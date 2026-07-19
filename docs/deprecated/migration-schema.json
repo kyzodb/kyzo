@@ -1,0 +1,329 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kyzo://migration-model/v1",
+  "title": "KyzoDB Migration Model",
+  "description": "Cut-destiny contract for a migration cluster under decisions.md. Descended from move_plan.json v10. Current condemned paths appear only as Delete evidence; every seat and rewire destination is a target-tree path. Cross-field invariants (joint satisfaction, disjointness, MECE ownership, authority honesty) are enforced by validate_plan.py, not by this schema alone.",
+  "type": "object",
+  "required": [
+    "version", "title", "status", "privilege", "scope", "authority",
+    "claim_tags", "joint_satisfaction", "deletes", "refused", "unexposed",
+    "ontology", "ban", "allowlist", "proof_meters", "by_target",
+    "final_meters", "qae"
+  ],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "const": "cut_destiny" },
+    "privilege": {
+      "type": "string",
+      "description": "Subordination statement: decisions.md is sole Spec authority; current paths are Delete evidence only; jointly impossible meters void the plan."
+    },
+    "scope": {
+      "type": "object",
+      "required": ["this_cut", "not_this_json"],
+      "properties": {
+        "this_cut": { "type": "string" },
+        "not_this_json": { "type": "string" },
+        "foundation_already_true": { "type": "array", "items": { "type": "string" } },
+        "target_not_current": { "type": "string" }
+      }
+    },
+    "authority": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Ordered authority sources, highest first. decisions.md must appear first."
+    },
+    "claim_tags": {
+      "type": "object",
+      "required": ["law", "Unconstructible", "Refused", "Unexposed"],
+      "properties": {
+        "law": { "type": "string" },
+        "Unconstructible": { "type": "string" },
+        "Refused": { "type": "string" },
+        "Unexposed": { "type": "string" }
+      },
+      "additionalProperties": false,
+      "description": "Exactly the three Spec tags. additionalProperties:false is the fourth-tag ban."
+    },
+    "joint_satisfaction": {
+      "type": "object",
+      "required": ["law"],
+      "properties": {
+        "law": { "type": "string" },
+        "proof_pairing": { "type": "string" },
+        "no_condemned_rewire": { "type": "string" }
+      }
+    },
+    "deletes": {
+      "type": "object",
+      "required": ["law", "paths", "meters"],
+      "properties": {
+        "law": { "type": "string" },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "why"],
+            "properties": { "path": { "type": "string" }, "why": { "type": "string" } }
+          }
+        },
+        "map_seats": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "why"],
+            "properties": { "path": { "type": "string" }, "why": { "type": "string" } }
+          }
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "why"],
+            "properties": { "name": { "type": "string" }, "why": { "type": "string" } }
+          }
+        },
+        "delete_guarded_invariants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "close"],
+            "properties": { "name": { "type": "string" }, "close": { "type": "string" } }
+          },
+          "description": "Symbol-absence invariants closed by grep-delete. Never tag these Unconstructible."
+        },
+        "not_deletes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["item", "why"],
+            "properties": { "item": { "type": "string" }, "why": { "type": "string" } }
+          }
+        },
+        "meters": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "refused": {
+      "type": "object",
+      "required": ["law", "items"],
+      "properties": {
+        "law": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "tag", "variant", "door", "authority", "why"],
+            "properties": {
+              "name": { "type": "string" },
+              "tag": { "const": "Refused" },
+              "variant": { "type": "string", "minLength": 1 },
+              "door": { "type": "string" },
+              "authority": {
+                "type": "string",
+                "pattern": "(decisions\\.md|cut_destiny)",
+                "description": "Either cites a decisions.md seat, or is tagged cut_destiny. Never dress an inference in Spec authority."
+              },
+              "why": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "unexposed": {
+      "type": "object",
+      "required": ["law", "items"],
+      "properties": {
+        "law": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "tag", "residual_risk", "detection"],
+            "properties": {
+              "name": { "type": "string" },
+              "tag": { "const": "Unexposed" },
+              "residual_risk": { "type": "string" },
+              "detection": {
+                "type": "string",
+                "description": "A real runtime/operational detection (poison, DST, campaign) or an explicit 'residual accepted'. Crate walls and compile-fails are prevention, not detection."
+              }
+            }
+          }
+        }
+      }
+    },
+    "carried_obligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "from", "obligation"],
+        "properties": {
+          "id": { "type": "string" },
+          "from": { "type": "string" },
+          "obligation": { "type": "string" },
+          "gate": { "type": "string" },
+          "seat_until_hoist": { "type": "string" }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "properties": {
+        "law": { "type": "string" },
+        "fate": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "action"],
+            "properties": {
+              "from": { "type": "string" },
+              "action": { "type": "string" },
+              "to": { "type": "string" },
+              "re-home": { "type": "string" },
+              "die": { "type": "string" }
+            }
+          }
+        },
+        "meters": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "ontology": {
+      "type": "object",
+      "required": ["authoritative_constructs", "unconstructible", "rulings"],
+      "properties": {
+        "authoritative_constructs": { "type": "array", "items": { "type": "string" } },
+        "unconstructible": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "proof"],
+            "properties": {
+              "name": { "type": "string" },
+              "proof": {
+                "type": "string",
+                "pattern": "compile-fail",
+                "description": "Only crate-consumer-demonstrable compile-fail seals this tag. Symbol absence in our own tree is Delete territory."
+              }
+            }
+          }
+        },
+        "rulings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "a"],
+            "properties": { "id": { "type": "string" }, "a": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "ban": { "type": "array", "items": { "type": "string" } },
+    "allowlist": {
+      "type": "object",
+      "required": ["law", "targets", "delete_after"],
+      "properties": {
+        "law": { "type": "string" },
+        "targets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Target-tree paths only. Must be disjoint from deletes.paths."
+        },
+        "delete_after": { "type": "array", "items": { "type": "string" } },
+        "forbidden_seats": { "type": "array", "items": { "type": "string" } },
+        "rewire": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "severance_edits": {
+      "type": "object",
+      "required": ["law", "entries"],
+      "properties": {
+        "law": { "type": "string" },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "license", "meter"],
+            "properties": {
+              "path": { "type": "string" },
+              "license": { "type": "string" },
+              "meter": { "type": "string" }
+            }
+          }
+        }
+      },
+      "description": "Scoped Delete-evidence edits on condemned files that must survive this cut structurally. The only lawful way to touch a condemned path."
+    },
+    "proof_meters": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "compile-fail" }
+    },
+    "by_target": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": { "type": "string" },
+          "owns": { "type": "array", "items": { "type": "string" } },
+          "owns_ops": { "type": "array", "items": { "type": "string" } },
+          "owns_helpers": { "type": "array", "items": { "type": "string" } },
+          "ban": { "type": "array", "items": { "type": "string" } },
+          "proof_meter": { "type": "array", "items": { "type": "string" } },
+          "delete_meter": { "type": "array", "items": { "type": "string" } },
+          "must_add": { "type": "array", "items": { "type": "string" } },
+          "must_delete_lines_for": { "type": "array", "items": { "type": "string" } },
+          "carried_notes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Prose gold from the source inventory that must not be lossy-compressed (deliberate subtleties, documented quirks)."
+          }
+        }
+      },
+      "description": "Keys are target-tree paths only; a condemned path as a key voids the instance."
+    },
+    "final_meters": { "type": "array", "items": { "type": "string" } },
+    "seated_laws": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["law", "seat", "meter"],
+        "properties": {
+          "law": { "type": "string" },
+          "seat": { "type": "string" },
+          "meter": { "type": "string" },
+          "exceptions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Explicit ledger of allowed meter hits (file + symbol + one-line justification). Empty is the default and the target."
+          }
+        }
+      }
+    },
+    "qae": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["q", "a", "e", "authority"],
+        "properties": {
+          "q": { "type": "string", "description": "The hardest precise question this swerve is still open on — adversarial to the recommended A." },
+          "a": { "type": "string", "description": "Recommended answer, stated to foreclose; names names." },
+          "e": { "type": "string", "description": "Why, plus what Delete/Refuse/Proof would close it." },
+          "authority": { "const": "cut_destiny" }
+        }
+      },
+      "description": "Operator inbox: genuinely open swerves the author could not foreclose, as QAE triplets per qae-context-creator. Empty means every choice is pre-made."
+    },
+    "campaigns_proposed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target_seat", "campaign"],
+        "properties": {
+          "target_seat": { "type": "string", "description": "The decisions.md seat or matrix row this campaign would falsify." },
+          "campaign": { "type": "string", "description": "Runnable adversarial campaign / DST shape. The only lawful expression of doubt about frozen law." }
+        }
+      }
+    }
+  }
+}

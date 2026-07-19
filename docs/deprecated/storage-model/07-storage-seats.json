@@ -1,0 +1,686 @@
+{
+  "version": 1,
+  "title": "Storage-arch seat map — decisions.md L1–L14 constructs seated in the target tree (the storage epic's mech suit)",
+  "status": "cut_destiny",
+  "privilege": "Architect seat contract only. decisions.md is sole Spec authority — this file yields on conflict. This instance CONSTRUCTS seats; it condemns symbols, not files. Nearly every seat is a NEW-SEAT proposal (marked in kind) because target-arch predates the Spec and has no seats for the L1–L14 constructs; existing store/session files extend. Claim-tag inflation voids this plan. Per the frozen preamble: Nonce / WriteAuthority / SnapshotFork constructor SIGNATURES stay unfrozen until the at-rest IncarnationId and live-fork SIV campaigns are green — stories may build the types and doors but must not seal those three signatures as Spec-frozen before campaign green.",
+  "scope": {
+    "this_cut": "Seat every storage-Spec construct: Store/Catalog/Engine types, StoreOpen, WriteAuthority, IncarnationId/IncarnationMintCap, SweepDoor + IntentOrdinal/CommitOrdinal, NonceLease pipeline, StableCommitCap arms, ObjectSlot/StagingTTL/PermanenceCandidate/ObjectDurabilityClass, CheckpointSeal, CanonicalTranscript, AdmissionCertificate/ReplicaKey/ReplicaCustody, CompositionId/OperationKey, AskShape/Footprint/Frontier, ForkGrant/RecoveryGrant/materialize, ShredSalt/WrappedShredSalt, the failure lattice, and the claim-tag ledgers. Downstream story-writers cut board stories directly from by_target entries.",
+    "not_this_json": "Migration of legacy files (01–06). Federation transport (NATS driver, semantic router, manifests §15–18, §69–73 fabric halves) beyond the Store-owned vocabulary seated here — a federation epic seats the fabric; this instance seats only what the Store itself owns (see qae). Apps on Kyzo are out of scope by Spec.",
+    "foundation_already_true": [
+      "store/{contract,tx,fjall,backup,keys,merkle,retry,scratch,skip_walk,time,verify_walk}.rs exist (contract/tx as stubs pending 03)",
+      "session/{admit,catalog,db}.rs exist (stubs/partial pending 02)",
+      "kyzo-crashfs (fault injection) and kyzo-trials (campaign lanes) exist",
+      "decisions.md is frozen; doubt takes campaign form only"
+    ],
+    "target_not_current": "by_target keys are target-tree paths; NEW-SEAT marks paths absent from target-arch that this instance proposes for ratification."
+  },
+  "authority": [
+    "docs/decisions.md — sole Spec (seats cited §N)",
+    ".claude/skills/architecture-map/target-arch.md — ideal paths (extended by NEW-SEAT proposals)",
+    "docs/deprecated/storage-model/0{1,2,3}-*.json — sibling migration instances this map composes with",
+    "This file — cut destiny; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Two proof forms carry the Unconstructible tag: TYPE-guarded (compile-fail a crate-consumer trybuild demonstrates — listed under ontology.unconstructible) and CONSTRUCTOR-guarded (a private constructor that inspects data the type system cannot see, e.g. cut ≥ expires_at — listed under seated_laws with DST meters, per §22's own constructor language). Conflating the two, or inflating Unexposed to Unconstructible, voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Relative to facts the process has observed; never claims to prevent offline dual-history a partitioned process cannot see (§2 preamble).",
+    "Refused": "Reachable program; typed runtime outcome. The closed StoreRefuse ledger at store/failure.rs is the Refused claim-tag ledger in types.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter (cloned disk, snapshot fork, bit-copied keystore, partitioned oblivious writer, hostile binding). The unexposed section below is the Unexposed claim-tag ledger; every entry names residual + detection."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist ⊇ every seat file the meters require. No condemned file paths — deletes are symbol-level (the fused-Db class). A story that needs a path not listed here amends this instance first.",
+    "proof_pairing": "compile-fail for type-guarded claims; DST campaign for constructor-guarded claims; grep-delete for the condemned symbol class.",
+    "no_condemned_rewire": "Not applicable at path level; the condemned symbols must not be re-minted under new names (ban list)."
+  },
+  "deletes": {
+    "law": "Symbol-level E-actions executed across the storage epic. Grep-delete class — never claim-tag territory.",
+    "paths": [],
+    "symbols": [
+      { "name": "fused public Db constructor / any 'open path → the database' facade returning storage + schema + evaluation as one ambient authority", "why": "§1: delete every such constructor; Engine holds Store/Catalog capabilities by composition." },
+      { "name": "Store::put_record / app-direct claim upsert / chunk-as-fact write", "why": "§93: apps never mint KyzoRecord meaning." },
+      { "name": "decrypt_export", "why": "§60: export leaves ciphertext; Store never decrypt-exports as a feature." },
+      { "name": "open FsyncCapable-style bool on the commit door", "why": "§27/§74: durability capability is a sealed StableCommitCap arm with campaign, never an open bool." },
+      { "name": "commit coalescing timers / timer-tuned SweepDoor parking", "why": "§25: wake ≠ timer; park only on queue non-empty or shutdown." },
+      { "name": "durable lock records / lock-expiry timers / abandonment ceremonies for footprints", "why": "§36: footprints are session-memory indexed by (FenceEpoch, IncarnationId); prior-epoch footprints are not live locks." },
+      { "name": "tenant-weight or conflict-history scheduler inside Engine", "why": "§43: writer competition is AskShape/Footprint law, not Engine adjudication; fairness is host-only." },
+      { "name": "mutable watermark / consume-reissue on WriteAuthority", "why": "§2: WriteAuthority is an immutable affine signing capability; all mutable floors live in the Store WAL." }
+    ],
+    "delete_guarded_invariants": [
+      { "name": "no path-only open anywhere in the tree at epic end", "close": "rg 'fn open\\(.*Path' crates/kyzo-core/src/store crates/kyzo-core/src/session → zero public hits; open requires StoreOpen" },
+      { "name": "no second commit-door besides the SweepDoor", "close": "rg 'Committed::' crates/kyzo-core/src → construction sites only inside store/sweep.rs" }
+    ],
+    "not_deletes": [
+      { "item": "the current Storage/ReadTx/WriteTx contract (03's relocation)", "why": "The Spec machine composes over it as the ordered-byte substrate; the SweepDoor and WAL wrap the adapter, they do not delete it." },
+      { "item": "exact full-scan top-k under cost refuse", "why": "§14: legal, admitted under Engine starts-or-not / Store debt — never Unconstructible." }
+    ],
+    "meters": [
+      "rg -n 'decrypt_export' crates → zero",
+      "rg -n 'put_record' crates/kyzo-core/src → zero public app-facing hits",
+      "rg -n 'FsyncCapable' crates → zero"
+    ]
+  },
+  "refused": {
+    "law": "The Refused claim-tag ledger. Every variant lands in the closed StoreRefuse / EngineRefuse enums (store/failure.rs owns the Store side; session doors own admission variants). Named door + Spec seat for each.",
+    "items": [
+      { "name": "open without StoreOpen capability", "tag": "Refused", "variant": "MissingStoreOpenCapability", "door": "store/open.rs", "authority": "decisions.md §5", "why": "Path-only open is ambient authority; successful path-only open is Unconstructible, the attempt refuses." },
+      { "name": "second writer against a locally fenced address", "tag": "Refused", "variant": "StoreFenced", "door": "store/authority.rs address fence", "authority": "decisions.md §2", "why": "Local mutex among Engines sharing one token — not protection against cp -r." },
+      { "name": "seal attempt from a dead incarnation or epoch", "tag": "Refused", "variant": "WriteSessionDead (optional recovery-link payload)", "door": "store/sweep.rs commit-door recheck", "authority": "decisions.md §25/§36", "why": "Resurrected task reaches the door and seals zero bytes — closes the async resurrection window without leases or clocks." },
+      { "name": "orphan write after observed RecoveryGrant", "tag": "Refused", "variant": "AuthorityRecovered", "door": "store/sweep.rs + session/admit.rs next admission-visible write boundary", "authority": "decisions.md §2/§36", "why": "The recovery-link-carrying cousin of WriteSessionDead." },
+      { "name": "epoch advance while current-epoch Fenced footprints live", "tag": "Refused", "variant": "EpochAdvanceBlocked", "door": "store/epoch.rs advance (IntentClear)", "authority": "decisions.md §36/§72", "why": "Ordinary advance requires IntentClear; RecoveryGrant advance is exempt under epoch-indexed footprint law." },
+      { "name": "resolve of a Pending object past its cut", "tag": "Refused", "variant": "Decayed", "door": "store/objects.rs resolve", "authority": "decisions.md §22", "why": "Expiry authority is Store cut comparison only; fabric clocks decide nothing." },
+      { "name": "object bytes gone while cut still live", "tag": "Refused", "variant": "ObjectMissing", "door": "store/objects.rs resolve", "authority": "decisions.md §22", "why": "Early fabric delete is a fabric fault, never a silent empty success." },
+      { "name": "Durable delete without covering retention certificate", "tag": "Refused", "variant": "ObjectRetainRequired", "door": "store/objects.rs GC", "authority": "decisions.md §23", "why": "Retention certificates gate Durable only; Pending lives under cut law." },
+      { "name": "cross-Store object resolution", "tag": "Refused", "variant": "ObjectRefForeignStore (and StagingToken cousin)", "door": "store/objects.rs resolve scope check", "authority": "decisions.md §16", "why": "Refs/tokens are Store-identity-prefixed; one Store cannot forge another's bytes as its meaning." },
+      { "name": "as-of naming a Durable object whose retention was violated", "tag": "Refused", "variant": "ObjectMissingForAsOf", "door": "store/objects.rs as-of materialize", "authority": "decisions.md §32", "why": "Never silent empty success; Pending at as-of refuses carrying the token." },
+      { "name": "incomparable ObjectDurabilityClass on Repair", "tag": "Refused", "variant": "typed refuse carrying BOTH classes (supply dominating class or explicit Downgrade)", "door": "store/objects.rs PermanenceWitness", "authority": "decisions.md §22", "why": "Dominance is a partial order; Downgrade is a named append-only supersession, never silent." },
+      { "name": "restore/open against a seal failing any bound digest", "tag": "Refused", "variant": "SealMismatch", "door": "store/seal.rs verify + store/backup.rs restore", "authority": "decisions.md §26", "why": "Never silent prefer-dump; silent loss of ReplicaCustody obligations is the same refusal." },
+      { "name": "post-shred restore of a shredded segment", "tag": "Refused", "variant": "Shredded (typed tombstone; neighbors decrypt)", "door": "store/backup.rs restore + store/crypto.rs", "authority": "decisions.md §64/§79", "why": "Typed tombstone preserving bitemporal existence proof — never silent unreadability." },
+      { "name": "client-supplied transaction time", "tag": "Refused", "variant": "ClientTxnTimeForbidden", "door": "store/time.rs at the commit door", "authority": "decisions.md §30", "why": "Store assigns txn time at the durable event; validity time stays application-assertable." },
+      { "name": "peer/client timestamp reordering another Store's commits", "tag": "Refused", "variant": "ForeignTxnTime", "door": "store/time.rs", "authority": "decisions.md §31", "why": "Commit order is local Store authority; federation compares roots, not wall clocks." },
+      { "name": "read continuing past snapshot/pin death", "tag": "Refused", "variant": "SnapshotExpired", "door": "store/tx.rs pin budget", "authority": "decisions.md §33", "why": "Silent continue on a newer snapshot is unrepresentable; restart is caller policy." },
+      { "name": "admission beyond the debt economy", "tag": "Refused", "variant": "StoreDebtExceeded", "door": "store/failure.rs debt ledger via session/admit.rs", "authority": "decisions.md §42", "why": "Throttle-in-place (silent stall) is unrepresentable; every overload path refuses with a reason." },
+      { "name": "write at the Store capacity ceiling", "tag": "Refused", "variant": "StoreFull", "door": "store/failure.rs", "authority": "decisions.md §54/§88", "why": "Engine may compose a split as workflow; Store never silent-auto-splits." },
+      { "name": "object backend full", "tag": "Refused", "variant": "ObjectBackendFull", "door": "store/objects.rs put", "authority": "decisions.md §54", "why": "No partial durable write visible as Committed; put fails closed before ref naming." },
+      { "name": "read of a quarantined range", "tag": "Refused", "variant": "Quarantined(range)", "door": "store/failure.rs + store/verify_walk.rs", "authority": "decisions.md §50", "why": "Range-scoped; rest of keyspace stays up; last-known-good serve is deleted." },
+      { "name": "object half of a dual fault", "tag": "Refused", "variant": "ObjectCorrupt (typed partial beside intact ordered facts)", "door": "store/failure.rs", "authority": "decisions.md §55", "why": "Serve facts at the cut and name the broken refs; one mixed success and whole-ask refusal of intact meaning are both deleted." },
+      { "name": "ordered half of a dual fault", "tag": "Refused", "variant": "OrderedCorrupt (quarantine/poison path)", "door": "store/failure.rs", "authority": "decisions.md §55", "why": "Objects intact + ordered wrong routes to the quarantine/poison lattice." },
+      { "name": "OperationKey reuse with a different request digest", "tag": "Refused", "variant": "OperationKeyReuse", "door": "store/idempotency.rs memo", "authority": "decisions.md §38", "why": "Same key + digest replays; a changed semantic field refuses — key-as-mutable-slot is deleted." },
+      { "name": "safe-retry door without an idempotency identity", "tag": "Refused", "variant": "MissingIdempotencyToken", "door": "store/idempotency.rs", "authority": "decisions.md §39", "why": "OperationKey is the one organ; parallel token maps are deleted." },
+      { "name": "Frontier neither conclusive nor confirmable", "tag": "Refused", "variant": "FrontierUnprovable", "door": "session/footprint.rs admission", "authority": "decisions.md §36", "why": "Accelerators accelerate; the reachability projection is the authority — inconclusive and unconfirmable never admits." },
+      { "name": "Optimistic conflict", "tag": "Refused", "variant": "terminal SSI conflict refuse carrying conflicting ranges", "door": "session/footprint.rs commit validation", "authority": "decisions.md §36", "why": "Terminal — no retry counters, windows, or Engine scheduler; caller re-derives." },
+      { "name": "interpreted knowledge without evidence coordinates", "tag": "Refused", "variant": "MissingEvidenceCoordinates", "door": "session/admit.rs", "authority": "decisions.md §10", "why": "The three-layer stack is admission law, not encouragement." },
+      { "name": "chunk-shaped row as evidence", "tag": "Refused", "variant": "ChunkIsNotEvidence", "door": "session/admit.rs", "authority": "decisions.md §11", "why": "Durable evidence is a typed span with coordinates + hash + provenance." },
+      { "name": "index build against SemanticSurface::None", "tag": "Refused", "variant": "NoSemanticSurface", "door": "session/admit.rs index law", "authority": "decisions.md §12", "why": "Forcing surfaces on every record corrupts embedding meaning." },
+      { "name": "secret material in an indexed key", "tag": "Refused", "variant": "SecretInIndexedKey", "door": "session/admit.rs against store/keys.rs closed class", "authority": "decisions.md §61", "why": "Order law forces plaintext keys; secrets in keys are permanent memcmp tax and leak." },
+      { "name": "open without the root KEK capability", "tag": "Refused", "variant": "MissingRootKek", "door": "store/crypto.rs unwrap at open", "authority": "decisions.md §63", "why": "Zero-access: host-only open that decrypts meaning is unrepresentable." },
+      { "name": "write landing in a forbidden geography", "tag": "Refused", "variant": "PlacementForbidden", "door": "session/admit.rs placement check", "authority": "decisions.md §77", "why": "Refuse-before-write; post-hoc relocate-as-success is deleted." },
+      { "name": "ObjectRef resolution from a deleted Store", "tag": "Refused", "variant": "StoreDeleted", "door": "store/objects.rs", "authority": "decisions.md §76", "why": "Store delete = crypto-shred + GC; dangling refs must not resolve." },
+      { "name": "unverified foreign dump import", "tag": "Refused", "variant": "ForeignHistoryUnverified", "door": "store/backup.rs import ceremony", "authority": "decisions.md §80", "why": "Blind import is a second write door for forged belief." },
+      { "name": "mixed-encoding decode during a format migration", "tag": "Refused", "variant": "FormatMigrationInProgress", "door": "store/contract.rs FormatVersion epoch", "authority": "decisions.md §81", "why": "Two FormatVersions coexist only inside an explicit migration epoch; silent mixed-decode is unrepresentable." },
+      { "name": "second discovery incompatible with an existing materialization", "tag": "Refused", "variant": "GrantAlreadyMaterialized (carrying the existing successor identity)", "door": "store/grants.rs materialize", "authority": "decisions.md §68", "why": "A grant is a seed: same grant → same successor, or typed refuse — never divergent lineages." },
+      { "name": "replica verification failures", "tag": "Refused", "variant": "closed sum: RetentionDeclined | AuthenticityFailed | ChainInconsistent | ScopeUnknown | ScopeRevoked | ScopeDenied", "door": "store/replica.rs verify_replica", "authority": "decisions.md §69", "why": "Manifest-resolution outcomes are never folded into RetentionDeclined; no reshape exists." },
+      { "name": "fabric insufficient for required movement", "tag": "Refused", "variant": "FabricUnavailable", "door": "store/failure.rs (consumed by any federation host)", "authority": "decisions.md §18", "why": "Fail closed; Kyzo never peer-dials." },
+      { "name": "KV-as-truth ingest", "tag": "Refused", "variant": "KvIsNotTruth", "door": "session/admit.rs ingest", "authority": "decisions.md §17/§90", "why": "Decryptability does not mint Engine meaning; ingest only via the Record door." },
+      { "name": "multi-store conflict in a composition", "tag": "Refused", "variant": "FederationConflict", "door": "session/composition.rs", "authority": "decisions.md §53", "why": "Engine owns cross-store conflict; Store knows only one address's local law." }
+    ]
+  },
+  "unexposed": {
+    "law": "The Unexposed claim-tag ledger. Every entry names residual risk and real detection or residual accepted. Inflation to Unconstructible is Spec fraud.",
+    "items": [
+      { "name": "hostile keystore bit-copy or live process/snapshot fork duplicating WriteAuthority use", "tag": "Unexposed", "residual_risk": "Two commit chains under one CryptoDomain (dual-use lineage); AEAD nonce reuse on live fork.", "detection": "dual-chain poison at chain-meet (lineage integrity only — never AEAD protection); SnapshotFork=yes arms require misuse-resistant AEAD (SIV) so nonce repeat degrades to message-equality leak; the equality leak itself is residual accepted (§2/§27/§62)" },
+      { "name": "clone-vs-clone IncarnationId collision (two at-rest clones, equal OpenOrdinal)", "tag": "Unexposed", "residual_risk": "Identical sealed bytes yield the same next OpenOrdinal; only Entropy distinguishes clones — cryptographically negligible, never Unconstructible (claiming otherwise is Refused as fraud).", "detection": "two-clone at-rest DST campaign asserts equal OpenOrdinals, differing Entropy, zero (key,nonce) collisions under the approved entropy arm; dual-chain poison bounds routine cloning (§62)" },
+      { "name": "partitioned oblivious writer through RecoveryGrant (never observed the grant)", "tag": "Unexposed", "residual_risk": "Divergent chain under the old CryptoDomain — offline dual-history no local door can prevent.", "detection": "Unexposed until chains meet → dual-chain poison + operator remediation surface (§2 preamble: observation fences forward; identical physics to ForkGrant's oblivious original)" },
+      { "name": "hostile object backend lying about its attested ObjectDurabilityClass", "tag": "Unexposed", "residual_risk": "Durable names a guarantee product the backend does not actually provide.", "detection": "per-arm destructive campaign licenses the specific product it attests; false attestation beyond the campaign is residual accepted at the arm boundary (§22)" },
+      { "name": "client crash losing client_operation_id before the first Store step", "tag": "Unexposed", "residual_risk": "A fresh process cannot re-derive the CompositionId; a duplicate composition may be issued as new client intent.", "detection": "residual accepted at the client boundary (§38 — never Spec-green Unconstructible); OperationKey memo still converges any step the old id did reach" },
+      { "name": "hostile binding / compromised runtime inside the process", "tag": "Unexposed", "residual_risk": "Bindings that decide instead of marshal can bypass sealed doors in-process.", "detection": "none at runtime for in-process forge; residual accepted at the crate boundary (§preamble: bindings marshal and never decide); integrity campaigns (chain verify, root recompute, golden vectors) detect persisted damage after the fact" }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "signatures-unfrozen-until-campaigns",
+      "from": "storage-arch freeze note",
+      "obligation": "Nonce / WriteAuthority / SnapshotFork constructor signatures stay unfrozen until the two-clone at-rest and live-fork SIV campaigns are green. Build the doors; do not seal those signatures as frozen Spec.",
+      "gate": "campaigns two-clone-at-rest + live-fork-mid-sweep green",
+      "seat_until_hoist": "crates/kyzo-core/src/store/nonce.rs + store/authority.rs + store/commit_cap.rs (doc note at each)"
+    },
+    {
+      "id": "recovery-sla-coefficients",
+      "from": "decisions.md §28/§86",
+      "obligation": "recovery_time_p999 ≤ f(bytes_since_last_flush) coefficients are measured and sealed from the adversarial crash-instant campaign — inventing a constant without the campaign is forbidden; the bound refuses the CLAIM (badge/bench/Spec row), never the open of a recoverable Store.",
+      "gate": "crash-instant DST campaign",
+      "seat_until_hoist": "crates/kyzo-trials/src/dst.rs (campaign lane)"
+    },
+    {
+      "id": "kv-separation-threshold",
+      "from": "decisions.md §47",
+      "obligation": "The large-value separation byte threshold is measured (RUM benches), never dogma in either direction; record the number in Spec when benched.",
+      "gate": "bench lane",
+      "seat_until_hoist": "crates/kyzo-core/src/store/compact.rs (doc note)"
+    }
+  ],
+  "tests": {
+    "law": "Campaigns are merge gates per §95; unit/DST batteries land beside their seats; kyzo-trials owns the cross-seat campaign lanes; kyzo-crashfs powers fault injection.",
+    "fate": [
+      { "from": "decisions.md campaign list (§95 + storage-arch)", "action": "seat", "to": "crates/kyzo-trials/src/dst.rs (campaign lanes) + crates/kyzo-crashfs (injection arms) — see campaigns_proposed for the enumerated set" }
+    ],
+    "meters": [
+      "each campaign in campaigns_proposed has a named lane in crates/kyzo-trials/src/dst.rs before its guarded construct's story closes"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "Store (sealed type; sole durable ordered-byte + Committed door) — store/contract.rs (§1)",
+      "StoreId (identity digest) + StoreOpen (TAG capability) + genesis params (RecoveryMatrix, StagingTTL, sealed size class) — store/open.rs (§4,5,6,88)",
+      "WriteAuthority + IncarnationMintCap + IncarnationId(OpenOrdinal, Entropy) + RecoveryMatrix + address fence — store/authority.rs (§2,62)",
+      "FenceEpoch + CryptoDomain + EpochGrant advance + IntentClear — store/epoch.rs (§56,72)",
+      "ForkGrant + RecoveryGrant + GrantId + materialize + AncestorReadGrant — store/grants.rs (§2,68)",
+      "SweepDoor + IntentionQueue + AdmittedIntent<IntentOrdinal> + CommitOrdinal + Committed<StoreId,FenceEpoch,CommitOrdinal> — store/sweep.rs (§25)",
+      "StableCommitCap (closed sum; SnapshotFork declaration) + ForkGenerationWitness — store/commit_cap.rs (§27,74,85)",
+      "WAL segments (hash-chained, epoch-headed) + replay + mutable floors — store/wal.rs (§21,24)",
+      "NonceLease + MintDomain(Commit|Compact|Rotate) + DomainCounter + pure nonce fn — store/nonce.rs (§25,62)",
+      "CheckpointSeal (mint + truncation consume) — store/seal.rs (§26)",
+      "ObjectRef + StagingToken + ObjectSlot + VolatilePending + PermanenceCandidate + PermanenceWitness + StagingTTL + ObjectDurabilityClass + Repair + Downgrade + reclaim/retention certificates + object GC — store/objects.rs (§16,22,23,32,76)",
+      "CanonicalTranscript + golden vectors + FormatVersion door for sealed artifacts — store/transcript.rs (§59,81)",
+      "ShredSalt (memory-only) + WrappedShredSalt + DEK derive + AuditKey + AEAD/SIV + compression-before-encryption — store/crypto.rs (§60–68)",
+      "pace=f(debt) + range-class leveling + MergeProof + KV-separation — store/compact.rs (§45,46,47,66)",
+      "failure lattice (Committed/Quarantined/Poisoned) + closed StoreRefuse ledger + debt economy — store/failure.rs (§42,50,52,54,55)",
+      "AdmissionCertificate + verify_replica + ReplicaKey + ReplicaCustody(Queryable|PendingAnchor) — store/replica.rs (§69,70)",
+      "OperationKey + OperationOutcome + request_digest memo — store/idempotency.rs (§38,39)",
+      "chained state roots + as-of roots + recovery/fork typed links + fork-equivalence — store/merkle.rs (§56,57,58)",
+      "transaction-time mint at the durable event — store/time.rs (§30,31)",
+      "leave-is-free packs + import ceremony + pack hygiene — store/backup.rs (§64,65,79,80)",
+      "closed Secret key class — store/keys.rs (§61)",
+      "quarantine walk — store/verify_walk.rs (§49,50)",
+      "Record admission monopoly + private KyzoRecord constructors + evidence stack + SemanticSurface + placement + certificate mint call — session/admit.rs (§8,10,11,12,61,69,77)",
+      "AskShape(Optimistic|Fenced) + Footprint sealed sum + Frontier + accelerator contract + (FenceEpoch,IncarnationId)-indexed live footprints — session/footprint.rs (§36)",
+      "CompositionId + composition sum (BestEffort|Saga|ReadAt) — session/composition.rs (§38,53)",
+      "Catalog (interpretive capability; generation = commit position) — session/catalog.rs (§1,7,20)",
+      "Engine (composition of Store + Catalog capabilities; two refuse taxonomies) — session/db.rs (§1,3,41,43)"
+    ],
+    "unconstructible": [
+      { "name": "Store evaluating a query", "proof": "compile-fail (trybuild): the sealed Store type exposes no evaluation method; a crate consumer calling one fails to resolve (§1)" },
+      { "name": "Engine minting Committed without Store write capability", "proof": "compile-fail (trybuild): Committed's constructor is private to store/sweep.rs; Engine holds capabilities, never the door (§1)" },
+      { "name": "Catalog owning a write/fsync/counter path", "proof": "compile-fail (trybuild): Catalog's type has no byte sink, fsync, or counter member to call (§1/§7)" },
+      { "name": "successful path-only Store open", "proof": "compile-fail (trybuild): every open door requires a privately constructed StoreOpen; no public path-taking constructor exists (§5)" },
+      { "name": "StoreOpen naming two Store identities", "proof": "compile-fail (trybuild): the TAG capability type carries exactly one StoreId scope (§6)" },
+      { "name": "KyzoRecord minted by store/decode/ingest modules", "proof": "compile-fail (trybuild): KyzoRecord constructors are private to the admission seam; store read doors yield ordered currency / ObjectRef material only (§8)" },
+      { "name": "CommitOrdinal minted at admission (history minted before the durable event)", "proof": "compile-fail (trybuild): CommitOrdinal's constructor is private to the SweepDoor seal path; AdmittedIntent carries only IntentOrdinal (§25)" },
+      { "name": "encrypt under a volatile nonce reservation", "proof": "compile-fail (trybuild): the encrypt door takes a NonceLease, whose only constructor consumes a durably-reserved counter block (§25/§62)" },
+      { "name": "WAL truncation without a covering CheckpointSeal", "proof": "compile-fail (trybuild): truncate's signature consumes a CheckpointSeal; no seal-free overload exists (§21/§26)" },
+      { "name": "Fenced ask carrying Footprint::Underivable", "proof": "compile-fail (trybuild): Fenced's constructor excludes the Underivable variant at plan construction (§36)" },
+      { "name": "reverse/bidirectional Frontier", "proof": "compile-fail (trybuild): Direction is in the Frontier type; reverse traversal cannot construct it and falls back to Envelope (§36)" },
+      { "name": "second serialization path for a sealed artifact", "proof": "compile-fail (trybuild): one CanonicalTranscript/AAD constructor; sealed artifact types offer no serde or alternate encoder surface (§59)" },
+      { "name": "WriteAuthority carrying mutable state", "proof": "compile-fail (trybuild): the type is immutable and affine — no &mut methods, no watermark field, moved on use where the Spec requires consumption of the session grant (§2)" },
+      { "name": "plaintext ShredSalt persistence", "proof": "compile-fail (trybuild): ShredSalt implements no serialization and no constructor accepts it into WAL/pack/seal writers; only WrappedShredSalt persists (§64)" },
+      { "name": "compacted packet without MergeProof lineage", "proof": "compile-fail (trybuild): the merged-packet constructor is private to the MergeProof mint (§66)" },
+      { "name": "Engine-minted CompositionId", "proof": "compile-fail (trybuild): CompositionId's only constructor takes the caller-supplied client_operation_id; no Engine-side fresh-id door exists (§38)" }
+    ],
+    "rulings": [
+      { "id": "crate-boundary-now-module-later-crate", "a": "The sealed types live in kyzo-core behind the sealed lib.rs facade; Unconstructible proofs are crate-consumer trybuild against that facade (move_plan v10 precedent). A dedicated kyzo-store crate is a later mechanical hoist if binding density demands it — not a precondition for the epic (see qae 1)." },
+      { "id": "constructor-guard-vs-type-guard", "a": "Spec lines like 'PermanenceWitness::mint is Unconstructible when cut ≥ expires_at' and 'non-dominating Repair is Unconstructible at the constructor' are CONSTRUCTOR-guarded: a private constructor inspects data. They are listed in seated_laws with DST meters, not in ontology.unconstructible (whose pattern is type-guarded compile-fail). The Spec tag is honored; the proof form is stated honestly." },
+      { "id": "genesis-config-once", "a": "Genesis-sealed parameters (RecoveryMatrix, ordinal StagingTTL, size class, entropy arm, StableCommitCap arm selection) enter through store/open.rs genesis construction and are injected config-once from the host composition root (kyzo-bin/src/engine.rs; wiring law rust-wiring). Post-genesis mutation of RecoveryMatrix/StagingTTL is Unconstructible (no setter exists — type-guarded)." },
+      { "id": "certificate-mint-at-admission-type-at-replica", "a": "AdmissionCertificate the TYPE (CanonicalTranscript artifact) is owned by store/replica.rs beside verify_replica; the MINT happens at the admission door (session/admit.rs) through a constructor only the admission seam can call. Authoring mints; replicas verify + mint custody — never re-author (§69)." },
+      { "id": "failure-ledger-is-the-refused-ledger", "a": "The closed StoreRefuse enum at store/failure.rs is the Refused claim-tag ledger in types: every variant in this instance's refused section lands there (or in the session-door refuse enums it composes). A refuse without a ledger variant is unshippable; a ledger variant without a Spec seat citation is unmintable." },
+      { "id": "unexposed-ledger-lives-in-spec", "a": "The Unexposed ledger is documentation + campaign law (this instance's unexposed section, decisions.md tags, and the campaign lanes) — deliberately NOT a code seat; encoding 'what we cannot detect' as a type would be costume. The operator surface (staged-object pressure, fence pressure, remediation) at store/failure.rs is its runtime face (§82: operator-sealed, tenant-blind)." },
+      { "id": "engine-two-taxonomies", "a": "session/db.rs (the Engine seat after §1 demolition) owns starts-or-not admission refuses (queue/deadline/memory); store/failure.rs owns debt/backpressure refuses. Two taxonomies, no arbitration organ, no tenant weights, no conflict-history scheduling (§42/§43)." },
+      { "id": "order-law-out-of-scope-here", "a": "§14's Candidates/Presentation constructs are evaluation-zone law already carried by move_plan v10 (metric.rs ResultValue, TagOrdered compile-fail) and exec/op/search.rs; this instance does not re-seat them — the storage epic touches them only where §35 puts two-axis coordinates on durable projection keyspaces (project zone stories)." },
+      { "id": "fjall-under-the-machine", "a": "The Spec machine (SweepDoor/WAL/seal) composes OVER the Storage adapter contract (store/contract.rs → store/fjall.rs). fjall is one adapter (§48); the SweepDoor owns commit order and the barrier calls the arm's proof (§25/§27). No Spec construct may take a fjall type in its signature." }
+    ]
+  },
+  "ban": [
+    "Do not freeze Nonce/WriteAuthority/SnapshotFork constructor signatures before the at-rest and live-fork campaigns are green.",
+    "Do not tag clone-vs-clone nonce distinctness Unconstructible — Entropy-bounded only; the inflation is Refused as fraud (§62).",
+    "Do not build empty tick commits, maintenance timers advancing cuts, or any wall-clock expiry authority (§22/§23).",
+    "Do not build durable lock records, lock-expiry timers, or footprint abandonment ceremonies (§36).",
+    "Do not let IntentOrdinal enter sealed identity — StagingTTL, expires_at, Catalog generation, seal cuts denominate in CommitOrdinal only (§25).",
+    "Do not mint a total-order ObjectDurabilityClass ladder — product + dominance only (§22).",
+    "Do not add a Catalog persistence type, byte sink, or counter (§1/§7).",
+    "Do not put WriteAuthority, KEK, plaintext ShredSalt, AuditKey, or IncarnationMintCap in packs, logs, or bundles; packs REQUIRE WrappedShredSalt + IncarnationId history (§65).",
+    "Do not claim live-fork 'safe' or equality-hiding under SIV — the leak is named residual (§27).",
+    "Do not bake a specific probabilistic structure name into Frontier Spec vocabulary — accelerators are sealed adapters declaring conclusive sides (§36).",
+    "Do not implement peer-dial, overlay, or object-sync fallback — fabric-down refuses (§18/§92).",
+    "Do not gate Store open on the recovery-SLA claim — the bound refuses claims, never recoverable opens (§28).",
+    "Do not build a second brain: carriage (queue timing, fabric cleanup, accelerator probability) never decides what exists — pull any such constructor back inside (§preamble)."
+  ],
+  "allowlist": {
+    "law": "Seat files only; a storage story touching a path not listed amends this instance first.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-core/src/store/contract.rs",
+      "crates/kyzo-core/src/store/open.rs",
+      "crates/kyzo-core/src/store/authority.rs",
+      "crates/kyzo-core/src/store/epoch.rs",
+      "crates/kyzo-core/src/store/grants.rs",
+      "crates/kyzo-core/src/store/sweep.rs",
+      "crates/kyzo-core/src/store/commit_cap.rs",
+      "crates/kyzo-core/src/store/wal.rs",
+      "crates/kyzo-core/src/store/nonce.rs",
+      "crates/kyzo-core/src/store/seal.rs",
+      "crates/kyzo-core/src/store/objects.rs",
+      "crates/kyzo-core/src/store/transcript.rs",
+      "crates/kyzo-core/src/store/crypto.rs",
+      "crates/kyzo-core/src/store/compact.rs",
+      "crates/kyzo-core/src/store/failure.rs",
+      "crates/kyzo-core/src/store/replica.rs",
+      "crates/kyzo-core/src/store/idempotency.rs",
+      "crates/kyzo-core/src/store/merkle.rs",
+      "crates/kyzo-core/src/store/time.rs",
+      "crates/kyzo-core/src/store/backup.rs",
+      "crates/kyzo-core/src/store/keys.rs",
+      "crates/kyzo-core/src/store/verify_walk.rs",
+      "crates/kyzo-core/src/store/tx.rs",
+      "crates/kyzo-core/src/store/fjall.rs",
+      "crates/kyzo-core/src/session/admit.rs",
+      "crates/kyzo-core/src/session/footprint.rs",
+      "crates/kyzo-core/src/session/composition.rs",
+      "crates/kyzo-core/src/session/catalog.rs",
+      "crates/kyzo-core/src/session/db.rs",
+      "crates/kyzo-core/src/lib.rs",
+      "crates/kyzo-bin/src/engine.rs",
+      "crates/kyzo-trials/src/dst.rs",
+      "crates/kyzo-crashfs/src/fault.rs",
+      "crates/kyzo-crashfs/src/harness.rs"
+    ],
+    "delete_after": [],
+    "forbidden_seats": [],
+    "rewire": [
+      "TARGET session/db.rs → Engine(Store, Catalog) composition; the ambient Db facade dies at this epic's demolition (§1; 02's carried obligation discharges here)",
+      "TARGET kyzo-bin/src/engine.rs → config-once genesis/arm injection through the composition root (no engine internals)"
+    ]
+  },
+  "proof_meters": [
+    "compile-fail (trybuild): Store evaluating a query; Engine minting Committed; Catalog write path (§1 triple)",
+    "compile-fail (trybuild): open(path) without StoreOpen; StoreOpen naming two Stores",
+    "compile-fail (trybuild): store module minting KyzoRecord",
+    "compile-fail (trybuild): CommitOrdinal constructed outside the SweepDoor; encrypt without a durable NonceLease; truncate without consuming a CheckpointSeal",
+    "compile-fail (trybuild): Fenced(Underivable); reverse-direction Frontier",
+    "compile-fail (trybuild): second serialization path for a sealed artifact; ShredSalt persistence; merged packet without MergeProof; Engine-minted CompositionId"
+  ],
+  "by_target": {
+    "crates/kyzo-core/src/store/contract.rs": {
+      "kind": "EXTEND (03's seat) — the sealed Store type joins the adapter contract",
+      "owns": ["Store (sealed type)"],
+      "ban": ["evaluation methods", "fjall types in any Spec signature", "public common super-type with Catalog/Engine"],
+      "proof_meter": ["compile-fail: Store evaluating a query"],
+      "delete_meter": ["rg -n 'pub struct Store' crates/kyzo-core/src/store/contract.rs → exactly 1"],
+      "carried_notes": ["§1: Store owns durable ordered bytes, the sole StableCommitCap/Committed door, dense CommitOrdinal + domain counters, IncarnationId + NonceLease floors in the WAL, write lineage under WriteAuthority signing. It never owns schema interpretation, Record minting, or query evaluation."]
+    },
+    "crates/kyzo-core/src/store/open.rs": {
+      "kind": "NEW-SEAT — Store identity + open capability + genesis",
+      "owns": ["StoreId", "StoreOpen", "genesis construction (seals FenceEpoch::genesis, CryptoDomain, optional RecoveryMatrix, ordinal StagingTTL, size class, entropy arm)"],
+      "ban": ["path-as-identity", "public path-taking open", "post-genesis RecoveryMatrix/StagingTTL setters"],
+      "proof_meter": ["compile-fail: path-only open; two-Store StoreOpen"],
+      "delete_meter": ["rg -n 'struct StoreOpen' crates/kyzo-core/src/store/open.rs → exactly 1"],
+      "carried_notes": [
+        "§4: identity is the sealed genesis/fork-minted digest; path/URL is rebindable location; rename/move preserves identity; restore preserves READABLE identity — write continuity was never in the bytes.",
+        "§5/§6: StoreOpen is TAG-ratcheted — one Store scope, closed verb family (open/read/write as sealed variants), bitemporal grant/revoke; transport may authenticate, never authorize.",
+        "§88: genesis seals the human-operable size class; at ceiling writes refuse StoreFull; Engine may compose splits as workflow."
+      ]
+    },
+    "crates/kyzo-core/src/store/authority.rs": {
+      "kind": "NEW-SEAT — write authority + incarnation identity",
+      "owns": ["WriteAuthority", "IncarnationMintCap", "IncarnationId", "OpenOrdinal", "Entropy", "RecoveryMatrix", "address fence"],
+      "ban": ["watermark/consume-reissue on WriteAuthority", "derive(KEK,…) for WriteAuthority", "IncarnationMintCap serialization (never in packs)", "second floor organ outside the WAL"],
+      "proof_meter": ["compile-fail: WriteAuthority with mutable state"],
+      "delete_meter": ["rg -n 'struct WriteAuthority' crates/kyzo-core/src/store/authority.rs → exactly 1"],
+      "carried_notes": [
+        "§2: immutable, affine, signing; minted at genesis/recovery/fork; lives in client keystore/HSM beside the root KEK; authorizes the SweepDoor only. HA is token move.",
+        "§62: IncarnationId=(OpenOrdinal, Entropy); OpenOrdinal minted strictly above every sealed predecessor in the lineage (recycle Unconstructible — constructor-guarded against WAL/seal history); Entropy distinguishes clones (negligible-collision, honestly Unexposed); Id is durable history (WAL-headed, seal-bound, in packs); MintCap is session-only.",
+        "Capability lattice: govern ≠ audit ≠ read ≠ encrypt — four doors, holding one confers none of the others."
+      ]
+    },
+    "crates/kyzo-core/src/store/epoch.rs": {
+      "kind": "NEW-SEAT — epochs and same-principal advance",
+      "owns": ["FenceEpoch", "CryptoDomain", "EpochGrant", "IntentClear", "advance Committed event"],
+      "ban": ["fabric-minted write continuity", "epoch advance under live current-epoch footprints without IntentClear (RecoveryGrant exempt)"],
+      "delete_meter": ["rg -n 'struct FenceEpoch' crates/kyzo-core/src/store/epoch.rs → exactly 1"],
+      "carried_notes": [
+        "§56/§72: advance is itself a Committed event — the last mint in the predecessor CryptoDomain, its root the mandatory chain predecessor of the successor domain's genesis root; recovery advances seal a typed recovery link auditors can distinguish; seals never span an epoch transition (§26).",
+        "Same principal + live token: new CryptoDomain, same KEK, new IncarnationId."
+      ]
+    },
+    "crates/kyzo-core/src/store/grants.rs": {
+      "kind": "NEW-SEAT — grants are seeds; materialize is pure",
+      "owns": ["ForkGrant", "RecoveryGrant", "GrantId", "materialize", "AncestorReadGrant"],
+      "ban": ["discovery-time identity entropy outside the grant seed", "grant-time kill of the original token", "post-grant shared-confidentiality Rotate", "in-place WriteAuthority reissue for the same epoch"],
+      "delete_meter": ["rg -n 'fn materialize' crates/kyzo-core/src/store/grants.rs → deterministic/idempotent doc + implementation present"],
+      "carried_notes": [
+        "§68: ForkGrant binds GrantId, predecessor StoreId, fork-point root, successor principal, identity seed, key-material commitment; materialize is pure/deterministic/idempotent — same grant → same successor StoreId and derivation inputs; second discovery converges or refuses GrantAlreadyMaterialized; original lineage continues untouched; successor secrets born under fork KEK.",
+        "§2: RecoveryGrant obeys the same seed law plus one-shot quorum — predecessor FenceEpoch in the signed payload; a second valid grant for one predecessor epoch is quorum equivocation → poison for the signing set's authority, never a second lineage; recovery keys are a distinct custodian class.",
+        "AncestorReadGrant: O(epochs) rewrap; cross-fork foreign-CryptoDomain plaintext Unconstructible."
+      ]
+    },
+    "crates/kyzo-core/src/store/sweep.rs": {
+      "kind": "NEW-SEAT — the ruled commit door",
+      "owns": ["SweepDoor", "IntentionQueue", "AdmittedIntent", "IntentOrdinal", "CommitOrdinal", "Committed"],
+      "ban": ["timers (wake ≠ timer: park only on queue non-empty or shutdown)", "early ack before the batch barrier", "refuse-as-durable-event to fill ordinal holes", "cut advancement on ghosts", "seal without session recheck"],
+      "proof_meter": ["compile-fail: CommitOrdinal minted at admission; Committed constructed outside the door"],
+      "delete_meter": ["rg -n 'struct CommitOrdinal' crates/kyzo-core/src/store/sweep.rs → exactly 1"],
+      "carried_notes": [
+        "§25: LMAX-shaped — single commit thread, continuous sweep → one StableCommitCap barrier → sweep again. IntentOrdinal decides who goes first (Store-monotonic, may gap freely — contention carriage, never sealed history); CommitOrdinal records what happened (dense by construction, assigned only at the durable event, in IntentOrdinal order among successes; predecessor-hash seals it — sole logical history authority).",
+        "Incarnation/epoch recheck before sealing ANY batch: mismatch → WriteSessionDead, zero sealed bytes — Optimistic and Fenced alike.",
+        "Ack law: no intention in batch N acked before batch N's barrier returns. Committed requires WriteAuthority + session IncarnationId + StableCommitCap.",
+        "Multi-thread commit with coalescing timer is Unexposed until kit/DST fails — not licensed."
+      ]
+    },
+    "crates/kyzo-core/src/store/commit_cap.rs": {
+      "kind": "NEW-SEAT — host commit-proof arms",
+      "owns": ["StableCommitCap", "SnapshotFork declaration", "ForkGenerationWitness"],
+      "ban": ["open bool capability", "arm without SnapshotFork declared (omission is not exclusion)", "production Committed from kit pass alone"],
+      "delete_meter": ["rg -n 'enum StableCommitCap' crates/kyzo-core/src/store/commit_cap.rs → closed sum with per-arm SnapshotFork"],
+      "carried_notes": [
+        "§27: closed sum (NativeFsyncProof | PlatformTransactionProof | …); SnapshotFork=yes arms REQUIRE misuse-resistant AEAD (SIV) as an arm condition; each arm ships its host failure DST before minting production Committed; the SweepDoor barrier IS the arm's commit proof.",
+        "§74/§85: WASM/OPFS/memory without a sealed arm cannot mint Committed — costume redefinition Unconstructible; ForkGenerationWitness remint makes mid-session uniqueness Unconstructible for that arm only (density-local claim)."
+      ]
+    },
+    "crates/kyzo-core/src/store/wal.rs": {
+      "kind": "NEW-SEAT — the sole commit-order authority in the retained suffix",
+      "owns": ["WAL segment format (epoch-headed)", "cross-segment hash chain", "replay", "mutable floors (NonceLease + IncarnationId records)"],
+      "ban": ["SST-as-source-of-truth after flush", "per-segment checksums without the cross-boundary chain"],
+      "delete_meter": ["rg -n 'fn replay' crates/kyzo-core/src/store/wal.rs → exactly 1"],
+      "carried_notes": [
+        "§21: within the retained suffix, replay from durable segments alone reconstructs Engine-visible state; memtables/SSTs wipe and rebuild as cache; WAL-wins rescoped — a sealed checkpoint disagreeing with retained WAL is an integrity fault/poison.",
+        "§24: each record covers the predecessor hash; the first record of segment N covers the last hash of segment N−1 — splice of two valid prefixes is unrepresentable."
+      ]
+    },
+    "crates/kyzo-core/src/store/nonce.rs": {
+      "kind": "NEW-SEAT — pipelined NonceLease",
+      "owns": ["NonceLease", "MintDomain", "DomainCounter", "pure nonce fn"],
+      "ban": ["raw/volatile nonce constructors", "per-intention leases", "shared counters across MintDomains"],
+      "proof_meter": ["compile-fail: encrypt without a durable lease"],
+      "delete_meter": ["rg -n 'enum MintDomain' crates/kyzo-core/src/store/nonce.rs → Commit | Compact | Rotate exactly"],
+      "carried_notes": [
+        "§25/§62: bootstrap persists IncarnationId + Lease[0] under one barrier; batch N encrypts under already-durable Lease[N], appends ciphertext + reservation for Lease[N+1], one barrier, then acks. Reserve-before-encrypt by construction; one barrier steady-state; unused remainder burns; gaps legal; crash mid-lease resumes strictly above the highest durably reserved ceiling. Compact and Rotate run the same pipeline shape on independent DomainCounters.",
+        "Nonce = pure(MintDomain, DomainCounter, CryptoDomain, IncarnationId). Signature unfrozen until campaigns green (carried obligation)."
+      ]
+    },
+    "crates/kyzo-core/src/store/seal.rs": {
+      "kind": "NEW-SEAT — CheckpointSeal: prefix authority transfer",
+      "owns": ["CheckpointSeal", "truncate (consumes seal)", "seal verification"],
+      "ban": ["truncation without a covering seal", "seals spanning epoch transitions", "plaintext ShredSalt/DEK/WriteAuthority/AuditKey material inside seals", "silent prefer-dump on mismatch"],
+      "proof_meter": ["compile-fail: truncate without consuming a seal"],
+      "delete_meter": ["rg -n 'struct CheckpointSeal' crates/kyzo-core/src/store/seal.rs → exactly 1"],
+      "carried_notes": [
+        "§26 binding list (minimum): StoreId; CryptoDomain; cut FenceEpoch; state root at cut; final WAL hash of the covered prefix; checkpoint manifest digest; FormatVersion; Catalog generation at cut; retained-object manifest digest INCLUDING every Pending ObjectSlot at cut; live PermanenceCandidate manifest digest; retained-certificate/ReplicaCustody manifest digest; NonceLease floors; Incarnation history boundary; prior seal digest or genesis digest.",
+        "Mint requires: replay of the covered prefix reproduces the checkpoint exactly; a retention certificate covers every snapshot/as-of obligation in the prefix. Unsealed dumps stay disposable; leave-is-free = seal + suffix + objects, or full WAL + objects."
+      ]
+    },
+    "crates/kyzo-core/src/store/objects.rs": {
+      "kind": "NEW-SEAT — the object seam: staging, permanence, durability classes, GC",
+      "owns": ["ObjectRef", "StagingToken", "ObjectSlot", "VolatilePending", "PermanenceCandidate", "PermanenceWitness", "StagingTTL", "ObjectDurabilityClass", "Repair", "Downgrade", "reclaim certificate", "retention certificate", "object GC", "closed object-store driver trait (put/get/delete/list)"],
+      "ban": ["wall-clock expiry authority", "class-less Durable", "total-order class ladders", "confirm-then-strip", "immortal candidates", "orphan puts (federation cannot invent refs — §71)", "direct backend API calls bypassing the closed trait (§15)"],
+      "delete_meter": ["rg -n 'enum ObjectSlot' crates/kyzo-core/src/store/objects.rs → Pending | Durable exactly"],
+      "carried_notes": [
+        "§22: logical ObjectSlot = Pending(StagingToken) | Durable(ObjectRef); physical seam VolatilePending → PermanenceCandidate → Durable; expires_at_transaction_cut = stage CommitOrdinal + genesis-sealed StagingTTL in dense CommitOrdinals; idle Stores leave staged objects unresolved, not decayed — deliberate law; reclaim certificate covers VolatilePending and PermanenceCandidate, capability-decided, idle or busy; operator surface exposes staged-object pressure.",
+        "PermanenceCandidate inherits expires_at: before cut confirm or reclaim; at/past cut reclaim only; PermanenceWitness::mint takes the current committed cut and is constructor-guarded Unconstructible when cut ≥ expires_at (seated_laws).",
+        "ObjectDurabilityClass: product of sealed dimensions {confirmed_copies, failure_domains, regions, consistency, integrity_verification, backend_contract}; dominance = every dimension ≥; Repair re-stages content-hash-verified bytes (non-identical bytes constructor-guarded Unconstructible) and requires a dominating class or explicit auditable Downgrade.",
+        "§23: retention certificates gate Durable GC only; two exits before cut, one after; §16: refs/tokens Store-identity-prefixed; §71: put requires an existing committed ObjectSlot/Record naming.",
+        "Client contract (§22, normative): Pending licenses ref + expiry decision (handle Decayed/ObjectMissing); PermanenceCandidate licenses no ordinary read; Durable licenses the sealed product class (still handle corruption/unavailability)."
+      ]
+    },
+    "crates/kyzo-core/src/store/transcript.rs": {
+      "kind": "NEW-SEAT — CanonicalTranscript: the one signed-byte law",
+      "owns": ["CanonicalTranscript", "golden vector fixtures (in-repo under store/golden/)", "unknown-version refuse door"],
+      "ban": ["sealed Unicode normalization surfaces (bytes and typed ids only)", "map encodings without duplicate-key refusal", "allocation before bounds checks"],
+      "proof_meter": ["compile-fail: second serialization path for a sealed artifact"],
+      "delete_meter": ["rg -n 'CanonicalTranscript' crates/kyzo-core/src/store/transcript.rs → one versioned constructor; golden vectors present in-repo"],
+      "carried_notes": [
+        "§59: encoding checklist as law — field ids and ordering; integer width/signedness/endianness; optional/default encoding; length bounds and recursion limits before allocation; hash/signature/key-id/domain-label encodings; AEAD nonce and AAD transcript fields; unknown version refuses; migration epochs anchor upgrades (§81).",
+        "Golden vectors for every sealed artifact kind (CheckpointSeal, AdmissionCertificate, ForkGrant, RecoveryGrant, MergeProof headers, AuditKey leaves, WAL headers); the mutation campaign asserts against the vectors, not the implementation's opinion of canonical."
+      ]
+    },
+    "crates/kyzo-core/src/store/crypto.rs": {
+      "kind": "NEW-SEAT — key hierarchy, shred, AEAD",
+      "owns": ["DEK derive", "KEK unwrap capability", "ShredSalt", "WrappedShredSalt", "AuditKey", "AEAD/SIV arms", "compression-before-encryption pipeline", "shred verb"],
+      "ban": ["plaintext-mode flag", "encrypt-then-compress", "unstructured random DEKs / single global DEK", "root-over-ciphertext (roots are cipher-invariant — merkle.rs consumes plaintext canonical)"],
+      "proof_meter": ["compile-fail: ShredSalt persistence"],
+      "delete_meter": ["rg -n 'struct ShredSalt' crates/kyzo-core/src/store/crypto.rs → exactly 1; no serde derive"],
+      "carried_notes": [
+        "§64: DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt) after unwrap of WrappedShredSalt; plaintext salt exists only inside the derivation moment in memory; shred = destroy WrappedShredSalt + all authorized replicas within the sovereignty boundary (packs via retention); exfiltrated copies are outside the threat model and the Spec says so.",
+        "§63: at-rest layer may use host-held wrapped DEKs; zero-access still requires the client/HSM root — two permanent layers. §67: compression precedes AEAD. §59: AuditKey leaf MAC over CanonicalTranscript; AuditKey ≠ AncestorReadGrant ≠ decrypt ≠ WriteAuthority; post-fork cross-lineage audit with foreign AuditKey Unconstructible."
+      ]
+    },
+    "crates/kyzo-core/src/store/compact.rs": {
+      "kind": "NEW-SEAT — deterministic compaction under encryption",
+      "owns": ["pace = f(debt)", "range-class commit-time classifier", "MergeProof", "KV-separation threshold"],
+      "ban": ["wall-clock/CPU/IO inputs to pace (replay determinism dies)", "background reclassification of frozen↔current", "ciphertext bit-identity as sealed compact identity"],
+      "proof_meter": ["compile-fail: merged packet without MergeProof"],
+      "delete_meter": ["rg -n 'fn pace' crates/kyzo-core/src/store/compact.rs → signature over debt quantities only"],
+      "carried_notes": [
+        "§45: pace is a pure function of committed-byte/reclaimable-debt quantities. §46: range class fixed at write from the bitemporal coordinate; densify-once-then-pin. §66: compaction copies sealed packets unchanged or mints merged packets only via private MergeProof over plaintext content hashes/lineage sealed into the output header, advancing Compact-domain counters under the door; sealed identity = plaintext content + lineage hashes + state roots — never ciphertext; salt regeneration under MergeProof does not change sealed identity.",
+        "§44: WA and retain/space-amp are the two hard release blockers; RA is published Spec metric."
+      ]
+    },
+    "crates/kyzo-core/src/store/failure.rs": {
+      "kind": "NEW-SEAT — the failure lattice + the Refused ledger + the debt economy + the operator surface",
+      "owns": ["StoreRefuse (closed enum — the Refused claim-tag ledger)", "Quarantined(range)", "Poisoned", "failure lattice closed table", "debt ledger", "operator health surface (debt, reclaimable, quarantine, last verify, staged-object pressure, fence pressure)"],
+      "ban": ["bool soup instead of the closed lattice", "last-known-good serve", "quarantine visibility to ordinary tenant queries (§82)", "silent stall anywhere in the economy"],
+      "delete_meter": ["rg -n 'enum StoreRefuse' crates/kyzo-core/src/store/failure.rs → exactly 1 closed enum carrying every variant in this instance's refused ledger"],
+      "carried_notes": [
+        "§52 closed table: Quarantined-only → reads/writes outside ranges OK, quarantined ranges refuse; Poisoned → operator recover/verify only; both → Poisoned dominates while quarantine metadata is retained for diagnosis. §50: unknown-invariant → whole-Store Poisoned fail-stop, never silent degrade.",
+        "§55 dual fault: typed partial — intact ordered facts + named ObjectCorrupt; never one mixed success, never whole-ask refusal of intact meaning.",
+        "§82: health is queryable data on a sealed operator surface only — tenant blindness."
+      ]
+    },
+    "crates/kyzo-core/src/store/replica.rs": {
+      "kind": "NEW-SEAT — certificates, custody, replica verification",
+      "owns": ["AdmissionCertificate", "verify_replica", "ReplicaKey", "ReplicaCustody", "PendingAnchor anchoring", "LocalProjection contract reference"],
+      "ban": ["reshape/re-author of certified meaning", "in-place local reinterpretation under a local Catalog cut", "strict-contiguous-only or head-attested catch-up modes", "exposing never-anchored PendingAnchor as queryable"],
+      "delete_meter": ["rg -n 'fn verify_replica' crates/kyzo-core/src/store/replica.rs → exactly 1"],
+      "carried_notes": [
+        "§69: certificate binds protocol version; origin StoreId/FenceEpoch/CommitOrdinal; schema cut; record digest; predecessor history digest; post-state root; authorizing key id; scope manifest digest + issuer key lineage + validity-as-of origin cut; OperationKey when composed; signature — all under CanonicalTranscript.",
+        "Accepting verify produces a durable custody Committed via the SweepDoor carrying origin coordinates (what) and local (StoreId, CommitOrdinal) (when); creates NO new Record identity; ReplicaKey = H(origin_store, origin_epoch, origin_commit, record_digest) makes re-delivery converge (§70: at-least-once bytes, exactly-once custody).",
+        "Origin-schema interpretation sealed forever; a local Catalog produces exactly LocalProjection (rebuildable cache) or a derived Record through ordinary admission carrying the certificate as evidence — no third constructor.",
+        "Arrival is anchored-sparse: out-of-order certificates retained opaque (PendingAnchor) until a seal or contiguous chain anchors origin coordinates; never-anchored is reclaimable under operator pressure."
+      ]
+    },
+    "crates/kyzo-core/src/store/idempotency.rs": {
+      "kind": "NEW-SEAT — the one idempotency organ",
+      "owns": ["OperationKey", "OperationOutcome", "request_digest memo"],
+      "ban": ["memoizing transient refuses as terminal", "parallel token maps", "key-as-mutable-slot"],
+      "delete_meter": ["rg -n 'enum OperationOutcome' crates/kyzo-core/src/store/idempotency.rs → Committed | DeterministicTerminalRefuse | Absent exactly"],
+      "carried_notes": [
+        "§38/§39: OperationKey = H(domain_label, CompositionId, StoreId, StepId); entry records (key, request_digest, terminal_outcome) where request_digest covers canonical envelope + schema + authority coordinates; same key+digest replays; ReadAt mints no entries; single-store safe-retry uses the same construction with a degenerate CompositionId — one organ."
+      ]
+    },
+    "crates/kyzo-core/src/store/merkle.rs": {
+      "kind": "EXTEND — chained roots become the Spec's accountability spine",
+      "owns": ["per-commit chained state root", "as-of root", "typed recovery/fork chain links", "fork-equivalence proof"],
+      "ban": ["current-only roots as the sole digest", "roots over ciphertext", "path/URL equivalence claims"],
+      "delete_meter": ["rg -n 'as_of_root|fork_point' crates/kyzo-core/src/store/merkle.rs → both surfaces present"],
+      "carried_notes": ["§56/§57/§58: every Committed mints a root chained to the prior; recovery links auditor-distinguishable; equality at a cut = recomputed roots; fork-equivalence = shared fork-point root without revealing post-fork content; roots plaintext-canonical, cipher-invariant, leaf-MAC'd under AuditKey."]
+    },
+    "crates/kyzo-core/src/store/time.rs": {
+      "kind": "EXTEND — transaction time at the durable event",
+      "owns": ["txn-time mint at the commit door"],
+      "ban": ["client txn time", "Engine-before-append txn time", "foreign timestamps ordering local commits"],
+      "delete_meter": ["rg -n 'ClientTxnTimeForbidden|ForeignTxnTime' crates/kyzo-core/src/store → variants present in the ledger"],
+      "carried_notes": ["§30/§31: within one Store, order is dense CommitOrdinal (never IntentOrdinal); physical observation optional for humans; across federation each Store's counter is namespaced by identity — no shared wall clock."]
+    },
+    "crates/kyzo-core/src/store/backup.rs": {
+      "kind": "EXTEND — leave-is-free under the Spec",
+      "owns": ["leave-is-free pack builder (seal+suffix+objects | full WAL+objects)", "pack hygiene scrub point", "import verify ceremony"],
+      "ban": ["WA/KEK/plaintext salt/AuditKey/MintCap in packs", "packs omitting WrappedShredSalt or IncarnationId history", "green incomplete restore"],
+      "delete_meter": ["rg -n 'WrappedShredSalt' crates/kyzo-core/src/store/backup.rs → pack inclusion path present"],
+      "carried_notes": ["§79/§65: restore yields identical READABLE state or typed refuse; write resume needs the separately-held token (or grants); post-shred restore converges to Refuse(Shredded) for that segment; §80: foreign dumps only under capability + chain/root verify."]
+    },
+    "crates/kyzo-core/src/store/keys.rs": {
+      "kind": "EXTEND — the closed Secret key class",
+      "owns": ["closed Secret class (DEKs, KEKs, passwords, bearer tokens, raw private keys, credential-marked material)"],
+      "ban": ["open-ended class growth without a Spec edit"],
+      "delete_meter": ["rg -n 'Secret' crates/kyzo-core/src/store/keys.rs → closed class enum present"],
+      "carried_notes": ["§61: illegal in any indexed/memcmp key; admission refuses SecretInIndexedKey; the memcmp-tax note is published."]
+    },
+    "crates/kyzo-core/src/store/verify_walk.rs": {
+      "kind": "EXTEND — table-scoped block identity + quarantine",
+      "owns": ["table/keyspace-scoped checksum identity", "quarantine range minting"],
+      "ban": ["store-global-only block identity (swap-two-tables goes undetected)"],
+      "delete_meter": ["rg -n 'keyspace|table' crates/kyzo-core/src/store/verify_walk.rs → scoped identity present"],
+      "carried_notes": ["§49: checksum binds table/keyspace identity + logical block — misplaced-but-intact is caught."]
+    },
+    "crates/kyzo-core/src/session/admit.rs": {
+      "kind": "EXTEND (02's seat) — the Record admission monopoly under the Spec",
+      "owns": ["private KyzoRecord constructors", "SemanticSurface", "evidence-stack admission law", "placement check", "AdmissionCertificate mint call", "KV-ingest refuse door"],
+      "ban": ["record minting from store/decode modules", "always-embed surfaces", "verify-then-trust ingest"],
+      "proof_meter": ["compile-fail: store module minting KyzoRecord"],
+      "delete_meter": ["rg -n 'SemanticSurface' crates/kyzo-core/src/session/admit.rs → enum present with None variant"],
+      "carried_notes": ["§8/§10/§11/§12/§13: bytes decode to ordered currency/ObjectRef material, never KyzoRecord; interpreted knowledge requires evidence coordinates; object bytes appear in results only as opaque ObjectRef — materialize is a separate verb yielding bytes, never DataValue truth."]
+    },
+    "crates/kyzo-core/src/session/footprint.rs": {
+      "kind": "NEW-SEAT — AskShape + footprint algebra + Frontier",
+      "owns": ["AskShape", "Footprint", "Frontier", "EdgePredicate", "accelerator contract (NegativeConclusive | PositiveConclusive | Neither)", "(FenceEpoch, IncarnationId) footprint index", "fence-pressure operator feed"],
+      "ban": ["Underivable inside Fenced", "under-approximating footprints", "accelerator-as-admission-authority", "durable lock organs, expiry timers, abandonment ceremonies"],
+      "proof_meter": ["compile-fail: Fenced(Underivable); reverse Frontier"],
+      "delete_meter": ["rg -n 'enum Footprint' crates/kyzo-core/src/session/footprint.rs → Exact | Envelope | IndexDomain | WholeRelation | Frontier | Underivable exactly"],
+      "carried_notes": [
+        "§36: Optimistic = full SSI, terminal conflict refuse carrying ranges, caller re-derives; Fenced = sound-superset footprint sealed with Catalog generation (Store commit position); footprints live only while the owning incarnation's session is live — session-memory; admission checks current (FenceEpoch, IncarnationId); the SweepDoor recheck is the paired door (store/sweep.rs).",
+        "Frontier: Direction in the type; self-extension is a plan error; authority is the reachability projection at the admission snapshot; EdgePredicate Catalog-sealed/plan-time total; data-dependent recursion that cannot construct Frontier falls back to Envelope over closed relations — coarse and honest; Envelope/Frontier width vs abort rates are bench-law ergonomics.",
+        "Write skew and phantoms Unconstructible under SSI-class detection; SSI-abort-free extends to Frontier; admission acquires the whole footprint before evaluation."
+      ]
+    },
+    "crates/kyzo-core/src/session/composition.rs": {
+      "kind": "NEW-SEAT — client-rooted cross-store composition",
+      "owns": ["CompositionId", "composition sum BestEffort | Saga | ReadAt", "Saga compensation keying", "ReadAt per-Store cut vector"],
+      "ban": ["cross-store Committed / TryAtomic / global snapshot", "Engine-minted CompositionId", "compensations under a different CompositionId"],
+      "proof_meter": ["compile-fail: Engine-minted CompositionId"],
+      "delete_meter": ["rg -n 'struct CompositionId' crates/kyzo-core/src/session/composition.rs → exactly 1"],
+      "carried_notes": ["§38: CompositionId = H(principal, client_operation_id, canonical_composition_digest); caller-durable before the first Store step; fresh processes re-derive from the same client intent; Engine may echo, never source. §53: Engine owns FederationConflict; Store knows one address's law."]
+    },
+    "crates/kyzo-core/src/session/catalog.rs": {
+      "kind": "EXTEND (02's seat) — Catalog becomes the Spec's interpretive capability",
+      "owns": ["as-of schema evaluation", "schema-mutating-Record admission gate", "Catalog generation as commit position"],
+      "ban": ["bytes, fsync, counters, any Catalog-owned persistence", "generation as a second clock"],
+      "proof_meter": ["compile-fail: Catalog write path"],
+      "delete_meter": ["rg -n 'fsync|WriteTx' crates/kyzo-core/src/session/catalog.rs → zero write-door surface"],
+      "carried_notes": ["§7: schema Records are facts; Catalog is their interpreter — rebuildable from replay like every projection; schema time and fact time are one clock; standing-view generation pin = Store commit pin (§20)."]
+    },
+    "crates/kyzo-core/src/session/db.rs": {
+      "kind": "EXTEND (02's seat) — the Engine seat; §1 demolition discharges here",
+      "owns": ["Engine (composition of Store + Catalog capabilities)", "starts-or-not admission refuse taxonomy"],
+      "ban": ["ambient fused handle granting storage + schema + evaluation", "tenant-weight or conflict-history scheduling", "router-hop ceremony on the N=1 embed path (§3)"],
+      "proof_meter": ["compile-fail: Engine minting Committed without Store write capability"],
+      "delete_meter": ["rg -n 'struct Engine' crates/kyzo-core/src/session/db.rs → exactly 1 after demolition"],
+      "carried_notes": ["§1/§3: three sealed non-interchangeable types, no public common super-type; N=1 shares the unskippable laws (Store identity in planning, admission monopoly, no anonymous local ids), not router ceremony; §41: one Store = one belief surface — B observes A's Committed without reopen; fence blocks second-writer mint only."]
+    },
+    "crates/kyzo-bin/src/engine.rs": {
+      "kind": "EXTEND — host composition root wiring (config-once)",
+      "owns": ["genesis/arm/keystore config-once injection into store/open.rs construction"],
+      "ban": ["engine internals imports", "host-side caches or shadow state the engine cannot account for"],
+      "delete_meter": ["rg -n 'StableCommitCap' crates/kyzo-bin/src/engine.rs → arm selection injected, not defined here"]
+    },
+    "crates/kyzo-trials/src/dst.rs": {
+      "kind": "EXTEND — the storage campaign lanes (merge witnesses per §95; outside Plan DoD)",
+      "owns": ["storage campaign lanes named per campaigns_proposed"],
+      "ban": ["campaign green substituting for a story's board Check (CLAUDE.md: full gates are merge witnesses outside Plan)"],
+      "delete_meter": ["each campaigns_proposed entry has a named lane"]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty — ratify the NEW-SEATs",
+      "must_add": [
+        "store/{open,authority,epoch,grants,sweep,commit_cap,wal,nonce,seal,objects,transcript,crypto,compact,failure,replica,idempotency}.rs — sixteen NEW-SEAT lines with one-phrase ownership each",
+        "session/{footprint,composition}.rs — two NEW-SEAT lines",
+        "session/db.rs description rewrite: Engine composition seat (§1), replacing 'primary Db capability handle'",
+        "kyzo-bin/src/engine.rs description rewrite: holds the Engine composition (not 'a live Db')"
+      ],
+      "must_delete_lines_for": [],
+      "delete_meter": ["all eighteen NEW-SEAT paths present on the map after ratification"]
+    }
+  },
+  "final_meters": [
+    "every by_target seat file exists with its owns constructs (spot meter: rg for each owns anchor symbol at its seat → exactly 1 definition)",
+    "ALL proof_meters green (trybuild suites under crates/kyzo-core/tests/compile_fail/)",
+    "StoreRefuse closed enum carries every refused-ledger variant; no refuse string without a variant",
+    "golden vectors present in-repo for every sealed artifact kind; CanonicalTranscript mutation lane green",
+    "campaign lanes named in kyzo-trials/src/dst.rs for every campaigns_proposed entry",
+    "Nonce/WriteAuthority/SnapshotFork signatures carry the unfrozen-until-campaign doc note until both gating campaigns are green",
+    "target-arch ratification executed (eighteen NEW-SEAT lines + two description rewrites)",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "SweepDoor verb holes — retry: a refused/cancelled intent re-admits as a NEW AdmittedIntent (fresh IntentOrdinal; old one gaps); partial failure: a batch seals only successes, in IntentOrdinal order, refuses advance no cut, and an epoch/incarnation mismatch seals ZERO bytes; lateness: a resurrected task from a dead session reaches the door and gets WriteSessionDead",
+      "seat": "store/sweep.rs",
+      "meter": "old-session resurrection DST (pause post-admission, reopen new incarnation, resume old task at every pipeline boundary → WriteSessionDead before any seal) + mixed-load ordinal DST (gaps in IntentOrdinal, dense CommitOrdinal) green",
+      "exceptions": []
+    },
+    {
+      "law": "NonceLease verb holes — retry/crash: resume mints strictly above the highest durably reserved ceiling (unused burns); partial failure: ciphertext without its lease reservation durable is unreachable (reserve-before-encrypt); lateness: none — leases carry no wall-clock",
+      "seat": "store/nonce.rs",
+      "meter": "pipeline power-cut DST green: cut at every barrier boundary; zero (key,nonce) reuse across resume",
+      "exceptions": []
+    },
+    {
+      "law": "materialize verb holes — retry: pure/idempotent (same grant → same successor); partial failure: a half-materialized successor re-derives deterministically from the grant; lateness: an oblivious original continuing under the old domain is Unexposed until chain-meet → poison, and GrantAlreadyMaterialized carries the existing identity on incompatible re-discovery",
+      "seat": "store/grants.rs",
+      "meter": "ForkGrant double-discovery DST (concurrent + restore) → identical successor or typed refuse, zero divergent lineages; RecoveryGrant equivocation DST → poison for the signing set",
+      "exceptions": []
+    },
+    {
+      "law": "object staging verb holes — retry: re-stage mints a new StagingToken; partial failure: crash between strip and Durable leaves a PermanenceCandidate with two exits before cut and one after; lateness: PermanenceWitness::mint(cut ≥ expires_at) has no constructor (constructor-guarded Unconstructible per §22), resolve past cut → Decayed, and idle Stores expire nothing",
+      "seat": "store/objects.rs",
+      "meter": "PermanenceCandidate strip/stall-past-cut DST + idle StagingTTL DST (no decay without cut advance; reclaim always lawful) green",
+      "exceptions": []
+    },
+    {
+      "law": "Repair verb holes — retry: idempotent over identical bytes; partial failure: failed re-stage leaves ObjectMissing standing (no half-Durable); lateness/deviation: non-identical bytes constructor-guarded Unconstructible; non-dominating class constructor-guarded Unconstructible; incomparable refuses carrying both classes; Downgrade is an auditable append-only supersession",
+      "seat": "store/objects.rs PermanenceWitness",
+      "meter": "durability dominance / incomparable / Downgrade DST across dominating, dominated, and incomparable class pairs green",
+      "exceptions": []
+    },
+    {
+      "law": "verify_replica verb holes — retry: re-delivery converges on ONE custody Committed via ReplicaKey; partial failure: out-of-order certificates retain opaque as PendingAnchor; lateness: never-anchored PendingAnchor is reclaimable under operator pressure, never silently queryable",
+      "seat": "store/replica.rs",
+      "meter": "five-delivery custody DST (five deliveries + two crashes → one local ordinal) + reversed/gapped/forged-manifest + accept-then-revoke campaigns green",
+      "exceptions": []
+    },
+    {
+      "law": "OperationKey verb holes — retry: same key + digest replays the memoized terminal outcome; partial failure: Engine crash mid-composition → fresh process re-derives CompositionId and re-asks each Store, zero duplicate effects; lateness/deviation: transient refuses never memoize; changed digest → OperationKeyReuse",
+      "seat": "store/idempotency.rs + session/composition.rs",
+      "meter": "CompositionId crash-before-return DST + composition Engine-crash retry DST (zero duplicate semantic effects) green",
+      "exceptions": []
+    },
+    {
+      "law": "CheckpointSeal verb holes — retry: seal mint is re-derivable (replay-verified) and truncation consuming a seal is idempotent under crash-mid-truncate; partial failure: a partially applied truncation converges on recovery or the seal stands unconsumed; lateness: restore against any stale/mismatched seal → SealMismatch, never silent prefer-dump",
+      "seat": "store/seal.rs",
+      "meter": "SealMismatch DST (incl. ReplicaCustody manifest loss and candidate-manifest loss) + truncate-crash convergence DST green",
+      "exceptions": []
+    },
+    {
+      "law": "epoch/recovery verb holes — retry: advance re-presents the token into a new epoch session; partial failure: crash-during-recovery converges idempotently to the same sealed state; lateness: orphans that observed recovery land AuthorityRecovered at the next admission-visible write boundary; stale-epoch Committed is Unconstructible at local doors only for observers (never distributed prevention)",
+      "seat": "store/epoch.rs + store/grants.rs + store/sweep.rs",
+      "meter": "partitioned-old-writer-through-RecoveryGrant DST (dual-chain poison + remediation surface) + RecoveryGrant mid-ask AuthorityRecovered DST + crash-during-recovery idempotence DST green",
+      "exceptions": []
+    },
+    {
+      "law": "IncarnationId at-rest honesty — historical recycle inside one WAL lineage constructor-guarded Unconstructible (OpenOrdinal strictly above every sealed predecessor); clone divergence Entropy-bounded and never claimed Unconstructible",
+      "seat": "store/authority.rs",
+      "meter": "two-clone at-rest DST: equal OpenOrdinals, differing Entropy, zero (key,nonce) collisions under the approved entropy arm; recycle-attempt refuse test",
+      "exceptions": []
+    }
+  ],
+  "qae": [
+    {
+      "q": "Unconstructible is defined at the sealed Rust type AND crate boundary. Store/Catalog/Engine seated inside kyzo-core share a crate with hosts of engine code — does the epic need a dedicated kyzo-store crate on day one for the §1 claims to be honest?",
+      "a": "No. The claims are proven by crate-consumer trybuild against the sealed lib.rs facade — exactly move_plan v10's precedent — and in-crate hostile modules are already named Unexposed (bindings/adapters marshal, never decide). Start in kyzo-core/src/store/; hoist to a kyzo-store crate later as a mechanical move if WASM/DO binding density or compile-time pressure demands it. Do not block the epic on a crate split.",
+      "e": "The soft alternative in the other direction — claiming module-privacy alone equals the crate-boundary tag — is the real fraud risk; the trybuild-at-the-facade proof form keeps the tag honest either way. Close: every ontology.unconstructible proof names trybuild; the Unexposed ledger names the in-process residual.",
+      "authority": "cut_destiny"
+    },
+    {
+      "q": "Where do §15–§18's fabric constructs (one object-store trait's NATS driver, KvIsNotTruth ingest wall, FabricUnavailable, the semantic router) live — this epic or a federation epic — given the Store must own the object seam NOW?",
+      "a": "Split by ownership, not by feature: the Store-owned halves seat in this epic (closed object-store driver trait at store/objects.rs; FabricUnavailable + KvIsNotTruth variants in the ledgers; the certificate/custody machinery at store/replica.rs). The NATS driver implementation, semantic router, manifest cuts, and account topology are a federation epic over these seats — no Kyzo peer-dial type exists in either epic (§18/§92 is a ban, not a deliverable).",
+      "e": "Building the fabric before the Store's own doors invites carriage-decides drift (the queue's timing becoming existence authority). The seats defined here are exactly what federation may consume; the trait wall (§15) means the driver lands without touching Store law. Close: driver implementations live outside kyzo-core/src/store; grep for jetstream/nats in kyzo-core → zero.",
+      "authority": "cut_destiny"
+    },
+    {
+      "q": "Golden vectors (§59) must outlive implementations — where do the bytes live and who may change them?",
+      "a": "In-repo fixtures beside the transcript seat (crates/kyzo-core/src/store/golden/, one file per sealed artifact kind, referenced by the mutation campaign). Changing a vector requires a FormatVersion decision (§81) recorded in the vector file's header — never a test-fix commit. The campaign asserts implementation-against-vectors, not vectors-against-implementation.",
+      "e": "Vectors that update whenever the encoder changes are the implementation's opinion of canonical — the exact soft alternative §59 deletes. Close: xtask gate refuses vector-file diffs lacking a FormatVersion header change; campaign direction stated in the fixture README.",
+      "authority": "cut_destiny"
+    },
+    {
+      "q": "The SweepDoor (single commit thread, IntentionQueue) and the current fjall WriteTx SSI contract (03) both claim the write path. Which one is the writer during the epic's transition, and what stops a half-built SweepDoor from becoming a second commit door beside the old one?",
+      "a": "One writer at a time, switched by story order: the SweepDoor lands wrapping the existing WriteTx commit as its first StableCommitCap arm's physical apply — the arm's barrier IS today's commit_durable. There is never a release where both doors mint Committed independently; the Committed type's private constructor moves INTO store/sweep.rs in the same story that turns the door on, so the old path stops compiling as a minting path the moment the new one exists.",
+      "e": "The soft alternative — 'keep both doors during migration, gate by flag' — is a second brain with a bool for a conscience; §25 has no flag arm. Close: the compile-fail meter (Committed construction sites only in sweep.rs) plus the delete_guarded_invariant; story sequencing note for the epic's write-path story.",
+      "authority": "cut_destiny"
+    }
+  ],
+  "campaigns_proposed": [
+    { "target_seat": "decisions.md §62/§2 (IncarnationId at-rest; gates nonce/authority signature freeze)", "campaign": "two-clone at-rest DST: clone sealed bytes, open both offline; assert equal OpenOrdinals (M+1), differing Entropy, identically restarting DomainCounters, zero (key,nonce) collisions under the approved entropy arm; then drive both to chain-meet and assert dual-chain poison." },
+    { "target_seat": "decisions.md §27/§62 (live-fork; gates SIV arm and signature freeze)", "campaign": "live-fork mid-sweep DST: fork the process/snapshot between encrypt and barrier on a SnapshotFork=yes arm; assert SIV degrades nonce repeat to message-equality leak only; assert a SnapshotFork=no arm's failure DST excludes the fork legally." },
+    { "target_seat": "decisions.md §25 (SweepDoor ordinals)", "campaign": "mixed-load ordinal DST: interleave conflicts, capacity refuses, cancels, successes; assert IntentOrdinal gaps freely, CommitOrdinal dense in intent order among successes, refuses advance no cut, and predecessor-hash seals CommitOrdinal only." },
+    { "target_seat": "decisions.md §25 (pipelined NonceLease)", "campaign": "pipeline power-cut DST: cut power at every pipeline boundary (encrypt, append, reserve, barrier, ack); assert reserve-before-encrypt held, resume strictly above durable ceiling, no early ack observed by any client." },
+    { "target_seat": "decisions.md §25/§36 (WriteSessionDead)", "campaign": "old-session resurrection DST: pause a task post-admission, reopen a new incarnation, resume the old task at every pipeline boundary; assert WriteSessionDead with zero sealed bytes at each; Fenced and Optimistic alike." },
+    { "target_seat": "decisions.md §2 (RecoveryGrant physics)", "campaign": "partitioned-old-writer-through-recovery DST: writer never observes the grant, mints a divergent chain under the old CryptoDomain; assert Unexposed until chain-meet, then dual-chain poison + operator remediation surface; observers meanwhile cannot construct stale-epoch Committed at local doors." },
+    { "target_seat": "decisions.md §68 (grants are seeds)", "campaign": "ForkGrant double-discovery DST: materialize the same grant concurrently and from restore; assert identical successor identity or GrantAlreadyMaterialized carrying the existing identity — zero divergent lineages; second RecoveryGrant for one predecessor epoch → equivocation poison." },
+    { "target_seat": "decisions.md §22/§23 (staging + idle law)", "campaign": "idle StagingTTL DST: stage objects, advance no truth; assert nothing expires and reclaim stays lawful; then advance real commits past the cut and assert Decayed on resolve and PermanenceCandidate reclaim-only; assert empty tick commits have no constructor to force decay." },
+    { "target_seat": "decisions.md §22 (durability dominance)", "campaign": "ObjectDurabilityClass DST: Repair with dominating, dominated, and incomparable proposals; assert mint, constructor refusal, and typed both-classes refuse respectively; Downgrade recorded as auditable supersession; Repair with non-identical bytes has no constructor." },
+    { "target_seat": "decisions.md §26 (CheckpointSeal)", "campaign": "SealMismatch DST: restore against seals with each bound digest independently corrupted (incl. Pending-at-cut, live-candidate manifest, ReplicaCustody manifest, Incarnation boundary); every arm refuses SealMismatch; truncate-without-seal fails to compile; crash mid-truncate converges." },
+    { "target_seat": "decisions.md §59 (CanonicalTranscript)", "campaign": "transcript mutation campaign: mutate every sealed-artifact encoder (field order, widths, map order, version bytes); assert divergence from in-repo golden vectors fails the gate; unknown version refuses; duplicate map keys refuse." },
+    { "target_seat": "decisions.md §69/§70 (custody)", "campaign": "five-delivery custody DST: deliver one certificate five times across two crashes; assert exactly one custody Committed (ReplicaKey convergence); reversed/gapped arrival retains PendingAnchor opaque until anchored; forged-manifest and accept-then-revoke refuse in the closed sum." },
+    { "target_seat": "decisions.md §38/§39 (composition)", "campaign": "CompositionId crash DST: crash Engine before returning the id; retry with the same client_operation_id → convergence, zero duplicate effects; replay a valid key with one changed semantic field → OperationKeyReuse; transient refuse never memoizes." },
+    { "target_seat": "decisions.md §36 (footprints)", "campaign": "Footprint crash-holder DST: kill the holding incarnation at every stage; assert locks dead at next open with zero durable residue; reverse-Frontier fails to compile; accelerator-inconclusive-unconfirmable → FrontierUnprovable never admit." },
+    { "target_seat": "decisions.md §29/§28 (durable license + recovery)", "campaign": "power-cut-at-commit-door DST via kyzo-crashfs: every minted Committed survives injected power cut; crash-during-recovery converges idempotently; adversarial crash-instant corpus seals the recovery_time_p999 coefficients; claim/badge refuses above f while open still succeeds." },
+    { "target_seat": "decisions.md §66/§84 (MergeProof determinism)", "campaign": "MergeProof DST: compact identical committed histories on two replicas under controlled domain counters; assert sealed identity equality over plaintext content + lineage + roots while ciphertext differs (salt regen); a merged packet without MergeProof fails to compile." },
+    { "target_seat": "decisions.md §64/§79 (shred × leave-is-free)", "campaign": "ShredSalt leave-is-free DST: full pack round-trip decrypts; shred a segment; restore the old pack → typed Shredded tombstone for that segment, neighbors decrypt, root chain verifies; a KEK-holding adversary without the wrapped salt reconstructs nothing." },
+    { "target_seat": "decisions.md §55 (dual fault)", "campaign": "dual-corruption DST: corrupt objects under intact ordered store and the reverse; assert typed partial (facts + named ObjectCorrupt) and quarantine/poison respectively; no single mixed success type exists to construct." }
+  ]
+}

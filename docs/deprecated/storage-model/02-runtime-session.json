@@ -1,0 +1,442 @@
+{
+  "version": 1,
+  "title": "runtime/ → session/ — relation/mutate/db/db_battery cut destiny under decisions.md",
+  "status": "cut_destiny",
+  "privilege": "Architect cut contract only. decisions.md is sole Spec authority — this file yields on conflict. Current condemned paths appear only as Delete evidence; every seat and rewire destination is a target-tree path. Claim-tag inflation or jointly impossible meters void this plan. Pre-law destinies from deprecated-migrated.md / deprecated-absorbed.md re-derived under the law; corrections recorded as rulings.",
+  "scope": {
+    "this_cut": "Condemned: crates/kyzo-core/src/runtime/{relation,mutate,db,db_battery}.rs — the runtime/ directory dies. Living targets: session/{catalog,access,admit,ops,db,jobs,verify,observe}.rs and exec/plan/compile.rs (IndexPositionUse relocation).",
+    "not_this_json": "query/ (01), storage/ (03), engines/ (04), data+fixed_rule (05), hosts (06), storage-arch seats (07). The §1 Engine/Store/Catalog decomposition of the Db handle is the storage epic's demolition — recorded here as a carried obligation, not executed in this cut.",
+    "foundation_already_true": [
+      "session/{admit,catalog,ops,access,jobs,db(54-line),verify}.rs exist as stubs or partial seats; session/observe.rs landed (212 lines); session/pinned_handle.hex golden bytes present",
+      "exec/plan/compile.rs landed with real content"
+    ],
+    "target_not_current": "by_target and allowlist.targets are target-tree paths only. Current condemned paths live solely under deletes / delete_after."
+  },
+  "authority": [
+    "docs/decisions.md — sole Spec",
+    "docs/deprecated/deprecated-migrated.md — runtime/{relation,mutate,db} census entries",
+    "docs/deprecated/deprecated-absorbed.md — runtime/db_battery.rs census entry",
+    ".claude/skills/architecture-map/target-arch.md — ideal paths",
+    "This file — cut destiny; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Inventing a fourth tag or inflating Unexposed to Unconstructible voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Proof: private constructor + compile-fail a crate-consumer trybuild can demonstrate.",
+    "Refused": "Reachable program; typed runtime outcome. Named refuse variants.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter. Name residual risk; real detection or residual accepted."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist ⊇ every TARGET file the meters require to change. Condemned paths are deleted via delete_after — not edited as living seats.",
+    "proof_pairing": "compile-fail for type-law claims (write-session species, sealed msgpack door); grep-delete for symbols/paths.",
+    "no_condemned_rewire": "runtime/* paths appear only under deletes/delete_after."
+  },
+  "deletes": {
+    "law": "E-action ledger for condemned CURRENT paths.",
+    "paths": [
+      { "path": "crates/kyzo-core/src/runtime/relation.rs", "why": "Catalog + handle + serialization boundary → session/catalog.rs; AccessLevel → session/access.rs; IndexPositionUse → exec/plan/compile.rs (its own provisional-home note). File dies." },
+      { "path": "crates/kyzo-core/src/runtime/mutate.rs", "why": "Mutation pipeline → session/admit.rs (the ALL-writes-one-path clause); index lifecycle → session/ops.rs. File dies." },
+      { "path": "crates/kyzo-core/src/runtime/db.rs", "why": "Entrypoint + SessionTx routing → session/db.rs; sys-op dispatch splits by family — jobs → session/jobs.rs, operator surface → session/ops.rs, catalog ops → session/catalog.rs, Verify → session/verify.rs. File dies." },
+      { "path": "crates/kyzo-core/src/runtime/db_battery.rs", "why": "Absorbed: e2e/contention/determinism arms beside session/db.rs; trigger-cache kill beside session/admit.rs; callback exactly-once arms beside session/observe.rs; F2 pin beside the session router. Named hostile-review sections — independence lives in reviewer authorship and deterministic mutant-killing, not file separation." }
+    ],
+    "symbols": [
+      { "name": "amend_key_prefix", "why": "Already deleted on port — splicing a relation id into an EncodedKey's bytes launders unproven provenance into the typed key. Grep-guard so it never returns." },
+      { "name": "lock: bool on read paths", "why": "The kernel is full SSI; there is no unlocked read to ask for. Died on port; grep-guard." },
+      { "name": "process-wide AtomicU64 id counter", "why": "Replaced by transactional RMW (leaked ids on abort; could not survive a second process). Grep-guard the pattern at the catalog seat." }
+    ],
+    "delete_guarded_invariants": [
+      { "name": "runtime/ directory gone", "close": "test ! -d crates/kyzo-core/src/runtime" },
+      { "name": "no amend_key_prefix anywhere", "close": "rg 'amend_key_prefix' crates → zero" },
+      { "name": "one row-update funnel", "close": "rg 'fn write_relation_row' crates/kyzo-core/src/session → exactly 1" }
+    ],
+    "not_deletes": [
+      { "item": "set_access_level deliberately ungated", "why": "Gating it on itself would wedge relations shut — the reason is recorded doctrine and travels with the code." },
+      { "item": "D2/N2-style documented quirks in SessionTx routing (retired-id funnel, Segments::OFF in write sessions)", "why": "Documented pinned behavior with named lineage; preserved, not 'fixed'." },
+      { "item": "PINNED_HANDLE_HEX golden bytes", "why": "The wire-format conversation-starter — session/pinned_handle.hex is already at its target seat." }
+    ],
+    "meters": [
+      "test ! -d crates/kyzo-core/src/runtime",
+      "rg -n 'crate::runtime::' crates/kyzo-core/src → zero",
+      "rg -n 'amend_key_prefix' crates → zero",
+      "rg -n 'fn write_relation_row' crates/kyzo-core/src/session → exactly 1"
+    ]
+  },
+  "refused": {
+    "law": "Typed runtime outcomes. Named variants. Authority honest.",
+    "items": [
+      {
+        "name": "temp-relation mutation reaching the read path",
+        "tag": "Refused",
+        "variant": "TempRelationNotReachableError (review finding F2)",
+        "door": "session/db.rs execute_single",
+        "authority": "cut_destiny",
+        "why": "Without this refusal the read path would silently drop the mutation — a silent-wrong-answer class."
+      },
+      {
+        "name": "trigger cascade exceeding depth 32",
+        "tag": "Refused",
+        "variant": "TriggerCascadeTooDeep (MAX_TRIGGER_CASCADE_DEPTH=32)",
+        "door": "session/admit.rs collect_mutations",
+        "authority": "cut_destiny",
+        "why": "Never silent truncation and never an unbounded loop — typed whole-abort."
+      },
+      {
+        "name": "temp relation routed to durable catalog ops",
+        "tag": "Refused",
+        "variant": "TempRelationNotRoutable",
+        "door": "session/catalog.rs",
+        "authority": "cut_destiny",
+        "why": "Refused here rather than routed — is_temp is the routing DATUM, not the router."
+      },
+      {
+        "name": "relation id space exhausted",
+        "tag": "Refused",
+        "variant": "RelationIdSpaceExhausted",
+        "door": "session/catalog.rs next_relation_id",
+        "authority": "cut_destiny",
+        "why": "Typed exhaustion routed through raw_decode's single bounds check — never a wrap."
+      },
+      {
+        "name": "insufficient access level",
+        "tag": "Refused",
+        "variant": "InsufficientAccessLevel",
+        "door": "session/access.rs checks at catalog/mutation doors",
+        "authority": "cut_destiny",
+        "why": "The Ord derive IS the semantics; refusal names required vs held rung."
+      },
+      {
+        "name": "invalid timeout",
+        "tag": "Refused",
+        "variant": "InvalidTimeout",
+        "door": "session/db.rs build_budget",
+        "authority": "cut_destiny",
+        "why": "The last line of defense before Duration::from_secs_f64 would panic — refuse, never panic, on a reachable input."
+      },
+      {
+        "name": "rename with indices attached",
+        "tag": "Refused",
+        "variant": "RelationHasIndices (rename gate)",
+        "door": "session/catalog.rs rename",
+        "authority": "cut_destiny",
+        "why": "The original stranded index rows under the old name — refusing is the fix's permanent form."
+      }
+    ]
+  },
+  "unexposed": {
+    "law": "Residual hostile-adapter risk with real detection or residual accepted.",
+    "items": [
+      {
+        "name": "hand-serialized catalog row injected below the kernel (shadow-struct corruption)",
+        "tag": "Unexposed",
+        "residual_risk": "A hostile writer below the session surface plants an out-of-range id or malformed msgpack catalog row.",
+        "detection": "decode refuses typed at first touch (shadow-struct corruption test travels with catalog.rs); storage verify campaign walks catalog rows — the walk continues past the wound and names BadTag"
+      },
+      {
+        "name": "trigger program cached under a stale key by an in-process adapter",
+        "tag": "Unexposed",
+        "residual_risk": "Bypassing the per-session parse cache could run a stale trigger program.",
+        "detection": "db_battery's cache-keyed-by-source mutant kill (two on-put triggers each running ITS program) — deterministic campaign, re-homed beside session/admit.rs"
+      }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "engine-store-catalog-decomposition",
+      "from": "decisions.md §1 vs target-arch session/db.rs ('primary Db capability handle')",
+      "obligation": "The ambient Db facade (one handle granting storage + schema + evaluation) is condemned by §1. This cut keeps Db as current currency; the storage epic demolishes it into Engine(Store, Catalog) composition. Record at the seat; do not half-rename now.",
+      "gate": "storage epic §1 story (see 07-storage-seats.json by_target session/db.rs)",
+      "seat_until_hoist": "crates/kyzo-core/src/session/db.rs"
+    },
+    {
+      "id": "phase-c-parsed-substances",
+      "from": "runtime/mutate.rs header FLAG(catalog tier)",
+      "obligation": "Triggers parsed once per session is sound (one cur_vld); the Phase C parsed-substances end state (triggers stored parsed) remains open and operator-visible.",
+      "gate": "catalog-tier story",
+      "seat_until_hoist": "crates/kyzo-core/src/session/admit.rs"
+    },
+    {
+      "id": "temporal-index-parsed-surface",
+      "from": "runtime/mutate.rs temporal_index_tests rationale",
+      "obligation": "No parsed surface for ::temporal index create; Erase has no scripted surface. The direct-SessionTx tests are the documented stopgap; the parsed surface is owed.",
+      "gate": "parse/session story",
+      "seat_until_hoist": "crates/kyzo-core/src/session/ops.rs"
+    },
+    {
+      "id": "clippy-collapsible-if-drift",
+      "from": "runtime/db.rs L2",
+      "obligation": "The #[allow(clippy::collapsible_if)] toolchain-drift workaround is dated — re-check on the next toolchain bump.",
+      "gate": "toolchain bump",
+      "seat_until_hoist": "crates/kyzo-core/src/session/db.rs"
+    }
+  ],
+  "tests": {
+    "law": "Batteries re-home beside their subjects as named hostile-review sections. Never weaken a pinned mutant-killer.",
+    "fate": [
+      { "from": "runtime/db_battery.rs", "action": "absorb then Delete", "to": "session/db.rs tests (rs3_independent_e2e_scenario, 3-writer contention, determinism across backends and repeats, F2 temp-relation pin), session/admit.rs tests (two-put-triggers-fire-distinctly — the cache-keyed-by-source mutant kill), session/observe.rs tests (callbacks exactly-once under contention + under seeded spurious conflicts — the deterministic phantom detector)" },
+      { "from": "runtime/relation.rs thirteen tests", "action": "re-home with catalog", "to": "session/catalog.rs + session/access.rs module tests (shadow-struct corruption, racing-creates concurrency proof, wire round-trip + PINNED_HANDLE_HEX, access ladder, skip-scan time travel, choose_index edges, ensure_compatible fix pin)" },
+      { "from": "runtime/mutate.rs batteries", "action": "re-home with pipeline", "to": "session/admit.rs tests (store-bytes-unchanged pin with meaning anchor, per-row terminal-tick whole-abort, three story-#88 coverage-gap pins, WRITE-COUNT LAW with SimStorage put_call_count oracle) + session/ops.rs tests (backfill-equals-incremental across two universes, base↔posting bijection, posting-rows-match-history with hand-encoded first-key byte claim)" },
+      { "from": "runtime/db.rs ~1900-line battery", "action": "re-home with entrypoint", "to": "session/db.rs tests (segments law e2e, baseline-forwarding spent=73 pin, retraction-governs pin, magic-sets end-to-end differential obligations 11–12, runaway-recursion + widening default-budget pin, bracketing test)" }
+    ],
+    "meters": [
+      "rg -n 'put_call_count' crates/kyzo-core/src/session → at least 1 (write-count law oracle survived)",
+      "rg -n 'rs3_callbacks_exactly_once_under_seeded_spurious_conflicts' crates/kyzo-core/src/session → exactly 1",
+      "rg -n 'PINNED_HANDLE_HEX' crates/kyzo-core/src/session → at least 1"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "SystemKey (closed enum) / RelationHandle / IndexRef / IndexKind (+manifests) / ConstraintRef / KeyspaceKind / catalog ops / sealed msgpack door — session/catalog.rs",
+      "AccessLevel + InsufficientAccessLevel — session/access.rs",
+      "IndexPositionUse — exec/plan/compile.rs (per its own provisional-home note)",
+      "execute_relation + put/update/remove + ensure/ensure_not + collect_mutations + update_indices + index_write_row + extractors + make_const_rule + trigger cascade — session/admit.rs",
+      "attach_and_backfill + five ::create ops + remove_index + IndexCtx + operator sys-ops (Compact, MerkleRoot, index DDL) — session/ops.rs",
+      "Db handle + run_script* + execute_single + compile_and_eval + finalize_rows + build_budget + SessionTx routing — session/db.rs",
+      "::running / ::kill — session/jobs.rs",
+      "SysOp::Verify route — session/verify.rs"
+    ],
+    "unconstructible": [
+      {
+        "name": "mutation against a read session",
+        "proof": "compile-fail (trybuild): mutation requires SessionTx<T: WriteTx>; a read session does not satisfy the bound"
+      },
+      {
+        "name": "a row value routed through the msgpack catalog door",
+        "proof": "compile-fail: the CatalogRecord supertrait is sealed and the ambiguity-trick test fails the build if DataValue ever implements CatalogRecord"
+      }
+    ],
+    "rulings": [
+      { "id": "catalog-is-knowledge-not-authority", "a": "A handle is a decoded catalog row — knowledge, not authority; the store's bytes remain the truth. SSI, no catalog locks, no process-wide atomics: uniqueness is isolation's theorem, not an atomic's side effect. This is §7-adjacent current law and survives into the storage epic where Catalog becomes the Engine-held interpreter." },
+      { "id": "wire-format-is-a-migration-conversation", "a": "msgpack struct maps ARE an on-disk format; changing them is a migration conversation under FormatVersion (§81 shape), not a refactor. PINNED_HANDLE_HEX failing is that conversation starting." },
+      { "id": "one-write-path", "a": "ALL writes enter through session/admit.rs — the zone law's one-path clause. update_indices stays the ONE write-side seam cross-module tests drive (pub(crate) at the admit path)." },
+      { "id": "temporal-single-fire", "a": "Old and new compose to the IDENTICAL posting key at the IDENTICAL coordinate; dual-fire would silently let the Assert clobber the Retract. No byte-content test can guard it — the guard is the write-count law (SimStorage put_call_count: exactly 2 puts per mutation kind, 0 dels ever). The epistemics travel with the code." },
+      { "id": "ordered-commit-ceremony", "a": "Fresh tx + fresh callback collector per attempt; segment bumps BEFORE commit; retirement evictions AFTER; callbacks after durable. A conflicted attempt leaks no phantom events; a committed one loses nothing." },
+      { "id": "one-kill-flag", "a": "Kill switch, timeouts, and the deadline half of Budget all set the one CancelFlag; a rule that honors check honors all of them for free." },
+      { "id": "current-paths-delete-evidence-only", "a": "runtime/* appears only under deletes/delete_after." }
+    ]
+  },
+  "ban": [
+    "Do not delete the unconditional SSI probe in put_into_relation — the fact-range read it conflict-tracks is the ONLY thing that makes a same-fact race abort one racer instead of losing an update.",
+    "Do not replace the write-count law with a byte-content test — the dual-fire mutant is byte-identical on committed disk.",
+    "Do not gate set_access_level on itself.",
+    "Do not reorder AccessLevel variants — the Ord derive IS the semantics.",
+    "Do not resurrect cleanups machinery, lock: bool, or the process-wide id counter.",
+    "Do not route temp relations — refuse them at the catalog door.",
+    "Do not re-key the trigger cache by source text alone.",
+    "Do not resolve mutation coordinates at any instant but the write's own valid.",
+    "Do not turn the retired-id funnel back into three sibling destroy sites.",
+    "Do not rename Db to Engine in this cut — that is the storage epic's §1 demolition (carried obligation).",
+    "Do not use whole-engine cargo green as this cut's meter."
+  ],
+  "allowlist": {
+    "law": "TARGET paths only.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-core/src/session/catalog.rs",
+      "crates/kyzo-core/src/session/access.rs",
+      "crates/kyzo-core/src/session/admit.rs",
+      "crates/kyzo-core/src/session/ops.rs",
+      "crates/kyzo-core/src/session/db.rs",
+      "crates/kyzo-core/src/session/jobs.rs",
+      "crates/kyzo-core/src/session/verify.rs",
+      "crates/kyzo-core/src/session/observe.rs",
+      "crates/kyzo-core/src/session/mod.rs",
+      "crates/kyzo-core/src/exec/plan/compile.rs",
+      "crates/kyzo-core/src/lib.rs",
+      "docs/deprecated/deprecated-migrated.md",
+      "docs/deprecated/deprecated-absorbed.md"
+    ],
+    "delete_after": [
+      "crates/kyzo-core/src/runtime/relation.rs",
+      "crates/kyzo-core/src/runtime/mutate.rs",
+      "crates/kyzo-core/src/runtime/db.rs",
+      "crates/kyzo-core/src/runtime/db_battery.rs"
+    ],
+    "forbidden_seats": [
+      "crates/kyzo-core/src/runtime/relation.rs",
+      "crates/kyzo-core/src/runtime/mutate.rs",
+      "crates/kyzo-core/src/runtime/db.rs",
+      "crates/kyzo-core/src/runtime/db_battery.rs"
+    ],
+    "rewire": [
+      "TARGET session/catalog.rs ← catalog + sealed serialization boundary from condemned runtime/relation.rs",
+      "TARGET session/access.rs ← AccessLevel ladder from condemned runtime/relation.rs",
+      "TARGET exec/plan/compile.rs ← IndexPositionUse from condemned runtime/relation.rs",
+      "TARGET session/admit.rs ← mutation pipeline from condemned runtime/mutate.rs",
+      "TARGET session/ops.rs ← index lifecycle + operator sys-ops from condemned runtime/mutate.rs + runtime/db.rs",
+      "TARGET session/db.rs ← entrypoint + SessionTx from condemned runtime/db.rs",
+      "TARGET session/jobs.rs ← ::running/::kill from condemned runtime/db.rs",
+      "TARGET session/verify.rs ← SysOp::Verify route from condemned runtime/db.rs"
+    ]
+  },
+  "proof_meters": [
+    "compile-fail (trybuild): mutation on a read session (SessionTx<T: WriteTx> bound unsatisfied)",
+    "compile-fail: DataValue implementing CatalogRecord breaks the sealed-door ambiguity trick"
+  ],
+  "by_target": {
+    "crates/kyzo-core/src/session/catalog.rs": {
+      "kind": "TARGET — the store's knowledge of its relations; coherent multi-row moves",
+      "owns": ["SystemKey", "RelationHandle", "RelationDeserError", "IndexRef", "IndexKind", "ConstraintRef", "KeyspaceKind", "next_relation_id", "allocate_relation_id", "write_relation_row", "destroy_relation", "set_access_level", "rename gates", "sealed CatalogRecord msgpack door", "choose_index", "TEMPORAL_POSTING_LEADING_COLUMN"],
+      "ban": ["catalog locks", "process-wide atomics", "second serialization door for catalog metadata", "amend_key_prefix"],
+      "proof_meter": ["compile-fail: DataValue as CatalogRecord (ambiguity trick)"],
+      "delete_meter": [
+        "rg -n 'enum SystemKey' crates/kyzo-core/src/session/catalog.rs → exactly 1",
+        "rg -n 'fn write_relation_row' crates/kyzo-core/src/session/catalog.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "SystemKey is a closed enum — no fourth shape can appear by accident; STORAGE_VERSION merged into FormatVersion which refuses strictly-earlier-and-stricter.",
+        "Indices BY REFERENCE — the index relation's own catalog row is the single authority.",
+        "IndexKind::Temporal design doc: the valid instant promoted ahead of the base key answers 'what changed at/near instant t' with a contiguous scan — scan-shaped, not search-shaped; the leading column is the WRITE'S OWN coordinate. Unit variants grew manifests decode-compatible with every store ever written.",
+        "KeyspaceKind: Facts vs AlgorithmState — versioning AlgorithmState would corrupt its invariants.",
+        "destroy's del_range runs in-transaction so an aborted transaction rolls the destruction back; rename refuses with indices attached; the two fixes-on-port (ensure_compatible trivially-true self-compare; create_relation dead store + opposite-store name check) keep their pins forever.",
+        "choose_index: longest bound prefix, back-join coverage, law-5 edges degrading to no-index.",
+        "Scan surface: every method takes the transaction to read; none of them routes — is_temp is the routing DATUM; skip scans strip time slots to LOGICAL rows; zero-clone projected probes."
+      ]
+    },
+    "crates/kyzo-core/src/session/access.rs": {
+      "kind": "TARGET — per-relation protection tiers",
+      "owns": ["AccessLevel", "InsufficientAccessLevel"],
+      "ban": ["reordering variants (Ord derive IS the semantics)"],
+      "delete_meter": ["rg -n 'enum AccessLevel' crates/kyzo-core/src/session/access.rs → exactly 1"]
+    },
+    "crates/kyzo-core/src/exec/plan/compile.rs": {
+      "kind": "TARGET living seat — IndexPositionUse relocates here per its provisional-home note",
+      "owns": ["IndexPositionUse"],
+      "ban": ["session imports for this type"],
+      "delete_meter": ["rg -n 'IndexPositionUse' crates/kyzo-core/src/exec/plan/compile.rs → definition present; zero definitions elsewhere"]
+    },
+    "crates/kyzo-core/src/session/admit.rs": {
+      "kind": "TARGET — the write admission path: mutation enters here only",
+      "owns": ["execute_relation", "put_into_relation", "update_in_relation", "remove_from_relation", "ensure/ensure_not", "collect_mutations", "update_indices", "index_write_row", "temporal_posting_tuple", "ShortTemporalIndexRow", "DataExtractor", "make_update_extractors", "make_const_rule", "MAX_TRIGGER_CASCADE_DEPTH", "project_mapper (StaleIndexMapper)"],
+      "ban": ["a second write path outside admit", "wall-clock valid defaults (stamp is snapshot-monotone)", "physical delete as retraction", "dual-fire temporal index writes"],
+      "delete_meter": [
+        "rg -n 'MAX_TRIGGER_CASCADE_DEPTH' crates/kyzo-core/src/session/admit.rs → exactly 1",
+        "rg -n 'fn update_indices' crates/kyzo-core/src/session/admit.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "THE LOAD-BEARING UNCONDITIONAL SSI PROBE: bitemporal version keys are distinct per transaction stamp, so two writers of the same fact never collide on written keys — the fact-range READ this probe conflict-tracks is the ONLY thing that makes a same-fact race abort one racer instead of losing an update; resolved AT THIS WRITE'S OWN valid, never an unrelated later instant.",
+        "VALID-coordinate default: the stamp, not wall-clock — snapshot-monotone, so a retrying writer can never land its update at an instant an already-committed writer has shadowed.",
+        "Retraction is revision, not erasure: a Retract row at the coordinate, never a physical delete; the preserved _new-carries-key-columns-only asymmetry.",
+        "update_in_relation: must-exist at the write's own valid; carry-forward of omitted non-key columns with a typed short-stored-row error.",
+        ":ensure can never carry a @ clause — 'current' always means the newest instant ever recorded.",
+        "TEMPORAL SINGLE-FIRE ruling with honest epistemics: content-equivalent to the dual-fire shape on disk, so the guard is the write-count law, not a byte test.",
+        "index_write_row: the shared scan-shaped seam writing at the base write's EXACT coordinate; the index's own watermark bump has a demonstrated-stale-read lineage.",
+        "IndexCtx resolved once per session and cached — a manifest that no longer parses/builds/decodes is a typed refusal at first touch, never mid-scan corruption.",
+        ":replace gates: in-trigger, with-indices, below-Normal; old triggers carried across the replace; touched_relations noted for the segment watermark before commit."
+      ]
+    },
+    "crates/kyzo-core/src/session/ops.rs": {
+      "kind": "TARGET — operator surface: index lifecycle + operator sys-ops",
+      "owns": ["attach_and_backfill", "remove_index", "IndexCtx", "apply_manifest_index", "five ::create ops", "Compact dispatch", "MerkleRoot dispatch (bounded scan ceiling)"],
+      "ban": ["resolution during temporal backfill (resolution is exactly what would collapse the history the backfill must reproduce whole)"],
+      "delete_meter": [
+        "rg -n 'fn attach_and_backfill' crates/kyzo-core/src/session/ops.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Temporal backfill is a raw whole-history walk; plain/manifest backfill walks current rows with the 0xFF group-clearing resume bound and the re-mints-now note; a posting IS a bitemporal fact (KeyspaceKind dispatch).",
+        "HNSW ::create documents its standard derivations; LSH builds are pinned-seed byte-identical.",
+        "Backfill-equals-incremental is the rebuildability law — two universes, id alignment asserted, raw-byte identity."
+      ]
+    },
+    "crates/kyzo-core/src/session/db.rs": {
+      "kind": "TARGET — the entrypoint: script string to result rows; SessionTx routing core",
+      "owns": ["Db", "ScriptOptions", "run_script", "execute_single", "compile_and_eval", "finalize_rows", "run_query", "run_query_readonly", "run_sys_op", "sys_write", "build_budget", "SessionTx", "current_row_routed", "system_stamp_routed", "DEFAULT_EPOCH_CEILING", "MAX_COMMIT_ATTEMPTS", "DEFAULT_DERIVED_TUPLE_CEILING"],
+      "ban": ["cooperative-poison threads or sleeping limit enforcement", "per-request mutability overrides (mutability read off the parsed program)", "second kill flag"],
+      "delete_meter": [
+        "rg -n 'MAX_COMMIT_ATTEMPTS' crates/kyzo-core/src/session/db.rs → exactly 1 definition",
+        "rg -n 'fn run_script' crates/kyzo-core/src/session/db.rs → at least 1"
+      ],
+      "carried_notes": [
+        "DEFAULT_DERIVED_TUPLE_CEILING 50M is not a round guess: bench_api's own ceiling reused, verified against kyzo-bench's recorded real-graph results with headroom arithmetic; the fast-refusing alternative was rejected because it would silently regress already-recorded benchmarks; a fixpoint-less query always crosses it structurally.",
+        "MAX_COMMIT_ATTEMPTS 128 with measured liveness reasoning — at 32 it was reachable by three writers under load, which is contention working, not failing.",
+        "Ordered write ceremony: fresh tx+collector, run_query, enforce_constraints, segment bumps BEFORE commit, retirement evictions AFTER, callbacks after durable.",
+        "Segments::OFF in write sessions is typed dirty-read protection, pinned by the constraint suite.",
+        "SessionTx::destroy_relation retired-id FUNNEL: three sibling destroy sites leaked one engine entry per cycle, forever.",
+        "The one-machine ruling: the row-at-a-time twin was deleted on measurement; criterion on a loaded 32-core box had it losing or tying everywhere.",
+        "Stale-comment mea culpa as standing doctrine: an external audit read a stale claim as ground truth — exactly the failure a comment in this codebase must never cause.",
+        "A transaction's writes are one instant of recorded history (system_stamp_routed)."
+      ]
+    },
+    "crates/kyzo-core/src/session/jobs.rs": {
+      "kind": "TARGET — background jobs: ::running / ::kill (today's stubs/refusals)",
+      "owns": ["::running dispatch", "::kill dispatch"],
+      "delete_meter": ["rg -n 'running|kill' crates/kyzo-core/src/session/jobs.rs → dispatch present"]
+    },
+    "crates/kyzo-core/src/session/verify.rs": {
+      "kind": "TARGET living seat — SysOp::Verify routes here",
+      "owns": ["Verify sys-op route"],
+      "delete_meter": ["rg -n 'Verify' crates/kyzo-core/src/session/verify.rs → route present"]
+    },
+    "crates/kyzo-core/src/session/observe.rs": {
+      "kind": "TARGET living seat — callback delivery law + its exactly-once batteries",
+      "owns": ["post-commit callback delivery", "once-per-transaction snapshot law"],
+      "ban": ["pre-commit callback delivery", "collector reused across retry attempts"],
+      "delete_meter": ["rg -n 'exactly_once' crates/kyzo-core/src/session/observe.rs → battery present"],
+      "carried_notes": [
+        "The seeded-spurious-conflict phantom detector: replacing a thread race with a deterministic replay is the sharpest form of the exactly-once proof — 40% seeded spurious conflicts force retry replays with no thread races; a collector not rebuilt per attempt, or pre-commit delivery, duplicates events.",
+        "Raw-order determinism assertions distinguished from sorted correctness assertions by helper choice (int_rows vs raw_int_rows)."
+      ]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty",
+      "must_add": [
+        "session/db.rs description gains the §1 obligation note: Db is the pre-storage-epic name of the Engine composition seat"
+      ],
+      "must_delete_lines_for": [],
+      "delete_meter": ["no runtime/ path appears in .claude/skills/architecture-map/target-arch.md"]
+    },
+    "docs/deprecated/deprecated-migrated.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["runtime/{relation,mutate,db} entries cite docs/deprecated/storage-model/02-runtime-session.json"]
+    },
+    "docs/deprecated/deprecated-absorbed.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["runtime/db_battery.rs entry cites docs/deprecated/storage-model/02-runtime-session.json"]
+    }
+  },
+  "final_meters": [
+    "test ! -d crates/kyzo-core/src/runtime",
+    "rg -n 'crate::runtime::' crates/kyzo-core/src → zero",
+    "session/{catalog,access,admit,ops,db,jobs,verify}.rs each exceed stub length",
+    "ALL proof_meters green",
+    "write-count law test (put_call_count) present under session",
+    "callbacks exactly-once pair present under session/observe.rs tests",
+    "PINNED_HANDLE_HEX wire round-trip test present under session",
+    "carried_obligations recorded at their seats",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "all writes enter through the admission path — one write door",
+      "seat": "session/admit.rs",
+      "meter": "rg -n 'fn put_into_relation|fn update_in_relation|fn remove_from_relation' crates/kyzo-core/src/session → all hits inside session/admit.rs",
+      "exceptions": []
+    },
+    {
+      "law": "no panic on reachable session inputs — typed refusals",
+      "seat": "session zone",
+      "meter": "rg -n 'panic!|unwrap\\(|expect\\(' crates/kyzo-core/src/session/{admit,catalog,ops,db,access,jobs,verify}.rs → zero outside cfg(test) and the Law-5-audited constructor-proof sites",
+      "exceptions": [
+        "Law-5-audited sites carried from the fork headers (constructor proofs; store_of-style invariants) — each carries its written justification at the call site"
+      ]
+    },
+    {
+      "law": "temporal single-fire — exactly 2 puts per mutation kind, 0 dels ever",
+      "seat": "session/admit.rs + SimStorage put_call_count oracle",
+      "meter": "the write-count law test asserts put_call_count == 2 and del_call_count == 0 per mutation kind",
+      "exceptions": []
+    }
+  ],
+  "qae": [
+    {
+      "q": "db_battery's F2 pin ('temp relation mutation is a typed refusal') is scheduled 'beside the session router when temp relations land' — but the router IS session/db.rs now. Does the pin land at db.rs tests immediately, or wait for a temp-relations story?",
+      "a": "Land it now beside session/db.rs's execute_single tests — the refusal exists today (TempRelationNotReachableError) and the pin guards it today. Waiting for a temp-relations story orphans a live mutant-kill.",
+      "e": "An unlanded pin on a live refusal is a coverage hole with a name. Close: tests.fate routes the F2 pin to session/db.rs; final meter checks the exactly-once and e2e arms present.",
+      "authority": "cut_destiny"
+    }
+  ],
+  "campaigns_proposed": [
+    {
+      "target_seat": "decisions.md §41 (read-your-writes across Engines on one Store) — current-law precursor at the session tier",
+      "campaign": "two Db clones on one universe: A commits, B reads the same cut without reopen; assert visibility with zero reopen; a reopen-required observation falsifies the shared-belief-surface claim at the current seam and informs the §41 DST."
+    }
+  ]
+}

@@ -1,0 +1,520 @@
+{
+  "version": 1,
+  "title": "query/ tree split — eval/laws/trials/normalize/mod cut destiny under decisions.md (exec fixpoint+provenance, kyzo-oracle, kyzo-trials)",
+  "status": "cut_destiny",
+  "privilege": "Architect cut contract only. decisions.md is sole Spec authority — this file yields on conflict. Current condemned paths appear only as Delete evidence; every seat and rewire destination is a target-tree path. Claim-tag inflation or jointly impossible meters void this plan. The pre-law destinies in deprecated-migrated.md were re-derived under decisions.md; where they conflicted, the law won and the correction is recorded as a ruling.",
+  "scope": {
+    "this_cut": "Condemned: crates/kyzo-core/src/query/{mod,normalize,eval,laws,trials}.rs — the whole query/ directory dies. Living targets: exec/mod.rs constitution; exec/plan/normalize.rs; exec/fixpoint/{eval,parallel}.rs; exec/provenance/eval.rs; session/db.rs (SessionView); rules/contract.rs (SessionFixedRule); kyzo-oracle/{eval,temporal,incremental,lib}.rs; kyzo-trials/{gauntlet,provenance,time_travel/*}.rs.",
+    "not_this_json": "runtime/ (02), storage/ (03), engines/ (04), data peels + fixed_rule (05), hosts/lsp (06), storage-arch seats (07). The already-executed query/{compile,stratify,magic,graph,search,semiring,sort,batch,batch_ops,temp_store,vm,levels,incremental,standing} cuts are prior history, not this plan.",
+    "foundation_already_true": [
+      "exec/plan/{compile,graph,magic,search,stratify}.rs and exec/fixpoint/delta_store.rs landed with real content",
+      "exec/fixpoint/{eval,parallel}.rs, exec/plan/normalize.rs, exec/provenance/eval.rs, kyzo-oracle/src/{eval,temporal,incremental}.rs are 1-line stub seat reservations",
+      "kyzo-trials/src/{gauntlet,provenance,dst,conformance,crash,serializability}.rs landed with real content; determinism.rs and fuzz.rs are stubs",
+      "kyzo-model owns program IR (expr/op/span/symbol) — the oracle's only permitted dependency"
+    ],
+    "target_not_current": "by_target and allowlist.targets are target-tree paths only. Current condemned paths live solely under deletes / delete_after."
+  },
+  "authority": [
+    "docs/decisions.md — sole Spec",
+    "docs/deprecated/deprecated-migrated.md — query/{mod,normalize,eval,laws,trials} census entries (pre-law L1 re-derived here)",
+    ".claude/skills/architecture-map/target-arch.md — ideal paths",
+    "docs/deprecated/move_plan.json v10 — genre precedent (executed)",
+    "This file — cut destiny; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Inventing a fourth tag or inflating Unexposed to Unconstructible voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Proof: private constructor + compile-fail a crate-consumer trybuild can demonstrate. Symbol absence in our tree is not this tag.",
+    "Refused": "Reachable program; typed runtime outcome. Named refuse variants.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter. Name residual risk; name real detection or state residual accepted."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist ⊇ every TARGET file the meters require to change. A meter no allowlisted target path can satisfy voids the plan. Condemned paths are deleted via delete_after — not edited as living seats.",
+    "proof_pairing": "compile-fail for crate-boundary claims (oracle independence, entry-proof constructors); grep-delete for symbol/path absence.",
+    "no_condemned_rewire": "query/* paths appear only under deletes/delete_after. Consumer wiring lands at target seats."
+  },
+  "deletes": {
+    "law": "E-action ledger for condemned CURRENT paths. Never by_target seats. Never rewire destinations.",
+    "paths": [
+      { "path": "crates/kyzo-core/src/query/mod.rs", "why": "Directory glue + the seven-laws constitution. Laws doc re-homes to exec/mod.rs; module decls dissolve into target zones; file dies with query/." },
+      { "path": "crates/kyzo-core/src/query/normalize.rs", "why": "Three-part file per its own landing notes: normalizer → exec/plan/normalize.rs; SessionView → session/db.rs; SessionFixedRule → rules/contract.rs. File dies." },
+      { "path": "crates/kyzo-core/src/query/eval.rs", "why": "Fixpoint engine → exec/fixpoint/eval.rs; parallel dispatch + merge barrier → exec/fixpoint/parallel.rs; witness/provenance machinery → exec/provenance/eval.rs. File dies." },
+      { "path": "crates/kyzo-core/src/query/laws.rs", "why": "THE REFERENCE SEMANTICS → kyzo-oracle (crate wall makes independence physics): program model + checkers + naive evaluator → oracle/eval.rs; temporal vocabulary → oracle/temporal.rs; story-#61 incremental reference → oracle/incremental.rs. File dies." },
+      { "path": "crates/kyzo-core/src/query/trials.rs", "why": "Generator + Capability 1 → kyzo-trials/gauntlet.rs; Capability 2 → kyzo-trials/provenance.rs; Capabilities 3–4 → kyzo-trials/time_travel/. File dies." }
+    ],
+    "symbols": [
+      { "name": "eval_both_ways / bytecode parity harness remnants", "why": "The second production evaluator is abolished; any surviving parity harness in query/ dies with the directory (grep-delete)." },
+      { "name": "check_time_travel_negation", "why": "Deleted whole per laws.rs's own ruling — general safety + stratifiability already prove the lift sound; do not resurrect at the oracle seat." }
+    ],
+    "delete_guarded_invariants": [
+      { "name": "no core evaluator symbol imported by the oracle crate", "close": "rg 'kyzo_core' crates/kyzo-oracle/src → zero" },
+      { "name": "no second naive evaluator inside kyzo-core after the split", "close": "rg 'fn naive_eval' crates/kyzo-core/src → zero" },
+      { "name": "query/ directory gone", "close": "test ! -d crates/kyzo-core/src/query" }
+    ],
+    "not_deletes": [
+      { "item": "the pub(crate) widenings epoch_ceiling / check_interrupt", "why": "Story-#80 sanctioned oracle seam. They survive as the deliberate seam until the oracle grows its own bounds vocabulary (rulings.oracle-budget); deleting them now breaks the judge." },
+      { "item": "D2 intra-epoch limiter dedup and N2 cross-epoch overshoot behavior", "why": "Documented, pinned behavior — preserved as-is at exec/fixpoint, never silently 'fixed'." },
+      { "item": "unstratifiable_corpus", "why": "Shared judge-contract surface — re-homes to kyzo-oracle lib surface, consumed by exec/plan/stratify.rs self-tests via kyzo-trials." }
+    ],
+    "meters": [
+      "test ! -d crates/kyzo-core/src/query",
+      "rg -n 'mod query' crates/kyzo-core/src/lib.rs → zero",
+      "rg -n 'crate::query::' crates/kyzo-core/src → zero",
+      "rg -n 'kyzo_core' crates/kyzo-oracle/src → zero",
+      "rg -n 'fn naive_eval' crates/kyzo-core/src → zero",
+      "rg -n 'struct SessionView' crates/kyzo-core/src/session/db.rs → exactly 1"
+    ]
+  },
+  "refused": {
+    "law": "Typed runtime outcomes. Named variants. Authority honest.",
+    "items": [
+      {
+        "name": "budget dimension exceeded at the epoch barrier",
+        "tag": "Refused",
+        "variant": "LimitExceeded { dimension, spent, rule, span }",
+        "door": "exec/fixpoint/eval.rs evaluate_stratum barrier (mid-epoch only for InFlightDerivations)",
+        "authority": "cut_destiny — Engine starts-or-not economy consistent with decisions.md §43",
+        "why": "A refusal is a pure function of program+facts+budget; deterministic dimensions check at barriers only. Silent stall is unrepresentable (§42 shape)."
+      },
+      {
+        "name": "provenance requested over folds / opaque algorithms",
+        "tag": "Refused",
+        "variant": "ProvenanceUnsupported",
+        "door": "exec/provenance/eval.rs provenance_graph",
+        "authority": "cut_destiny",
+        "why": "Aggregation folds and opaque algorithms are not semiring operations; their tuples ground out. Pretending is a forged explanation."
+      },
+      {
+        "name": "oracle budgeted door exceeds its additive ceiling",
+        "tag": "Refused",
+        "variant": "OracleLimitExceeded (kyzo-oracle bounds vocabulary)",
+        "door": "kyzo-oracle/src/eval.rs naive_eval_at_budgeted",
+        "authority": "cut_destiny",
+        "why": "Additive, never a replacement: the naive oracle's whole reason to exist is the TRUE answer; a mandatory ceiling would put a second, lesser claim in its place."
+      },
+      {
+        "name": "unstratifiable / unsafe program at construction",
+        "tag": "Refused",
+        "variant": "Rejection (five variants incl. UnsafeNegation, UnboundVariable)",
+        "door": "kyzo-oracle/src/eval.rs checkers + exec/plan/normalize.rs two-round well-ordering",
+        "authority": "cut_destiny",
+        "why": "Still-pending atoms after the two-round well-ordering refuse with the upstream-verbatim messages; the oracle's checkers are the judge's contract."
+      }
+    ]
+  },
+  "unexposed": {
+    "law": "Residual hostile-adapter risk. Detection real or residual accepted — never crate walls as detection.",
+    "items": [
+      {
+        "name": "in-process hostile adapter drives the pub(crate) eval seams (epoch_ceiling, check_interrupt, RuleBody) outside the sealed API",
+        "tag": "Unexposed",
+        "residual_risk": "A hostile in-crate module or compromised build constructs evaluator states the public surface forbids.",
+        "detection": "none at runtime for in-process forge; residual accepted at the crate boundary — the seams are the sanctioned judge/trials doors and shrink when the oracle grows its own bounds vocabulary"
+      },
+      {
+        "name": "corrupted proof tree echoing eval's own reasoning",
+        "tag": "Unexposed",
+        "residual_risk": "A proof checker that imported evaluator symbols could be blinded into passing a forged derivation.",
+        "detection": "trials provenance campaign: FOUR-corruption negative control (premise tuple, conclusion, out-of-range rule index, sibling-rule mis-attribution) must fail verify; checker re-derives each step's binding from scratch"
+      }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "demand-rewriter-generative-gap",
+      "from": "query/trials.rs module doc (stated open gap) + runtime/db.rs obligations 11–12",
+      "obligation": "End-to-end demand-rewriter differential exists at the session seam (fixed corpus); the remaining breadth — a GENERATIVE corpus through the public path — stays open and named. Carry into kyzo-trials/gauntlet.rs as a named standing item, never silently dropped.",
+      "gate": "kyzo-trials gauntlet lane grows a generated-program magic-vs-bypass arm",
+      "seat_until_hoist": "crates/kyzo-trials/src/gauntlet.rs (named TODO-with-owner section)"
+    },
+    {
+      "id": "oracle-seam-shrink",
+      "from": "query/eval.rs L2 (story-#80 pub(crate) widenings)",
+      "obligation": "epoch_ceiling / check_interrupt widenings are the sanctioned oracle seam only until kyzo-oracle owns its bounds vocabulary; then shrink or re-justify.",
+      "gate": "kyzo-oracle OracleBudget landed",
+      "seat_until_hoist": "crates/kyzo-core/src/exec/fixpoint/eval.rs"
+    }
+  ],
+  "tests": {
+    "law": "Test batteries migrate with their zone as module tests; kyzo-trials grows public-surface twins. Never weaken a pinned mutant-killer.",
+    "fate": [
+      { "from": "query/eval.rs ~3200-line battery", "action": "re-home with zone", "to": "exec/fixpoint/eval.rs + exec/fixpoint/parallel.rs + exec/provenance/eval.rs module tests (streaming ModelBody harness, fifteen fixed differentials, refuted-theorem counterexample-as-differential, five mutation-hardening kills incl. stride pinned BY LITERAL, witness pins incl. per-group premises killer, thread-count determinism for results+witnesses+refusals)" },
+      { "from": "query/laws.rs ~2570-line battery", "action": "re-home with zone", "to": "kyzo-oracle module tests (five law pins, kernel cross-check, nine degenerate temporal pins, hand-traced lift fixture, source-order loud-failure regression, two >5000-case grids, incremental battery)" },
+      { "from": "query/trials.rs capabilities", "action": "split then Delete", "to": "kyzo-trials/src/gauntlet.rs (generator + Capability 1), kyzo-trials/src/provenance.rs (Capability 2), kyzo-trials/src/time_travel/path.rs (Capabilities 3–4)" },
+      { "from": "query/mod.rs cfg(test)", "action": "dies with glue" }
+    ],
+    "meters": [
+      "rg -n 'flip_interior_rule' crates/kyzo-trials/src/provenance.rs → at least 1 (four-corruption control survived)",
+      "rg -n 'INTERRUPT_STRIDE' crates/kyzo-core/src/exec/fixpoint/eval.rs → literal-pinned test present",
+      "rg -n 'shuffle_body' crates/kyzo-trials/src/time_travel → at least 1 (Mutant-C lineage survived)"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "Budget / BudgetDimension / InterruptTicker / LimitExceeded / Killed — exec/fixpoint/eval.rs",
+      "RuleBody / FixedRuleEval seams + AtomOccurrence / Premises — exec/fixpoint/eval.rs",
+      "EvalRuleSet / EvalProgram (entry-proof constructor) / RowLimit / QueryLimiter — exec/fixpoint/eval.rs",
+      "merge barrier + rayon-vs-wasm dispatch — exec/fixpoint/parallel.rs",
+      "Witness / WitnessTable / WitnessBinder / provenance_graph / ProvenanceUnsupported — exec/provenance/eval.rs",
+      "SessionView — session/db.rs (implements the exec read seam and rules StoredInputSource; consumer-defined traits stay with their consumers)",
+      "SessionFixedRule — rules/contract.rs",
+      "oracle program model + checkers + naive_eval* + OracleBudget + unstratifiable_corpus — kyzo-oracle/src/eval.rs (+lib.rs surface)",
+      "AsOf / Event / resolve* / derive_intervals / diff / compose / Axis / Interval / OPEN_END — kyzo-oracle/src/temporal.rs",
+      "story-#61 incremental reference — kyzo-oracle/src/incremental.rs",
+      "AggrFold injection seam — kyzo-oracle/src/lib.rs (trials binds the real engine folds)"
+    ],
+    "unconstructible": [
+      {
+        "name": "EvalProgram without a proven entry (mid-pipeline entry discovery)",
+        "proof": "compile-fail (trybuild): crate-consumer cannot construct EvalProgram except via from_execution_order's entry-proving constructor"
+      },
+      {
+        "name": "oracle depending on the production evaluator",
+        "proof": "compile-fail: kyzo-oracle's Cargo.toml carries no kyzo-core edge, so any kyzo_core:: path in the oracle fails to resolve at build; dependency direction is core/trials → oracle only"
+      }
+    ],
+    "rulings": [
+      { "id": "laws-doc-is-exec-constitution", "a": "query/mod.rs's seven engine laws (each with enforcement site) become exec/mod.rs's module doc verbatim-with-updated-sites. The laws are the zone's contract; losing them is lossy compression of deliberate law." },
+      { "id": "seam-traits-live-with-consumers", "a": "RuleBody/FixedRuleEval (exec) and StoredInputSource (rules) are consumer-defined traits; SessionView implements them from session/db.rs. exec and rules never import session — the dependency arrow is session → exec/rules, matching the authority graph." },
+      { "id": "oracle-budget", "a": "kyzo-oracle owns its bounds vocabulary (OracleBudget, additive door, barrier-granularity only). It never consumes exec's Budget. The #80 arrival question is ruled: no shared budget type across the judge wall." },
+      { "id": "no-core-to-oracle-edge", "a": "kyzo-core never depends on kyzo-oracle. The production proof-tree checker seats at exec/provenance/eval.rs (imports no evaluator symbol — metered); oracle differentials live in kyzo-trials, which depends on both. See qae for the ::verify door consequence." },
+      { "id": "aggr-fold-injection", "a": "The real-landed-aggregations rule survives the crate wall by dependency inversion: kyzo-oracle exposes an AggrFold seam keyed by kyzo-model aggregate declarations; kyzo-trials injects the engine's real fold ops from exec/fold/aggr.rs. Expressions stay deliberately independent; aggregations deliberately shared — both on the record." },
+      { "id": "oracle-not-test-only", "a": "DOC CORRECTION carried: the 'cfg(test) only' claim in laws.rs's doc is superseded — the target formulation is 'the judge's contract: same question, independent answer', not test-only." },
+      { "id": "trials-public-surface", "a": "kyzo-trials batteries drive the sealed public surface or the sanctioned oracle seam only — no new pub(crate) widenings minted for convenience; each existing widening carries its justification or shrinks (carried_obligations.oracle-seam-shrink)." },
+      { "id": "current-paths-delete-evidence-only", "a": "query/* appears only under deletes/delete_after. Rewire into a condemned file voids the plan." }
+    ]
+  },
+  "ban": [
+    "Do not resurrect a second production evaluator or any eval_both_ways parity harness.",
+    "Do not optimize the oracle — obviously-correct-by-inspection is the design criterion; optimizing the judge is a defect.",
+    "Do not give kyzo-core a kyzo-oracle dependency edge.",
+    "Do not let kyzo-oracle import anything but kyzo-model (and std).",
+    "Do not move mid-epoch checks onto deterministic dimensions — barrier-only is a determinism REQUIREMENT, not style.",
+    "Do not strip merge_in's dedup (N1: removing the filter is survivable, removing merge_in's dedup is not).",
+    "Do not silently 'fix' D2/N2 limiter semantics — they are documented pinned behavior.",
+    "Do not re-add check_time_travel_negation at the oracle seat.",
+    "Do not wire exec or rules to import session for SessionView — implement consumer-defined seams.",
+    "Do not use whole-engine cargo green as this cut's meter.",
+    "Do not invent a fourth Spec claim tag."
+  ],
+  "allowlist": {
+    "law": "TARGET paths only. Allowlist ⊇ every target file meters require. Condemned currents are delete_after only.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-core/src/exec/mod.rs",
+      "crates/kyzo-core/src/exec/plan/normalize.rs",
+      "crates/kyzo-core/src/exec/fixpoint/eval.rs",
+      "crates/kyzo-core/src/exec/fixpoint/parallel.rs",
+      "crates/kyzo-core/src/exec/provenance/eval.rs",
+      "crates/kyzo-core/src/session/db.rs",
+      "crates/kyzo-core/src/session/mod.rs",
+      "crates/kyzo-core/src/rules/contract.rs",
+      "crates/kyzo-core/src/lib.rs",
+      "crates/kyzo-oracle/src/eval.rs",
+      "crates/kyzo-oracle/src/temporal.rs",
+      "crates/kyzo-oracle/src/incremental.rs",
+      "crates/kyzo-oracle/src/lib.rs",
+      "crates/kyzo-trials/src/gauntlet.rs",
+      "crates/kyzo-trials/src/provenance.rs",
+      "crates/kyzo-trials/src/determinism.rs",
+      "crates/kyzo-trials/src/time_travel/path.rs",
+      "crates/kyzo-trials/src/time_travel/mod.rs",
+      "crates/kyzo-trials/src/lib.rs",
+      "docs/deprecated/deprecated-migrated.md"
+    ],
+    "delete_after": [
+      "crates/kyzo-core/src/query/mod.rs",
+      "crates/kyzo-core/src/query/normalize.rs",
+      "crates/kyzo-core/src/query/eval.rs",
+      "crates/kyzo-core/src/query/laws.rs",
+      "crates/kyzo-core/src/query/trials.rs"
+    ],
+    "forbidden_seats": [
+      "crates/kyzo-core/src/query/mod.rs",
+      "crates/kyzo-core/src/query/normalize.rs",
+      "crates/kyzo-core/src/query/eval.rs",
+      "crates/kyzo-core/src/query/laws.rs",
+      "crates/kyzo-core/src/query/trials.rs"
+    ],
+    "rewire": [
+      "TARGET exec/fixpoint/eval.rs ← Budget/seams/evaluable tier/limiter/eval fns from condemned query/eval.rs",
+      "TARGET exec/fixpoint/parallel.rs ← merge barrier + dispatch from condemned query/eval.rs",
+      "TARGET exec/provenance/eval.rs ← witness machinery from condemned query/eval.rs",
+      "TARGET exec/plan/normalize.rs ← NNF/DNF/well-ordering from condemned query/normalize.rs",
+      "TARGET session/db.rs ← SessionView from condemned query/normalize.rs (implements exec/rules seams)",
+      "TARGET rules/contract.rs ← SessionFixedRule from condemned query/normalize.rs",
+      "TARGET kyzo-oracle ← reference semantics from condemned query/laws.rs (kyzo-model imports only)",
+      "TARGET kyzo-trials ← capability batteries from condemned query/trials.rs (public surface or sanctioned seam)"
+    ]
+  },
+  "proof_meters": [
+    "compile-fail (trybuild): crate-consumer cannot construct EvalProgram without the entry-proving constructor",
+    "compile-fail: kyzo-oracle build has no kyzo-core dependency edge; kyzo_core:: paths in the oracle fail to resolve"
+  ],
+  "by_target": {
+    "crates/kyzo-core/src/exec/mod.rs": {
+      "kind": "zone constitution — module tree + the seven engine laws doc",
+      "owns": [],
+      "must_add": [
+        "the seven engine laws doc from query/mod.rs, each law naming its (updated) enforcement site",
+        "module decls: fixpoint, fold, plan, provenance, sort (alongside existing expr, op, stdlib)"
+      ],
+      "ban": ["module-decls-as-status-board dead_code ledger (each liveness note travels to its file)"],
+      "delete_meter": [
+        "rg -n 'Answer correctness' crates/kyzo-core/src/exec/mod.rs → at least 1",
+        "rg -n 'mod fixpoint' crates/kyzo-core/src/exec/mod.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Seven laws with enforcement sites: answer correctness (oracle differential), stratification-refusal, termination, rule safety, total input handling, concurrency liveness, operator coherence — 'clever execution must be invisible'.",
+        "The ratchet discipline: dead-code attributes carry justification and are recorded as REMOVED once proven."
+      ]
+    },
+    "crates/kyzo-core/src/exec/plan/normalize.rs": {
+      "kind": "TARGET — NNF→DNF + two-round well-ordering (faithful upstream ports; 'nothing about them is interim')",
+      "owns": ["NNF/DNF machinery", "normalize_args", "two-round well-ordering", "NormalFormAtom"],
+      "ban": ["search-atom variant on NormalFormAtom (search atoms join the plan at the catalog boundary, not through normalization)", "session imports"],
+      "delete_meter": [
+        "rg -n 'SessionView|SessionFixedRule' crates/kyzo-core/src/exec/plan/normalize.rs → zero"
+      ],
+      "carried_notes": [
+        "Negated Unification = UnsafeNegation; negated Search = shared NegatedSearchUnsupported; two lookup closures (schema for named fields, full handles for search).",
+        "normalize_args: expressions → fresh bindings + unifications; REPEATED variables → fresh binding + equality unification; ignored → generated.",
+        "Still-pending atoms at the end refuse with the upstream-verbatim UnsafeNegation/UnboundVariable messages.",
+        "Every upstream unreachable! is a typed invariant (law-5)."
+      ]
+    },
+    "crates/kyzo-core/src/exec/fixpoint/eval.rs": {
+      "kind": "TARGET — the fixpoint engine: Budget, seams, evaluable tier, limiter, the four eval functions",
+      "owns": ["Budget", "BudgetDimension", "InterruptTicker", "LimitExceeded", "Killed", "RuleBody", "FixedRuleEval", "AtomOccurrence", "Premises", "PremiseSource", "EvalRuleSet", "EvalProgram", "HeadAggrKind", "RowLimit", "QueryLimiter", "stratified_evaluate", "evaluate_stratum", "note_pending"],
+      "ban": ["unbounded fixpoint (Budget is a required parameter)", "mid-epoch checks on deterministic dimensions", "cooperative-poison sleeper threads", "session imports"],
+      "proof_meter": ["compile-fail: EvalProgram without entry-proving constructor"],
+      "delete_meter": [
+        "rg -n 'fn stratified_evaluate' crates/kyzo-core/src/exec/fixpoint/eval.rs → signature takes Budget",
+        "rg -n 'INTERRUPT_STRIDE' crates/kyzo-core/src/exec/fixpoint/eval.rs → exactly 1 definition"
+      ],
+      "carried_notes": [
+        "THE DETERMINISM LAW: same program+facts+budget ⇒ identical results AND identical refusals at any thread count. Four supports: immutable epoch reads; sequential canonical-order merge barrier; barrier-only deterministic dimensions (a mid-epoch check observes a schedule-dependent partial count and is therefore a determinism bug); sequential entry-under-limit carve-out.",
+        "Non-perturbation theorem WITH its refutation history: plain out-stores hold only admissions so len IS the count; meet epochs overcount — repaired by meet_put_admission_faithful's monotone transition counting; it refuses ONLY queries the barrier would also refuse, earlier, before the OOM.",
+        "Boundedness law: peak resident O(P·(ceiling+STRIDE)), independent of input relations' product size — the guarantee the incident violated.",
+        "N1: the load-bearing re-derivation dedup is merge_in's — removing the filter is survivable, removing merge_in's dedup is not.",
+        "N2: preserved limiter cross-epoch overshoot, pinned by name. D2: intra-epoch limiter dedup fixing upstream's double-count.",
+        "Cow slice-consuming economy: re-derived and rejected rows — the bulk of every recursive fixpoint — allocate nothing on either path.",
+        "Meet identity row inserted ONLY if empty and all-aggregated so the identity can never leak alongside real derivations.",
+        "Thirteen-site Law-5 panic audit — every unwrap/unreachable accounted (constructor proofs, store_of/store_of_mut, checked all-aggregated flatten)."
+      ]
+    },
+    "crates/kyzo-core/src/exec/fixpoint/parallel.rs": {
+      "kind": "TARGET — deterministic sharded parallelism: dispatch + merge barrier",
+      "owns": ["rayon-vs-wasm dispatch", "merge barrier machinery"],
+      "ban": ["schedule-dependent sealed outcomes", "second barrier discipline"],
+      "delete_meter": [
+        "rg -n 'rayon' crates/kyzo-core/src/exec/fixpoint/parallel.rs → dispatch confined here (zero rayon in exec/fixpoint/eval.rs)"
+      ],
+      "carried_notes": [
+        "Batching never reorders results relative to canonical merge order; the barrier is where determinism is manufactured, not where it is hoped."
+      ]
+    },
+    "crates/kyzo-core/src/exec/provenance/eval.rs": {
+      "kind": "TARGET — derivations that explain themselves + the independent proof checker",
+      "owns": ["Witness", "WitnessTable", "WitnessBinder", "PendingWitnesses", "provenance_graph", "ProvNode", "ProvenanceUnsupported"],
+      "ban": ["importing evaluator internals for verification (checker re-derives bindings from scratch)"],
+      "delete_meter": [
+        "rg -n 'use .*fixpoint::eval::(evaluate|eval_)' crates/kyzo-core/src/exec/provenance → zero (checker imports no evaluator symbol)"
+      ],
+      "carried_notes": [
+        "WitnessTable append-only in admission order; derivation None for fold/fixed/identity rows.",
+        "COLLAPSE BOUNDARY: aggregation folds and opaque algorithms are not semiring operations — their tuples ground out; premise rows VERIFIED against their attributed stores; enumeration ceiling; limiter-blind noted.",
+        "WitnessBinder recovers meet group keys by projection; the per-group premises KILLER test (two groups folding to the same value) travels with it."
+      ]
+    },
+    "crates/kyzo-core/src/session/db.rs": {
+      "kind": "TARGET living seat — SessionView joins the session core here",
+      "owns": ["SessionView"],
+      "ban": ["SessionView leaking into exec/plan or rules as an imported concrete type (seam traits only)"],
+      "delete_meter": [
+        "rg -n 'struct SessionView' crates/kyzo-core/src/session/db.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Copy BY DESIGN — two references; `_`-prefix namespace-routed catalog; as-of-routed scans; serves the magic tier's schema seam and the fixed-rule payload's stored-input seam."
+      ]
+    },
+    "crates/kyzo-core/src/rules/contract.rs": {
+      "kind": "TARGET living seat — SessionFixedRule adapter lands beside the contract it implements",
+      "owns": ["SessionFixedRule"],
+      "ban": ["caller-supplied output arity (manifest-branded only)"],
+      "delete_meter": [
+        "rg -n 'SessionFixedRule' crates/kyzo-core/src/rules/contract.rs → at least 1"
+      ],
+      "carried_notes": [
+        "Output BRANDED with the manifest arity, never a caller-supplied one; the budget's kill flag shared so a cancelled query stops the rule; budgeted output armed with the TRUE GLOBAL admitted total — counting every prior admission, not just this writer's own rows — so a row-amplifying algorithm refuses mid-run."
+      ]
+    },
+    "crates/kyzo-oracle/src/eval.rs": {
+      "kind": "TARGET — THE REFERENCE SEMANTICS: program model + checkers + naive evaluator + OracleBudget",
+      "owns": ["Literal (one-seam constructors)", "Rule", "FixedRule (oracle form)", "Program::untimed", "Rejection", "check_safety", "check_stratifiable", "check_wellformed", "NameIntroduction", "strata (Bellman-Ford)", "Bindings", "unify", "ground", "naive_eval", "naive_eval_at", "naive_eval_at_budgeted", "OracleBudget", "unstratifiable_corpus"],
+      "ban": ["kyzo-core imports", "rayon or any parallelism", "optimization of the naive evaluator"],
+      "delete_meter": [
+        "rg -n 'rayon' crates/kyzo-oracle → zero",
+        "rg -n 'unstratifiable_corpus' crates/kyzo-oracle/src → at least 1"
+      ],
+      "carried_notes": [
+        "Deliberately naive — written to be OBVIOUSLY correct; the oracle is judge, never production; abstract program form minimal so it can outlive any concrete AST.",
+        "Aggregation semantics AS LAW: normal folds once at the fixpoint beneath; all-meet heads recurse; all-aggregated identity row inserted only when round one derives nothing; fixed rules on boundaries.",
+        "THREE deliberate upstream divergences, all in the oracle's favor, recorded WITH directions: non-suffix meet demotion (upstream froze wrong answers); order-dependent aggregations deterministic-here-but-arrival-order-artifacts (differential harnesses must avoid or canonicalize); no-entry-symbol whole-program judging vs upstream's dead-rule pruning.",
+        "TIME-TRAVEL NEGATION LIFT: the engine's former refusal was an operator-implementation gap, not semantic; a negated literal's as_of is a TERM-FREE AsOf; a historical relation is always a SINK in the stratification graph — check deleted whole.",
+        "One-seam constructor discipline carries story-#62's five-file-fallout lesson; #85's NameIntroduction — one predicate applied uniformly, not three separately-argued refusal loops.",
+        "#89 sharing-soundness: reference-tier helpers shared because all three modules judge the ENGINE, never each other; stratify.rs's aggregation_character stays the ONE deliberately-independent copy.",
+        "naive_eval_at_impl: identity-row-at-round-one rule; 100k loud non-termination bound.",
+        "check_oracle_budget carries the REAL LimitExceeded messages (message parity is part of the differential)."
+      ]
+    },
+    "crates/kyzo-oracle/src/temporal.rs": {
+      "kind": "TARGET — reference temporal vocabulary",
+      "owns": ["AsOf", "Event", "resolve_events", "resolve", "resolve_relation", "Axis", "Interval", "OPEN_END", "derive_intervals", "SignedFact", "diff", "compose"],
+      "ban": ["kyzo-core imports"],
+      "delete_meter": [
+        "rg -n 'fn derive_intervals' crates/kyzo-oracle/src/temporal.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "AsOf: EXACT CORRESPONDENCE to the Reverse-wrapped real type — identical total order through inverted representations, proven by the kernel cross-check, not asserted in a doc comment.",
+        "Event: TERMINAL-TICK RESERVATION at construction — zero-width [MAX, MAX) interval unrepresentable; untimed embedding is a real, callable function.",
+        "resolve_events: Assert-holds / Retract-settles / Erase-transparent; diff on resolved snapshots, never intervals; coalescing definitional; sys-axis breakpoint filtering rationale.",
+        "Axis mirrored by exec's DeltaAxis — wall discipline already practiced."
+      ]
+    },
+    "crates/kyzo-oracle/src/incremental.rs": {
+      "kind": "TARGET — story-#61 incremental reference",
+      "owns": ["incremental_eval", "topological_order", "edb_relations", "head_is_derivable"],
+      "ban": ["recursion support (refused unconditionally — DRed territory)", "fixed-rule incremental (empty-delta wrong-answer argument)"],
+      "delete_meter": [
+        "rg -n 'fn incremental_eval' crates/kyzo-oracle/src/incremental.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Two-phase candidates-then-verify with the MULTISET-VS-SET pitfall the generative differential caught the first time it ran; aggregation FULLY covered by group re-derivation (min/max under retraction has no incremental formula); zero-rows-still-EDB; redundant-patch filter with its caught-phantom-delta lineage."
+      ]
+    },
+    "crates/kyzo-oracle/src/lib.rs": {
+      "kind": "TARGET — judge surface: re-exports + AggrFold injection seam",
+      "owns": ["AggrFold seam trait"],
+      "ban": ["any dependency besides kyzo-model"],
+      "delete_meter": [
+        "rg -n 'kyzo-model' crates/kyzo-oracle/Cargo.toml → exactly 1 dependency stanza; no other kyzo- crates"
+      ],
+      "carried_notes": [
+        "Real-landed-aggregations rule survives the crate wall by dependency inversion: trials injects exec/fold's real fold ops through this seam; the oracle's LOOP stays independent with a termination guard."
+      ]
+    },
+    "crates/kyzo-trials/src/gauntlet.rs": {
+      "kind": "TARGET living seat — generator + Capability 1 merge from condemned query/trials.rs",
+      "owns": ["GenParams generator (five meet lattices, eleven dimensions)", "differential over every IDB relation", "run_seed four claims"],
+      "ban": ["re-deriving a second renderer (reuse the existing one)", "map-iteration-dependent generator vocabularies"],
+      "delete_meter": [
+        "rg -n 'cross_join' crates/kyzo-trials/src/gauntlet.rs → at least 1 (delta-discipline discriminator survived)"
+      ],
+      "carried_notes": [
+        "Pool-width guard: a 1-thread 8-thread run proves nothing; empty-witness-table vacuity guard; refusal determinism on BOTH budget dimensions with exact spends; KYZO_TRIALS_SEEDS/BASE env knobs; model_arities from the MODEL alone (an oracle-empty relation must still carry a real arity or over-derivation is an invisible vacuous pass); cross_join built to discriminate the delta-discipline mutant that threads only the first contained store's delta."
+      ]
+    },
+    "crates/kyzo-trials/src/provenance.rs": {
+      "kind": "TARGET living seat — Capability 2 (proof reconstruction + independent verify)",
+      "owns": ["Proof tree reconstruction battery", "four-corruption negative control"],
+      "ban": ["checker echoing evaluator reasoning"],
+      "delete_meter": [
+        "rg -n 'flip_interior_rule' crates/kyzo-trials/src/provenance.rs → at least 1"
+      ],
+      "carried_notes": [
+        "reconstruct: derivation-less admissions return None; index_witnesses first-witness-wins; verify imports no EVALUATOR symbol and re-derives each step's binding from scratch; negated-premise boundary refused rather than pretended; generator seed reproducibility with a substance floor."
+      ]
+    },
+    "crates/kyzo-trials/src/time_travel/path.rs": {
+      "kind": "TARGET living seat — Capabilities 3–4 (temporal generator twin + refusal-lift coverage)",
+      "owns": ["gen_temporal_history", "program_grid", "three hand-mutant pairs", "refusal-lift battery (Capability 4)"],
+      "ban": ["independence claims where only wiring is proven (epistemics sections travel intact)"],
+      "delete_meter": [
+        "rg -n 'program_grid' crates/kyzo-trials/src/time_travel → at least 1"
+      ],
+      "carried_notes": [
+        "Epistemics preserved verbatim in section docs: (a) resolve vs derive_intervals are genuinely TWO independent algorithms; (b) diff/compose is a mathematical identity, not an independence claim; (c) the pushdown check proves WIRING not algebra.",
+        "HIST_RELS in fixed order so reproducibility never depends on map iteration; shuffle_body carries the Mutant-C lineage; ±1-and-extremes grid with the i64::MAX−1 sentinel reasoning; three hand-mutant pairs prove the campaign's own eyes; the honest COUNTED comparative claim on the coordinates-only grid.",
+        "Capability 4: four independently written references — brute-force closure, set complement, group-and-count, and meet propagation whose FOLD reuses the real landed Aggregation ops via the oracle AggrFold seam while the LOOP stays independent."
+      ]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty",
+      "must_add": [
+        "crates/kyzo-core/src/session/db.rs description grows: SessionView read surface (implements exec/rules seams)",
+        "crates/kyzo-core/src/rules/contract.rs description names SessionFixedRule adapter and cancellation vocabulary"
+      ],
+      "must_delete_lines_for": [],
+      "delete_meter": [
+        "no query/ path appears in .claude/skills/architecture-map/target-arch.md"
+      ]
+    },
+    "docs/deprecated/deprecated-migrated.md": {
+      "kind": "inventory seal — query entries cite this instance",
+      "delete_meter": [
+        "query/{mod,normalize,eval,laws,trials} entries cite docs/deprecated/storage-model/01-query-tree.json"
+      ]
+    }
+  },
+  "final_meters": [
+    "test ! -d crates/kyzo-core/src/query",
+    "rg -n 'crate::query::' crates/kyzo-core/src → zero",
+    "kyzo-oracle/src/{eval,temporal,incremental}.rs each exceed stub length and rg 'kyzo_core' crates/kyzo-oracle/src → zero",
+    "exec/fixpoint/{eval,parallel}.rs and exec/provenance/eval.rs exceed stub length; exec/mod.rs declares fixpoint, fold, plan, provenance, sort",
+    "ALL proof_meters green",
+    "thread-count determinism tests (results + witnesses + refusals) present under exec/fixpoint",
+    "kernel cross-check + terminal-tick pair present under kyzo-oracle tests",
+    "carried_obligations recorded at their seats (demand-rewriter gap named in gauntlet.rs; oracle-seam-shrink noted at exec/fixpoint/eval.rs)",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "no unbounded fixpoint — Budget is a required parameter of every evaluation door",
+      "seat": "exec/fixpoint/eval.rs",
+      "meter": "rg -n 'fn stratified_evaluate|fn evaluate_stratum' crates/kyzo-core/src/exec/fixpoint/eval.rs → every signature carries a Budget parameter",
+      "exceptions": []
+    },
+    {
+      "law": "determinism: identical results and refusals at any thread count",
+      "seat": "exec/fixpoint (eval + parallel) module tests",
+      "meter": "a thread-count determinism test asserting byte-identical results, witnesses, and refusals across 1/2/4/8 threads exists and passes in the exec/fixpoint test battery",
+      "exceptions": []
+    },
+    {
+      "law": "the oracle stays naive and independent — judge only",
+      "seat": "kyzo-oracle crate",
+      "meter": "rg -n 'rayon|kyzo_core' crates/kyzo-oracle/src → zero",
+      "exceptions": []
+    },
+    {
+      "law": "mutants killed by LITERALS where a symbol-relative bound would move with the mutant",
+      "seat": "exec/fixpoint test battery",
+      "meter": "the stride-pinned-by-literal test survives the move (rg for the literal stride pin in exec/fixpoint tests → at least 1)",
+      "exceptions": []
+    }
+  ],
+  "qae": [
+    {
+      "q": "The production `::verify` door (story #80) ships proof verification to users, and laws.rs's verifier was the oracle's. With the no-core-to-oracle-edge ruling, where does production ::verify get an independent checker — and doesn't seating it in exec/provenance (same crate as the evaluator) gut the independence the crate wall was for?",
+      "a": "::verify consumes exec/provenance/eval.rs's checker, whose independence is module-boundary law: it imports no evaluator symbol and re-derives every binding from scratch, metered by rg. The oracle's own verifier remains the judge-side twin exercised in kyzo-trials, which depends on both crates and cross-checks the two verifiers on the same proofs. Core never depends on the oracle.",
+      "e": "Crate-wall independence for the production path would drag the judge into every production binary and invert the dependency arrows the map draws. Module-boundary independence plus a trials cross-check of checker-vs-checker preserves the 'agreement is evidence, not tautology' property with a mechanical meter (import grep + differential). Close: the import-grep meter in by_target and a checker-vs-checker arm in kyzo-trials/provenance.rs.",
+      "authority": "cut_destiny"
+    },
+    {
+      "q": "trials.rs drove pub(crate) eval seams from inside kyzo-core; kyzo-trials sits outside the crate. Which seams become public surface, and which batteries stay behind as module tests rather than widening the sealed door?",
+      "a": "Batteries whose subject is an internal invariant (merge-barrier determinism, witness pins, limiter traces) stay as exec module tests beside their subject. Batteries whose subject is the CONTRACT (oracle differentials, refusal determinism, proof verification, temporal grids) move to kyzo-trials and drive the sealed public surface plus the two sanctioned seams (epoch_ceiling, check_interrupt) until OracleBudget lands. No new pub(crate) widening is minted for a moved test.",
+      "e": "The alternative — widening the sealed door until every internal battery can run externally — is the soft path that erodes the boundary one test at a time; name it and delete it. Close: rg for new pub(crate) in exec/fixpoint during the cut reviews each hit against the sanctioned-seam ledger (carried_obligations.oracle-seam-shrink).",
+      "authority": "cut_destiny"
+    }
+  ],
+  "campaigns_proposed": [
+    {
+      "target_seat": "exec/fixpoint determinism law (this instance's seated law; feeds decisions.md §84's determinism doctrine)",
+      "campaign": "kyzo-trials/determinism.rs lane: run the generated-program corpus at 1/2/4/8 threads plus real concurrent OS threads on one read transaction; assert answers, witness tables, and refusals byte-identical per seed; a schedule-dependent divergence on any seed falsifies the barrier-only claim."
+    },
+    {
+      "target_seat": "oracle independence (rulings.no-core-to-oracle-edge)",
+      "campaign": "checker-vs-checker: reconstruct proofs with exec/provenance's checker and the oracle's verifier over the same witness tables including the four-corruption negative control; any proof one accepts and the other rejects falsifies the independence claim."
+    }
+  ]
+}

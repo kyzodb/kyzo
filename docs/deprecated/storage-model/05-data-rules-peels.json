@@ -1,0 +1,456 @@
+{
+  "version": 1,
+  "title": "data/ remaining peels + fixed_rule/ → model program tiers, exec plan/fold, rules contract — cut destiny under decisions.md",
+  "status": "cut_destiny",
+  "privilege": "Architect cut contract only. decisions.md is sole Spec authority — this file yields on conflict. Current condemned paths appear only as Delete evidence; every seat and rewire destination is a target-tree path. Claim-tag inflation or jointly impossible meters void this plan. Where a pre-law destiny conflicts with target-arch, the map wins and the correction is recorded (NamedRows); where the map has no seat, NEW-SEATs are proposed and marked.",
+  "scope": {
+    "this_cut": "Condemned: crates/kyzo-core/src/data/{program,aggr}.rs, the empty data/sketch/ directory, crates/kyzo-core/src/fixed_rule/{mod.rs,utilities/mod.rs} — fixed_rule/ dies. Severance: data/mod.rs shrinks to `pub(crate) mod json;` (stale decls for aggr/program/sketch/arrow_ipc/bitemporal removed). Living targets: kyzo-model/src/program/{rule,query,aggregate}.rs (rule+query are NEW-SEATs), exec/plan/{program,normalize}.rs, exec/fold/aggr.rs, rules/{contract,graph_view}.rs.",
+    "not_this_json": "data/functions,expr,relation,tests — executed under move_plan.json v10. data/json.rs is a LIVING target seat (map line: NamedRows + diagnostic JSON envelopes) and is not condemned. query/ (01), runtime/ (02), storage/ (03), engines/ (04), hosts (06), storage seats (07).",
+    "foundation_already_true": [
+      "kyzo-model owns program IR expr/op/span/symbol; exec/stdlib kernels + bind/bound_op/errors landed",
+      "exec/plan/{compile,graph,magic,search,stratify}.rs landed; exec/plan/{program,normalize}.rs and exec/fold/aggr.rs are stubs",
+      "rules/{contract(109),graph_view(250)}.rs partially landed; rules/algo/* and rules/io/* landed; fixed_rule/mod.rs (2420 lines) is still the live monolith",
+      "data/mod.rs currently declares aggr, arrow_ipc, bitemporal, json, program, sketch — arrow_ipc.rs and bitemporal.rs no longer exist (stale decls; tree mid-cut red by design)"
+    ],
+    "target_not_current": "by_target and allowlist.targets are target-tree paths only."
+  },
+  "authority": [
+    "docs/decisions.md — sole Spec",
+    "docs/deprecated/deprecated-split.md — data/program.rs + data/mod.rs census entries",
+    "docs/deprecated/deprecated-migrated.md — data/aggr.rs + fixed_rule/{mod,utilities} census entries",
+    ".claude/skills/architecture-map/target-arch.md — ideal paths (NamedRows seat correction applied here)",
+    "docs/deprecated/move_plan.json v10 — executed sibling cut",
+    "This file — cut destiny; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Inflating Unexposed to Unconstructible voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Proof: private constructor + compile-fail a crate-consumer trybuild can demonstrate.",
+    "Refused": "Reachable program; typed runtime outcome. Named refuse variants.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter. Name residual risk; real detection or residual accepted."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist ⊇ every TARGET file the meters require to change. Condemned paths are deleted via delete_after; data/mod.rs is touched only via severance_edits.",
+    "proof_pairing": "compile-fail for typestate/brand claims; grep-delete for symbols/paths.",
+    "no_condemned_rewire": "data/{program,aggr}.rs and fixed_rule/* appear only under deletes/delete_after."
+  },
+  "deletes": {
+    "law": "E-action ledger for condemned CURRENT paths.",
+    "paths": [
+      { "path": "crates/kyzo-core/src/data/program.rs", "why": "Splits on the tier line: INPUT tier + options vocabulary + Trivia/Comment + WriteValidity/ValidityClause/DeltaAxis → kyzo-model/src/program/{rule,query}.rs (NEW-SEATs — what engine, oracle, and hosts agree a query IS); NORMAL/STRATIFIED/MAGIC tiers + StoreLifetimes + BodyNormalizer seam → exec/plan/program.rs (+normalize.rs); the 14-test battery moves with its tiers. File dies." },
+      { "path": "crates/kyzo-core/src/data/aggr.rs", "why": "Not a 1:1 move — declaration welded to implementation. Meaning half (names, meet-vs-normal kind as data) → kyzo-model/src/program/aggregate.rs; fold objects, factories, NumAccum → exec/fold/aggr.rs. Tests move with their halves. choice_rand does not migrate as-is (unseeded rng — see refused + ruling). File dies." },
+      { "path": "crates/kyzo-core/src/fixed_rule/mod.rs", "why": "NAMED SPLIT inside rules/: contract substance (FixedRule trait, payload + input surface, option extractors, FixedRuleOutput + OutputSpendGuard, CancelFlag, handle/registry/errors, SimpleFixedRule, tests_support) → rules/contract.rs; graph-builder half (intern_edges, checked_node_id, as_directed_* builders, NotAnEdge/BadEdgeWeight) → rules/graph_view.rs. TupleIter seam → kyzo-model value/row.rs iterator species; NamedRows (+to_arrow_ipc) → data/json.rs per the map (correction over the census's 'session tier' prose). File dies." },
+      { "path": "crates/kyzo-core/src/fixed_rule/utilities/mod.rs", "why": "Structural glue — dies with the directory; readers/constant landed at rules/io/, reorder_sort at rules/algo/." }
+    ],
+    "symbols": [
+      { "name": "FixedRuleApply.fixed_impl: Arc<dyn FixedRule> in the model tier", "why": "BLOCKER resolved: model carries a resolved NAME with arity proof; the live impl binds at exec/plan time. A model type welded to a runtime trait object has no seat (kyzo-model depends on nothing)." },
+      { "name": "duplicate arity authority (parse-recorded arity field vs arity() recomputed from the impl)", "why": "One authority: the declaration's arity; the impl is checked against it at bind. The self-flagged smell dies at the same cut." },
+      { "name": "InvalidInverseTripleUse", "why": "Dead — identified and dropped in the fork-header ledger; grep-guard." }
+    ],
+    "delete_guarded_invariants": [
+      { "name": "fixed_rule/ directory gone", "close": "test ! -d crates/kyzo-core/src/fixed_rule" },
+      { "name": "data/ contains only json.rs + mod.rs", "close": "ls crates/kyzo-core/src/data → exactly json.rs and mod.rs" },
+      { "name": "one arity authority for fixed rules", "close": "rg 'fn arity' crates/kyzo-core/src/rules/contract.rs → declaration authority only; no recompute-from-impl second source" }
+    ],
+    "not_deletes": [
+      { "item": "data/json.rs", "why": "Living map seat: NamedRows + diagnostic JSON envelopes (composes kyzo-model envelope/json). Not condemned; data/mod.rs survives as its glue." },
+      { "item": "NoStoredInputs placeholder", "why": "Superseded-placeholder-kept-for-its-own-regression-test pattern — travels to rules/contract.rs with its reason." },
+      { "item": "the 28-registration DEFAULT_FIXED_RULES registry incl. aliases", "why": "Engine-side by the parse-tier blocker ruling; stays at rules/contract.rs — the model binds declaration-shaped handles only." }
+    ],
+    "meters": [
+      "test ! -f crates/kyzo-core/src/data/program.rs",
+      "test ! -f crates/kyzo-core/src/data/aggr.rs",
+      "test ! -d crates/kyzo-core/src/data/sketch",
+      "test ! -d crates/kyzo-core/src/fixed_rule",
+      "rg -n 'crate::fixed_rule::' crates/kyzo-core/src → zero",
+      "rg -n 'crate::data::(program|aggr|sketch)' crates/kyzo-core/src crates/kyzo-trials/src → zero",
+      "rg -n 'Arc<dyn FixedRule>' crates/kyzo-model/src → zero",
+      "rg -n 'InvalidInverseTripleUse' crates → zero"
+    ]
+  },
+  "refused": {
+    "law": "Typed runtime outcomes. Named variants. Authority honest.",
+    "items": [
+      {
+        "name": "choice_rand under unseeded randomness",
+        "tag": "Refused",
+        "variant": "AggrRefuse::UnseededChoiceRand",
+        "door": "kyzo-model/src/program/aggregate.rs parse_aggr (declaration admission)",
+        "authority": "cut_destiny",
+        "why": "choice_rand folds UNSEEDED rand::rng() — nondeterminism in the answer path with no determinism-as-data field to declare it. It does not migrate as-is: it lands only with the rules/rng.rs seeded discipline and a determinism-as-data marking on Aggregation, else the declaration refuses. The soft alternative (migrate now, fix later) is deleted and named."
+      },
+      {
+        "name": "fixed-rule output row at a lying arity",
+        "tag": "Refused",
+        "variant": "arity-brand refusal at FixedRuleOutput::put",
+        "door": "rules/contract.rs FixedRuleOutput (manifest-branded)",
+        "authority": "cut_destiny",
+        "why": "Refused at the first wrong row instead of feeding mis-shaped tuples into downstream joins — SimpleFixedRule's check made universal."
+      },
+      {
+        "name": "fixed-rule output flood past the spend ceiling",
+        "tag": "Refused",
+        "variant": "OutputSpendGuard ceiling refusal (OUTPUT_STRIDE-bounded)",
+        "door": "rules/contract.rs OutputSpendGuard",
+        "authority": "cut_destiny",
+        "why": "A fixed rule runs to completion inside one epoch, filling its output store before any barrier checks — the same hole the mid-epoch InterruptTicker closes for ordinary rules; the count is the store's own distinct size so the refusal is deterministic and byte-identical."
+      },
+      {
+        "name": "nullary node relation fed to a graph algorithm",
+        "tag": "Refused",
+        "variant": "typed refusal via ensure_min_len (schema-level guard)",
+        "door": "rules/contract.rs FixedRuleInputRelation",
+        "authority": "cut_destiny",
+        "why": "The systemic finding: ten algorithms read a node relation's first column unguarded; a zero-column relation made every one panic instead of refusing cleanly."
+      },
+      {
+        "name": "entry missing from an input program",
+        "tag": "Refused",
+        "variant": "NoEntry (spanned/spanless) at construction",
+        "door": "kyzo-model/src/program/rule.rs InputProgram construction",
+        "authority": "cut_destiny",
+        "why": "Entry-as-a-FIELD: construction refusal, never mid-pipeline discovery."
+      }
+    ]
+  },
+  "unexposed": {
+    "law": "Residual hostile-adapter risk with real detection or residual accepted.",
+    "items": [
+      {
+        "name": "hostile in-process caller minting a magic/stratified tier value without its transformation",
+        "tag": "Unexposed",
+        "residual_risk": "The typestate law (tiers minted only by their transformations; possession is proof) holds at the sealed API; an in-crate adapter could construct tier values by hand.",
+        "detection": "none at runtime for in-crate forge; residual accepted at the crate boundary — the oracle differential campaign catches semantic damage (a hand-minted tier that changes answers diverges from naive_eval)"
+      }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "aggr-null-accumulator",
+      "from": "data/aggr.rs L2 Watch",
+      "obligation": "Null doubles as 'no value yet' in the meet accumulators (min/max document null-skipping; intersection silently conflates a real Null row with its identity). Destination law wants a typed Option-shaped accumulator — reforge on arrival at exec/fold/aggr.rs, or record the conflation as documented behavior with a pin.",
+      "gate": "exec/fold/aggr.rs landing story",
+      "seat_until_hoist": "crates/kyzo-core/src/exec/fold/aggr.rs"
+    },
+    {
+      "id": "extract-bound-asymmetry",
+      "from": "data/expr.rs L2 (planning half already re-homed; watch item outstanding)",
+      "obligation": "extract_bound's GE/GT arm coerces the lower-bound constant via get_int but the upper via get_float (mirrored in LE/LT) — adjudicate deliberate rounding direction vs latent bounds bug before the plan-zone code is treated as settled.",
+      "gate": "exec/plan bounds story",
+      "seat_until_hoist": "crates/kyzo-core/src/exec/plan/compile.rs (watch note at the bounds code)"
+    },
+    {
+      "id": "lsp-vocabulary-cut",
+      "from": "fixed_rule/mod.rs L1 cross-reference",
+      "obligation": "The registry's Arc<dyn FixedRule> is resolved and CALLED at parse time today; with the name+arity model cut, the LSP/model vocabulary question (06's qae) is dischargeable — fixed-rule and aggregation NAMES become model vocabulary; the live impls stay engine-side.",
+      "gate": "06-hosts-lsp.json qae resolution",
+      "seat_until_hoist": "crates/kyzo-model/src/program/rule.rs (declaration handle)"
+    }
+  ],
+  "tests": {
+    "law": "Tests move with their tiers/halves. Never weaken a pinned mutant-killer.",
+    "fate": [
+      { "from": "data/program.rs 14-test battery", "action": "split with tiers", "to": "kyzo-model/src/program/{rule,query}.rs module tests (input tier) + exec/plan/program.rs module tests (normal/stratified/magic tiers)" },
+      { "from": "data/aggr.rs battery (update_checked flag-pinning harness, semilattice laws per meet, inversion/exactness/beyond-2^53/exact-Int regressions, F1/F2 mutation-proven holes, kind-agreement, collect-limit)", "action": "split with halves", "to": "exec/fold/aggr.rs tests (flag-contract battery, folds) + kyzo-model/src/program/aggregate.rs tests (kind-agreement, names)" },
+      { "from": "fixed_rule/mod.rs battery", "action": "split with halves", "to": "rules/contract.rs tests (arity-brand refusals, stored-seam regression, cancellation mid-run, registry pins, channel round trip, OutputSpendGuard budget pair, nullary systemic-finding test, arrow-ipc wiring) + rules/graph_view.rs tests (intern_site_refuses_at_u32_bound F3 boundary pins, graph-builder battery)" }
+    ],
+    "meters": [
+      "rg -n 'intern_site_refuses_at_u32_bound' crates/kyzo-core/src/rules/graph_view.rs → exactly 1",
+      "rg -n 'nullary_node_relation_refuses_not_panics_across_algos' crates/kyzo-core/src/rules/contract.rs → exactly 1",
+      "rg -n 'update_checked' crates/kyzo-core/src/exec/fold/aggr.rs → flag-contract battery present"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "InputProgram / InputAtom / InputInlineRule / FixedRuleApply (name+arity declaration) / SearchInput / DeltaAxis / ValidityClause / Unification / Comment / Trivia / NoEntry / EmptyRuleSet — kyzo-model/src/program/rule.rs (NEW-SEAT)",
+      "QueryAssertion / ReturnMutation / SortDir / RelationOp / WriteValidity / InputRelationHandle / QueryOutOptions / num_to_take — kyzo-model/src/program/query.rs (NEW-SEAT)",
+      "Aggregation (name identity) / AggrKind (meet-vs-normal as data) / parse_aggr — kyzo-model/src/program/aggregate.rs",
+      "NormalizedProgram / StratifiedProgram / MagicProgram tiers / StoreLifetimes / BodyNormalizer / normalize_ruleset / TierInvariant — exec/plan/program.rs",
+      "fold objects / factories / NumAccum / meet_aggr! / normal_aggr! — exec/fold/aggr.rs",
+      "FixedRule trait / FixedRulePayload / FixedRuleInputRelation / option extractors / FixedRuleOutput / OutputSpendGuard / CancelFlag / QueryCancelledError / StoredInputSource / NoStoredInputs / FixedRuleHandle / DEFAULT_FIXED_RULES / SimpleFixedRule / PreparedFixedRule — rules/contract.rs",
+      "intern_edges / checked_node_id / as_directed_* builders / NotAnEdge / BadEdgeWeight — rules/graph_view.rs",
+      "TupleIter — kyzo-model/src/value/row.rs (iterator species of the tuple tier)",
+      "NamedRows + to_arrow_ipc call boundary — crates/kyzo-core/src/data/json.rs (map seat; composes kyzo-model envelope/{json,arrow})"
+    ],
+    "unconstructible": [
+      {
+        "name": "a stratified/magic tier value outside its minting transformation",
+        "proof": "compile-fail (trybuild): crate-consumer cannot construct NormalizedProgram/StratifiedProgram/MagicProgram — tiers minted only by their transformations; possession is proof"
+      },
+      {
+        "name": "a kind/impl disagreement on Aggregation (meet fold registered under a normal kind)",
+        "proof": "compile-fail (trybuild): the declaration/fold pairing door rebuilds AggrKind's unrepresentable-disagreement proof at the model/exec seam"
+      },
+      {
+        "name": "a fixed-rule output writer without the manifest arity brand",
+        "proof": "compile-fail (trybuild): FixedRuleOutput constructible only from the branded manifest arity — never a caller-supplied width"
+      }
+    ],
+    "rulings": [
+      { "id": "input-tier-is-model-vocabulary", "a": "The INPUT tier is what engine, oracle, and hosts agree a query IS — model vocabulary at kyzo-model/src/program/{rule,query}.rs (NEW-SEATs; deprecated-split's destination, absent from target-arch — map correction proposed). The NORMAL/STRATIFIED/MAGIC tiers are plan artifacts minted and consumed inside compilation — exec/plan/program.rs; the oracle never sees a magic program." },
+      { "id": "fixed-rule-apply-declaration", "a": "FixedRuleApply in the model is a resolved NAME with arity proof; Arc<dyn FixedRule> binds at exec/plan. One arity authority: the declaration; bind checks the impl against it. This resolves the parse-tier blocker all three census docs cite." },
+      { "id": "namedrows-map-correction", "a": "CORRECTION under authority order: fixed_rule census prose said NamedRows goes to 'the session tier's public result type'; target-arch seats it at crates/kyzo-core/src/data/json.rs (NamedRows + diagnostic JSON envelopes, composing kyzo-model envelope/json). The map wins. data/mod.rs survives as the sole glue line `pub(crate) mod json;` — a structural mod file, lawful though unlisted on the map." },
+      { "id": "aggregate-shared-fold-seam", "a": "Aggregation names + AggrKind are model vocabulary (aggregate.rs); fold bodies are exec (fold/aggr.rs); the oracle reaches the REAL folds via the AggrFold injection seam ruled in 01-query-tree.json. No fold body in kyzo-model." },
+      { "id": "choice-rand-settled", "a": "choice_rand's unseeded fold is refused at declaration admission (AggrRefuse::UnseededChoiceRand) until a seeded, determinism-as-data form is ruled. Not an open operator question — the soft 'migrate now, fix later' is deleted by name." },
+      { "id": "cancellation-vocabulary", "a": "CancelFlag seats at rules/contract.rs but is engine-wide cancellation vocabulary (budget deadline, kill, search atoms share it per the one-flag design); the map's contract.rs line should name cancellation explicitly (map honesty must_add)." },
+      { "id": "trivia-attachment-authority", "a": "One place decides leading/trailing trivia attachment, with the verified pest span quirk documented — travels intact to kyzo-model/src/program/rule.rs." },
+      { "id": "current-paths-delete-evidence-only", "a": "data/{program,aggr}.rs and fixed_rule/* appear only under deletes/delete_after; data/mod.rs only under severance_edits." }
+    ]
+  },
+  "ban": [
+    "Do not put a fold body, a runtime trait object, or an exec import in kyzo-model.",
+    "Do not migrate choice_rand's unseeded fold.",
+    "Do not keep two arity authorities for fixed rules.",
+    "Do not let the oracle see NORMAL/STRATIFIED/MAGIC tier types.",
+    "Do not weaken the OutputSpendGuard stride harmonization with eval's InterruptTicker.",
+    "Do not drop the u32::MAX Dijkstra sentinel reservation when moving checked_node_id.",
+    "Do not edit data/mod.rs except via severance_edits (decl removal to `pub(crate) mod json;` only).",
+    "Do not seat NamedRows anywhere but data/json.rs (map correction is on the record).",
+    "Do not re-weld declaration to implementation anywhere this cut splits them.",
+    "Do not use whole-engine cargo green as this cut's meter."
+  ],
+  "allowlist": {
+    "law": "TARGET paths only. data/mod.rs is severance-only.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-model/src/program/rule.rs",
+      "crates/kyzo-model/src/program/query.rs",
+      "crates/kyzo-model/src/program/aggregate.rs",
+      "crates/kyzo-model/src/program/mod.rs",
+      "crates/kyzo-model/src/value/row.rs",
+      "crates/kyzo-model/src/lib.rs",
+      "crates/kyzo-core/src/exec/plan/program.rs",
+      "crates/kyzo-core/src/exec/plan/normalize.rs",
+      "crates/kyzo-core/src/exec/plan/compile.rs",
+      "crates/kyzo-core/src/exec/fold/aggr.rs",
+      "crates/kyzo-core/src/exec/mod.rs",
+      "crates/kyzo-core/src/rules/contract.rs",
+      "crates/kyzo-core/src/rules/graph_view.rs",
+      "crates/kyzo-core/src/rules/mod.rs",
+      "crates/kyzo-core/src/data/json.rs",
+      "crates/kyzo-core/src/lib.rs",
+      "docs/deprecated/deprecated-split.md",
+      "docs/deprecated/deprecated-migrated.md"
+    ],
+    "delete_after": [
+      "crates/kyzo-core/src/data/program.rs",
+      "crates/kyzo-core/src/data/aggr.rs",
+      "crates/kyzo-core/src/fixed_rule/mod.rs",
+      "crates/kyzo-core/src/fixed_rule/utilities/mod.rs"
+    ],
+    "forbidden_seats": [
+      "crates/kyzo-core/src/data/program.rs",
+      "crates/kyzo-core/src/data/aggr.rs",
+      "crates/kyzo-core/src/data/mod.rs",
+      "crates/kyzo-core/src/fixed_rule/mod.rs",
+      "crates/kyzo-core/src/fixed_rule/utilities/mod.rs"
+    ],
+    "rewire": [
+      "TARGET kyzo-model/src/program/{rule,query}.rs ← input tier + options vocabulary from condemned data/program.rs (no engine imports)",
+      "TARGET exec/plan/program.rs ← normal/stratified/magic tiers + BodyNormalizer from condemned data/program.rs",
+      "TARGET kyzo-model/src/program/aggregate.rs ← names + AggrKind from condemned data/aggr.rs",
+      "TARGET exec/fold/aggr.rs ← folds + NumAccum from condemned data/aggr.rs",
+      "TARGET rules/contract.rs ← contract substance from condemned fixed_rule/mod.rs",
+      "TARGET rules/graph_view.rs ← graph-builder half from condemned fixed_rule/mod.rs",
+      "TARGET kyzo-model/src/value/row.rs ← TupleIter iterator species from condemned fixed_rule/mod.rs",
+      "TARGET data/json.rs ← NamedRows seat consolidation (to_arrow_ipc at the envelope boundary)"
+    ],
+    "severance_edits": [
+      "crates/kyzo-core/src/data/mod.rs"
+    ]
+  },
+  "severance_edits": {
+    "law": "Scoped Delete-evidence edits on condemned/dying files that must survive this cut structurally. Not living seats. Not compatibility rewiring.",
+    "entries": [
+      {
+        "path": "crates/kyzo-core/src/data/mod.rs",
+        "license": "Remove mod decls for aggr, program, sketch and the stale arrow_ipc, bitemporal decls; final content is the license header + `pub(crate) mod json;`. The file survives as glue for the living map seat data/json.rs (rulings.namedrows-map-correction) — no other content.",
+        "meter": "rg -n 'mod (aggr|program|sketch|arrow_ipc|bitemporal)' crates/kyzo-core/src/data/mod.rs → zero; rg -n 'mod json' crates/kyzo-core/src/data/mod.rs → exactly 1"
+      }
+    ]
+  },
+  "proof_meters": [
+    "compile-fail (trybuild): crate-consumer cannot construct a stratified/magic tier value outside its transformation",
+    "compile-fail (trybuild): Aggregation kind/fold disagreement at the model/exec pairing door",
+    "compile-fail (trybuild): FixedRuleOutput without the manifest arity brand"
+  ],
+  "by_target": {
+    "crates/kyzo-model/src/program/rule.rs": {
+      "kind": "NEW-SEAT (proposed; deprecated-split destination absent from target-arch) — the input tier: what a rule/atom/program IS",
+      "owns": ["InputProgram", "InputAtom", "InputInlineRule", "InputInlineRulesOrFixed", "FixedRuleApply (name+arity declaration)", "FixedRuleArg", "SearchInput", "DeltaAxis", "ValidityClause", "Unification", "Comment", "Trivia", "collect_trivia_anchors", "shares_a_line_with_preceding_content", "NoEntry", "EmptyRuleSet", "EntryHeadNotExplicitlyDefined", "TempSymbGen"],
+      "ban": ["kyzo-core imports", "Arc<dyn FixedRule> or any runtime trait object", "normal/stratified/magic tier types"],
+      "delete_meter": [
+        "rg -n 'kyzo_core|Arc<dyn' crates/kyzo-model/src/program/rule.rs → zero",
+        "rg -n 'struct InputProgram' crates/kyzo-model/src/program/rule.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Typestate law: tiers minted only by their transformations; possession is proof. Entry-as-a-FIELD: construction refusal, never mid-pipeline discovery.",
+        "WriteValidity's no-system-time-by-design law AND its per-row terminal-tick re-proof: parse proved the column, not the value — re-prove per row through the same smart constructor.",
+        "ValidityClause's one-grammar-seat doctrine: Spans/Delta bind one EXTRA trailing column, arity checks untouched.",
+        "DeltaAxis mirrored by the oracle's own laws::Axis — wall discipline already practiced.",
+        "Trivia attachment authority: one place decides leading/trailing, with the verified pest span quirk documented.",
+        "Binding.tuple_pos: Option<usize> carries its own typestate-split invitation — the model migration IS the port that honors it."
+      ]
+    },
+    "crates/kyzo-model/src/program/query.rs": {
+      "kind": "NEW-SEAT (proposed) — query-output options vocabulary",
+      "owns": ["QueryAssertion", "ReturnMutation", "SortDir", "RelationOp", "WriteValidity", "InputRelationHandle", "QueryOutOptions", "num_to_take"],
+      "ban": ["kyzo-core imports"],
+      "delete_meter": [
+        "rg -n 'kyzo_core' crates/kyzo-model/src/program/query.rs → zero",
+        "rg -n 'struct QueryOutOptions' crates/kyzo-model/src/program/query.rs → exactly 1"
+      ]
+    },
+    "crates/kyzo-model/src/program/aggregate.rs": {
+      "kind": "TARGET (map seat, file to create) — aggregate declaration shapes: names + meet-vs-normal as data",
+      "owns": ["Aggregation", "AggrKind", "parse_aggr"],
+      "ban": ["fold bodies", "NumAccum", "kyzo-core imports", "unseeded nondeterministic aggregate admission"],
+      "delete_meter": [
+        "rg -n 'kyzo_core' crates/kyzo-model/src/program/aggregate.rs → zero",
+        "rg -n 'UnseededChoiceRand' crates/kyzo-model/src/program/aggregate.rs → refuse variant present"
+      ],
+      "carried_notes": [
+        "Name-only identity for Aggregation; meet-vs-normal is what stratify rules on and the oracle implements independently; sketch fallthrough in parse_aggr routes approximate families to exec/fold/sketch."
+      ]
+    },
+    "crates/kyzo-core/src/exec/plan/program.rs": {
+      "kind": "TARGET — plan-tier program IR: normal/stratified/magic + the normalizer seam",
+      "owns": ["NormalFormAtom tiers", "StratifiedProgram", "StoreLifetimes", "Adornment", "MagicSymbol", "MagicInlineRule", "MagicRulesOrFixed", "MagicFixedRuleApply", "MagicAtom", "MagicProgram", "StratifiedMagicProgram", "BodyNormalizer", "normalize_ruleset", "TierInvariant"],
+      "ban": ["exposure of tier types through the sealed public door", "panicking tier invariants (returned, never panicked)"],
+      "proof_meter": ["compile-fail: tier value outside its transformation"],
+      "delete_meter": [
+        "rg -n 'struct MagicProgram' crates/kyzo-core/src/exec/plan/program.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Execution-order-in-the-type: upstream's three-file .rev() convention reversed exactly once; StoreLifetimes is a documented unit type; head dedup via ***n at normalize_ruleset."
+      ]
+    },
+    "crates/kyzo-core/src/exec/fold/aggr.rs": {
+      "kind": "TARGET — aggregation folds: the implementation half",
+      "owns": ["NormalAggrObj", "MeetAggrObj", "fold factories", "NumAccum", "meet_aggr!", "normal_aggr!"],
+      "ban": ["name/kind authority (model owns it)", "unseeded rng in any fold"],
+      "proof_meter": ["compile-fail: kind/fold disagreement at the pairing door"],
+      "delete_meter": [
+        "rg -n 'rand::rng\\(\\)|thread_rng' crates/kyzo-core/src/exec/fold/aggr.rs → zero",
+        "rg -n 'struct NumAccum' crates/kyzo-core/src/exec/fold/aggr.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "The changed-flag contract with the fixed upstream inversions: the flag gates delta propagation — a false 'unchanged' is a premature fixpoint; exact-Num-order min/max; NumAccum exact-Int sum/product; F1/F2 mutation-proven holes stay pinned.",
+        "Null-as-no-value accumulator conflation is carried_obligations.aggr-null-accumulator — typed Option-shaped accumulator on arrival or a documented pin."
+      ]
+    },
+    "crates/kyzo-core/src/rules/contract.rs": {
+      "kind": "TARGET living seat — what a fixed rule promises (contract substance from fixed_rule/mod.rs)",
+      "owns": ["FixedRule trait", "FixedRulePayload", "FixedRuleInputRelation", "ensure_min_len", "option extractors (nine)", "FixedRuleOutput", "OutputSpendGuard", "OUTPUT_STRIDE", "CancelFlag", "QueryCancelledError", "StoredInputSource", "StoredInputUnavailable", "NoStoredInputs", "FixedRuleHandle", "FixedRuleNotFoundError", "DEFAULT_FIXED_RULES", "SimpleFixedRule", "PreparedFixedRule", "tests_support"],
+      "ban": ["caller-supplied output arity", "a second cancellation flag", "graph builders (graph_view owns them)"],
+      "proof_meter": ["compile-fail: FixedRuleOutput without manifest brand"],
+      "delete_meter": [
+        "rg -n 'struct OutputSpendGuard' crates/kyzo-core/src/rules/contract.rs → exactly 1",
+        "rg -n 'DEFAULT_FIXED_RULES' crates/kyzo-core/src/rules/contract.rs → registry of 28 present"
+      ],
+      "carried_notes": [
+        "Cancellation polling doctrine: at least once per unit of unbounded work — a loop that never checks is a loop that cannot be killed; one flag integrates kill switch, timeouts, and the deadline half of Budget.",
+        "OutputSpendGuard is the fixed-rule twin of eval's mid-epoch InterruptTicker; determinism argued from the store's own distinct size; stride harmonized with eval's.",
+        "The systemic-finding test discipline: every case complete except the guard under test — failure isolation built into the fixture.",
+        "A fixed rule is an opaque computation treated as a single stratum-bounded rule; it never participates in recursion.",
+        "NamedRows seam: to_arrow_ipc is the production call site of story-#77's encoder, refusing heterogeneous columns — the call boundary composes kyzo-model envelope/arrow from the NamedRows seat at data/json.rs."
+      ]
+    },
+    "crates/kyzo-core/src/rules/graph_view.rs": {
+      "kind": "TARGET living seat — the CSR graph builders beside the algorithms",
+      "owns": ["intern_edges", "checked_node_id", "as_directed_* builders", "NotAnEdge", "BadEdgeWeight"],
+      "ban": ["silent u32 truncation (the aliasing-onto-id-0 bug)", "spending u32::MAX (reserved as the Dijkstra no-back-pointer sentinel)"],
+      "delete_meter": [
+        "rg -n 'fn checked_node_id' crates/kyzo-core/src/rules/graph_view.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "checked_node_id mints at the intern site: the original's indices.len() as u32 silently truncated, aliasing the 2^32-th node onto id 0; cap is u32::MAX−1 because u32::MAX stays reserved; the bound is untestable at scale — factored into this function precisely so a unit test can pin the boundary arithmetic without the allocation; finite/non-negative weight validation, default weight 1.0."
+      ]
+    },
+    "crates/kyzo-model/src/value/row.rs": {
+      "kind": "TARGET living seat — TupleIter joins the tuple tier's iterator species",
+      "owns": ["TupleIter"],
+      "ban": ["engine imports"],
+      "delete_meter": [
+        "rg -n 'TupleIter' crates/kyzo-model/src/value/row.rs → definition present; zero definitions in kyzo-core"
+      ]
+    },
+    "crates/kyzo-core/src/data/json.rs": {
+      "kind": "TARGET living seat (map line 261) — NamedRows + diagnostic JSON envelopes",
+      "owns": ["NamedRows", "diagnostic JSON envelopes"],
+      "ban": ["a second NamedRows definition anywhere", "DataValue↔JSON wire bodies (kyzo-model envelope/json owns them)"],
+      "delete_meter": [
+        "rg -n 'pub struct NamedRows' crates → exactly 1, at crates/kyzo-core/src/data/json.rs"
+      ]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty",
+      "must_add": [
+        "crates/kyzo-model/src/program/rule.rs — input-tier rule/atom vocabulary (NEW-SEAT ratification)",
+        "crates/kyzo-model/src/program/query.rs — query-output options vocabulary (NEW-SEAT ratification)",
+        "crates/kyzo-core/src/data/mod.rs — structural glue line for the surviving data/json.rs seat (or an explicit note that mod glue is implied)",
+        "rules/contract.rs line names cancellation (CancelFlag) explicitly"
+      ],
+      "must_delete_lines_for": [],
+      "delete_meter": ["program/rule.rs + program/query.rs present on the map after ratification"]
+    },
+    "docs/deprecated/deprecated-split.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["data/program.rs and data/mod.rs entries cite docs/deprecated/storage-model/05-data-rules-peels.json"]
+    },
+    "docs/deprecated/deprecated-migrated.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["data/aggr.rs and fixed_rule entries cite docs/deprecated/storage-model/05-data-rules-peels.json"]
+    }
+  },
+  "final_meters": [
+    "test ! -f crates/kyzo-core/src/data/program.rs && test ! -f crates/kyzo-core/src/data/aggr.rs && test ! -d crates/kyzo-core/src/data/sketch && test ! -d crates/kyzo-core/src/fixed_rule",
+    "severance: data/mod.rs declares json only",
+    "ALL proof_meters green",
+    "kyzo-model/src/program/{rule,query,aggregate}.rs exist with zero kyzo_core imports",
+    "exec/plan/program.rs and exec/fold/aggr.rs exceed stub length",
+    "rules/contract.rs owns the registry + OutputSpendGuard; rules/graph_view.rs owns checked_node_id",
+    "exactly one pub struct NamedRows, at data/json.rs",
+    "carried_obligations recorded at their seats",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "total function over values — Result, never panic on reachable input",
+      "seat": "exec/fold/aggr.rs + rules/{contract,graph_view}.rs",
+      "meter": "rg -n 'panic!|unwrap\\(|expect\\(' crates/kyzo-core/src/exec/fold/aggr.rs crates/kyzo-core/src/rules/contract.rs crates/kyzo-core/src/rules/graph_view.rs → zero outside cfg(test)",
+      "exceptions": []
+    },
+    {
+      "law": "determinism-as-data — nondeterministic aggregates and ops are declared, never assumed foldable",
+      "seat": "kyzo-model/src/program/aggregate.rs + exec/fold/aggr.rs",
+      "meter": "no unseeded rng in fold bodies (rg → zero); UnseededChoiceRand refuse path tested",
+      "exceptions": []
+    },
+    {
+      "law": "the fixed-rule cancellation polling doctrine",
+      "seat": "rules/contract.rs CancelFlag + every algo loop",
+      "meter": "cancellation-honored-mid-run test (BFS per-edge poll) present and green",
+      "exceptions": []
+    }
+  ],
+  "qae": [
+    {
+      "q": "deprecated-split routes the input tier to model/program/{rule,query}.rs, but target-arch's program/ zone has no such files — and adding them makes program/ carry rule vocabulary that parse/{query,script}.rs lifts into. Are two NEW-SEATs the right cut, or should the input tier fold into the existing parse/ seats?",
+      "a": "Two NEW-SEATs (program/rule.rs, program/query.rs). The parse/ zone lifts TEXT into IR; the program/ zone IS the IR. Folding tier vocabulary into parse files would weld syntax lifting to vocabulary the oracle and hosts must share without parsing anything. Ratify both files onto the map.",
+      "e": "The soft alternative — 'parse owns the types it produces' — reintroduces the engine/oracle wall problem the model crate exists to solve (the oracle consumes programs it never parsed). Close: map ratification (must_add), zero-kyzo-core-import meters on both files.",
+      "authority": "cut_destiny"
+    },
+    {
+      "q": "data/sketch/ is an empty directory and exec/fold/sketch/* already carries the sketch family — but does any data/sketch census entry remain unexecuted, or is deleting the empty dir the whole remaining act?",
+      "a": "Deleting the empty directory and its stale mod decl is the whole remaining act; the sketch family's constructs live at exec/fold/sketch/{mod,aggr,count_min,hll,tdigest}.rs per the map, and the tree confirms content landed there. No census gold is orphaned.",
+      "e": "Verified against the tree (data/sketch/ empty; exec/fold/sketch populated). Close: the ls meter in delete_guarded_invariants; if a later census diff surfaces unmigrated sketch gold, that is a new finding, not this cut's debt.",
+      "authority": "cut_destiny"
+    }
+  ],
+  "campaigns_proposed": [
+    {
+      "target_seat": "aggregation changed-flag contract (exec/fold/aggr.rs; feeds the §84 determinism doctrine)",
+      "campaign": "flag-inversion hunt: over the five meet lattices, mutate each fold's changed flag to report 'unchanged' on one transition class; the generative differential vs the oracle must catch every mutant as a premature fixpoint — any surviving mutant falsifies the flag-contract battery's coverage claim."
+    }
+  ]
+}

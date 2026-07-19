@@ -1,0 +1,415 @@
+{
+  "version": 1,
+  "title": "storage/ → store/ — contract/tx split + tests decomposition cut destiny under decisions.md",
+  "status": "cut_destiny",
+  "privilege": "Architect cut contract only. decisions.md is sole Spec authority — this file yields on conflict. Current condemned paths appear only as Delete evidence; every seat and rewire destination is a target-tree path. Claim-tag inflation or jointly impossible meters void this plan. Pre-law destinies re-derived under the law; corrections recorded as rulings.",
+  "scope": {
+    "this_cut": "Condemned: crates/kyzo-core/src/storage/{mod,tests}.rs — the storage/ directory dies. Living targets: store/{contract,tx,fjall,backup,verify_walk}.rs; kyzo-model/src/format/tests.rs (encoding-law battery); kyzo-crashfs/src/sim.rs (DST instrument battery); kyzo-trials/src/{crash,dst,conformance,fuzz}.rs.",
+    "not_this_json": "query/ (01), runtime/ (02), engines/ (04), data+fixed_rule (05), hosts (06). The storage-epic constructs (SweepDoor, WAL, CheckpointSeal, WriteAuthority …) are 07-storage-seats.json — this cut relocates the CURRENT contract, it does not build the Spec machine.",
+    "foundation_already_true": [
+      "store/{contract,tx}.rs are 1-line stubs; store/{backup,fjall,keys,merkle,retry,scratch,skip_walk,time,verify_walk}.rs landed",
+      "kyzo-crashfs/src/{sim,fault,harness,passthrough}.rs landed",
+      "kyzo-trials/src/{conformance,dst,crash,serializability}.rs landed with real content (the story-#79 kit lives at kyzo-trials/src/conformance.rs)",
+      "storage/{conformance,crash_matrix,sim}.rs already relocated in prior executed cuts"
+    ],
+    "target_not_current": "by_target and allowlist.targets are target-tree paths only."
+  },
+  "authority": [
+    "docs/decisions.md — sole Spec",
+    "docs/deprecated/deprecated-migrated.md — storage/{mod,tests} census entries",
+    ".claude/skills/architecture-map/target-arch.md — ideal paths",
+    "This file — cut destiny; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Inflating Unexposed to Unconstructible voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Proof: private constructor + compile-fail a crate-consumer trybuild can demonstrate.",
+    "Refused": "Reachable program; typed runtime outcome. Named refuse variants.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter. Name residual risk; real detection or residual accepted."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist ⊇ every TARGET file the meters require to change. Condemned paths are deleted via delete_after — not edited as living seats.",
+    "proof_pairing": "compile-fail for signature-enforced laws (snapshot-then-mint, consuming commit); grep-delete for path/symbol absence.",
+    "no_condemned_rewire": "storage/* paths appear only under deletes/delete_after."
+  },
+  "deletes": {
+    "law": "E-action ledger for condemned CURRENT paths.",
+    "paths": [
+      { "path": "crates/kyzo-core/src/storage/mod.rs", "why": "Contract prose + Storage trait + FormatVersion + SystemClock + seal → store/contract.rs; ReadTx/WriteTx/ConflictError → store/tx.rs; module decls are structural glue dying with the directory." },
+      { "path": "crates/kyzo-core/src/storage/tests.rs", "why": "One tier-wide test file the target decomposes beside its subjects: encoding-law battery → kyzo-model/src/format/tests.rs; fjall pins → store/fjall.rs + store/contract.rs tests; backup battery → store/backup.rs; verify pair → store/verify_walk.rs; process-abort crash → kyzo-trials/src/crash.rs; DST semantics + seven campaigns + hardening sentinel → kyzo-crashfs/src/sim.rs with campaign shapes feeding kyzo-trials/src/dst.rs. The generic kit-source duplicates die in favor of the conformance kit call." }
+    ],
+    "symbols": [
+      { "name": "per-backend copies of the generic KV/MVCC/RYOW/del_range/phantom/concurrent-writers/chunk-boundary/send-sync scenarios", "why": "CONDEMNED AS SUPERSEDED: they are the story-#79 kit's extraction source, verbatim-duplicated by kyzo-trials/src/conformance.rs generic laws which fjall and sim already pass via run_full_battery. Only what the kit deliberately excludes (the per-backend pins) survives." }
+    ],
+    "delete_guarded_invariants": [
+      { "name": "storage/ directory gone", "close": "test ! -d crates/kyzo-core/src/storage" },
+      { "name": "no second conformance battery", "close": "rg 'run_full_battery' crates → definitions only in kyzo-trials/src/conformance.rs" }
+    ],
+    "not_deletes": [
+      { "item": "the write_write_race_aborts_second_committer pin and its sim twin", "why": "The contract-v2 pin carrying v1 history, re-pinned KNOWINGLY — the two must stay together; they are per-backend pins the kit deliberately excludes." },
+      { "item": "the empty-write-set-certifies-nothing arm", "why": "Contract-semantics pin, travels with the v2 pin pair." },
+      { "item": "SCOPE HONESTY doc on process-abort vs power-cut", "why": "Abort simulates process crash; a power cut is a stronger event needing fault-injection infrastructure — the doc is the honesty gate for §29's future campaign and travels to kyzo-trials/src/crash.rs verbatim." }
+    ],
+    "meters": [
+      "test ! -d crates/kyzo-core/src/storage",
+      "rg -n 'crate::storage::' crates/kyzo-core/src → zero",
+      "rg -n 'fn as_of_oracle' crates/kyzo-core/src/store → at least 1 (time-travel oracle arm re-homed beside its cursors)"
+    ]
+  },
+  "refused": {
+    "law": "Typed runtime outcomes. Named variants. Authority honest.",
+    "items": [
+      {
+        "name": "write-write race — second committer",
+        "tag": "Refused",
+        "variant": "ConflictError",
+        "door": "store/tx.rs commit",
+        "authority": "cut_destiny — sealed contract history v2 (KyzoDB sides with PostgreSQL SSI / TiKV: abort write-write races)",
+        "why": "Retry-on-conflict is a control-flow decision, not a string match; a blind put cannot silently swallow a concurrent insert."
+      },
+      {
+        "name": "corrupt key during a skip scan",
+        "tag": "Refused",
+        "variant": "typed decode error WITHOUT cursor advance",
+        "door": "store/tx.rs range_skip_scan_tuple",
+        "authority": "cut_destiny",
+        "why": "A scan cannot silently step over bytes it could not judge."
+      },
+      {
+        "name": "dump advertising a floor below its own rows",
+        "tag": "Refused",
+        "variant": "dump floor refusal (row stamped above its own floor)",
+        "door": "store/backup.rs dump",
+        "authority": "cut_destiny — leave-is-free precursor of decisions.md §79",
+        "why": "A backup that lies about its floor forges restore-time clock truth."
+      },
+      {
+        "name": "restore into a non-empty store",
+        "tag": "Refused",
+        "variant": "restore non-empty refusal",
+        "door": "store/backup.rs restore",
+        "authority": "cut_destiny — restore_storage is whole-store-into-empty by contract",
+        "why": "Partial merge-restore is a second write door for forged history (§80 shape)."
+      },
+      {
+        "name": "pre-value-plane FormatVersion v4 store open",
+        "tag": "Refused",
+        "variant": "FormatVersion mismatch refusal naming the stamp",
+        "door": "store/contract.rs FormatVersion parse at open",
+        "authority": "decisions.md §81 — FormatVersion migration law (current-law precursor)",
+        "why": "The #119 migration boundary made explicit and executable: v4 SPECIFICALLY refused, CURRENT parses as exactly 5; older stamps still parse so the mismatch refusal can NAME them."
+      }
+    ]
+  },
+  "unexposed": {
+    "law": "Residual hostile-adapter risk with real detection or residual accepted.",
+    "items": [
+      {
+        "name": "fsync failure after commit application (commit_durable shortfall)",
+        "tag": "Unexposed",
+        "residual_risk": "The transaction IS committed and crash-survivable in the process, but power-cut-lost; a host that ignores the durability shortfall error advertises durability it does not have.",
+        "detection": "sim durability-tiers campaign arm (deterministic / failed-fsync / 200-seed mixed) distinguishes committed-crash-survivable from power-cut-lost; §29's power-cut DST campaign is the permanent license"
+      },
+      {
+        "name": "hostile writer below the kernel injecting bytes into the ordered store",
+        "tag": "Unexposed",
+        "residual_risk": "Raw puts below the session/catalog surface can plant undecodable or misplaced bytes.",
+        "detection": "verify_storage campaign on a REAL kernel-written store: corruption surfaces as BadTag and the walk continues past the wound; catalog-aware per-format value verification is real, not decorative"
+      }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "power-cut-honesty",
+      "from": "storage/tests.rs crash_consistency_process_abort SCOPE HONESTY doc",
+      "obligation": "abort() simulates process crash only; the power-cut claim needs fault-injection infrastructure (kyzo-crashfs / dm-flakey class). Until §29's power-cut-at-commit-door campaign is green, the word 'durable' is not licensed in Spec claims.",
+      "gate": "decisions.md §29 campaign green",
+      "seat_until_hoist": "crates/kyzo-trials/src/crash.rs (doc carried verbatim)"
+    },
+    {
+      "id": "kit-necessary-not-sufficient",
+      "from": "decisions.md §27/§85 vs current conformance kit",
+      "obligation": "kyzo-trials/src/conformance.rs kit pass is necessary-not-sufficient for production Committed; the StableCommitCap arm requirement lands with 07-storage-seats.json. Record at the kit so nobody reads kit-green as durability license.",
+      "gate": "07-storage-seats.json store/commit_cap.rs story",
+      "seat_until_hoist": "crates/kyzo-trials/src/conformance.rs (doc note)"
+    }
+  ],
+  "tests": {
+    "law": "Laws-not-scenarios: each battery lands beside its subject; generators justified by the exact mutant/bug shape they catch travel with that justification intact.",
+    "fate": [
+      { "from": "storage/tests.rs encoding-law battery (corpus, laws 1–3, byte-flip harness, signed-zero, shared-boundary generative arm)", "action": "re-home", "to": "crates/kyzo-model/src/format/tests.rs — it tests the codec, not the store; the corpus doubles as fuzz-seed material for kyzo-trials/src/fuzz.rs" },
+      { "from": "fjall-specific pins (inverted-range poisoning, options/stats, FormatVersion stamps incl. v4 boundary, clock/watermark batteries, snapshot-then-mint reproducer, RAM-floor pin)", "action": "re-home", "to": "crates/kyzo-core/src/store/fjall.rs + crates/kyzo-core/src/store/contract.rs module tests" },
+      { "from": "backup battery incl. both floor pins and edge cases (huge length prefix is an error not an allocation abort; truncation mid-pair; truncated floor field)", "action": "re-home", "to": "crates/kyzo-core/src/store/backup.rs module tests" },
+      { "from": "verify pair (real-kernel fixture; walk-continues-past-the-wound; corrupt-polarity value catch)", "action": "re-home", "to": "crates/kyzo-core/src/store/verify_walk.rs module tests (fixture builds through the session crate's public surface after the split)" },
+      { "from": "time-travel-vs-oracle arm + MIN-ts termination pins", "action": "re-home", "to": "per-backend module tests beside their cursors (store/fjall.rs, kyzo-crashfs/src/sim.rs); the skip-walk theorem already owns the generic proof at store/skip_walk.rs" },
+      { "from": "process-abort crash test", "action": "re-home", "to": "crates/kyzo-trials/src/crash.rs (real-process territory, same lane as the FUSE matrix)" },
+      { "from": "DST semantics tests + seven campaigns + hardening sentinel + retry-liveness", "action": "re-home", "to": "crates/kyzo-crashfs/src/sim.rs (they are the instrument's own proof battery); campaign SHAPES feed crates/kyzo-trials/src/dst.rs" },
+      { "from": "generic KV/MVCC/RYOW/del_range/phantom/concurrent/chunk/send-sync scenarios", "action": "die", "die": "superseded by kyzo-trials/src/conformance.rs run_full_battery — the kit call replaces the copies" }
+    ],
+    "meters": [
+      "rg -n 'law2' crates/kyzo-model/src/format/tests.rs → exhaustive-pairwise order arm present",
+      "rg -n 'sim_fault_plan_identical_at_any_thread_count' crates/kyzo-crashfs/src/sim.rs → exactly 1 (hardening sentinel survived)",
+      "rg -n 'write_write_race_aborts_second_committer' crates/kyzo-core/src/store crates/kyzo-crashfs/src → exactly 2 (fjall pin + sim twin stay together)",
+      "rg -n 'concurrent_increments_lose_nothing_at_the_storage_layer' crates/kyzo-core/src/store/fjall.rs → exactly 1 (the named reproducer the snapshot-then-mint proof cites)"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "Storage trait + sealed module + FormatVersion (CURRENT=5) + SystemClock — store/contract.rs",
+      "ReadTx / WriteTx / ConflictError / Slice — store/tx.rs",
+      "fjall adapter + its pins — store/fjall.rs",
+      "dump/restore + floor law — store/backup.rs",
+      "catalog-aware verification walk — store/verify_walk.rs",
+      "encoding-law battery + corpus — kyzo-model/src/format/tests.rs",
+      "sim instrument + its proof battery — kyzo-crashfs/src/sim.rs",
+      "conformance kit (public law for second backends) — kyzo-trials/src/conformance.rs"
+    ],
+    "unconstructible": [
+      {
+        "name": "reads-from order disagreeing with stamp order (mint before snapshot)",
+        "proof": "compile-fail by signature: the stamp mint takes the open snapshot as an argument, so the reverse order does not type-check for a crate consumer (the v3 SNAPSHOT-THEN-MINT proof)"
+      },
+      {
+        "name": "use of a committed write transaction",
+        "proof": "compile-fail (trybuild): consuming commit — a committed transaction is a value that no longer exists (existing write_tx_use_after_commit/abort suites)"
+      }
+    ],
+    "rulings": [
+      { "id": "contract-history-is-law", "a": "The sealed contract history (v2 write-write abort with industry comparison; v3 mandatory bitemporality with the snapshot-then-mint proof and shadowed-forever lineage; v4 one-cursor skip scan; v4 bump-anyway: the decodable tag space is part of the format's identity) travels VERBATIM into store/contract.rs's doc. Lossy compression of these rulings is a plan violation." },
+      { "id": "store-is-adapter-boundary", "a": "Per decisions.md §48: the Store API carries no fjall types; fjall is one adapter at store/fjall.rs behind store/contract.rs. The sealed module admits the simulator as the contract's own test double, not a second backend. Per §85 the kit is public law for second backends — it lives at kyzo-trials/src/conformance.rs and its pass is necessary-not-sufficient (carried obligation)." },
+      { "id": "wal-not-yet", "a": "CORRECTION under the law: the current Storage contract has no WAL/SweepDoor/Committed-mint machinery (§21/§25). This cut does NOT invent them — it relocates the current contract honestly. The Spec machine is built by the storage epic per 07-storage-seats.json; conflating relocation with construction is how half-built doors ship." },
+      { "id": "encoding-battery-is-model-law", "a": "The one law (binary order = semantic order) is model vocabulary; its battery seats at kyzo-model/src/format/tests.rs, not beside the store. The store consumes lawful bytes; it does not own the order proof." },
+      { "id": "current-paths-delete-evidence-only", "a": "storage/* appears only under deletes/delete_after." }
+    ]
+  },
+  "ban": [
+    "Do not weaken any per-backend pin while replacing the generic copies with the kit call.",
+    "Do not separate the fjall v2 write-write pin from its sim twin.",
+    "Do not let the encoding-law corpus fork — one corpus at kyzo-model, referenced as fuzz seeds by trials.",
+    "Do not read kit-green as a durability license (§27/§85 — necessary-not-sufficient).",
+    "Do not claim power-cut durability from the process-abort test (scope honesty).",
+    "Do not add fjall types to the Storage trait (§48).",
+    "Do not use whole-engine cargo green as this cut's meter.",
+    "Do not invent a fourth Spec claim tag."
+  ],
+  "allowlist": {
+    "law": "TARGET paths only.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-core/src/store/contract.rs",
+      "crates/kyzo-core/src/store/tx.rs",
+      "crates/kyzo-core/src/store/fjall.rs",
+      "crates/kyzo-core/src/store/backup.rs",
+      "crates/kyzo-core/src/store/verify_walk.rs",
+      "crates/kyzo-core/src/store/skip_walk.rs",
+      "crates/kyzo-core/src/lib.rs",
+      "crates/kyzo-model/src/format/tests.rs",
+      "crates/kyzo-model/src/format.rs",
+      "crates/kyzo-crashfs/src/sim.rs",
+      "crates/kyzo-trials/src/crash.rs",
+      "crates/kyzo-trials/src/dst.rs",
+      "crates/kyzo-trials/src/conformance.rs",
+      "crates/kyzo-trials/src/fuzz.rs",
+      "docs/deprecated/deprecated-migrated.md"
+    ],
+    "delete_after": [
+      "crates/kyzo-core/src/storage/mod.rs",
+      "crates/kyzo-core/src/storage/tests.rs"
+    ],
+    "forbidden_seats": [
+      "crates/kyzo-core/src/storage/mod.rs",
+      "crates/kyzo-core/src/storage/tests.rs"
+    ],
+    "rewire": [
+      "TARGET store/contract.rs ← contract prose + Storage trait + FormatVersion + SystemClock + seal from condemned storage/mod.rs",
+      "TARGET store/tx.rs ← ReadTx/WriteTx/ConflictError from condemned storage/mod.rs",
+      "TARGET kyzo-model/src/format/tests.rs ← encoding-law battery from condemned storage/tests.rs",
+      "TARGET kyzo-crashfs/src/sim.rs ← DST battery from condemned storage/tests.rs",
+      "TARGET kyzo-trials/src/crash.rs ← process-abort test from condemned storage/tests.rs"
+    ]
+  },
+  "proof_meters": [
+    "compile-fail by signature: stamp mint requires the open snapshot argument (snapshot-then-mint)",
+    "compile-fail (trybuild): write transaction unusable after commit/abort (consuming commit)"
+  ],
+  "by_target": {
+    "crates/kyzo-core/src/store/contract.rs": {
+      "kind": "TARGET — the storage contract: ordered scans, SSI, consuming commits",
+      "owns": ["Storage trait", "sealed module (one backend by decree; sim as the contract's own test double)", "FormatVersion", "SystemClock"],
+      "ban": ["fjall types in the trait (§48)", "second backend admitted outside the sealed module without kit + (future) StableCommitCap arm"],
+      "proof_meter": ["compile-fail by signature: snapshot-then-mint"],
+      "delete_meter": [
+        "rg -n 'struct FormatVersion|CURRENT' crates/kyzo-core/src/store/contract.rs → definitions present",
+        "rg -n 'fjall' crates/kyzo-core/src/store/contract.rs → zero"
+      ],
+      "carried_notes": [
+        "Written for that machine, not for any historical backend's shape; two-species genus with consuming commit — a committed transaction is not an invalid state to guard against but a value that no longer exists.",
+        "Concurrency economics stated plainly: reads AND writes are the conflict surface; first-committer-wins; uniqueness is enforced by the write itself; batch_put outside the surface; parallel preparation with serial commit application as the throughput ceiling; long-reader GC delay; coarse as-of ranges in write transactions.",
+        "Sealed contract history v2/v3/v4 verbatim (see rulings.contract-history-is-law).",
+        "FormatVersion CURRENT=5 with the whole version history in its doc; the v4 BUMP-ANYWAY ruling: the decodable tag space is part of the format's identity same as the tags already in it; canonical-spelling parse refusing non-canonical stamps.",
+        "SystemClock: max(now,last+1) CAS mint; floor/raise_floor for restore; an ABANDONED transaction's mint still raises the floor — a too-high floor is safe, a reused stamp is not."
+      ]
+    },
+    "crates/kyzo-core/src/store/tx.rs": {
+      "kind": "TARGET — transactions: snapshot isolation, typed conflicts",
+      "owns": ["ReadTx", "WriteTx", "ConflictError", "Slice (refcount currency)"],
+      "ban": ["non-consuming commit", "string-matched conflict detection"],
+      "proof_meter": ["compile-fail (trybuild): use-after-commit/abort"],
+      "delete_meter": [
+        "rg -n 'fn commit' crates/kyzo-core/src/store/tx.rs → consuming self signature"
+      ],
+      "carried_notes": [
+        "Degenerate ranges EMPTY never an error; whole-range conflict tracking on open — the conservative choice, and the one phantom protection needs; del_range's degenerate-tracks-nothing caveat.",
+        "range_skip_scan_tuple: mandatory two-axis with the corrupt-key error-without-advancing rule; keys-only scans so counts never pay value I/O.",
+        "system_stamp minted at snapshot creation; commit_durable's honest failure semantics — the transaction IS committed; the error reports the durability shortfall, not a rollback."
+      ]
+    },
+    "crates/kyzo-core/src/store/fjall.rs": {
+      "kind": "TARGET living seat — fjall adapter + its per-backend pins",
+      "owns": ["fjall pins: inverted-range poisoning regression", "options/stats pins", "clock/watermark batteries", "snapshot-then-mint named reproducer", "Linux RAM-floor sane-band pin"],
+      "ban": ["re-duplicating kit scenarios (call run_full_battery)"],
+      "delete_meter": [
+        "rg -n 'inverted_ranges_under_contention_commit_clean' crates/kyzo-core/src/store/fjall.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "inverted_ranges pin drives the store-poisoning regression through EVERY range entry point with contention arming commit-time validation, then proves the write-serialize lock unpoisoned.",
+        "RAM-floor pin: sane-band assertion catches a unit mixup without pinning an exact host-dependent value."
+      ]
+    },
+    "crates/kyzo-core/src/store/backup.rs": {
+      "kind": "TARGET living seat — dump/restore + floor law",
+      "owns": ["dump floor law", "restore-into-empty law", "restore_raises_clock_floor_past_imported_stamps"],
+      "ban": ["silent partial restore (leave-is-free precursor of §79)"],
+      "delete_meter": [
+        "rg -n 'dump_refuses_a_row_stamped_above_its_own_floor' crates/kyzo-core/src/store/backup.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "The concurrency floor pin re-parses each dump's FILE BYTES independently — not the in-process values dump_storage itself computed — with the wait-for-writers scheduling-artifact guard; sabotage-verify runs with a legitimate-row control.",
+        "Edge cases: huge length prefix is an error, not an allocation abort; truncation mid-pair; truncated floor field."
+      ]
+    },
+    "crates/kyzo-core/src/store/verify_walk.rs": {
+      "kind": "TARGET living seat — catalog-aware full ordered verification walk",
+      "owns": ["verify_storage battery"],
+      "ban": ["raw-puts fixtures for catalog-aware verification (the verifier needs the real entry taxonomy)"],
+      "delete_meter": [
+        "rg -n 'verify_storage_catches_a_corrupt_value' crates/kyzo-core/src/store/verify_walk.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Corruption injected below the kernel surfaces as BadTag and THE WALK CONTINUES past the wound (quarantine-shaped precursor of §50); a still-decodable key over a corrupt polarity byte proves per-format value verification is real, not decorative.",
+        "After the split the real cataloged fixture builds through the session crate's public surface."
+      ]
+    },
+    "crates/kyzo-model/src/format/tests.rs": {
+      "kind": "TARGET — the one-law encoding battery (laws, not scenarios)",
+      "owns": ["corpus", "law1 round-trip", "law2 exhaustive-pairwise order embedding", "law3 no-panic-on-corrupt + byte-flip harness", "signed-zero canonicalization pins", "shared-boundary generative arm"],
+      "ban": ["example-based order tests standing in for the pairwise law"],
+      "delete_meter": [
+        "rg -n 'law3_byte_flip_harness' crates/kyzo-model/src/format/tests.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Laws-not-scenarios: cross-type tag disorder, non-monotone float encodings, NaN order divergence are invisible to example-based tests; law2 is EXHAUSTIVE PAIRWISE so cross-type disagreements cannot hide behind sort stability and a failure names the exact offending pair.",
+        "corpus rules: every variant, ≥2 members each so cross-type AND within-type pairs exist; tricky regions enumerated; adding a case is one line; arb_value excludes regex FOR A REASON.",
+        "shared-boundary generative arm justified by the exact bug shape: independent i64 draws almost never share a boundary, so the generic generator has no power against a comparison that drops one field.",
+        "byte-flip harness: every single-byte mutation × three flip masks over every corpus encoding — the structured-corruption space the random Law 3 generator misses; the corpus doubles as fuzz-seed material for kyzo-trials/src/fuzz.rs."
+      ]
+    },
+    "crates/kyzo-crashfs/src/sim.rs": {
+      "kind": "TARGET living seat — the DST instrument + its own proof battery",
+      "owns": ["sim KV-vs-model semantics tests", "seven campaigns (retry survival; crash-at-every-point clean prefix; durability tiers; time travel under interleaved writers; write skew; no lost phantom; first-committer-wins)", "hardening sentinel", "retry-liveness"],
+      "ban": ["positional (global op-counter) fault plans (the sentinel exists to kill them)"],
+      "delete_meter": [
+        "rg -n 'sim_retry_liveness_escapes_injected_faults' crates/kyzo-crashfs/src/sim.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Hardening sentinel: fixed logical work across 1/2/4/8 FREE-RUNNING OS threads, no scheduler; the (op, attempt)→outcome matrix byte-identical per seed and different across seeds, with both-arms anti-vacuity.",
+        "Write-skew campaign: overlapping snapshots with crossed read/write sets must abort at least one side in EVERY seed; final state one of the two SERIAL outcomes. Lost-phantom campaign observes commit order through the serialized scheduler with per-branch assertions.",
+        "The interleaving log key whose final content IS the commit order, and whose length proves no update was lost.",
+        "Retry-liveness: 90% storms; the missing-attempt-component mutant named as mutation-verified."
+      ]
+    },
+    "crates/kyzo-trials/src/crash.rs": {
+      "kind": "TARGET living seat — real-process crash territory",
+      "owns": ["crash_consistency_process_abort + SCOPE HONESTY doc"],
+      "ban": ["claiming power-cut coverage from process abort"],
+      "delete_meter": [
+        "rg -n 'crash_consistency_process_abort' crates/kyzo-trials/src/crash.rs → exactly 1"
+      ]
+    },
+    "crates/kyzo-trials/src/dst.rs": {
+      "kind": "TARGET living seat — campaign shapes from the sim battery feed the DST lane",
+      "owns": ["campaign shapes registry fed by sim battery"],
+      "delete_meter": [
+        "rg -n 'write.?skew|lost.?phantom' crates/kyzo-trials/src/dst.rs → campaign shapes present"
+      ]
+    },
+    "crates/kyzo-trials/src/conformance.rs": {
+      "kind": "TARGET living seat — the story-#79 kit; per §85 public law for second backends",
+      "owns": ["run_full_battery"],
+      "ban": ["reading kit pass as production durability license (§27/§85)"],
+      "delete_meter": [
+        "rg -n 'necessary-not-sufficient|necessary not sufficient' crates/kyzo-trials/src/conformance.rs → doc note present"
+      ]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty",
+      "must_add": [
+        "kyzo-model/src/format/tests.rs description names the encoding-law battery ownership (corpus + laws 1–3)"
+      ],
+      "must_delete_lines_for": [],
+      "delete_meter": ["no storage/ path appears in .claude/skills/architecture-map/target-arch.md"]
+    },
+    "docs/deprecated/deprecated-migrated.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["storage/{mod,tests} entries cite docs/deprecated/storage-model/03-storage-store.json"]
+    }
+  },
+  "final_meters": [
+    "test ! -d crates/kyzo-core/src/storage",
+    "rg -n 'crate::storage::' crates/kyzo-core/src → zero",
+    "store/contract.rs and store/tx.rs exceed stub length; contract history v2/v3/v4 present in contract.rs doc",
+    "ALL proof_meters green",
+    "encoding-law battery present at kyzo-model/src/format/tests.rs (law1/law2/law3 + byte-flip)",
+    "sim seven campaigns + hardening sentinel present at kyzo-crashfs/src/sim.rs",
+    "fjall v2 pin + sim twin both present (exactly 2 hits)",
+    "carried_obligations recorded at their seats",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "snapshot-then-mint: reads-from order agrees with stamp order by signature",
+      "seat": "store/contract.rs SystemClock + store/tx.rs",
+      "meter": "the stamp-mint function signature takes the open snapshot; the named reproducer test (concurrent_increments_lose_nothing_at_the_storage_layer) passes at store/fjall.rs",
+      "exceptions": []
+    },
+    {
+      "law": "a scan never silently steps over bytes it could not judge",
+      "seat": "store/tx.rs range_skip_scan_tuple",
+      "meter": "corrupt-key test asserts typed error without cursor advance",
+      "exceptions": []
+    },
+    {
+      "law": "one conformance battery — backends prove themselves against the kit, not private copies",
+      "seat": "kyzo-trials/src/conformance.rs",
+      "meter": "rg -n 'run_full_battery' crates → call sites in fjall/sim tests; definitions only in conformance.rs",
+      "exceptions": []
+    }
+  ],
+  "qae": [
+    {
+      "q": "The sim instrument battery lands in kyzo-crashfs (the instrument's crate), but the seven campaigns are contract-semantics proofs that also gate the fjall backend. If they live only beside the sim, what stops a future fjall change from passing while the sim-only campaigns still shine green?",
+      "a": "The campaigns run against the Storage trait, parameterized over backend, seated in kyzo-crashfs beside the sim but instantiated for BOTH backends where the contract permits (fjall skips only fault-injection arms that need the sim's injection hooks). The kit (conformance.rs) remains the both-backends floor; the campaigns are the sim-native ceiling.",
+      "e": "The soft alternative — 'sim campaigns cover the contract, fjall inherits by faith' — is trust-the-twin, a carriage-as-authority shape. Close: campaign functions generic over the sealed Storage trait; fjall instantiations for every arm that needs no injection hook; meter counts instantiations.",
+      "authority": "cut_destiny"
+    }
+  ],
+  "campaigns_proposed": [
+    {
+      "target_seat": "decisions.md §29 — power-cut licenses the word 'durable'",
+      "campaign": "kyzo-crashfs power-cut-at-commit-door: inject power cut (not process abort) at every commit-path point via the fault FS; every minted commit ack survives; crash-during-recovery converges idempotently. Green is the license for 'durable' in Spec claims; the process-abort test never substitutes."
+    },
+    {
+      "target_seat": "decisions.md §84 — sealed-artifact determinism set",
+      "campaign": "dump bytes determinism: same committed history under controlled schedules produces byte-identical FormatVersioned dumps across two runs and two hosts; any divergence names an unseeded RNG or racy schedule in the sealed-artifact path."
+    }
+  ]
+}

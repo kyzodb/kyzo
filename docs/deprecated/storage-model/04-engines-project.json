@@ -1,0 +1,382 @@
+{
+  "version": 1,
+  "title": "engines/ → project/ — mod/segments/text-ast/hostile-batteries cut destiny under decisions.md",
+  "status": "cut_destiny",
+  "privilege": "Architect cut contract only. decisions.md is sole Spec authority — this file yields on conflict. Current condemned paths appear only as Delete evidence; every seat and rewire destination is a target-tree path. Claim-tag inflation or jointly impossible meters void this plan.",
+  "scope": {
+    "this_cut": "Condemned: crates/kyzo-core/src/engines/{mod,segments}.rs, engines/text/ast.rs, engines/{gazetteer_hostile,sparse_hostile}.rs — the engines/ directory and engines/text/ die. Living targets: project/{contract,residency,current,gazetteer}.rs, project/sparse/sparse_hostile.rs, project/text/ast.rs, kyzo-model/src/parse/search.rs (FTS AST pure-data half), kyzo-trials/src/fuzz.rs + kyzo-core benches (the two #[ignore]d probes re-laned).",
+    "not_this_json": "The individual engines (fts, hnsw, lsh, sparse, spatial, gazetteer production halves) already relocated in prior executed cuts. query/ (01), runtime/ (02), storage/ (03), data+fixed_rule (05), hosts (06), storage seats (07).",
+    "foundation_already_true": [
+      "project/{contract,residency,current}.rs and project/text/ast.rs and project/sparse/sparse_hostile.rs are 1-line stub seat reservations",
+      "project/gazetteer.rs landed (874 lines — the production engine already migrated)",
+      "kyzo-model has no parse/ zone yet — kyzo-model/src/parse/search.rs is a planned map seat"
+    ],
+    "target_not_current": "by_target and allowlist.targets are target-tree paths only."
+  },
+  "authority": [
+    "docs/decisions.md — sole Spec",
+    "docs/deprecated/deprecated-migrated.md — engines/{mod,segments,text/ast} census entries",
+    "docs/deprecated/deprecated-absorbed.md — engines/{sparse_hostile,gazetteer_hostile} census entries",
+    ".claude/skills/architecture-map/target-arch.md — ideal paths",
+    "This file — cut destiny; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Inflating Unexposed to Unconstructible voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Proof: private constructor + compile-fail a crate-consumer trybuild can demonstrate.",
+    "Refused": "Reachable program; typed runtime outcome. Named refuse variants.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter. Name residual risk; real detection or residual accepted."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist ⊇ every TARGET file the meters require to change. Condemned paths are deleted via delete_after — not edited as living seats.",
+    "proof_pairing": "compile-fail for signature-enforced laws (witness-after-snapshot); grep-delete for path/symbol absence.",
+    "no_condemned_rewire": "engines/* paths appear only under deletes/delete_after."
+  },
+  "deletes": {
+    "law": "E-action ledger for condemned CURRENT paths.",
+    "paths": [
+      { "path": "crates/kyzo-core/src/engines/mod.rs", "why": "Module tree dissolves into project/; the one owned concept — IndexRowCorrupt + index_rows — → project/contract.rs. The per-module #[allow(dead_code)] liveness ledger is condemned: the mod-file-as-status-board pattern dies with the monolith layout." },
+      { "path": "crates/kyzo-core/src/engines/segments.rs", "why": "Validity discipline (Watermark, witness_after_snapshot, bump_before_commit, should_build + miss map) → project/residency.rs; segment structure + cache/serving (Segment, SegmentEngine, Segments context, checked_row_end) → project/current.rs. Tests split with their halves; the #82 regression battery travels with the gate." },
+      { "path": "crates/kyzo-core/src/engines/text/ast.rs", "why": "SPLIT compelled by the crate wall: pure-data half (FtsExpr/FtsLiteral/FtsNear + flatten/is_empty + depth invariant) → kyzo-model/src/parse/search.rs; analyzer-coupled tokenize rewrite → project/text/ast.rs as an extension over the model type. engines/text/ dies with it." },
+      { "path": "crates/kyzo-core/src/engines/sparse_hostile.rs", "why": "Absorbed into project/sparse/sparse_hostile.rs as a NAMED hostile-review section beside the module tests. Independence lives in independently-derived references, not file separation." },
+      { "path": "crates/kyzo-core/src/engines/gazetteer_hostile.rs", "why": "Absorbed into project/gazetteer.rs's test submodule as a named hostile-review section; the two #[ignore]d heavyweight probes re-lane (corrupt-dictionary sweep → kyzo-trials/src/fuzz.rs; phase-timing scaling probe → bench lane)." }
+    ],
+    "symbols": [
+      { "name": "per-module #[allow(dead_code)] liveness ledger in a mod file", "why": "In the target each projection lands with its surface or doesn't land; grep-guard the status-board pattern out of project/mod.rs." }
+    ],
+    "delete_guarded_invariants": [
+      { "name": "engines/ directory gone", "close": "test ! -d crates/kyzo-core/src/engines" },
+      { "name": "IndexRowCorrupt defined once", "close": "rg 'IndexRowCorrupt' crates/kyzo-core/src → definition only in project/contract.rs" }
+    ],
+    "not_deletes": [
+      { "item": "everything in both hostile batteries", "why": "Nothing is condemned in either; every test crosses with its independence artifacts (f64 oracle, hand-computed bit patterns, structurally-different leftmost-longest reference)." },
+      { "item": "the #82 alternating-writes regression battery", "why": "Travels with the rebuild gate to project/residency.rs — never weakened." }
+    ],
+    "meters": [
+      "test ! -d crates/kyzo-core/src/engines",
+      "rg -n 'crate::engines::' crates/kyzo-core/src → zero",
+      "rg -n 'engines/' crates/kyzo-core/src/lib.rs → zero"
+    ]
+  },
+  "refused": {
+    "law": "Typed runtime outcomes. Named variants. Authority honest.",
+    "items": [
+      {
+        "name": "undecodable index row during a projection scan",
+        "tag": "Refused",
+        "variant": "IndexRowCorrupt (typed Diagnostic; codec refusals become the index's OWN corruption by downcast; storage/IO errors pass through unchanged)",
+        "door": "project/contract.rs index_rows scan boundary",
+        "authority": "decisions.md §51 — projections are rebuildable cache; disagreement → rebuild or typed refuse, never silent serve",
+        "why": "Its help text — 'the index can be dropped and re-created from its base relation' — IS the projection law; a raw DecodeError cannot leak out of an engine as its contract."
+      },
+      {
+        "name": "segment build past the u32 offset ceiling",
+        "tag": "Refused",
+        "variant": "build declines (typed) — projection is optional speed",
+        "door": "project/current.rs Segment::build via checked_row_end",
+        "authority": "cut_destiny",
+        "why": "Declining-is-always-sound: the fallback pays no more than the build would have; the F7 total cast is factored out so a unit test pins the boundary arithmetic without 4.3 billion values."
+      }
+    ]
+  },
+  "unexposed": {
+    "law": "Residual hostile-adapter risk with real detection or residual accepted.",
+    "items": [
+      {
+        "name": "projection served stale by an adapter bypassing the witness gate",
+        "tag": "Unexposed",
+        "residual_risk": "An in-crate caller could hand get() a witness it did not take from the open snapshot, serving a cut the base has moved past.",
+        "detection": "the #75 join-probe twin and segments-law end-to-end battery (fresh-never-dirty through build/orphan/rollback) catch the reachable shapes; miss-map loss test proves the cache is never a source of truth; residual accepted for hostile in-crate forgery"
+      }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "durable-generation-vocabulary",
+      "from": "engines/segments.rs L2 arrival note + decisions.md §20/§35",
+      "obligation": "The process-local Watermark is sound ONLY while segments are memory-only. If projections ever persist, the generation vocabulary must become durable — and §20 rules what it becomes: Catalog generation is a Store commit-order position, never a second watermark organ; §35 requires two-axis coordinates on any durable projection keyspace. Name this at project/residency.rs on day one.",
+      "gate": "storage epic (07-storage-seats.json) / any projection-persistence story",
+      "seat_until_hoist": "crates/kyzo-core/src/project/residency.rs (doc note)"
+    },
+    {
+      "id": "k0-pin-beside-fts",
+      "from": "engines/sparse_hostile.rs L2",
+      "obligation": "The k=0 check-before-push regression was fixed in BOTH the sparse engine and the identical shape in fts_search; the pin exists only on the sparse side. The fix was shared; the pin must be too — land the twin beside project/text/fts.rs.",
+      "gate": "this cut's test re-home",
+      "seat_until_hoist": "crates/kyzo-core/src/project/text/fts.rs (twin pin)"
+    },
+    {
+      "id": "ignored-probes-relane",
+      "from": "engines/gazetteer_hostile.rs + engines/hnsw harness L2 (rule-#11 ledger)",
+      "obligation": "The two #[ignore]d gazetteer probes re-lane: corrupt-dictionary sweep (incl. 2 MiB surface) → kyzo-trials/src/fuzz.rs; phase-timing scaling probe → the bench lane. Ignored unit tests are not a lane.",
+      "gate": "this cut",
+      "seat_until_hoist": "crates/kyzo-trials/src/fuzz.rs + crates/kyzo-core/benches/bench_api.rs"
+    },
+    {
+      "id": "segments-off-door-plumbing",
+      "from": "engines/segments.rs arrival note (#120)",
+      "obligation": "Segments::OFF threading is door plumbing the #120 operator wiring replaces — carry the note; do not entrench the threading as design.",
+      "gate": "#120 operator wiring story",
+      "seat_until_hoist": "crates/kyzo-core/src/project/current.rs (doc note)"
+    }
+  ],
+  "tests": {
+    "law": "Hostile batteries land as NAMED hostile-review sections beside what they attack; independence lives in independently-derived references, not file separation.",
+    "fate": [
+      { "from": "engines/segments.rs battery", "action": "split with halves", "to": "project/residency.rs tests (witness equality governs service; stable-miss-streak gate; #82 alternating-writes never crossing the gate; miss-map loss only delays rebuild) + project/current.rs tests (prefix ranges vs linear-scan oracle; orphan + evict + held Arc; empty segment; u32 boundary)" },
+      { "from": "engines/sparse_hostile.rs (eight adversarial tests)", "action": "absorb", "to": "project/sparse/sparse_hostile.rs as a named hostile-review section" },
+      { "from": "engines/gazetteer_hostile.rs battery", "action": "absorb + re-lane", "to": "project/gazetteer.rs test submodule (named hostile-review section); corrupt sweep → kyzo-trials/src/fuzz.rs; scaling probe → bench lane" },
+      { "from": "engines/text/ast.rs tests", "action": "split with halves", "to": "kyzo-model parse/search.rs tests (is_empty edges, flatten collapse laws) + project/text/ast.rs tests (analyzer rewrites incl. stopword-vanishing and Near distance preservation)" }
+    ],
+    "meters": [
+      "rg -n 'summation_order|run_bits' crates/kyzo-core/src/project/sparse → battery present with exact-bit assertions",
+      "rg -n 'ref_tag' crates/kyzo-core/src/project/gazetteer.rs → independent reference present",
+      "rg -n 'to_lowercase' crates/kyzo-core/src/project/gazetteer.rs → mutation-differential (İNDEX mutant kill) present"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "IndexRowCorrupt + index_rows — project/contract.rs (defined ONCE because all engines name it)",
+      "Watermark + witness_after_snapshot + bump_before_commit + should_build + miss map — project/residency.rs",
+      "Segment + SegmentEngine + Segments context + checked_row_end — project/current.rs",
+      "FtsExpr + FtsLiteral + FtsNear + flatten/is_empty + depth invariant — kyzo-model/src/parse/search.rs",
+      "analyzer-coupled tokenize extension — project/text/ast.rs"
+    ],
+    "unconstructible": [
+      {
+        "name": "the racy witness order (witness taken before the snapshot it claims)",
+        "proof": "compile-fail by signature: witness_after_snapshot takes the open snapshot BY SIGNATURE, so the racy order does not type-check — soundness by signature, not calling convention (same mechanism as the storage layer's stamp_after_snapshot)"
+      },
+      {
+        "name": "an FtsExpr deep enough to overflow a derived recursive walk",
+        "proof": "compile-fail shape: the parser is the only non-test constructor and bounds depth/operator count; a new public constructor for a crate consumer does not exist — every recursive walk INCLUDING compiler-derived Drop/Clone/PartialEq/Hash is stack-safe BECAUSE the bound holds"
+      }
+    ],
+    "rulings": [
+      { "id": "projection-law-under-51", "a": "project/contract.rs is §51's seat in current law: projections are rebuildable cache, never WAL-authoritative meaning; on disagreement rebuild or refuse typed; silent serve is deleted. IndexRowCorrupt's downcast discipline (codec corruption owned; storage/IO passed through) is that law's read-boundary half." },
+      { "id": "fts-ast-crate-wall", "a": "kyzo-model/src/parse/search.rs must NAME the AST it produces and kyzo-model cannot depend on the engine — so the pure-data FTS AST lives model-side; project/text/ast.rs holds only the analyzer-coupled tokenize as an extension over the model type. PREFIX literals pass through whole: filtering or stemming a prefix pattern would change what it means." },
+      { "id": "hostile-batteries-independence", "a": "Absorption does not dilute independence: the sparse battery's f64 oracle and hand-computed bit patterns, and the gazetteer's structurally-different enumeration+resumption reference (agreement between three independent derivations), are the independence — file separation never was." },
+      { "id": "shared-projection-test-rig", "a": "Fixture plumbing follows each battery; where the target grows a shared projection-test rig it dissolves there instead of duplicating per engine — the rig, if minted, seats beside project/contract.rs tests." },
+      { "id": "current-paths-delete-evidence-only", "a": "engines/* appears only under deletes/delete_after." }
+    ]
+  },
+  "ban": [
+    "Do not weaken the exact-BIT score determinism standard (byte-identity, not tolerance).",
+    "Do not re-create a mod-file dead-code status board in project/mod.rs.",
+    "Do not give kyzo-model's FTS AST a public constructor that skips the parser's depth bound.",
+    "Do not let project/text own the FtsExpr type (model owns it; project extends).",
+    "Do not leave the k=0 pin one-sided (carried obligation: twin beside fts_search).",
+    "Do not keep heavyweight probes as #[ignore]d unit tests — re-lane them.",
+    "Do not serve a projection on anything but witness equality.",
+    "Do not use whole-engine cargo green as this cut's meter."
+  ],
+  "allowlist": {
+    "law": "TARGET paths only.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-core/src/project/contract.rs",
+      "crates/kyzo-core/src/project/residency.rs",
+      "crates/kyzo-core/src/project/current.rs",
+      "crates/kyzo-core/src/project/mod.rs",
+      "crates/kyzo-core/src/project/gazetteer.rs",
+      "crates/kyzo-core/src/project/sparse/sparse_hostile.rs",
+      "crates/kyzo-core/src/project/text/ast.rs",
+      "crates/kyzo-core/src/project/text/fts.rs",
+      "crates/kyzo-model/src/parse/search.rs",
+      "crates/kyzo-model/src/parse/mod.rs",
+      "crates/kyzo-model/src/lib.rs",
+      "crates/kyzo-core/src/lib.rs",
+      "crates/kyzo-trials/src/fuzz.rs",
+      "crates/kyzo-core/benches/bench_api.rs",
+      "docs/deprecated/deprecated-migrated.md",
+      "docs/deprecated/deprecated-absorbed.md"
+    ],
+    "delete_after": [
+      "crates/kyzo-core/src/engines/mod.rs",
+      "crates/kyzo-core/src/engines/segments.rs",
+      "crates/kyzo-core/src/engines/text/ast.rs",
+      "crates/kyzo-core/src/engines/sparse_hostile.rs",
+      "crates/kyzo-core/src/engines/gazetteer_hostile.rs"
+    ],
+    "forbidden_seats": [
+      "crates/kyzo-core/src/engines/mod.rs",
+      "crates/kyzo-core/src/engines/segments.rs",
+      "crates/kyzo-core/src/engines/text/ast.rs",
+      "crates/kyzo-core/src/engines/sparse_hostile.rs",
+      "crates/kyzo-core/src/engines/gazetteer_hostile.rs"
+    ],
+    "rewire": [
+      "TARGET project/contract.rs ← IndexRowCorrupt + index_rows from condemned engines/mod.rs",
+      "TARGET project/residency.rs ← validity discipline from condemned engines/segments.rs",
+      "TARGET project/current.rs ← segment cache/serving from condemned engines/segments.rs",
+      "TARGET kyzo-model/src/parse/search.rs ← pure-data FTS AST from condemned engines/text/ast.rs",
+      "TARGET project/text/ast.rs ← analyzer-coupled tokenize from condemned engines/text/ast.rs",
+      "TARGET project/sparse/sparse_hostile.rs ← battery from condemned engines/sparse_hostile.rs",
+      "TARGET project/gazetteer.rs ← battery from condemned engines/gazetteer_hostile.rs"
+    ]
+  },
+  "proof_meters": [
+    "compile-fail by signature: witness_after_snapshot without the open snapshot argument",
+    "compile-fail: crate-consumer cannot construct FtsExpr outside the parser's bounded constructor"
+  ],
+  "by_target": {
+    "crates/kyzo-core/src/project/contract.rs": {
+      "kind": "TARGET — the projection contract: rebuildable, typed corruption, one read boundary",
+      "owns": ["IndexRowCorrupt", "index_rows"],
+      "ban": ["raw DecodeError leaking as an engine's contract", "silent serve of disagreeing projections (§51)"],
+      "delete_meter": [
+        "rg -n 'IndexRowCorrupt' crates/kyzo-core/src/project/contract.rs → definition present",
+        "rg -n 'fn index_rows' crates/kyzo-core/src/project/contract.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Corruption-is-an-error-never-a-panic extended to every index read path, defined ONCE because all engines name it; the downcast discipline separates codec corruption (the index's own) from storage/IO errors (pass through unchanged).",
+        "'The index can be dropped and re-created from its base relation' is the projection law this file states."
+      ]
+    },
+    "crates/kyzo-core/src/project/residency.rs": {
+      "kind": "TARGET — the rebuild/validity discipline (generations, invalidation)",
+      "owns": ["Watermark", "witness_after_snapshot", "bump_before_commit", "should_build", "REBUILD_AFTER_STABLE_MISSES", "miss map"],
+      "ban": ["cross-process watermark claims (fresh process = zero + empty cache)", "durable watermark organ (carried obligation names §20's answer)"],
+      "proof_meter": ["compile-fail by signature: witness before snapshot"],
+      "delete_meter": [
+        "rg -n 'fn witness_after_snapshot' crates/kyzo-core/src/project/residency.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Monotone, process-local; fresh process = zero + empty cache so cross-process staleness cannot arise.",
+        "bump_before_commit / witness_after_snapshot pairing was adopted after a hostile review proved the documented-ordering version racy — soundness by SIGNATURE, not calling convention.",
+        "should_build: N consecutive misses at the SAME witness; miss-map loss only delays rebuild, never corrupts serving — the never-a-source-of-truth claim is PROVEN by a loss test.",
+        "Day-one note (carried obligation): if projections ever persist, the generation vocabulary becomes durable under §20 (Store commit-order position) with §35 two-axis keyspaces."
+      ]
+    },
+    "crates/kyzo-core/src/project/current.rs": {
+      "kind": "TARGET — which projection build is live for readers right now",
+      "owns": ["Segment", "SegmentEngine", "Segments", "checked_row_end", "install", "evict"],
+      "ban": ["serving on anything but witness equality", "unchecked u32 offset casts"],
+      "delete_meter": [
+        "rg -n 'fn checked_row_end' crates/kyzo-core/src/project/current.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "Witness equality is the entire serving criterion; Arc-held orphans serve mid-scan readers to completion; harmless-early-orphan rollback story.",
+        "Declining-is-always-sound: the u32 decline and the gate decline are one doctrine — a projection is optional speed; the fallback pays no more than the build would have.",
+        "Dense row-major values + u32 END offsets; prefix_range/partition binary search; checked_row_end factored out to be testable without 4.3 billion values.",
+        "Segments::OFF threading is door plumbing #120 replaces (carried note)."
+      ]
+    },
+    "crates/kyzo-model/src/parse/search.rs": {
+      "kind": "TARGET (map seat; parse zone not yet landed in kyzo-model) — FTS mini-language + the AST it produces",
+      "owns": ["FtsExpr", "FtsLiteral", "FtsNear", "flatten", "is_empty", "do_tokenize (pure half)"],
+      "ban": ["engine imports (crate wall)", "public unbounded constructors for FtsExpr"],
+      "proof_meter": ["compile-fail: FtsExpr constructed outside the parser bound"],
+      "delete_meter": [
+        "rg -n 'FtsExpr' crates/kyzo-model/src/parse/search.rs → definition present; zero definitions in kyzo-core"
+      ],
+      "carried_notes": [
+        "THE DEPTH INVARIANT doc travels verbatim: the parser is the only non-test constructor and bounds depth/operator count; every recursive walk including compiler-derived Drop/Clone/PartialEq/Hash is stack-safe BECAUSE the bound holds; 'a new constructor must either enforce the same bound or make every walk, including Drop, iterative' — the sharpest derived-Drop stack-safety analysis in the tree; bounding at the parser is proven STRONGER than an iterative rewrite.",
+        "PREFIX literals pass through whole (meaning argument); shallow-is_empty with flatten-as-normalizer stated as a design pair."
+      ]
+    },
+    "crates/kyzo-core/src/project/text/ast.rs": {
+      "kind": "TARGET — analyzer-coupled tokenize extension over the model FTS AST",
+      "owns": ["analyzer tokenize rewrite over FtsExpr"],
+      "ban": ["redefining the FTS AST types (model owns them)"],
+      "delete_meter": [
+        "rg -n 'struct FtsExpr|enum FtsExpr' crates/kyzo-core/src/project/text/ast.rs → zero (imports model type)"
+      ]
+    },
+    "crates/kyzo-core/src/project/sparse/sparse_hostile.rs": {
+      "kind": "TARGET — named hostile-review battery beside the sparse projection",
+      "owns": ["eight adversarial sparse tests + fixture plumbing + run_bits exact f32 bit projection"],
+      "ban": ["tolerance-based score assertions (exact-bit only)"],
+      "delete_meter": [
+        "rg -n 'run_bits' crates/kyzo-core/src/project/sparse/sparse_hostile.rs → present"
+      ],
+      "carried_notes": [
+        "Battery targets exactly what the module's own tests under-pin (the admission sort under summation_order_is_pinned fed a pre-sorted query); independent f64 dot-product reference on exact-representable weights; large tie-set top-k survivors pinned (ascending-key tiebreak + truncation); denormal/huge weights finite and deterministic — +inf a lawful score, NaN never; -0.0 admitted and never a hit; k=0 check-before-push regression pin (twin owed beside fts_search — carried obligation)."
+      ]
+    },
+    "crates/kyzo-core/src/project/gazetteer.rs": {
+      "kind": "TARGET living seat — production engine (landed) + absorbed hostile battery as test submodule",
+      "owns": ["gazetteer hostile-review test section (ref_tag, assert_agree, Turkish dotted/dotless i, ligature/combining-mark, nesting/overlap, 4000-case seeded fuzz, İNDEX mutation differential, two-compiles agreement)"],
+      "ban": ["collapsing the two structurally different oracles into one"],
+      "delete_meter": [
+        "rg -n 'assert_agree' crates/kyzo-core/src/project/gazetteer.rs → present"
+      ],
+      "carried_notes": [
+        "TWO structurally different oracles for one engine (greedy scan vs candidate enumeration + greedy resumption) — agreement between three independent derivations is the strongest law here; the mutation-differential pattern: a test justified by the exact mutant it kills (to_ascii_lowercase → to_lowercase diverges on İNDEX); every span boundary-truthful and slicing back to its surface; determinism on re-tag."
+      ]
+    },
+    "crates/kyzo-trials/src/fuzz.rs": {
+      "kind": "TARGET living seat — corrupt-dictionary sweep re-laned from #[ignore]",
+      "owns": ["gazetteer corrupt-dictionary sweep (incl. 2 MiB surface)"],
+      "delete_meter": [
+        "rg -n 'gazetteer' crates/kyzo-trials/src/fuzz.rs → sweep present"
+      ]
+    },
+    "crates/kyzo-core/benches/bench_api.rs": {
+      "kind": "TARGET living seat — phase-timing scaling probe re-laned to the bench lane",
+      "owns": ["gazetteer phase-timing scaling probe"],
+      "delete_meter": [
+        "rg -n 'gazetteer' crates/kyzo-core/benches → probe present in the bench lane"
+      ]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty",
+      "must_add": [
+        "kyzo-model/src/parse/search.rs description notes it owns the FTS AST pure-data types (FtsExpr/FtsLiteral/FtsNear)"
+      ],
+      "must_delete_lines_for": [],
+      "delete_meter": ["no engines/ path appears in .claude/skills/architecture-map/target-arch.md"]
+    },
+    "docs/deprecated/deprecated-migrated.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["engines/{mod,segments,text/ast} entries cite docs/deprecated/storage-model/04-engines-project.json"]
+    },
+    "docs/deprecated/deprecated-absorbed.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["engines/{sparse_hostile,gazetteer_hostile} entries cite docs/deprecated/storage-model/04-engines-project.json"]
+    }
+  },
+  "final_meters": [
+    "test ! -d crates/kyzo-core/src/engines",
+    "rg -n 'crate::engines::' crates/kyzo-core/src → zero",
+    "project/{contract,residency,current}.rs and project/text/ast.rs and project/sparse/sparse_hostile.rs each exceed stub length",
+    "ALL proof_meters green",
+    "FtsExpr defined in kyzo-model only; project/text extends it",
+    "#82 regression battery present under project/residency.rs tests",
+    "carried_obligations recorded at their seats (durable-generation note; k=0 twin; re-laned probes; Segments::OFF note)",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "a projection serves only on witness equality; disagreement rebuilds or refuses (§51)",
+      "seat": "project/residency.rs + project/current.rs",
+      "meter": "witness-equality-governs-service battery present and green (orphan + evict + held Arc arms)",
+      "exceptions": []
+    },
+    {
+      "law": "index-read corruption is a typed error at one boundary, never a panic",
+      "seat": "project/contract.rs index_rows",
+      "meter": "rg -n 'panic!|unwrap\\(|expect\\(' crates/kyzo-core/src/project/contract.rs → zero outside cfg(test)",
+      "exceptions": []
+    },
+    {
+      "law": "exact-bit score determinism — byte identity, not tolerance",
+      "seat": "project/sparse/sparse_hostile.rs (house standard for all score-emitting projections)",
+      "meter": "run_bits-style assertions compare f32 bit patterns, not approximate equality",
+      "exceptions": []
+    }
+  ],
+  "qae": [
+    {
+      "q": "target-arch carries BOTH project/text/*.rs analyzer files AND a nested project/text/tokenizer/*.rs subtree with the same filenames (its own line admits 'target layout may collapse with text/'). Which layout does this cut treat as law when landing engines/text material?",
+      "a": "Treat the flat project/text/ layout as law and the nested tokenizer/ subtree as a map redundancy to be collapsed: one file per analyzer at project/text/, no duplicate subtree. This cut lands ast.rs at the flat seat; the map's duplicate lines are a recorded map-honesty correction for the operator's next map pass.",
+      "e": "Two seats for one tokenizer is two homes for one truth — the map's own hedge line shows it was never a ruling. Landing into both would mint twins; landing into nested-only contradicts every already-landed flat file. Close: map pass deletes the tokenizer/ duplicate lines; meter — no filename appears twice under project/text/ in target-arch.",
+      "authority": "cut_destiny"
+    }
+  ],
+  "campaigns_proposed": [
+    {
+      "target_seat": "decisions.md §51 — projection rebuild-or-refuse",
+      "campaign": "wipe-projection campaign: for each landed projection (fts, hnsw, lsh, sparse, spatial, gazetteer), delete the projection state under a live base relation, then query — assert rebuild-from-base or typed refuse; any silent wrong answer falsifies the rebuildable-cache claim."
+    }
+  ]
+}

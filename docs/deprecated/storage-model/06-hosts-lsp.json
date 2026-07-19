@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "title": "hosts — kyzo-lsp split + lsp_api door death + kyzo-core/tests preserve-in-place — cut destiny under decisions.md",
+  "status": "cut_destiny",
+  "privilege": "Architect cut contract only. decisions.md is sole Spec authority — this file yields on conflict. Claim-tag inflation or jointly impossible meters void this plan. The kyzo-bin server split (feeds.rs/console.rs) is already executed in the tree; this instance seals its remaining ledger notes and rules the LSP.",
+  "scope": {
+    "this_cut": "Living targets: kyzo-lsp/src/{main,translate}.rs (translate.rs is a 1-line stub; main.rs 837 lines still monolithic); kyzo-core/src/lib.rs (the lsp_api door dies); crates/kyzo-core/tests/ preserved in place as the sealed contract's integration suite; kyzo-bin/src/server/mod.rs ledger notes sealed.",
+    "not_this_json": "Everything engine-side (01–05, 07). The kyzo-bin door renames (client.rs→repl/fetch.rs, relations.rs→bulk.rs, changes+standing→feeds.rs, pages→console.rs) are executed history.",
+    "foundation_already_true": [
+      "kyzo-bin/src/server/{feeds,console}.rs exist with content; old changes/standing/pages files are gone",
+      "kyzo-lsp/src/translate.rs exists as a stub; main.rs still holds transport + translation + features",
+      "kyzo-core/src/lib.rs still exports lsp_api (rg hit) — the door is alive and condemned",
+      "05-data-rules-peels.json seats fixed-rule name+arity declarations in kyzo-model (the vocabulary this cut's LSP rewire needs)"
+    ],
+    "target_not_current": "by_target and allowlist.targets are target-tree paths only."
+  },
+  "authority": [
+    "docs/decisions.md — sole Spec",
+    "docs/deprecated/deprecated-migrated.md — kyzo-lsp/main.rs, kyzo-bin/server/mod.rs, crates/kyzo-core/tests/ census entries",
+    ".claude/skills/architecture-map/target-arch.md — ideal paths (kyzo-lsp/src/translate.rs seat)",
+    "This file — cut destiny; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Inflating Unexposed to Unconstructible voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Proof: private constructor + compile-fail a crate-consumer trybuild can demonstrate.",
+    "Refused": "Reachable program; typed runtime outcome. Named refuse variants.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter. Name residual risk; real detection or residual accepted."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist ⊇ every TARGET file the meters require to change. No condemned file paths this cut; the condemned surface is the lsp_api symbol door, closed by grep-delete.",
+    "proof_pairing": "grep-delete for the lsp_api door; the sealed-door boundary is proven by the existing public-surface suite.",
+    "no_condemned_rewire": "No path-level condemnation this cut; symbol-level deletes only."
+  },
+  "deletes": {
+    "law": "Symbol-level E-actions; no file dies this cut.",
+    "paths": [],
+    "symbols": [
+      { "name": "kyzo::lsp_api (check_script door in kyzo-core/src/lib.rs)", "why": "The LSP speaks kyzo-model's public parse surface; a core-crate door minted for one host is a second meaning door on the sealed facade. Dies; validation rewires to kyzo-model." }
+    ],
+    "delete_guarded_invariants": [
+      { "name": "no lsp_api door on the sealed facade", "close": "rg 'lsp_api' crates/kyzo-core/src crates/kyzo-lsp/src → zero" },
+      { "name": "LSP does not import the engine", "close": "rg 'kyzo_core|kyzo-core' crates/kyzo-lsp/Cargo.toml crates/kyzo-lsp/src → zero after the catalog-door qae is executed (until then: exactly the sanctioned sealed-door usage, no engine-internal paths)" }
+    ],
+    "not_deletes": [
+      { "item": "crates/kyzo-core/tests/ fourteen-file suite", "why": "PRESERVE-IN-PLACE: external integration crates reach only the public kyzo:: facade — the exact boundary the target seals; the suite is the drift detector for the facade's re-export decision." },
+      { "item": "kyzo-bin server/mod.rs dropped-not-stubbed ledger + body-limit DoS fix", "why": "The richest behavior-change ledger in the crate; each upstream feature's absence is argued from a contract with the fix's real seat named. Travels with the file, sealed by this instance's notes." },
+      { "item": "the LSP's narrow matching_bracket copy", "why": "Earned its own narrow copy — no access to the crate-internal scanner; same class as reject_excessive_nesting for the identical reason. Drift-honest hand copy with blast radius stated." }
+    ],
+    "meters": [
+      "rg -n 'lsp_api' crates/kyzo-core/src crates/kyzo-lsp/src → zero",
+      "rg -n 'fn diagnostics_from_report|struct LineIndex' crates/kyzo-lsp/src/translate.rs → definitions present",
+      "rg -n 'struct LineIndex' crates/kyzo-lsp/src/main.rs → zero (moved, not twinned)"
+    ]
+  },
+  "refused": {
+    "law": "Typed runtime outcomes. Named variants. Authority honest.",
+    "items": [
+      {
+        "name": "HTTP request body past the per-route limit",
+        "tag": "Refused",
+        "variant": "413-class body-limit refusal (only /import raises its cap via --max-import-body-mb)",
+        "door": "kyzo-bin/src/server/mod.rs route layer",
+        "authority": "cut_destiny",
+        "why": "Upstream disabled the 2 MiB cap router-wide — a one-connection memory-exhaustion DoS; the per-route fix is sealed doctrine."
+      },
+      {
+        "name": "malformed bind/port config at server startup",
+        "tag": "Refused",
+        "variant": "typed config refusal (lifting the startup unwraps per the zone note)",
+        "door": "kyzo-bin/src/server/mod.rs server_main startup",
+        "authority": "cut_destiny",
+        "why": "Process-entry failures are lawful panics under the zone's no-panic-escapes-a-HANDLER clause, but the map's 'malformed config is a typed refusal' line wants bind/port parse lifted to a typed refusal on arrival — recorded as the seat's next edit."
+      }
+    ]
+  },
+  "unexposed": {
+    "law": "Residual hostile-adapter risk with real detection or residual accepted.",
+    "items": [
+      {
+        "name": "LSP client sending positions past the end of the line/document",
+        "tag": "Unexposed",
+        "residual_risk": "Hostile or buggy editors send over-long UTF-16 positions; a naive index would panic the server.",
+        "detection": "clamp-never-crash posture is the translation tier's law (position CLAMPS past-the-end; a clamp is a wrong-looking diagnostic, never a crashed server); the LSP smoke suite exercises the clamp; residual accepted for wrong-looking columns"
+      }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "lsp-consts-become-model-vocabulary",
+      "from": "kyzo-lsp/main.rs L2 watch",
+      "obligation": "AGGREGATIONS/KEYWORDS consts are drift-honest hand copies (three hand-kept lists: parse's, the LSP's, the grammar's keywords — one concept each). When 05's model vocabulary cut lands (aggregate names, fixed-rule name+arity), the LSP consumes kyzo-model and the hand lists die.",
+      "gate": "05-data-rules-peels.json aggregate.rs + rule.rs landing",
+      "seat_until_hoist": "crates/kyzo-lsp/src/main.rs (drift-honesty note stays until then)"
+    },
+    {
+      "id": "lsp-formatter-clause",
+      "from": "kyzo-lsp/main.rs L2 watch",
+      "obligation": "zone-lsp's formatter clause is honored today only by absence — when formatting lands it must call kyzo-model's format.rs (the one canonical pretty-printer), never a local one.",
+      "gate": "any LSP formatting story",
+      "seat_until_hoist": "crates/kyzo-lsp/src/main.rs (doc note)"
+    }
+  ],
+  "tests": {
+    "law": "The external suite is the facade's drift detector; host tests stay host-side.",
+    "fate": [
+      { "from": "crates/kyzo-core/tests/ (fourteen files)", "action": "preserve-in-place", "to": "crates/kyzo-core/tests/ — model-vocabulary re-exports resolve per lib.rs's facade re-export; no test text changes if the facade keeps the names" }
+    ],
+    "meters": [
+      "crates/kyzo-core/tests/public_api_surface.rs still compiles against the sealed facade after the lsp_api deletion"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "LineIndex (UTF-16 position law) + word_at + diagnostics_from_report + collect_labels — kyzo-lsp/src/translate.rs",
+      "wire transport (read_message/write_message) + server loop + feature handlers (hover, completion, definition) + catalog tier — kyzo-lsp/src/main.rs",
+      "sealed public facade re-exports — kyzo-core/src/lib.rs"
+    ],
+    "unconstructible": [
+      {
+        "name": "a host reaching engine internals past the sealed facade",
+        "proof": "compile-fail: kyzo-core internals are pub(crate); a host crate consuming anything not re-exported by lib.rs fails to resolve — the public_api_surface suite locks the export set"
+      }
+    ],
+    "rulings": [
+      { "id": "translate-split", "a": "The diagnostics translation tier (LineIndex, word_at, diagnostics_from_report, collect_labels) moves whole to kyzo-lsp/src/translate.rs — 'miette → LSP: spans to ranges, errors to diagnostics' is that seat's substance. Transport, loop, and features stay main.rs. No twinning: LineIndex defined once." },
+      { "id": "lsp-speaks-model", "a": "Validation rewires from kyzo::lsp_api::check_script to kyzo-model's public parse surface. The language server needs the language; the parse surface is the language's door. The lsp_api facade door dies with no replacement on kyzo-core." },
+      { "id": "tests-preserve-in-place", "a": "crates/kyzo-core/tests/ remains the sealed contract's own integration suite. The one cross-cutting rewire is transparent: the facade re-exports kyzo-model vocabulary (DataValue, Tuple, Validity, UuidWrapper, …); if the facade keeps the names, no test text changes — and if it breaks a consumer, this suite breaks first, at the contract. That is its job." },
+      { "id": "bin-ledger-sealed", "a": "kyzo-bin server/mod.rs's dropped-not-stubbed ledger (no per-request mutability override — mutability read off the parsed program; no /transact — the fix is runtime-tier API, not a bin workaround; no /import-from-backup — restore is whole-store-into-empty; gzip+brotli only with the zstd C-dependency exclusion verified) is sealed doctrine; future server stories cite it rather than re-litigating." },
+      { "id": "lexical-navigation-is-design", "a": "Deliberately-lexical go-to-definition is argued from the user's experience (mid-keystroke documents don't parse; a feature that only works on valid documents reads as broken); None-over-guessing posture everywhere (unbalanced brackets, unknown hover, no dbPath guessing from rootUri — silently creating a store nobody asked for is the worse failure mode)." }
+    ]
+  },
+  "ban": [
+    "Do not keep or re-mint an engine-side lsp_api door.",
+    "Do not twin LineIndex between main.rs and translate.rs.",
+    "Do not add a local formatter to the LSP (kyzo-model format.rs is the one pretty-printer).",
+    "Do not guess dbPath from rootUri.",
+    "Do not let the LSP hand-roll message SHAPES (lsp-types stays; only the transport framing is hand-rolled, by ruling).",
+    "Do not reshape crates/kyzo-core/tests/ to chase facade drift — the suite breaking IS the signal.",
+    "Do not remove the per-route body limit or widen it router-wide."
+  ],
+  "allowlist": {
+    "law": "TARGET paths only.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-lsp/src/main.rs",
+      "crates/kyzo-lsp/src/translate.rs",
+      "crates/kyzo-lsp/Cargo.toml",
+      "crates/kyzo-core/src/lib.rs",
+      "crates/kyzo-bin/src/server/mod.rs",
+      "crates/kyzo-core/tests/public_api_surface.rs",
+      "docs/deprecated/deprecated-migrated.md"
+    ],
+    "delete_after": [],
+    "forbidden_seats": [],
+    "rewire": [
+      "TARGET kyzo-lsp/src/translate.rs ← LineIndex + diagnostics translation from kyzo-lsp/src/main.rs (intra-crate move, no condemned file)",
+      "TARGET kyzo-lsp/src/main.rs ← validation calls kyzo-model public parse surface (lsp_api door dies on kyzo-core/src/lib.rs)"
+    ]
+  },
+  "proof_meters": [
+    "compile-fail: host crates cannot reach non-re-exported kyzo-core internals (public_api_surface suite locks the export set)"
+  ],
+  "by_target": {
+    "crates/kyzo-lsp/src/translate.rs": {
+      "kind": "TARGET — miette → LSP: spans to ranges, errors to diagnostics",
+      "owns": ["LineIndex", "word_at", "diagnostics_from_report", "collect_labels"],
+      "ban": ["engine imports", "guessing on unmappable positions (clamp, never crash; None, never guess)"],
+      "delete_meter": [
+        "rg -n 'struct LineIndex' crates/kyzo-lsp/src/translate.rs → exactly 1"
+      ],
+      "carried_notes": [
+        "LSP positions are UTF-16 CODE UNITS — the rationale names exactly which diagnostics would render at the wrong column (escape/codepoint diagnostics carrying non-ASCII spans); position CLAMPS past-the-end; offset is the honest inverse with the spec's own over-long-position rule.",
+        "One Diagnostic per label across the error tree — the same shape parse fuzz's walk_labels proves every parser error satisfies, walked here from the public Diagnostic trait; Display + #[help] in one message so the mechanical fix shows up in the editor; defensive no-label fallback with its reason.",
+        "validate publishes empty-on-success because clearing previously-published diagnostics is as important as reporting new ones."
+      ]
+    },
+    "crates/kyzo-lsp/src/main.rs": {
+      "kind": "TARGET living seat — transport, server loop, features, catalog tier",
+      "owns": ["read_message/write_message transport", "server loop + capabilities", "hover/completion/definition handlers", "catalog tier (open_catalog_db, list_relations, columns_for_relation)", "matching_bracket", "rule_definitions", "definition_at"],
+      "ban": ["hand-rolled message shapes (lsp-types only; transport framing exempt by ruling)", "local formatter", "rootUri dbPath guessing"],
+      "delete_meter": [
+        "rg -n 'lsp_api' crates/kyzo-lsp/src/main.rs → zero",
+        "rg -n 'lsp_types' crates/kyzo-lsp/src/main.rs → present (real protocol shapes)"
+      ],
+      "carried_notes": [
+        "Transport ruling: hand-rolled Content-Length framing, no async runtime — but every request/notification param is lsp-types, the same crate rust-analyzer uses; clean-EOF vs mid-message-EOF distinguished so a truncated stream is diagnosable.",
+        "Catalog scope: dbPath ONLY, opening a real store so hover/completion answer from the connected catalog, not a shadow; degrades catalog-free without one; an unparseable URI is the client's bug, not ours to crash over.",
+        "didClose clears stale squiggles; full-sync-only invariant stated at didOpen/didChange."
+      ]
+    },
+    "crates/kyzo-core/src/lib.rs": {
+      "kind": "TARGET living seat — sealed facade; the lsp_api door dies here",
+      "owns": [],
+      "must_delete_lines_for": ["lsp_api module + re-export"],
+      "ban": ["single-host doors on the sealed facade"],
+      "delete_meter": [
+        "rg -n 'lsp_api' crates/kyzo-core/src/lib.rs → zero"
+      ]
+    },
+    "crates/kyzo-bin/src/server/mod.rs": {
+      "kind": "TARGET living seat — route table + state + startup; ledger sealed",
+      "owns": ["ServerArgs", "DbState", "server_main", "wrap_json", "internal_error"],
+      "ban": ["router-wide body-limit removal", "per-request mutability overrides", "/transact or /import-from-backup workarounds"],
+      "delete_meter": [
+        "rg -n 'max-import-body-mb|max_import_body_mb' crates/kyzo-bin/src/server/mod.rs → per-route raise present"
+      ],
+      "carried_notes": [
+        "internal_error handles JoinError only — everything the engine itself can refuse comes back as Ok(Err(_)).",
+        "Startup unwraps are process-entry failures, lawful under the zone's no-panic-escapes-a-HANDLER clause; the bind/port parse lift to a typed refusal is the seat's recorded next edit (refused.items)."
+      ]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty",
+      "must_add": [
+        "kyzo-bin/src/engine.rs note: 'opens and holds a live Db' becomes 'holds the Engine composition' when the storage epic executes §1 (cross-reference 07)"
+      ],
+      "must_delete_lines_for": [],
+      "delete_meter": ["kyzo-lsp/src/translate.rs remains on the map with its miette→LSP description"]
+    },
+    "docs/deprecated/deprecated-migrated.md": {
+      "kind": "inventory seal",
+      "delete_meter": ["kyzo-lsp and kyzo-bin server entries cite docs/deprecated/storage-model/06-hosts-lsp.json"]
+    }
+  },
+  "final_meters": [
+    "rg -n 'lsp_api' crates → zero",
+    "kyzo-lsp/src/translate.rs exceeds stub length; LineIndex defined exactly once, in translate.rs",
+    "crates/kyzo-core/tests/ suite green against the facade after the door deletion",
+    "ALL proof_meters green",
+    "carried_obligations recorded at their seats",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "clamp-never-crash, None-never-guess — the LSP's posture on hostile/degenerate input",
+      "seat": "kyzo-lsp/src/{translate,main}.rs",
+      "meter": "rg -n 'panic!|unwrap\\(|expect\\(' crates/kyzo-lsp/src → zero on request-handling paths outside cfg(test)",
+      "exceptions": [
+        "process-entry startup failures (transport stdin/stdout acquisition) — lawful under the no-panic-escapes-a-HANDLER clause, each justified at the site"
+      ]
+    }
+  ],
+  "qae": [
+    {
+      "q": "zone-lsp forbids depending on the engine ('the language server needs the language, not the database'), yet the shipped catalog features (hover columns, relation completion) open a real fjall Db and run ::relations/::columns through the session tier. The census refused to choose. Rule it: do the catalog features move out, or does the law gain a sanctioned door?",
+      "a": "Keep the catalog features; amend zone-lsp to forbid engine INTERNALS, not the sealed public door. The LSP may consume exactly the same sealed kyzo:: facade any host (kyzo-bin) consumes, read-only, dbPath-explicit — and nothing else. A separately-minted read-only introspection crate would be a second door for one host; moving the features out deletes shipped user value to satisfy a law whose intent (no engine coupling past the seal) the sealed door already honors.",
+      "e": "The engine-internal coupling the zone law fears is real; the sealed facade is precisely the boundary built to make such consumption safe — hosts import only what lib.rs re-exports (compile-fail proof). Close: zone-lsp text amendment (operator edit); meter — kyzo-lsp imports only kyzo (facade) + kyzo-model + lsp-types; rg for any non-facade kyzo-core path → zero. Recorded as cut_destiny; the zone-law text edit itself is the operator's pen.",
+      "authority": "cut_destiny"
+    },
+    {
+      "q": "Full go-to-definition and completion want fixed-rule and aggregation vocabulary. 05 puts name+arity declarations in kyzo-model. Is that the whole discharge, or does the LSP still need an engine edge for live registry contents?",
+      "a": "Model vocabulary is the whole discharge for language features: names, arities, keywords come from kyzo-model (killing the three hand-kept lists). Live registry contents (which rules THIS store's engine actually has loaded) are catalog-tier questions and flow through the same sealed-door catalog channel as ::relations — never a new edge.",
+      "e": "Splitting language-static from store-live keeps the language server honest: static answers never misreport what the engine accepts (the drift-honesty note's blast radius), live answers come from the connected store or degrade to None. Close: carried_obligations.lsp-consts-become-model-vocabulary; meter — AGGREGATIONS/KEYWORDS consts deleted from main.rs once model vocabulary lands.",
+      "authority": "cut_destiny"
+    }
+  ],
+  "campaigns_proposed": []
+}

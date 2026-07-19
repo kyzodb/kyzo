@@ -7,8 +7,7 @@
 
 # Story #321: memcmp.rs/fact_payload.rs/tuple.rs no longer exist — the
 # codec split into crates/kyzo-core/src/data/value/{canonical,number,mod,row}.rs
-# during the value-plane migration (see .claude/rules/deprecated-migrated.md's
-# "data/value/ core" entry) and the surfaces below were never repointed, so
+# during the value-plane migration, and the surfaces below were never repointed, so
 # this check silently stopped covering any real code the moment the split
 # landed. Repointed to the current file layout; the CLOSURE, not just the
 # file paths, was re-derived: same-file reachability means a thin wrapper
