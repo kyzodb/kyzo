@@ -12,6 +12,10 @@
 //! Owns: [`SweepDoor`], [`IntentionQueue`], [`AdmittedIntent`],
 //! [`IntentOrdinal`], [`CommitOrdinal`], [`Applied`], [`Committed`].
 //!
+//! Also owns the live [`RootChain`](super::merkle::RootChain) on the door:
+//! each [`Committed`] mint extends it via [`RootChain::append`](super::merkle::RootChain::append);
+//! [`Applied`] never extends history-authoritative roots (§25 / §56).
+//!
 //! Bans: timers (wake ≠ timer — park only on queue non-empty or shutdown);
 //! early ack before the batch barrier; refuse-as-durable-event to fill
 //! ordinal holes; cut advancement on ghosts; seal without session recheck
@@ -30,6 +34,9 @@ use std::collections::VecDeque;
 use super::authority::{IncarnationId, WriteAuthority};
 use super::commit_cap::StableCommitCap;
 use super::epoch::FenceEpoch;
+use super::merkle::{
+    ChainLinkKind, ChainedStateRoot, MerkleChainRefuse, RootChain, StateRoot,
+};
 use super::open::StoreId;
 use super::tx::{CommitFailure, WriteTx};
 
@@ -298,6 +305,10 @@ pub struct SweepDoor {
     highest_commit: CommitOrdinal,
     /// Predecessor-hash chain head over CommitOrdinal (sole history seal).
     predecessor_hash: [u8; 32],
+    /// Spec §56 chained state roots — extended only at [`Self::seal_durable`]
+    /// (`Committed` mint). Prior tip is stored here so accountability is not
+    /// cold on-demand only. Never extended by [`Self::seal`] / [`Applied`].
+    root_chain: RootChain,
 }
 
 impl SweepDoor {
@@ -329,6 +340,7 @@ impl SweepDoor {
             last_sealed_intent: None,
             highest_commit: CommitOrdinal::ZERO,
             predecessor_hash: [0u8; 32],
+            root_chain: RootChain::empty(),
         })
     }
 
@@ -350,6 +362,16 @@ impl SweepDoor {
     /// Last successfully sealed IntentOrdinal, if any.
     pub fn last_sealed_intent_ordinal(&self) -> Option<IntentOrdinal> {
         self.last_sealed_intent
+    }
+
+    /// Stored per-commit [`RootChain`] (tip = prior root for the next mint).
+    pub fn root_chain(&self) -> &RootChain {
+        &self.root_chain
+    }
+
+    /// Prior [`StateRoot`] the next `Committed` mint must cover (or genesis).
+    pub fn prior_root(&self) -> StateRoot {
+        self.root_chain.prior_root()
     }
 
     /// Admit an intent: mint Store-monotonic IntentOrdinal (may gap later).
@@ -381,10 +403,16 @@ impl SweepDoor {
     /// on failure. Session recheck against live `current` before any seal —
     /// mismatch seals zero bytes. Intents must seal in strictly increasing
     /// [`IntentOrdinal`] order.
+    ///
+    /// On success, mints a Spec [`ChainedStateRoot`] over `content_root`
+    /// (plaintext-canonical digest at this cut) and extends [`RootChain`] via
+    /// [`RootChain::append`]. History-authoritative roots extend only here —
+    /// never on [`Self::seal`] / [`Applied`] (§25 / §56).
     pub fn seal_durable<W: WriteTx>(
         &mut self,
         intent: AdmittedIntent,
         tx: W,
+        content_root: StateRoot,
         current: &SweepSession,
     ) -> Result<Committed, SweepSealFailure> {
         self.prepare_seal(&intent, current)?;
@@ -406,6 +434,20 @@ impl SweepDoor {
             seal_predecessor_hash(self.predecessor_hash, self.store_id, commit_ordinal);
         self.highest_commit = commit_ordinal;
 
+        // Sole Committed mint site for the Spec chain (§56): bind content to
+        // the stored prior tip, then append so the next seal sees it.
+        let chained = ChainedStateRoot::mint(
+            self.store_id,
+            self.fence_epoch,
+            commit_ordinal,
+            content_root,
+            self.root_chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        self.root_chain
+            .append(chained)
+            .map_err(SweepSealFailure::MerkleChain)?;
+
         Ok(Committed::mint(
             self.store_id,
             self.fence_epoch,
@@ -417,7 +459,8 @@ impl SweepDoor {
     ///
     /// Returns [`Applied`] — never [`Committed`]. Soft dual-mint of one proof
     /// type across durability strengths is banned. Does not assign
-    /// [`CommitOrdinal`] (history mints only at the durable event).
+    /// [`CommitOrdinal`] and does not extend [`RootChain`] (history-authoritative
+    /// roots mint only at the durable / [`Committed`] event — §25 / §56).
     pub fn seal<W: WriteTx>(
         &mut self,
         intent: AdmittedIntent,
@@ -542,4 +585,8 @@ pub enum SweepSealFailure {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Apply(CommitFailure),
+    /// Spec root-chain append refused (predecessor mismatch).
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    MerkleChain(MerkleChainRefuse),
 }

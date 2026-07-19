@@ -436,6 +436,16 @@ impl RootChain {
     pub fn links(&self) -> &[ChainedStateRoot] {
         &self.links
     }
+
+    /// Prior root the next mint must cover — tip of the chain, or
+    /// [`GENESIS_ROOT`] when empty. Stored on the SweepDoor so the prior is
+    /// not cold on-demand only.
+    pub fn prior_root(&self) -> StateRoot {
+        self.links
+            .last()
+            .map(|l| l.root())
+            .unwrap_or(GENESIS_ROOT)
+    }
 }
 
 /// State root at any committed transaction time (as-of root).
