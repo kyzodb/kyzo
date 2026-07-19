@@ -22,7 +22,7 @@ pub(crate) mod callback;
 /// Lives in the runtime tier by law — the value plane has no ambient
 /// clock, and determinism campaigns replay stamps rather than minting
 /// them.
-pub(crate) fn current_validity() -> miette::Result<crate::data::value::ValidityTs> {
+pub(crate) fn current_validity() -> miette::Result<kyzo_model::value::ValidityTs> {
     let micros = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| miette::miette!("system clock before the epoch: {e}"))?
@@ -30,7 +30,7 @@ pub(crate) fn current_validity() -> miette::Result<crate::data::value::ValidityT
     let micros: i64 = micros
         .try_into()
         .map_err(|_| miette::miette!("system clock beyond i64 microseconds"))?;
-    Ok(crate::data::value::ValidityTs::from_raw(micros))
+    Ok(kyzo_model::value::ValidityTs::from_raw(micros))
 }
 
 // Production host door: `runtime/db.rs` enforces constraints at commit

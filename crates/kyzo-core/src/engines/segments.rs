@@ -47,7 +47,7 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
-use crate::data::value::{DataValue, RelationId, Tuple};
+use kyzo_model::value::{DataValue, RelationId, Tuple};
 use crate::engines::projection::{Generation, ProjectionBuilder, ResidentIndexKey, Sealed, Stale};
 use crate::runtime::generation::RelationGeneration;
 use crate::storage::ReadTx;

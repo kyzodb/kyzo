@@ -7,7 +7,21 @@ license.workspace = true
 homepage.workspace = true
 repository.workspace = true
 publish = false
-description = "KyzoDB shared vocabulary seat (parse, format, value kinds). Empty scaffold until relocate fills it."
+description = "KyzoDB shared vocabulary: DataValue, program atoms, envelopes, validity coerce"
+
+[dependencies]
+miette = { version = "7", features = ["fancy"] }
+serde = { version = "1.0.199" }
+serde_derive = "1.0.199"
+serde_json = "1.0.116"
+uuid = { version = "1.8.0", features = ["v1", "v4", "serde"] }
+regex = "1.10.4"
+regex-syntax = "0.8"
+thiserror = "2.0.14"
+base64 = "0.22.0"
+jiff = { version = "0.2.31", default-features = false, features = ["std", "perf-inline", "tzdb-bundle-always"] }
+smartstring = { version = "1.0.1", features = ["serde"] }
+flatbuffers = { version = "25.12.19", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

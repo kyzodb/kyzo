@@ -190,10 +190,10 @@ use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, NormalAggr};
 use crate::data::program::{HeadAggrSlot, MagicSymbol};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{Derivation, DerivationGraph};
 use crate::query::temp_store::{
@@ -1867,8 +1867,8 @@ mod tests {
     use super::*;
     use crate::data::aggr::parse_aggr;
     use crate::data::program::StoreLifetimes;
-    use crate::data::span::SourceSpan;
-    use crate::data::symb::Symbol;
+    use kyzo_model::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
     use crate::query::laws::{FixedRule, Literal, Program, Rel, Rule, Term, naive_eval};
 
     // ── plumbing ─────────────────────────────────────────────────────────

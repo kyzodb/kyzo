@@ -39,7 +39,7 @@ use serde_json::{Map, Value as JsonValue, json};
 use std::collections::BTreeMap;
 
 use crate::data::json::format_error_as_json;
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 use crate::runtime::db::Db;
 use crate::storage::Storage;
 

@@ -67,10 +67,10 @@ use std::sync::mpsc::Receiver;
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
 use crate::query::incremental::{self, IncrementalProgram, MaintainedState};
@@ -461,7 +461,7 @@ mod tests {
         HeadAggrSlot, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
         MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram,
     };
-    use crate::data::value::{DataValue, Num};
+    use kyzo_model::value::{DataValue, Num};
     use crate::storage::fjall::new_fjall_storage;
 
     fn sym(name: &str) -> Symbol {

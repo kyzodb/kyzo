@@ -66,10 +66,10 @@ use crate::data::program::{
     WriteValidity,
 };
 use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, ValidityTs};
-use crate::data::value::{Tuple, TupleT};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, ValidityTs};
+use kyzo_model::value::{Tuple, TupleT};
 use crate::fixed_rule::utilities::Constant;
 use crate::fixed_rule::{FixedRule, FixedRuleHandle, NamedRows};
 use crate::runtime::callback::{CallbackCollector, CallbackOp};
@@ -79,7 +79,7 @@ use crate::runtime::relation::{
     Residency,
 };
 use crate::storage::{Storage, WriteTx};
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Assertion failure for {key:?} of {relation}: {notice}")]
@@ -816,7 +816,7 @@ impl<T: WriteTx> SessionTx<T> {
             match self.current_row_routed(
                 relation_store,
                 extracted.as_slice(),
-                crate::data::value::MAX_VALIDITY_TS,
+                kyzo_model::value::MAX_VALIDITY_TS,
                 span,
             )? {
                 None => {
@@ -883,7 +883,7 @@ impl<T: WriteTx> SessionTx<T> {
                 .current_row_routed(
                     relation_store,
                     extracted.as_slice(),
-                    crate::data::value::MAX_VALIDITY_TS,
+                    kyzo_model::value::MAX_VALIDITY_TS,
                     span,
                 )?
                 .is_some()
@@ -1186,7 +1186,7 @@ fn temporal_posting_tuple(
         bail!(ShortTemporalIndexRow(base.name.to_string()));
     }
     let mut out = Tuple::with_capacity(1 + keys_len);
-    out.push(crate::data::value::StoredValiditySlot::new(valid).as_datavalue());
+    out.push(kyzo_model::value::StoredValiditySlot::new(valid).as_datavalue());
     out.extend(row[..keys_len].iter().cloned());
     Ok(out)
 }
@@ -1633,7 +1633,7 @@ impl<T: WriteTx> SessionTx<T> {
                     // as-of resolution — resolution is exactly what would
                     // collapse the history this backfill must reproduce
                     // whole), and its polarity from the value.
-                    let tuple = crate::data::value::decode_tuple_from_key(k, keys_len + 2)?;
+                    let tuple = kyzo_model::value::decode_tuple_from_key(k, keys_len + 2)?;
                     let polarity = crate::data::bitemporal::claim_polarity_of_value(v)?;
                     let key_cols = &tuple.as_slice()[..keys_len];
                     let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
@@ -1681,7 +1681,7 @@ impl<T: WriteTx> SessionTx<T> {
         let stamp = self.system_stamp_routed(base.residency());
         let upper = (base.id.raw() + 1).to_be_bytes();
         let keys_len = base.metadata.keys.len();
-        let as_of = crate::data::value::AsOf::current(crate::data::value::MAX_VALIDITY_TS);
+        let as_of = kyzo_model::value::AsOf::current(kyzo_model::value::MAX_VALIDITY_TS);
         let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
         loop {
             // Current rows only: an index reflects current state, and the
@@ -1988,8 +1988,8 @@ mod bulk_write_tests {
 
     use fjall::Slice;
 
-    use crate::data::value::DataValue;
-    use crate::data::value::Tuple;
+    use kyzo_model::value::DataValue;
+    use kyzo_model::value::Tuple;
     use crate::runtime::db::Db;
     use crate::storage::sim::SimStorage;
     use crate::storage::{ReadTx, Storage};
@@ -2270,7 +2270,7 @@ mod temporal_index_tests {
 
     use super::*;
     use crate::data::relation::ColType;
-    use crate::data::value::{StoredValiditySlot, ValidityTs};
+    use kyzo_model::value::{StoredValiditySlot, ValidityTs};
     use crate::runtime::db::ScriptOptions;
     use crate::storage::ReadTx;
     use crate::storage::sim::SimStorage;
@@ -2380,7 +2380,7 @@ mod temporal_index_tests {
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("posting row decodes cleanly");
-                let tup = crate::data::value::decode_tuple_from_key(&k, 4)
+                let tup = kyzo_model::value::decode_tuple_from_key(&k, 4)
                     .expect("posting key decodes cleanly");
                 let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
@@ -2413,7 +2413,7 @@ mod temporal_index_tests {
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("base row decodes cleanly");
-                let tup = crate::data::value::decode_tuple_from_key(&k, 3)
+                let tup = kyzo_model::value::decode_tuple_from_key(&k, 3)
                     .expect("base key decodes cleanly");
                 let key_col = tup[0].get_int().expect("int base key column");
                 let valid = match &tup.as_slice()[1] {

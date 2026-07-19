@@ -1,0 +1,1357 @@
+{
+  "version": 10,
+  "title": "functions.rs bag \u2014 cut destiny under decisions.md (target seats + severance)",
+  "status": "cut_destiny",
+  "privilege": "Architect cut contract only. decisions.md is sole Spec authority \u2014 this file yields on conflict. Spec claim tags: Unconstructible / Refused / Unexposed only. Delete is an E-action, not a claim tag. Plan for TARGET state per deprecated-*.md L1 + decisions \u2014 not today's bag shape. Current paths may appear only as Delete evidence (what gets severed/removed). They must never appear as rewire destinations or living by_target seats. A rewire entry pointing into a condemned file is compatibility and voids the plan. Map seats. Census exhaustive. Folders never choose. No partial purity. Claim-tag inflation or jointly impossible meters void this plan. Allowlist \u2287 every TARGET file the meters require to change. Severance_edits may license narrowly scoped Delete-evidence edits on condemned files that must remain until a later peel; they are not living seats and not rewire destinations.",
+  "scope": {
+    "this_cut": "Target: OpDecl + BoundOp + bind::resolve_op + errors + ten kernels + geo; model program/expr + value/json_convert; schema column/relation coerce using model json_convert; bag tests under exec/stdlib/tests; condemned data/functions, data/expr, data/relation, data/tests/*, exec/stdlib/{functions,expr,exprs}, engines/hnsw_filter_harness Deleted. Eval half that calls resolve_op/BoundOp::apply lives in exec (never model).",
+    "not_this_json": "Remaining data/* peels (program, aggr, json NamedRows, data/mod.rs death with directory) and other deprecated-*.md moments \u2014 later. data/mod.rs is Delete evidence only here (dies with directory); never a by_target/rewire seat.",
+    "foundation_already_true": [
+      "kyzo-model owns DataValue / ValidityTs / SourceSpan / ValidityCoerce",
+      "kyzo-core \u2192 kyzo-model edge exists"
+    ],
+    "target_not_current": "by_target and allowlist.targets are target-tree paths only. Current condemned paths live solely under deletes / delete_after."
+  },
+  "authority": [
+    "docs/decisions.md \u2014 sole Spec",
+    "docs/deprecated/deprecated-split.md \u2014 bag + data/expr + data/tests + data/mod fate (L1)",
+    "docs/deprecated/deprecated-migrated.md \u2014 data/relation \u2192 model/schema (L1)",
+    "docs/deprecated/deprecated-absorbed.md \u2014 engines/hnsw_filter_harness \u2192 project/vector/ (L1; nothing rewires at condemned address)",
+    ".claude/skills/architecture-map/target-arch.md \u2014 ideal paths",
+    "This file \u2014 cut destiny v9; subordinate to decisions.md"
+  ],
+  "claim_tags": {
+    "law": "Mandatory Spec tags from decisions.md only. Every unrepresentable re-tags under exactly one. Inventing a fourth tag or inflating Unexposed\u2192Unconstructible voids this plan.",
+    "Unconstructible": "No path through the sealed Rust type and crate boundary constructs the illegal state. Proof: private constructor + compile-fail that a crate-consumer trybuild can demonstrate. Symbol absence in our tree is not this tag.",
+    "Refused": "Reachable program; typed runtime outcome. Named refuse variants.",
+    "Unexposed": "Absent from the public API but reachable by a hostile adapter. Name residual risk; name real detection or state residual accepted \u2014 never costume prevention as detection."
+  },
+  "joint_satisfaction": {
+    "law": "Allowlist \u2287 every TARGET file the meters require to change. A meter no allowlisted target path can satisfy voids the plan. Condemned paths are deleted via delete_after \u2014 not edited as living seats.",
+    "proof_pairing": "decisions.md \u00a71 form: compile-fail for reverse-composition through the sealed API; grep-delete for symbols/paths.",
+    "no_condemned_rewire": "If a path is condemned in deprecated-*.md L1, it appears only under deletes/delete_after. Consumer wiring seats at L1 destiny.",
+    "severance": "severance_edits licenses narrowly scoped Delete-evidence edits on condemned files that must remain until a later peel. Meters on those edits are jointly satisfiable via allowlist.severance_edits. This is not a by_target living seat and not a rewire destination."
+  },
+  "deletes": {
+    "law": "E-action ledger for condemned CURRENT paths. Never by_target seats. Never rewire destinations.",
+    "paths": [
+      {
+        "path": "crates/kyzo-core/src/data/functions.rs",
+        "why": "Catch-all bag \u2014 Deleted."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/expr.rs",
+        "why": "File dies (deprecated-split). Expr/LazyOp/decls \u2192 model/program/expr.rs; planning \u2192 exec/plan/; Bytecode \u2192 REMOVE. Not an Expr AST surviving seat."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/relation.rs",
+        "why": "File dies (deprecated-migrated). \u2192 model/schema/{relation,column}.rs. Not a rewire-import seat for exec kernels."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/tests/functions.rs",
+        "why": "Re-home then Delete."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/tests/exprs.rs",
+        "why": "Split re-home/die then Delete."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/tests/mod.rs",
+        "why": "Dies with data/tests/ \u2014 Delete. Never a rewire seat."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/mod.rs",
+        "why": "Dies with data/ directory as last peels leave (deprecated-split). This cut: severance_edits only \u2014 remove mod decls for deleted children; file remains condemned. Never a by_target/rewire living seat."
+      },
+      {
+        "path": "crates/kyzo-core/src/exec/stdlib/functions.rs",
+        "why": "Delete (exists)."
+      },
+      {
+        "path": "crates/kyzo-core/src/exec/stdlib/exprs.rs",
+        "why": "Delete (exists)."
+      },
+      {
+        "path": "crates/kyzo-core/src/exec/stdlib/expr.rs",
+        "why": "Delete (exists)."
+      },
+      {
+        "path": "crates/kyzo-core/src/engines/hnsw_filter_harness.rs",
+        "why": "Absorbed \u2192 project/vector/hnsw_filter_harness.rs (deprecated-absorbed). Current address is Delete evidence only \u2014 no rewire entry here."
+      }
+    ],
+    "map_seats": [
+      {
+        "path": "crates/kyzo-core/src/exec/stdlib/exprs.rs",
+        "why": "Remove."
+      },
+      {
+        "path": "crates/kyzo-core/src/exec/stdlib/expr.rs",
+        "why": "Remove."
+      },
+      {
+        "path": "crates/kyzo-core/src/exec/stdlib/functions.rs",
+        "why": "Remove."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/functions.rs",
+        "why": "Remove."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/expr.rs",
+        "why": "Remove if listed."
+      },
+      {
+        "path": "crates/kyzo-core/src/data/relation.rs",
+        "why": "Remove if listed."
+      },
+      {
+        "path": "crates/kyzo-core/src/engines/hnsw_filter_harness.rs",
+        "why": "Remove if listed; destiny is project/vector/hnsw_filter_harness.rs."
+      }
+    ],
+    "symbols": [
+      {
+        "name": "define_op!",
+        "why": "grep-delete."
+      },
+      {
+        "name": "Op::define / pub Op with callable inner for builtins",
+        "why": "grep-delete fused mint."
+      },
+      {
+        "name": "pub/free apply_op / any second apply API",
+        "why": "grep-delete crate-graph. Sole door BoundOp::apply."
+      },
+      {
+        "name": "pub get_op / facade besides bind::resolve_op",
+        "why": "grep-delete."
+      },
+      {
+        "name": "ValidityCoerce redefined under exec/stdlib or data/functions",
+        "why": "grep-delete redefinition."
+      },
+      {
+        "name": "to_json / json2val defined under exec/stdlib as the sole authority while model coerce needs them",
+        "why": "Bodies seat in kyzo-model value/json_convert; collection imports \u2014 no twin."
+      },
+      {
+        "name": "transitional re-export shims left as done",
+        "why": "Deleted."
+      }
+    ],
+    "delete_guarded_invariants": [
+      {
+        "name": "no second pub resolve besides bind::resolve_op",
+        "close": "grep: exactly one pub fn resolve_op in bind.rs; zero get_op"
+      },
+      {
+        "name": "no second pub apply besides BoundOp::apply",
+        "close": "grep: zero fn apply_op in kyzo-core + kyzo-model"
+      },
+      {
+        "name": "no fused define_op! / Op::define in tree",
+        "close": "grep-delete \u2192 zero"
+      }
+    ],
+    "not_deletes": [
+      {
+        "item": "OP_CONCAT as one OpDecl",
+        "why": "One BoundOp; kind-total arms."
+      },
+      {
+        "item": "collection list+JSON ops co-located",
+        "why": "\u00a711 is admission; json_convert vocabulary lives in model."
+      },
+      {
+        "item": "oracle import graph",
+        "why": "Outside this cut."
+      },
+      {
+        "item": "OP_CHUNKS* list algebra",
+        "why": "Legal; evidence Refuse at admission."
+      },
+      {
+        "item": "to_float('NAN') / signum NaN arms as surface offers",
+        "why": "Offers may stay; StdlibRefuse::NanAnswer at BoundOp::apply is the law (settles deprecated-split open question)."
+      }
+    ],
+    "meters": [
+      "test ! -f crates/kyzo-core/src/data/functions.rs",
+      "test ! -f crates/kyzo-core/src/data/expr.rs",
+      "test ! -f crates/kyzo-core/src/data/relation.rs",
+      "test ! -d crates/kyzo-core/src/data/tests",
+      "test ! -f crates/kyzo-core/src/exec/stdlib/functions.rs",
+      "test ! -f crates/kyzo-core/src/exec/stdlib/exprs.rs",
+      "test ! -f crates/kyzo-core/src/exec/stdlib/expr.rs",
+      "test ! -f crates/kyzo-core/src/engines/hnsw_filter_harness.rs",
+      "rg -n 'define_op!' crates/kyzo-core/src crates/kyzo-model/src \u2192 zero",
+      "rg -n 'fn apply_op|pub fn apply_op' crates/kyzo-core/src crates/kyzo-model/src \u2192 zero",
+      "rg -n 'fn get_op|pub fn get_op' crates/kyzo-core/src crates/kyzo-model/src \u2192 zero",
+      "rg -n 'pub fn resolve_op' crates/kyzo-core/src/exec/stdlib/bind.rs \u2192 exactly 1",
+      "rg -n 'pub fn resolve_op' crates/kyzo-core/src crates/kyzo-model/src \u2192 exactly 1",
+      "rg -n 'crate::data::functions::' crates/kyzo-core/src crates/kyzo-trials/src \u2192 zero",
+      "rg -n 'fn str2vld|struct BadValiditySpecification|fn data_value_to_vld_spec' crates/kyzo-core/src/exec/stdlib \u2192 zero definitions",
+      "rg -n 'fn to_json|fn json2val' crates/kyzo-core/src/exec/stdlib \u2192 zero definitions (import from kyzo_model::value::json_convert only)",
+      "rg -n 'exec/stdlib/(exprs|expr|functions)\\.rs|data/(functions|expr|relation)\\.rs|engines/hnsw_filter_harness' .claude/skills/architecture-map/target-arch.md \u2192 zero living seats",
+      "allowlist.targets contains no path under deletes.paths (condemned current addresses)",
+      "rg -n 'mod (functions|expr|relation|tests)' crates/kyzo-core/src/data/mod.rs \u2192 zero"
+    ]
+  },
+  "refused": {
+    "law": "Typed runtime outcomes. Named variants. Authority honest.",
+    "items": [
+      {
+        "name": "successful NaN answer from BoundOp::apply",
+        "tag": "Refused",
+        "variant": "StdlibRefuse::NanAnswer",
+        "door": "BoundOp::apply",
+        "authority": "cut_destiny \u2014 not decisions.md",
+        "why": "NaN bits may exist; never a successful builtin answer. Infinity legal. Settles deprecated-split offered-but-unreachable surface: offers (to_float('NAN'), signum NaN arm) may stay; the checkpoint is the law."
+      },
+      {
+        "name": "chunk-shaped row as evidence/knowledge without coordinates",
+        "tag": "Refused",
+        "variant": "Refuse(ChunkIsNotEvidence)",
+        "door": "Record admission",
+        "authority": "decisions.md \u00a711",
+        "why": "Not a stdlib OP_CHUNKS* ban."
+      },
+      {
+        "name": "language compare cross-type",
+        "tag": "Refused",
+        "variant": "StdlibRefuse::CrossTypeCompare",
+        "door": "compare.rs",
+        "authority": "cut_destiny \u2014 door separation per decisions.md \u00a714",
+        "why": "Not \u00a714 A-sentence."
+      }
+    ]
+  },
+  "unexposed": {
+    "law": "Residual hostile-adapter risk. Detection must be real or residual accepted \u2014 never list crate walls as detection.",
+    "items": [
+      {
+        "name": "in-process hostile binding / compromised runtime invents a second apply door or fused mint the sealed API forbids",
+        "tag": "Unexposed",
+        "residual_risk": "Adapter outside the sealed public API constructs illegal eval/mint states.",
+        "detection": "none at runtime for in-process forge; residual accepted at the crate boundary (bindings marshal and never decide)"
+      },
+      {
+        "name": "hostile adapter forges TagOrdered score use for metric results the sealed types forbid",
+        "tag": "Unexposed",
+        "residual_risk": "Out-of-tree code bypasses ResultValue-only score seating.",
+        "detection": "none at runtime for out-of-tree forge; residual accepted at the crate boundary; in-tree TagOrdered score path is Unconstructible via compile-fail"
+      }
+    ]
+  },
+  "carried_obligations": [
+    {
+      "id": "regex-compile-per-row",
+      "from": "deprecated-split data/functions.rs L2",
+      "obligation": "compile_regex_value recompiles per row (validation hoisted, compilation not). Carry until bench-gated hoist to parse/desugar is ruled and metered.",
+      "gate": "bench-gated; not a decisions.md door; not waived by not_deletes",
+      "seat_until_hoist": "crates/kyzo-core/src/exec/stdlib/text.rs (named helper compile_regex_value)"
+    }
+  ],
+  "tests": {
+    "law": "Bag tests re-home to TARGET exec/stdlib/tests (deprecated-split L1). Condemned data/tests paths are Delete only.",
+    "fate": [
+      {
+        "from": "crates/kyzo-core/src/data/tests/functions.rs",
+        "action": "re-home then Delete",
+        "to": "crates/kyzo-core/src/exec/stdlib/tests/{collection,compare,convert,numeric,text,metric,nondet,temporal_format,interval,geo}.rs"
+      },
+      {
+        "from": "crates/kyzo-core/src/data/tests/exprs.rs",
+        "action": "split then Delete",
+        "re-home": "exec/stdlib/tests/bound_op_nan.rs \u2014 StdlibRefuse::NanAnswer at BoundOp::apply; fold/short-circuit/serde arity against ONE evaluator",
+        "die": "eval_both_ways bytecode parity harness"
+      },
+      {
+        "from": "crates/kyzo-core/src/data/tests/mod.rs",
+        "action": "Delete with data/tests/"
+      }
+    ],
+    "meters": [
+      "test ! -d crates/kyzo-core/src/data/tests",
+      "test -f crates/kyzo-core/src/exec/stdlib/tests/bound_op_nan.rs",
+      "bound_op_nan asserts StdlibRefuse::NanAnswer for poisoned scalar/vector",
+      "each kernel has exec/stdlib/tests/<name>.rs with re-homed domain tables",
+      "rg -n 'eval_both_ways' crates/kyzo-core/src/exec/stdlib/tests \u2192 zero"
+    ]
+  },
+  "ontology": {
+    "authoritative_constructs": [
+      "OpDecl \u2014 kyzo-model program/op.rs",
+      "Expr / LazyOp / Decision / op declaration wire \u2014 kyzo-model program/expr.rs (no exec/stdlib imports)",
+      "BoundOp + BoundOp::apply \u2014 exec/stdlib/bound_op.rs",
+      "bind_op + bind::resolve_op \u2014 exec/stdlib/bind.rs",
+      "StdlibRefuse including NanAnswer + CrossTypeCompare \u2014 exec/stdlib/errors.rs",
+      "json_convert (to_json, json2val, \u2026) \u2014 kyzo-model value/json_convert.rs; schema coerce + collection import \u2014 no twin",
+      "Kernel families \u2014 collection | compare | numeric | text | metric | convert | nondet | temporal_format | interval | geo",
+      "ValidityCoerce \u2014 kyzo-model value/validity_coerce.rs"
+    ],
+    "unconstructible": [
+      {
+        "name": "OpDecl holding a callable / body field constructed through the sealed API",
+        "proof": "compile-fail (trybuild): crate-consumer cannot construct OpDecl with a body/callable"
+      },
+      {
+        "name": "BoundOp constructed outside bind_op in bind.rs",
+        "proof": "compile-fail (trybuild): BoundOp { \u2026 } / pub constructor outside bind.rs"
+      },
+      {
+        "name": "metric / distance scores on TagOrdered storage or join order",
+        "proof": "compile-fail (trybuild): TagOrdered score path (decisions \u00a714)"
+      }
+    ],
+    "rulings": [
+      {
+        "id": "current-paths-delete-evidence-only",
+        "a": "Current condemned paths appear only under deletes/delete_after. Every by_target seat and rewire destination is a target-tree path per deprecated-*.md L1. Rewire into a condemned file voids the plan."
+      },
+      {
+        "id": "expr-dies-model-expr-seats",
+        "a": "data/expr.rs Deleted. Expr/LazyOp/decls/wire \u2192 kyzo-model/src/program/expr.rs. Planning bounds \u2192 exec/plan/. Bytecode REMOVE. resolve_op/BoundOp::apply called only from exec (eval.rs), never from model."
+      },
+      {
+        "id": "json-convert-model-vocabulary",
+        "a": "to_json/json2val-class conversion is model value vocabulary at kyzo-model/src/value/json_convert.rs. schema/column coerce Json arm and exec/stdlib/collection import it. Twin definitions Unconstructible/Delete-guarded. data/relation.rs Deleted after schema seat."
+      },
+      {
+        "id": "data-mod-delete-evidence",
+        "a": "data/mod.rs is never a living by_target/rewire seat. This cut licenses severance_edits only: remove mod (functions|expr|relation|tests); meter rg \u2192 zero. Full file Delete when directory dies (not_this_json). data/tests/ Deleted this cut."
+      },
+      {
+        "id": "hnsw-harness-absorb-destiny",
+        "a": "engines/hnsw_filter_harness.rs is Delete evidence (absorbed cut). OP_* imports seat at project/vector/hnsw_filter_harness.rs targeting kyzo_model::program::op. No rewire at condemned engines/ address."
+      },
+      {
+        "id": "nan-answer-settles-offers",
+        "a": "StdlibRefuse::NanAnswer at BoundOp::apply settles deprecated-split offered-but-unreachable NaN surface \u2014 offers may stay; the checkpoint is the law. Not an open operator question."
+      },
+      {
+        "id": "regex-carry",
+        "a": "Per-row compile_regex_value is carried_obligations.regex-compile-per-row \u2014 bench-gated hoist later; not waived."
+      },
+      {
+        "id": "joint-satisfaction",
+        "a": "Allowlist \u2287 every TARGET file meters require. Condemned paths deleted, not edited."
+      },
+      {
+        "id": "proof-pairing-section-1-form",
+        "a": "\u00a71 Proof-form by analogy: compile-fail reverse-composition + grep-delete symbols. Not \u00a71 A-sentence seating OpDecl."
+      },
+      {
+        "id": "sealed-names",
+        "a": "bind::resolve_op; StdlibRefuse::NanAnswer; StdlibRefuse::CrossTypeCompare."
+      },
+      {
+        "id": "op-decl-neq-body",
+        "a": "OpDecl no inner; BoundOp via bind_op only."
+      },
+      {
+        "id": "one-name-door",
+        "a": "Exactly one pub resolve_op in bind.rs."
+      },
+      {
+        "id": "one-apply-door",
+        "a": "BoundOp::apply sole apply door crate-graph."
+      },
+      {
+        "id": "compare-cross-type-cut-destiny",
+        "a": "CrossTypeCompare; authority cut_destiny \u2014 door separation per \u00a714."
+      },
+      {
+        "id": "chunks-refused-at-admission",
+        "a": "List algebra in collection; evidence Refuse at admission \u00a711."
+      },
+      {
+        "id": "metric-resultvalue",
+        "a": "Distances in metric.rs; TagOrdered Unconstructible."
+      },
+      {
+        "id": "concat-one-op",
+        "a": "OP_CONCAT in collection."
+      },
+      {
+        "id": "nondet-carriage",
+        "a": "nondet.rs; deterministic=false; never constant-folded."
+      },
+      {
+        "id": "validity-mint-calls-coerce",
+        "a": "OP_VALIDITY calls model ValidityCoerce."
+      },
+      {
+        "id": "geo-minted",
+        "a": "geo.rs + map same cut."
+      },
+      {
+        "id": "typed-arity-law",
+        "a": "Typed arity at BoundOp::apply/bind seam \u2014 required."
+      },
+      {
+        "id": "inventory-pointer",
+        "a": "deprecated-split data/functions.rs L1 pointer must cite this plan version (v9), not v4."
+      },
+      {
+        "id": "cut-destiny-not-spec-ruled",
+        "a": "status cut_destiny."
+      }
+    ]
+  },
+  "ban": [
+    "Do not edit data/mod.rs except via severance_edits (mod-decl removal only).",
+    "Do not place a condemned current path in allowlist.targets or by_target as a living/rewire seat.",
+    "Do not wire bind::resolve_op or BoundOp::apply into data/expr.rs or kyzo-model (model has no exec edge).",
+    "Do not make schema/relation import exec/stdlib for to_json \u2014 use model json_convert.",
+    "Do not twin to_json/json2val in collection and model.",
+    "Do not rewire engines/hnsw_filter_harness.rs \u2014 only project/vector destiny.",
+    "Do not leave NanAnswer settlement as an open operator question.",
+    "Do not waive regex-compile-per-row carried obligation via not_deletes handwave.",
+    "Do not leave deprecated-split pointing at move_plan v4.",
+    "Do not invent a fourth Spec claim tag.",
+    "Do not mint trybuild proofs for symbol absence.",
+    "Do not leave pub get_op or second resolve_op.",
+    "Do not leave pub/free apply_op.",
+    "Do not leave exec/stdlib/functions|expr|exprs as living seats.",
+    "Do not put metric scores on TagOrdered paths.",
+    "Do not orphan bag tests.",
+    "Do not elevate this file over decisions.md.",
+    "Do not use whole-engine cargo green as this cut's meter.",
+    "Do not leave transitional shims as done."
+  ],
+  "allowlist": {
+    "law": "TARGET paths only. Allowlist \u2287 every target file meters require. Condemned currents are delete_after only.",
+    "targets": [
+      ".claude/skills/architecture-map/target-arch.md",
+      "crates/kyzo-core/src/exec/expr/eval.rs",
+      "crates/kyzo-core/src/exec/op/mod.rs",
+      "crates/kyzo-core/src/exec/plan/compile.rs",
+      "crates/kyzo-core/src/exec/stdlib/bind.rs",
+      "crates/kyzo-core/src/exec/stdlib/bound_op.rs",
+      "crates/kyzo-core/src/exec/stdlib/collection.rs",
+      "crates/kyzo-core/src/exec/stdlib/compare.rs",
+      "crates/kyzo-core/src/exec/stdlib/convert.rs",
+      "crates/kyzo-core/src/exec/stdlib/errors.rs",
+      "crates/kyzo-core/src/exec/stdlib/geo.rs",
+      "crates/kyzo-core/src/exec/stdlib/interval.rs",
+      "crates/kyzo-core/src/exec/stdlib/metric.rs",
+      "crates/kyzo-core/src/exec/stdlib/mod.rs",
+      "crates/kyzo-core/src/exec/stdlib/nondet.rs",
+      "crates/kyzo-core/src/exec/stdlib/numeric.rs",
+      "crates/kyzo-core/src/exec/stdlib/temporal_format.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/bound_op_nan.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/collection.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/compare.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/convert.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/geo.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/interval.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/metric.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/mod.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/nondet.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/temporal_format.rs",
+      "crates/kyzo-core/src/exec/stdlib/tests/text.rs",
+      "crates/kyzo-core/src/exec/stdlib/text.rs",
+      "crates/kyzo-core/src/project/sparse/sparse.rs",
+      "crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs",
+      "crates/kyzo-core/src/react/incremental.rs",
+      "crates/kyzo-core/src/rules/algo/reorder_sort.rs",
+      "crates/kyzo-core/src/rules/io/csv.rs",
+      "crates/kyzo-model/src/lib.rs",
+      "crates/kyzo-model/src/program/expr.rs",
+      "crates/kyzo-model/src/program/mod.rs",
+      "crates/kyzo-model/src/program/op.rs",
+      "crates/kyzo-model/src/schema/column.rs",
+      "crates/kyzo-model/src/schema/relation.rs",
+      "crates/kyzo-model/src/value/json_convert.rs",
+      "crates/kyzo-model/src/value/mod.rs",
+      "crates/kyzo-trials/src/time_travel/path.rs",
+      "docs/deprecated/deprecated-split.md"
+    ],
+    "delete_after": [
+      "crates/kyzo-core/src/data/functions.rs",
+      "crates/kyzo-core/src/data/expr.rs",
+      "crates/kyzo-core/src/data/relation.rs",
+      "crates/kyzo-core/src/data/tests/functions.rs",
+      "crates/kyzo-core/src/data/tests/exprs.rs",
+      "crates/kyzo-core/src/data/tests/mod.rs",
+      "crates/kyzo-core/src/exec/stdlib/functions.rs",
+      "crates/kyzo-core/src/exec/stdlib/exprs.rs",
+      "crates/kyzo-core/src/exec/stdlib/expr.rs",
+      "crates/kyzo-core/src/engines/hnsw_filter_harness.rs"
+    ],
+    "forbidden_seats": [
+      "crates/kyzo-core/src/data/functions.rs",
+      "crates/kyzo-core/src/data/expr.rs",
+      "crates/kyzo-core/src/data/relation.rs",
+      "crates/kyzo-core/src/data/tests/functions.rs",
+      "crates/kyzo-core/src/data/tests/exprs.rs",
+      "crates/kyzo-core/src/data/tests/mod.rs",
+      "crates/kyzo-core/src/exec/stdlib/functions.rs",
+      "crates/kyzo-core/src/exec/stdlib/exprs.rs",
+      "crates/kyzo-core/src/exec/stdlib/expr.rs",
+      "crates/kyzo-core/src/engines/hnsw_filter_harness.rs",
+      "crates/kyzo-core/src/data/mod.rs"
+    ],
+    "rewire": [
+      "TARGET exec/expr/eval.rs \u2192 bind::resolve_op + BoundOp::apply + StdlibRefuse::NanAnswer / errors (sole eval apply door)",
+      "TARGET exec/op|plan|react|rules|project/sparse|trials \u2192 kyzo_model::program::op OpDecl constants (never data::functions)",
+      "TARGET project/vector/hnsw_filter_harness.rs \u2192 kyzo_model::program::op (absorb destiny; engines/ path is delete_after only)",
+      "TARGET model/program/expr.rs \u2190 Expr/LazyOp/Decision/decl wire from condemned data/expr.rs (no resolve_op/BoundOp calls)",
+      "TARGET model/schema/{column,relation}.rs \u2190 coerce/schema from condemned data/relation.rs; Json arm uses model json_convert",
+      "TARGET model/value/json_convert.rs \u2190 to_json/json2val vocabulary; collection.rs imports"
+    ],
+    "severance_edits": [
+      "crates/kyzo-core/src/data/mod.rs"
+    ]
+  },
+  "proof_meters": [
+    "compile-fail (trybuild): crate-consumer cannot construct OpDecl with a body/callable through the sealed API",
+    "compile-fail (trybuild): BoundOp constructed outside bind_op in bind.rs",
+    "compile-fail (trybuild): TagOrdered score path for metric results"
+  ],
+  "by_target": {
+    "crates/kyzo-model/src/program/op.rs": {
+      "kind": "OpDecl vocabulary \u2014 no body",
+      "owns": [
+        "OpDecl",
+        "OP_ABS",
+        "OP_ACOS",
+        "OP_ACOSH",
+        "OP_ADD",
+        "OP_APPEND",
+        "OP_ASIN",
+        "OP_ASINH",
+        "OP_ASSERT",
+        "OP_ATAN",
+        "OP_ATAN2",
+        "OP_ATANH",
+        "OP_BIT_AND",
+        "OP_BIT_NOT",
+        "OP_BIT_OR",
+        "OP_BIT_XOR",
+        "OP_CEIL",
+        "OP_CHARS",
+        "OP_CHUNKS",
+        "OP_CHUNKS_EXACT",
+        "OP_CONCAT",
+        "OP_COS",
+        "OP_COSH",
+        "OP_COS_DIST",
+        "OP_DECODE_BASE64",
+        "OP_DEG_TO_RAD",
+        "OP_DIFFERENCE",
+        "OP_DIV",
+        "OP_DUMP_JSON",
+        "OP_ENCODE_BASE64",
+        "OP_ENDS_WITH",
+        "OP_EQ",
+        "OP_EXP",
+        "OP_EXP2",
+        "OP_FIRST",
+        "OP_FLOOR",
+        "OP_FORMAT_TIMESTAMP",
+        "OP_FROM_SUBSTRINGS",
+        "OP_GE",
+        "OP_GET",
+        "OP_GT",
+        "OP_HAVERSINE",
+        "OP_HAVERSINE_DEG_INPUT",
+        "OP_INTERSECTION",
+        "OP_INTERVAL_BEFORE",
+        "OP_INTERVAL_DURING",
+        "OP_INTERVAL_END",
+        "OP_INTERVAL_FINISHES",
+        "OP_INTERVAL_HAS_END",
+        "OP_INTERVAL_HAS_START",
+        "OP_INTERVAL_INTERSECTS",
+        "OP_INTERVAL_IS_END_UNBOUNDED",
+        "OP_INTERVAL_IS_START_UNBOUNDED",
+        "OP_INTERVAL_MEETS",
+        "OP_INTERVAL_OVERLAPS",
+        "OP_INTERVAL_START",
+        "OP_INTERVAL_STARTS",
+        "OP_INT_RANGE",
+        "OP_IP_DIST",
+        "OP_IS_BYTES",
+        "OP_IS_FINITE",
+        "OP_IS_FLOAT",
+        "OP_IS_IN",
+        "OP_IS_INFINITE",
+        "OP_IS_INT",
+        "OP_IS_JSON",
+        "OP_IS_LIST",
+        "OP_IS_NAN",
+        "OP_IS_NULL",
+        "OP_IS_NUM",
+        "OP_IS_STRING",
+        "OP_IS_UUID",
+        "OP_IS_VEC",
+        "OP_JSON",
+        "OP_JSON_OBJECT",
+        "OP_JSON_TO_SCALAR",
+        "OP_L2_DIST",
+        "OP_L2_NORMALIZE",
+        "OP_LAST",
+        "OP_LE",
+        "OP_LENGTH",
+        "OP_LIST",
+        "OP_LN",
+        "OP_LOG10",
+        "OP_LOG2",
+        "OP_LOWERCASE",
+        "OP_LT",
+        "OP_MAKE_INTERVAL",
+        "OP_MAX",
+        "OP_MAYBE_GET",
+        "OP_MIN",
+        "OP_MINUS",
+        "OP_MOD",
+        "OP_MUL",
+        "OP_NEGATE",
+        "OP_NEQ",
+        "OP_NOW",
+        "OP_PACK_BITS",
+        "OP_PARSE_JSON",
+        "OP_PARSE_TIMESTAMP",
+        "OP_POW",
+        "OP_PREPEND",
+        "OP_RAD_TO_DEG",
+        "OP_RAND_BERNOULLI",
+        "OP_RAND_CHOOSE",
+        "OP_RAND_FLOAT",
+        "OP_RAND_INT",
+        "OP_RAND_UUID_V1",
+        "OP_RAND_UUID_V4",
+        "OP_RAND_VEC",
+        "OP_REGEX",
+        "OP_REGEX_EXTRACT",
+        "OP_REGEX_EXTRACT_FIRST",
+        "OP_REGEX_MATCHES",
+        "OP_REGEX_REPLACE",
+        "OP_REGEX_REPLACE_ALL",
+        "OP_REMOVE_JSON_PATH",
+        "OP_REVERSE",
+        "OP_ROUND",
+        "OP_SET_JSON_PATH",
+        "OP_SIGNUM",
+        "OP_SIN",
+        "OP_SINH",
+        "OP_SLICE",
+        "OP_SLICE_STRING",
+        "OP_SORTED",
+        "OP_SQRT",
+        "OP_STARTS_WITH",
+        "OP_STR_INCLUDES",
+        "OP_SUB",
+        "OP_T2S",
+        "OP_TAN",
+        "OP_TANH",
+        "OP_TO_BOOL",
+        "OP_TO_FLOAT",
+        "OP_TO_INT",
+        "OP_TO_STRING",
+        "OP_TO_UNITY",
+        "OP_TO_UUID",
+        "OP_TRIM",
+        "OP_TRIM_END",
+        "OP_TRIM_START",
+        "OP_UNICODE_NORMALIZE",
+        "OP_UNION",
+        "OP_UNPACK_BITS",
+        "OP_UPPERCASE",
+        "OP_UUID_TIMESTAMP",
+        "OP_VALIDITY",
+        "OP_VEC",
+        "OP_WINDOWS"
+      ],
+      "ban": [
+        "body field",
+        "define_op!",
+        "imports of kyzo-core"
+      ],
+      "proof_meter": [
+        "compile-fail: OpDecl with body/callable through sealed API"
+      ],
+      "delete_meter": [
+        "OP_* count == 149",
+        "rg define_op! \u2192 zero"
+      ]
+    },
+    "crates/kyzo-model/src/program/expr.rs": {
+      "kind": "TARGET \u2014 Expr/LazyOp/Decision + declaration wire twins from condemned data/expr.rs; NO exec/stdlib calls",
+      "owns": [
+        "Expr",
+        "LazyOp",
+        "Decision",
+        "op declaration serde/wire discipline as model data"
+      ],
+      "ban": [
+        "kyzo_core / exec/stdlib imports",
+        "resolve_op",
+        "BoundOp::apply",
+        "get_op",
+        "apply_op",
+        "Op with callable inner",
+        "Bytecode machine (REMOVE \u2014 not seated here)"
+      ],
+      "delete_meter": [
+        "file exists at target",
+        "rg 'kyzo_core|exec::stdlib|resolve_op|BoundOp|apply_op|get_op' crates/kyzo-model/src/program/expr.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-model/src/value/json_convert.rs": {
+      "kind": "TARGET NEW-SEAT \u2014 to_json / json2val / interval_to_json vocabulary for coerce Json arm + collection kernels",
+      "owns": [
+        "to_json",
+        "json2val",
+        "interval_to_json",
+        "related Json\u2194DataValue conversion used by schema coerce"
+      ],
+      "ban": [
+        "exec/stdlib twin definitions",
+        "kyzo-core imports"
+      ],
+      "delete_meter": [
+        "file exists",
+        "schema/column.rs and exec/stdlib/collection.rs import from here",
+        "rg 'fn to_json|fn json2val' crates/kyzo-core/src/exec/stdlib \u2192 zero definitions"
+      ]
+    },
+    "crates/kyzo-model/src/schema/column.rs": {
+      "kind": "TARGET \u2014 ColType/ColumnDef/coerce from condemned data/relation.rs; Json arm uses json_convert",
+      "owns": [
+        "ColType",
+        "ColumnDef",
+        "NullableColType",
+        "VecElementType",
+        "coerce"
+      ],
+      "ban": [
+        "import exec/stdlib for json conversion",
+        "twin to_json bodies"
+      ],
+      "delete_meter": [
+        "coerce Json arm calls kyzo_model::value::json_convert",
+        "no crate::data::functions"
+      ]
+    },
+    "crates/kyzo-model/src/schema/relation.rs": {
+      "kind": "TARGET \u2014 StoredRelationMetadata + column-compat from condemned data/relation.rs",
+      "owns": [
+        "StoredRelationMetadata",
+        "column compat checks"
+      ],
+      "ban": [
+        "exec/stdlib imports for bag helpers"
+      ],
+      "delete_meter": [
+        "file seated; no data::functions"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/bound_op.rs": {
+      "kind": "BoundOp private mint; BoundOp::apply sole apply door; NanAnswer; typed arity",
+      "owns": [
+        "BoundOp",
+        "BoundOp::apply"
+      ],
+      "ban": [
+        "pub constructor besides bind_op",
+        "second apply API"
+      ],
+      "proof_meter": [
+        "compile-fail: BoundOp outside bind.rs"
+      ],
+      "delete_meter": [
+        "NanAnswer on NaN success",
+        "typed arity refuse at seam"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/bind.rs": {
+      "kind": "bind_op + sealed bind::resolve_op sole public name\u2192BoundOp API",
+      "owns": [
+        "bind_op",
+        "resolve_op",
+        "builtin registry 149"
+      ],
+      "ban": [
+        "get_op",
+        "second resolve_op",
+        "define_op!"
+      ],
+      "delete_meter": [
+        "exactly one pub fn resolve_op in crate graph",
+        "get_op \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/errors.rs": {
+      "kind": "StdlibRefuse + helpers",
+      "owns": [
+        "StdlibRefuse",
+        "StdlibRefuse::NanAnswer",
+        "StdlibRefuse::CrossTypeCompare",
+        "IntegerOverflow",
+        "DivisionByZero",
+        "DomainError",
+        "VecOpEmptyArgs",
+        "no_nan",
+        "no_nan_vec",
+        "result_has_nan"
+      ],
+      "ban": [
+        "unnamed NaN refuse",
+        "per-kernel twins"
+      ],
+      "delete_meter": [
+        "NanAnswer + CrossTypeCompare defined only here"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/collection.rs": {
+      "kind": "list + JSON algebra ops; imports model json_convert \u2014 does not define to_json/json2val",
+      "owns_ops": [
+        "OP_APPEND",
+        "OP_CHUNKS",
+        "OP_CHUNKS_EXACT",
+        "OP_CONCAT",
+        "OP_DIFFERENCE",
+        "OP_DUMP_JSON",
+        "OP_FIRST",
+        "OP_GET",
+        "OP_INTERSECTION",
+        "OP_INT_RANGE",
+        "OP_JSON",
+        "OP_JSON_OBJECT",
+        "OP_JSON_TO_SCALAR",
+        "OP_LAST",
+        "OP_LENGTH",
+        "OP_LIST",
+        "OP_MAYBE_GET",
+        "OP_PARSE_JSON",
+        "OP_PREPEND",
+        "OP_REMOVE_JSON_PATH",
+        "OP_REVERSE",
+        "OP_SET_JSON_PATH",
+        "OP_SLICE",
+        "OP_SORTED",
+        "OP_UNION",
+        "OP_WINDOWS"
+      ],
+      "owns_helpers": [
+        "json_array_index",
+        "get_json_path",
+        "get_json_path_immutable",
+        "deep_merge_json",
+        "get_index",
+        "get_impl",
+        "imports kyzo_model::value::json_convert::{to_json,json2val,\u2026}"
+      ],
+      "ban": [
+        "defining to_json/json2val here",
+        "evidence seat",
+        "TagOrdered",
+        "multi-name CONCAT"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/collection.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/collection.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op",
+        "imports kyzo_model::value::json_convert",
+        "rg 'fn to_json|fn json2val' this file \u2192 zero definitions"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/compare.rs": {
+      "kind": "language eq/ord; CrossTypeCompare (cut_destiny per \u00a714 door separation)",
+      "owns_ops": [
+        "OP_ASSERT",
+        "OP_EQ",
+        "OP_GE",
+        "OP_GT",
+        "OP_IS_BYTES",
+        "OP_IS_FINITE",
+        "OP_IS_FLOAT",
+        "OP_IS_IN",
+        "OP_IS_INFINITE",
+        "OP_IS_INT",
+        "OP_IS_JSON",
+        "OP_IS_LIST",
+        "OP_IS_NAN",
+        "OP_IS_NULL",
+        "OP_IS_NUM",
+        "OP_IS_STRING",
+        "OP_IS_UUID",
+        "OP_IS_VEC",
+        "OP_LE",
+        "OP_LT",
+        "OP_NEQ"
+      ],
+      "owns_helpers": [
+        "ensure_same_value_type"
+      ],
+      "ban": [
+        "Tag as language <",
+        "\u00a714 A-sentence as Spec seat for this refuse"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/compare.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/compare.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op",
+        "CrossTypeCompare on cross-type"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/numeric.rs": {
+      "kind": "numeric + bit; infinity legal; NaN \u2192 NanAnswer at apply",
+      "owns_ops": [
+        "OP_ABS",
+        "OP_ACOS",
+        "OP_ACOSH",
+        "OP_ADD",
+        "OP_ASIN",
+        "OP_ASINH",
+        "OP_ATAN",
+        "OP_ATAN2",
+        "OP_ATANH",
+        "OP_BIT_AND",
+        "OP_BIT_NOT",
+        "OP_BIT_OR",
+        "OP_BIT_XOR",
+        "OP_CEIL",
+        "OP_COS",
+        "OP_COSH",
+        "OP_DIV",
+        "OP_EXP",
+        "OP_EXP2",
+        "OP_FLOOR",
+        "OP_LN",
+        "OP_LOG10",
+        "OP_LOG2",
+        "OP_MAX",
+        "OP_MIN",
+        "OP_MINUS",
+        "OP_MOD",
+        "OP_MUL",
+        "OP_NEGATE",
+        "OP_PACK_BITS",
+        "OP_POW",
+        "OP_ROUND",
+        "OP_SIGNUM",
+        "OP_SIN",
+        "OP_SINH",
+        "OP_SQRT",
+        "OP_SUB",
+        "OP_TAN",
+        "OP_TANH",
+        "OP_UNPACK_BITS"
+      ],
+      "owns_helpers": [
+        "add_vecs",
+        "mul_vecs",
+        "pow_out_of_domain",
+        "vec_value"
+      ],
+      "ban": [
+        "wrapping overflow success",
+        "local NaN twin"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/numeric.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/numeric.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/text.rs": {
+      "kind": "string + regex; compile_regex_value named helper \u2014 carried_obligations.regex-compile-per-row",
+      "owns_ops": [
+        "OP_CHARS",
+        "OP_ENDS_WITH",
+        "OP_FROM_SUBSTRINGS",
+        "OP_LOWERCASE",
+        "OP_REGEX",
+        "OP_REGEX_EXTRACT",
+        "OP_REGEX_EXTRACT_FIRST",
+        "OP_REGEX_MATCHES",
+        "OP_REGEX_REPLACE",
+        "OP_REGEX_REPLACE_ALL",
+        "OP_SLICE_STRING",
+        "OP_STARTS_WITH",
+        "OP_STR_INCLUDES",
+        "OP_T2S",
+        "OP_TRIM",
+        "OP_TRIM_END",
+        "OP_TRIM_START",
+        "OP_UNICODE_NORMALIZE",
+        "OP_UPPERCASE"
+      ],
+      "owns_helpers": [
+        "compile_regex_value",
+        "val2str"
+      ],
+      "ban": [
+        "OP_CONCAT ownership",
+        "waiving per-row compile obligation"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/text.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/text.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op",
+        "compile_regex_value present until hoist ruled",
+        "OP_CONCAT ownership \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/metric.rs": {
+      "kind": "ResultValue distances; never TagOrdered",
+      "owns_ops": [
+        "OP_COS_DIST",
+        "OP_IP_DIST",
+        "OP_L2_DIST",
+        "OP_L2_NORMALIZE"
+      ],
+      "owns_helpers": [],
+      "ban": [
+        "TagOrdered",
+        "OP_VEC"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/metric.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/metric.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op"
+      ],
+      "proof_meter": [
+        "compile-fail: TagOrdered score path"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/convert.rs": {
+      "kind": "to_*/VEC/uuid/OP_VALIDITY\u2192model coerce; NaN offers may exist \u2014 NanAnswer is law",
+      "owns_ops": [
+        "OP_DECODE_BASE64",
+        "OP_ENCODE_BASE64",
+        "OP_TO_BOOL",
+        "OP_TO_FLOAT",
+        "OP_TO_INT",
+        "OP_TO_STRING",
+        "OP_TO_UNITY",
+        "OP_TO_UUID",
+        "OP_UUID_TIMESTAMP",
+        "OP_VALIDITY",
+        "OP_VEC"
+      ],
+      "owns_helpers": [
+        "vec_element_type"
+      ],
+      "ban": [
+        "str2vld bodies",
+        "distance kernels"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/convert.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/convert.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/nondet.rs": {
+      "kind": "carriage clock+rng; deterministic=false",
+      "owns_ops": [
+        "OP_NOW",
+        "OP_RAND_BERNOULLI",
+        "OP_RAND_CHOOSE",
+        "OP_RAND_FLOAT",
+        "OP_RAND_INT",
+        "OP_RAND_UUID_V1",
+        "OP_RAND_UUID_V4",
+        "OP_RAND_VEC"
+      ],
+      "owns_helpers": [
+        "unix_now"
+      ],
+      "ban": [
+        "constant-fold",
+        "co-location with temporal_format/coerce"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/nondet.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/nondet.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op",
+        "every owns_ops deterministic=false"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/temporal_format.rs": {
+      "kind": "timestamp format/parse values; not NOW; not validity admission",
+      "owns_ops": [
+        "OP_FORMAT_TIMESTAMP",
+        "OP_PARSE_TIMESTAMP"
+      ],
+      "owns_helpers": [
+        "autosi_precision",
+        "format_rfc3339",
+        "TimestampFormatRefused"
+      ],
+      "ban": [
+        "NOW/rand",
+        "str2vld"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/temporal_format.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/temporal_format.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/interval.rs": {
+      "kind": "Interval + Allen",
+      "owns_ops": [
+        "OP_INTERVAL_BEFORE",
+        "OP_INTERVAL_DURING",
+        "OP_INTERVAL_END",
+        "OP_INTERVAL_FINISHES",
+        "OP_INTERVAL_HAS_END",
+        "OP_INTERVAL_HAS_START",
+        "OP_INTERVAL_INTERSECTS",
+        "OP_INTERVAL_IS_END_UNBOUNDED",
+        "OP_INTERVAL_IS_START_UNBOUNDED",
+        "OP_INTERVAL_MEETS",
+        "OP_INTERVAL_OVERLAPS",
+        "OP_INTERVAL_START",
+        "OP_INTERVAL_STARTS",
+        "OP_MAKE_INTERVAL"
+      ],
+      "owns_helpers": [
+        "two_intervals"
+      ],
+      "ban": [
+        "evidence/chunk"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/interval.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/interval.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op",
+        "Allen + EMPTY covered in tests"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/geo.rs": {
+      "kind": "haversine/deg-rad",
+      "owns_ops": [
+        "OP_DEG_TO_RAD",
+        "OP_HAVERSINE",
+        "OP_HAVERSINE_DEG_INPUT",
+        "OP_RAD_TO_DEG"
+      ],
+      "owns_helpers": [],
+      "ban": [
+        "anonymous in numeric forever",
+        "TagOrdered"
+      ],
+      "delete_meter": [
+        "every owns_ops name's body lives under crates/kyzo-core/src/exec/stdlib/geo.rs",
+        "rg 'define_op!' crates/kyzo-core/src/exec/stdlib/geo.rs \u2192 zero",
+        "bodies registered only via bind_op(OpDecl, body) + bind::resolve_op",
+        "map lists geo.rs"
+      ]
+    },
+    "crates/kyzo-core/src/exec/stdlib/mod.rs": {
+      "kind": "module tree",
+      "owns": [],
+      "ban": [
+        "functions/expr/exprs modules",
+        "re-export get_op/apply_op"
+      ],
+      "delete_meter": [
+        "declares bind,bound_op,errors,kernels,tests only"
+      ]
+    },
+    "crates/kyzo-core/src/exec/expr/eval.rs": {
+      "kind": "TARGET \u2014 sole eval door that calls bind::resolve_op / BoundOp::apply / NanAnswer",
+      "owns": [],
+      "ban": [
+        "data::functions",
+        "apply_op twin",
+        "calling through condemned data/expr"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' this file \u2192 zero",
+        "NaN path \u2192 StdlibRefuse::NanAnswer / errors::result_has_nan via BoundOp::apply"
+      ]
+    },
+    "crates/kyzo-core/src/exec/op/mod.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-core/src/exec/op/mod.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/exec/plan/compile.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-core/src/exec/plan/compile.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/rules/io/csv.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-core/src/rules/io/csv.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/rules/algo/reorder_sort.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-core/src/rules/algo/reorder_sort.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/project/sparse/sparse.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-core/src/project/sparse/sparse.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/react/incremental.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-core/src/react/incremental.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-trials/src/time_travel/path.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-trials/src/time_travel/path.rs \u2192 zero"
+      ]
+    },
+    "crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs": {
+      "kind": "TARGET living seat \u2014 rewire off data::functions to kyzo_model::program::op (and resolve_op/BoundOp only where eval)",
+      "owns": [],
+      "ban": [
+        "crate::data::functions::",
+        "rewiring a condemned current path instead of this destiny"
+      ],
+      "delete_meter": [
+        "rg 'crate::data::functions::' crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs \u2192 zero"
+      ]
+    },
+    ".claude/skills/architecture-map/target-arch.md": {
+      "kind": "map honesty",
+      "must_delete_lines_for": [
+        "crates/kyzo-core/src/exec/stdlib/exprs.rs",
+        "crates/kyzo-core/src/exec/stdlib/expr.rs",
+        "crates/kyzo-core/src/exec/stdlib/functions.rs",
+        "crates/kyzo-core/src/data/functions.rs",
+        "crates/kyzo-core/src/data/expr.rs",
+        "crates/kyzo-core/src/data/relation.rs",
+        "crates/kyzo-core/src/engines/hnsw_filter_harness.rs"
+      ],
+      "must_add": [
+        "crates/kyzo-core/src/exec/stdlib/geo.rs \u2014 geospatial numeric kernels",
+        "crates/kyzo-model/src/value/json_convert.rs \u2014 to_json/json2val vocabulary for coerce + collection",
+        "crates/kyzo-model/src/program/expr.rs \u2014 expression AST (already on map \u2014 verify role: no stdlib registry)",
+        "bind::resolve_op named on bind.rs map line"
+      ],
+      "delete_meter": [
+        "condemned paths absent",
+        "geo + json_convert present"
+      ]
+    },
+    "docs/deprecated/deprecated-split.md": {
+      "kind": "inventory seal \u2014 bag + tests fate; L1 pointer \u2192 move_plan.json v9",
+      "delete_meter": [
+        "data/functions.rs L1 cites docs/deprecated/move_plan.json v9 (not v4)",
+        "functions + data/tests blocks match target (gone \u2192 seats)",
+        "NanAnswer settlement + regex carried obligation reflected"
+      ]
+    }
+  },
+  "final_meters": [
+    "joint_satisfaction + no_condemned_rewire: no allowlist.targets path \u2208 deletes.paths; severance_edits meters green via allowlist.severance_edits only",
+    "ALL proof_meters green",
+    "severance_edits: data/mod.rs mod (functions|expr|relation|tests) \u2192 zero",
+    "ALL tests.meters green",
+    "exactly one pub fn resolve_op in bind.rs",
+    "StdlibRefuse::NanAnswer + CrossTypeCompare in errors.rs",
+    "kyzo-model/src/value/json_convert.rs exists; schema + collection import it; zero twin defs in exec/stdlib",
+    "kyzo-model/src/program/expr.rs owns Expr/LazyOp; no kyzo_core/stdlib imports in that file",
+    "data/expr.rs, data/relation.rs, data/functions.rs, data/tests/, engines/hnsw_filter_harness.rs, exec/stdlib/{functions,expr,exprs}.rs all absent",
+    "carried_obligations.regex-compile-per-row recorded; NanAnswer settlement ruling present",
+    "deprecated-split functions L1 cites move_plan.json v9",
+    "architecture-map: geo + json_convert + program/expr; condemned paths absent",
+    "OpDecl 149; each resolve_op-reachable once",
+    "status cut_destiny"
+  ],
+  "seated_laws": [
+    {
+      "law": "total function over values \u2014 Result, never panic on reachable input",
+      "seat": "BoundOp::apply + every kernel body",
+      "meter": "rg 'panic!|unwrap\\(|expect\\(' crates/kyzo-core/src/exec/stdlib/{collection,compare,convert,numeric,text,metric,nondet,temporal_format,interval,geo,bound_op}.rs \u2192 zero",
+      "exceptions": []
+    },
+    {
+      "law": "determinism-as-data \u2014 nondet ops never constant-folded",
+      "seat": "nondet.rs OpDecls + bind registry; fold/partial_eval at model/program/expr.rs + exec/expr/eval.rs",
+      "meter": "every owns_ops in nondet.rs has OpDecl.deterministic=false; partial_eval/fold paths in model/program/expr.rs + exec/expr/eval.rs skip deterministic=false ops"
+    },
+    {
+      "law": "typed arity proof at BoundOp::apply / bind seam",
+      "seat": "bound_op.rs + bind.rs",
+      "meter": "BoundOp::apply or bind seam rejects arity mismatch with named StdlibRefuse / Arity refuse \u2014 no faith indexing without proof type"
+    },
+    {
+      "law": "NaN Refused (StdlibRefuse::NanAnswer); infinity legitimate; offers may stay \u2014 checkpoint is law",
+      "seat": "bound_op.rs + errors.rs",
+      "meter": "tests/bound_op_nan.rs + NanAnswer path"
+    },
+    {
+      "law": "language compare cross-type \u2192 StdlibRefuse::CrossTypeCompare",
+      "seat": "compare.rs",
+      "meter": "compare tests refuse cross-type eq/ord"
+    },
+    {
+      "law": "time: host-clock pre-epoch ERROR; parsed pre-epoch negative; micros FLOOR",
+      "seat": "temporal_format.rs + convert validity mint calling model coerce",
+      "meter": "temporal_format + convert tests carry pre-epoch / floor pins from deprecated-split"
+    },
+    {
+      "law": "Allen doctrine + EMPTY interval law",
+      "seat": "interval.rs",
+      "meter": "interval tests: six primitives + intersects; EMPTY start>end lawful"
+    }
+  ],
+  "severance_edits": {
+    "law": "Delete-evidence edits on condemned files that must survive this cut structurally: only the listed severances; no other content; file remains condemned for later death. Not a living by_target seat. Not compatibility rewiring.",
+    "entries": [
+      {
+        "path": "crates/kyzo-core/src/data/mod.rs",
+        "license": "Delete-evidence edit only: remove mod decls for paths deleted this cut (functions, expr, relation, tests); no other content; file remains condemned for later directory death with program/aggr/json peels (not_this_json).",
+        "meter": "rg -n 'mod (functions|expr|relation|tests)' crates/kyzo-core/src/data/mod.rs \u2192 zero"
+      }
+    ]
+  }
+}

@@ -62,8 +62,8 @@ use std::fmt;
 use miette::Diagnostic;
 use thiserror::Error;
 
-use crate::data::value::{DecodeError, SearchHits, Tuple};
-use crate::data::value::DataValue;
+use kyzo_model::value::{DecodeError, SearchHits, Tuple};
+use kyzo_model::value::DataValue;
 use self::lsh::LshPermutationDecodeRefused;
 
 /// A stored index row (or a base row an index points at) failed to decode as
@@ -189,7 +189,7 @@ impl fmt::Display for IndexCorruptReason {
             Self::HnswCanaryEntryKeyTooShort { found } => write!(
                 f,
                 "canary entry key is {found} bytes, expected at least {}",
-                crate::data::value::StorageKey::RELATION_PREFIX_LEN
+                kyzo_model::value::StorageKey::RELATION_PREFIX_LEN
             ),
             Self::HnswLayerOutOfRange { layer } => {
                 write!(
@@ -257,15 +257,15 @@ impl fmt::Display for IndexCorruptReason {
 
 /// Wrap a scanned index-row stream so a codec refusal surfaces as this
 /// index's OWN typed [`IndexRowCorrupt`], never a bare
-/// [`DecodeError`](crate::data::value::DecodeError). Storage/IO errors are
+/// [`DecodeError`](kyzo_model::value::DecodeError). Storage/IO errors are
 /// NOT corruption and pass through unchanged (distinguished by diagnostic
 /// code `value::decode`). Every engine consumes an index scan through this
 /// boundary, so a raw codec error cannot leak out of an engine as its
 /// contract.
 pub(crate) fn index_rows<'a>(
     index_name: &'a str,
-    scan: impl Iterator<Item = miette::Result<crate::data::value::Tuple>> + 'a,
-) -> impl Iterator<Item = miette::Result<crate::data::value::Tuple>> + 'a {
+    scan: impl Iterator<Item = miette::Result<kyzo_model::value::Tuple>> + 'a,
+) -> impl Iterator<Item = miette::Result<kyzo_model::value::Tuple>> + 'a {
     scan.map(move |r| {
         r.map_err(|e| {
             if let Some(de) = e.downcast_ref::<DecodeError>().copied() {

@@ -34,7 +34,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::data::program::Comment;
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 use crate::fixed_rule::{FixedRule, SimpleFixedRule};
 use crate::parse::{Script, parse_expressions, parse_script};
 use crate::runtime::current_validity;
@@ -452,9 +452,9 @@ fn fixed_rule_trivia_round_trips() {
     };
     let trivia = |p: &crate::data::program::InputProgram| match p
         .rules()
-        .get(&crate::data::symb::Symbol::new(
+        .get(&kyzo_model::program::symbol::Symbol::new(
             "h",
-            crate::data::span::SourceSpan(0, 0),
+            kyzo_model::SourceSpan(0, 0),
         ))
         .expect("rule `h` present")
     {

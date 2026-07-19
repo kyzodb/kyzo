@@ -79,10 +79,10 @@ use thiserror::Error;
 use crate::data::program::{
     InputProgram, QueryAssertion, QueryOutOptions, RelationOp, ReturnMutation,
 };
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, DataValue, ValidityTs};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, DataValue, ValidityTs};
 use crate::fixed_rule::{CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
 use crate::parse::sys::{AccessLevel as ParseAccessLevel, SysOp};
 use crate::parse::{Script, parse_script};
@@ -142,7 +142,7 @@ pub(crate) struct ImperativeNotWired;
 ))]
 pub(crate) struct TempRelationNotReachableError(
     pub(crate) String,
-    #[label] pub(crate) crate::data::span::SourceSpan,
+    #[label] pub(crate) kyzo_model::SourceSpan,
 );
 
 /// A system op needs an operator-tier feature that has not landed — today
@@ -159,7 +159,7 @@ pub(crate) struct IndexOpNotLanded(pub(crate) &'static str);
 #[derive(Debug, Error, Diagnostic)]
 #[error("{0}")]
 #[diagnostic(code(db::assertion_failure))]
-pub(crate) struct QueryAssertionFailure(String, #[label] crate::data::span::SourceSpan);
+pub(crate) struct QueryAssertionFailure(String, #[label] kyzo_model::SourceSpan);
 
 /// Registering a fixed rule under a name already taken.
 #[derive(Debug, Error, Diagnostic)]
@@ -993,11 +993,11 @@ pub struct SessionTx<T> {
     /// Every relation id this transaction wrote (user writes, trigger
     /// writes, index backfills alike) — drained into segment-generation
     /// bumps BEFORE the storage commit (the segments' soundness rule).
-    pub(crate) touched_relations: std::collections::BTreeSet<crate::data::value::RelationId>,
+    pub(crate) touched_relations: std::collections::BTreeSet<kyzo_model::value::RelationId>,
     /// Relation ids permanently retired by this transaction (destroy /
     /// replace / index drop) — drained into segment-engine evictions
     /// AFTER a successful commit (a rolled-back destroy retires nothing).
-    pub(crate) retired_relations: std::collections::BTreeSet<crate::data::value::RelationId>,
+    pub(crate) retired_relations: std::collections::BTreeSet<kyzo_model::value::RelationId>,
 }
 
 impl<T: ReadTx> SessionTx<T> {
@@ -1054,7 +1054,7 @@ impl<T: ReadTx> SessionTx<T> {
     /// happened to land at. The three write paths in `runtime/mutate.rs`
     /// pass their own resolved `WriteValidity` coordinate; `:ensure` /
     /// `:ensure_not` (which can never carry a `@` clause) pass
-    /// [`crate::data::value::MAX_VALIDITY_TS`] for the ordinary "does this
+    /// [`kyzo_model::value::MAX_VALIDITY_TS`] for the ordinary "does this
     /// exist at all, right now" question. For an unspecified-`@` write
     /// `valid` is the transaction's own system stamp, which is always at
     /// or past every instant an ordinary (non-`@`) history could contain,
@@ -1861,7 +1861,7 @@ mod tests {
             .put_fact(
                 &mut tx,
                 &[DataValue::from(1), DataValue::from("retro")],
-                crate::data::value::ValidityTs::from_raw(150),
+                kyzo_model::value::ValidityTs::from_raw(150),
                 SourceSpan(0, 0),
             )
             .unwrap();

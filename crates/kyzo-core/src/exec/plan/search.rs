@@ -39,9 +39,9 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::program::{SearchInput, TempSymbGen};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, SearchHits, Vector};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, SearchHits, Vector};
 use crate::engines::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
 use crate::engines::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
 use crate::engines::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};

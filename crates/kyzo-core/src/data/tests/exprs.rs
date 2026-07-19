@@ -16,8 +16,8 @@
 
 use crate::data::expr::{Expr, LazyOp, Op, apply_op};
 use crate::data::functions::{OP_ADD, OP_EQ, OP_NOW, OP_RAND_FLOAT};
-use crate::data::span::SourceSpan;
-use crate::data::value::{DataValue, Vector};
+use kyzo_model::SourceSpan;
+use kyzo_model::value::{DataValue, Vector};
 
 fn cnst(val: impl Into<DataValue>) -> Expr {
     Expr::Const {

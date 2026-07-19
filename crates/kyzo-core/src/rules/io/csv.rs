@@ -37,10 +37,10 @@ use crate::data::program::{
     FixedRuleOptionNotFoundError, WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
 };
 use crate::data::relation::{ColType, NullableColType};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::Tuple;
-use crate::data::value::{DataValue, TERMINAL_VALIDITY};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{DataValue, TERMINAL_VALIDITY};
 use crate::fixed_rule::utilities::jlines::{LocalFileFetchUnavailable, UrlFetchUnavailable};
 use crate::fixed_rule::{
     CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,

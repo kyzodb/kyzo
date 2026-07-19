@@ -58,8 +58,8 @@ use fjall::{
 use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, ValidityTs};
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{
     Aborted, BackendIoError, CommitFailure, CommitIo, Committed, ConflictError, FormatVersion,
@@ -555,7 +555,7 @@ impl Storage for FjallStorage {
             // this check.
             const {
                 assert!(
-                    crate::data::value::RelationId::CAP <= (0xff_u64 << 56),
+                    kyzo_model::value::RelationId::CAP <= (0xff_u64 << 56),
                     "emptiness probe bound must exceed every relation-id prefix"
                 );
             }

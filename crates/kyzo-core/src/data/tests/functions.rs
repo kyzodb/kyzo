@@ -22,8 +22,8 @@ use serde_json::json;
 
 use crate::data::functions::*;
 use crate::data::relation::{ColType, NullableColType};
-use crate::data::value::{DataValue, ValidityTs, Vector};
-use crate::data::value::data_value_any;
+use kyzo_model::value::{DataValue, ValidityTs, Vector};
+use kyzo_model::data_value_any;
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-5
@@ -988,8 +988,8 @@ fn test_regex() {
         op_regex_matches(&[
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "c.e".into()
                 )
                 .unwrap()
@@ -1003,8 +1003,8 @@ fn test_regex() {
         op_regex_matches(&[
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "c.ef$".into()
                 )
                 .unwrap()
@@ -1018,8 +1018,8 @@ fn test_regex() {
         op_regex_matches(&[
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "c.e$".into()
                 )
                 .unwrap()
@@ -1033,8 +1033,8 @@ fn test_regex() {
         op_regex_replace(&[
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "[be]".into()
                 )
                 .unwrap()
@@ -1049,8 +1049,8 @@ fn test_regex() {
         op_regex_replace_all(&[
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "[be]".into()
                 )
                 .unwrap()
@@ -1064,8 +1064,8 @@ fn test_regex() {
         op_regex_extract(&[
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "[xayef]|(GH)".into()
                 )
                 .unwrap()
@@ -1083,8 +1083,8 @@ fn test_regex() {
         op_regex_extract_first(&[
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "[xayef]|(GH)".into()
                 )
                 .unwrap()
@@ -1097,8 +1097,8 @@ fn test_regex() {
         op_regex_extract(&[
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "xyz".into()
                 )
                 .unwrap()
@@ -1112,8 +1112,8 @@ fn test_regex() {
         op_regex_extract_first(&[
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
-                crate::data::value::RegexSource::validated(
-                    crate::data::value::RegexFlags::NONE,
+                kyzo_model::value::RegexSource::validated(
+                    kyzo_model::value::RegexFlags::NONE,
                     "xyz".into()
                 )
                 .unwrap()
@@ -1993,7 +1993,7 @@ fn format_timestamp_numeric_agreed() {
 
 #[test]
 fn format_timestamp_validity_input_agreed() {
-    use crate::data::value::Validity;
+    use kyzo_model::value::Validity;
     let f = |micros: i64| {
         let vld = DataValue::Validity(
             Validity::new(ValidityTs::from_raw(micros), true).expect("non-reserved"),

@@ -64,10 +64,10 @@ use crate::data::program::{
     NormalFormRelationApplyAtom, NormalFormRuleApplyAtom, TempSymbGen, Unification, ValidityClause,
 };
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::span::SourceSpan;
-use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, DataValue};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::{Symbol, SymbolKind};
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, DataValue};
 use crate::fixed_rule::{
     CancelFlag, FixedRuleOutput, FixedRulePayload, StoredInputSource, TupleIter,
 };

@@ -19,9 +19,9 @@
 
 use super::RelAlgebra;
 use crate::data::program::MagicSymbol;
-use crate::data::span::SourceSpan;
-use crate::data::value::data_value_any;
-use crate::data::value::{DataValue, SearchHits, Tag};
+use kyzo_model::SourceSpan;
+use kyzo_model::data_value_any;
+use kyzo_model::value::{DataValue, SearchHits, Tag};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;

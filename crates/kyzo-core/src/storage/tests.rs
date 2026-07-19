@@ -34,8 +34,8 @@ use smartstring::{LazyCompact, SmartString};
 
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValiditySlot, ValidityTs, Vector};
-use crate::data::value::{StorageKey, RelationId, Tuple, TupleT};
+use kyzo_model::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValiditySlot, ValidityTs, Vector};
+use kyzo_model::value::{StorageKey, RelationId, Tuple, TupleT};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
@@ -88,15 +88,15 @@ fn corpus() -> Vec<DataValue> {
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
         DataValue::Regex(
-            crate::data::value::RegexSource::validated(
-                crate::data::value::RegexFlags::NONE,
+            kyzo_model::value::RegexSource::validated(
+                kyzo_model::value::RegexFlags::NONE,
                 "^a.*b$".into(),
             )
             .unwrap(),
         ),
         DataValue::Regex(
-            crate::data::value::RegexSource::validated(
-                crate::data::value::RegexFlags::NONE,
+            kyzo_model::value::RegexSource::validated(
+                kyzo_model::value::RegexFlags::NONE,
                 "^z+$".into(),
             )
             .unwrap(),
@@ -178,7 +178,7 @@ fn corpus() -> Vec<DataValue> {
 
 fn encode(v: &DataValue) -> Vec<u8> {
     let mut buf = vec![];
-    crate::data::value::append_canonical(&mut buf, v);
+    kyzo_model::value::append_canonical(&mut buf, v);
     buf
 }
 
@@ -935,7 +935,7 @@ fn corrupt_inputs_error_never_panic() {
     // bytes, so the requirement is simply no panic, ever.
     let mut k = vec![0xFF; 8];
     let mut enc = vec![];
-    crate::data::value::append_canonical(
+    kyzo_model::value::append_canonical(
         &mut enc,
         &DataValue::Validity(Validity::new(ValidityTs::from_raw(1), true).expect("non-reserved").into()),
     );
@@ -1260,7 +1260,7 @@ fn concurrency_bounds_are_compiler_checked() {
 /// payload reaches the RegexWrapper deserializer in 14 bytes.
 #[test]
 fn law3_value_payloads_error_never_panic() {
-    use crate::data::value::extend_tuple_from_v;
+    use kyzo_model::value::extend_tuple_from_v;
     // rmp payload: array[1] { map{ "Regex": "" } } behind the 8-byte header.
     let mut hostile = vec![0u8; 8];
     hostile.extend([0x91, 0x81, 0xa5]);
@@ -1275,7 +1275,7 @@ proptest! {
     #[test]
     fn law3_value_generative(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
         let mut tup: Tuple = Tuple::new();
-        let _ = crate::data::value::extend_tuple_from_v(&mut tup, &bytes);
+        let _ = kyzo_model::value::extend_tuple_from_v(&mut tup, &bytes);
     }
 }
 
@@ -1779,7 +1779,7 @@ use crate::storage::retry::{get_attempt, put_attempt, retry_on_conflict, write_t
 use crate::storage::sim::{
     FaultConfig, SimRng, SimStorage, TxBody, for_each_seed, run_interleaved,
 };
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 /// The sim must satisfy the same KV contract as the real backend: the mixed
 /// workload from `kv_contract_matches_model`, checked against the BTreeMap
@@ -3138,7 +3138,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
     let val_of = |v: i64| -> Vec<u8> {
         let mut out = Vec::new();
         out.push(crate::data::bitemporal::ClaimPolarity::Assert.encode());
-        crate::data::value::append_canonical(&mut out, &DataValue::from(v));
+        kyzo_model::value::append_canonical(&mut out, &DataValue::from(v));
         out
     };
     // Version key of the one fact at (valid=stamp, sys=stamp).

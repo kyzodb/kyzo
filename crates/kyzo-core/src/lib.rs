@@ -261,7 +261,6 @@ pub(crate) mod capacity;
 pub(crate) mod data;
 // Target-zone seats landing mid-cut (ideal map: kyzo-model / exec / rules).
 pub(crate) mod exec;
-pub(crate) mod model;
 pub(crate) mod rules;
 // Engines production host doors: `runtime/mutate.rs` (fts/hnsw/lsh create/drop),
 // `query/search.rs` (`RelationIndexSearch::search_relation`),
@@ -306,7 +305,7 @@ mod jepsen_trials;
 
 pub use data::json::JsonData;
 pub use data::json::format_error_as_json;
-pub use data::value::{
+pub use kyzo_model::value::{
     Arity, AsOf, DataValue, Num, RegexSource, RelationId, StorageKey, Tuple, TupleKey, TupleT,
     UuidWrapper, Validity, ValidityTs, Vector, decode_tuple_from_key,
 };

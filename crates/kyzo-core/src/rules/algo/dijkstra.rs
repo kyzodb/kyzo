@@ -46,10 +46,10 @@ use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::expr::Expr;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
 use crate::fixed_rule::{

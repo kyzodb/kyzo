@@ -31,10 +31,10 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::data_value_any;
-use crate::data::value::{DataValue, Tuple};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::data_value_any;
+use kyzo_model::value::{DataValue, Tuple};
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 pub(crate) struct Constant;
@@ -202,7 +202,7 @@ impl FixedRule for Constant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::Tuple;
+    use kyzo_model::value::Tuple;
     use crate::fixed_rule::tests_support::run_fixed_rule;
 
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the

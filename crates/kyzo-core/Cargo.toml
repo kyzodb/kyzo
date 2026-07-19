@@ -12,6 +12,7 @@ categories.workspace = true
 description = "KyzoDB storage engine core: a pure-Rust fork of CozoDB"
 
 [dependencies]
+kyzo-model = { path = "../kyzo-model" }
 # Index-operator tier (both pure Rust). twox-hash: XxHash32 for MinHash-LSH
 # signatures (2.x re-exports XxHash32 with the with_seed/Hasher API; already
 # in-tree transitively via fjall). quadrature: numeric integration for the

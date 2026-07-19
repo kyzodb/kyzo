@@ -33,9 +33,9 @@ use rand::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::expr::Expr;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, Tuple};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::rng::SeededRng;
 use crate::fixed_rule::{
@@ -129,7 +129,7 @@ fn label_propagation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::Tuple;
+    use kyzo_model::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {

@@ -25,8 +25,8 @@ use miette::{Diagnostic, IntoDiagnostic, Result, bail, miette};
 use thiserror::Error;
 
 use crate::data::bitemporal::system_stamp_of_key;
-use crate::data::value::ValidityTs;
-use crate::data::value::{StorageKey, RelationId};
+use kyzo_model::value::ValidityTs;
+use kyzo_model::value::{StorageKey, RelationId};
 use crate::runtime::relation::{KeyspaceKind, list_relations};
 use crate::storage::{FormatVersion, ReadTx, Storage};
 
@@ -208,7 +208,7 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     let mut floor_bytes = [0u8; 8];
     r.read_exact(&mut floor_bytes)
         .map_err(|_| miette!("truncated dump: missing clock floor"))?;
-    db.raise_clock_floor(crate::data::value::ValidityTs::from_raw(
+    db.raise_clock_floor(kyzo_model::value::ValidityTs::from_raw(
         i64::from_be_bytes(floor_bytes),
     ))?;
     let iter = std::iter::from_fn(move || read_pair(&mut r).transpose());

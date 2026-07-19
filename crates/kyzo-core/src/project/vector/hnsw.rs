@@ -218,9 +218,9 @@ use crate::data::relation::VecElementType;
 use crate::data::relation::{
     ColLen, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
 };
-use crate::data::span::SourceSpan;
-use crate::data::value::Tuple;
-use crate::data::value::{
+use kyzo_model::SourceSpan;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{
     DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, append_canonical,
     decode_tuple_from_key, encode_owned,
 };
@@ -229,7 +229,7 @@ use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -2275,7 +2275,7 @@ impl RelationIndexSearch for Hnsw {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         crate::engines::admit_relation_search_hits(hnsw_knn_body(
             tx,
             request.q,
@@ -2335,7 +2335,7 @@ impl Hnsw {
         params: &HnswKnnParams,
         filter_expr: &Option<Expr>,
         cancel: &crate::fixed_rule::CancelFlag,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         Self::search_relation(
             tx,
             HnswSearchRequest {
@@ -3101,14 +3101,14 @@ mod tests {
 
     use super::*;
     use crate::data::program::InputRelationHandle;
-    use crate::data::value::{TupleT, encode_key_with_suffix};
+    use kyzo_model::value::{TupleT, encode_key_with_suffix};
 
     macro_rules! knn_rows {
         ($($arg:expr),* $(,)?) => {
             crate::engines::search_rows(Hnsw::knn($($arg),*).unwrap()).unwrap()
         };
     }
-    use crate::data::symb::Symbol;
+    use kyzo_model::program::symbol::Symbol;
     use crate::fixed_rule::CancelFlag;
     use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
     use crate::storage::Storage;
@@ -3204,7 +3204,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -3302,7 +3302,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -3375,7 +3375,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -3485,7 +3485,7 @@ mod tests {
                 base.put_fact(
                     &mut tx,
                     r.as_slice(),
-                    crate::data::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::from_raw(0),
                     SourceSpan(0, 0),
                 )
                 .unwrap();
@@ -3740,7 +3740,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -3980,7 +3980,7 @@ mod tests {
             .put_fact(
                 &mut tx,
                 zrow.as_slice(),
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -4071,7 +4071,7 @@ mod tests {
         base.put_fact(
             &mut tx,
             moved.as_slice(),
-            crate::data::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

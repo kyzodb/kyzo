@@ -50,9 +50,9 @@ use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::expr::Expr;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, Tuple};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
 use crate::fixed_rule::{
@@ -179,7 +179,7 @@ fn page_rank(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::Tuple;
+    use kyzo_model::value::Tuple;
 
     /// The termination metric a Jacobi run stops on. `page_rank` uses
     /// [`Term::Sum`] (`Σ|Δ|`); [`Term::Max`] exists only so a test can pin

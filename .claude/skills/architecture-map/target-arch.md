@@ -29,11 +29,8 @@ Format: `path` — description
 `crates/kyzo-core/benches/storage.rs` — measures fjall put/get/commit cost in isolation
 `crates/kyzo-core/benches/string_eq.rs` — measures string equality where binary order must stay semantic order
 `crates/kyzo-core/examples/language_tour.rs` — teaching script that walks KyzoScript surface features against a live Db
-`crates/kyzo-core/src/exec/currency/admitted.rs` — epoch-scoped rows that have passed admission and may be read by operators
-`crates/kyzo-core/src/exec/currency/arena.rs` — bump arena that owns short-lived exec allocations for one evaluation epoch
-`crates/kyzo-core/src/exec/currency/code.rs` — interned symbols/codes valid only inside the current evaluation epoch
-`crates/kyzo-core/src/exec/currency/column.rs` — columnar batch currency operators consume during evaluation
-`crates/kyzo-core/src/exec/currency/row.rs` — row currency operators exchange during evaluation
+`crates/kyzo-model/src/value/arena.rs` — order-preserving interning dictionary: dense Code, epoch observers, Admission/Denial mint law
+`crates/kyzo-model/src/value/row.rs` — admitted row/tuple-key currency of the value plane (storage key + scan bounds)
 `crates/kyzo-core/src/exec/expr/batch.rs` — vectorized expression evaluation over columnar batches
 `crates/kyzo-core/src/exec/expr/eval.rs` — scalar expression evaluation against bound variables
 `crates/kyzo-core/src/exec/fixpoint/delta_store.rs` — delta relation store that feeds stratified fixpoint rounds
@@ -68,11 +65,21 @@ Format: `path` — description
 `crates/kyzo-core/src/exec/provenance/eval.rs` — evaluates provenance alongside ordinary derivation
 `crates/kyzo-core/src/exec/provenance/semiring.rs` — semiring algebra that defines how provenance combines
 `crates/kyzo-core/src/exec/sort.rs` — orders result rows under the one law’s semantic order
+`crates/kyzo-core/src/exec/stdlib/bind.rs` — sole door that mints BoundOp from OpDecl + body; owns the builtin registry pairing
+`crates/kyzo-core/src/exec/stdlib/bound_op.rs` — BoundOp: OpDecl paired with a total body fn; private mint via bind only
+`crates/kyzo-core/src/exec/stdlib/collection.rs` — list and JSON algebra kernels (not evidence/chunks-as-truth)
+`crates/kyzo-core/src/exec/stdlib/compare.rs` — language equality/order/type predicates and assert; cross-type refuse (not Tag order)
+`crates/kyzo-core/src/exec/stdlib/convert.rs` — eval-time value construction/conversion (to_*, vec, uuid fields, validity mint)
+`crates/kyzo-core/src/exec/stdlib/errors.rs` — typed numeric/domain refuse + NaN checkpoint helpers both evaluators share
 `crates/kyzo-core/src/exec/stdlib/expr.rs` — built-in expression forms callable from KyzoScript
 `crates/kyzo-core/src/exec/stdlib/exprs.rs` — registry of built-in expression implementations
-`crates/kyzo-core/src/exec/stdlib/functions.rs` — built-in function implementations bound into eval
-`crates/kyzo-core/src/exec/stdlib/mod.rs` — standard library of evaluable builtins
-`crates/kyzo-core/src/exec/stdlib/text.rs` — text-oriented builtins (split, match, …) over string values
+`crates/kyzo-core/src/exec/stdlib/interval.rs` — Allen and interval-value kernels beside the Interval kind
+`crates/kyzo-core/src/exec/stdlib/metric.rs` — ResultValue distance/score kernels for Candidates membership (never TagOrdered; not vec ctor)
+`crates/kyzo-core/src/exec/stdlib/mod.rs` — stdlib module tree and re-exports; owns no domain meaning
+`crates/kyzo-core/src/exec/stdlib/nondet.rs` — ambient clock and rng ops; determinism-as-data; never authority for what exists
+`crates/kyzo-core/src/exec/stdlib/numeric.rs` — pure numeric / bit kernels over DataValue
+`crates/kyzo-core/src/exec/stdlib/temporal_format.rs` — timestamp format/parse as values; not validity admission
+`crates/kyzo-core/src/exec/stdlib/text.rs` — string/regex kernels over string values
 `crates/kyzo-core/src/format/tests.rs` — locks encode/decode round-trips where binary order equals semantic order
 `crates/kyzo-core/src/lib.rs` — sealed public door of the engine crate; hosts import only what this re-exports
 `crates/kyzo-core/src/project/contract.rs` — trait boundary every rebuildable projection must satisfy
@@ -229,8 +236,9 @@ Format: `path` — description
 `crates/kyzo-crashfs/src/sim.rs` — in-process simulated FS for deterministic crash testing
 `crates/kyzo-crashfs/tests/standalone_mount.rs` — proves crashfs can mount and serve without the full trials stack
 `crates/kyzo-lsp/src/translate.rs` — maps LSP requests/responses onto sealed engine parse and query doors
+`crates/kyzo-model/src/envelope/json.rs` — DataValue ↔ JSON / serde wire conversions (NamedRows diagnostic envelopes stay in kyzo-core data/json)
 `crates/kyzo-model/src/envelope/arrow.rs` — Arrow-shaped wire envelope for values crossing process boundaries
-`crates/kyzo-model/src/format.rs` — canonical encode/decode: bytes whose order is semantic order
+`crates/kyzo-model/src/format.rs` — KyzoScript pretty-printer (proof → one canonical source text); value byte encode is value/canonical.rs
 `crates/kyzo-model/src/format/tests.rs` — property and round-trip tests for the one-law encoding
 `crates/kyzo-model/src/lib.rs` — vocabulary crate root: types and parse, no engine state
 `crates/kyzo-model/src/parse/expr.rs` — lifts KyzoScript expression syntax into program IR
@@ -243,6 +251,7 @@ Format: `path` — description
 `crates/kyzo-model/src/parse/sys.rs` — lifts system-op syntax into typed system requests
 `crates/kyzo-model/src/program/aggregate.rs` — aggregate declaration shapes in program IR
 `crates/kyzo-model/src/program/expr.rs` — expression AST used after parse and before exec
+`crates/kyzo-model/src/program/op.rs` — builtin op declarations: name, arity, determinism-as-data (no bodies)
 `crates/kyzo-model/src/program/span.rs` — source spans carried on every IR node for refusals
 `crates/kyzo-model/src/program/symbol.rs` — interned/program symbols naming relations and variables
 `crates/kyzo-model/src/schema/column.rs` — column name and type in a relation schema
@@ -251,7 +260,10 @@ Format: `path` — description
 `crates/kyzo-model/src/value/admission.rs` — rules for admitting raw inputs into lawful values
 `crates/kyzo-model/src/value/arity.rs` — arity as a first-class constrained count
 `crates/kyzo-model/src/value/bytes_qty.rs` — byte-quantity newtype (sizes/limits), not a bare usize
+`crates/kyzo-core/src/data/json.rs` — NamedRows + diagnostic JSON envelopes (composes kyzo-model envelope/json)
 `crates/kyzo-model/src/value/canonical.rs` — canonicalization so equal values share one byte form
+`crates/kyzo-model/src/value/code.rs` — dense interned Code / StampedCode handles (epoch-scoped)
+`crates/kyzo-model/src/value/column.rs` — columnar admitted codes over a Domain
 `crates/kyzo-model/src/value/cell.rs` — single stored/query cell holding one tagged value
 `crates/kyzo-model/src/value/kind/collection.rs` — list/set/map-like value kinds and their order
 `crates/kyzo-model/src/value/kind/interval.rs` — interval value kind (bounds as variants, not sentinels)
@@ -261,13 +273,14 @@ Format: `path` — description
 `crates/kyzo-model/src/value/kind/uuid.rs` — UUID value kind
 `crates/kyzo-model/src/value/kind/validity.rs` — temporal validity value kind
 `crates/kyzo-model/src/value/kind/vector.rs` — dense/sparse vector value kinds
-`crates/kyzo-model/src/value/mod.rs` — domain value vocabulary the one law binds
+`crates/kyzo-model/src/value/mod.rs` — DataValue: owned logical value face and domain value vocabulary the one law binds; kyzo-model owns this type (not data/value)
 `crates/kyzo-model/src/value/number.rs` — numeric value kinds with total order-safe encoding
 `crates/kyzo-model/src/value/prefix.rs` — byte prefixes that keep cross-kind order coherent
 `crates/kyzo-model/src/value/proofs.rs` — executable proofs that Ord and encode agree
 `crates/kyzo-model/src/value/search_hits.rs` — search-result hit values returned from projections
 `crates/kyzo-model/src/value/string.rs` — string value kind under Tag
 `crates/kyzo-model/src/value/tag.rs` — single cross-kind discriminant that owns type order
+`crates/kyzo-model/src/value/validity_coerce.rs` — one `@` / write-coordinate coercion law shared by parse and mutate
 `crates/kyzo-oracle/src/eval.rs` — independent reference evaluator for conformance against the engine
 `crates/kyzo-oracle/src/incremental.rs` — reference incremental semantics for standing/delta campaigns
 `crates/kyzo-oracle/src/lib.rs` — oracle crate: reference semantics, not the production engine

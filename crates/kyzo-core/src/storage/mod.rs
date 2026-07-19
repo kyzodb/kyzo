@@ -139,8 +139,8 @@ use ::fjall::Slice;
 use itertools::Itertools;
 use miette::{Result, bail, miette};
 
-use crate::data::value::{AsOf, ValidityTs};
-use crate::data::value::{Tuple, decode_tuple_from_kv};
+use kyzo_model::value::{AsOf, ValidityTs};
+use kyzo_model::value::{Tuple, decode_tuple_from_kv};
 
 pub(crate) mod backup;
 // The backend-agnostic conformance kit (story #79): a reusable law/DST/
@@ -581,7 +581,7 @@ pub trait ReadTx: sealed::Sealed + Sync {
 
     /// Bitemporal as-of scan: among keys differing only in their two
     /// trailing time slots (valid instant outer, system version inner —
-    /// [`StorageKey::BITEMPORAL_TAIL_LEN`](crate::data::value::StorageKey)),
+    /// [`StorageKey::BITEMPORAL_TAIL_LEN`](kyzo_model::value::StorageKey)),
     /// resolve each fact to what the record said at the [`AsOf`]
     /// coordinate, and yield only facts whose governing
     /// row asserts them. A row's polarity (assert / retract / erase) is

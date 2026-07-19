@@ -25,10 +25,10 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::{BindingPos, Expr};
 use crate::data::functions::OP_LIST;
 use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::fixed_rule::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };

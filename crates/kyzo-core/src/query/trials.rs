@@ -70,10 +70,10 @@ use miette::Result;
 use crate::data::aggr::{MeetAccum, MeetAggr, parse_aggr};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{HeadAggrSlot, MagicSymbol, StoreLifetimes};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::query::eval::{
     AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum,
     FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody, Witness, WitnessTable,

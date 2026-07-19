@@ -49,7 +49,7 @@ use smartstring::{LazyCompact, SmartString};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 pub(crate) mod ast;
 pub(crate) mod cangjie;
@@ -245,14 +245,14 @@ impl TokenizerConfig {
         hasher.update(self.name.as_bytes());
         let mut args_vec = vec![];
         for arg in &self.args {
-            crate::data::value::append_canonical(&mut args_vec, arg);
+            kyzo_model::value::append_canonical(&mut args_vec, arg);
         }
         hasher.update(&args_vec);
         for filter in filters {
             hasher.update(filter.name.as_bytes());
             args_vec.clear();
             for arg in &filter.args {
-                crate::data::value::append_canonical(&mut args_vec, arg);
+                kyzo_model::value::append_canonical(&mut args_vec, arg);
             }
             hasher.update(&args_vec);
         }

@@ -53,8 +53,8 @@ use rand::prelude::*;
 use serde::de::{Error as DeError, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::data::value::{DataValue, Num, NumRepr};
-use crate::data::value::data_value_any;
+use kyzo_model::value::{DataValue, Num, NumRepr};
+use kyzo_model::data_value_any;
 
 /// Private supertrait seal for aggregation op traits — crate visibility
 /// alone is not the seal.

@@ -74,8 +74,8 @@ use crate::data::program::{
     FixedRuleArg, MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormProgram,
     NormalFormRulesOrFixed, NormalFormStratum, StoreLifetimes, StratifiedNormalFormProgram,
 };
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use crate::query::graph::{
     Graph, StratifiedGraph, generalized_kahn, reachable_components, strongly_connected_components,
 };
@@ -523,8 +523,8 @@ mod tests {
         InputInlineRule, InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom,
         NormalFormRuleApplyAtom, QueryOutOptions, Trivia,
     };
-    use crate::data::symb::SymbolKind;
-    use crate::data::value::DataValue;
+    use kyzo_model::program::symbol::SymbolKind;
+    use kyzo_model::value::DataValue;
     use crate::query::laws;
 
     fn sym(name: &str) -> Symbol {

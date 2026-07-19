@@ -74,9 +74,9 @@ use miette::{Error, Result};
 
 use crate::data::aggr::{Aggregation, NormalAggr};
 use crate::data::program::HeadAggrSlot;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::query::ra::temporal::SignedFact;
 
 /// One rule-body argument: a bound value, or a variable to unify.
@@ -934,8 +934,8 @@ pub(crate) fn incremental_eval(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::span::SourceSpan;
-    use crate::data::value::Num;
+    use kyzo_model::SourceSpan;
+    use kyzo_model::value::Num;
     use crate::query::laws;
 
     fn sym(name: &str) -> Symbol {

@@ -148,10 +148,10 @@ use thiserror::Error;
 
 use crate::data::expr::{BindingPos, Expr};
 use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, MAX_VALIDITY_TS};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, MAX_VALIDITY_TS};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -1007,7 +1007,7 @@ mod tests {
     use crate::data::program::InputRelationHandle;
     use crate::data::relation::{ColType, NullableColType};
     use crate::data::relation::{ColumnDef, StoredRelationMetadata};
-    use crate::data::value::{DataValue, ValidityTs};
+    use kyzo_model::value::{DataValue, ValidityTs};
     use crate::engines::segments::SegmentEngine;
     use crate::query::temp_store::RegularTempStore;
     use crate::runtime::relation::create_relation;
@@ -1180,7 +1180,7 @@ mod tests {
             KeyspaceKind::Facts,
         )
         .unwrap();
-        let stamp = crate::data::value::ValidityTs::from_raw(0);
+        let stamp = kyzo_model::value::ValidityTs::from_raw(0);
         // left: j ∈ {7, 8, 9(no match)}; right rows (i, j): j=7 has 2000
         // rows, j=8 has 3.
         for j in [7i64, 8, 9] {
@@ -1310,7 +1310,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &row,
-                    crate::data::value::ValidityTs::from_raw(ts),
+                    kyzo_model::value::ValidityTs::from_raw(ts),
                     sp(),
                 )
                 .unwrap();
@@ -1459,7 +1459,7 @@ mod tests {
                     .put_fact(
                         &mut tx,
                         &lrow,
-                        crate::data::value::ValidityTs::from_raw(0),
+                        kyzo_model::value::ValidityTs::from_raw(0),
                         sp(),
                     )
                     .unwrap();
@@ -1469,7 +1469,7 @@ mod tests {
                         .put_fact(
                             &mut tx,
                             &rrow,
-                            crate::data::value::ValidityTs::from_raw(0),
+                            kyzo_model::value::ValidityTs::from_raw(0),
                             sp(),
                         )
                         .unwrap();
@@ -1539,7 +1539,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &lrow,
-                    crate::data::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::from_raw(0),
                     sp(),
                 )
                 .unwrap();
@@ -1548,7 +1548,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &rrow,
-                    crate::data::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::from_raw(0),
                     sp(),
                 )
                 .unwrap();

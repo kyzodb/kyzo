@@ -75,10 +75,10 @@ use thiserror::Error;
 use crate::data::program::{
     FixedRuleArg, InputAtom, InputInlineRulesOrFixed, InputProgram, QueryOutOptions,
 };
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::Tuple;
-use crate::data::value::{DataValue, ValidityTs};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{DataValue, ValidityTs};
 use crate::fixed_rule::NamedRows;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx, status_ok};
 use crate::runtime::relation::{

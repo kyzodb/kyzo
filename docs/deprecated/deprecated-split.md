@@ -3,7 +3,6 @@ paths:
   - "crates/kyzo-core/src/data/expr.rs"
   - "crates/kyzo-core/src/data/functions.rs"
   - "crates/kyzo-core/src/data/program.rs"
-  - "crates/kyzo-core/src/data/value/row.rs"
   - "crates/kyzo-core/src/query/batch.rs"
   - "crates/kyzo-core/src/query/batch_ops.rs"
   - "crates/kyzo-core/src/query/temp_store.rs"
@@ -11,7 +10,6 @@ paths:
   - "crates/kyzo-core/src/query/levels.rs"
   - "crates/kyzo-core/src/query/normalize.rs"
   - "crates/kyzo-core/src/data/mod.rs"
-  - "crates/kyzo-core/src/data/value/mod.rs"
   - "crates/kyzo-core/src/data/tests/**"
 ---
 
@@ -85,17 +83,20 @@ base64, conversions (to_bool/to_unity/to_int/to_float/to_string +
 `val2str`), vector ops (`vec_element_type`, vec, rand_vec, l2_normalize,
 l2_dist, ip_dist, cos_dist), int_range, the rand ops, timestamp/validity
 section (autosi_precision, format_rfc3339, format/parse_timestamp,
-`timestamp_to_micros`, `str2vld`, `BadValiditySpecification`,
-`data_value_to_vld_spec`), uuid ops, and the interval section
+uuid ops, and the interval section
+(validity coerce ALREADY CUT → kyzo-model `value/validity_coerce.rs`),
 (`two_intervals`, make/start/end, boundary-shape predicates, six Allen
 primitives + intersects) — closed)
-- **L1:** splits by domain into `exec/stdlib/{math,text,collection,time,
-  geo}` (json ops ride with collection; vector/distance with math;
-  haversine/deg-rad with geo). NOT stdlib: `data_value_to_vld_spec`/
-  `str2vld` (the ONE `@`-clause coercion law shared by parse-time and
-  per-row-mutate evaluation) sit beside the Validity vocabulary at the
-  model tier; `result_has_nan` travels with the checkpoint contract that
-  both evaluators enforce, not with any one domain.
+- **L1:** destinies ruled in `docs/deprecated/move_plan.json` v9 (OpDecl /
+  BoundOp / bind::resolve_op / errors / ten kernel seats incl. minted `geo.rs`;
+  model `program/expr.rs` + `value/json_convert.rs`; condemned currents are
+  Delete evidence only). ALREADY SEATED outside this bag: ValidityCoerce →
+  `crates/kyzo-model/src/value/validity_coerce.rs`. Cut names from this
+  inventory as each seat's meter passes — inventory cut is part of the seal.
+  Settled: `StdlibRefuse::NanAnswer` at `BoundOp::apply` is the law for the
+  offered-but-unreachable NaN surface (offers may stay). Carried:
+  per-row `compile_regex_value` until bench-gated hoist (see plan
+  `carried_obligations`).
 - **L2:** gold: the total-function law; `define_op!`'s five-facts-zero-
   drift weld; the refusal catalog's policies (overflow never wraps to a
   wrong answer; div/mod refuse zero; one DomainError shape; infinity
@@ -120,40 +121,14 @@ primitives + intersects) — closed)
   caller-proves-arity is good, but indexing `args[0..]` on faith deserves
   a typed arity proof at the new seam.
 
-## data/mod.rs (30 lines; inventory: header, the dead-code-discipline
-comment, 11 module decls + cfg(test) tests — closed) and
-## data/value/mod.rs (889 lines; inventory: module doc (DataValue trait-
-law contract, no-bottom-variant ruling), 13 module decls + re-exports,
-`Vector` (new/eq/hash via normalized bits), `UuidWrapper`, `DataValue`
-enum + tag() + accessors + From impls, the structural-Ord storage mirror
-(+ `json_storage_cmp`/`interval_storage_cmp`), Display (ruled: part of
-query semantics, oracle-judged), `LARGEST_UTF_CHAR`, the `Tuple` alias
-with its @authority block, `decode_from_key`/`decode_values_all`/
-`decode_tuple_from_key`/`encode_tuple_bare`/`decode_tuple_bare`/
-`bare_prefix_len`/`bare_bounds_{lower,upper}`/`extend_tuple_from_v`/
-`decode_key_into`/`decode_tuple_from_kv`/`decode_tuple`, `ScanBound` +
-its Ord, and the facade_tests (Ord-mirror law over generated pairs,
-identity-through-facade, codec round-trip, bound-order-equals-key-order)
-— closed)
-- **L1:** data/mod.rs is structural glue; dies with the directory in the
-  crate split. data/value/mod.rs's contents → `model/value/` — `Vector`
-  and `UuidWrapper` join their kind faces, `DataValue` + its trait-law
-  contract becomes the model's owned logical value, `ScanBound` goes to
-  the codec's bound vocabulary beside canonical.
-- **L2:** gold in value/mod.rs: Eq/Hash ARE the identity laws; `Ord` is
-  the storage order as a fast structural mirror LAW-LOCKED to the codec
-  by differential property tests ("one order, two proven implementations,
-  machine-checked equal — never two truths"); deliberately no
-  bottom/sentinel variant (scan bounds are codec vocabulary, not domain
-  members — `ScanBound`'s Ord and written form both extend the storage
-  order, law-tested). Open obligation carried in-file: `Tuple` is still
-  `type Tuple = Vec<DataValue>` with `@status pending #126` — the
-  tuple-vec-alias drift finding closes only when the newtype lands; the
-  model migration is the natural moment. data/mod.rs note: its
-  discipline says dead-code EXPECTATIONS
-  fire as consumers land, but `program` carries `#[allow(dead_code)]` —
-  exempt from the self-removing ratchet the comment promises; the
-  successor tree uses `expect` only.
+## data/mod.rs (structural glue; module decls + cfg(test) tests — closed)
+- **L1:** structural glue for remaining `data/` modules; dies with the
+  directory as the last `data/*` peels leave. `data/value/` is already
+  gone (plane seated at `crates/kyzo-model/src/value/`).
+- **L2:** gold: dead-code EXPECTATIONS fire as consumers land. Note:
+  `program` still carries `#[allow(dead_code)]` — exempt from the
+  self-removing ratchet the comment promises; the successor tree uses
+  `expect` only.
 
 ## data/program.rs (2405 lines; inventory: fork header (typestate
 transformations + port constraints), module doc (the four tiers as

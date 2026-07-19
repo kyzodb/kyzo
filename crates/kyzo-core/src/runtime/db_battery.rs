@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 use crate::fixed_rule::NamedRows;
 use crate::runtime::db::{Db, ScriptOptions};
 use crate::storage::Storage;

@@ -154,13 +154,13 @@ use thiserror::Error;
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr, NormalAggr};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::HeadAggrSlot;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::query::eval::Budget;
 
 /// Oracle relation / variable name. Content-eq `Arc<str>`: corpus sites
 /// mint from `'static` literals via [`From`]; the verify→oracle seam mints
-/// from runtime [`Symbol`](crate::data::symb::Symbol) text with
+/// from runtime [`Symbol`](kyzo_model::program::symbol::Symbol) text with
 /// [`Name::owned`] — no process-global leak-intern table (P115).
 #[derive(Clone, Debug)]
 pub(crate) struct Name(Arc<str>);
@@ -3985,8 +3985,8 @@ mod tests {
     #[test]
     fn asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture() {
         use crate::data::bitemporal::check_key_for_bitemporal;
-        use crate::data::value::{RelationId, TupleT};
-        use crate::data::value::{Validity, ValiditySlot, ValidityTs};
+        use kyzo_model::value::{RelationId, TupleT};
+        use kyzo_model::value::{Validity, ValiditySlot, ValidityTs};
 
         fn vts(t: i64) -> ValidityTs {
             ValidityTs::from_raw(t)
@@ -4026,7 +4026,7 @@ mod tests {
                 let (ret, nxt) = check_key_for_bitemporal(
                     k,
                     *polarity,
-                    crate::data::value::AsOf::at(vts(sys_at), vts(valid_at)),
+                    kyzo_model::value::AsOf::at(vts(sys_at), vts(valid_at)),
                     None,
                 )
                 .expect("well-formed test key");

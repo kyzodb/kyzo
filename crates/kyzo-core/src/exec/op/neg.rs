@@ -21,9 +21,9 @@ use super::{
     TempStoreRA, epoch_store_of,
 };
 use crate::data::program::MagicSymbol;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;

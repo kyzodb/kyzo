@@ -112,8 +112,8 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::span::SourceSpan;
-use crate::data::value::{DataValue, ScanBound, Tuple};
+use kyzo_model::SourceSpan;
+use kyzo_model::value::{DataValue, ScanBound, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::runtime::relation::RelationHandle;
@@ -808,7 +808,7 @@ impl RelationIndexSearch for Spatial {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         match request {
             SpatialSearchRequest::Range { base, idx, bbox } => {
                 crate::engines::admit_relation_search_hits(spatial_range_query_body(
@@ -835,7 +835,7 @@ impl Spatial {
         base: &RelationHandle,
         idx: &RelationHandle,
         bbox: &BoundingBox,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         Self::search_relation(
             tx,
             SpatialSearchRequest::Range { base, idx, bbox },
@@ -850,7 +850,7 @@ impl Spatial {
         idx: &RelationHandle,
         query: &GeoPoint,
         params: &KnnParams,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         Self::search_relation(
             tx,
             SpatialSearchRequest::Knn {
@@ -1045,7 +1045,7 @@ fn spatial_knn_body(
 mod tests {
     use super::*;
     use crate::data::program::InputRelationHandle;
-    use crate::data::symb::Symbol;
+    use kyzo_model::program::symbol::Symbol;
     use crate::runtime::relation::KeyspaceKind;
     use crate::runtime::relation::create_relation;
     use crate::storage::Storage;
@@ -1154,7 +1154,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -1249,7 +1249,7 @@ mod tests {
             .iter()
             .map(|(code, key)| {
                 let mut buf = Vec::new();
-                crate::data::value::append_canonical(&mut buf, key);
+                kyzo_model::value::append_canonical(&mut buf, key);
                 (buf, *code)
             })
             .collect();
@@ -1615,7 +1615,7 @@ mod tests {
         // Overwrite the index row's value with garbage msgpack.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::value::encode_key_with_suffix(f.idx.id, &[], &[]);
+            let lower = kyzo_model::value::encode_key_with_suffix(f.idx.id, &[], &[]);
             let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()

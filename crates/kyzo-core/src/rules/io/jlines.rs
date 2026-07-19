@@ -31,15 +31,15 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::json::{JsonValue, json_to_datavalue};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::fixed_rule::{
     CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,
     FixedRulePayload,
 };
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 /// The filesystem seam of the reader utilities: calculation rules do not
 /// open local paths — the host loads bytes and passes them via `content`.

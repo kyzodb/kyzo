@@ -33,11 +33,11 @@ use proptest::prelude::*;
 use crate::data::expr::BindingPos;
 use crate::data::functions::{OP_GE, OP_LT, OP_MOD};
 use crate::data::program::InputRelationHandle;
-use crate::data::symb::Symbol;
+use kyzo_model::program::symbol::Symbol;
 use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
 use crate::storage::Storage;
 use crate::storage::fjall::new_fjall_storage;
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Local schema helpers (the draft's live in `mod tests`; kept private there).
@@ -185,7 +185,7 @@ fn hsetup(
         base.put_fact(
             &mut tx,
             r.as_slice(),
-            crate::data::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

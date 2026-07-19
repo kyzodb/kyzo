@@ -75,9 +75,9 @@ use thiserror::Error;
 use crate::data::program::{
     InputProgram, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed,
 };
-use crate::data::symb::Symbol;
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, ValidityTs};
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, ValidityTs};
 use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
 use crate::query::laws;
@@ -279,7 +279,7 @@ fn translate_term(sym: &Symbol) -> laws::Term {
 /// the oracle's own plain-ascending `laws::AsOf` — the exact correspondence
 /// `laws.rs`'s own module doc states and
 /// `asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture` proves.
-fn to_oracle_asof(real: crate::data::value::AsOf) -> laws::AsOf {
+fn to_oracle_asof(real: kyzo_model::value::AsOf) -> laws::AsOf {
     laws::AsOf {
         valid: real.valid().raw(),
         sys: real.sys().raw(),
@@ -453,14 +453,14 @@ fn scan_edb_facts(
         let handle = get_relation(tx, rel.as_str())?;
         let arity = handle.arity();
         let bindings: Vec<Symbol> = (0..arity)
-            .map(|i| Symbol::new(format!("_verify_{i}"), crate::data::span::SourceSpan(0, 0)))
+            .map(|i| Symbol::new(format!("_verify_{i}"), kyzo_model::SourceSpan(0, 0)))
             .collect();
         let scan = StoredWithValidityRA {
             bindings,
             storage: handle,
             filters: vec![],
             as_of,
-            span: crate::data::span::SourceSpan(0, 0),
+            span: kyzo_model::SourceSpan(0, 0),
         };
         let mut rows: BTreeSet<Tuple> = BTreeSet::new();
         for batch in scan.iter_batched(tx)? {
@@ -558,7 +558,7 @@ impl<S: Storage> Db<S> {
     pub fn verify_script(
         &self,
         payload: &str,
-        params: BTreeMap<String, crate::data::value::DataValue>,
+        params: BTreeMap<String, kyzo_model::value::DataValue>,
         options: ScriptOptions,
     ) -> Result<VerifyOutcome> {
         let cur_vld = current_validity()?;
@@ -685,10 +685,10 @@ impl<S: Storage> Db<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::DataValue;
+    use kyzo_model::value::DataValue;
     use crate::storage::fjall::new_fjall_storage;
 
-    fn no_params() -> BTreeMap<String, crate::data::value::DataValue> {
+    fn no_params() -> BTreeMap<String, kyzo_model::value::DataValue> {
         BTreeMap::new()
     }
 

@@ -117,15 +117,15 @@ use twox_hash::XxHash32;
 
 use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::span::SourceSpan;
-use crate::data::value::{DataValue, Tuple, append_canonical};
+use kyzo_model::SourceSpan;
+use kyzo_model::value::{DataValue, Tuple, append_canonical};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -804,7 +804,7 @@ impl RelationIndexSearch for Lsh {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         crate::engines::admit_relation_search_hits(lsh_search_body(
             request.cancel,
             tx,
@@ -843,7 +843,7 @@ impl Lsh {
         filter_code: &Option<Expr>,
         perms: &HashPermutations,
         tokenizer: &TextAnalyzer,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         Self::search_relation(
             tx,
             LshSearchRequest {
@@ -947,7 +947,7 @@ mod tests {
     use crate::runtime::relation::KeyspaceKind;
 
     use crate::data::program::InputRelationHandle;
-    use crate::data::symb::Symbol;
+    use kyzo_model::program::symbol::Symbol;
     use crate::fixed_rule::CancelFlag;
     use crate::runtime::relation::create_relation;
     use crate::storage::Storage;
@@ -1193,7 +1193,7 @@ mod tests {
                 base.put_fact(
                     &mut tx,
                     &row,
-                    crate::data::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::from_raw(0),
                     SourceSpan(0, 0),
                 )
                 .unwrap();
@@ -1206,7 +1206,7 @@ mod tests {
             let rtx = db.read_tx().unwrap();
             let mut out = vec![];
             for rel in [&idx, &inv] {
-                let lower = crate::data::value::encode_key_with_suffix(rel.id, &[], &[]);
+                let lower = kyzo_model::value::encode_key_with_suffix(rel.id, &[], &[]);
                 let upper = (rel.id.raw() + 1).to_be_bytes();
                 for kv in rtx.range_scan(lower.as_bytes(), &upper) {
                     let (k, v) = kv.unwrap();
@@ -1332,7 +1332,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();

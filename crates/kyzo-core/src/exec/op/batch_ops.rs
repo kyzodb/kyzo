@@ -19,8 +19,8 @@ use miette::{Diagnostic, Result};
 use thiserror::Error;
 
 use crate::data::expr::Expr;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 
 pub(crate) const BATCH_ROWS: usize = 1024;
 
@@ -295,7 +295,7 @@ pub(crate) struct BatchScanFilter<I> {
 impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I> {
     type Item = Result<Batch>;
     fn next(&mut self) -> Option<Self::Item> {
-        use crate::data::value::{decode_key_into, extend_tuple_from_v};
+        use kyzo_model::value::{decode_key_into, extend_tuple_from_v};
         loop {
             if let Some(e) = self.pending_err.take() {
                 return Some(Err(e));

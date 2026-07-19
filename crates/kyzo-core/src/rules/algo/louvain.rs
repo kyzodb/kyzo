@@ -27,9 +27,9 @@ use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::expr::Expr;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, Tuple};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{
     CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
@@ -286,7 +286,7 @@ fn louvain_step(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::data::value::{DataValue, Tuple};
+    use kyzo_model::value::{DataValue, Tuple};
     use crate::fixed_rule::CancelFlag;
     use crate::fixed_rule::algos::louvain::{CommunityDetectionLouvain, louvain};
     use crate::fixed_rule::graph::DirectedCsrGraph;

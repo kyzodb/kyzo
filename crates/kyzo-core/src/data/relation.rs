@@ -45,10 +45,10 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::functions::to_json;
-use crate::data::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
+use kyzo_model::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
 
 use crate::data::json::{json_from_serde, serde_from_json};
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 /// Schema vocabulary: a vector column's declared element width. Stored
 /// vector VALUES are always f64 canonical (format v1); `F32` columns
@@ -578,7 +578,7 @@ impl NullableColType {
                             // date is a negative count, not a panic (the CozoDB
                             // original unwrapped `duration_since(UNIX_EPOCH)` on
                             // a `SystemTime` and aborted on any pre-epoch input).
-                            let microseconds = crate::data::functions::timestamp_to_micros(ts);
+                            let microseconds = kyzo_model::timestamp_to_micros(ts);
 
                             if microseconds == i64::MAX || microseconds == i64::MIN {
                                 bail!(InvalidValidity(DataValue::Str(s.into())))

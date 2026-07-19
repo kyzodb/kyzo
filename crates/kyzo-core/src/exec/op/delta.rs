@@ -20,10 +20,10 @@
 use super::epoch_store_of;
 use crate::data::expr::{Expr, compute_bounds};
 use crate::data::program::MagicSymbol;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::ScanBound;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::ScanBound;
 use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter, BatchTupleFilter, conjunction_pred};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;

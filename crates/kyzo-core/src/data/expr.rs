@@ -57,10 +57,10 @@ use thiserror::Error;
 use crate::data::functions::*;
 // Only the `CustomOp` return-type contract needs the schema vocabulary.
 use crate::data::relation::NullableColType;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
-use crate::data::value::data_value_any;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
+use kyzo_model::data_value_any;
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("The variable '{0}' is unbound")]

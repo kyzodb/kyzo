@@ -20,10 +20,10 @@
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
 use crate::data::expr::Expr;
 use crate::data::program::MagicSymbol;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;

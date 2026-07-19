@@ -25,14 +25,14 @@
 //! unproven, half-filled instance.
 //!
 //! The compile-fail property is itself witnessed in every build:
-//! [`crate::data::value::proofs::assert_not_impl`] proves that an incomplete
+//! [`crate::value::proofs::assert_not_impl`] proves that an incomplete
 //! instantiation does not implement the build trait, placed beside each
 //! builder it guards.
 
 /// A required builder field that has NOT yet been supplied.
 #[derive(Debug)]
-pub(crate) struct Unset;
+pub struct Unset;
 
 /// A required builder field that HAS been supplied.
 #[derive(Debug)]
-pub(crate) struct Set;
+pub struct Set;

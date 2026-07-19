@@ -36,8 +36,8 @@ use crate::data::aggr::{
 use crate::data::sketch::count_min::CountMinSketch;
 use crate::data::sketch::hll::HyperLogLog;
 use crate::data::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};
-use crate::data::value::DataValue;
-use crate::data::value::data_value_any;
+use kyzo_model::value::DataValue;
+use kyzo_model::data_value_any;
 
 // ── HyperLogLog: approximate distinct count (normal) ─────────────────────
 

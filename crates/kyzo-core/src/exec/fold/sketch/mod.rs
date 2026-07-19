@@ -67,7 +67,7 @@ pub(crate) mod tdigest;
 
 pub(crate) use hll::HllEstimate;
 
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 
 // xxHash64 primes, from the published specification.
 const PRIME64_1: u64 = 0x9E37_79B1_85EB_CA87;
@@ -185,7 +185,7 @@ pub(crate) fn xxh64(data: &[u8], seed: u64) -> u64 {
 /// because this is the same encoding that backs the on-disk keys.
 pub(crate) fn encode_value(v: &DataValue) -> Vec<u8> {
     let mut buf = Vec::new();
-    crate::data::value::append_canonical(&mut buf, v);
+    kyzo_model::value::append_canonical(&mut buf, v);
     buf
 }
 

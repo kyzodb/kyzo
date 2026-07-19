@@ -32,9 +32,9 @@ use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
 use crate::data::program::SortDir;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::Tuple;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
 use crate::query::levels::EpochStore;
 use crate::query::temp_store::TupleInIter;
 
@@ -90,7 +90,7 @@ pub(crate) fn sort_and_collect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::DataValue;
+    use kyzo_model::value::DataValue;
     use crate::query::temp_store::RegularTempStore;
 
     fn store_of(rows: &[Vec<i64>]) -> EpochStore {

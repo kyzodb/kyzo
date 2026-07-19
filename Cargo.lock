@@ -2039,6 +2039,7 @@ dependencies = [
  "jieba-rs",
  "jiff",
  "kyzo-crashfs",
+ "kyzo-model",
  "miette",
  "ndarray",
  "ordered-float",
@@ -2127,6 +2128,32 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "kyzo-model"
+version = "0.8.2"
+dependencies = [
+ "base64",
+ "flatbuffers",
+ "jiff",
+ "miette",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "smartstring",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "kyzo-oracle"
+version = "0.8.2"
+
+[[package]]
+name = "kyzo-trials"
+version = "0.8.2"
 
 [[package]]
 name = "lazy_static"

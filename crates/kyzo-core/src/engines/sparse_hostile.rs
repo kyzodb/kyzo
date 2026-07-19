@@ -20,9 +20,9 @@ use std::collections::BTreeMap;
 use crate::data::expr::Expr;
 use crate::data::program::InputRelationHandle;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
 use crate::engines::sparse::{
     Sparse, SparseSearchParams, sparse_index_metadata, sparse_put, sparse_total_docs,
 };
@@ -93,7 +93,7 @@ fn setup(db: &impl Storage, docs: &[Doc]) -> Fixture {
         base.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

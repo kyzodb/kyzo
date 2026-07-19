@@ -116,9 +116,9 @@ use thiserror::Error;
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{InputProgram, InputRelationHandle};
 use crate::data::relation::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{
     AsOf, DataValue, StorageKey, MAX_VALIDITY_TS, RelationId, ScanBound, StoredValiditySlot, Tuple,
     TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
     scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
@@ -663,7 +663,7 @@ mod catalog {
         #[allow(dead_code)]
         struct Marker;
         impl<T: CatalogRecord> AmbiguousIfImpl<Marker> for T {}
-        let _ = <crate::data::value::DataValue as AmbiguousIfImpl<_>>::__proof;
+        let _ = <kyzo_model::value::DataValue as AmbiguousIfImpl<_>>::__proof;
     };
 
     /// Serialize a catalog record: msgpack with struct maps. Infallible in
@@ -892,7 +892,7 @@ impl RelationHandle {
         ret.push(polarity.encode());
         if polarity == ClaimPolarity::Assert {
             for v in &tuple[start..] {
-                crate::data::value::append_canonical(&mut ret, v);
+                kyzo_model::value::append_canonical(&mut ret, v);
             }
         }
         Ok(ret)
@@ -921,7 +921,7 @@ impl RelationHandle {
         );
         let mut ret = Vec::with_capacity(16 * (tuple.len() - start));
         for v in &tuple[start..] {
-            crate::data::value::append_canonical(&mut ret, v);
+            kyzo_model::value::append_canonical(&mut ret, v);
         }
         Ok(ret)
     }
@@ -935,7 +935,7 @@ impl RelationHandle {
     ) -> Result<Vec<u8>> {
         let mut ret = Vec::with_capacity(16 * tuple.len());
         for v in tuple {
-            crate::data::value::append_canonical(&mut ret, v);
+            kyzo_model::value::append_canonical(&mut ret, v);
         }
         Ok(ret)
     }
@@ -1667,8 +1667,8 @@ mod tests {
 
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use crate::data::value::ValidityTs;
-    use crate::data::value::decode_tuple_from_key;
+    use kyzo_model::value::ValidityTs;
+    use kyzo_model::value::decode_tuple_from_key;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{ConflictError, Storage};
 
@@ -1840,7 +1840,7 @@ mod tests {
 
         let shadow = ShadowHandle {
             name: handle.name.clone(),
-            id: crate::data::value::RelationId::CAP + 1, // out of the allocatable range
+            id: kyzo_model::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
             put_triggers: handle.put_triggers.clone(),
             rm_triggers: handle.rm_triggers.clone(),
@@ -1993,7 +1993,7 @@ mod tests {
         // allocation crosses the ceiling.
         tx.put(
             &SystemKey::IdCounter.encode(),
-            &(crate::data::value::RelationId::CAP - 1).to_be_bytes(),
+            &(kyzo_model::value::RelationId::CAP - 1).to_be_bytes(),
         )
         .unwrap();
         let err =

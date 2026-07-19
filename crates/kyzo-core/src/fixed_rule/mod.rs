@@ -98,16 +98,16 @@ use crate::data::program::{
     FixedRuleOptionNotFoundError, MagicFixedRuleApply, MagicFixedRuleRuleArg, MagicSymbol,
     WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
 };
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, DataValue};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, DataValue};
 use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
 use crate::fixed_rule::utilities::*;
 use crate::query::eval::{BudgetDimension, LimitExceeded};
 use crate::query::levels::EpochStore;
 use crate::query::temp_store::{RegularTempStore, TupleInIter};
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 use crate::rules::algo::*;
 
 // algos/ cut — algorithms seated at rules/algo.
@@ -846,7 +846,7 @@ impl FixedRuleOutput {
 #[cfg(test)]
 mod fixed_rule_output_budget_tests {
     use super::*;
-    use crate::data::value::DataValue;
+    use kyzo_model::value::DataValue;
 
     fn row(i: i64) -> Tuple {
         Tuple::from_vec(vec![DataValue::from(i), DataValue::from(i)])

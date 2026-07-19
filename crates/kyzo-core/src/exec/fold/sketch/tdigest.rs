@@ -46,8 +46,8 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::{DataValue, Num};
-use crate::data::value::data_value_any;
+use kyzo_model::value::{DataValue, Num};
+use kyzo_model::data_value_any;
 
 /// The compression parameter δ. Larger is more accurate and larger; 100 is
 /// the common default (≈ 1% rank error mid-distribution, better at tails).

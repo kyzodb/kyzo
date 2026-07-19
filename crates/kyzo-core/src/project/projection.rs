@@ -31,7 +31,7 @@ use std::fmt;
 
 use miette::Result;
 
-use crate::data::value::{RelationId, SearchHits, Tuple};
+use kyzo_model::value::{RelationId, SearchHits, Tuple};
 use crate::storage::ReadTx;
 
 /// A projection kind's identity in the build→seal→freshness machine.

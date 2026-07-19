@@ -148,8 +148,8 @@ use crate::data::program::{
     StratifiedNormalFormProgram, ValidityClause,
 };
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::span::SourceSpan;
-use crate::data::symb::{Symbol, SymbolKind};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::{Symbol, SymbolKind};
 
 // ─────────────────────────────────────────────────────────────────────────
 // SEAM: the catalog (runtime tier, not yet ported).
@@ -1149,8 +1149,8 @@ mod tests {
     };
     use crate::data::relation::ColumnDef;
     use crate::data::relation::{ColType, NullableColType};
-    use crate::data::value::AsOf;
-    use crate::data::value::DataValue;
+    use kyzo_model::value::AsOf;
+    use kyzo_model::value::DataValue;
 
     // ── construction helpers ────────────────────────────────────────────
 
@@ -1816,7 +1816,7 @@ mod tests {
     /// original panicked on.
     #[test]
     fn time_travel_requires_a_validity_keyed_relation() {
-        use crate::data::value::ValidityTs;
+        use kyzo_model::value::ValidityTs;
 
         struct NoRule;
         impl FixedRule for NoRule {

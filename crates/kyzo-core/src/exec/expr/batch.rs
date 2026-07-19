@@ -19,7 +19,7 @@
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::value::{DataValue, Tuple};
+use kyzo_model::value::{DataValue, Tuple};
 
 /// A row's width does not match the batch arity — refuse, never truncate
 /// with `.take` (P061).

@@ -16,8 +16,8 @@ use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
 use crate::data::program::HeadAggrSlot;
-use crate::data::value::DataValue;
-use crate::data::value::{
+use kyzo_model::value::DataValue;
+use kyzo_model::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
 };
 use crate::query::temp_store::{
@@ -1246,8 +1246,8 @@ use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
 use crate::data::program::HeadAggrSlot;
-use crate::data::value::DataValue;
-use crate::data::value::{DecodeError, Tuple, decode_tuple_bare, encode_tuple_bare};
+use kyzo_model::value::DataValue;
+use kyzo_model::value::{DecodeError, Tuple, decode_tuple_bare, encode_tuple_bare};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Own-bytes row keys (P094)
@@ -1958,14 +1958,14 @@ impl TupleInIter<'_> {
             TupleInIter::MeetSuffix { key, val, .. } => {
                 let mut full = key.to_vec();
                 for a in val.iter() {
-                    crate::data::value::append_canonical(&mut full, &a.to_value());
+                    kyzo_model::value::append_canonical(&mut full, &a.to_value());
                 }
                 full.as_slice().cmp(probe)
             }
             TupleInIter::Values { key, val, .. } => {
                 let mut full = Vec::new();
                 for v in key.iter().chain(val.iter()) {
-                    crate::data::value::append_canonical(&mut full, v);
+                    kyzo_model::value::append_canonical(&mut full, v);
                 }
                 full.as_slice().cmp(probe)
             }
@@ -2172,7 +2172,7 @@ impl Iterator for TupleInIterIterator<'_> {
 mod tests {
     use super::*;
     use crate::data::aggr::parse_aggr;
-    use crate::data::value::ScanBound;
+    use kyzo_model::value::ScanBound;
     use crate::query::levels::{EpochStore, LevelKind};
 
     fn t(vals: &[i64]) -> Tuple {

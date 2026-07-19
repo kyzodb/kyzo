@@ -53,9 +53,13 @@ use uuid::v1::Timestamp;
 use crate::data::expr::Op;
 use crate::data::json::{json_from_serde, serde_from_json};
 use crate::data::relation::VecElementType;
-use crate::data::value::{
+use kyzo_model::data_value_any;
+use kyzo_model::value::{
     Bound, DataValue, Interval, Json, Num, NumRepr, NumericOrd, RegexFlags, RegexSource, Validity,
-    ValidityTs, Vector, data_value_any,
+    ValidityTs, Vector,
+};
+pub(crate) use kyzo_model::{
+    BadValiditySpecification, data_value_to_vld_spec, str2vld, timestamp_to_micros,
 };
 use serde_json::Value as JsonValue;
 
@@ -306,7 +310,7 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
 /// The interval render shared with the bridge: `null` for empty,
 /// `[lo|null, hi|null]` otherwise.
 fn interval_to_json(iv: &Interval) -> JsonValue {
-    use crate::data::value::wide::interval::{Hi, Lo};
+    use kyzo_model::value::wide::interval::{Hi, Lo};
     match iv.ends() {
         None => JsonValue::Null,
         Some((lo, hi)) => {
@@ -1559,7 +1563,7 @@ pub(crate) fn op_regex(args: &[DataValue]) -> Result<DataValue> {
 /// recompiles here. A future optimization would hoist COMPILATION (not
 /// just validation) into the operator layer instead, measured by the bench
 /// lane.
-fn compile_regex_value(r: &RegexSource) -> Result<crate::data::value::CompiledRegexV1> {
+fn compile_regex_value(r: &RegexSource) -> Result<kyzo_model::value::CompiledRegexV1> {
     r.compile()
         .map_err(|err| miette!("stored regex failed to compile: {err:?}"))
 }
@@ -2680,17 +2684,6 @@ pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Str(format_rfc3339(ts, off)?))
 }
 
-// Microseconds since the Unix epoch for a parsed timestamp, FLOORED toward
-// negative infinity: the microsecond that *contains* the instant, applied
-// uniformly on both sides of 1970. jiff's `as_microsecond` truncates toward
-// zero, which would place a pre-epoch sub-microsecond instant one microsecond
-// too late; the chrono predecessor floored, and validity timestamps feed the
-// time-travel key, so we preserve the floor. `as_nanosecond` is an `i128` in
-// range [-2.6e23, 2.6e23] here; the floored microsecond count fits an i64.
-pub(crate) fn timestamp_to_micros(ts: jiff::Timestamp) -> i64 {
-    (ts.as_nanosecond().div_euclid(1000)) as i64
-}
-
 define_op!(OP_PARSE_TIMESTAMP, 1, false, true);
 /// Parses an RFC 3339 / ISO 8601 timestamp string to seconds since the Unix
 /// epoch (a float; pre-1970 inputs are negative). A `:60` leap second is
@@ -2702,69 +2695,13 @@ pub(crate) fn op_parse_timestamp(args: &[DataValue]) -> Result<DataValue> {
         .get_str()
         .ok_or_else(|| miette!("'parse_timestamp' expects a string"))?;
     let ts: jiff::Timestamp = s.parse().map_err(|_| miette!("bad datetime: {}", s))?;
-    // Pre-epoch datetimes yield negative seconds. The CozoDB original went
-    // through `SystemTime` and unwrapped `duration_since(UNIX_EPOCH)`, aborting
-    // the process on any user-supplied datetime before 1970.
-    //
-    // Decomposed as chrono did — a FLOORED whole second plus a non-negative
-    // subsecond nanosecond count — so the lossy f64 result is bit-identical to
-    // the former `chrono::DateTime::timestamp() as f64 + subsec_nanos / 1e9`
-    // across the epoch boundary. jiff's own `as_second()` truncates toward zero
-    // and pairs it with a signed subsecond, which rounds pre-epoch instants to a
-    // slightly different f64.
+    // Pre-epoch datetimes yield negative seconds. Decomposed as chrono did —
+    // a FLOORED whole second plus a non-negative subsecond nanosecond count —
+    // so the lossy f64 result is bit-identical across the epoch boundary.
     let nanos = ts.as_nanosecond();
     let secs =
         nanos.div_euclid(1_000_000_000) as f64 + (nanos.rem_euclid(1_000_000_000) as f64) / 1e9;
     Ok(DataValue::from(secs))
-}
-
-/// Parses an RFC 3339 / ISO 8601 timestamp string to a validity timestamp in
-/// microseconds since the Unix epoch, floored toward negative infinity (see
-/// [`timestamp_to_micros`]). A `:60` leap second is clamped to `:59` of the
-/// same minute (jiff does not fold it into the following second, unlike the
-/// former chrono implementation).
-pub(crate) fn str2vld(s: &str) -> Result<ValidityTs> {
-    let ts: jiff::Timestamp = s.parse().map_err(|_| miette!("bad datetime: {}", s))?;
-    // Same law as `op_parse_timestamp`: a pre-epoch validity is a negative
-    // microsecond count, not a panic.
-    Ok(ValidityTs::from_raw(timestamp_to_micros(ts)))
-}
-
-#[derive(Debug, Error, Diagnostic)]
-#[error("bad specification of validity")]
-#[diagnostic(code(parser::bad_validity_spec))]
-pub(crate) struct BadValiditySpecification(#[label] pub(crate) crate::data::span::SourceSpan);
-
-/// Interpret an already-evaluated [`DataValue`] as a validity coordinate — an
-/// integer microsecond count, the sentinels `"NOW"`/`"END"`, or an RFC 3339
-/// string. Shared by both `@` clauses in the grammar: the read side's
-/// (`parse::query::expr2vld_spec`, evaluated once at parse time) and the
-/// write side's per-row form (`runtime::mutate`, evaluated once per output
-/// row) — one coercion law for what a validity expression may mean, however
-/// many times it ends up evaluated.
-pub(crate) fn data_value_to_vld_spec(
-    val: DataValue,
-    span: crate::data::span::SourceSpan,
-    cur_vld: ValidityTs,
-) -> Result<ValidityTs> {
-    match val {
-        DataValue::Num(n) => {
-            let microseconds = n.as_int().ok_or(BadValiditySpecification(span))?;
-            // User-facing int coordinate: refuse the reserved terminal via
-            // the assertion door. (`"END"` below remains the read-side
-            // sentinel spelling of the same tick.)
-            ValidityTs::for_assertion(microseconds)
-                .ok_or_else(|| miette::Report::new(BadValiditySpecification(span)))
-        }
-        DataValue::Str(s) => match &s as &str {
-            "NOW" => Ok(cur_vld),
-            "END" => Ok(crate::data::value::MAX_VALIDITY_TS),
-            s => Ok(str2vld(s).map_err(|_| BadValiditySpecification(span))?),
-        },
-        data_value_any!() => {
-            bail!(BadValiditySpecification(span))
-        }
-    }
 }
 
 // Nondeterministic: fresh randomness and a clock read per evaluation; never

@@ -107,7 +107,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -367,8 +367,8 @@ impl Gazetteer {
 mod tests {
     use super::*;
     use crate::data::program::InputRelationHandle;
-    use crate::data::span::SourceSpan;
-    use crate::data::symb::Symbol;
+    use kyzo_model::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
     use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
@@ -414,7 +414,7 @@ mod tests {
             dict.put_fact(
                 &mut tx,
                 &row,
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -796,7 +796,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -826,7 +826,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &bad,
-            crate::data::value::ValidityTs::from_raw(1),
+            kyzo_model::value::ValidityTs::from_raw(1),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -857,7 +857,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &bad,
-            crate::data::value::ValidityTs::from_raw(1),
+            kyzo_model::value::ValidityTs::from_raw(1),
             SourceSpan(0, 0),
         )
         .unwrap();

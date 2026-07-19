@@ -107,8 +107,8 @@ use thiserror::Error;
 
 use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::span::SourceSpan;
-use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
+use kyzo_model::SourceSpan;
+use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
@@ -116,7 +116,7 @@ use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -638,7 +638,7 @@ impl RelationIndexSearch for Fts {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         crate::engines::admit_relation_search_hits(fts_search_body(
             request.cancel,
             tx,
@@ -688,7 +688,7 @@ impl Fts {
         filter_code: &Option<Expr>,
         tokenizer: &TextAnalyzer,
         n_total: usize,
-    ) -> Result<crate::data::value::SearchHits> {
+    ) -> Result<kyzo_model::value::SearchHits> {
         Self::search_relation(
             tx,
             FtsSearchRequest {
@@ -779,7 +779,7 @@ mod tests {
     use super::*;
 
     use crate::data::program::InputRelationHandle;
-    use crate::data::symb::Symbol;
+    use kyzo_model::program::symbol::Symbol;
     use crate::engines::text::TokenizerConfig;
     use crate::fixed_rule::CancelFlag;
     use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
@@ -875,7 +875,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -1134,7 +1134,7 @@ mod tests {
         // Byte-flip every index row's value to reserved-msgpack garbage.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::value::encode_key_with_suffix(f.idx.id, &[], &[]);
+            let lower = kyzo_model::value::encode_key_with_suffix(f.idx.id, &[], &[]);
             let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()
@@ -1210,7 +1210,7 @@ mod tests {
         base.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

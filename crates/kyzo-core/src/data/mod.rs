@@ -26,9 +26,6 @@ pub(crate) mod json;
 pub(crate) mod program;
 pub(crate) mod relation;
 pub(crate) mod sketch;
-pub(crate) mod span;
-pub(crate) mod symb;
-pub(crate) mod value;
 
 #[cfg(test)]
 mod tests;

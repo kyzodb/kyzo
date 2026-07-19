@@ -146,10 +146,10 @@ use miette::{Result, bail, miette};
 use crate::data::bitemporal::{
     ClaimPolarity, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
 };
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
-use crate::data::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
+use kyzo_model::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -797,9 +797,9 @@ impl Iterator for RowChunks {
 mod tests {
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use crate::data::span::SourceSpan;
-    use crate::data::symb::Symbol;
-    use crate::data::value::{MAX_VALIDITY_TS, ValidityTs};
+    use kyzo_model::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
+    use kyzo_model::value::{MAX_VALIDITY_TS, ValidityTs};
     use crate::runtime::relation::{KeyspaceKind, create_relation};
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};

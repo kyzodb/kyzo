@@ -81,9 +81,9 @@ use thiserror::Error;
 use crate::data::aggr::Aggregation;
 use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::span::SourceSpan;
-use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::{AsOf, DataValue, ValidityTs};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::{Symbol, SymbolKind};
+use kyzo_model::value::{AsOf, DataValue, ValidityTs};
 
 // The fixed-rule tier has landed: its trait and handle live in
 // `fixed_rule/mod.rs` (the former seam declarations here re-homed there
@@ -177,7 +177,7 @@ impl WriteValidity {
             WriteValidity::PerRow(expr) => {
                 let span = expr.span();
                 let val = expr.eval(row)?;
-                let vld = crate::data::functions::data_value_to_vld_spec(val, span, cur_vld)?;
+                let vld = kyzo_model::data_value_to_vld_spec(val, span, cur_vld)?;
                 // `parse::query::resolve_write_validity` proves the same
                 // thing for the `Fixed` coordinate at parse time, but a
                 // `PerRow` clause's instant comes out of THIS row's own
@@ -188,7 +188,7 @@ impl WriteValidity {
                 // user-asserted write validity can never be the reserved
                 // terminal tick (`i64::MAX` / `'END'`), the instant every
                 // open-end sentinel and derived interval reads as "still open."
-                crate::data::value::ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
+                kyzo_model::value::ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
                     miette::miette!(
                         labels = vec![miette::LabeledSpan::underline(span)],
                         "a write validity cannot be the reserved terminal tick (i64::MAX / 'END')"
@@ -934,7 +934,7 @@ pub(crate) enum ValidityClause {
     /// `@spans var[, sys_expr]`: derive maximal equal-payload half-open
     /// runs along the valid axis at a fixed system snapshot (`sys`,
     /// default the record's current belief) — one output row per run,
-    /// `var` bound to the produced [`crate::data::value::Interval`].
+    /// `var` bound to the produced [`kyzo_model::value::Interval`].
     Spans { sys: ValidityTs, var: Symbol },
     /// `@delta(a, b) var` / `@delta_sys(a, b) var`: the axis-parameterized
     /// net diff between two coordinates on `axis` (the other axis fixed at

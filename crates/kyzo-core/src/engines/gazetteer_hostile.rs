@@ -24,9 +24,9 @@ use std::collections::BTreeSet;
 
 use crate::data::program::InputRelationHandle;
 use crate::data::relation::{ColType, StoredRelationMetadata};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
 use crate::engines::gazetteer::{
     Gazetteer, GazetteerConfig, Tag, compile_dictionary, gazetteer_dict_metadata,
 };
@@ -68,7 +68,7 @@ fn compile(
         dict.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -461,7 +461,7 @@ fn law5_corrupt_dictionary_sweep_never_panics() {
                 dict.put_fact(
                     &mut tx,
                     &row,
-                    crate::data::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::from_raw(0),
                     SourceSpan(0, 0),
                 )
                 .unwrap();
@@ -499,7 +499,7 @@ fn probe_big_surface_scaling() {
         dict.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

@@ -81,11 +81,11 @@ use std::ops::Bound;
 use fjall::Slice;
 use miette::Result;
 
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, ValidityTs};
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{Aborted, CommitFailure, Committed, ReadTx, WriteTx};
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 /// One session's temp keyspace: an ordered map with the kernel's
 /// transaction interface. "Transaction" is honorary — the map IS the
@@ -280,8 +280,8 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::value::{DataValue, Validity, ValiditySlot, ValidityTs};
-    use crate::data::value::{RelationId, TupleT};
+    use kyzo_model::value::{DataValue, Validity, ValiditySlot, ValidityTs};
+    use kyzo_model::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId::new(7).expect("below cap");
 

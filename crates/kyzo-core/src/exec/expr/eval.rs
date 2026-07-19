@@ -38,7 +38,7 @@
 use miette::Result;
 
 use crate::data::expr::{BindingPos, Decision, Expr};
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 use crate::query::batch::{ColumnBatch, ErrorMin, Selection};
 
 /// Selection indexes are `u32`; [`Selection::iter`] widens stored ids to
@@ -316,7 +316,7 @@ mod tests {
     use super::*;
     use crate::data::expr::LazyOp;
     use crate::data::functions::{OP_ADD, OP_EQ, OP_GT};
-    use crate::data::value::DataValue;
+    use kyzo_model::value::DataValue;
 
     fn cnst(v: impl Into<DataValue>) -> Expr {
         Expr::Const {
@@ -326,7 +326,7 @@ mod tests {
     }
     fn binding(pos: usize) -> Expr {
         Expr::Binding {
-            var: crate::data::symb::Symbol::new(format!("c{pos}"), Default::default()),
+            var: kyzo_model::program::symbol::Symbol::new(format!("c{pos}"), Default::default()),
             tuple_pos: BindingPos::Resolved(pos),
         }
     }
@@ -342,10 +342,10 @@ mod tests {
     /// both, over every (expr, batch) this generator produces.
     fn differential(expr: &Expr, rows: &[Vec<DataValue>]) {
         let width = rows.first().map_or(0, Vec::len);
-        let owned_rows: Vec<crate::data::value::Tuple> = rows
+        let owned_rows: Vec<kyzo_model::value::Tuple> = rows
             .iter()
             .cloned()
-            .map(crate::data::value::Tuple::from_vec)
+            .map(kyzo_model::value::Tuple::from_vec)
             .collect();
         let batch = ColumnBatch::from_rows(owned_rows, width).expect("test rows uniform width");
         let sel = Selection::all(rows.len()).expect("test batch fits u32");
@@ -461,7 +461,7 @@ mod tests {
                     span: Default::default(),
                 },
                 1 | 2 => Expr::Binding {
-                    var: crate::data::symb::Symbol::new("c", Default::default()),
+                    var: kyzo_model::program::symbol::Symbol::new("c", Default::default()),
                     tuple_pos: BindingPos::Resolved((next(rng) % 2) as usize),
                 },
                 3 => Expr::Apply {

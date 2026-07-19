@@ -145,9 +145,9 @@ use crate::data::program::{
     DeltaAxis, HeadAggrSlot, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed,
     MagicSymbol, StratifiedMagicProgram, ValidityClause,
 };
-use crate::data::span::SourceSpan;
-use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::DataValue;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::{Symbol, SymbolKind};
+use kyzo_model::value::DataValue;
 use crate::query::eval::{
     AtomOccurrence, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum, FixedRuleEval, Premises,
     RuleBody,
@@ -1085,7 +1085,7 @@ mod tests {
         StoreLifetimes, Unification,
     };
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use crate::data::value::Tuple;
+    use kyzo_model::value::Tuple;
     use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
     use crate::query::laws::{Literal, Program, Rel, Rule, Term, naive_eval};
     use crate::runtime::relation::KeyspaceKind;
@@ -1171,7 +1171,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     row.as_slice(),
-                    crate::data::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::from_raw(0),
                     sp(),
                 )
                 .expect("put row");
@@ -2507,7 +2507,7 @@ mod tests {
             .put_fact(
                 &mut tx,
                 key_vals,
-                crate::data::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::from_raw(0),
                 sp(),
             )
             .expect("put truncated row");

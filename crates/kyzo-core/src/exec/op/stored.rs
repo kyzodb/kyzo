@@ -19,9 +19,9 @@
 use super::{StoredRowTooShortError, TupleIter};
 use crate::Tuple;
 use crate::data::expr::{Expr, compute_bounds};
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, DataValue, ScanBound};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{AsOf, DataValue, ScanBound};
 use crate::engines::segments::{Segment, SegmentEngine, SegmentMiss, Segments};
 use crate::query::batch_ops::refine_batch;
 use crate::query::batch_ops::{
@@ -493,7 +493,7 @@ mod segment_gate_tests {
     use super::*;
     use crate::data::program::InputRelationHandle;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use crate::data::value::ValidityTs;
+    use kyzo_model::value::ValidityTs;
     use crate::engines::segments::SegmentEngine;
     use crate::runtime::relation::create_relation;
     use crate::storage::fjall::new_fjall_storage;

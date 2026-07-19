@@ -19,11 +19,11 @@
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::value::{
+use kyzo_model::value::{
     AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValiditySlot, ValidityTs,
     append_canonical, decode_tuple_from_key, decode_values_all,
 };
-use crate::data::value::data_value_any;
+use kyzo_model::data_value_any;
 
 /// Named refusals on the bitemporal decode / polarity path — never a bare
 /// `bail!(String)`.
@@ -266,8 +266,8 @@ pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()>
 mod tests {
     use super::*;
 
-    use crate::data::value::ValidityTs;
-    use crate::data::value::{RelationId, TupleT};
+    use kyzo_model::value::ValidityTs;
+    use kyzo_model::value::{RelationId, TupleT};
     use std::collections::BTreeMap;
 
     fn vts(t: i64) -> ValidityTs {
@@ -567,7 +567,7 @@ mod tests {
         val.push(ClaimPolarity::Assert.encode());
         let non_keys = vec![DataValue::from(42i64), DataValue::from(7i64)];
         for v in &non_keys {
-            crate::data::value::append_canonical(&mut val, v);
+            kyzo_model::value::append_canonical(&mut val, v);
         }
         let mut tup: Tuple = Tuple::from_vec(vec![DataValue::from(1i64)]);
         extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();

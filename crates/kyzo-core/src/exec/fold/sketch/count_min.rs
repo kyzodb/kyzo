@@ -45,7 +45,7 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 
 /// One pinned hash seed per row. The sketch uses the first `depth` of these,
 /// so `depth` is capped at their count. Fixed as part of the sketch format.
@@ -372,7 +372,7 @@ mod tests {
         //   Int(999) = 10 03 04 42 f9 c0 00..(8)
         let enc = |v: &DataValue| {
             let mut b = Vec::new();
-            crate::data::value::append_canonical(&mut b, v);
+            kyzo_model::value::append_canonical(&mut b, v);
             b
         };
         assert_eq!(enc(&val(0)), vec![0x10, 0x02, 0x00]);

@@ -17,9 +17,9 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::TupleIter;
-use crate::data::span::SourceSpan;
-use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::ra::join::eliminate_from_tuple;
 use itertools::Itertools;

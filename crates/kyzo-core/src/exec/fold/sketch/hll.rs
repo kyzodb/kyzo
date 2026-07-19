@@ -48,7 +48,7 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::DataValue;
+use kyzo_model::value::DataValue;
 
 /// The seed for the element hash. Pinned: changing it changes every
 /// sketch's contents (and is a stored-format change if sketches are ever
@@ -567,7 +567,7 @@ mod tests {
         // of format-correct input, not an implementation snapshot.
         let enc = |v: &DataValue| {
             let mut b = Vec::new();
-            crate::data::value::append_canonical(&mut b, v);
+            kyzo_model::value::append_canonical(&mut b, v);
             b
         };
         assert_eq!(enc(&val(0)), vec![0x10, 0x02, 0x00]);
