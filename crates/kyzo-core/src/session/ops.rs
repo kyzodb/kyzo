@@ -15,6 +15,7 @@
 //! Index lifecycle: attach/backfill/remove and the five `::create` ops.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use fjall::Slice;
@@ -29,12 +30,18 @@ use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::program::expr::Expr;
 use crate::session::catalog::{
     IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency, TEMPORAL_POSTING_LEADING_COLUMN,
+    get_relation,
 };
-use crate::session::db::{SessionTx, status_ok};
-use crate::store::WriteTx;
+use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
+use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple, ValidityTs, decode_tuple_from_kv};
+
+/// The scan ceiling for `::merkle_root` when the caller sets no
+/// derived-tuple ceiling: 2^32 key-value pairs. Large enough for any store
+/// this engine has met, small enough that no scan is unbounded.
+const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = NonZeroU64::new(1 << 32).unwrap();
 
 // ─────────────────────────────────────────────────────────────────────────
 // Manifest-index maintenance and lifecycle (the index-operator tier)
@@ -671,6 +678,111 @@ impl<T: WriteTx> SessionTx<T> {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Engine sys-op doors for index / operator lifecycle
+// ─────────────────────────────────────────────────────────────────────────
+
+impl<S: Storage> Engine<S> {
+    /// `::compact` — flush the store.
+    pub(crate) fn sys_compact(&self) -> Result<NamedRows> {
+        self.store.sync()?;
+        Ok(status_ok())
+    }
+
+    /// `::merkle_root` — bounded cold scan of store (or one relation) state.
+    pub(crate) fn sys_merkle_root(
+        &self,
+        rel: Option<&Symbol>,
+        options: &ScriptOptions,
+    ) -> Result<NamedRows> {
+        // A cold root is a full ordered rescan, so the scan must be
+        // bounded: the session's derived-tuple ceiling doubles as the
+        // scan ceiling (one scanned pair = one unit), with a default
+        // when the caller sets none. A ceiling of zero refuses before
+        // scanning anything.
+        let ceiling = match options.derived_tuple_ceiling {
+            Some(c) => NonZeroU64::new(c)
+                .ok_or(crate::store::merkle::MerkleScanExceeded { ceiling: 0 })?,
+            None => DEFAULT_MERKLE_SCAN_CEILING,
+        };
+        let rtx = self.store.read_tx()?;
+        let root = match rel {
+            None => crate::store::merkle::state_root(&rtx, ceiling)?,
+            Some(name) => {
+                let id = get_relation(&rtx, &name.name)?.id;
+                crate::store::merkle::relation_root(&rtx, id, ceiling)?
+            }
+        };
+        Ok(NamedRows::try_new(
+            vec!["root".into()],
+            vec![Tuple::from_vec(vec![DataValue::from(root.to_hex())])],
+        )?)
+    }
+
+    /// `::indices` — list index names and kinds on a relation.
+    pub(crate) fn sys_list_indices(&self, name: &Symbol) -> Result<NamedRows> {
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let handle = get_relation(&tx.store, &name.name)?;
+        let rows = handle
+            .indices
+            .iter()
+            .map(|r| {
+                let kind = match &r.kind {
+                    IndexKind::Plain { .. } => "plain",
+                    IndexKind::Temporal => "temporal",
+                    IndexKind::Hnsw(..) => "hnsw",
+                    IndexKind::Fts(..) => "fts",
+                    IndexKind::Lsh { .. } => "lsh",
+                };
+                Tuple::from_vec(vec![
+                    DataValue::from(r.name.as_str()),
+                    DataValue::from(kind),
+                ])
+            })
+            .collect();
+        Ok(NamedRows::try_new(vec!["name".into(), "kind".into()], rows)?)
+    }
+
+    /// `::index create`.
+    pub(crate) fn sys_create_index(
+        &self,
+        rel: &Symbol,
+        name: &Symbol,
+        cols: &[Symbol],
+    ) -> Result<NamedRows> {
+        self.sys_write(|tx| tx.create_plain_index(&rel.name, &name.name, cols))
+    }
+
+    /// `::hnsw create`.
+    pub(crate) fn sys_create_vector_index(
+        &self,
+        cfg: &crate::parse::sys::HnswIndexConfig,
+    ) -> Result<NamedRows> {
+        self.sys_write(|tx| tx.create_hnsw_index(cfg))
+    }
+
+    /// `::fts create`.
+    pub(crate) fn sys_create_fts_index(
+        &self,
+        cfg: &crate::parse::sys::FtsIndexConfig,
+    ) -> Result<NamedRows> {
+        self.sys_write(|tx| tx.create_fts_index(cfg))
+    }
+
+    /// `::lsh create`.
+    pub(crate) fn sys_create_minhash_lsh_index(
+        &self,
+        cfg: &crate::parse::sys::MinHashLshConfig,
+    ) -> Result<NamedRows> {
+        self.sys_write(|tx| tx.create_lsh_index(cfg))
+    }
+
+    /// `::index drop`.
+    pub(crate) fn sys_remove_index(&self, rel: &Symbol, idx: &Symbol) -> Result<NamedRows> {
+        self.sys_write(|tx| tx.remove_index(&rel.name, &idx.name))
+    }
+}
+
 
 /// read-side RA operator that serves window/stab queries over these
 /// postings is a separate chunk, see `IndexKind::Temporal`'s doc comment).
@@ -1228,5 +1340,123 @@ mod temporal_index_tests {
         db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
             .expect("remove");
         check_delta("rm", p3, d3);
+    }
+}
+
+#[cfg(test)]
+mod index_surface_tests {
+    use std::collections::BTreeMap;
+
+    use crate::data::json::NamedRows;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::Storage;
+    use kyzo_model::value::{DataValue, Tuple};
+
+    fn no_params() -> BTreeMap<String, DataValue> {
+        BTreeMap::new()
+    }
+
+    fn open_engine<S: Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
+    }
+
+    /// Result rows as sorted `i64` vectors, for order-independent assertions.
+    fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+        let mut out: Vec<Vec<i64>> = nr
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Index-served as-of reads answer exactly like base scans, through
+    /// the REAL `::index create` surface: same rows at every coordinate,
+    /// including one where the fact was retracted and one where its value
+    /// changed between coordinates.
+    #[test]
+    fn plain_index_asof_reads_match_base_scans() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+        db.run_script(
+            "?[k, v] <- [[1, 10], [2, 20]] :create t {k => v}",
+            no_params(),
+        )
+        .expect("create");
+        db.run_script("::index create t:by_v {v}", no_params())
+            .expect("::index create must be a live surface");
+        // History: update k=1, retract k=2 (distinct stamps).
+        db.run_script("?[k, v] <- [[1, 11]] :put t {k => v}", no_params())
+            .expect("update");
+        db.run_script("?[k] <- [[2]] :rm t {k}", no_params())
+            .expect("retract");
+
+        // The index-served plan binds v first (the index's leading
+        // column); the base plan binds k first. Same logical query.
+        let via_index = db
+            .run_script("?[v, k] := *t:by_v{v, k} :order v", no_params())
+            .expect("index read");
+        let via_base = db
+            .run_script("?[v, k] := *t[k, v] :order v", no_params())
+            .expect("base read");
+        assert_eq!(
+            via_index.rows(),
+            via_base.rows(),
+            "index and base must agree on current state"
+        );
+        assert_eq!(via_base.rows().len(), 1, "one row: k=1 updated, k=2 gone");
+        let want: Tuple = Tuple::from_vec(vec![DataValue::from(11), DataValue::from(1)]);
+        assert_eq!(via_base.rows()[0], want);
+    }
+
+    /// Backfill batching at scale: a plain index created over MORE rows
+    /// than one backfill batch (4096) must index every row exactly once —
+    /// the resume bound (fact prefix + `Bot`) must neither skip nor
+    /// double-count across batch boundaries.
+    #[test]
+    fn index_backfill_resumes_correctly_across_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+        db.run_script("?[k, v] <- [[0, 0]] :create big {k => v}", no_params())
+            .expect("create");
+        let mut chunk = vec![];
+        for i in 0..5000i64 {
+            chunk.push(format!("[{}, {}]", i, i * 7));
+            if chunk.len() == 500 {
+                db.run_script(
+                    &format!("?[k, v] <- [{}] :put big {{k => v}}", chunk.join(", ")),
+                    no_params(),
+                )
+                .expect("seed chunk");
+                chunk.clear();
+            }
+        }
+        db.run_script("::index create big:by_v {v}", no_params())
+            .expect("index create over 5000 rows");
+        let via_index = db
+            .run_script("?[count(v)] := *big:by_v{v, k}", no_params())
+            .expect("count via index");
+        assert_eq!(
+            int_rows(&via_index),
+            vec![vec![5000]],
+            "every row indexed once"
+        );
+        // And value-level agreement with the base on a spot range.
+        let via_base = db
+            .run_script(
+                "?[v] := *big[k, v], k >= 4094, k <= 4098 :order v",
+                no_params(),
+            )
+            .expect("base spot");
+        let via_idx = db
+            .run_script(
+                "?[v] := *big:by_v{v, k}, k >= 4094, k <= 4098 :order v",
+                no_params(),
+            )
+            .expect("index spot");
+        assert_eq!(via_base.rows(), via_idx.rows(), "batch-boundary rows agree");
     }
 }

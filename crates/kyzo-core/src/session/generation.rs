@@ -97,3 +97,181 @@ impl IndexGeneration {
         CatalogGeneration::from_index(self).projection_stamp()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::data::json::NamedRows;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use crate::store::sim::SimStorage;
+    use crate::store::Storage;
+    use kyzo_model::value::DataValue;
+
+    fn no_params() -> BTreeMap<String, DataValue> {
+        BTreeMap::new()
+    }
+
+    fn open_engine<S: Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
+    }
+
+    /// Result rows as sorted `i64` vectors, for order-independent assertions.
+    fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+        let mut out: Vec<Vec<i64>> = nr
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The segment law, end to end: a run of pure reads with no
+    /// intervening write eventually builds and serves the relation's
+    /// current-state segment (the rebuild gate declines the first miss and
+    /// builds on the second — `engines/segments.rs`'s
+    /// `rebuild_gated_by_stable_miss_streak`); ANY committed write to the
+    /// relation orphans it (a re-read sees the write, never the cached
+    /// past, whether or not a segment had actually been built yet); a
+    /// DENIED write leaves state and answers untouched; and the same query
+    /// inside a write session reads the transaction's own uncommitted view,
+    /// never a committed-state segment.
+    #[test]
+    fn segments_serve_fresh_and_never_dirty() {
+        let db = open_engine(SimStorage::new(7));
+        db.run_script(
+            "?[k, v] <- [[1, 10], [2, 20]] :create w {k => v}",
+            no_params(),
+        )
+        .unwrap();
+
+        // The first read's miss is ungated (declines to build, per the
+        // rebuild gate); the second read's miss is at the same generation
+        // (stable) and crosses the threshold, building the segment. Either
+        // way both reads return the correct answer.
+        let q = "?[k, v] := *w[k, v]";
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+
+        // A committed write orphans the segment: the re-read sees it.
+        db.run_script("?[k, v] <- [[3, 30]] :put w {k, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20], vec![3, 30]]
+        );
+
+        // A retraction is a write like any other: served state updates.
+        db.run_script("?[k, v] <- [[2, 20]] :rm w {k, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![3, 30]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![3, 30]]
+        );
+
+        // A write whose transaction rolls back (parse-stage failure after
+        // the relation was touched is hard to stage; a constraint denial
+        // is the canonical rollback) leaves both state and served answers
+        // untouched — the early bump merely orphans, never lies.
+        db.run_script(
+            "::constraint create nonneg { ?[k, v] := *w[k, v], v < 0 }",
+            no_params(),
+        )
+        .unwrap();
+        assert!(
+            db.run_script("?[k, v] <- [[4, -1]] :put w {k, v}", no_params())
+                .is_err(),
+            "violating write denied"
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![3, 30]]
+        );
+
+        // A PLAIN INDEX is a mutated relation in its own right: its
+        // segment must orphan when a base-relation write updates the
+        // mirrored rows (hostile-review reproducer: the served index
+        // segment returned the stale two-row past after a base `:put`).
+        db.run_script("::index create w:by_v {v}", no_params())
+            .unwrap();
+        let qi = "?[v, k] := *w:by_v{v, k}";
+        assert_eq!(
+            int_rows(&db.run_script(qi, no_params()).unwrap()),
+            vec![vec![10, 1], vec![30, 3]]
+        );
+        db.run_script("?[k, v] <- [[5, 50]] :put w {k, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(qi, no_params()).unwrap()),
+            vec![vec![10, 1], vec![30, 3], vec![50, 5]],
+            "an index segment must never outlive a base write"
+        );
+    }
+
+    /// [`segments_serve_fresh_and_never_dirty`]'s reproducer, extended to
+    /// the JOIN PROBE path (issue #75's fix): `*jl[k], *jr[k, v]` compiles
+    /// to a prefix join whose right side (`jr`) is now served, current-
+    /// state, straight from its segment (`StoredRA::prefix_join_batched`)
+    /// instead of the bitemporal seek-based probe. The probe side must
+    /// obey the identical freshness law as a plain scan — a write to `jr`
+    /// bumps its generation BEFORE commit, so the very next read's live
+    /// stamp can never classify a segment sealed before that write as
+    /// fresh, and the join sees the new row immediately, never a cached
+    /// probe answer.
+    #[test]
+    fn segments_serve_fresh_and_never_dirty_for_join_probes() {
+        let db = open_engine(SimStorage::new(9));
+        db.run_script("?[k] <- [[1], [2]] :create jl {k}", no_params())
+            .unwrap();
+        db.run_script("?[k2, v] <- [[1, 10]] :create jr {k2 => v}", no_params())
+            .unwrap();
+
+        // The first read's miss declines (rebuild gate); the second read's
+        // miss is at the same stable generation and builds jr's segment, so
+        // its point-lookup probe is served from the cache from here on.
+        let q = "?[k, v] := *jl[k], *jr[k, v]";
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10]]
+        );
+
+        // A committed write to jr — the PROBE side of the join — orphans
+        // its segment: the re-read must see the new row, not a stale
+        // probe answer served from before the write.
+        db.run_script("?[k2, v] <- [[2, 20]] :put jr {k2 => v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+
+        // A retraction on the probe side is a write like any other.
+        db.run_script("?[k2, v] <- [[1, 10]] :rm jr {k2, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![2, 20]]
+        );
+    }
+}
+

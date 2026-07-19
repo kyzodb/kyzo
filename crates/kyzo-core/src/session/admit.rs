@@ -1837,7 +1837,7 @@ mod trigger_cache_battery {
 
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
-            .rows
+            .rows()
             .iter()
             .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
             .collect();
@@ -1884,5 +1884,25 @@ mod trigger_cache_battery {
             vec![vec![0, 0], vec![1, 10], vec![2, 20]],
             "second on-put trigger must run ITS program, not a cache-collided one"
         );
+    }
+
+    /// `:replace` atomically clears the old rows and inserts the new set,
+    /// inside one transaction — the kernel `del_range` and the puts commit
+    /// together.
+    #[test]
+    fn replace_is_atomic_clear_and_insert() {
+        let db = open_engine(SimStorage::new(3));
+        db.run_script(
+            "?[a, b] <- [[1, 2], [2, 3], [3, 4]] :create edge {a, b}",
+            no_params(),
+        )
+        .expect("create");
+        db.run_script("?[a, b] <- [[9, 9]] :replace edge {a, b}", no_params())
+            .expect("replace");
+        let out = db
+            .run_script("?[a, b] := *edge[a, b]", no_params())
+            .expect("scan");
+        // The old three rows are gone; only the replacement survives.
+        assert_eq!(int_rows(&out), vec![vec![9, 9]]);
     }
 }

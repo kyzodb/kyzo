@@ -23,6 +23,8 @@ use std::fmt::{Display, Formatter};
 use miette::Diagnostic;
 use thiserror::Error;
 
+use crate::parse::sys::AccessLevel as ParseAccessLevel;
+
 /// What operations a stored relation admits. **The `Ord` derive IS the
 /// semantics** (an existing type-driven win of the original, preserved
 /// deliberately): every gate is a comparison, `Hidden < ReadOnly <
@@ -67,3 +69,14 @@ pub(crate) struct InsufficientAccessLevel(
     pub(crate) String,
     pub(crate) AccessLevel,
 );
+
+/// Map the parser's access-level enum to the catalog's. Both are the same
+/// four-rung ladder; the parse tier and runtime tier keep distinct types.
+pub(crate) fn map_access_level(level: ParseAccessLevel) -> AccessLevel {
+    match level {
+        ParseAccessLevel::Hidden => AccessLevel::Hidden,
+        ParseAccessLevel::ReadOnly => AccessLevel::ReadOnly,
+        ParseAccessLevel::Protected => AccessLevel::Protected,
+        ParseAccessLevel::Normal => AccessLevel::Normal,
+    }
+}

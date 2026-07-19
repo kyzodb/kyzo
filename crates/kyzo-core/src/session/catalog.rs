@@ -114,12 +114,15 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::store::time::ClaimPolarity;
+use crate::data::json::NamedRows;
 use crate::data::relation::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
 use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
 use kyzo_model::program::{InputProgram, InputRelationHandle};
 use crate::parse::parse_script;
-use crate::session::access::{AccessLevel, InsufficientAccessLevel};
-use crate::store::{ReadTx, WriteTx};
+use crate::parse::sys::AccessLevel as ParseAccessLevel;
+use crate::session::access::{AccessLevel, InsufficientAccessLevel, map_access_level};
+use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
+use crate::store::{ReadTx, Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{
@@ -1558,6 +1561,143 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
     tx.put(&new_row_key, &rel.encode()?)
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Engine sys-op doors for catalog-facing system ops
+// ─────────────────────────────────────────────────────────────────────────
+
+impl<S: Storage> Engine<S> {
+    /// `::relations` — list stored relations.
+    pub(crate) fn sys_list_relations(&self) -> Result<NamedRows> {
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let mut rows = vec![];
+        for handle in list_relations(&tx.store)? {
+            rows.push(Tuple::from_vec(vec![
+                DataValue::from(handle.name.as_str()),
+                DataValue::from(handle.arity() as i64),
+                DataValue::from(format!("{:?}", handle.access_level)),
+            ]));
+        }
+        Ok(NamedRows::try_new(
+            vec!["name".into(), "arity".into(), "access_level".into()],
+            rows,
+        )?)
+    }
+
+    /// `::columns` — list key/non-key columns of a relation.
+    pub(crate) fn sys_list_columns(&self, name: &Symbol) -> Result<NamedRows> {
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let handle = get_relation(&tx.store, &name.name)?;
+        let mut rows = vec![];
+        for col in handle
+            .metadata
+            .keys
+            .iter()
+            .map(|c| (c, true))
+            .chain(handle.metadata.non_keys.iter().map(|c| (c, false)))
+        {
+            rows.push(Tuple::from_vec(vec![
+                DataValue::from(col.0.name.as_str()),
+                DataValue::from(col.1),
+            ]));
+        }
+        Ok(NamedRows::try_new(vec!["column".into(), "is_key".into()], rows)?)
+    }
+
+    /// `::fixed_rules` — names of registered fixed rules.
+    pub(crate) fn sys_list_fixed_rules(&self) -> Result<NamedRows> {
+        let rows = self
+            .fixed_rules()
+            .keys()
+            .map(|k| Tuple::from_vec(vec![DataValue::from(k.as_str())]))
+            .collect();
+        Ok(NamedRows::try_new(vec!["name".into()], rows)?)
+    }
+
+    /// `::show_triggers` — put/rm/replace trigger sources on a relation.
+    pub(crate) fn sys_show_trigger(&self, name: &Symbol) -> Result<NamedRows> {
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let handle = get_relation(&tx.store, &name.name)?;
+        let mut rows = vec![];
+        for (kind, src) in handle
+            .put_triggers
+            .iter()
+            .map(|s| ("on_put", s))
+            .chain(handle.rm_triggers.iter().map(|s| ("on_rm", s)))
+            .chain(handle.replace_triggers.iter().map(|s| ("on_replace", s)))
+        {
+            rows.push(Tuple::from_vec(vec![
+                DataValue::from(kind),
+                DataValue::from(src.program().to_string()),
+            ]));
+        }
+        Ok(NamedRows::try_new(vec!["kind".into(), "source".into()], rows)?)
+    }
+
+    /// `::remove` — destroy one or more relations.
+    pub(crate) fn sys_remove_relation(&self, names: Vec<Symbol>) -> Result<NamedRows> {
+        self.sys_write(|tx| {
+            for name in &names {
+                tx.destroy_relation(&name.name)?;
+            }
+            Ok(status_ok())
+        })
+    }
+
+    /// `::rename` — rename relation pairs.
+    pub(crate) fn sys_rename_relation(
+        &self,
+        pairs: Vec<(Symbol, Symbol)>,
+    ) -> Result<NamedRows> {
+        self.sys_write(|tx| {
+            for (old, new) in &pairs {
+                rename_relation(&mut tx.store, old, new)?;
+            }
+            Ok(status_ok())
+        })
+    }
+
+    /// `::describe` — set a relation's description.
+    pub(crate) fn sys_describe_relation(
+        &self,
+        name: &Symbol,
+        desc: &str,
+    ) -> Result<NamedRows> {
+        self.sys_write(|tx| {
+            describe_relation(&mut tx.store, &name.name, desc)?;
+            Ok(status_ok())
+        })
+    }
+
+    /// `::set_triggers` — replace put/rm/replace trigger sources.
+    pub(crate) fn sys_set_triggers(
+        &self,
+        name: Symbol,
+        puts: Vec<String>,
+        rms: Vec<String>,
+        replaces: Vec<String>,
+    ) -> Result<NamedRows> {
+        self.sys_write(move |tx| {
+            set_relation_triggers(&mut tx.store, &name, &puts, &rms, &replaces)?;
+            Ok(status_ok())
+        })
+    }
+
+    /// `::access` — set access level on named relations.
+    pub(crate) fn sys_set_access_level(
+        &self,
+        names: Vec<Symbol>,
+        level: ParseAccessLevel,
+    ) -> Result<NamedRows> {
+        let level = map_access_level(level);
+        self.sys_write(move |tx| {
+            for name in &names {
+                set_access_level(&mut tx.store, &name.name, level)?;
+            }
+            Ok(status_ok())
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests: the catalog's executable law.
 // ---------------------------------------------------------------------------
@@ -2140,6 +2280,96 @@ mod tests {
         let err = RelationHandle::decode(&bytes.as_slice()[..bytes.len() / 2]).unwrap_err();
         assert!(err.downcast_ref::<RelationDeserError>().is_some());
         assert!(RelationHandle::decode(b"garbage").is_err());
+    }
+
+    /// The language surface's coordinate ORDER, pinned with a
+    /// discriminating history (reviewer's probe): a retroactive write —
+    /// valid instant far in the past, system stamp now — reads back only
+    /// when the parser maps `@ first, second` to (system, valid). Swapped
+    /// coordinates put the system cut before the write's stamp, where the
+    /// record knew nothing.
+    #[test]
+    fn asof_clause_first_coordinate_is_system_time() {
+        use std::collections::BTreeMap;
+        use crate::session::db::Engine;
+        use kyzo_model::SourceSpan;
+
+        fn no_params() -> BTreeMap<String, DataValue> {
+            BTreeMap::new()
+        }
+        fn open_engine<S: Storage>(store: S) -> Engine<S> {
+            Engine::compose(store, Catalog::new()).expect("compose engine")
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+        db.run_script(
+            "?[k, v] <- [[9, 'seed']] :create hist {k => v}",
+            no_params(),
+        )
+        .expect("create");
+        // The retroactive write: valid = 150 µs (ancient), sys = now.
+        let mut tx = db.store.write_tx().unwrap();
+        let handle = get_relation(&tx, "hist").unwrap();
+        handle
+            .put_fact(
+                &mut tx,
+                &[DataValue::from(1), DataValue::from("retro")],
+                ValidityTs::from_raw(150),
+                SourceSpan(0, 0),
+            )
+            .unwrap();
+        tx.commit().unwrap();
+        let now = crate::session::current_validity().unwrap().raw();
+
+        // (sys=now, valid=200): the record NOW says the fact held at 200.
+        let rows = db
+            .run_script(&format!("?[v] := *hist[1, v @ {now}, 200]"), no_params())
+            .expect("two-coordinate read");
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from("retro")])];
+        assert_eq!(
+            rows.rows(),
+            want,
+            "system-now, valid-200 must see the retroactive claim"
+        );
+        // Swapped (sys=200, valid=now): at system time 200 µs the record
+        // did not exist; a parser that swapped coordinates would return
+        // the row here and the empty set above.
+        let rows = db
+            .run_script(&format!("?[v] := *hist[1, v @ 200, {now}]"), no_params())
+            .expect("swapped-coordinate read");
+        assert!(
+            rows.rows().is_empty(),
+            "at system time 200µs the record knew nothing: {rows:?}"
+        );
+    }
+
+    /// The `@` clause parses in both arities through the public script
+    /// surface: `@ valid` (current belief) and `@ system, valid` (the
+    /// record as it was). Resolution semantics are pinned by the
+    /// time-travel trials; this pins the LANGUAGE surface.
+    #[test]
+    fn asof_clause_parses_one_and_two_coordinates() {
+        use std::collections::BTreeMap;
+        use crate::session::db::Engine;
+
+        fn no_params() -> BTreeMap<String, DataValue> {
+            BTreeMap::new()
+        }
+        fn open_engine<S: Storage>(store: S) -> Engine<S> {
+            Engine::compose(store, Catalog::new()).expect("compose engine")
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+        db.run_script("?[k, v] <- [[1, 10]] :create hist {k => v}", no_params())
+            .expect("create");
+        db.run_script("?[k, v] := *hist[k, v @ 12345]", no_params())
+            .expect("single-coordinate as-of parses and runs");
+        db.run_script("?[k, v] := *hist[k, v @ 12345, 67890]", no_params())
+            .expect("two-coordinate as-of parses and runs");
+        db.run_script("?[k, v] := *hist{k, v @ 12345, 67890}", no_params())
+            .expect("two-coordinate as-of parses in named form");
     }
 
     /// The pinned wire bytes of the canonical handle above (msgpack,
