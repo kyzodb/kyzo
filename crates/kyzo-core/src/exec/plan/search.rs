@@ -34,11 +34,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use miette::{Diagnostic, Result, bail};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use kyzo_model::program::expr::Expr;
-use kyzo_model::program::rule::{SearchInput, TempSymbGen};
+use kyzo_model::program::rule::{SearchFilter, SearchInput, TempSymbGen};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, SearchHits, Vector};
@@ -300,11 +299,11 @@ fn expr_as_var(name: impl AsRef<str>, e: &Expr, span: SourceSpan) -> Result<Symb
 }
 
 fn take_const(
-    params: &mut BTreeMap<SmartString<LazyCompact>, Expr>,
+    params: &mut BTreeMap<Symbol, Expr>,
     name: &'static str,
     span: SourceSpan,
 ) -> Result<Option<DataValue>> {
-    match params.remove(name) {
+    match params.remove(&Symbol::new(name, span)) {
         None => Ok(None),
         Some(e) => {
             let v = e
@@ -322,7 +321,7 @@ fn take_const(
 }
 
 fn take_pos_int(
-    params: &mut BTreeMap<SmartString<LazyCompact>, Expr>,
+    params: &mut BTreeMap<Symbol, Expr>,
     name: &'static str,
     span: SourceSpan,
 ) -> Result<Option<usize>> {
@@ -352,11 +351,11 @@ fn take_pos_int(
 }
 
 fn take_var(
-    params: &mut BTreeMap<SmartString<LazyCompact>, Expr>,
+    params: &mut BTreeMap<Symbol, Expr>,
     name: &'static str,
     span: SourceSpan,
 ) -> Result<Option<Symbol>> {
-    match params.remove(name) {
+    match params.remove(&Symbol::new(name, span)) {
         None => Ok(None),
         Some(e) => Ok(Some(expr_as_var(name, &e, span)?)),
     }
@@ -368,7 +367,7 @@ fn take_var(
 /// leftover key names a column that does not exist — refused.
 fn base_frame(
     base: &RelationHandle,
-    mut bindings: BTreeMap<SmartString<LazyCompact>, Expr>,
+    mut bindings: BTreeMap<Symbol, Expr>,
     symb_gen: &mut TempSymbGen,
     span: SourceSpan,
 ) -> Result<Vec<Symbol>> {
@@ -379,14 +378,14 @@ fn base_frame(
         .iter()
         .chain(base.metadata.non_keys.iter())
     {
-        match bindings.remove(&col.name) {
+        match bindings.remove(&Symbol::new(col.name.clone(), span)) {
             Some(e) => frame.push(expr_as_var(&col.name, &e, span)?),
             None => frame.push(symb_gen.next_ignored(span)),
         }
     }
     if let Some((name, _)) = bindings.into_iter().next() {
         bail!(SearchColumnNotFound(
-            Symbol::new(name, span),
+            name,
             Symbol::new(base.name.clone(), span),
             span
         ));
@@ -418,11 +417,12 @@ pub(crate) fn resolve_search(
         .clone();
     let idx = handle(&idx_ref.relation_name(&base.name))?;
 
-    let mut params = inp.parameters;
-    let query = params
-        .remove("query")
-        .ok_or(SearchParamRequired("query", span))?;
-    let filter = params.remove("filter");
+    let query = inp.query;
+    let filter = match inp.filter {
+        SearchFilter::Unfiltered => None,
+        SearchFilter::Pred(e) => Some(e),
+    };
+    let mut params = inp.modality.into_map();
     let mut own_bindings = base_frame(&base, inp.bindings, symb_gen, span)?;
 
     let cfg = match idx_ref.kind {
@@ -530,7 +530,7 @@ pub(crate) fn resolve_search(
 
     if let Some((name, _)) = params.into_iter().next() {
         bail!(SearchParamInvalid(
-            Symbol::new(name, span),
+            name,
             SearchParamInvalidReason::UnknownParameter,
             span
         ));

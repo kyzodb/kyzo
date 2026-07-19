@@ -253,20 +253,18 @@ pub(crate) fn convert_named_field_relation(
         .map(|col| &col.name)
         .collect();
     for k in args.keys() {
-        if !fields.contains(k) {
-            bail!(NamedFieldNotFound(
-                name.clone(),
-                Symbol::new(k.clone(), span),
-                span
-            ));
+        if !fields.contains(&k.name) {
+            bail!(NamedFieldNotFound(name.clone(), k.clone(), span));
         }
     }
     let mut new_args = vec![];
     for col_def in metadata.keys.iter().chain(metadata.non_keys.iter()) {
-        let arg = args.remove(&col_def.name).unwrap_or_else(|| Expr::Binding {
-            var: symb_gen.next_ignored(span),
-            tuple_pos: BindingPos::Unresolved,
-        });
+        let arg = args
+            .remove(&Symbol::new(col_def.name.clone(), span))
+            .unwrap_or_else(|| Expr::Binding {
+                var: symb_gen.next_ignored(span),
+                tuple_pos: BindingPos::Unresolved,
+            });
         new_args.push(arg);
     }
     Ok(InputRelationApplyAtom {

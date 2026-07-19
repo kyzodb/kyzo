@@ -912,7 +912,7 @@ struct DisconnectedChannelRule;
 impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
     fn arity(
         &self,
-        _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        _options: &FixedRuleOptions,
         _rule_head: &[Symbol],
         _span: SourceSpan,
     ) -> Result<usize> {
