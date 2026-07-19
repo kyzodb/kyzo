@@ -38,12 +38,14 @@
 use miette::{Result, bail, miette};
 
 use kyzo_model::data_value_any;
+use kyzo_model::data_value_to_vld_spec;
 use kyzo_model::program::expr::{
     BindingPos, Decision, EvalRaisedError, Expr, LazyOp, NoImplementationError,
     PredicateTypeError, TupleTooShortError, UnboundVariableError,
 };
 use kyzo_model::program::op::OpDecl;
-use kyzo_model::value::DataValue;
+use kyzo_model::program::WriteValidity;
+use kyzo_model::value::{DataValue, ValidityTs};
 use crate::exec::expr::batch::{ColumnBatch, ErrorMin, Selection};
 use crate::exec::stdlib::resolve_op;
 
@@ -57,6 +59,41 @@ fn row_sel(row: usize) -> u32 {
 
 fn bound_of(op: OpDecl) -> Result<&'static crate::exec::stdlib::BoundOp> {
     resolve_op(&op.display_name()).ok_or_else(|| miette!("unknown builtin op {}", op.name))
+}
+
+/// Resolve a mutation's valid-time coordinate for one row at the write
+/// boundary: `Now` is the transaction stamp, `Fixed` is constant, and
+/// `PerRow` evaluates the full carried [`Expr`] via [`eval_expr`] then
+/// re-proves the terminal tick through [`ValidityTs::for_assertion`].
+///
+/// Model `WriteValidity` is declaration-only; this is the evaluation body
+/// (same declaration/body split as `OpDecl` / `BoundOp`).
+pub(crate) fn resolve_write_validity(
+    write_vld: &WriteValidity,
+    row: &[DataValue],
+    stamp: ValidityTs,
+    cur_vld: ValidityTs,
+) -> Result<ValidityTs> {
+    match write_vld {
+        WriteValidity::Now => Ok(stamp),
+        WriteValidity::Fixed(v) => Ok(*v),
+        WriteValidity::PerRow(expr) => {
+            let span = expr.span();
+            let val = eval_expr(expr, row)?;
+            let vld = data_value_to_vld_spec(val, span, cur_vld)?;
+            // Parse proved the expression names one of the mutation's
+            // output columns, never what value that column will hold for
+            // any given row. Re-prove per row: a user-asserted write
+            // validity can never be the reserved terminal tick
+            // (`i64::MAX` / `'END'`).
+            ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
+                miette!(
+                    labels = vec![miette::LabeledSpan::underline(span)],
+                    "a write validity cannot be the reserved terminal tick (i64::MAX / 'END')"
+                )
+            })
+        }
+    }
 }
 
 /// Row-path expression evaluation — sole door that applies [`BoundOp::apply`].

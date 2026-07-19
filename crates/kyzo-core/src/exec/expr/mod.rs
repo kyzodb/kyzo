@@ -2,4 +2,4 @@
 pub(crate) mod batch;
 pub(crate) mod eval;
 
-pub(crate) use eval::{eval_expr, eval_pred, eval_to_const};
+pub(crate) use eval::{eval_expr, eval_pred, eval_to_const, resolve_write_validity};

@@ -172,6 +172,17 @@ impl NamedRows {
         })
     }
 
+    /// Encode this page as a self-contained Arrow IPC stream via
+    /// [`kyzo_model::envelope::arrow`] (Schema + one RecordBatch + EOS).
+    pub fn to_arrow_ipc(&self) -> miette::Result<Vec<u8>> {
+        let batch = kyzo_model::envelope::arrow::ColumnBatch::from_rows(
+            self.rows.clone(),
+            self.headers.len(),
+        );
+        let names: Vec<&str> = self.headers.iter().map(String::as_str).collect();
+        kyzo_model::envelope::arrow::encode_stream(&batch, &names)
+    }
+
     /// Parse the same envelope back into a `NamedRows`.
     pub fn from_json(v: &JsonValue) -> miette::Result<Self> {
         let headers = v

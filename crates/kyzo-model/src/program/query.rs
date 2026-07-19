@@ -7,25 +7,21 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): query-output options vocabulary seated in kyzo-model; write
- * validity re-proves the terminal tick per row through the same smart
- * constructor. Per-row expression evaluation uses resolved column bindings
- * (or constants); full Apply trees are evaluated in the engine.
+ * (MPL-2.0): query-output options vocabulary seated in kyzo-model.
+ * `WriteValidity` is declaration-only here — `PerRow` carries the full
+ * `Expr` as data; row evaluation and terminal-tick re-proof live at the
+ * write boundary in kyzo-core (`resolve_write_validity` via `eval_expr`).
  */
 
 //! Query-output options vocabulary: what a query asserts, mutates, and returns.
 
 use std::fmt::{Debug, Display, Formatter};
 
-use miette::{Result, bail, miette};
-use thiserror::Error;
-
 use crate::SourceSpan;
-use crate::data_value_to_vld_spec;
-use crate::program::expr::{BindingPos, Expr, TupleTooShortError, UnboundVariableError};
+use crate::program::expr::Expr;
 use crate::program::symbol::Symbol;
 use crate::schema::relation::StoredRelationMetadata;
-use crate::value::{DataValue, ValidityTs};
+use crate::value::ValidityTs;
 
 /// A `:assert none` / `:assert some` clause: the query fails unless its
 /// result set is empty / non-empty.
@@ -89,73 +85,6 @@ pub enum WriteValidity {
     /// column — the backfill/import case, where every row carries its own
     /// timestamp.
     PerRow(Expr),
-}
-
-impl WriteValidity {
-    /// Resolve this mutation's valid coordinate for one row: `Now` is the
-    /// transaction's own system stamp (untouched pre-`@` behavior), `Fixed`
-    /// is the same instant for every row, and `PerRow` evaluates its
-    /// expression against THIS row exactly like any other column
-    /// extractor.
-    ///
-    /// `PerRow` after parse is a resolved column binding (or a constant).
-    /// Full Apply/Lazy trees are engine evaluation; this seat refuses them
-    /// rather than inventing a second evaluator.
-    pub fn resolve(
-        &self,
-        row: &[DataValue],
-        stamp: ValidityTs,
-        cur_vld: ValidityTs,
-    ) -> Result<ValidityTs> {
-        match self {
-            WriteValidity::Now => Ok(stamp),
-            WriteValidity::Fixed(v) => Ok(*v),
-            WriteValidity::PerRow(expr) => {
-                let span = expr.span();
-                let val = eval_write_validity_expr(expr, row)?;
-                let vld = data_value_to_vld_spec(val, span, cur_vld)?;
-                // Parse proved the expression names one of the mutation's
-                // output columns, never what value that column will hold
-                // for any given row. Re-prove per row through the same
-                // smart constructor: a user-asserted write validity can
-                // never be the reserved terminal tick (`i64::MAX` / `'END'`).
-                ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
-                    miette!(
-                        labels = vec![miette::LabeledSpan::underline(span)],
-                        "a write validity cannot be the reserved terminal tick (i64::MAX / 'END')"
-                    )
-                })
-            }
-        }
-    }
-}
-
-fn eval_write_validity_expr(expr: &Expr, row: &[DataValue]) -> Result<DataValue> {
-    match expr {
-        Expr::Const { val, .. } => Ok(val.clone()),
-        Expr::Binding { var, tuple_pos, .. } => match *tuple_pos {
-            BindingPos::Unresolved => {
-                bail!(UnboundVariableError(var.name.to_string(), var.span))
-            }
-            BindingPos::Resolved(i) => Ok(row
-                .get(i)
-                .ok_or_else(|| {
-                    TupleTooShortError(var.name.to_string(), i, row.len(), var.span)
-                })?
-                .clone()),
-        },
-        other => {
-            #[derive(Debug, Error, miette::Diagnostic)]
-            #[error(
-                "WriteValidity::PerRow requires a resolved column binding or constant; \
-                 complex expressions are evaluated in the engine"
-            )]
-            #[diagnostic(code(query::write_validity_expr))]
-            struct WriteValidityExprNotColumn(#[label] SourceSpan);
-
-            bail!(WriteValidityExprNotColumn(other.span()))
-        }
-    }
 }
 
 /// The output stored relation as the query *declares* it: name, declared

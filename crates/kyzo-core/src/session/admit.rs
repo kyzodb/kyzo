@@ -339,7 +339,12 @@ impl<T: WriteTx> SessionTx<T> {
             // `@`-carrying mutation instead asserts the row at the
             // instant its own clause names, per row if the clause names
             // one of this row's own columns.
-            let valid = write_vld.resolve(tuple.as_slice(), stamp, cur_vld)?;
+            let valid = crate::exec::expr::resolve_write_validity(
+                write_vld,
+                tuple.as_slice(),
+                stamp,
+                cur_vld,
+            )?;
             let extracted: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
@@ -483,7 +488,12 @@ impl<T: WriteTx> SessionTx<T> {
 
         let stamp = self.system_stamp_routed(relation_store.residency());
         for tuple in res_iter {
-            let valid = write_vld.resolve(tuple.as_slice(), stamp, cur_vld)?;
+            let valid = crate::exec::expr::resolve_write_validity(
+                write_vld,
+                tuple.as_slice(),
+                stamp,
+                cur_vld,
+            )?;
             let mut new_kv: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
@@ -616,7 +626,12 @@ impl<T: WriteTx> SessionTx<T> {
 
         let stamp = self.system_stamp_routed(relation_store.residency());
         for tuple in res_iter {
-            let valid = write_vld.resolve(tuple.as_slice(), stamp, cur_vld)?;
+            let valid = crate::exec::expr::resolve_write_validity(
+                write_vld,
+                tuple.as_slice(),
+                stamp,
+                cur_vld,
+            )?;
             let extracted: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
@@ -1445,8 +1460,9 @@ mod bulk_write_tests {
     }
 
     /// A per-row `@` clause's coordinate comes out of the row's own data
-    /// (`WriteValidity::PerRow`, resolved once per row inside
-    /// `put_into_relation`'s loop), so the reserved terminal tick
+    /// (`WriteValidity::PerRow`, resolved once per row via
+    /// `resolve_write_validity` inside `put_into_relation`'s loop), so the
+    /// reserved terminal tick
     /// (`i64::MAX`, issue #62's ruling) can only be caught here, at
     /// runtime, when the offending row is actually reached — parse time
     /// only proved `@ ts` names one of the mutation's own output columns,
