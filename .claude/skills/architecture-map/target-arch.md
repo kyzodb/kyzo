@@ -252,7 +252,7 @@ Format: `path` — description
 `crates/kyzo-crashfs/src/passthrough.rs` — passthrough FS layer that can interpose faults on real IO
 `crates/kyzo-crashfs/src/sim.rs` — in-process simulated FS for deterministic crash testing
 `crates/kyzo-crashfs/tests/standalone_mount.rs` — proves crashfs can mount and serve without the full trials stack
-`crates/kyzo-lsp/src/translate.rs` — maps LSP requests/responses onto sealed engine parse and query doors
+`crates/kyzo-lsp/src/translate.rs` — miette → LSP: spans to ranges, errors to diagnostics (LineIndex, word_at, diagnostics_from_report, collect_labels)
 `crates/kyzo-model/src/envelope/json.rs` — DataValue ↔ JSON / serde wire conversions (NamedRows diagnostic envelopes stay in kyzo-core data/json)
 `crates/kyzo-model/src/envelope/arrow.rs` — Arrow-shaped wire envelope for values crossing process boundaries
 `crates/kyzo-model/src/format.rs` — KyzoScript pretty-printer (proof → one canonical source text); value byte encode is value/canonical.rs

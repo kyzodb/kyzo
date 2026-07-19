@@ -10,11 +10,14 @@
 //! The KyzoScript language server (story #92): the delivery of story #73's
 //! designed diagnostics, live in the editor instead of only after a real
 //! run. Every `textDocument/didOpen`/`didChange` re-validates the document
-//! through [`kyzo::lsp_api::check_script`] — the same `ParseError`/
+//! through kyzo-model's public parse surface — the same `ParseError`/
 //! `AggrNotFound`/`OptionNotConstantError`/… surface #73 redesigned — and
-//! publishes the result as LSP `Diagnostic`s: span becomes `Range`, the
-//! error's `Display` plus its `#[help]` become `message`, and the
-//! diagnostic `code` carries the same `parser::…` code the CLI shows.
+//! publishes the result as LSP `Diagnostic`s via [`translate`]: span becomes
+//! `Range`, the error's `Display` plus its `#[help]` become `message`, and
+//! the diagnostic `code` carries the same `parser::…` code the CLI shows.
+//!
+//! When formatting lands it must call kyzo-model's format door (the one
+//! canonical pretty-printer), never a local one.
 //!
 //! Transport is hand-rolled stdio JSON-RPC (`Content-Length` framing, no
 //! async runtime): diagnostics-on-type is synchronous, single-document
@@ -45,17 +48,21 @@
 //! often mid-keystroke and does not parse at all, and a feature that only
 //! works on valid documents reads as broken to an editor user.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
 
 use kyzo::{Db, FjallStorage, new_fjall_storage};
+use kyzo_model::DataValue;
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, Diagnostic, DiagnosticSeverity, Hover,
-    HoverContents, HoverProviderCapability, InitializeResult, MarkupContent, MarkupKind,
-    NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    CompletionItem, CompletionItemKind, CompletionOptions, Diagnostic, Hover, HoverContents,
+    HoverProviderCapability, InitializeResult, MarkupContent, MarkupKind, OneOf, Position,
+    PublishDiagnosticsParams, Range, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri,
 };
 use serde_json::{Value, json};
+
+mod translate;
+use translate::{LineIndex, diagnostics_from_report, word_at};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Wire transport: Content-Length-framed JSON-RPC over stdio, per the LSP
@@ -121,189 +128,15 @@ fn response(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Byte offset -> LSP `Position`. LSP positions are UTF-16 code units
-// (`PositionEncodingKind::UTF16`, the default every client must support),
-// not bytes and not Unicode scalar values -- a span past the first
-// non-ASCII character would render at the wrong column in the editor
-// otherwise, silently, for exactly the scripts most likely to exercise the
-// escape/codepoint diagnostics (#73's `InvalidUtf8Error`/
-// `InvalidEscapeSeqError`) that carry non-ASCII spans.
-// ─────────────────────────────────────────────────────────────────────────
-
-struct LineIndex {
-    /// Byte offset of the start of each line (line 0's start, always 0, is
-    /// the first entry).
-    line_starts: Vec<usize>,
-}
-
-impl LineIndex {
-    fn new(text: &str) -> Self {
-        let mut line_starts = vec![0];
-        for (i, b) in text.bytes().enumerate() {
-            if b == b'\n' {
-                line_starts.push(i + 1);
-            }
-        }
-        LineIndex { line_starts }
-    }
-
-    /// The `Position` for `byte_offset` into the same `text` this index was
-    /// built from. Clamps past-the-end offsets to the document's end
-    /// rather than panicking: a span is proven in-bounds against the
-    /// *parser's* view of the text, but nothing re-proves that here, and a
-    /// clamp is a wrong-looking diagnostic, never a crashed server.
-    fn position(&self, text: &str, byte_offset: usize) -> Position {
-        let byte_offset = byte_offset.min(text.len());
-        let line = self
-            .line_starts
-            .binary_search(&byte_offset)
-            .unwrap_or_else(|insert_at| insert_at - 1);
-        let line_start = self.line_starts[line];
-        let character = text[line_start..byte_offset].encode_utf16().count() as u32;
-        Position::new(line as u32, character)
-    }
-
-    /// The inverse of [`LineIndex::position`]: the byte offset a `Position`
-    /// (UTF-16 code units into its line) names. Walks the line's chars
-    /// counting UTF-16 units rather than assuming 1 unit == 1 byte, for the
-    /// same reason `position` above doesn't assume it either. Clamps a
-    /// character past the line's real length to the line's end (the LSP
-    /// spec's own rule for an over-long position, not an error).
-    fn offset(&self, text: &str, position: Position) -> usize {
-        let line = position.line as usize;
-        let Some(&line_start) = self.line_starts.get(line) else {
-            return text.len();
-        };
-        let line_end = self
-            .line_starts
-            .get(line + 1)
-            .map_or(text.len(), |&next| next.saturating_sub(1).max(line_start));
-        let line_text = &text[line_start..line_end.min(text.len())];
-        let mut units = 0u32;
-        for (byte_idx, ch) in line_text.char_indices() {
-            if units >= position.character {
-                return line_start + byte_idx;
-            }
-            units += ch.len_utf16() as u32;
-        }
-        line_start + line_text.len()
-    }
-}
-
-/// The identifier-shaped word touching `offset` in `text` — the token a
-/// hover or completion request is "about" — plus its own byte range,
-/// widening left and right from `offset` while the character is a
-/// KyzoScript identifier character (`[A-Za-z0-9_]`; good enough for a
-/// relation/aggregation name, which is all hover/completion resolve
-/// against here). `None` if `offset` doesn't touch such a word at all
-/// (whitespace, punctuation, end of document).
-fn word_at(text: &str, offset: usize) -> Option<(&str, usize, usize)> {
-    fn is_word_char(c: char) -> bool {
-        c.is_ascii_alphanumeric() || c == '_'
-    }
-    let offset = offset.min(text.len());
-    let mut start = offset;
-    while start > 0 {
-        let prev = text[..start].chars().next_back()?;
-        if !is_word_char(prev) {
-            break;
-        }
-        start -= prev.len_utf8();
-    }
-    let mut end = offset;
-    while end < text.len() {
-        let next = text[end..].chars().next()?;
-        if !is_word_char(next) {
-            break;
-        }
-        end += next.len_utf8();
-    }
-    if start == end {
-        None
-    } else {
-        Some((&text[start..end], start, end))
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// miette::Report -> LSP Diagnostic[]: the redesigned #73 surface, live.
-// ─────────────────────────────────────────────────────────────────────────
-
-/// One [`Diagnostic`] per label in `err`'s tree (its own labels, then every
-/// `#[related]` cause and `diagnostic_source`, walked recursively — the
-/// same shape `parse::fuzz_tests::walk_labels` proves every parser error
-/// satisfies, just walked here from the public `Diagnostic` trait instead
-/// of that crate-internal test helper). Every diagnostic shares one
-/// message: the error's own `Display`, plus its `#[help]` text appended
-/// when present, so the mechanical fix #73 wrote for a SQL-shaped mistake
-/// (or any other designed hint) shows up in the editor, not just at the
-/// CLI. Falls back to a single diagnostic at the document's start if the
-/// error tree carries no label anywhere (defensive: every error the parse
-/// tier itself raises is spanned, per #73's law test, but `check_script`
-/// can also surface a non-parser failure, e.g. the system clock, with no
-/// span to give).
-fn diagnostics_from_report(err: &miette::Report, text: &str, index: &LineIndex) -> Vec<Diagnostic> {
-    let message = match err.help() {
-        Some(help) => format!("{err}\n\nhelp: {help}"),
-        None => err.to_string(),
-    };
-    let code = err.code().map(|c| NumberOrString::String(c.to_string()));
-
-    let mut out = Vec::new();
-    collect_labels(err.as_ref(), &message, &code, text, index, &mut out);
-    if out.is_empty() {
-        out.push(Diagnostic {
-            range: Range::new(Position::new(0, 0), Position::new(0, 0)),
-            severity: Some(DiagnosticSeverity::ERROR),
-            source: Some("kyzoscript".to_string()),
-            message,
-            code,
-            ..Diagnostic::default()
-        });
-    }
-    out
-}
-
-fn collect_labels(
-    diag: &dyn miette::Diagnostic,
-    message: &str,
-    code: &Option<NumberOrString>,
-    text: &str,
-    index: &LineIndex,
-    out: &mut Vec<Diagnostic>,
-) {
-    if let Some(labels) = diag.labels() {
-        for label in labels {
-            let start = index.position(text, label.offset());
-            let end = index.position(text, label.offset() + label.len());
-            out.push(Diagnostic {
-                range: Range::new(start, end),
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("kyzoscript".to_string()),
-                message: message.to_string(),
-                code: code.clone(),
-                ..Diagnostic::default()
-            });
-        }
-    }
-    if let Some(related) = diag.related() {
-        for r in related {
-            collect_labels(r, message, code, text, index, out);
-        }
-    }
-    if let Some(src) = diag.diagnostic_source() {
-        collect_labels(src, message, code, text, index, out);
-    }
-}
-
 /// Validate `text` and turn the result into the `Diagnostic`s to publish:
 /// empty on success (clearing any previously-published diagnostics for
 /// this document is just as important as reporting new ones), one or more
-/// on failure.
+/// on failure. Speaks kyzo-model's public parse surface — the language
+/// door — never an engine host façade.
 fn validate(text: &str) -> Vec<Diagnostic> {
-    match kyzo::lsp_api::check_script(text, &Default::default()) {
-        Ok(()) => Vec::new(),
+    let params = BTreeMap::<String, DataValue>::new();
+    match kyzo_model::parse::parse_script(text, &params) {
+        Ok(_) => Vec::new(),
         Err(report) => diagnostics_from_report(&report, text, &LineIndex::new(text)),
     }
 }

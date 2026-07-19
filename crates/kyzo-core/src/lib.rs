@@ -364,5 +364,5 @@ pub use session::verify::VerifyOutcome;
 pub use exec::op::temporal::SignedFact;
 pub use react::standing::StandingQuery;
 
-// Sealed doors deleted (bench_api / fuzz_api / lsp_api). Tooling speaks the
-// sealed contract or goes red — bespoke façades were contract debt.
+// Sealed single-host doors deleted. Tooling speaks the sealed contract or
+// goes red — bespoke façades were contract debt.

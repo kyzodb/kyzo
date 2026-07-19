@@ -13,7 +13,11 @@ name = "kyzo-lsp"
 path = "src/main.rs"
 
 [dependencies]
+# Catalog features (hover columns, relation completion) consume the sealed
+# `kyzo::` façade read-only, dbPath-explicit — the same door any host uses.
+# Validation speaks kyzo-model's public parse surface (the language door).
 kyzo = { path = "../kyzo-core" }
+kyzo-model = { path = "../kyzo-model" }
 # The LSP wire protocol's types (Diagnostic, Range, Position, the request/
 # notification param shapes) -- the same crate rust-analyzer itself uses.
 # Pure Rust, serde-based; no runtime attached, so the server loop below is

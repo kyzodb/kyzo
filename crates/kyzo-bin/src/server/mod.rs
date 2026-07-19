@@ -8,9 +8,10 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0). The former flat `server.rs` is now this directory: one module
- * per HTTP concern (`auth`, `query`, `bulk`, `rules`, `changes`, `pages`);
+ * per HTTP concern (`auth`, `query`, `bulk`, `rules`, `feeds`, `console`);
  * this file owns only `ServerArgs`, the shared `DbState`, and wiring the
- * router together. Behavior changes from the CozoDB original:
+ * router together. Behavior changes from the CozoDB original — sealed
+ * doctrine (cite rather than re-litigate):
  *
  * - **Engine selection** goes through `engine::open` (one backend, `fjall`;
  *   see that module's doc) instead of `DbInstance::new(engine, path, config)`
@@ -33,26 +34,26 @@
  * - **No `/transact` multi-statement transactions.** Upstream's
  *   `DbInstance::multi_transaction`/`run_multi_transaction` held a live
  *   transaction across several HTTP requests. kyzo-core's transaction type
- *   (`SessionTx`) has only `pub(crate)` constructors (`runtime/db.rs`) and
+ *   (`SessionTx`) has only `pub(crate)` constructors (`session/db.rs`) and
  *   `Db` exposes no equivalent of `multi_transaction` — there is nothing to
  *   call. Dropped, not stubbed; the fix is new kyzo-core runtime-tier API,
  *   not a bin-crate workaround.
  * - **No `/import-from-backup`.** Upstream partially restored named
  *   relations from a backup file into a live, non-empty store.
  *   `kyzo::restore_storage`'s contract is whole-store-only into an EMPTY
- *   target (`storage/backup.rs`: "recovery is always discard-and-re-run");
+ *   target (`store/backup.rs`: "recovery is always discard-and-re-run");
  *   there is no selective-relation restore to call. `bulk::backup`
  *   (whole-store dump) and `bulk::import_relations` (row-level) remain and
  *   together cover the same ground through different, real entry points.
  * - **`query::text_query` is one line of engine logic** —
  *   `kyzo::Db::run_script_json` — because the JSON envelope (params in,
  *   `{ok, headers, rows, took}`/error out) now lives in kyzo-core itself
- *   (`runtime::json`), shared with every future binding. This file only
+ *   (`session::json`), shared with every future binding. This file only
  *   maps the envelope's `ok` field to an HTTP status code
  *   ([`wrap_json`]).
  * - **The `/rules` SSE bridge speaks `std::sync::mpsc`, not `crossbeam`.**
  *   `SimpleFixedRule::rule_with_channel` in this port already made that
- *   swap (`fixed_rule/mod.rs`'s port note); `rules.rs` follows it, which
+ *   swap (`rules/` port note); `rules.rs` follows it, which
  *   drops the `crossbeam` dependency entirely.
  * - **`x-cozo-auth` becomes `x-kyzo-auth`**; the token-table auth check
  *   (`auth.rs`) now tests only that a matching token row exists
@@ -74,7 +75,7 @@
  *   trait) for the auth-token generator.
  * - `lazy_static!`/lifetime-annotated `Db<'s, S>` are gone: kyzo-core's `Db`
  *   is not lifetime-parameterized (its sessions own their transactions
- *   rather than borrowing one — `runtime/db.rs`'s module doc), so
+ *   rather than borrowing one — `session/db.rs`'s module doc), so
  *   `DbState`/`MyAuth` hold plain owned clones.
  * - **No workspace-wide `DefaultBodyLimit::disable()`.** The original
  *   disabled axum's default 2 MiB body cap for the WHOLE router so `/import`
@@ -84,6 +85,9 @@
  *   (a one-connection memory-exhaustion DoS). Only `/import` now raises its
  *   limit, via a route-specific `DefaultBodyLimit::max` layer sized by
  *   `--max-import-body-mb`; every other route keeps axum's own default.
+ * - **Startup bind/port parse** remains process-entry unwrap today (lawful
+ *   under the zone's no-panic-escapes-a-HANDLER clause); lifting to a typed
+ *   refusal on arrival is this seat's recorded next edit.
  */
 
 //! The HTTP API server: route table, shared state, and startup. Each route
@@ -91,11 +95,10 @@
 
 mod auth;
 mod bulk;
-mod changes;
-mod pages;
+mod console;
+mod feeds;
 mod query;
 mod rules;
-mod standing;
 
 use std::collections::BTreeMap;
 use std::net::{Ipv6Addr, SocketAddr};
@@ -241,8 +244,8 @@ pub(crate) async fn server_main(args: ServerArgs) {
             put(bulk::import_relations).layer(DefaultBodyLimit::max(max_import_bytes)),
         )
         .route("/backup", post(bulk::backup))
-        .route("/changes/{relation}", get(changes::observe_changes))
-        .route("/standing", get(standing::observe_standing))
+        .route("/changes/{relation}", get(feeds::observe_changes))
+        .route("/standing", get(feeds::observe_standing))
         .route("/rules/{name}", get(rules::register_rule))
         .route(
             "/rule-result/{id}",
@@ -250,8 +253,8 @@ pub(crate) async fn server_main(args: ServerArgs) {
         )
         .with_state(state)
         .layer(AsyncRequireAuthorizationLayer::new(auth_obj))
-        .fallback(pages::not_found)
-        .route("/", get(pages::root))
+        .fallback(console::not_found)
+        .route("/", get(console::root))
         .layer(cors)
         .layer(CompressionLayer::new());
 
