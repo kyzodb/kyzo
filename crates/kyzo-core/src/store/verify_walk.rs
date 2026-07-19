@@ -37,16 +37,86 @@
 //!
 //! `verify_storage_catches_a_corrupt_value` and the injected-corruption walk
 //! pin that BadTag surfaces and THE WALK CONTINUES past the wound.
+//!
+//! ## Spec extend (§49/§50)
+//!
+//! Table/keyspace-scoped checksum identity + quarantine range minting live
+//! beside the catalog-aware walk. Store-global-only block identity is banned
+//! (swap-two-tables would go undetected).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use fjall::Slice;
 use miette::Result;
+use sha2::{Digest, Sha256};
 
 use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
 use kyzo_model::value::{DataValue, RelationId, decode_tuple_from_key, extend_tuple_from_v};
 use crate::session::catalog::RelationHandle;
+use crate::store::failure::{KeyspaceId, QuarantineRange};
 use crate::store::{ReadTx, Storage};
+
+/// Table/keyspace-scoped checksum identity (§49).
+///
+/// Binds keyspace identity + logical block so misplaced-but-intact data is
+/// caught. A store-global-only checksum is banned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KeyspaceScopedChecksum {
+    /// Table / keyspace identity.
+    keyspace: KeyspaceId,
+    /// Logical block ordinal within the keyspace.
+    block: u64,
+    /// Checksum over (keyspace, block, payload).
+    digest: [u8; 32],
+}
+
+impl KeyspaceScopedChecksum {
+    /// Compute a scoped checksum over payload bytes.
+    pub fn compute(keyspace: KeyspaceId, block: u64, payload: &[u8]) -> Self {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.keyspace_scoped_checksum.v1");
+        h.update(u64::to_be_bytes(keyspace.get()));
+        h.update(u64::to_be_bytes(block));
+        h.update(payload);
+        Self {
+            keyspace,
+            block,
+            digest: h.finalize().into(),
+        }
+    }
+
+    /// Keyspace identity.
+    pub fn keyspace(self) -> KeyspaceId {
+        self.keyspace
+    }
+
+    /// Logical block ordinal.
+    pub fn block(self) -> u64 {
+        self.block
+    }
+
+    /// Checksum digest.
+    pub fn digest(self) -> [u8; 32] {
+        self.digest
+    }
+
+    /// Verify payload against this identity.
+    pub fn verify(self, payload: &[u8]) -> bool {
+        Self::compute(self.keyspace, self.block, payload).digest == self.digest
+    }
+}
+
+/// Mint a quarantine range from a failed scoped-identity check (§50).
+///
+/// Ordinary tenant queries never see the range; the operator surface and
+/// [`crate::store::failure::StoreRefuse::Quarantined`] do.
+pub fn mint_quarantine_range(
+    keyspace: KeyspaceId,
+    start: Vec<u8>,
+    end: Vec<u8>,
+) -> QuarantineRange {
+    QuarantineRange::mint(keyspace, start, end)
+}
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption
 /// without itself growing unboundedly on a badly damaged store.

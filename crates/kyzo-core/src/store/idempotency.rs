@@ -1,0 +1,183 @@
+/*
+ * Copyright 2026, The KyzoDB Authors.
+ * KyzoDB is a fork of CozoDB (Copyright 2022, The Cozo Project Authors).
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+//! The one idempotency organ (decisions.md §38, §39).
+//!
+//! Owns: [`OperationKey`], [`OperationOutcome`], request_digest memo.
+//!
+//! Bans: memoizing transient refuses as terminal; parallel token maps;
+//! key-as-mutable-slot.
+//!
+//! `OperationKey = H(domain_label, CompositionId, StoreId, StepId)`.
+//! Single-store safe-retry uses the same construction with a degenerate
+//! CompositionId — one organ. ReadAt mints no entries.
+
+use sha2::{Digest, Sha256};
+
+use super::failure::StoreRefuse;
+use super::open::StoreId;
+
+/// Store-scoped idempotency identity (§38/§39).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OperationKey([u8; 32]);
+
+impl OperationKey {
+    /// Derive `H(domain_label, CompositionId, StoreId, StepId)`.
+    ///
+    /// `composition_id` is the caller-derived CompositionId digest (session
+    /// owns the type; Store sees only the sealed bytes so the layering stays
+    /// one-way).
+    pub fn derive(
+        domain_label: &[u8],
+        composition_id: &[u8; 32],
+        store_id: StoreId,
+        step_id: &[u8],
+    ) -> Self {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.operation_key.v1");
+        h.update(domain_label);
+        h.update(composition_id);
+        h.update(store_id.as_bytes());
+        h.update(step_id);
+        Self(h.finalize().into())
+    }
+
+    /// Degenerate single-store safe-retry key over a caller-durable client op id.
+    pub fn single_store(
+        domain_label: &[u8],
+        client_operation_id: &[u8],
+        store_id: StoreId,
+        step_id: &[u8],
+    ) -> Self {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.composition_id.degenerate.v1");
+        h.update(client_operation_id);
+        let degenerate: [u8; 32] = h.finalize().into();
+        Self::derive(domain_label, &degenerate, store_id, step_id)
+    }
+
+    /// Borrow the key digest.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Memoized terminal outcome for an [`OperationKey`] (§38).
+///
+/// Transient refuses (capacity, availability, transport) are **never**
+/// memoized as terminal — only these three arms exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperationOutcome {
+    /// Prior admission committed under this key + digest.
+    Committed {
+        /// Sealed request digest that produced the commit.
+        request_digest: [u8; 32],
+    },
+    /// Deterministic terminal refuse under this key + digest.
+    DeterministicTerminalRefuse {
+        /// Sealed request digest that produced the refuse.
+        request_digest: [u8; 32],
+        /// Store ledger refuse that terminated.
+        refuse: StoreRefuse,
+    },
+    /// No memo entry (ReadAt / never admitted).
+    Absent,
+}
+
+/// One memo entry: `(key, request_digest, terminal_outcome)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdempotencyEntry {
+    key: OperationKey,
+    request_digest: [u8; 32],
+    outcome: OperationOutcome,
+}
+
+impl IdempotencyEntry {
+    /// Key.
+    pub fn key(&self) -> OperationKey {
+        self.key
+    }
+
+    /// Request digest covering canonical envelope + schema + authority coordinates.
+    pub fn request_digest(&self) -> &[u8; 32] {
+        &self.request_digest
+    }
+
+    /// Terminal outcome.
+    pub fn outcome(&self) -> &OperationOutcome {
+        &self.outcome
+    }
+}
+
+/// In-memory OperationKey memo (Store-scoped).
+#[derive(Debug, Default)]
+pub struct IdempotencyMemo {
+    entries: std::collections::BTreeMap<[u8; 32], IdempotencyEntry>,
+}
+
+impl IdempotencyMemo {
+    /// Empty memo.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Digest of a request envelope (canonical bytes the caller already sealed).
+    pub fn digest_request(envelope: &[u8]) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.request_digest.v1");
+        h.update(envelope);
+        h.finalize().into()
+    }
+
+    /// Look up a key. Missing → [`OperationOutcome::Absent`].
+    pub fn lookup(&self, key: &OperationKey) -> OperationOutcome {
+        self.entries
+            .get(key.as_bytes())
+            .map(|e| e.outcome.clone())
+            .unwrap_or(OperationOutcome::Absent)
+    }
+
+    /// Replay or record a terminal outcome.
+    ///
+    /// Same key + digest → replay prior outcome. Same key + different digest →
+    /// [`StoreRefuse::OperationKeyReuse`]. Transient outcomes must not call this.
+    pub fn remember(
+        &mut self,
+        key: OperationKey,
+        request_digest: [u8; 32],
+        outcome: OperationOutcome,
+    ) -> Result<OperationOutcome, StoreRefuse> {
+        match outcome {
+            OperationOutcome::Absent => {
+                // Absent is not a terminal memo — never store it.
+                return Ok(OperationOutcome::Absent);
+            }
+            OperationOutcome::Committed { .. }
+            | OperationOutcome::DeterministicTerminalRefuse { .. } => {}
+        }
+        if let Some(existing) = self.entries.get(key.as_bytes()) {
+            if existing.request_digest != request_digest {
+                return Err(StoreRefuse::OperationKeyReuse);
+            }
+            return Ok(existing.outcome.clone());
+        }
+        let entry = IdempotencyEntry {
+            key,
+            request_digest,
+            outcome: outcome.clone(),
+        };
+        self.entries.insert(*key.as_bytes(), entry);
+        Ok(outcome)
+    }
+
+    /// Safe-retry door: require a key, then lookup/replay.
+    pub fn require_key(key: Option<OperationKey>) -> Result<OperationKey, StoreRefuse> {
+        key.ok_or(StoreRefuse::MissingIdempotencyToken)
+    }
+}

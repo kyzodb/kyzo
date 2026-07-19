@@ -18,6 +18,12 @@
 //! - **lost-phantom** — commit order observed through the serialized scheduler
 //!   with per-branch assertions; no phantom insert survives unnoticed.
 //!
+//! ## Storage-Spec campaign lanes (07 `campaigns_proposed`)
+//!
+//! Named lanes below are merge witnesses per §95 — outside Plan DoD. Bodies
+//! stay red until their guarded seats are green; **naming** is the seat
+//! obligation of story #350 T12. See [`storage_campaign_lanes`].
+//!
 //! The storage-seam DST (`kyzo-crashfs/src/sim.rs`) proves the KV contract is
 //! seed-reproducible under faults, crashes, and contention. This module carries
 //! that proof one tier up.
@@ -1312,4 +1318,144 @@ fn antivacuity_corrupt_reference_is_caught() {
     );
     // And the true answer equals the hand-checked oracle, closing the loop.
     assert_eq!(real, tc_expected());
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Storage-Spec campaign lanes (07 campaigns_proposed) — named seats.
+// Bodies red until seats green; naming is the T12 obligation (§95).
+// ═════════════════════════════════════════════════════════════════════════
+
+/// Named storage campaign lanes from `07-storage-seats.json` `campaigns_proposed`.
+///
+/// Each `fn` is the lane name the architecture map and board cite. Bodies
+/// remain `ignore`d (red-until-seats-green) until their guarded construct's
+/// campaign can run green — campaign green never substitutes for a story
+/// board Check (CLAUDE.md).
+#[allow(dead_code)]
+pub mod storage_campaign_lanes {
+    /// §62/§2 — IncarnationId at-rest; gates nonce/authority signature freeze.
+    #[test]
+    #[ignore = "red until seats green: two-clone at-rest DST"]
+    fn two_clone_at_rest_dst() {
+        unimplemented!("two-clone at-rest DST: equal OpenOrdinals, differing Entropy, zero (key,nonce) collisions; dual-chain poison at chain-meet");
+    }
+
+    /// §27/§62 — live-fork; gates SIV arm and signature freeze.
+    #[test]
+    #[ignore = "red until seats green: live-fork mid-sweep DST"]
+    fn live_fork_mid_sweep_dst() {
+        unimplemented!("live-fork mid-sweep DST: SnapshotFork=yes SIV degrades nonce repeat to message-equality leak; SnapshotFork=no excludes fork legally");
+    }
+
+    /// §25 — SweepDoor ordinals.
+    #[test]
+    #[ignore = "red until seats green: mixed-load ordinal DST"]
+    fn mixed_load_ordinal_dst() {
+        unimplemented!("mixed-load ordinal DST: IntentOrdinal gaps free, CommitOrdinal dense among successes, refuses advance no cut");
+    }
+
+    /// §25 — pipelined NonceLease.
+    #[test]
+    #[ignore = "red until seats green: pipeline power-cut DST"]
+    fn pipeline_power_cut_dst() {
+        unimplemented!("pipeline power-cut DST: cut at every barrier; reserve-before-encrypt; resume above durable ceiling");
+    }
+
+    /// §25/§36 — WriteSessionDead.
+    #[test]
+    #[ignore = "red until seats green: old-session resurrection DST"]
+    fn old_session_resurrection_dst() {
+        unimplemented!("old-session resurrection DST: WriteSessionDead with zero sealed bytes at every pipeline boundary");
+    }
+
+    /// §2 — RecoveryGrant physics.
+    #[test]
+    #[ignore = "red until seats green: partitioned-old-writer-through-recovery DST"]
+    fn partitioned_old_writer_through_recovery_dst() {
+        unimplemented!("partitioned-old-writer-through-recovery DST: Unexposed until chain-meet, then dual-chain poison");
+    }
+
+    /// §68 — grants are seeds.
+    #[test]
+    #[ignore = "red until seats green: ForkGrant double-discovery DST"]
+    fn fork_grant_double_discovery_dst() {
+        unimplemented!("ForkGrant double-discovery DST: identical successor or GrantAlreadyMaterialized; RecoveryGrant equivocation poison");
+    }
+
+    /// §22/§23 — staging + idle law.
+    #[test]
+    #[ignore = "red until seats green: idle StagingTTL DST"]
+    fn idle_staging_ttl_dst() {
+        unimplemented!("idle StagingTTL DST: no decay without cut advance; Decayed past cut; reclaim always lawful");
+    }
+
+    /// §22 — durability dominance.
+    #[test]
+    #[ignore = "red until seats green: ObjectDurabilityClass DST"]
+    fn object_durability_class_dst() {
+        unimplemented!("ObjectDurabilityClass DST: dominating / dominated / incomparable Repair; Downgrade auditable");
+    }
+
+    /// §26 — CheckpointSeal.
+    #[test]
+    #[ignore = "red until seats green: SealMismatch DST"]
+    fn seal_mismatch_dst() {
+        unimplemented!("SealMismatch DST: each bound digest independently corrupted refuses; truncate-crash converges");
+    }
+
+    /// §59 — CanonicalTranscript.
+    #[test]
+    #[ignore = "red until seats green: transcript mutation campaign"]
+    fn transcript_mutation_campaign() {
+        unimplemented!("transcript mutation campaign: assert against in-repo golden vectors; unknown version refuses");
+    }
+
+    /// §69/§70 — custody.
+    #[test]
+    #[ignore = "red until seats green: five-delivery custody DST"]
+    fn five_delivery_custody_dst() {
+        unimplemented!("five-delivery custody DST: one custody Committed; PendingAnchor opaque; closed ReplicaRefuse sum");
+    }
+
+    /// §38/§39 — composition.
+    #[test]
+    #[ignore = "red until seats green: CompositionId crash DST"]
+    fn composition_id_crash_dst() {
+        unimplemented!("CompositionId crash DST: retry same client_operation_id converges; OperationKeyReuse; transient never memoizes");
+    }
+
+    /// §36 — footprints.
+    #[test]
+    #[ignore = "red until seats green: Footprint crash-holder DST"]
+    fn footprint_crash_holder_dst() {
+        unimplemented!("Footprint crash-holder DST: locks dead at next open; FrontierUnprovable never admits");
+    }
+
+    /// §29/§28 — durable license + recovery.
+    #[test]
+    #[ignore = "red until seats green: power-cut-at-commit-door DST"]
+    fn power_cut_at_commit_door_dst() {
+        unimplemented!("power-cut-at-commit-door DST via kyzo-crashfs: every Committed survives; recovery converges; recovery_time_p999 sealed");
+    }
+
+    /// §66/§84 — MergeProof determinism.
+    #[test]
+    #[ignore = "red until seats green: MergeProof DST"]
+    fn merge_proof_dst() {
+        unimplemented!("MergeProof DST: sealed identity equality over plaintext; ciphertext differs; no MergeProof fails to compile");
+    }
+
+    /// §64/§79 — shred × leave-is-free.
+    #[test]
+    #[ignore = "red until seats green: ShredSalt leave-is-free DST"]
+    fn shred_salt_leave_is_free_dst() {
+        unimplemented!("ShredSalt leave-is-free DST: shred → typed Shredded tombstone; neighbors decrypt; root chain verifies");
+    }
+
+    /// §55 — dual fault.
+    #[test]
+    #[ignore = "red until seats green: dual-corruption DST"]
+    fn dual_corruption_dst() {
+        unimplemented!("dual-corruption DST: ObjectCorrupt typed partial vs OrderedCorrupt quarantine/poison; no mixed success type");
+    }
 }

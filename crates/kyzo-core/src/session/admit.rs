@@ -20,6 +20,14 @@
 //! operation, coerces each row through the relation's declared column
 //! types, writes through the session, maintains plain/temporal indices,
 //! and collects old/new rows for triggers and callbacks.
+//!
+//! ## Spec extend (§8/§10/§11/§12/§13/§61/§77/§90)
+//!
+//! Record admission monopoly under the Spec: private [`KyzoRecord`]
+//! constructors, [`SemanticSurface`], evidence-stack admission law,
+//! placement check, [`AdmissionCertificate`] mint call, KV-ingest refuse.
+//! Bytes decode to ordered currency / ObjectRef material, never KyzoRecord
+//! — store/decode modules have no mint path (compile-fail).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -52,6 +60,207 @@ use kyzo_model::data_value_any;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, ValidityTs};
 use kyzo_model::value::{Tuple, TupleT};
+
+use crate::store::keys::Secret;
+use crate::store::open::StoreId;
+use crate::store::replica::{
+    mint_admission_certificate, AdmissionCertificate, AdmissionCertificateParts, ReplicaRefuse,
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Spec admission monopoly (§8/§10–§13/§61/§77/§90) — seats beside the
+// carried mutation pipeline below. Store modules cannot mint KyzoRecord.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Semantic surface for indexed interpretation (§12).
+///
+/// [`SemanticSurface::None`] refuses index build (`NoSemanticSurface`) —
+/// forcing surfaces on every record corrupts embedding meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SemanticSurface {
+    /// No semantic surface — index build against this refuses.
+    None,
+    /// Embedding / vector surface.
+    Embedding,
+    /// Full-text surface.
+    FullText,
+    /// Lexical / token surface.
+    Lexical,
+}
+
+/// Evidence coordinates required for interpreted knowledge (§10).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EvidenceCoordinates {
+    /// Span start offset.
+    pub start: u64,
+    /// Span end offset.
+    pub end: u64,
+    /// Content hash of the evidence span.
+    pub hash: [u8; 32],
+    /// Provenance digest.
+    pub provenance: [u8; 32],
+}
+
+/// Placement constraint for geography / residency (§77).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlacementConstraint {
+    /// Allowed region ids (empty = unrestricted).
+    pub allowed_regions: Vec<[u8; 16]>,
+}
+
+/// Privately constructed Record — admission monopoly (§8/§93).
+///
+/// No public constructor. Store/decode modules cannot mint this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KyzoRecord {
+    /// Store that admitted this record.
+    store_id: StoreId,
+    /// Record content digest.
+    digest: [u8; 32],
+    /// Optional semantic surface.
+    surface: SemanticSurface,
+    /// Evidence coordinates (required for interpreted knowledge).
+    evidence: Option<EvidenceCoordinates>,
+}
+
+impl KyzoRecord {
+    /// Digest.
+    pub fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+
+    /// Semantic surface.
+    pub fn surface(&self) -> SemanticSurface {
+        self.surface
+    }
+
+    /// Evidence coordinates, when present.
+    pub fn evidence(&self) -> Option<&EvidenceCoordinates> {
+        self.evidence.as_ref()
+    }
+
+    /// Owning Store.
+    pub fn store_id(&self) -> StoreId {
+        self.store_id
+    }
+}
+
+/// Inputs for the admission door (private mint path).
+#[derive(Debug, Clone)]
+pub struct AdmitRecordParts {
+    /// Target Store.
+    pub store_id: StoreId,
+    /// Record content digest.
+    pub digest: [u8; 32],
+    /// Semantic surface.
+    pub surface: SemanticSurface,
+    /// Evidence coordinates for interpreted knowledge.
+    pub evidence: Option<EvidenceCoordinates>,
+    /// Placement constraint (refuse-before-write).
+    pub placement: PlacementConstraint,
+    /// Region this write would land in.
+    pub write_region: [u8; 16],
+    /// Whether any indexed key column carries Secret-class material.
+    pub secret_in_indexed_key: Option<Secret>,
+    /// True when the ingest path is raw KV-as-truth (§17/§90).
+    pub kv_as_truth: bool,
+    /// True when the row is chunk-shaped rather than typed evidence (§11).
+    pub chunk_shaped: bool,
+    /// Certificate parts to mint at successful admission.
+    pub certificate: AdmissionCertificateParts,
+}
+
+/// Session-door admission refuses (not StoreRefuse / EngineRefuse).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum AdmitRefuse {
+    /// Interpreted knowledge without evidence coordinates (§10).
+    #[error("MissingEvidenceCoordinates: interpreted knowledge requires evidence")]
+    #[diagnostic(code(session::admit::missing_evidence_coordinates))]
+    MissingEvidenceCoordinates,
+    /// Chunk-shaped row as evidence (§11).
+    #[error("ChunkIsNotEvidence: durable evidence is a typed span, not a chunk row")]
+    #[diagnostic(code(session::admit::chunk_is_not_evidence))]
+    ChunkIsNotEvidence,
+    /// Index build against SemanticSurface::None (§12).
+    #[error("NoSemanticSurface: index build against SemanticSurface::None")]
+    #[diagnostic(code(session::admit::no_semantic_surface))]
+    NoSemanticSurface,
+    /// Secret material in an indexed key (§61).
+    #[error("SecretInIndexedKey: Secret-class material illegal in indexed keys")]
+    #[diagnostic(code(session::admit::secret_in_indexed_key))]
+    SecretInIndexedKey {
+        /// Which Secret class was found.
+        kind: Secret,
+    },
+    /// Write landing in a forbidden geography (§77).
+    #[error("PlacementForbidden: write region not in allowed set")]
+    #[diagnostic(code(session::admit::placement_forbidden))]
+    PlacementForbidden,
+    /// KV-as-truth ingest (§17/§90).
+    #[error("KvIsNotTruth: decryptability does not mint Engine meaning")]
+    #[diagnostic(code(session::admit::kv_is_not_truth))]
+    KvIsNotTruth,
+    /// Certificate mint / replica refuse bubbled from the store seat.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Replica(#[from] ReplicaRefuse),
+}
+
+/// Admit a Record through the monopoly door: placement, evidence, surface,
+/// secret-key, KV-ingest checks, then mint [`AdmissionCertificate`] + [`KyzoRecord`].
+pub(crate) fn admit_record(
+    parts: AdmitRecordParts,
+) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+    if parts.kv_as_truth {
+        return Err(AdmitRefuse::KvIsNotTruth);
+    }
+    if parts.chunk_shaped {
+        return Err(AdmitRefuse::ChunkIsNotEvidence);
+    }
+    if let Some(kind) = parts.secret_in_indexed_key {
+        return Err(AdmitRefuse::SecretInIndexedKey { kind });
+    }
+    if !parts.placement.allowed_regions.is_empty()
+        && !parts
+            .placement
+            .allowed_regions
+            .iter()
+            .any(|r| r == &parts.write_region)
+    {
+        return Err(AdmitRefuse::PlacementForbidden);
+    }
+    // Interpreted knowledge (non-None surface) requires evidence coordinates.
+    if parts.surface != SemanticSurface::None && parts.evidence.is_none() {
+        return Err(AdmitRefuse::MissingEvidenceCoordinates);
+    }
+    let certificate = mint_admission_certificate(parts.certificate)?;
+    let record = KyzoRecord {
+        store_id: parts.store_id,
+        digest: parts.digest,
+        surface: parts.surface,
+        evidence: parts.evidence,
+    };
+    Ok((record, certificate))
+}
+
+/// Index-build law: refuse against [`SemanticSurface::None`] (§12).
+pub(crate) fn admit_index_surface(surface: SemanticSurface) -> Result<(), AdmitRefuse> {
+    match surface {
+        SemanticSurface::None => Err(AdmitRefuse::NoSemanticSurface),
+        SemanticSurface::Embedding | SemanticSurface::FullText | SemanticSurface::Lexical => Ok(()),
+    }
+}
+
+/// AuthorityRecovered check at the next admission-visible write boundary (§2/§36).
+pub(crate) fn refuse_if_authority_recovered(
+    observed_recovery: bool,
+) -> Result<(), crate::store::failure::StoreRefuse> {
+    if observed_recovery {
+        Err(crate::store::failure::StoreRefuse::AuthorityRecovered)
+    } else {
+        Ok(())
+    }
+}
 
 #[error("Assertion failure for {key:?} of {relation}: {notice}")]
 #[diagnostic(code(transact::assertion_failure))]

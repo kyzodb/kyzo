@@ -49,6 +49,12 @@ pub(crate) mod compact;
 pub(crate) mod transcript;
 /// DEK/KEK/ShredSalt/WrappedShredSalt/AuditKey/AEAD pipeline (07 seat).
 pub(crate) mod crypto;
+/// Failure lattice + closed StoreRefuse ledger + debt economy (07 seat).
+pub(crate) mod failure;
+/// AdmissionCertificate + verify_replica + ReplicaCustody (07 seat).
+pub(crate) mod replica;
+/// OperationKey + OperationOutcome + request_digest memo (07 seat).
+pub(crate) mod idempotency;
 
 // Sim instrument lives at kyzo-crashfs (seat); path-included here so the
 // sealed Storage trait can admit it as the contract's own test double.
@@ -116,6 +122,14 @@ pub use crypto::{
     SegmentCounter, ShredReceipt, ShredSalt, WrappedShredSalt, compress, compress_then_encrypt,
     derive_dek, encrypt, shred, unwrap_shred_salt, wrap_shred_salt,
 };
+pub use failure::{
+    DebtLedger, FailureLattice, KeyspaceId, OperatorHealthSurface, QuarantineRange, StoreRefuse,
+};
+pub use replica::{
+    AdmissionCertificate, AdmissionCertificateParts, LocalProjection, ReplicaCustody, ReplicaKey,
+    ReplicaRefuse, anchor_pending, verify_replica,
+};
+pub use idempotency::{IdempotencyEntry, IdempotencyMemo, OperationKey, OperationOutcome};
 pub use keys::{Secret, SecretKeyRefuse, refuse_if_secret};
 pub use backup::{
     ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse, dump_storage,
