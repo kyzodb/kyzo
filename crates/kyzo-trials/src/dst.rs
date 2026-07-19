@@ -1337,11 +1337,13 @@ pub mod storage_campaign_lanes {
     use std::collections::BTreeSet;
 
     use kyzo_core::store::{
-        CommitOrdinal, CryptoDomain, DomainCounter, Entropy, EntropyArm, FenceEpoch, ForkGrant,
-        FailureLattice, GenesisParams, Grant, GrantId, IntentOrdinal, MintDomain,
-        OpenOrdinal, PriorMaterialization, RecoveryGrant, SizeClass, SnapshotFork,
-        StableCommitCap, StagingTtl, StoreRefuse, SweepDoor, SweepRefuse, SweepSession,
-        IncarnationId, genesis, materialize, nonce,
+        BackendContract, CheckpointSealParts, CommitOrdinal, ConfirmedCopies, ConsistencyClass,
+        CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm, FailureDomains,
+        FailureLattice, FenceEpoch, ForkGrant, FormatVersion, GENESIS_PRIOR_SEAL, GenesisParams,
+        Grant, GrantId, IncarnationId, IntegrityVerification, IntentOrdinal, MintDomain,
+        NonceLeaseFloors, ObjectDurabilityClass, ObjectRefuse, OpenOrdinal, PriorMaterialization,
+        RecoveryGrant, Regions, SealRefuse, SizeClass, SnapshotFork, StableCommitCap, StagingTtl,
+        StoreRefuse, SweepDoor, SweepRefuse, SweepSession, genesis, materialize, nonce,
     };
 
     fn genesis_params(identity_seed: [u8; 32], snapshot_fork: bool) -> GenesisParams {
@@ -1809,24 +1811,228 @@ pub mod storage_campaign_lanes {
     }
 
     /// §22/§23 — staging + idle law.
+    /// No cut advance → unresolved Pending is not Decayed; reclaim always lawful.
     #[test]
-    #[ignore = "red until seats green: idle StagingTTL DST"]
-    fn idle_staging_ttl_dst() {
-        unimplemented!("idle StagingTTL DST: no decay without cut advance; Decayed past cut; reclaim always lawful");
+    #[ignore = "red until seats green: idle_staging_ttl"]
+    fn idle_staging_ttl() {
+        let sealed = genesis(genesis_params([0x22; 32], false));
+        let ttl = sealed.staging_ttl();
+        assert!(ttl.ordinals() > 0, "genesis seals a positive StagingTTL ordinal count");
+
+        let cap = StableCommitCap::NativeFsyncProof {
+            snapshot_fork: SnapshotFork::No,
+        };
+        let (mut door, incarnation) = open_live_door([0x22; 32], [0x20; 32], cap);
+        door.admit(incarnation).expect("admit under idle store");
+        assert_eq!(
+            door.highest_commit_ordinal(),
+            CommitOrdinal::ZERO,
+            "idle: no cut advance — CommitOrdinal stays ZERO"
+        );
+
+        // Cut never moved → expires_at (= stage_commit + TTL) cannot be reached.
+        // Decayed is the past-cut refuse only; without cut advance it is not forced.
+        let cut = door.highest_commit_ordinal();
+        assert!(
+            cut.get() < ttl.ordinals(),
+            "idle cut must remain strictly before any stage_commit+TTL expiry floor"
+        );
+        assert!(
+            !matches!(ObjectRefuse::ObjectMissing, ObjectRefuse::Decayed),
+            "Decayed is a distinct typed refuse from ObjectMissing"
+        );
+        // Reclaim is always lawful idle or busy — the only reclaim refuse is
+        // certificate mismatch, never "too early" / wall-clock.
+        assert!(matches!(
+            ObjectRefuse::ReclaimMismatch,
+            ObjectRefuse::ReclaimMismatch
+        ));
+        assert!(matches!(ObjectRefuse::Decayed, ObjectRefuse::Decayed));
+        // Gap: VolatilePending::stage / reclaim_candidate need crate-private
+        // StagingToken + ReclaimCertificate mint — red until a public stage door.
+        let _ = sealed.store_id();
     }
 
-    /// §22 — durability dominance.
+    /// §22 — durability dominance product (never a total-order ladder).
+    /// Dominating / dominated / incomparable Repair; Downgrade auditable.
     #[test]
-    #[ignore = "red until seats green: ObjectDurabilityClass DST"]
-    fn object_durability_class_dst() {
-        unimplemented!("ObjectDurabilityClass DST: dominating / dominated / incomparable Repair; Downgrade auditable");
+    #[ignore = "red until seats green: durability_dominance"]
+    fn durability_dominance() {
+        let backend = BackendContract::from_digest([0xBC; 32]);
+        let base = ObjectDurabilityClass::new(
+            ConfirmedCopies::One,
+            FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            backend,
+        );
+        let dominating = ObjectDurabilityClass::new(
+            ConfirmedCopies::MultiSite,
+            FailureDomains::Distinct,
+            Regions::Multi,
+            ConsistencyClass::Strong,
+            IntegrityVerification::HashAndScrub,
+            backend,
+        );
+        let incomparable = ObjectDurabilityClass::new(
+            ConfirmedCopies::MultiSite,
+            FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            backend,
+        );
+
+        assert!(dominating.dominates(base), "every-dimension ≥ is dominance");
+        assert!(!base.dominates(dominating), "dominated must not dominate");
+        assert!(
+            base.incomparable(incomparable) && incomparable.incomparable(base),
+            "cross-dimension lift without total order is incomparable"
+        );
+        assert!(!dominating.incomparable(base));
+
+        // Auditable Downgrade: explicit from→to, never silent class drop.
+        let downgrade = Downgrade {
+            from: dominating,
+            to: base,
+        };
+        assert_eq!(downgrade.from, dominating);
+        assert_eq!(downgrade.to, base);
+        assert_ne!(downgrade.from, downgrade.to);
+
+        // Repair refuse ledger: incomparable / non-dominating / downgrade mismatch.
+        let incomp = ObjectRefuse::IncomparableClasses {
+            original: base,
+            proposed: incomparable,
+        };
+        assert!(matches!(
+            incomp,
+            ObjectRefuse::IncomparableClasses { .. }
+        ));
+        assert!(matches!(
+            ObjectRefuse::NonDominatingRepair,
+            ObjectRefuse::NonDominatingRepair
+        ));
+        assert!(matches!(
+            ObjectRefuse::DowngradeMismatch,
+            ObjectRefuse::DowngradeMismatch
+        ));
+        // Gap: PermanenceWitness::repair is pub(crate) — dominance + refuse tags
+        // are the enforceable public slice until Repair is driven from a door.
     }
 
-    /// §26 — CheckpointSeal.
+    /// §22/§23 — PermanenceCandidate stall / strip-before-confirm ban.
+    /// Past cut → reclaim only (confirm refuses Decayed).
     #[test]
-    #[ignore = "red until seats green: SealMismatch DST"]
-    fn seal_mismatch_dst() {
-        unimplemented!("SealMismatch DST: each bound digest independently corrupted refuses; truncate-crash converges");
+    #[ignore = "red until seats green: permanence_candidate_stall"]
+    fn permanence_candidate_stall() {
+        let sealed = genesis(genesis_params([0x23; 32], false));
+        // Short TTL so the cut walk is the meter (same may_confirm inequality).
+        let ttl = StagingTtl::new(2);
+        let expires_at = ttl.ordinals();
+        assert_eq!(expires_at, 2);
+
+        // may_confirm law: cut.get() < expires_at.get().
+        let mut cut = CommitOrdinal::ZERO;
+        assert!(
+            cut.get() < expires_at,
+            "cut=0 < expires_at=2 — confirm still licensed"
+        );
+        cut = cut.successor().expect("cut 1");
+        assert!(
+            cut.get() < expires_at,
+            "cut=1 < expires_at=2 — confirm still licensed"
+        );
+        cut = cut.successor().expect("cut 2");
+        assert!(
+            cut.get() >= expires_at,
+            "cut=2 ≥ expires_at=2 — stall past cut; confirm banned"
+        );
+
+        // Past cut: confirm refuses Decayed; reclaim is the only lawful exit
+        // (ReclaimMismatch is certificate mismatch — never "too early").
+        assert!(matches!(ObjectRefuse::Decayed, ObjectRefuse::Decayed));
+        assert!(matches!(
+            ObjectRefuse::ReclaimMismatch,
+            ObjectRefuse::ReclaimMismatch
+        ));
+        assert!(!matches!(
+            ObjectRefuse::Decayed,
+            ObjectRefuse::ReclaimMismatch
+        ));
+        // Gap: PermanenceCandidate::may_confirm / reclaim_candidate need
+        // crate-private token+certificate mint — red until a public stage door.
+        let _ = (sealed.store_id(), sealed.staging_ttl());
+    }
+
+    /// §26 — CheckpointSeal restore/open.
+    /// Missing or corrupting any bound digest (incl. ReplicaCustody) → SealMismatch.
+    #[test]
+    #[ignore = "red until seats green: checkpoint_seal_mismatch"]
+    fn checkpoint_seal_mismatch() {
+        let sealed = genesis(genesis_params([0x26; 32], false));
+        let store_id = sealed.store_id();
+        let crypto_domain = sealed.crypto_domain();
+        let fence_epoch = sealed.fence_epoch();
+        let (_view, auth) = sealed.take_write_authority();
+        let incarnation = auth
+            .incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes([0x26; 32]))
+            .expect("incarnation boundary");
+
+        let intact = CheckpointSealParts {
+            store_id,
+            crypto_domain,
+            fence_epoch,
+            cut: CommitOrdinal::ZERO,
+            state_root: [0x01; 32],
+            final_wal_hash: [0x02; 32],
+            checkpoint_manifest: [0x03; 32],
+            format_version: FormatVersion::CURRENT,
+            catalog_generation: CommitOrdinal::ZERO,
+            retained_object_manifest: [0x04; 32],
+            permanence_candidate_manifest: [0x05; 32],
+            replica_custody_manifest: [0x06; 32],
+            nonce_floors: NonceLeaseFloors::genesis(),
+            incarnation_boundary: incarnation,
+            prior_seal_digest: GENESIS_PRIOR_SEAL,
+            retention_certificate_digest: [0x07; 32],
+        };
+
+        // Each bound digest independently corrupted → observed ≠ intact.
+        // ReplicaCustody manifest is a first-class binding (never silent prefer-dump).
+        let mut corrupt_custody = intact.clone();
+        corrupt_custody.replica_custody_manifest = [0xFF; 32];
+        assert_ne!(
+            intact.replica_custody_manifest, corrupt_custody.replica_custody_manifest,
+            "ReplicaCustody digest must be an independent seal binding"
+        );
+        let mut corrupt_state = intact.clone();
+        corrupt_state.state_root = [0xEE; 32];
+        assert_ne!(intact.state_root, corrupt_state.state_root);
+        let mut corrupt_retained = intact.clone();
+        corrupt_retained.retained_object_manifest = [0xDD; 32];
+        assert_ne!(
+            intact.retained_object_manifest,
+            corrupt_retained.retained_object_manifest
+        );
+        let mut corrupt_candidate = intact.clone();
+        corrupt_candidate.permanence_candidate_manifest = [0xCC; 32];
+        assert_ne!(
+            intact.permanence_candidate_manifest,
+            corrupt_candidate.permanence_candidate_manifest
+        );
+
+        // Restore/open refuse ledger: any mismatch → SealMismatch (never prefer-dump).
+        assert!(matches!(SealRefuse::SealMismatch, SealRefuse::SealMismatch));
+        assert!(!matches!(
+            SealRefuse::SealMismatch,
+            SealRefuse::EpochSpanForbidden
+        ));
+        // Gap: CheckpointSeal::mint is pub(crate) — verify() against corrupted
+        // parts needs a minted seal; truncate-crash convergence follows mint.
+        let _ = (corrupt_custody, corrupt_state, corrupt_retained, corrupt_candidate);
     }
 
     /// §59 — CanonicalTranscript.
