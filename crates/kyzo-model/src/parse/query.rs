@@ -18,10 +18,8 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 
 use miette::{Diagnostic, LabeledSpan, Report, Result, bail, ensure};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::program::aggregate::parse_aggr;
@@ -31,9 +29,9 @@ use crate::program::query::{
     WriteValidity,
 };
 use crate::program::rule::{
-    FixedRuleApply, FixedRuleArg, FixedRuleHandle, HeadAggrSlot, InputAtom, InputInlineRule,
-    InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram, InputRelationApplyAtom,
-    InputRuleApplyAtom, SearchInput, Trivia, Unification, ValidityClause,
+    FixedRuleApply, FixedRuleArg, FixedRuleHandle, FixedRuleOptions, HeadAggrSlot, InputAtom,
+    InputInlineRule, InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
+    InputRelationApplyAtom, InputRuleApplyAtom, SearchInput, Trivia, Unification, ValidityClause,
 };
 use crate::program::span::SourceSpan;
 use crate::program::symbol::{Symbol, SymbolKind};
@@ -238,8 +236,10 @@ pub(crate) fn parse_query(
                 let data_part = src.next().unwrap();
                 let entry_param_head = extract_entry_param_head(data_part.clone());
                 let data = build_expr(data_part, param_pool)?;
-                let mut options = BTreeMap::new();
-                options.insert(SmartString::from("data"), data.clone());
+                let options = FixedRuleOptions::from_entries([(
+                    Symbol::new("data", span),
+                    data.clone(),
+                )])?;
                 let handle = FixedRuleHandle {
                     name: Symbol::new("Constant", span),
                 };
@@ -272,7 +272,7 @@ pub(crate) fn parse_query(
                         fixed: FixedRuleApply {
                             fixed_handle: handle,
                             rule_args: vec![],
-                            options: Arc::new(options),
+                            options,
                             head,
                             arity,
                             span,
@@ -806,14 +806,14 @@ fn parse_atom(
 fn extract_named_apply_arg(
     pair: Pair<'_>,
     param_pool: &BTreeMap<String, DataValue>,
-) -> Result<(SmartString<LazyCompact>, Expr)> {
+) -> Result<(Symbol, Expr)> {
     let mut inner = pair.into_inner();
     let name_p = inner.next().unwrap();
-    let name = SmartString::from(name_p.as_str());
+    let name = Symbol::new(name_p.as_str(), name_p.extract_span());
     let arg = match inner.next() {
         Some(a) => build_expr(a, param_pool)?,
         None => Expr::Binding {
-            var: Symbol::new(name.clone(), name_p.extract_span()),
+            var: name.clone(),
             tuple_pos: BindingPos::Unresolved,
         },
     };
@@ -897,7 +897,7 @@ fn parse_fixed_rule(
     let name_pair = src.next().unwrap();
     let fixed_name = name_pair.as_str();
     let mut rule_args: Vec<FixedRuleArg> = vec![];
-    let mut options: BTreeMap<SmartString<LazyCompact>, Expr> = Default::default();
+    let mut options = FixedRuleOptions::empty();
     let args_list = src.next().unwrap();
     let args_list_span = args_list.extract_span();
 
@@ -982,7 +982,7 @@ fn parse_fixed_rule(
                                 Rule::fixed_named_relation_arg_pair => {
                                     let mut vs = p.into_inner();
                                     let kp = vs.next().unwrap();
-                                    let k = SmartString::from(kp.as_str());
+                                    let k = Symbol::new(kp.as_str(), kp.extract_span());
                                     let v = match vs.next() {
                                         Some(vp) => {
                                             if !seen_bindings.insert(vp.as_str()) {
@@ -994,7 +994,7 @@ fn parse_fixed_rule(
                                             if !seen_bindings.insert(kp.as_str()) {
                                                 bail!(DuplicateBindingError(kp.extract_span()))
                                             }
-                                            Symbol::new(k.clone(), kp.extract_span())
+                                            k.clone()
                                         }
                                     };
                                     bindings.insert(k, v);
@@ -1023,10 +1023,11 @@ fn parse_fixed_rule(
             }
             Rule::fixed_opt_pair => {
                 let mut inner = nxt.into_inner();
-                let name = inner.next().unwrap().as_str();
+                let name_p = inner.next().unwrap();
+                let name = Symbol::new(name_p.as_str(), name_p.extract_span());
                 let val = inner.next().unwrap();
                 let val = build_expr(val, param_pool)?;
-                options.insert(SmartString::from(name), val);
+                options.insert(name, val)?;
             }
             _ => bail!(UnexpectedRule(nxt.extract_span())),
         }
@@ -1042,7 +1043,7 @@ fn parse_fixed_rule(
         FixedRuleApply {
             fixed_handle: fixed,
             rule_args,
-            options: Arc::new(options),
+            options,
             head,
             arity,
             span: args_list_span,
@@ -1067,14 +1068,14 @@ fn insert_empty_const_rule(
     bindings: &[Symbol],
 ) {
     let entry_symbol = Symbol::prog_entry(Default::default());
-    let mut options = BTreeMap::new();
-    options.insert(
-        SmartString::from("data"),
+    let options = FixedRuleOptions::from_entries([(
+        Symbol::new("data", Default::default()),
         Expr::Const {
             val: DataValue::List(vec![]),
             span: Default::default(),
         },
-    );
+    )])
+    .expect("data is a declared fixed-rule option");
     progs.insert(
         entry_symbol,
         InputInlineRulesOrFixed::Fixed {
@@ -1083,7 +1084,7 @@ fn insert_empty_const_rule(
                     name: Symbol::new("Constant", Default::default()),
                 },
                 rule_args: vec![],
-                options: Arc::new(options),
+                options,
                 head: bindings.to_vec(),
                 arity: bindings.len(),
                 span: Default::default(),

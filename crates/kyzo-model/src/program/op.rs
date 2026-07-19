@@ -367,3 +367,114 @@ impl<'de> serde::Deserialize<'de> for OpDecl {
         resolve_decl(&v).ok_or_else(|| serde::de::Error::custom(format!("unknown op: {v}")))
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Fixed-rule option declarations — closed name vocabulary, no bodies.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Declaration of a fixed-rule option name. Closed vocabulary: an unknown
+/// name cannot resolve, so it cannot enter a [`crate::program::rule::FixedRuleOptions`] bag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FixedRuleOptionDecl {
+    /// Wire / surface name, e.g. `"data"`.
+    pub name: &'static str,
+}
+
+impl FixedRuleOptionDecl {
+    pub const fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+pub const OPT_BREAK_TIES: FixedRuleOptionDecl = FixedRuleOptionDecl::new("break_ties");
+pub const OPT_CONDITION: FixedRuleOptionDecl = FixedRuleOptionDecl::new("condition");
+pub const OPT_CONTENT: FixedRuleOptionDecl = FixedRuleOptionDecl::new("content");
+pub const OPT_DATA: FixedRuleOptionDecl = FixedRuleOptionDecl::new("data");
+pub const OPT_DELIMITER: FixedRuleOptionDecl = FixedRuleOptionDecl::new("delimiter");
+pub const OPT_DELTA: FixedRuleOptionDecl = FixedRuleOptionDecl::new("delta");
+pub const OPT_DESCENDING: FixedRuleOptionDecl = FixedRuleOptionDecl::new("descending");
+pub const OPT_EPSILON: FixedRuleOptionDecl = FixedRuleOptionDecl::new("epsilon");
+pub const OPT_FIELDS: FixedRuleOptionDecl = FixedRuleOptionDecl::new("fields");
+pub const OPT_HAS_HEADERS: FixedRuleOptionDecl = FixedRuleOptionDecl::new("has_headers");
+pub const OPT_HEURISTIC: FixedRuleOptionDecl = FixedRuleOptionDecl::new("heuristic");
+pub const OPT_ITERATIONS: FixedRuleOptionDecl = FixedRuleOptionDecl::new("iterations");
+pub const OPT_JSON_LINES: FixedRuleOptionDecl = FixedRuleOptionDecl::new("json_lines");
+pub const OPT_K: FixedRuleOptionDecl = FixedRuleOptionDecl::new("k");
+pub const OPT_KEEP_DEPTH: FixedRuleOptionDecl = FixedRuleOptionDecl::new("keep_depth");
+pub const OPT_KEEP_TIES: FixedRuleOptionDecl = FixedRuleOptionDecl::new("keep_ties");
+pub const OPT_LIMIT: FixedRuleOptionDecl = FixedRuleOptionDecl::new("limit");
+pub const OPT_MAX_CLIQUES: FixedRuleOptionDecl = FixedRuleOptionDecl::new("max_cliques");
+pub const OPT_MAX_ITER: FixedRuleOptionDecl = FixedRuleOptionDecl::new("max_iter");
+pub const OPT_NULL_IF_ABSENT: FixedRuleOptionDecl = FixedRuleOptionDecl::new("null_if_absent");
+pub const OPT_OUT: FixedRuleOptionDecl = FixedRuleOptionDecl::new("out");
+pub const OPT_PREPEND_INDEX: FixedRuleOptionDecl = FixedRuleOptionDecl::new("prepend_index");
+pub const OPT_SEED: FixedRuleOptionDecl = FixedRuleOptionDecl::new("seed");
+pub const OPT_SKIP: FixedRuleOptionDecl = FixedRuleOptionDecl::new("skip");
+pub const OPT_SORT_BY: FixedRuleOptionDecl = FixedRuleOptionDecl::new("sort_by");
+pub const OPT_STEPS: FixedRuleOptionDecl = FixedRuleOptionDecl::new("steps");
+pub const OPT_TAKE: FixedRuleOptionDecl = FixedRuleOptionDecl::new("take");
+pub const OPT_THETA: FixedRuleOptionDecl = FixedRuleOptionDecl::new("theta");
+pub const OPT_TYPES: FixedRuleOptionDecl = FixedRuleOptionDecl::new("types");
+pub const OPT_UNDIRECTED: FixedRuleOptionDecl = FixedRuleOptionDecl::new("undirected");
+pub const OPT_URL: FixedRuleOptionDecl = FixedRuleOptionDecl::new("url");
+pub const OPT_WEIGHT: FixedRuleOptionDecl = FixedRuleOptionDecl::new("weight");
+
+/// Resolve a fixed-rule option surface name to a [`FixedRuleOptionDecl`].
+/// Unknown / misspelled names return `None` — unconstructible into an options bag.
+pub fn resolve_fixed_rule_option(name: &str) -> Option<FixedRuleOptionDecl> {
+    Some(match name {
+        "break_ties" => OPT_BREAK_TIES,
+        "condition" => OPT_CONDITION,
+        "content" => OPT_CONTENT,
+        "data" => OPT_DATA,
+        "delimiter" => OPT_DELIMITER,
+        "delta" => OPT_DELTA,
+        "descending" => OPT_DESCENDING,
+        "epsilon" => OPT_EPSILON,
+        "fields" => OPT_FIELDS,
+        "has_headers" => OPT_HAS_HEADERS,
+        "heuristic" => OPT_HEURISTIC,
+        "iterations" => OPT_ITERATIONS,
+        "json_lines" => OPT_JSON_LINES,
+        "k" => OPT_K,
+        "keep_depth" => OPT_KEEP_DEPTH,
+        "keep_ties" => OPT_KEEP_TIES,
+        "limit" => OPT_LIMIT,
+        "max_cliques" => OPT_MAX_CLIQUES,
+        "max_iter" => OPT_MAX_ITER,
+        "null_if_absent" => OPT_NULL_IF_ABSENT,
+        "out" => OPT_OUT,
+        "prepend_index" => OPT_PREPEND_INDEX,
+        "seed" => OPT_SEED,
+        "skip" => OPT_SKIP,
+        "sort_by" => OPT_SORT_BY,
+        "steps" => OPT_STEPS,
+        "take" => OPT_TAKE,
+        "theta" => OPT_THETA,
+        "types" => OPT_TYPES,
+        "undirected" => OPT_UNDIRECTED,
+        "url" => OPT_URL,
+        "weight" => OPT_WEIGHT,
+        _ => return None,
+    })
+}
+
+impl serde::Serialize for FixedRuleOptionDecl {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.name)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FixedRuleOptionDecl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = String::deserialize(deserializer)?;
+        resolve_fixed_rule_option(&v)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown fixed-rule option: {v}")))
+    }
+}

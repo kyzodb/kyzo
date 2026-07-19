@@ -9,6 +9,8 @@
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): the input-tier program vocabulary seated in kyzo-model;
  * FixedRuleApply carries name+arity declaration only (no Arc<dyn FixedRule>);
+ * fixed-rule options are a typed FixedRuleOptions bag (Symbol keys, unknown
+ * names unconstructible); named-field maps are Symbol-keyed;
  * one arity authority on the declaration field; NormalForm minting omitted
  * (normalize lives in exec/plan).
  */
@@ -21,15 +23,17 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::{Debug, Display, Formatter};
-use std::sync::Arc;
 
 use miette::{Diagnostic, Result, bail};
+use serde::de::Error as _;
+use serde::{Deserialize, Serialize};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::SourceSpan;
 use crate::program::aggregate::Aggregation;
 use crate::program::expr::Expr;
+use crate::program::op::resolve_fixed_rule_option;
 use crate::program::query::QueryOutOptions;
 use crate::program::symbol::Symbol;
 use crate::value::{AsOf, DataValue, ValidityTs};
@@ -251,15 +255,103 @@ impl FixedRuleHandle {
     }
 }
 
+/// Unknown / misspelled fixed-rule option — refused at construction, never
+/// deferred to bind-time panic.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+#[error("unknown fixed-rule option '{name}'")]
+#[diagnostic(code(parser::unknown_fixed_rule_option))]
+#[diagnostic(help("Option names are a closed vocabulary; unknown names are unconstructible"))]
+pub struct UnknownFixedRuleOption {
+    pub name: String,
+    #[label]
+    pub span: SourceSpan,
+}
+
+/// Proven fixed-rule options bag: every key resolved through
+/// [`resolve_fixed_rule_option`]. Identity keys are [`Symbol`]; an unknown
+/// name cannot enter this type.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FixedRuleOptions {
+    entries: BTreeMap<Symbol, Expr>,
+}
+
+impl FixedRuleOptions {
+    pub fn empty() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// Build from Symbol-keyed pairs; refuses any key that does not resolve.
+    pub fn from_entries(
+        entries: impl IntoIterator<Item = (Symbol, Expr)>,
+    ) -> std::result::Result<Self, UnknownFixedRuleOption> {
+        let mut opts = Self::empty();
+        for (name, value) in entries {
+            opts.insert(name, value)?;
+        }
+        Ok(opts)
+    }
+
+    /// Insert one option. Unknown names are unconstructible here.
+    pub fn insert(
+        &mut self,
+        name: Symbol,
+        value: Expr,
+    ) -> std::result::Result<(), UnknownFixedRuleOption> {
+        if resolve_fixed_rule_option(&name).is_none() {
+            return Err(UnknownFixedRuleOption {
+                name: name.name.to_string(),
+                span: name.span,
+            });
+        }
+        self.entries.insert(name, value);
+        Ok(())
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Expr> {
+        self.entries
+            .get(&Symbol::new(name, SourceSpan::default()))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Expr)> {
+        self.entries.iter()
+    }
+
+    pub fn as_map(&self) -> &BTreeMap<Symbol, Expr> {
+        &self.entries
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl Serialize for FixedRuleOptions {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        self.entries.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for FixedRuleOptions {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let raw = BTreeMap::<Symbol, Expr>::deserialize(deserializer)?;
+        Self::from_entries(raw).map_err(D::Error::custom)
+    }
+}
+
 /// A fixed rule applied in rule position: name + arity declaration.
 ///
 /// One arity authority: the declaration field. The engine checks the live
-/// impl against it at bind time. No `Arc<dyn FixedRule>`.
+/// impl against it at bind time. No `Arc<dyn FixedRule>`. Options are a
+/// typed [`FixedRuleOptions`] bag — unknown names unconstructible.
 #[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct FixedRuleApply {
     pub fixed_handle: FixedRuleHandle,
     pub rule_args: Vec<FixedRuleArg>,
-    pub options: Arc<BTreeMap<SmartString<LazyCompact>, Expr>>,
+    pub options: FixedRuleOptions,
     pub head: Vec<Symbol>,
     /// Declaration arity — the one authority; [`Self::arity`] returns it.
     pub arity: usize,
@@ -306,7 +398,7 @@ pub enum FixedRuleArg {
     },
     NamedStored {
         name: Symbol,
-        bindings: BTreeMap<SmartString<LazyCompact>, Symbol>,
+        bindings: BTreeMap<Symbol, Symbol>,
         as_of: Option<AsOf>,
         #[serde(skip)]
         span: SourceSpan,
@@ -492,13 +584,13 @@ impl Display for InputAtom {
 }
 
 /// An index search atom as parsed: relation and index names, named-field
-/// bindings, and raw parameters. Purely syntactic.
+/// bindings, and raw parameters. Purely syntactic. Keys are [`Symbol`].
 #[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct SearchInput {
     pub relation: Symbol,
     pub index: Symbol,
-    pub bindings: BTreeMap<SmartString<LazyCompact>, Expr>,
-    pub parameters: BTreeMap<SmartString<LazyCompact>, Expr>,
+    pub bindings: BTreeMap<Symbol, Expr>,
+    pub parameters: BTreeMap<Symbol, Expr>,
     #[serde(skip)]
     pub span: SourceSpan,
 }
@@ -552,11 +644,11 @@ impl ValidityClause {
 }
 
 /// A stored-relation application addressed by named fields:
-/// `*name{field: expr, …}`.
+/// `*name{field: expr, …}`. Field names are [`Symbol`] keys.
 #[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct InputNamedFieldRelationApplyAtom {
     pub name: Symbol,
-    pub args: BTreeMap<SmartString<LazyCompact>, Expr>,
+    pub args: BTreeMap<Symbol, Expr>,
     pub validity: Option<ValidityClause>,
     #[serde(skip)]
     pub span: SourceSpan,
@@ -898,7 +990,7 @@ impl Display for InputProgram {
                         }
                         write!(f, "{rule_arg}")?;
                     }
-                    for (k, v) in options.as_ref() {
+                    for (k, v) in options.iter() {
                         if first {
                             first = false;
                         } else {
