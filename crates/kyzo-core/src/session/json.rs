@@ -40,10 +40,10 @@ use std::collections::BTreeMap;
 
 use crate::data::json::format_error_as_json;
 use kyzo_model::value::DataValue;
-use crate::session::db::Db;
+use crate::session::db::Engine;
 use crate::store::Storage;
 
-impl<S: Storage> Db<S> {
+impl<S: Storage> Engine<S> {
     /// Run a script with JSON-encoded parameters, returning a JSON envelope
     /// that is always `Ok` at the Rust level — the ONE "JSON in, JSON out"
     /// entry point every binding (HTTP, WASM, C ABI) should call instead of
@@ -102,13 +102,18 @@ impl<S: Storage> Db<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::db::Db;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
+
+    fn open_engine<S: crate::store::Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
+    }
 
     #[test]
     fn run_script_json_success_envelope_has_ok_headers_rows() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         let out = db.run_script_json("?[x] <- [[1],[2]]", &json!({}));
         assert_eq!(out["ok"], json!(true));
         assert_eq!(out["headers"], json!(["x"]));
@@ -118,7 +123,7 @@ mod tests {
     #[test]
     fn run_script_json_binds_params_from_json() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         let out = db.run_script_json("?[x] <- [[$v]]", &json!({"v": 99}));
         assert_eq!(out["ok"], json!(true));
         assert_eq!(out["rows"], json!([[99]]));
@@ -127,7 +132,7 @@ mod tests {
     #[test]
     fn run_script_json_reports_parse_error_without_panicking() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         let out = db.run_script_json("not a valid script", &json!({}));
         assert_eq!(out["ok"], json!(false));
         assert!(out.get("message").is_some());
@@ -137,7 +142,7 @@ mod tests {
     #[test]
     fn run_script_json_refuses_non_object_params() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         let out = db.run_script_json("?[x] <- [[1]]", &json!([1, 2, 3]));
         assert_eq!(out["ok"], json!(false));
     }
@@ -152,7 +157,7 @@ mod tests {
     #[test]
     fn run_script_json_carries_the_verify_directive_for_free() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3]] :create edge {a, b}",
             BTreeMap::new(),

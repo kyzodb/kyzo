@@ -691,13 +691,18 @@ mod temporal_index_tests {
     use super::*;
     use kyzo_model::program::InputRelationHandle;
     use crate::data::relation::ColType;
-    use crate::session::db::{Db, ScriptOptions};
+    use crate::session::catalog::Catalog;
+    use crate::session::db::{Engine, ScriptOptions};
     use crate::store::{ReadTx, Storage};
     use crate::store::sim::SimStorage;
     use kyzo_model::value::{StoredValiditySlot, ValidityTs};
 
     fn vts(t: i64) -> ValidityTs {
         ValidityTs::from_raw(t)
+    }
+
+    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
     }
 
     fn col(name: &str) -> ColumnDef {
@@ -724,8 +729,8 @@ mod temporal_index_tests {
         }
     }
 
-    fn open_session(db: &Db<SimStorage>) -> SessionTx<<SimStorage as Storage>::WriteTx> {
-        SessionTx::new_write(db.storage.write_tx().unwrap(), ScriptOptions::default())
+    fn open_session(db: &Engine<SimStorage>) -> SessionTx<<SimStorage as Storage>::WriteTx> {
+        SessionTx::new_write(db.store.write_tx().unwrap(), ScriptOptions::default())
     }
 
     /// Write one base point event directly (bypassing `execute_relation`,
@@ -867,7 +872,7 @@ mod temporal_index_tests {
     /// does precede the base key bytes, not follow them.
     #[test]
     fn temporal_index_posting_rows_match_the_scripted_history_exactly() {
-        let db = Db::new(SimStorage::new(0x7E57_0001)).expect("db");
+        let db = open_engine(SimStorage::new(0x7E57_0001));
         let mut stx = open_session(&db);
         stx.create_relation(base_input("e"), KeyspaceKind::Facts)
             .unwrap();
@@ -888,7 +893,7 @@ mod temporal_index_tests {
         }
         stx.store.commit().unwrap();
 
-        let tx = db.storage.read_tx().unwrap();
+        let tx = db.store.read_tx().unwrap();
         let mut got = scan_postings(&tx, &idx_handle);
         got.sort_by_key(|r| (Reverse(r.0), r.1, Reverse(r.2), Reverse(r.3)));
         let mut want: Vec<DecodedPosting> = events
@@ -956,7 +961,7 @@ mod temporal_index_tests {
         ];
 
         // Universe A: index live from the start (incremental).
-        let db_a = Db::new(SimStorage::new(0xB0071)).expect("db a");
+        let db_a = open_engine(SimStorage::new(0xB0071));
         let mut stx_a = open_session(&db_a);
         stx_a
             .create_relation(base_input("b"), KeyspaceKind::Facts)
@@ -983,7 +988,7 @@ mod temporal_index_tests {
         // call is a no-op over an empty index list — write the base rows
         // directly instead, to keep the helper's contract ("an index is
         // attached") honest.
-        let db_b = Db::new(SimStorage::new(0xB0072)).expect("db b");
+        let db_b = open_engine(SimStorage::new(0xB0072));
         let mut stx_b = open_session(&db_b);
         stx_b
             .create_relation(base_input("b"), KeyspaceKind::Facts)
@@ -1011,8 +1016,8 @@ mod temporal_index_tests {
         );
         assert_eq!(idx_a.id, idx_b.id);
 
-        let tx_a = db_a.storage.read_tx().unwrap();
-        let tx_b = db_b.storage.read_tx().unwrap();
+        let tx_a = db_a.store.read_tx().unwrap();
+        let tx_b = db_b.store.read_tx().unwrap();
         let lower: Vec<u8> = Tuple::default().encode_as_key(idx_a.id).as_ref().to_vec();
         let upper = (idx_a.id.raw() + 1).to_be_bytes().to_vec();
         let raw_a: Vec<(Slice, Slice)> = tx_a
@@ -1040,7 +1045,7 @@ mod temporal_index_tests {
     /// sys, polarity) — not merely for the byte-verified fixture above.
     #[test]
     fn every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate() {
-        let db = Db::new(SimStorage::new(0x7E57_0002)).expect("db");
+        let db = open_engine(SimStorage::new(0x7E57_0002));
         let mut stx = open_session(&db);
         stx.create_relation(base_input("m"), KeyspaceKind::Facts)
             .unwrap();
@@ -1059,7 +1064,7 @@ mod temporal_index_tests {
         }
         stx.store.commit().unwrap();
 
-        let tx = db.storage.read_tx().unwrap();
+        let tx = db.store.read_tx().unwrap();
         let mut base_rows = scan_base_rows(&tx, &base);
         let mut postings = scan_postings(&tx, &idx_handle);
         base_rows.sort_by_key(decoded_posting_sort_key);
@@ -1083,7 +1088,7 @@ mod temporal_index_tests {
     /// exact posting byte set.
     #[test]
     fn temporal_index_production_pipeline_mirrors_one_posting_per_base_event() {
-        let db = Db::new(SimStorage::new(0x7E57_0003)).expect("db");
+        let db = open_engine(SimStorage::new(0x7E57_0003));
         db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
             .expect("create");
         {
@@ -1107,7 +1112,7 @@ mod temporal_index_tests {
         db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
             .expect("remove");
 
-        let rtx = SessionTx::new_read(db.storage.read_tx().unwrap(), ScriptOptions::default());
+        let rtx = SessionTx::new_read(db.store.read_tx().unwrap(), ScriptOptions::default());
         let base = rtx.get_relation("po").unwrap();
         let idx_handle = rtx.get_relation("po:t").unwrap();
         let mut base_rows = scan_base_rows(&rtx.store, &base);
@@ -1166,7 +1171,7 @@ mod temporal_index_tests {
     /// calls `WriteTx::del`/`del_range` on a mutation path at all.
     #[test]
     fn temporal_index_write_count_law_holds_for_every_mutation_kind() {
-        let db = Db::new(SimStorage::new(0x7E57_0004)).expect("db");
+        let db = open_engine(SimStorage::new(0x7E57_0004));
         db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
             .expect("create");
         {
@@ -1175,12 +1180,12 @@ mod temporal_index_tests {
             stx.store.commit().unwrap();
         }
 
-        let puts_before_all = db.storage.put_call_count();
-        let dels_before_all = db.storage.del_call_count();
+        let puts_before_all = db.store.put_call_count();
+        let dels_before_all = db.store.del_call_count();
 
         let check_delta = |label: &str, puts_before: u64, dels_before: u64| {
-            let puts_after = db.storage.put_call_count();
-            let dels_after = db.storage.del_call_count();
+            let puts_after = db.store.put_call_count();
+            let dels_after = db.store.del_call_count();
             assert_eq!(
                 puts_after - puts_before,
                 2,

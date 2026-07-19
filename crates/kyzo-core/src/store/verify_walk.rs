@@ -235,7 +235,8 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
 mod pins {
     //! verify_storage battery (re-homed from storage/tests.rs).
 
-    use crate::session::db::Db;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::verify_walk::verify_storage;
     use crate::store::{ReadTx, Storage};
@@ -246,7 +247,7 @@ mod pins {
         let path = dir.path().join("db");
         let data_key: Vec<u8> = {
             let storage = new_fjall_storage(&path).unwrap();
-            let db = Db::new(storage.clone()).unwrap();
+            let db = Engine::compose(storage.clone(), Catalog::new()).unwrap();
             db.run_script(
                 "?[k, v] <- [[1, 7]] :create rel {k => v}",
                 std::collections::BTreeMap::new(),
@@ -283,7 +284,7 @@ mod pins {
         let clean_checked;
         {
             let storage = new_fjall_storage(&path).unwrap();
-            let db = Db::new(storage.clone()).unwrap();
+            let db = Engine::compose(storage.clone(), Catalog::new()).unwrap();
             db.run_script(
                 "?[k, v] <- [[1, 7], [2, 14], [3, 21], [4, 28], [5, 35]] :create rel {k => v}",
                 std::collections::BTreeMap::new(),

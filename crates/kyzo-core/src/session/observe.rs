@@ -55,7 +55,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::json::NamedRows;
-use crate::session::db::Db;
+use crate::session::db::Engine;
 use crate::store::Storage;
 
 /// Represents the kind of operation that triggered the callback.
@@ -134,7 +134,7 @@ impl EventCallbackRegistry {
     }
 }
 
-impl<S: Storage> Db<S> {
+impl<S: Storage> Engine<S> {
     /// Register a callback channel to receive changes when the requested
     /// relation is successfully committed. The returned id unregisters it.
     ///
@@ -219,12 +219,17 @@ mod exactly_once_battery {
     use std::collections::BTreeMap;
 
     use kyzo_model::value::DataValue;
-    use crate::session::db::Db;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::{FaultConfig, SimStorage};
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
+    }
+
+    fn open_engine<S: crate::store::Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
     }
 
     /// The phantom-event law, actually exercised: a callback registered on a
@@ -234,7 +239,7 @@ mod exactly_once_battery {
     #[test]
     fn rs3_callbacks_exactly_once_under_contention() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
             .expect("create counter");
 
@@ -283,7 +288,7 @@ mod exactly_once_battery {
             spurious_conflict_ppm: 400_000, // ~40% of commits conflict spuriously
             ..Default::default()
         };
-        let db = Db::new(SimStorage::with_faults(77, faults)).unwrap();
+        let db = open_engine(SimStorage::with_faults(77, faults));
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
             .expect("create counter (retries through spurious conflicts)");
 

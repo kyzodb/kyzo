@@ -85,7 +85,7 @@ use crate::exec::op::stored::StoredWithValidityRA;
 use crate::exec::fixpoint::delta_store::TupleInIter;
 use crate::session::catalog::get_relation;
 use crate::session::current_validity;
-use crate::session::db::{Db, ScriptOptions, SessionTx};
+use crate::session::db::{Engine, ScriptOptions, SessionTx};
 use crate::store::{ReadTx, Storage};
 
 /// The outcome of one `::verify` run. Never a bare bool: a MATCH, a
@@ -549,7 +549,7 @@ fn oracle_budget(options: &ScriptOptions) -> Result<crate::exec::fixpoint::eval:
     Ok(budget)
 }
 
-impl<S: Storage> Db<S> {
+impl<S: Storage> Engine<S> {
     /// Run `payload` through both the production evaluator and the sealed
     /// naive oracle against one shared snapshot, reporting agreement,
     /// disagreement, or a named refusal. See the module docs for exactly
@@ -616,7 +616,7 @@ impl<S: Storage> Db<S> {
         // rendered to KyzoScript only in [`VerifyOutcome::into_named_rows`].
         let mismatch_program = MismatchProgram(program.clone());
 
-        let tx = SessionTx::new_read(self.storage.read_tx()?, options.clone());
+        let tx = SessionTx::new_read(self.store.read_tx()?, options.clone());
 
         // Production: the real pipeline, on this transaction's snapshot.
         let (result, limited, head, _out_opts) = self.compile_and_eval(
@@ -685,19 +685,24 @@ impl<S: Storage> Db<S> {
 mod tests {
     use super::*;
     use kyzo_model::value::DataValue;
+    use crate::session::catalog::Catalog;
     use crate::store::fjall::new_fjall_storage;
 
     fn no_params() -> BTreeMap<String, kyzo_model::value::DataValue> {
         BTreeMap::new()
     }
 
-    fn seeded_db() -> Db<crate::store::fjall::FjallStorage> {
+    fn open_engine<S: Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
+    }
+
+    fn seeded_db() -> Engine<crate::store::fjall::FjallStorage> {
         let dir = tempfile::tempdir().expect("tempdir");
         let storage = new_fjall_storage(dir.path()).expect("open fjall storage");
         // Leak the tempdir so the store outlives this function — the test
-        // only needs the Db handle, never the path.
+        // only needs the Engine handle, never the path.
         std::mem::forget(dir);
-        let db = Db::new(storage).expect("open db");
+        let db = open_engine(storage);
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4]] :create edge {a, b}",
             no_params(),
@@ -869,7 +874,7 @@ mod tests {
             let mut rng = Rng::new(seed);
             let (program, entries) = gen_program(&mut rng);
             let db =
-                Db::new(crate::store::sim::SimStorage::new(seed)).expect("open sim-backed db");
+                open_engine(crate::store::sim::SimStorage::new(seed));
             for (rel, rows) in &program.facts {
                 let arity = rows.iter().next().map(|t| t.len()).unwrap_or(0);
                 db.run_script(&facts_script(rel, arity, rows), no_params())
@@ -940,8 +945,7 @@ mod tests {
                 // KyzoScript syntax to invoke an unregistered algorithm.
                 continue;
             }
-            let db = Db::new(crate::store::sim::SimStorage::new(0xC09A))
-                .unwrap_or_else(|e| panic!("{name}: db open: {e}"));
+            let db = open_engine(crate::store::sim::SimStorage::new(0xC09A));
             for (rel, arity) in edb_relations(&program) {
                 db.run_script(&facts_script(rel, arity, &BTreeSet::new()), no_params())
                     .unwrap_or_else(|e| panic!("{name}: create EDB {rel}: {e}"));
@@ -994,7 +998,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = new_fjall_storage(dir.path()).unwrap();
         std::mem::forget(dir);
-        let db = Db::new(storage).unwrap();
+        let db = open_engine(storage);
         db.run_script(
             "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
             no_params(),
@@ -1061,7 +1065,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = new_fjall_storage(dir.path()).unwrap();
         std::mem::forget(dir);
-        let db = Db::new(storage).unwrap();
+        let db = open_engine(storage);
         db.run_script(
             "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
             no_params(),
@@ -1099,7 +1103,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = new_fjall_storage(dir.path()).unwrap();
         std::mem::forget(dir);
-        let db = Db::new(storage).unwrap();
+        let db = open_engine(storage);
         db.run_script(
             "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
             no_params(),

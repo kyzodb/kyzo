@@ -17,7 +17,7 @@
 use miette::{Result, bail};
 
 use crate::data::json::NamedRows;
-use crate::session::db::IndexOpNotLanded;
+use crate::session::db::EngineRefuse;
 
 /// `::running` — list in-flight jobs. Stub: empty rows with the ratified
 /// column shape until a job table exists.
@@ -30,5 +30,5 @@ pub(crate) fn list_running() -> Result<NamedRows> {
 
 /// `::kill` — cancel a running job. Typed refusal until jobs land.
 pub(crate) fn kill_running() -> Result<NamedRows> {
-    bail!(IndexOpNotLanded("::kill"))
+    bail!(EngineRefuse::IndexOpNotLanded("::kill"))
 }

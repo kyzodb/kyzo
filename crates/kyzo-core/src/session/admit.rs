@@ -44,7 +44,7 @@ use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{
     IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency,
 };
-use crate::session::db::{Db, SessionTx};
+use crate::session::db::{Engine, SessionTx};
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
@@ -99,7 +99,7 @@ impl<T: WriteTx> SessionTx<T> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Db<S>,
+        db: &Engine<S>,
         res_iter: impl Iterator<Item = Tuple>,
         op: RelationOp,
         meta: &InputRelationHandle,
@@ -267,7 +267,7 @@ impl<T: WriteTx> SessionTx<T> {
     #[allow(clippy::too_many_arguments)]
     fn put_into_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Db<S>,
+        db: &Engine<S>,
         res_iter: impl Iterator<Item = Tuple>,
         headers: &[Symbol],
         cur_vld: ValidityTs,
@@ -440,7 +440,7 @@ impl<T: WriteTx> SessionTx<T> {
     #[allow(clippy::too_many_arguments)]
     fn update_in_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Db<S>,
+        db: &Engine<S>,
         res_iter: impl Iterator<Item = Tuple>,
         headers: &[Symbol],
         cur_vld: ValidityTs,
@@ -585,7 +585,7 @@ impl<T: WriteTx> SessionTx<T> {
     #[allow(clippy::too_many_arguments)]
     fn remove_from_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Db<S>,
+        db: &Engine<S>,
         res_iter: impl Iterator<Item = Tuple>,
         headers: &[Symbol],
         cur_vld: ValidityTs,
@@ -891,7 +891,7 @@ impl<T: WriteTx> SessionTx<T> {
     #[allow(clippy::too_many_arguments)]
     fn collect_mutations<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Db<S>,
+        db: &Engine<S>,
         cur_vld: ValidityTs,
         callback_targets: &BTreeSet<SmartString<LazyCompact>>,
         callback_collector: &mut CallbackCollector,
@@ -1339,12 +1339,17 @@ mod bulk_write_tests {
 
     use kyzo_model::value::DataValue;
     use kyzo_model::value::Tuple;
-    use crate::session::db::Db;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
     use crate::store::sim::SimStorage;
     use crate::store::{ReadTx, Storage};
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
+    }
+
+    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
     }
 
     /// A deterministic seeded workload exercising every branch the bulk-write
@@ -1353,7 +1358,7 @@ mod bulk_write_tests {
     /// finds nothing), re-puts of existing keys (probe finds a row,
     /// `has_indices`/`need_to_collect` both false so only the probe and the
     /// write run), and removals (retraction through the same key encoder).
-    fn run_seeded_workload(db: &Db<SimStorage>) {
+    fn run_seeded_workload(db: &Engine<SimStorage>) {
         db.run_script("?[k, v] <- [] :create w {k => v}", no_params())
             .expect("create");
         let mut fresh = String::from("?[k, v] <- [");
@@ -1394,10 +1399,10 @@ mod bulk_write_tests {
     /// probe, put/remove, commit).
     #[test]
     fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() {
-        let db = Db::new(SimStorage::new(0xB01C_0001)).expect("db");
+        let db = open_engine(SimStorage::new(0xB01C_0001));
         run_seeded_workload(&db);
 
-        let tx = db.storage.read_tx().expect("read tx");
+        let tx = db.store.read_tx().expect("read tx");
         let scan: Vec<(Slice, Slice)> = tx.total_scan().collect::<Result<_, _>>().expect("scan");
         assert_eq!(
             scan.len(),
@@ -1475,7 +1480,7 @@ mod bulk_write_tests {
     /// early.
     #[test]
     fn per_row_write_validity_at_terminal_instant_refuses_whole_mutation() {
-        let db = Db::new(SimStorage::new(0xB01C_0002)).expect("db");
+        let db = open_engine(SimStorage::new(0xB01C_0002));
         db.run_script("?[k, v] <- [] :create w3 {k => v}", no_params())
             .expect("create");
 
@@ -1513,7 +1518,7 @@ mod bulk_write_tests {
     /// wrote, not the value the refused one tried to place.
     #[test]
     fn insert_of_an_existing_key_refuses_and_commits_nothing() {
-        let db = Db::new(SimStorage::new(0xB01C_0003)).expect("db");
+        let db = open_engine(SimStorage::new(0xB01C_0003));
         db.run_script("?[k, v] <- [] :create wi {k => v}", no_params())
             .expect("create");
         db.run_script("?[k, v] <- [[1, 10]] :insert wi {k => v}", no_params())
@@ -1547,7 +1552,7 @@ mod bulk_write_tests {
     /// updates a key it just wrote. Updating an absent key must refuse.
     #[test]
     fn update_of_a_missing_key_refuses() {
-        let db = Db::new(SimStorage::new(0xB01C_0004)).expect("db");
+        let db = open_engine(SimStorage::new(0xB01C_0004));
         db.run_script("?[k, v] <- [] :create wu {k => v}", no_params())
             .expect("create");
         db.run_script("?[k, v] <- [[1, 10]] :put wu {k => v}", no_params())
@@ -1572,7 +1577,7 @@ mod bulk_write_tests {
     /// omitted one must retain its prior stored value, untouched.
     #[test]
     fn update_carries_forward_an_omitted_non_key_column() {
-        let db = Db::new(SimStorage::new(0xB01C_0005)).expect("db");
+        let db = open_engine(SimStorage::new(0xB01C_0005));
         db.run_script("?[k, a, b] <- [] :create wc {k => a, b}", no_params())
             .expect("create");
         db.run_script(
@@ -1609,11 +1614,16 @@ mod trigger_cache_battery {
 
     use kyzo_model::value::DataValue;
     use crate::data::json::NamedRows;
-    use crate::session::db::Db;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
     use crate::store::sim::SimStorage;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
+    }
+
+    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
     }
 
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
@@ -1631,7 +1641,7 @@ mod trigger_cache_battery {
     /// the trigger pipeline works at all — nothing else in the tree tests it.
     #[test]
     fn rs3_two_put_triggers_fire_distinctly_in_one_session() {
-        let db = Db::new(SimStorage::new(41)).unwrap();
+        let db = open_engine(SimStorage::new(41));
         db.run_script("?[a, b] <- [[0, 0]] :create src {a => b}", no_params())
             .expect("create src");
         db.run_script("?[a, b] <- [[0, 0]] :create mirror {a => b}", no_params())

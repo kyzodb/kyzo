@@ -55,20 +55,17 @@
  *   and system genera are executed.
  */
 
-//! The database entrypoint: from a script string to result rows.
+//! The Engine admission door: from a script string to result rows.
 //!
-//! [`Db`] is the process-wide handle — storage plus the fixed-rule and
-//! event-callback registries. [`Db::run_script`] parses a script and runs it:
-//! a query compiles (normalize → stratify → magic-sets → relational-algebra
-//! plan) and evaluates semi-naively over the session's transaction, a
-//! mutation additionally writes its result set back through the mutation
-//! pipeline, and a system op reads or edits the catalog. The result is a
-//! [`NamedRows`].
+//! [`Engine`] holds Store and Catalog capabilities by composition — never
+//! owns Store doors, never persists. [`Engine::run_script`] parses a script
+//! and runs it: a query compiles (normalize → stratify → magic-sets →
+//! relational-algebra plan) and evaluates semi-naively over the session's
+//! transaction, a mutation additionally writes its result set back through
+//! the mutation pipeline, and a system op reads or edits the catalog. The
+//! result is a [`NamedRows`]. The fused `Db` / `Db::new(storage)` ambient
+//! bag is deleted (decisions.md §1).
 
-
-// Carried obligation: engine-store-catalog-decomposition — Db remains the
-// pre-storage-epic name of the Engine composition seat (§1); storage epic
-// demolishes it. Do not half-rename here.
 // Carried obligation: clippy-collapsible-if-drift — record at this seat.
 
 use std::num::NonZeroUsize;
@@ -109,7 +106,7 @@ use crate::session::observe::{CallbackCollector, EventCallbackRegistry};
 use crate::session::current_validity;
 use crate::session::access::AccessLevel;
 use crate::session::catalog::{
-    ConstraintRef, KeyspaceKind, RelationHandle, Residency, create_relation,
+    Catalog, ConstraintRef, KeyspaceKind, RelationHandle, Residency, create_relation,
     describe_relation, destroy_relation, get_relation, list_relations, rename_relation,
     set_access_level, set_relation_triggers, write_relation_row,
 };
@@ -134,71 +131,70 @@ pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 /// [`ConflictError`]: crate::store::ConflictError
 const MAX_COMMIT_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(128).unwrap();
 
-/// A script asked for the imperative genus (`?[…] <- …` control flow), which
-/// the session tier executes for queries and system ops but not yet for
-/// imperative blocks.
+/// Closed Engine admission refuse taxonomy (decisions.md §42/§43).
+///
+/// The seven production panic-shapes that lived as separate structs on the
+/// fused `Db` bag are named variants of one enum at the single Engine
+/// admission door. Store debt/backpressure stays exclusive to
+/// `store/failure.rs` (`StoreRefuse`) — never merged here.
 #[derive(Debug, Error, Diagnostic)]
-#[error("imperative scripts are not executed yet")]
-#[diagnostic(code(db::imperative_not_wired))]
-pub(crate) struct ImperativeNotWired;
+pub(crate) enum EngineRefuse {
+    /// A script asked for the imperative genus (`?[…] <- …` control flow),
+    /// which the session tier executes for queries and system ops but not
+    /// yet for imperative blocks.
+    #[error("imperative scripts are not executed yet")]
+    #[diagnostic(code(db::imperative_not_wired))]
+    ImperativeNotWired,
 
-/// A store op targeting a temp relation (`_`-prefixed). In this tier the
-/// session — and with it the temp store — lives exactly as long as one
-/// script, so a temp write could never be observed; without this refusal
-/// the read path would silently drop the mutation (review finding F2).
-/// Lands for real with multi-script sessions.
-#[derive(Debug, Error, Diagnostic)]
-#[error("temp relation '{0}' cannot be stored to yet: sessions do not outlive a script")]
-#[diagnostic(code(db::temp_relation_not_reachable))]
-#[diagnostic(help(
-    "temp relations (`_`-prefixed) become writable when multi-script \
-     sessions land; store to a named relation instead"
-))]
-pub(crate) struct TempRelationNotReachableError(
-    pub(crate) String,
-    #[label] pub(crate) kyzo_model::SourceSpan,
-);
+    /// A store op targeting a temp relation (`_`-prefixed). In this tier the
+    /// session — and with it the temp store — lives exactly as long as one
+    /// script, so a temp write could never be observed; without this refusal
+    /// the read path would silently drop the mutation (review finding F2).
+    /// Lands for real with multi-script sessions.
+    #[error("temp relation '{0}' cannot be stored to yet: sessions do not outlive a script")]
+    #[diagnostic(code(db::temp_relation_not_reachable))]
+    #[diagnostic(help(
+        "temp relations (`_`-prefixed) become writable when multi-script \
+         sessions land; store to a named relation instead"
+    ))]
+    TempRelationNotReachableError(String, #[label] kyzo_model::SourceSpan),
 
-/// A system op needs an operator-tier feature that has not landed — today
-/// exactly `::explain` and `::running`/`::kill`. Index DDL (`::index`,
-/// `::hnsw`, `::fts`, `::lsh` create/drop) and catalog ops are complete;
-/// this error's name predates their landing and survives only for the two
-/// ops above.
-#[derive(Debug, Error, Diagnostic)]
-#[error("system op '{0}' needs the index-operator tier, which has not landed")]
-#[diagnostic(code(db::index_op_not_landed))]
-pub(crate) struct IndexOpNotLanded(pub(crate) &'static str);
+    /// A system op needs an operator-tier feature that has not landed — today
+    /// exactly `::explain` and `::running`/`::kill`. Index DDL (`::index`,
+    /// `::hnsw`, `::fts`, `::lsh` create/drop) and catalog ops are complete;
+    /// this error's name predates their landing and survives only for the two
+    /// ops above.
+    #[error("system op '{0}' needs the index-operator tier, which has not landed")]
+    #[diagnostic(code(db::index_op_not_landed))]
+    IndexOpNotLanded(&'static str),
 
-/// A `:assert none` / `:assert some` query option was violated.
-#[derive(Debug, Error, Diagnostic)]
-#[error("{0}")]
-#[diagnostic(code(db::assertion_failure))]
-pub(crate) struct QueryAssertionFailure(String, #[label] kyzo_model::SourceSpan);
+    /// A `:assert none` / `:assert some` query option was violated.
+    #[error("{0}")]
+    #[diagnostic(code(db::assertion_failure))]
+    QueryAssertionFailure(String, #[label] kyzo_model::SourceSpan),
 
-/// Registering a fixed rule under a name already taken.
-#[derive(Debug, Error, Diagnostic)]
-#[error("cannot register fixed rule '{0}': the name is already taken")]
-#[diagnostic(code(db::fixed_rule_name_conflict))]
-pub(crate) struct FixedRuleNameConflict(pub(crate) String);
+    /// Registering a fixed rule under a name already taken.
+    #[error("cannot register fixed rule '{0}': the name is already taken")]
+    #[diagnostic(code(db::fixed_rule_name_conflict))]
+    FixedRuleNameConflict(String),
 
-/// A mutation named an output relation whose precondition the op requires:
-/// `:create` on an existing relation, or a non-create/replace op on a
-/// missing one.
-#[derive(Debug, Error, Diagnostic)]
-#[error("{0}")]
-#[diagnostic(code(db::store_relation_precondition))]
-pub(crate) struct StoreRelationPrecondition(String);
+    /// A mutation named an output relation whose precondition the op requires:
+    /// `:create` on an existing relation, or a non-create/replace op on a
+    /// missing one.
+    #[error("{0}")]
+    #[diagnostic(code(db::store_relation_precondition))]
+    StoreRelationPrecondition(String),
 
-/// A `:timeout` (or caller-supplied deadline) that cannot become a
-/// [`Duration`]: negative, non-finite, or too large to fit. The parser only
-/// bounds `:timeout` by `> 0`, so this is the last line of defense before
-/// `Duration::from_secs_f64` would panic.
-#[derive(Debug, Error, Diagnostic)]
-#[error(
-    "timeout of {0} seconds is not usable: it must be a finite, non-negative number of seconds that fits in a Duration"
-)]
-#[diagnostic(code(db::invalid_timeout))]
-pub(crate) struct InvalidTimeout(pub(crate) f64);
+    /// A `:timeout` (or caller-supplied deadline) that cannot become a
+    /// [`Duration`]: negative, non-finite, or too large to fit. The parser only
+    /// bounds `:timeout` by `> 0`, so this is the last line of defense before
+    /// `Duration::from_secs_f64` would panic.
+    #[error(
+        "timeout of {0} seconds is not usable: it must be a finite, non-negative number of seconds that fits in a Duration"
+    )]
+    #[diagnostic(code(db::invalid_timeout))]
+    InvalidTimeout(f64),
+}
 
 /// The scan ceiling for `::merkle_root` when the caller sets no
 /// derived-tuple ceiling: 2^32 key-value pairs. Large enough for any store
@@ -269,23 +265,30 @@ pub struct ScriptOptions {
     pub timeout_secs: Option<f64>,
 }
 
-/// One database: a storage backend plus the process-wide registries.
+/// Engine: sole Record admission + evaluation + projection orchestration.
 ///
-/// Cloning a `Db` shares the same storage and registries (the registries are
-/// behind `Arc`), so callbacks and fixed rules registered on one clone are
-/// visible on the others — the handle is a shared view of one universe.
-pub struct Db<S> {
-    pub(crate) storage: S,
+/// Holds Store (`S: Storage`) and [`Catalog`] capabilities by composition
+/// only — never owns Store doors, never persists. Cloning shares the same
+/// Store handle, Catalog capability, and registries (behind `Arc`), so
+/// callbacks and fixed rules registered on one clone are visible on the
+/// others.
+///
+/// The fused `Db` / `Db::new(storage)` ambient bag is deleted; callers must
+/// supply Store and Catalog explicitly via [`Engine::compose`].
+pub struct Engine<S> {
+    pub(crate) store: S,
+    pub(crate) catalog: Catalog,
     pub(crate) segments: Arc<crate::project::current::SegmentEngine>,
     pub(crate) fixed_rules: Arc<RwLock<BTreeMap<String, Arc<dyn FixedRule>>>>,
     pub(crate) event_callbacks: Arc<RwLock<EventCallbackRegistry>>,
     pub(crate) callback_count: Arc<AtomicU32>,
 }
 
-impl<S: Clone> Clone for Db<S> {
+impl<S: Clone> Clone for Engine<S> {
     fn clone(&self) -> Self {
         Self {
-            storage: self.storage.clone(),
+            store: self.store.clone(),
+            catalog: self.catalog.clone(),
             segments: self.segments.clone(),
             fixed_rules: self.fixed_rules.clone(),
             event_callbacks: self.event_callbacks.clone(),
@@ -294,18 +297,26 @@ impl<S: Clone> Clone for Db<S> {
     }
 }
 
-impl<S: Storage> Db<S> {
-    /// Open a database over the given storage backend, seeding the fixed-rule
-    /// registry with the built-ins.
-    pub fn new(storage: S) -> Result<Self> {
+impl<S: Storage> Engine<S> {
+    /// Compose an Engine from Store and Catalog capabilities.
+    ///
+    /// Not `new(storage)`: that fused constructor is deleted. Engine never
+    /// mints Catalog from Store alone — both capabilities are required.
+    pub fn compose(store: S, catalog: Catalog) -> Result<Self> {
         let fixed_rules = DEFAULT_FIXED_RULES.clone();
         Ok(Self {
-            storage,
+            store,
+            catalog,
             segments: Arc::new(crate::project::current::SegmentEngine::default()),
             fixed_rules: Arc::new(RwLock::new(fixed_rules)),
             event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::default())),
             callback_count: Arc::new(AtomicU32::new(0)),
         })
+    }
+
+    /// The interpretive Catalog capability this Engine holds.
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
     }
 
     /// A snapshot of the fixed-rule registry: the built-ins plus every
@@ -320,14 +331,14 @@ impl<S: Storage> Db<S> {
 
     /// Register a custom fixed rule under `name`. Errors if the name is taken
     /// (including by a built-in). The rule becomes usable in every session of
-    /// this `Db` (and its clones).
+    /// this Engine (and its clones).
     pub fn register_fixed_rule(&self, name: String, rule: impl FixedRule + 'static) -> Result<()> {
         let mut registry = self
             .fixed_rules
             .write()
             .expect("fixed-rule registry poisoned");
         if registry.contains_key(&name) {
-            bail!(FixedRuleNameConflict(name));
+            bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
         registry.insert(name, Arc::from(Box::new(rule) as Box<dyn FixedRule>));
         Ok(())
@@ -341,7 +352,7 @@ impl<S: Storage> Db<S> {
             .write()
             .expect("fixed-rule registry poisoned");
         if registry.contains_key(&name) {
-            bail!(FixedRuleNameConflict(name));
+            bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
         registry.insert(name, rule);
         Ok(())
@@ -360,7 +371,7 @@ impl<S: Storage> Db<S> {
             .is_some()
     }
 
-    /// The next callback registration id (monotonic per `Db`).
+    /// The next callback registration id (monotonic per Engine).
     pub(crate) fn next_callback_id(&self) -> u32 {
         self.callback_count.fetch_add(1, Ordering::SeqCst) + 1
     }
@@ -391,7 +402,7 @@ impl<S: Storage> Db<S> {
         match parse_script(payload, &params, &fixed, cur_vld)? {
             Script::Single(prog) => self.execute_single(*prog, cur_vld, &options),
             Script::Sys(op) => self.run_sys_op(op, cur_vld, &options),
-            Script::Imperative(_) => bail!(ImperativeNotWired),
+            Script::Imperative(_) => bail!(EngineRefuse::ImperativeNotWired),
         }
     }
 
@@ -419,7 +430,7 @@ impl<S: Storage> Db<S> {
         if let Some((h, _, _, _)) = &program.out_opts().store_relation
             && h.name.is_temp_relation_name()
         {
-            bail!(TempRelationNotReachableError(
+            bail!(EngineRefuse::TempRelationNotReachableError(
                 h.name.name.to_string(),
                 h.span
             ));
@@ -431,7 +442,7 @@ impl<S: Storage> Db<S> {
                 // conflicted attempt is discarded whole, so no phantom events.
                 let mut collector = CallbackCollector::default();
                 let mut tx = SessionTx::new_write(
-                    crate::store::retry::write_tx_attempt(&self.storage)?,
+                    crate::store::retry::write_tx_attempt(&self.store)?,
                     options.clone(),
                 );
                 let rows = self
@@ -468,7 +479,7 @@ impl<S: Storage> Db<S> {
                 Ok(rows)
             })
         } else {
-            let mut tx = SessionTx::new_read(self.storage.read_tx()?, options.clone());
+            let mut tx = SessionTx::new_read(self.store.read_tx()?, options.clone());
             self.run_query_readonly(&mut tx, program, cur_vld)
         }
     }
@@ -568,7 +579,7 @@ impl<S: Storage> Db<S> {
             match assertion {
                 QueryAssertion::AssertNone(span) => {
                     if let Some(first) = rows.first() {
-                        bail!(QueryAssertionFailure(
+                        bail!(EngineRefuse::QueryAssertionFailure(
                             format!(
                                 "the query is required to return no rows, but it returned {first:?}"
                             ),
@@ -578,7 +589,7 @@ impl<S: Storage> Db<S> {
                 }
                 QueryAssertion::AssertSome(span) => {
                     if rows.is_empty() {
-                        bail!(QueryAssertionFailure(
+                        bail!(EngineRefuse::QueryAssertionFailure(
                             "the query is required to return some rows, but it returned none"
                                 .to_string(),
                             *span,
@@ -611,14 +622,14 @@ impl<S: Storage> Db<S> {
             let exists = tx.get_relation(&meta.name.name).is_ok();
             match op {
                 RelationOp::Create if exists => {
-                    bail!(StoreRelationPrecondition(format!(
+                    bail!(EngineRefuse::StoreRelationPrecondition(format!(
                         "cannot :create relation '{}': it already exists",
                         meta.name.name
                     )));
                 }
                 RelationOp::Create | RelationOp::Replace => {}
                 _ if !exists => {
-                    bail!(StoreRelationPrecondition(format!(
+                    bail!(EngineRefuse::StoreRelationPrecondition(format!(
                         "relation '{}' does not exist",
                         meta.name.name
                     )));
@@ -717,7 +728,7 @@ impl<S: Storage> Db<S> {
             SysOp::ListConstraints => self.sys_list_constraints(),
             // Read-only catalog ops.
             SysOp::ListRelations => {
-                let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
+                let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
                 let mut rows = vec![];
                 for handle in list_relations(&tx.store)? {
                     rows.push(Tuple::from_vec(vec![
@@ -732,7 +743,7 @@ impl<S: Storage> Db<S> {
                 )?)
             }
             SysOp::ListColumns(name) => {
-                let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
+                let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
                 let handle = get_relation(&tx.store, &name.name)?;
                 let mut rows = vec![];
                 for col in handle
@@ -758,7 +769,7 @@ impl<S: Storage> Db<S> {
                 Ok(NamedRows::try_new(vec!["name".into()], rows)?)
             }
             SysOp::ShowTrigger(name) => {
-                let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
+                let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
                 let handle = get_relation(&tx.store, &name.name)?;
                 let mut rows = vec![];
                 for (kind, src) in handle
@@ -808,7 +819,7 @@ impl<S: Storage> Db<S> {
                 })
             }
             SysOp::Compact => {
-                self.storage.sync()?;
+                self.store.sync()?;
                 Ok(status_ok())
             }
             SysOp::MerkleRoot(rel) => {
@@ -822,7 +833,7 @@ impl<S: Storage> Db<S> {
                         .ok_or(crate::store::merkle::MerkleScanExceeded { ceiling: 0 })?,
                     None => DEFAULT_MERKLE_SCAN_CEILING,
                 };
-                let rtx = self.storage.read_tx()?;
+                let rtx = self.store.read_tx()?;
                 let root = match rel {
                     None => crate::store::merkle::state_root(&rtx, ceiling)?,
                     Some(name) => {
@@ -843,11 +854,11 @@ impl<S: Storage> Db<S> {
             }
 
             // Not yet: explain, kill, and every index-operator op.
-            SysOp::Explain(_) => bail!(IndexOpNotLanded("::explain")),
+            SysOp::Explain(_) => bail!(EngineRefuse::IndexOpNotLanded("::explain")),
             SysOp::KillRunning(_) => crate::session::jobs::kill_running(),
             SysOp::ListIndices(name) => {
                 let _ = cur_vld;
-                let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
+                let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
                 let handle = get_relation(&tx.store, &name.name)?;
                 let rows = handle
                     .indices
@@ -888,7 +899,7 @@ impl<S: Storage> Db<S> {
     ) -> Result<NamedRows> {
         crate::store::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                crate::store::retry::write_tx_attempt(&self.storage)?,
+                crate::store::retry::write_tx_attempt(&self.store)?,
                 ScriptOptions::default(),
             );
             let out = f(&mut tx).map_err(RetryError::session_report)?;
@@ -927,7 +938,8 @@ fn build_budget(
         .filter(|s| *s > 0.0)
         .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     if let Some(secs) = deadline {
-        let duration = Duration::try_from_secs_f64(secs).map_err(|_| InvalidTimeout(secs))?;
+        let duration =
+            Duration::try_from_secs_f64(secs).map_err(|_| EngineRefuse::InvalidTimeout(secs))?;
         budget = budget.with_timeout(duration);
     }
     Ok(budget)
@@ -999,7 +1011,7 @@ pub struct SessionTx<T> {
     /// mutated, `name → typed [`ConstraintRef`] substance`, deduped by name
     /// (each relation in a constraint's read-set mirrors the identical
     /// spec). Collected by the mutation pipeline and drained by
-    /// [`Db::enforce_constraints`](crate::session::db::Db) before commit.
+    /// [`Engine::enforce_constraints`](crate::session::db::Engine) before commit.
     pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, ConstraintRef>,
     /// Every relation id this transaction wrote (user writes, trigger
     /// writes, index backfills alike) — drained into segment-generation
@@ -1334,6 +1346,13 @@ mod tests {
         BTreeMap::new()
     }
 
+    /// Test-local composition: Store + fresh Catalog. Not the deleted fused
+    /// public `Db::new(storage)` constructor — production callers use
+    /// [`Engine::compose`].
+    fn open_engine<S: Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
+    }
+
     /// The segment law, end to end: a run of pure reads with no
     /// intervening write eventually builds and serves the relation's
     /// current-state segment (the rebuild gate declines the first miss and
@@ -1346,7 +1365,7 @@ mod tests {
     /// never a committed-state segment.
     #[test]
     fn segments_serve_fresh_and_never_dirty() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         db.run_script(
             "?[k, v] <- [[1, 10], [2, 20]] :create w {k => v}",
             no_params(),
@@ -1438,7 +1457,7 @@ mod tests {
     /// probe answer.
     #[test]
     fn segments_serve_fresh_and_never_dirty_for_join_probes() {
-        let db = Db::new(SimStorage::new(9)).unwrap();
+        let db = open_engine(SimStorage::new(9));
         db.run_script("?[k] <- [[1], [2]] :create jl {k}", no_params())
             .unwrap();
         db.run_script("?[k2, v] <- [[1, 10]] :create jr {k2 => v}", no_params())
@@ -1497,7 +1516,7 @@ mod tests {
     /// materializing the whole output.
     #[test]
     fn fixed_rule_output_respects_derived_tuple_ceiling() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         let mut edges = String::from("?[a, b, w] <- [");
         for i in 0..60 {
             edges.push_str(&format!("[{}, {}, 1.0],", i, i + 1));
@@ -1557,7 +1576,7 @@ mod tests {
     ///   caught.
     #[test]
     fn fixed_rule_dispatch_forwards_true_baseline_not_zero() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         let mut edges = String::from("?[a, b, w] <- [");
         for i in 0..10 {
             edges.push_str(&format!("[{}, {}, 1.0],", i, i + 1));
@@ -1602,12 +1621,15 @@ mod tests {
     /// `Duration::from_secs_f64(1e300)` directly, which panics.
     #[test]
     fn huge_timeout_is_a_clean_error_not_a_panic() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         let err = db
             .run_script("?[a] := a in [1, 2, 3] :timeout 1e300", no_params())
             .expect_err("an unrepresentable timeout must refuse cleanly");
         assert!(
-            err.downcast_ref::<InvalidTimeout>().is_some(),
+            matches!(
+                err.downcast_ref::<EngineRefuse>(),
+                Some(EngineRefuse::InvalidTimeout(_))
+            ),
             "expected a typed InvalidTimeout refusal, got: {err}"
         );
     }
@@ -1617,7 +1639,7 @@ mod tests {
     /// covers infinity — both must be refused, never panic.
     #[test]
     fn huge_or_infinite_timeout_via_script_options_is_a_clean_error() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         for bad in [1e300_f64, f64::INFINITY] {
             let opts = ScriptOptions {
                 timeout_secs: Some(bad),
@@ -1627,7 +1649,10 @@ mod tests {
                 .run_script_with("?[a] := a in [1, 2, 3]", no_params(), opts)
                 .expect_err("an unrepresentable timeout must refuse cleanly, not panic");
             assert!(
-                err.downcast_ref::<InvalidTimeout>().is_some(),
+                matches!(
+                    err.downcast_ref::<EngineRefuse>(),
+                    Some(EngineRefuse::InvalidTimeout(_))
+                ),
                 "expected a typed InvalidTimeout refusal for {bad}, got: {err}"
             );
         }
@@ -1641,7 +1666,7 @@ mod tests {
     /// must now see the same clean typed error.
     #[test]
     fn overflowing_literal_product_is_a_clean_error_not_a_panic() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         let err = db
             .run_script("?[x] := x = 2222222000*867076028303", no_params())
             .expect_err("an i64-overflowing literal product must refuse cleanly");
@@ -1666,7 +1691,7 @@ mod tests {
     /// the index, the mutation hook indexes a later insert, and the
     /// `~doc:emb{…}` atom drives `hnsw_knn` through parse → resolve →
     /// compile → RA → eval, appending the distance column nearest-first.
-    fn hnsw_create_insert_search<S: Storage>(db: Db<S>) {
+    fn hnsw_create_insert_search<S: Storage>(db: Engine<S>) {
         db.run_script(
             "?[id, v] <- [[1, vec([1.0, 0.0, 0.0, 0.0])], [2, vec([0.0, 1.0, 0.0, 0.0])]] \
              :create doc {id => v: <F32; 4>}",
@@ -1709,19 +1734,19 @@ mod tests {
 
     #[test]
     fn hnsw_create_insert_search_mem() {
-        hnsw_create_insert_search(Db::new(SimStorage::new(7)).unwrap());
+        hnsw_create_insert_search(open_engine(SimStorage::new(7)));
     }
 
     #[test]
     fn hnsw_create_insert_search_fjall() {
         let dir = tempfile::tempdir().expect("tempdir");
-        hnsw_create_insert_search(Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap());
+        hnsw_create_insert_search(open_engine(new_fjall_storage(dir.path()).unwrap()));
     }
 
     /// FTS end to end: `::fts create` + a search atom with a bound score.
     #[test]
     fn fts_create_search_mem() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         db.run_script(
             "?[id, body] <- [[1, 'the quick brown fox'], [2, 'lazy dogs sleep']] \
              :create doc {id => body: String}",
@@ -1757,7 +1782,7 @@ mod tests {
     /// same suspension state machine the materialized join pins.
     #[test]
     fn search_hits_resume_across_output_batch_boundary() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         let mut script = String::from("?[id, body] <- [");
         for i in 0..1200 {
             script.push_str(&format!("[{i}, 'common fox term {i}'],"));
@@ -1783,7 +1808,7 @@ mod tests {
     /// removes the index and the search atom then refuses typed.
     #[test]
     fn lsh_create_search_drop_mem() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         db.run_script(
             "?[id, body] <- [[1, 'a b c d e f g h i j'], [2, 'a b c d e f g h i z'], [3, 'q r s t u v w x y zz']] \
              :create doc {id => body: String}",
@@ -1830,7 +1855,7 @@ mod tests {
     /// THE FIRST END-TO-END QUERY: create → insert → recursive query with a
     /// join → exact rows, all through the public `Db::run_script` over a real
     /// backend. Parameterized so the same script runs on fjall and mem.
-    fn create_insert_recursive_join<S: Storage>(db: Db<S>) {
+    fn create_insert_recursive_join<S: Storage>(db: Engine<S>) {
         // Create the relation and insert the edges of 1→2→3→4→2 in one script.
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
@@ -1876,13 +1901,13 @@ mod tests {
     #[test]
     fn first_end_to_end_query_over_fjall() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         create_insert_recursive_join(db);
     }
 
     #[test]
     fn first_end_to_end_query_over_mem() {
-        let db = Db::new(SimStorage::new(7)).unwrap();
+        let db = open_engine(SimStorage::new(7));
         create_insert_recursive_join(db);
     }
 
@@ -1891,7 +1916,7 @@ mod tests {
     /// together.
     #[test]
     fn replace_is_atomic_clear_and_insert() {
-        let db = Db::new(SimStorage::new(3)).unwrap();
+        let db = open_engine(SimStorage::new(3));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4]] :create edge {a, b}",
             no_params(),
@@ -1914,7 +1939,7 @@ mod tests {
     #[test]
     fn retry_under_contention_loses_no_update() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
             .expect("create counter");
 
@@ -1951,7 +1976,7 @@ mod tests {
     /// delete-reinsert lost the row for the life of the process.)
     #[test]
     fn retraction_governs_across_transactions_on_both_backends() {
-        fn drive<S: Storage>(db: Db<S>) {
+        fn drive<S: Storage>(db: Engine<S>) {
             db.run_script("?[k, v] <- [[1, 'first']] :create t {k => v}", no_params())
                 .expect("create");
             db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
@@ -1979,8 +2004,8 @@ mod tests {
             assert!(gone.rows().is_empty(), "re-retracted fact must be absent");
         }
         let dir = tempfile::tempdir().unwrap();
-        drive(Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap());
-        drive(Db::new(crate::store::sim::SimStorage::new(7)).unwrap());
+        drive(open_engine(new_fjall_storage(dir.path()).unwrap()));
+        drive(open_engine(crate::store::sim::SimStorage::new(7)));
     }
 
     /// The language surface's coordinate ORDER, pinned with a
@@ -1993,14 +2018,14 @@ mod tests {
     fn asof_clause_first_coordinate_is_system_time() {
         use crate::session::catalog::get_relation;
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script(
             "?[k, v] <- [[9, 'seed']] :create hist {k => v}",
             no_params(),
         )
         .expect("create");
         // The retroactive write: valid = 150 µs (ancient), sys = now.
-        let mut tx = db.storage.write_tx().unwrap();
+        let mut tx = db.store.write_tx().unwrap();
         let handle = get_relation(&tx, "hist").unwrap();
         handle
             .put_fact(
@@ -2041,7 +2066,7 @@ mod tests {
     #[test]
     fn plain_index_asof_reads_match_base_scans() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script(
             "?[k, v] <- [[1, 10], [2, 20]] :create t {k => v}",
             no_params(),
@@ -2079,7 +2104,7 @@ mod tests {
     #[test]
     fn guard_idiom_short_circuits_through_scripts() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script(
             "?[k, v] <- [[0, 10], [2, 20]] :create t {k => v}",
             no_params(),
@@ -2118,7 +2143,7 @@ mod tests {
     #[test]
     fn guard_survives_conjunction_pushdown_across_joins() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script("?[k] <- [[1], [2]] :create a {k}", no_params())
             .expect("create a");
         db.run_script(
@@ -2158,7 +2183,7 @@ mod tests {
     #[test]
     fn index_backfill_resumes_correctly_across_batches() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script("?[k, v] <- [[0, 0]] :create big {k => v}", no_params())
             .expect("create");
         let mut chunk = vec![];
@@ -2206,7 +2231,7 @@ mod tests {
     #[test]
     fn asof_clause_parses_one_and_two_coordinates() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script("?[k, v] <- [[1, 10]] :create hist {k => v}", no_params())
             .expect("create");
         db.run_script("?[k, v] := *hist[k, v @ 12345]", no_params())
@@ -2217,7 +2242,7 @@ mod tests {
             .expect("two-coordinate as-of parses in named form");
     }
 
-    fn current<S: Storage>(db: &Db<S>) -> i64 {
+    fn current<S: Storage>(db: &Engine<S>) -> i64 {
         let out = db
             .run_script("?[v] := *ctr[k, v]", no_params())
             .expect("read counter");
@@ -2229,7 +2254,7 @@ mod tests {
     /// wall-clock dependence.
     #[test]
     fn budget_refusal_is_deterministic_and_typed() {
-        let db = Db::new(SimStorage::new(5)).unwrap();
+        let db = open_engine(SimStorage::new(5));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
             no_params(),
@@ -2285,7 +2310,7 @@ mod tests {
     /// not the pre-existing one, is what catches it.
     #[test]
     fn runaway_value_generating_recursion_refuses_under_explicit_ceiling() {
-        let db = Db::new(SimStorage::new(11)).unwrap();
+        let db = open_engine(SimStorage::new(11));
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(10),
             ..Default::default()
@@ -2329,7 +2354,7 @@ mod tests {
     /// this file, verifying the actual compiled-in default end to end.)
     #[test]
     fn widening_value_generating_recursion_refuses_under_default_budget() {
-        let db = Db::new(SimStorage::new(12)).unwrap();
+        let db = open_engine(SimStorage::new(12));
         let err = db
             .run_script(
                 "
@@ -2370,7 +2395,7 @@ mod tests {
     /// cap on legitimate work.
     #[test]
     fn raising_derived_tuple_ceiling_admits_a_larger_terminating_query() {
-        let db = Db::new(SimStorage::new(13)).unwrap();
+        let db = open_engine(SimStorage::new(13));
         let mut edges = String::from("?[a, b] <- [");
         for i in 0..999 {
             edges.push_str(&format!("[{i}, {}],", i + 1));
@@ -2429,7 +2454,7 @@ mod tests {
     /// read (`*edge{a: x}`), which drives catalog-schema field resolution.
     #[test]
     fn negation_and_named_field_through_public_api() {
-        let db = Db::new(SimStorage::new(13)).unwrap();
+        let db = open_engine(SimStorage::new(13));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 1], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
             no_params(),
@@ -2456,14 +2481,14 @@ mod tests {
     /// The compiled plan's symbols, so a test can prove the magic-sets
     /// rewrite actually fired (a non-`Muggle` symbol) rather than trusting a
     /// bound-recursive query to have triggered it.
-    fn compiled_magic_symbols<S: Storage>(db: &Db<S>, script: &str) -> Vec<String> {
+    fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
         let cur_vld = current_validity().unwrap();
         let fixed = db.fixed_rules();
         let prog = match parse_script(script, &no_params(), &fixed, cur_vld).unwrap() {
             Script::Single(p) => *p,
             Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
         };
-        let tx = SessionTx::new_read(db.storage.read_tx().unwrap(), ScriptOptions::default());
+        let tx = SessionTx::new_read(db.store.read_tx().unwrap(), ScriptOptions::default());
         let view = SessionView {
             store: &tx.store,
             temp: &tx.temp,
@@ -2534,7 +2559,7 @@ mod tests {
         let full_path = &oracle["path"];
 
         // The same program+facts through the real engine.
-        let db = Db::new(SimStorage::new(17)).unwrap();
+        let db = open_engine(SimStorage::new(17));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4], [5, 6]] :create edge {a, b}",
             no_params(),
@@ -2601,7 +2626,7 @@ mod tests {
     /// `bench_api::points_to` hand-builds.
     #[test]
     fn pointsto_magic_symbols_are_unadorned() {
-        let db = Db::new(SimStorage::new(6800)).unwrap();
+        let db = open_engine(SimStorage::new(6800));
         db.run_script("?[a, b] <- [] :create addr_of {a, b}", no_params())
             .expect("create addr_of");
         db.run_script("?[a, b] <- [] :create assign {a, b}", no_params())
@@ -2639,7 +2664,7 @@ mod tests {
     /// transitive-closure shape used throughout this test module.)
     #[test]
     fn transitive_closure_magic_symbols_under_unbound_query() {
-        let db = Db::new(SimStorage::new(6801)).unwrap();
+        let db = open_engine(SimStorage::new(6801));
         db.run_script(
             "?[a, b] <- [[1,2],[2,3],[3,4]] :create edge {a, b}",
             no_params(),
@@ -2682,7 +2707,7 @@ mod tests {
         /// Every non-`?` symbol name, sorted — order-independent, so this
         /// doesn't couple to `BTreeMap` iteration order the way the
         /// hand-pinned tests above (deliberately) do.
-        fn sorted_syms<S: Storage>(db: &Db<S>, script: &str) -> Vec<String> {
+        fn sorted_syms<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
             let mut syms = compiled_magic_symbols(db, script);
             syms.sort();
             syms
@@ -2703,7 +2728,7 @@ mod tests {
                 .collect();
             bypass_rows.sort();
 
-            let db = Db::new(SimStorage::new(68_001)).unwrap();
+            let db = open_engine(SimStorage::new(68_001));
             let edge_literal: String = (0..n as i64 - 1)
                 .map(|i| format!("[{i},{}],", i + 1))
                 .collect();
@@ -2776,7 +2801,7 @@ mod tests {
                 .collect();
             bypass_rows.sort();
 
-            let db = Db::new(SimStorage::new(68_002)).unwrap();
+            let db = open_engine(SimStorage::new(68_002));
             let load_rel = |name: &str, rows: &[(i64, i64)]| {
                 let literal: String = rows.iter().map(|(y, x)| format!("[{y},{x}],")).collect();
                 db.run_script(
@@ -2896,7 +2921,7 @@ mod tests {
             };
             let expected = oracle_answer(&program, "p");
 
-            let db = Db::new(SimStorage::new(68_101)).unwrap();
+            let db = open_engine(SimStorage::new(68_101));
             for (name, rows) in [
                 ("seedp", vec![(1i64, 2i64)]),
                 ("linkp", vec![(2, 3)]),
@@ -3007,7 +3032,7 @@ mod tests {
             };
             let expected = oracle_answer(&program, "excluded");
 
-            let db = Db::new(SimStorage::new(68_102)).unwrap();
+            let db = open_engine(SimStorage::new(68_102));
             for (name, rows) in [
                 ("addr_of", vec![(1i64, 2i64), (2, 3)]),
                 ("assign", vec![(2, 3), (3, 4)]),
@@ -3090,7 +3115,7 @@ mod tests {
             };
             let expected = oracle_answer(&program, "dup");
 
-            let db = Db::new(SimStorage::new(68_103)).unwrap();
+            let db = open_engine(SimStorage::new(68_103));
             db.run_script(
                 "?[a, b, c] <- [[1,2,2],[1,3,4]] :create baseq {a, b, c}",
                 no_params(),
@@ -3216,7 +3241,7 @@ mod tests {
             };
             let expected = oracle_answer(&program, "pt");
 
-            let db = Db::new(SimStorage::new(68_104)).unwrap();
+            let db = open_engine(SimStorage::new(68_104));
             for (name, rows) in [
                 ("addr_of", vec![(1i64, 2i64)]),
                 ("assign", vec![(2, 3)]),
@@ -3276,13 +3301,18 @@ mod db_battery {
 
     use kyzo_model::value::DataValue;
     use crate::data::json::NamedRows;
-    use crate::session::db::{Db, ScriptOptions};
+    use crate::session::catalog::Catalog;
+    use crate::session::db::{Engine, ScriptOptions};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
+    }
+
+    fn open_engine<S: Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
     }
 
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
@@ -3308,7 +3338,7 @@ mod db_battery {
     #[test]
     fn rs3_independent_e2e_scenario() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
 
         db.run_script(
             "?[a, b] <- [[1, 10], [2, 20]] :create sal {a => b}",
@@ -3375,7 +3405,7 @@ mod db_battery {
     #[test]
     fn rs3_three_writer_contention_loses_no_update() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
             .expect("create counter");
 
@@ -3405,7 +3435,7 @@ mod db_battery {
     /// a budget refusal renders identically on repeated runs.
     #[test]
     fn rs3_determinism_across_backends_and_repeats() {
-        fn scenario<S: Storage>(db: &Db<S>) -> (Vec<Vec<i64>>, Vec<Vec<i64>>) {
+        fn scenario<S: Storage>(db: &Engine<S>) -> (Vec<Vec<i64>>, Vec<Vec<i64>>) {
             db.run_script(
                 "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2], [5, 6]] :create edge {a, b}",
                 no_params(),
@@ -3422,10 +3452,10 @@ mod db_battery {
         }
 
         let dir1 = tempfile::tempdir().unwrap();
-        let db1 = Db::new(new_fjall_storage(dir1.path()).unwrap()).unwrap();
+        let db1 = open_engine(new_fjall_storage(dir1.path()).unwrap());
         let dir2 = tempfile::tempdir().unwrap();
-        let db2 = Db::new(new_fjall_storage(dir2.path()).unwrap()).unwrap();
-        let db3 = Db::new(SimStorage::new(99)).unwrap();
+        let db2 = open_engine(new_fjall_storage(dir2.path()).unwrap());
+        let db3 = open_engine(SimStorage::new(99));
 
         let (a1, a2) = scenario(&db1);
         let (b1, _) = scenario(&db2);
@@ -3435,7 +3465,7 @@ mod db_battery {
         assert_eq!(a1, c1, "fjall vs sim: identical rows in order");
 
         // Budget refusal is reproducible, including its rendered content.
-        let refusal = |db: &Db<SimStorage>| -> String {
+        let refusal = |db: &Engine<SimStorage>| -> String {
             let opts = ScriptOptions {
                 derived_tuple_ceiling: Some(3),
                 ..Default::default()
@@ -3469,7 +3499,7 @@ mod db_battery {
     /// `unwrap_err`.
     #[test]
     fn rs3_temp_relation_mutation_is_a_typed_refusal() {
-        let db = Db::new(SimStorage::new(23)).unwrap();
+        let db = open_engine(SimStorage::new(23));
         let err = db
             .run_script("?[a] <- [[1]] :create _scratch {a}", no_params())
             .unwrap_err();

@@ -358,7 +358,8 @@ pub use rules::contract::{
     FixedRulePayload, SimpleFixedRule, SimpleRuleBody,
 };
 pub use session::observe::{CallbackEvent, CallbackOp};
-pub use session::db::{Db, ScriptOptions};
+pub use session::catalog::Catalog;
+pub use session::db::{Engine, ScriptOptions};
 pub use session::verify::VerifyOutcome;
 
 pub use exec::op::temporal::SignedFact;

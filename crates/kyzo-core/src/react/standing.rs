@@ -78,7 +78,8 @@ use crate::session::db::{SessionNormalizer, SessionView};
 use crate::exec::op::temporal::SignedFact;
 use crate::session::observe::{CallbackEvent, CallbackOp};
 use crate::session::current_validity;
-use crate::session::db::{Db, ScriptOptions, SessionTx};
+use crate::session::catalog::Catalog;
+use crate::session::db::{Engine, ScriptOptions, SessionTx};
 use crate::session::catalog::get_relation;
 use crate::store::Storage;
 
@@ -159,7 +160,7 @@ fn no_duplicate_key_prefix(rows: &BTreeSet<Tuple>, key_arity: usize) -> bool {
 /// constructor, so a `StandingQuery` that exists is always both
 /// subscribed and snapshot-initialized.
 pub struct StandingQuery<S: Storage> {
-    db: Db<S>,
+    db: Engine<S>,
     program: IncrementalProgram,
     state: MaintainedState,
     subscriptions: BTreeMap<Symbol, Subscription>,
@@ -175,7 +176,7 @@ impl<S: Storage> StandingQuery<S> {
     /// internal-facing half, exposed for callers that already hold a
     /// compiled [`StratifiedMagicProgram`](crate::exec::plan::program::StratifiedMagicProgram).
     pub(crate) fn register(
-        db: &Db<S>,
+        db: &Engine<S>,
         magic: crate::exec::plan::program::StratifiedMagicProgram,
     ) -> Result<Self> {
         let program = incremental::translate(magic)?;
@@ -407,7 +408,7 @@ impl<S: Storage> Drop for StandingQuery<S> {
     }
 }
 
-impl<S: Storage> Db<S> {
+impl<S: Storage> Engine<S> {
     /// Register a standing query from a real KyzoScript read query — the
     /// public entry point: a user hands this a query string, exactly as
     /// they would to [`Db::run_script`], and gets back a live
@@ -529,7 +530,7 @@ mod tests {
     #[test]
     fn register_snapshots_current_state_then_apply_pending_tracks_real_commits() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
         db.run_script(":create r {x: Int =>}", no_params()).unwrap();
         // p(1) exists, r is empty: q(1) should already hold at registration.
@@ -584,7 +585,7 @@ mod tests {
     #[test]
     fn current_answer_and_apply_pending_answer_match_the_symbol_keyed_calls() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
         db.run_script(":create r {x: Int =>}", no_params()).unwrap();
         db.run_script("?[x] <- [[1]] :put p {x}", no_params())
@@ -626,7 +627,7 @@ mod tests {
     #[test]
     fn apply_pending_nets_multiple_queued_commits_before_evaluating() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
 
         // Repro 1: put-then-rm of the same absent key nets to no change.
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
@@ -656,7 +657,7 @@ mod tests {
         // Repro 2: p(1) already present; rm-then-put in one drain nets to
         // no change (it stays present).
         let dir2 = tempfile::tempdir().unwrap();
-        let db2 = Db::new(new_fjall_storage(dir2.path()).unwrap()).unwrap();
+        let db2 = Engine::compose(new_fjall_storage(dir2.path()).unwrap(), Catalog::new()).unwrap();
         db2.run_script(":create p {x: Int =>}", no_params())
             .unwrap();
         db2.run_script(":create r {x: Int =>}", no_params())
@@ -690,7 +691,7 @@ mod tests {
         // rows in the maintained state — a structural key-uniqueness
         // violation that poisons every downstream rule.
         let dir3 = tempfile::tempdir().unwrap();
-        let db3 = Db::new(new_fjall_storage(dir3.path()).unwrap()).unwrap();
+        let db3 = Engine::compose(new_fjall_storage(dir3.path()).unwrap(), Catalog::new()).unwrap();
         db3.run_script(":create q {k: Int => val: Int}", no_params())
             .unwrap();
         let mut sq3 = db3
@@ -727,7 +728,7 @@ mod tests {
     #[test]
     fn teardown_unregisters_every_subscription() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
         db.run_script(":create r {x: Int =>}", no_params()).unwrap();
         let sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
@@ -749,7 +750,7 @@ mod tests {
     #[test]
     fn drop_on_scope_exit_unregisters_every_subscription() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
         db.run_script(":create r {x: Int =>}", no_params()).unwrap();
         let ids: Vec<u32> = {
@@ -778,7 +779,7 @@ mod tests {
     #[test]
     fn register_standing_refuses_a_real_recursive_query() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
         db.run_script(":create edge {a: Int, b: Int =>}", no_params())
             .unwrap();
         let query = "path[a, b] := *edge[a, b]\npath[a, b] := *edge[a, c], path[c, b]\n?[a, b] := path[a, b]";
@@ -805,7 +806,7 @@ mod tests {
     #[test]
     fn register_standing_maintains_a_real_aggregating_query_across_real_commits() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
         db.run_script(":create p {x: Int, y: Int =>}", no_params())
             .unwrap();
         db.run_script("?[x, y] <- [[1, 10], [1, 20]] :put p {x, y}", no_params())
@@ -946,7 +947,7 @@ mod tests {
         ]
     }
 
-    fn create_relation(db: &Db<crate::store::fjall::FjallStorage>, name: &str, arity: usize) {
+    fn create_relation(db: &Engine<crate::store::fjall::FjallStorage>, name: &str, arity: usize) {
         let cols = (0..arity)
             .map(|i| format!("k{i}: Int"))
             .collect::<Vec<_>>()
@@ -981,7 +982,7 @@ mod tests {
         for shape in shapes() {
             for _iteration in 0..8 {
                 let dir = tempfile::tempdir().unwrap();
-                let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+                let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
                 // `live: what every EDB relation ACTUALLY holds right now,
                 // mirrored in-process so a `Minus` picks a real victim.
                 let mut live: BTreeMap<&str, BTreeSet<Vec<i64>>> = BTreeMap::new();
@@ -1077,7 +1078,7 @@ mod tests {
         for query in queries {
             for _iteration in 0..20 {
                 let dir = tempfile::tempdir().unwrap();
-                let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+                let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
                 db.run_script(":create q {k: Int => val: Int}", no_params())
                     .unwrap();
 

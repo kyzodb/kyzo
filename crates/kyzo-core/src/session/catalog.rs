@@ -129,6 +129,29 @@ use kyzo_model::value::{
 };
 
 // ---------------------------------------------------------------------------
+// Catalog capability (decisions.md §1) — interpreter, not a byte owner.
+// ---------------------------------------------------------------------------
+
+/// Sole interpretive schema capability: as-of schema evaluation and
+/// admission-gating of schema-mutating Records.
+///
+/// Owns no bytes, no fsync path, no counters. Schema Records are Store
+/// facts; Catalog is their interpreter. Sealed — no public common
+/// super-type with Store or Engine.
+#[derive(Clone, Debug, Default)]
+pub struct Catalog {
+    _sealed: (),
+}
+
+impl Catalog {
+    /// Mint an interpretive Catalog capability. Does not open storage,
+    /// allocate counters, or touch durable bytes.
+    pub fn new() -> Self {
+        Self { _sealed: () }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The system keyspace, typed.
 // ---------------------------------------------------------------------------
 

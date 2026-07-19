@@ -82,7 +82,7 @@ use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, ValidityTs};
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{ConstraintRef, get_relation, list_relations, write_relation_row};
-use crate::session::db::{Db, ScriptOptions, SessionTx, status_ok};
+use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
 use crate::exec::fixpoint::delta_store::TupleInIter;
 use crate::store::retry::RetryError;
 use crate::store::scratch::TempTx;
@@ -272,7 +272,7 @@ fn stored_read_set(prog: &InputProgram) -> BTreeSet<SmartString<LazyCompact>> {
     out
 }
 
-impl<S: Storage> Db<S> {
+impl<S: Storage> Engine<S> {
     /// Evaluate a constraint body read-only and return its satisfying rows
     /// — the violation witnesses — sorted and deduped (deterministic at any
     /// thread count). Runs under the session's budget.
@@ -369,7 +369,7 @@ impl<S: Storage> Db<S> {
 
         crate::store::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                crate::store::retry::write_tx_attempt(&self.storage)?,
+                crate::store::retry::write_tx_attempt(&self.store)?,
                 options.clone(),
             );
 
@@ -442,7 +442,7 @@ impl<S: Storage> Db<S> {
     pub(crate) fn sys_remove_constraint(&self, name: &Symbol) -> Result<NamedRows> {
         crate::store::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                crate::store::retry::write_tx_attempt(&self.storage)?,
+                crate::store::retry::write_tx_attempt(&self.store)?,
                 ScriptOptions::default(),
             );
             let mut found = false;
@@ -475,7 +475,7 @@ impl<S: Storage> Db<S> {
     /// triple, in catalog order — a mirrored constraint appears once per
     /// relation it reads.
     pub(crate) fn sys_list_constraints(&self) -> Result<NamedRows> {
-        let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
         let mut rows = vec![];
         for handle in list_relations(&tx.store)? {
             for c in &handle.constraints {
@@ -496,12 +496,16 @@ impl<S: Storage> Db<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::catalog::RelationHasConstraints;
+    use crate::session::catalog::{Catalog, RelationHasConstraints};
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
+    }
+
+    fn open_engine<S: Storage>(store: S) -> Engine<S> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
     }
 
     fn ints(nr: &NamedRows) -> Vec<Vec<i64>> {
@@ -522,7 +526,7 @@ mod tests {
     /// the `expect_err` here pass a violating commit and the test fail.
     #[test]
     fn check_constraint_denies_violating_insert_with_witnesses() {
-        let db = Db::new(SimStorage::new(21)).unwrap();
+        let db = open_engine(SimStorage::new(21));
         db.run_script("?[k, v] <- [[1, 5]] :create scores {k => v}", no_params())
             .expect("create");
         db.run_script(
@@ -568,7 +572,7 @@ mod tests {
     /// children is denied (parent-side attachment of the SAME constraint).
     #[test]
     fn fk_constraint_fires_on_child_insert_and_parent_delete() {
-        let db = Db::new(SimStorage::new(22)).unwrap();
+        let db = open_engine(SimStorage::new(22));
         db.run_script("?[id] <- [[1]] :create parent {id}", no_params())
             .expect("create parent");
         db.run_script("?[id, fk] <- [] :create child {id => fk}", no_params())
@@ -619,7 +623,7 @@ mod tests {
     /// succeeds; dropping makes previously denied writes commit again.
     #[test]
     fn creation_over_violating_data_is_refused_with_witnesses() {
-        let db = Db::new(SimStorage::new(23)).unwrap();
+        let db = open_engine(SimStorage::new(23));
         db.run_script(
             "?[k, v] <- [[1, -9], [2, 3]] :create scores {k => v}",
             no_params(),
@@ -673,7 +677,7 @@ mod tests {
     /// trigger's write together.
     #[test]
     fn trigger_writes_are_constrained_and_abort_is_atomic() {
-        let db = Db::new(SimStorage::new(24)).unwrap();
+        let db = open_engine(SimStorage::new(24));
         db.run_script("?[x] <- [] :create a {x}", no_params())
             .expect("create a");
         db.run_script("?[y] <- [] :create b {y}", no_params())
@@ -723,7 +727,7 @@ mod tests {
     /// checking rolls back.
     #[test]
     fn constraint_exceeding_budget_is_a_typed_refusal() {
-        let db = Db::new(SimStorage::new(25)).unwrap();
+        let db = open_engine(SimStorage::new(25));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
             no_params(),
@@ -778,7 +782,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn witnesses_are_deterministic_across_thread_counts_and_backends() {
-        fn violate<S: Storage>(db: &Db<S>) -> (String, usize, Vec<Tuple>) {
+        fn violate<S: Storage>(db: &Engine<S>) -> (String, usize, Vec<Tuple>) {
             db.run_script("?[k, v] <- [[0, 0]] :create scores {k => v}", no_params())
                 .expect("create");
             db.run_script(
@@ -803,7 +807,7 @@ mod tests {
                 .install(f)
         }
 
-        let baseline = at_thread_count(1, || violate(&Db::new(SimStorage::new(7)).unwrap()));
+        let baseline = at_thread_count(1, || violate(&open_engine(SimStorage::new(7))));
         assert_eq!(baseline.1, 20, "full violation count reported");
         assert_eq!(baseline.2.len(), WITNESS_CAP, "witness list capped");
         // Sorted ⇒ the cap keeps the smallest keys 1..=8.
@@ -813,12 +817,12 @@ mod tests {
         );
 
         for threads in [2, 4] {
-            let got = at_thread_count(threads, || violate(&Db::new(SimStorage::new(7)).unwrap()));
+            let got = at_thread_count(threads, || violate(&open_engine(SimStorage::new(7))));
             assert_eq!(got, baseline, "witnesses differ at {threads} threads");
         }
         let dir = tempfile::tempdir().unwrap();
         let on_fjall = at_thread_count(2, || {
-            violate(&Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap())
+            violate(&open_engine(new_fjall_storage(dir.path()).unwrap()))
         });
         assert_eq!(on_fjall, baseline, "witnesses differ across backends");
     }
@@ -828,7 +832,7 @@ mod tests {
     /// typed refusals, and none of them attaches anything.
     #[test]
     fn creation_refusals_are_typed_and_attach_nothing() {
-        let db = Db::new(SimStorage::new(26)).unwrap();
+        let db = open_engine(SimStorage::new(26));
         db.run_script("?[k] <- [[1]] :create r {k}", no_params())
             .expect("create r");
 
@@ -929,7 +933,7 @@ mod tests {
     /// otherwise sibling writes would fail forever on a dangling reference.
     #[test]
     fn destroy_rename_replace_refused_while_constrained() {
-        let db = Db::new(SimStorage::new(27)).unwrap();
+        let db = open_engine(SimStorage::new(27));
         db.run_script("?[id] <- [[1]] :create parent {id}", no_params())
             .expect("create parent");
         db.run_script("?[id, fk] <- [] :create child {id => fk}", no_params())
@@ -969,7 +973,7 @@ mod tests {
     /// (Hostile-review finding: the drop path once ran with no access check.)
     #[test]
     fn drop_requires_the_same_access_rung_as_create() {
-        let db = Db::new(SimStorage::new(30)).unwrap();
+        let db = open_engine(SimStorage::new(30));
         db.run_script("?[k, v] <- [[1, 5]] :create scores {k => v}", no_params())
             .expect("create");
         db.run_script(
@@ -1023,7 +1027,7 @@ mod tests {
     /// silent stop, never an unbounded loop.
     #[test]
     fn trigger_cascade_runs_deep_and_cycles_hit_the_typed_ceiling() {
-        let db = Db::new(SimStorage::new(28)).unwrap();
+        let db = open_engine(SimStorage::new(28));
         for rel in ["a", "b", "c"] {
             db.run_script(&format!("?[x] <- [] :create {rel} {{x}}"), no_params())
                 .expect("create");
@@ -1083,7 +1087,7 @@ mod tests {
     /// one logical key are denied.
     #[test]
     fn uniqueness_constraint_shape() {
-        let db = Db::new(SimStorage::new(29)).unwrap();
+        let db = open_engine(SimStorage::new(29));
         // email is a dependent column; k is the primary key.
         db.run_script(
             "?[k, email] <- [[1, 'a@x.com']] :create users {k => email}",
