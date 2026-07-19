@@ -310,7 +310,9 @@ impl PartialOrd for DataValue {
 
 impl Ord for DataValue {
     /// The storage total order: a structural mirror of canonical byte
-    /// order, law-locked to the codec by differential tests.
+    /// order, law-locked to the codec by differential tests. Total over
+    /// every constructible pair — no NaN hole, no cross-kind refuse, no
+    /// panic (the T4 / #199 tie-break authority).
     fn cmp(&self, other: &Self) -> Ordering {
         let t = self.tag().cmp(&other.tag());
         if t != Ordering::Equal {
@@ -362,7 +364,10 @@ impl Ord for DataValue {
             }
             (DataValue::Validity(a), DataValue::Validity(b)) => a.cmp(b),
             (DataValue::Interval(a), DataValue::Interval(b)) => interval_storage_cmp(a, b),
-            _ => unreachable!("tags equal"),
+            // Tags already agreed; every same-kind arm is covered above.
+            // Equal is the total-order refuse of panic — compare never panics
+            // for any constructible DataValue pair (the T4 law).
+            _ => Ordering::Equal,
         }
     }
 }

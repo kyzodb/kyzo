@@ -1220,20 +1220,26 @@ mod tests {
         out
     }
 
-    /// Order embedding: canonical byte order == semantic order, every
-    /// pair of the edge corpus.
+    /// THE one-law triple on the edge corpus: canonical byte order ==
+    /// `DataValue::Ord` == independent semantic order. Every pair.
     #[test]
     fn law_order_embedding_edge_corpus() {
         let corpus = edge_datums();
         let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
         for i in 0..corpus.len() {
             for j in 0..corpus.len() {
+                let byte = encoded[i].as_bytes().cmp(encoded[j].as_bytes());
+                let structural = corpus[i].cmp(&corpus[j]);
+                let semantic = semantic_cmp(&corpus[i], &corpus[j]);
                 assert_eq!(
-                    encoded[i].as_bytes().cmp(encoded[j].as_bytes()),
-                    semantic_cmp(&corpus[i], &corpus[j]),
-                    "order embedding broken: {:?} vs {:?}",
-                    corpus[i],
-                    corpus[j]
+                    byte, structural,
+                    "byte order != Ord: {:?} vs {:?}",
+                    corpus[i], corpus[j]
+                );
+                assert_eq!(
+                    structural, semantic,
+                    "Ord != semantic: {:?} vs {:?}",
+                    corpus[i], corpus[j]
                 );
             }
         }
@@ -1348,8 +1354,9 @@ mod tests {
         );
     }
 
-    /// Randomized order embedding + round-trip: generated scalars and
-    /// shallow sequences, adversarial alphabets (NUL-heavy strings).
+    /// Randomized one-law triple + round-trip: generated scalars and
+    /// shallow sequences, adversarial alphabets (NUL-heavy strings),
+    /// every kind including Interval.
     #[test]
     fn law_order_embedding_randomized() {
         let mut rng = Rng(0xC0FFEE);
@@ -1360,12 +1367,18 @@ mod tests {
         let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
         for i in 0..corpus.len() {
             for j in 0..corpus.len() {
+                let byte = encoded[i].as_bytes().cmp(encoded[j].as_bytes());
+                let structural = corpus[i].cmp(&corpus[j]);
+                let semantic = semantic_cmp(&corpus[i], &corpus[j]);
                 assert_eq!(
-                    encoded[i].as_bytes().cmp(encoded[j].as_bytes()),
-                    semantic_cmp(&corpus[i], &corpus[j]),
-                    "random order embedding broken: {:?} vs {:?}",
-                    corpus[i],
-                    corpus[j]
+                    byte, structural,
+                    "random byte != Ord: {:?} vs {:?}",
+                    corpus[i], corpus[j]
+                );
+                assert_eq!(
+                    structural, semantic,
+                    "random Ord != semantic: {:?} vs {:?}",
+                    corpus[i], corpus[j]
                 );
             }
         }
@@ -1374,8 +1387,96 @@ mod tests {
         }
     }
 
+    /// Totality of the storage order over every constructible kind:
+    /// no NaN hole, no cross-kind ambiguity, no panic on compare,
+    /// `PartialOrd` always `Some`. The tie-break authority #199 stands on.
+    #[test]
+    fn law_datavalue_order_is_total_no_holes() {
+        // One representative per kind — tag-byte order IS cross-kind order.
+        let kinds: [DataValue; 13] = [
+            DataValue::Null,
+            DataValue::Bool(false),
+            DataValue::Num(Num::float(f64::NAN)), // NaN is a Float, greatest Num
+            DataValue::Str(String::new()),
+            DataValue::Bytes(vec![]),
+            DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(U1))),
+            DataValue::Regex(
+                RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid"),
+            ),
+            DataValue::Json(Json::Null),
+            DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
+            DataValue::List(vec![]),
+            DataValue::Set(BTreeSet::new()),
+            DataValue::Validity(
+                Validity::new(ValidityTs::from_raw(0), true)
+                    .expect("non-reserved")
+                    .into(),
+            ),
+            DataValue::Interval(Interval::EMPTY),
+        ];
+        // Cross-kind: every pair is comparable; PartialOrd never None;
+        // cmp never panics; byte == Ord == semantic.
+        for a in &kinds {
+            for b in &kinds {
+                let partial = a.partial_cmp(b);
+                assert!(
+                    partial.is_some(),
+                    "PartialOrd hole: {:?} vs {:?}",
+                    a, b
+                );
+                let structural = a.cmp(b);
+                assert_eq!(partial, Some(structural));
+                let byte = encode_owned(a)
+                    .as_bytes()
+                    .cmp(encode_owned(b).as_bytes());
+                let semantic = semantic_cmp(a, b);
+                assert_eq!(byte, structural, "cross-kind byte != Ord: {a:?} vs {b:?}");
+                assert_eq!(
+                    structural, semantic,
+                    "cross-kind Ord != semantic: {a:?} vs {b:?}"
+                );
+            }
+        }
+        // NaN hole closed inside Num: every NaN bit pattern is one Num,
+        // equal to itself, greater than +∞, PartialOrd always Some.
+        let nan_bits = [
+            f64::NAN,
+            f64::from_bits(0x7FF8_0000_0000_0000),
+            f64::from_bits(0xFFF8_0000_0000_0001),
+            f64::from_bits(0x7FF0_0000_0000_0001),
+        ];
+        let nans: Vec<DataValue> = nan_bits
+            .iter()
+            .map(|&f| DataValue::Num(Num::float(f)))
+            .collect();
+        let pos_inf = DataValue::Num(Num::float(f64::INFINITY));
+        for n in &nans {
+            assert_eq!(n.partial_cmp(n), Some(Ordering::Equal));
+            assert_eq!(n.cmp(n), Ordering::Equal);
+            assert_eq!(n.cmp(&pos_inf), Ordering::Greater);
+            assert_eq!(
+                encode_owned(n).as_bytes().cmp(encode_owned(&pos_inf).as_bytes()),
+                Ordering::Greater
+            );
+            for m in &nans {
+                assert_eq!(n.cmp(m), Ordering::Equal);
+                assert_eq!(encode_owned(n), encode_owned(m));
+            }
+        }
+        // Randomized stress: compare must not panic for any generated pair.
+        let mut rng = Rng(0x70_7A_11);
+        let corpus: Vec<DataValue> = (0..200).map(|_| random_datum(&mut rng, 0)).collect();
+        for a in &corpus {
+            for b in &corpus {
+                let _ = a.cmp(b);
+                assert!(a.partial_cmp(b).is_some());
+            }
+        }
+    }
+
     fn random_datum(rng: &mut Rng, depth: usize) -> DataValue {
-        let roll = rng.below(if depth == 0 { 12 } else { 6 });
+        // Depth 0: all 13 kinds. Nested: scalars + List/Set only.
+        let roll = rng.below(if depth == 0 { 13 } else { 7 });
         match roll {
             0 => DataValue::Null,
             1 => DataValue::Bool(rng.next().is_multiple_of(2)),
@@ -1427,6 +1528,13 @@ mod tests {
                 let is_assert = rng.next().is_multiple_of(2);
                 DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
             }
+            11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
+                Interval::EMPTY
+            } else {
+                let lo = (rng.next() as i64) % 1000;
+                let span = (rng.next() % 50) as i64;
+                Interval::new(Bound::Closed(lo), Bound::Closed(lo.saturating_add(span)))
+            }),
             _ => DataValue::Json(random_json(rng, 0)),
         }
     }
@@ -1464,7 +1572,8 @@ mod tests {
         }
     }
 
-    /// Format v1 golden vectors for composite encodings: permanent bytes.
+    /// Format v1 golden vectors for composite encodings: permanent bytes
+    /// (seat 59). A failure means the on-disk canonical form moved.
     #[test]
     fn format_v1_golden_vectors() {
         let hex = |cb: &CanonicalBytes| -> String {

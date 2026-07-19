@@ -849,6 +849,40 @@ mod tests {
         assert!(Num::float(f64::NEG_INFINITY) < Num::int(i64::MIN));
     }
 
+    /// `Num`'s order is total: `PartialOrd` never returns `None` — the
+    /// IEEE NaN hole is closed at construction (one canonical NaN).
+    #[test]
+    fn law_num_partial_ord_is_total_no_nan_hole() {
+        let mut c = corpus();
+        extend_random(&mut c, 200, 0xBAD_70_E1);
+        // Inject many raw NaN bit patterns; construction collapses them.
+        for bits in [
+            0x7FF8_0000_0000_0000u64,
+            0xFFF8_0000_0000_0001,
+            0x7FF0_DEAD_BEEF_0001,
+            0xFFFF_FFFF_FFFF_FFFF,
+        ] {
+            c.push(Num::float(f64::from_bits(bits)));
+        }
+        for &a in &c {
+            for &b in &c {
+                let p = a.partial_cmp(&b);
+                assert!(
+                    p.is_some(),
+                    "Num PartialOrd hole (NaN?): {a:?} vs {b:?}"
+                );
+                assert_eq!(p, Some(a.cmp(&b)));
+            }
+        }
+        // Canonical NaN is greatest and equal to every other NaN mint.
+        let nan = Num::float(f64::NAN);
+        assert_eq!(nan.partial_cmp(&nan), Some(Ordering::Equal));
+        assert_eq!(
+            nan.partial_cmp(&Num::float(f64::INFINITY)),
+            Some(Ordering::Greater)
+        );
+    }
+
     /// Format v1 golden vectors: these bytes are permanent. A failure here
     /// means the on-disk numeric key moved, which is forbidden.
     #[test]
