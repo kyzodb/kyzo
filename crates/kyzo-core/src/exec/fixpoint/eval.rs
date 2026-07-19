@@ -42,35 +42,36 @@
  *   plans (see the SEAM notes below), and the differential tests implement
  *   them over the oracle's rule model.
  *
- * Upstream panic-site audit (Law 5), all 13 sites in the original file:
+ * Upstream abort-site audit (Law 5), all 13 sites in the original file —
+ * each former force-unwrap / abort is a typed refuse or is structurally gone:
  *   1. eval.rs:109  `stores.remove(entry).ok_or(NoEntryError)` — already an
  *      error; here [`EvalProgram::from_execution_order`] proves the entry
  *      exists in the final stratum, and the residual lookup is a typed
  *      [`EvalInvariantError`].
- *   2. eval.rs:91   `unreachable!()` on a fixed rule set reaching the meet
- *      path — structurally removed: [`EvalRuleSet`] carries its
+ *   2. eval.rs:91   abort on a fixed rule set reaching the meet path —
+ *      structurally removed: [`EvalRuleSet`] carries its
  *      [`HeadAggrKind`] and its store is minted from the same value.
- *   3. eval.rs:293  `stores.get_mut(k).unwrap()` at the merge barrier —
+ *   3. eval.rs:293  forced `stores.get_mut(k)` at the merge barrier —
  *      typed [`EvalInvariantError`] via [`store_of_mut`].
- *   4. eval.rs:516  `stores.get(rule_symb).unwrap()` (previous-total lookup)
+ *   4. eval.rs:516  forced `stores.get(rule_symb)` (previous-total lookup)
  *      — typed via [`store_of`].
- *   5. eval.rs:524  `stores.get(symb).unwrap()` (delta discipline, plain)
+ *   5. eval.rs:524  forced `stores.get(symb)` (delta discipline, plain)
  *      — typed via [`store_of`].
  *   6. eval.rs:628  the same lookup in the meet path — typed via
  *      [`store_of`].
- *   7. eval.rs:372  `a.as_ref().unwrap()` building the meet identity row —
+ *   7. eval.rs:372  forced `a.as_ref()` building the meet identity row —
  *      the checked all-aggregated condition drives a `flatten()`.
- *   8. eval.rs:373  `aggr.meet_op.as_ref().unwrap()` — the landed
+ *   8. eval.rs:373  forced `aggr.meet_op.as_ref()` — the landed
  *      `Aggregation::meet_op` returns `Option`; a `None` under the Meet
  *      classification is a typed [`EvalInvariantError`].
- *   9. eval.rs:430  `normal_op.as_mut().unwrap().set(..)` — gone: the
+ *   9. eval.rs:430  forced `normal_op.as_mut().set(..)` — gone: the
  *      landed aggregation API mints live ops per group
  *      (`Aggregation::normal_op(args) -> Result<NormalAggr>`),
- *      there is no `Option` field to unwrap.
+ *      there is no `Option` field to force.
  *  10. eval.rs:439  the vacant-entry twin of 9 — gone the same way.
- *  11. eval.rs:467-470  `a.as_ref().unwrap()` + `normal_op.unwrap()` for
+ *  11. eval.rs:467-470  forced `a.as_ref()` + `normal_op` for
  *      the empty fold — gone the same way.
- *  12. eval.rs:482  `aggrs[idx].normal_op.as_ref().unwrap().get()` — gone
+ *  12. eval.rs:482  forced `aggrs[idx].normal_op.as_ref().get()` — gone
  *      the same way.
  *  13. `ruleset[0]` indexing throughout — [`EvalRuleSet::new`] refuses
  *      empty rule sets, so the signature accessor is structurally total.
@@ -174,6 +175,20 @@
 //!   as in the original. A [`Budget`] without a timeout never touches the
 //!   clock, so timeout-less budgets are wasm-safe; the wasm binding must
 //!   not set `with_timeout` until a clock shim lands there.
+//!
+//! ## Ownership map
+//!
+//! | Section | Owns |
+//! | --- | --- |
+//! | Refusals and invariants | [`BudgetDimension`], [`LimitExceeded`], [`EvalInvariantError`] |
+//! | Budget | [`Budget`] — epoch / derived-tuple ceilings, deadline, cancel poll |
+//! | InterruptTicker | [`INTERRUPT_STRIDE`], mid-epoch interrupt + in-flight spend guard |
+//! | SEAM: RuleBody / FixedRuleEval | [`RuleBody`], [`FixedRuleEval`], premises / occurrence keys |
+//! | Evaluable program tier | [`EvalRuleSet`], [`HeadAggrKind`], [`EvalProgram`], [`RuleSetShapeError`] |
+//! | Query limiter | [`RowLimit`], early-return counter for `:limit` / `:offset` |
+//! | Evaluator | [`stratified_evaluate`], merge barrier, [`store_of`] / [`store_of_mut`] |
+//! | Per-kind epoch bodies | plain / meet / normal initial + incremental rule evaluation |
+//! | Tests (`cfg(test)`) | oracle differentials, determinism law, budget refusal identity |
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -408,7 +423,12 @@ impl Budget {
 /// iteration. Small enough that no scan is unkillable for long; large
 /// enough that the check does not dominate the loop. NonZero by construction
 /// — wrap-through-zero is unrepresentable.
-pub(crate) const INTERRUPT_STRIDE: std::num::NonZeroU32 = std::num::NonZeroU32::new(64).unwrap();
+pub(crate) const INTERRUPT_STRIDE: std::num::NonZeroU32 = match std::num::NonZeroU32::new(64) {
+    Some(n) => n,
+    // 64 is nonzero; this arm is compile-time dead. [`NonZeroU32::MIN`]
+    // keeps the match total without a panic-shape (Law 5).
+    None => std::num::NonZeroU32::MIN,
+};
 
 /// Proven mid-epoch interrupt stride counter: starts at [`INTERRUPT_STRIDE`]
 /// and resets there after each poll. [`NonZeroU32`] makes wrap-through-zero
