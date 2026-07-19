@@ -45,6 +45,10 @@ pub(crate) mod seal;
 pub(crate) mod objects;
 /// Deterministic compaction: pace, range class, MergeProof (07 seat).
 pub(crate) mod compact;
+/// CanonicalTranscript + golden vectors + unknown-version refuse (07 seat).
+pub(crate) mod transcript;
+/// DEK/KEK/ShredSalt/WrappedShredSalt/AuditKey/AEAD pipeline (07 seat).
+pub(crate) mod crypto;
 
 // Sim instrument lives at kyzo-crashfs (seat); path-included here so the
 // sealed Storage trait can admit it as the contract's own test double.
@@ -102,4 +106,18 @@ pub use compact::{
 pub use merkle::{
     ChainLinkKind, ChainedStateRoot, ForkPoint, GENESIS_ROOT, MerkleChainRefuse, RootChain,
     StateRoot, as_of_root, fork_equivalence, roots_equal_at_cut,
+};
+pub use transcript::{
+    CanonicalTranscript, CanonicalTranscriptBuilder, FieldId, MapValue, SealedArtifactKind,
+    TranscriptRefuse, encode_golden_fixture, parse_golden_hex,
+};
+pub use crypto::{
+    AeadArm, AuditKey, Ciphertext, CompressedBytes, CryptoRefuse, Dek, Kek, KekUnwrapCap,
+    SegmentCounter, ShredReceipt, ShredSalt, WrappedShredSalt, compress, compress_then_encrypt,
+    derive_dek, encrypt, shred, unwrap_shred_salt, wrap_shred_salt,
+};
+pub use keys::{Secret, SecretKeyRefuse, refuse_if_secret};
+pub use backup::{
+    ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse, dump_storage,
+    import_verify, restore_storage,
 };

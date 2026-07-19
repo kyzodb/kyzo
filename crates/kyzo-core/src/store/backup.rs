@@ -7,13 +7,19 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Pure-Rust backup/interchange: dump the entire key-value store to a portable
-//! file and restore it into a fresh store. (The CozoDB base used SQLite for
-//! this role; KyzoDB's format is a simple length-prefixed binary file.)
+//! Leave-is-free packs + dump/restore interchange (decisions.md §64, §65, §79, §80).
 //!
-//! Format: 8-byte magic `KYZODMP2`, then for each pair a u64-BE key length,
-//! the key bytes, a u64-BE value length, the value bytes. Pairs appear in
-//! ascending key order (`total_scan` order), which is exactly what
+//! Owns: leave-is-free pack builder (seal+suffix+objects | full WAL+objects),
+//! pack hygiene scrub point, import verify ceremony; plus the portable
+//! length-prefixed dump format (`KYZODMP2`).
+//!
+//! Bans: WA / KEK / plaintext salt / AuditKey / MintCap in packs; packs
+//! omitting [`WrappedShredSalt`] or [`IncarnationId`] history; green
+//! incomplete restore.
+//!
+//! Dump format: 8-byte magic `KYZODMP2`, then for each pair a u64-BE key
+//! length, the key bytes, a u64-BE value length, the value bytes. Pairs appear
+//! in ascending key order (`total_scan` order), which is exactly what
 //! [`Storage::batch_put`](crate::Storage::batch_put) requires on restore.
 
 use std::collections::BTreeMap;
@@ -24,6 +30,8 @@ use std::path::Path;
 use miette::{Diagnostic, IntoDiagnostic, Result, bail, miette};
 use thiserror::Error;
 
+use crate::store::authority::IncarnationId;
+use crate::store::crypto::WrappedShredSalt;
 use crate::store::time::system_stamp_of_key;
 use kyzo_model::value::ValidityTs;
 use kyzo_model::value::{StorageKey, RelationId};
@@ -246,6 +254,168 @@ fn read_pair(r: &mut impl Read) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     Ok(Some((k, v)))
 }
 
+// ── Leave-is-free pack (§79 / §65) ──────────────────────────────────────────
+
+/// Leave-is-free pack shape: seal+suffix+objects, or full WAL+objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LeaveIsFreeKind {
+    /// CheckpointSeal + retained WAL suffix + retained objects.
+    SealAndSuffix,
+    /// Full WAL + retained objects at the cut.
+    FullWal,
+}
+
+/// Inputs required to build a leave-is-free pack. Omitting wrapped salts or
+/// incarnation history is Unconstructible as leave-is-free.
+#[derive(Debug, Clone)]
+pub struct LeaveIsFreeParts {
+    /// Pack shape.
+    pub kind: LeaveIsFreeKind,
+    /// FormatVersion stamped into the pack.
+    pub format_version: FormatVersion,
+    /// Wrapped shred salts for every retained encrypted segment (§64/§65).
+    pub wrapped_shred_salts: Vec<WrappedShredSalt>,
+    /// IncarnationId history required for restore verification (§62/§65).
+    pub incarnation_history: Vec<IncarnationId>,
+    /// Opaque retained object / WAL / seal payload bytes (adapter currency).
+    pub payload: Vec<u8>,
+}
+
+/// Sealed leave-is-free pack. WriteAuthority / KEK / plaintext ShredSalt /
+/// AuditKey / IncarnationMintCap are absent by construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaveIsFreePack {
+    kind: LeaveIsFreeKind,
+    format_version: FormatVersion,
+    wrapped_shred_salts: Vec<WrappedShredSalt>,
+    incarnation_history: Vec<IncarnationId>,
+    payload: Vec<u8>,
+}
+
+/// Typed refuse from pack build / hygiene / import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum PackRefuse {
+    #[error("leave-is-free pack missing WrappedShredSalt for retained encrypted segments")]
+    #[diagnostic(code(store::backup::missing_wrapped_shred_salt))]
+    MissingWrappedShredSalt,
+    #[error("leave-is-free pack missing IncarnationId history")]
+    #[diagnostic(code(store::backup::missing_incarnation_history))]
+    MissingIncarnationHistory,
+    #[error("pack hygiene: forbidden secret material at scrub point")]
+    #[diagnostic(code(store::backup::hygiene_secret))]
+    HygieneSecretMaterial,
+    #[error("import ceremony: foreign history unverified")]
+    #[diagnostic(code(store::backup::foreign_unverified))]
+    ForeignHistoryUnverified,
+    #[error("import ceremony: incomplete restore refused (never green-incomplete)")]
+    #[diagnostic(code(store::backup::incomplete_restore))]
+    IncompleteRestore,
+    #[error("post-shred restore of shredded segment")]
+    #[diagnostic(code(store::backup::shredded))]
+    Shredded,
+}
+
+impl LeaveIsFreePack {
+    /// Build a leave-is-free pack. Requires non-empty WrappedShredSalt list and
+    /// IncarnationId history — omitting either is Unconstructible as leave-is-free.
+    pub fn build(parts: LeaveIsFreeParts) -> Result<Self, PackRefuse> {
+        if parts.wrapped_shred_salts.is_empty() {
+            return Err(PackRefuse::MissingWrappedShredSalt);
+        }
+        if parts.incarnation_history.is_empty() {
+            return Err(PackRefuse::MissingIncarnationHistory);
+        }
+        let pack = Self {
+            kind: parts.kind,
+            format_version: parts.format_version,
+            wrapped_shred_salts: parts.wrapped_shred_salts,
+            incarnation_history: parts.incarnation_history,
+            payload: parts.payload,
+        };
+        pack_hygiene_scrub(&pack)?;
+        Ok(pack)
+    }
+
+    /// Pack shape.
+    pub fn kind(&self) -> LeaveIsFreeKind {
+        self.kind
+    }
+
+    /// FormatVersion stamped into the pack.
+    pub fn format_version(&self) -> FormatVersion {
+        self.format_version
+    }
+
+    /// Wrapped shred salts included in the pack (required restore inputs).
+    pub fn wrapped_shred_salts(&self) -> &[WrappedShredSalt] {
+        &self.wrapped_shred_salts
+    }
+
+    /// IncarnationId history included in the pack.
+    pub fn incarnation_history(&self) -> &[IncarnationId] {
+        &self.incarnation_history
+    }
+
+    /// Opaque retained payload.
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+}
+
+/// Pack hygiene scrub point (§65): Store/Engine bundle emit and leave-is-free
+/// boundaries. WA / KEK / plaintext salt / AuditKey / MintCap presence after
+/// this point is a Spec violation — those types have no field on the pack.
+fn pack_hygiene_scrub(pack: &LeaveIsFreePack) -> Result<(), PackRefuse> {
+    // Structural scrub: required handles present; forbidden secrets have no
+    // constructor into LeaveIsFreePack. Empty payload alone is still a pack
+    // (objects may be backend-retained under the cut certificate).
+    if pack.wrapped_shred_salts.is_empty() || pack.incarnation_history.is_empty() {
+        return Err(PackRefuse::HygieneSecretMaterial);
+    }
+    Ok(())
+}
+
+/// Import verify ceremony (§80): foreign dumps only under capability + chain /
+/// root verify. Blind import is a second write door for forged belief.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImportCapability {
+    /// Caller presented chain/root verify authority.
+    verified: bool,
+}
+
+impl ImportCapability {
+    /// Mint after chain/root verification succeeded.
+    pub fn after_chain_verify() -> Self {
+        Self { verified: true }
+    }
+
+    /// Unverified foreign import — ceremony will refuse.
+    pub fn unverified() -> Self {
+        Self { verified: false }
+    }
+}
+
+/// Run the import verify ceremony over a leave-is-free pack.
+pub fn import_verify(
+    pack: &LeaveIsFreePack,
+    cap: ImportCapability,
+    objects_complete: bool,
+) -> Result<(), PackRefuse> {
+    if !cap.verified {
+        return Err(PackRefuse::ForeignHistoryUnverified);
+    }
+    if pack.wrapped_shred_salts.is_empty() {
+        return Err(PackRefuse::MissingWrappedShredSalt);
+    }
+    if pack.incarnation_history.is_empty() {
+        return Err(PackRefuse::MissingIncarnationHistory);
+    }
+    if !objects_complete {
+        return Err(PackRefuse::IncompleteRestore);
+    }
+    pack_hygiene_scrub(pack)
+}
+
 #[cfg(test)]
 mod pins {
     //! Backup floor law pins (re-homed from storage/tests.rs).
@@ -319,5 +489,59 @@ mod pins {
             err.downcast_ref::<DumpClockFloorViolation>().is_some(),
             "expected a typed DumpClockFloorViolation, got: {err}"
         );
+    }
+
+    #[test]
+    fn leave_is_free_pack_requires_wrapped_shred_salt() {
+        use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
+        use crate::store::backup::{
+            LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse, import_verify,
+            ImportCapability,
+        };
+        use crate::store::crypto::{
+            Kek, KekUnwrapCap, SegmentCounter, ShredSalt, wrap_shred_salt,
+        };
+        use crate::store::epoch::{CryptoDomain, FenceEpoch};
+        use crate::store::open::StoreId;
+        use crate::store::FormatVersion;
+
+        let store = StoreId::from_digest([0xCD; 32]);
+        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x55; 32]));
+        let wrapped = wrap_shred_salt(
+            &cap,
+            &ShredSalt::from_bytes([0x66; 32]),
+            SegmentCounter::ZERO,
+            domain,
+        );
+        let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
+        let incarnation = mint.mint(Entropy::from_bytes([0x77; 32])).unwrap();
+
+        let missing_salt = LeaveIsFreePack::build(LeaveIsFreeParts {
+            kind: LeaveIsFreeKind::SealAndSuffix,
+            format_version: FormatVersion::CURRENT,
+            wrapped_shred_salts: vec![],
+            incarnation_history: vec![incarnation],
+            payload: vec![1, 2, 3],
+        });
+        assert!(matches!(
+            missing_salt,
+            Err(PackRefuse::MissingWrappedShredSalt)
+        ));
+
+        let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
+            kind: LeaveIsFreeKind::FullWal,
+            format_version: FormatVersion::CURRENT,
+            wrapped_shred_salts: vec![wrapped],
+            incarnation_history: vec![incarnation],
+            payload: vec![1, 2, 3],
+        })
+        .expect("pack with WrappedShredSalt + IncarnationId");
+        assert!(!pack.wrapped_shred_salts().is_empty());
+        assert!(import_verify(&pack, ImportCapability::after_chain_verify(), true).is_ok());
+        assert!(matches!(
+            import_verify(&pack, ImportCapability::unverified(), true),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
     }
 }
