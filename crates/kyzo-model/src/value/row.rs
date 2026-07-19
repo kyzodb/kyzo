@@ -362,7 +362,9 @@ impl RelationId {
         let Some(head) = bytes.get(..8) else {
             return Err(DecodeError::Truncated);
         };
-        let id = u64::from_be_bytes(head.try_into().expect("8 bytes"));
+        let mut arr = [0u8; 8];
+        arr.copy_from_slice(head);
+        let id = u64::from_be_bytes(arr);
         if id >= RelationId::CAP {
             return Err(DecodeError::RelationIdOverCap);
         }

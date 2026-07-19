@@ -211,7 +211,9 @@ fn skip_at(bytes: &[u8], depth: usize) -> Result<usize, DecodeError> {
             let Some(dim_bytes) = body.get(..4) else {
                 return Err(DecodeError::Truncated);
             };
-            let dim = u32::from_be_bytes(dim_bytes.try_into().expect("4 bytes")) as usize;
+            let mut dim_arr = [0u8; 4];
+            dim_arr.copy_from_slice(dim_bytes);
+            let dim = u32::from_be_bytes(dim_arr) as usize;
             let mut at = 4;
             for _ in 0..dim {
                 let (_, used) = Num::decode_key(&body[at..]).map_err(DecodeError::Num)?;
@@ -752,27 +754,26 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
         }
         Tag::Vector => {
             let count_bytes = body.get(..4).ok_or(DecodeError::Truncated)?;
-            let count = u32::from_be_bytes(count_bytes.try_into().expect("4 bytes")) as usize;
-            let mut components = Vec::new();
+            let mut count_arr = [0u8; 4];
+            count_arr.copy_from_slice(count_bytes);
+            let count = u32::from_be_bytes(count_arr) as usize;
+            let mut floats = Vec::with_capacity(count);
             let mut used = 4usize;
             for _ in 0..count {
                 let (n, nused) = Num::decode_key(&body[used..]).map_err(DecodeError::Num)?;
-                if n.as_float().is_none() {
+                let Some(f) = n.as_float() else {
                     return Err(DecodeError::VectorComponentNotFloat);
-                }
-                components.push(n);
+                };
+                floats.push(f);
                 used += nused;
             }
-            let floats: Vec<f64> = components
-                .into_iter()
-                .map(|n| n.as_float().expect("validated float component"))
-                .collect();
             let vector = Vector::try_new(floats).ok_or(DecodeError::VectorDimensionOverflow)?;
             Ok((DataValue::Vector(vector), 1 + used))
         }
         Tag::Validity => {
             let ts_bytes = body.get(..8).ok_or(DecodeError::Truncated)?;
-            let mut asc: [u8; 8] = ts_bytes.try_into().expect("8 bytes");
+            let mut asc = [0u8; 8];
+            asc.copy_from_slice(ts_bytes);
             for b in &mut asc {
                 *b = !*b;
             }
@@ -835,10 +836,9 @@ fn decode_interval_end(body: &[u8], _is_lo: bool) -> Result<(End, usize), Decode
         Some(0x01) => Ok((End::Unbounded, 1)),
         Some(0x02) => {
             let ts_bytes = body.get(1..9).ok_or(DecodeError::Truncated)?;
-            Ok((
-                End::At(ts_from_asc(ts_bytes.try_into().expect("8 bytes"))),
-                9,
-            ))
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(ts_bytes);
+            Ok((End::At(ts_from_asc(arr)), 9))
         }
         Some(_) => Err(DecodeError::IntervalNotCanonical),
         None => Err(DecodeError::Truncated),
@@ -1058,6 +1058,9 @@ mod tests {
             (DataValue::Validity(x), DataValue::Validity(y)) => x.cmp_as_of_order(*y),
             (DataValue::Interval(x), DataValue::Interval(y)) => semantic_interval_cmp(x, y),
             (DataValue::Geometry(x), DataValue::Geometry(y)) => x.cmp(y),
+            // T4 totalization: tags already compared equal above; every
+            // DataValue kind is covered by the arms. Unreachable by the
+            // sum type — kept as the independent mirror's totality seal.
             _ => unreachable!("tags equal"),
         }
     }
@@ -1106,6 +1109,9 @@ mod tests {
                 }
                 x.entries().len().cmp(&y.entries().len())
             }
+            // T4 totalization: ranks already compared equal; every Json
+            // variant is covered. Unreachable by the sum type — kept as
+            // the independent mirror's totality seal.
             _ => unreachable!("ranks equal"),
         }
     }

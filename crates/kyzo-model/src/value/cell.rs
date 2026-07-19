@@ -114,16 +114,18 @@ impl Value {
     ///
     /// Wide path refuses with [`Denial::ExtentOverflow`] when the arena
     /// cannot admit another distinct value or the canonical bytes exceed
-    /// `u32` span space — never a process abort.
+    /// `u32` span space. An empty [`CanonicalBytes`] witness (corrupt —
+    /// encode never mints one) refuses with
+    /// [`Denial::BookkeepingBroken`] — never a process abort.
     pub fn mint(cb: &CanonicalBytes, arena: &mut Arena) -> Result<Minted, Denial> {
         let canonical = cb.as_bytes();
-        debug_assert!(
-            !canonical.is_empty(),
-            "CanonicalBytes witness is never empty"
-        );
-        let payload = &canonical[1..];
+        // CanonicalBytes is mint-only via encode; an empty witness is corrupt
+        // bookkeeping — typed refuse, never a slice-index panic.
+        let Some((&tag, payload)) = canonical.split_first() else {
+            return Err(Denial::BookkeepingBroken);
+        };
         let mut bytes = [0u8; 16];
-        bytes[0] = canonical[0];
+        bytes[0] = tag;
         if payload.len() <= INLINE_MAX {
             bytes[1] = payload.len() as u8;
             bytes[2..2 + payload.len()].copy_from_slice(payload);
@@ -143,6 +145,11 @@ impl Value {
         }
     }
 
+    /// Tag byte of a minted word. Lawful by construction: only
+    /// [`Value::mint`] / [`Value::gathered`] write the word, and they
+    /// copy the tag from a [`CanonicalBytes`] witness (itself mint-only
+    /// via encode). Kept as infallible — an illegal tag is unrepresentable
+    /// without forging the private `[u8; 16]` (no `from_bytes` door).
     pub fn tag(self) -> Tag {
         Tag::from_byte(self.bytes[0]).expect("a Value carries a lawful tag by construction")
     }
@@ -176,9 +183,9 @@ impl Value {
         if self.is_inline() {
             None
         } else {
-            Some(Code(u32::from_be_bytes(
-                self.bytes[6..10].try_into().expect("4 bytes"),
-            )))
+            let mut raw = [0u8; 4];
+            raw.copy_from_slice(&self.bytes[6..10]);
+            Some(Code(u32::from_be_bytes(raw)))
         }
     }
 
@@ -195,7 +202,9 @@ impl Value {
             }
             p
         } else {
-            self.bytes[2..6].try_into().expect("4 bytes")
+            let mut p = [0u8; 4];
+            p.copy_from_slice(&self.bytes[2..6]);
+            p
         }
     }
 

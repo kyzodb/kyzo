@@ -359,8 +359,11 @@ pub(super) struct Run {
 
 impl Run {
     /// Mint from entries already sorted and unique (the delta drains
-    /// through here). The precondition is the caller's law, re-checked in
-    /// debug builds.
+    /// through here). The precondition is the caller's law: every
+    /// production caller (`seal` drain, merge output) establishes sorted
+    /// uniqueness before this door. Kept as `debug_assert` (T4-style
+    /// unreachable-by-construction in release) — not a typed refuse of
+    /// external input.
     fn from_sorted(entries: Vec<Entry>, heap: &Heap) -> Run {
         debug_assert!(
             entries
@@ -428,10 +431,10 @@ impl Run {
 /// path manufactures one from nothing.
 pub(super) struct StampMintAuthority(pub(self) ());
 
-/// Process-unique arena identity: minted once per [`Arena::new`] from a
-/// monotone counter (creation order — deterministic, no clock), carried by
-/// every stamp and observer, verified on every spend. Never part of any
-/// answer, so determinism of results is untouched.
+/// Process-unique arena identity: minted once per [`Arena::try_new`] /
+/// [`Arena::new`] from a monotone counter (creation order — deterministic,
+/// no clock), carried by every stamp and observer, verified on every spend.
+/// Never part of any answer, so determinism of results is untouched.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
 pub struct ArenaId(u64);
@@ -442,13 +445,16 @@ const _: () = assert!(std::mem::align_of::<ArenaId>() == std::mem::align_of::<u6
 static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(0);
 
 impl ArenaId {
-    fn mint() -> ArenaId {
+    /// Mint a process-unique id. Refuses with [`Denial::ExtentOverflow`]
+    /// when the half-space of assignable ids is exhausted — never a panic
+    /// at this door. [`Arena::new`] uses this through [`Arena::try_new`];
+    /// wrap-around must not silently recycle identities.
+    fn try_mint() -> Result<ArenaId, Denial> {
         let id = NEXT_ARENA_ID.fetch_add(1, AtomicOrd::Relaxed);
-        // The contract says process-unique, so wrap-around is refused,
-        // not silently recycled (2^63 arenas is unreachable; the assert
-        // is the contract made executable).
-        assert!(id < u64::MAX / 2, "ArenaId space exhausted");
-        ArenaId(id)
+        if id >= u64::MAX / 2 {
+            return Err(Denial::ExtentOverflow);
+        }
+        Ok(ArenaId(id))
     }
 }
 
@@ -529,7 +535,8 @@ pub enum Denial {
     /// A `u32`/`u64` extent would wrap: domain absorb growth, arena
     /// distinct-value capacity (`len == u32::MAX`), a value's byte length /
     /// heap offset / chunk id exceeding span encoding space, `off + len`
-    /// overflow at span mint, or the epoch counter exhausting `u64`.
+    /// overflow at span mint, the epoch counter exhausting `u64`, or
+    /// [`ArenaId`] process-unique mint space (`2^63`) exhausting.
     ExtentOverflow,
     /// Epoch remap produced a code past `u32::MAX` (checked add overflow).
     CodeRemapOverflow,
@@ -1522,15 +1529,26 @@ pub struct Arena {
 }
 
 impl Arena {
+    /// Infallible mint for the reachable process lifetime. Exhaustion of
+    /// the ArenaId half-space (`2^63`) is typed at [`Arena::try_new`]; this
+    /// face maps that refuse to a process abort only after the typed door
+    /// has already named [`Denial::ExtentOverflow`].
     pub fn new() -> Self {
-        Arena {
-            id: ArenaId::mint(),
+        Self::try_new().expect("ArenaId space exhausted")
+    }
+
+    /// Evidence-bearing constructor: refuses with
+    /// [`Denial::ExtentOverflow`] when ArenaId space is exhausted — never
+    /// a bare panic at the mint law itself.
+    pub fn try_new() -> Result<Self, Denial> {
+        Ok(Arena {
+            id: ArenaId::try_mint()?,
             heap: Heap::new(),
             runs: Vec::new(),
             sealed_len: 0,
             delta: Delta::new(),
             epoch: Epoch(0),
-        }
+        })
     }
 
     pub fn epoch(&self) -> Epoch {
@@ -2622,7 +2640,7 @@ mod tests {
             col.push(*c).expect("lawful push");
         }
         let base = arena.compare_derefs();
-        let perm = col.admit(&f).expect("lawful admit").sort_permutation();
+        let perm = col.admit(&f).expect("lawful admit").sort_permutation().expect("lawful sort");
         assert_eq!(perm.len(), 1000);
         assert_eq!(
             arena.compare_derefs() - base,

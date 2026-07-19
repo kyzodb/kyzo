@@ -326,11 +326,15 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 
     /// A deterministic sort permutation by value order (the kernel the
     /// laws exercise; takes the fast lane when it may).
-    pub fn sort_permutation(&self) -> Vec<u32> {
-        assert!(
-            self.codes.len() <= u32::MAX as usize,
-            "column exceeds u32 index space"
-        );
+    ///
+    /// Refuses with [`Denial::ExtentOverflow`] when the column exceeds
+    /// `u32` index space; propagates typed [`Denial`] from
+    /// [`AdmittedCodes::cmp_at`] on a corrupt admission extent — never a
+    /// process abort.
+    pub fn sort_permutation(&self) -> Result<Vec<u32>, Denial> {
+        if self.codes.len() > u32::MAX as usize {
+            return Err(Denial::ExtentOverflow);
+        }
         let mut idx: Vec<u32> = (0..self.codes.len() as u32).collect();
         if self.all_sealed {
             idx.sort_by(|&i, &j| {
@@ -340,12 +344,19 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
                 )
             });
         } else {
-            idx.sort_by(|&i, &j| {
-                self.cmp_at(i as usize, j as usize)
-                    .expect("lawful admission extent")
+            let mut denied = None;
+            idx.sort_by(|&i, &j| match self.cmp_at(i as usize, j as usize) {
+                Ok(o) => o,
+                Err(e) => {
+                    denied = Some(e);
+                    Ordering::Equal
+                }
             });
+            if let Some(e) = denied {
+                return Err(e);
+            }
         }
-        idx
+        Ok(idx)
     }
 }
 
@@ -373,21 +384,22 @@ impl WordColumn {
 
     /// The write door: consumes the minted pairing. Inline words carry no
     /// context and pass freely; wide words verify their stamp into the
-    /// domain. Typed [`Denial`] on foreign/stale wide stamps — never a panic.
+    /// domain. Typed [`Denial`] on foreign/stale wide stamps or a broken
+    /// [`Minted`] pairing — never a panic.
     pub fn push(&mut self, m: Minted) -> Result<(), Denial> {
         let value = m.value();
         match m.stamp() {
             None => {
-                debug_assert!(value.is_inline(), "Minted coherence broken");
+                if !value.is_inline() {
+                    return Err(Denial::BookkeepingBroken);
+                }
                 self.words.push(value);
                 Ok(())
             }
             Some(stamp) => {
-                debug_assert_eq!(
-                    value.code().map(Code::raw),
-                    Some(stamp.code().raw()),
-                    "Minted coherence broken"
-                );
+                if value.code().map(Code::raw) != Some(stamp.code().raw()) {
+                    return Err(Denial::BookkeepingBroken);
+                }
                 self.domain = self.domain.absorb_stamp(stamp)?;
                 self.words.push(value);
                 Ok(())
@@ -484,14 +496,17 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
 
     /// The canonical bytes of the word at `i` (inline: rebuilt; wide:
     /// resolved through the observer).
+    ///
+    /// A non-inline word without a code is corrupt residency — typed
+    /// [`Denial::BookkeepingBroken`], never a panic.
     pub fn canonical(&self, i: usize) -> Result<Vec<u8>, Denial> {
         let w = &self.words[i];
         match w.inline_canonical() {
             Some(bytes) => Ok(bytes),
-            None => Ok(self
-                .pass
-                .resolve(w.code().expect("non-inline word carries a code").raw() as usize)?
-                .to_vec()),
+            None => {
+                let code = w.code().ok_or(Denial::BookkeepingBroken)?;
+                Ok(self.pass.resolve(code.raw() as usize)?.to_vec())
+            }
         }
     }
 
@@ -686,7 +701,7 @@ mod tests {
         let adm = col.admit(&f).expect("lawful admit");
         assert!(adm.all_sealed());
         assert!(adm.raw_sealed().is_some());
-        let perm = adm.sort_permutation();
+        let perm = adm.sort_permutation().expect("lawful sort");
         // The permutation must equal the byte-order sort, exactly.
         let mut expect: Vec<u32> = (0..adm.len() as u32).collect();
         expect.sort_by(|&i, &j| {
@@ -727,7 +742,7 @@ mod tests {
         let adm = col.admit(&f).expect("lawful admit");
         assert!(!adm.all_sealed());
         assert!(adm.raw_sealed().is_none());
-        let perm = adm.sort_permutation();
+        let perm = adm.sort_permutation().expect("lawful sort");
         let sorted: Vec<&[u8]> = perm
             .iter()
             .map(|&i| adm.resolve(i as usize).expect("lawful"))
