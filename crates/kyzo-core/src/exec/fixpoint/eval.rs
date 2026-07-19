@@ -878,6 +878,11 @@ impl<R, F> EvalProgram<R, F> {
             .ok_or(kyzo_model::program::rule::NoEntry::spanless())?;
         Ok(Self { strata, entry })
     }
+
+    /// The program entry store — provenance certificates target this symbol.
+    pub(crate) fn entry(&self) -> &MagicSymbol {
+        &self.entry
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

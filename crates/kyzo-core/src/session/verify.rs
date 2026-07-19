@@ -6,35 +6,70 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Root tamper evidence (story #289): independently recompute a plaintext-
-//! canonical [`StateRoot`] from store contents and compare it to the stored
-//! [`RootChain`] tip via [`as_of_root`] / [`roots_equal_at_cut`]. The
-//! expected digest is always looked up from the chain; the observed digest
-//! is always a cold rescan — a caller-supplied root is never an input to
-//! this door.
+//! Two verify doors live here:
 //!
-//! ## Query-answer `::verify` — disclosed [OPEN]
+//! ## Query-answer `::verify` — provenance door
 //!
-//! The query-answer capability (`::verify { <query> }`) that once ran the
-//! production evaluator against `kyzo_oracle::eval` was **removed** from this
-//! crate (storage-era crate wall: kyzo-core must never depend on kyzo-oracle).
-//! The oracle-differential corpus is re-homed into `kyzo-trials` (zone-trials),
-//! preserved pending the provenance rebuild.
+//! [`crate::parse::sys::SysOp::Verify`] / [`Engine::verify_input_program`] runs
+//! the query through the production evaluator with stores retained, builds the
+//! derivation graph via [`crate::exec::provenance::eval::provenance_graph`],
+//! solves the tropical semiring, extracts min-cost certificates, and checks
+//! them with [`crate::exec::provenance::semiring::verify_proof`] (structural
+//! certificate check — imports no evaluator symbol). Outcomes are
+//! [`VerifyOutcome::Match`], [`VerifyOutcome::BudgetRefused`], or
+//! [`VerifyOutcome::Mismatch`] (reproducible bundle), rendered as NamedRows
+//! `["status", "summary", "detail"]`.
 //!
-//! Until then, `SysOp::Verify` returns [`EngineRefuse::IndexOpNotLanded`] —
-//! the same **disclosed** "parses, not landed" door as `::explain`
-//! (`session/db.rs::run_sys_op`). That is not a silent stub: it is an honest
-//! [OPEN] to the witness/checker work (`#257` Witness Law / `#258` The
-//! Checker): provenance-backed `::verify` via
-//! [`crate::exec::provenance`] (`provenance_graph` / `verify_proof`).
-//! RA premise attribution is landed (`CompiledRuleBody::premise_sources`
-//! + `want_premises` grounding rows); session wiring of `SysOp::Verify` is
-//! the remaining door. Do not fake that door here.
+//! Unsupported constructs (mutations, `:order`/`:limit`/`:offset`, bodies that
+//! cannot attribute premises) are named [`VerifyOutcome::Unsupported`] — never
+//! a silent pass.
+//!
+//! The oracle-differential corpus that once lived here is re-homed in
+//! `kyzo-trials` (`verify_differential`); rewriting that corpus onto this
+//! provenance door is a follow-on pass (parent), not this wire.
+//!
+//! ## Root tamper evidence (story #289)
+//!
+//! [`verify`] independently recomputes a plaintext-canonical [`StateRoot`]
+//! from store contents and compares it to the stored [`RootChain`] tip via
+//! [`as_of_root`] / [`roots_equal_at_cut`]. The expected digest is always
+//! looked up from the chain; the observed digest is always a cold rescan —
+//! a caller-supplied root is never an input to this door. Separate from
+//! query-answer `::verify`.
 
-use miette::Result;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::num::{NonZeroU32, NonZeroU64};
 
-use crate::store::merkle::{ChainedStateRoot, RootChain, StateRoot, as_of_root, link_at_cut, roots_equal_at_cut, state_root};
-use crate::store::{CommitOrdinal, ReadTx};
+use miette::{Diagnostic, Result};
+use thiserror::Error;
+
+use crate::data::json::NamedRows;
+use crate::exec::fixpoint::delta_store::TupleInIter;
+use crate::exec::fixpoint::eval::{PremiseSource, RowLimit, stratified_evaluate_with_stores};
+use crate::exec::plan::compile::stratified_magic_compile;
+use crate::exec::provenance::eval::{provenance_graph, ProvenanceUnsupported};
+use crate::exec::provenance::semiring::{
+    as_cost_map, extract_min_cost_proof, solve, verify_proof, Cost, ProvenanceLimitExceeded,
+    SolverBudget, TropicalAnn,
+};
+use crate::parse::{Script, parse_script};
+use crate::rules::contract::{CancelAuthority, SessionFixedRule};
+use crate::session::current_validity;
+use crate::session::db::{
+    Engine, ScriptOptions, SessionNormalizer, SessionTx, SessionView, build_budget,
+    DEFAULT_DERIVED_TUPLE_CEILING, DEFAULT_EPOCH_CEILING,
+};
+use crate::store::merkle::{
+    ChainedStateRoot, RootChain, StateRoot, as_of_root, link_at_cut, roots_equal_at_cut, state_root,
+};
+use crate::store::{CommitOrdinal, ReadTx, Storage};
+use kyzo_model::program::InputProgram;
+use kyzo_model::value::{DataValue, Tuple, ValidityTs};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Root tamper evidence (#289)
+// ─────────────────────────────────────────────────────────────────────────
 
 /// Outcome of root tamper-evidence [`verify`]: intact chain match, or a
 /// reproducible mismatch between the stored tip and an independent rescan.
@@ -91,6 +126,301 @@ pub(crate) fn verify(
         Ok(RootVerifyOutcome::Tampered {
             expected,
             recomputed,
+        })
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Query-answer ::verify — provenance door
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Outcome of one provenance-backed `::verify` run. Never a bare bool: a
+/// MATCH, a budgeted refusal, a reproducible MISMATCH bundle, or a named
+/// unsupported construct.
+#[derive(Debug, Clone)]
+pub enum VerifyOutcome {
+    /// Evaluated entry answers equal provenance support; every answer has
+    /// a structurally verified min-cost certificate.
+    Match { row_count: usize },
+    /// Evaluated answers disagree with provenance support, or a certificate
+    /// fails `verify_proof`. Carries both sets plus the typed program for
+    /// reproduction.
+    Mismatch {
+        program: MismatchProgram,
+        evaluated: BTreeSet<Tuple>,
+        provenance: BTreeSet<Tuple>,
+        certificate: Option<String>,
+    },
+    /// A construct this door refuses rather than silently mistranslating.
+    Unsupported { reason: VerifyUnsupported },
+    /// A provenance enumeration or solver ceiling was crossed.
+    BudgetRefused { reason: ProvenanceLimitExceeded },
+}
+
+/// Typed program carried by [`VerifyOutcome::Mismatch`].
+#[derive(Debug, Clone)]
+pub struct MismatchProgram(pub(crate) InputProgram);
+
+impl std::fmt::Display for MismatchProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// Named reason [`VerifyOutcome::Unsupported`] carries.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+pub enum VerifyUnsupported {
+    #[error(
+        "::verify supports single read queries only, not sys ops or \
+         imperative scripts"
+    )]
+    #[diagnostic(code(verify::not_single_read))]
+    NotSingleRead,
+    #[error("::verify supports pure read queries only, not mutations")]
+    #[diagnostic(code(verify::mutation))]
+    Mutation,
+    #[error(
+        ":order / :limit / :offset are not supported by this cut of \
+         ::verify — it compares full, unordered answer sets under provenance"
+    )]
+    #[diagnostic(code(verify::order_limit_offset))]
+    OrderLimitOffset,
+    #[error("provenance unavailable: {reason}")]
+    #[diagnostic(code(verify::provenance_unavailable))]
+    ProvenanceUnavailable { reason: &'static str },
+}
+
+impl From<VerifyUnsupported> for VerifyOutcome {
+    fn from(reason: VerifyUnsupported) -> Self {
+        VerifyOutcome::Unsupported { reason }
+    }
+}
+
+impl VerifyOutcome {
+    /// Product-surface rendering for `::verify { … }` — one row,
+    /// `["status", "summary", "detail"]`.
+    pub(crate) fn into_named_rows(self) -> NamedRows {
+        let (status, summary, detail) = match self {
+            VerifyOutcome::Match { row_count } => {
+                ("match", format!("{row_count} row(s) agree"), String::new())
+            }
+            VerifyOutcome::Mismatch {
+                program,
+                evaluated,
+                provenance,
+                certificate,
+            } => {
+                let mut detail = format!(
+                    "program:\n{program}\nevaluated: {evaluated:?}\nprovenance: {provenance:?}"
+                );
+                if let Some(cert) = certificate {
+                    let _ = write!(detail, "\ncertificate: {cert}");
+                }
+                (
+                    "mismatch",
+                    format!(
+                        "evaluated {} row(s) vs provenance {} row(s)",
+                        evaluated.len(),
+                        provenance.len()
+                    ),
+                    detail,
+                )
+            }
+            VerifyOutcome::Unsupported { reason } => {
+                ("unsupported", reason.to_string(), String::new())
+            }
+            VerifyOutcome::BudgetRefused { reason } => {
+                ("refused", reason.to_string(), String::new())
+            }
+        };
+        NamedRows::verify_status_row(status, summary, detail)
+    }
+}
+
+impl<S: Storage> Engine<S> {
+    /// Rust API: parse `payload` and run provenance-backed `::verify`.
+    pub fn verify_script(
+        &self,
+        payload: &str,
+        params: BTreeMap<String, DataValue>,
+        options: ScriptOptions,
+    ) -> Result<VerifyOutcome> {
+        let cur_vld = current_validity()?;
+        match parse_script(payload, &params)? {
+            Script::Query(prog) => self.verify_input_program(prog, cur_vld, &options),
+            Script::Sys { .. } | Script::Imperative { .. } => {
+                Ok(VerifyUnsupported::NotSingleRead.into())
+            }
+        }
+    }
+
+    /// `::verify { … }` door (`SysOp::Verify`): compile → eval with stores
+    /// retained → [`provenance_graph`] → tropical solve →
+    /// [`extract_min_cost_proof`] + [`verify_proof`] per entry answer.
+    pub(crate) fn verify_input_program(
+        &self,
+        program: InputProgram,
+        cur_vld: ValidityTs,
+        options: &ScriptOptions,
+    ) -> Result<VerifyOutcome> {
+        if program.out_opts().store_relation.is_some() {
+            return Ok(VerifyUnsupported::Mutation.into());
+        }
+        if !program.out_opts().sorters.is_empty()
+            || program.out_opts().limit.is_some()
+            || program.out_opts().offset.is_some()
+        {
+            return Ok(VerifyUnsupported::OrderLimitOffset.into());
+        }
+
+        let out_opts = program.out_opts().clone();
+        let mismatch_program = MismatchProgram(program.clone());
+        let tx = SessionTx::new_read(self.store.read_tx()?, options.clone());
+
+        let (_auth, cancel) = CancelAuthority::arm();
+        let view = SessionView {
+            store: &tx.store,
+            temp: &tx.temp,
+        };
+        let mut normalizer = SessionNormalizer::new(view, cancel.clone());
+        let (nf, _) = crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?;
+        let (strat, mut lifetimes) = nf.into_stratified_program()?;
+        let magic = strat.magic_sets_rewrite(&view)?;
+        let compiled = stratified_magic_compile(&tx.store, magic)?;
+        let eval_prog = crate::exec::plan::compile::bind_for_eval(
+            &compiled,
+            &tx.store,
+            crate::project::current::Segments(Some(&self.segments)),
+            &mut |app| Ok(SessionFixedRule::new(app, view, cancel.clone())),
+        )?;
+
+        let _ = cur_vld;
+        let budget = build_budget(options, &out_opts, cancel)?;
+
+        // Provenance needs every rule store live through the final stratum.
+        let keep_until = eval_prog.strata.len().saturating_sub(1);
+        for stratum in &eval_prog.strata {
+            for name in stratum.defs.keys() {
+                lifetimes.note_use(name.clone(), keep_until);
+            }
+        }
+
+        let (outcome, mut stores) = stratified_evaluate_with_stores(
+            &eval_prog,
+            &lifetimes,
+            RowLimit::default(),
+            &budget,
+            None,
+        )?;
+        let entry = eval_prog.entry().clone();
+        stores.insert(entry.clone(), outcome.store);
+
+        let evaluated: BTreeSet<Tuple> = stores
+            .get(&entry)
+            .expect("entry reinserted")
+            .all_iter()?
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<BTreeSet<_>, _>>()?;
+
+        let derivation_ceiling = NonZeroU64::new(
+            options
+                .derived_tuple_ceiling
+                .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING)
+                .max(1),
+        )
+        .expect("max(1) is nonzero");
+        let unit = NonZeroU64::new(1).expect("1 is nonzero");
+        let weights = |_: &_, _: usize| unit;
+
+        let graph = match provenance_graph(
+            &eval_prog,
+            &stores,
+            &budget,
+            derivation_ceiling,
+            &weights,
+        ) {
+            Ok(g) => g,
+            Err(e) => {
+                if let Some(lim) = e.downcast_ref::<ProvenanceLimitExceeded>() {
+                    return Ok(VerifyOutcome::BudgetRefused {
+                        reason: lim.clone(),
+                    });
+                }
+                if let Some(u) = e.downcast_ref::<ProvenanceUnsupported>() {
+                    return Ok(VerifyOutcome::Unsupported {
+                        reason: VerifyUnsupported::ProvenanceUnavailable { reason: u.reason },
+                    });
+                }
+                return Err(e);
+            }
+        };
+
+        let solver_ceiling = NonZeroU32::new(
+            options
+                .epoch_ceiling
+                .unwrap_or(DEFAULT_EPOCH_CEILING)
+                .max(1),
+        )
+        .expect("max(1) is nonzero");
+        let ann = match solve::<TropicalAnn, _>(&graph, &SolverBudget::new(solver_ceiling)) {
+            Ok(a) => a,
+            Err(e) => {
+                if let Some(lim) = e.downcast_ref::<ProvenanceLimitExceeded>() {
+                    return Ok(VerifyOutcome::BudgetRefused {
+                        reason: lim.clone(),
+                    });
+                }
+                return Err(e);
+            }
+        };
+        let costs = as_cost_map(&ann);
+
+        let provenance: BTreeSet<Tuple> = costs
+            .iter()
+            .filter_map(|(node, cost)| match (node, cost) {
+                ((PremiseSource::Rule(sym), tup), Cost::Finite(_)) if *sym == entry => {
+                    Some(tup.clone())
+                }
+                _ => None,
+            })
+            .collect();
+
+        if provenance != evaluated {
+            return Ok(VerifyOutcome::Mismatch {
+                program: mismatch_program,
+                evaluated,
+                provenance,
+                certificate: None,
+            });
+        }
+
+        for tup in &evaluated {
+            let node = (PremiseSource::Rule(entry.clone()), tup.clone());
+            let proof = match extract_min_cost_proof(&graph, &costs, &node) {
+                Ok(p) => p,
+                Err(e) => {
+                    let cert = format!("extract failed for {tup:?}: {e}");
+                    return Ok(VerifyOutcome::Mismatch {
+                        program: mismatch_program,
+                        evaluated,
+                        provenance,
+                        certificate: Some(cert),
+                    });
+                }
+            };
+            if let Err(bad) = verify_proof(&proof, &graph) {
+                let cert = format!("verify_proof rejected {tup:?}: {bad}");
+                return Ok(VerifyOutcome::Mismatch {
+                    program: mismatch_program,
+                    evaluated,
+                    provenance,
+                    certificate: Some(cert),
+                });
+            }
+        }
+
+        Ok(VerifyOutcome::Match {
+            row_count: evaluated.len(),
         })
     }
 }
@@ -365,5 +695,76 @@ mod tests {
                 panic!("v1 bytes must Intact against as-of cut o1")
             }
         }
+    }
+
+    #[test]
+    fn provenance_verify_matches_transitive_closure() {
+        use crate::session::catalog::Catalog;
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_fjall_storage(dir.path()).unwrap();
+        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        db.run_script(":create edge {a: Int, b: Int}", Default::default())
+            .expect("create schema");
+        let rows = DataValue::List(vec![
+            DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
+            DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
+            DataValue::List(vec![DataValue::from(3i64), DataValue::from(4i64)]),
+        ]);
+        db.run_script(
+            "?[a, b] <- $rows :put edge {a, b}",
+            BTreeMap::from([("rows".into(), rows)]),
+        )
+        .expect("seed");
+
+        let outcome = db
+            .verify_script(
+                r#"
+                path[x, y] := *edge[x, y]
+                path[x, z] := path[x, y], *edge[y, z]
+                ?[x, y] := path[x, y]
+                "#,
+                Default::default(),
+                ScriptOptions::default(),
+            )
+            .expect("verify_script runs");
+        match outcome {
+            VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn provenance_verify_directive_returns_match_row() {
+        use crate::session::catalog::Catalog;
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_fjall_storage(dir.path()).unwrap();
+        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        db.run_script(":create edge {a: Int, b: Int}", Default::default())
+            .expect("create schema");
+        let rows = DataValue::List(vec![
+            DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
+            DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
+        ]);
+        db.run_script(
+            "?[a, b] <- $rows :put edge {a, b}",
+            BTreeMap::from([("rows".into(), rows)]),
+        )
+        .expect("seed");
+
+        let rows = db
+            .run_script(
+                r#"
+                ::verify {
+                    path[x, y] := *edge[x, y]
+                    path[x, z] := path[x, y], *edge[y, z]
+                    ?[x, y] := path[x, y]
+                }
+                "#,
+                Default::default(),
+            )
+            .expect("::verify runs");
+        assert_eq!(rows.headers(), &["status", "summary", "detail"]);
+        assert_eq!(rows.rows().len(), 1);
+        assert_eq!(rows.rows()[0][0], DataValue::from("match"));
     }
 }

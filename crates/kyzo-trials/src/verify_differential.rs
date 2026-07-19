@@ -9,11 +9,12 @@
 //! Oracle-differential verify corpus — re-homed from condemned
 //! `kyzo-core::session::verify` (pre-`3f8749b` query-answer half).
 //!
-//! Production `::verify` stays [`kyzo::EngineRefuse`]-class
-//! `IndexOpNotLanded` (disclosed [OPEN] to #257/#258 provenance). This
-//! module is the zone-trials home for the oracle-vs-engine differential:
-//! [`Engine::run_script_with`] on one side, [`kyzo_oracle::naive_eval_at_budgeted`]
-//! on the other, against EDB facts loaded through public script doors.
+//! Production `::verify` is now the provenance door in
+//! `kyzo-core::session::verify` (`provenance_graph` / `verify_proof` →
+//! match / refused / mismatch NamedRows). **This module remains the
+//! oracle-vs-engine differential corpus**; rewriting it onto the
+//! provenance path is a follow-on pass (parent owns that cut) — do not
+//! treat IndexOpNotLanded as current production status.
 //!
 //! Root tamper-evidence verify (story #289) stays in `kyzo-core` — not here.
 //!
@@ -865,9 +866,9 @@ fn verify_refuses_a_predicate_atom_by_name() {
     }
 }
 
-/// Ruling (b): production `::verify` is IndexOpNotLanded. The differential
-/// Match that the directive once returned now lives in trials
-/// [`verify_script`]. Also assert the production door stays honest.
+/// Production `::verify` was IndexOpNotLanded; it is now the provenance door.
+/// This test still asserts the *old* refusal — rewrite onto provenance Match
+/// (parent corpus pass). Kept so the differential corpus shape is visible.
 #[test]
 fn verify_directive_runs_through_run_script() {
     let db = seeded_db();
@@ -897,8 +898,8 @@ fn verify_directive_runs_through_run_script() {
     }
 }
 
-/// The directive's unsupported naming, re-homed: production `::verify`
-/// refuses as not-landed; trials differential names Predicate.
+/// Production `::verify` now returns NamedRows Unsupported for predicates;
+/// this test still expects the old IndexOpNotLanded Err — rewrite (parent).
 #[test]
 fn verify_directive_names_unsupported_constructs() {
     let db = seeded_db();

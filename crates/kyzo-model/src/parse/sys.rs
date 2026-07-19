@@ -348,6 +348,17 @@ pub(crate) fn parse_sys(
             )?;
             SysScript::Explain(Box::new(prog))
         }
+        Rule::verify_op => {
+            let prog = parse_query(
+                inner
+                    .children()
+                    .expect("the query to verify")?
+                    .into_inner(),
+                param_pool,
+                cur_vld,
+            )?;
+            SysScript::Verify(Box::new(prog))
+        }
         Rule::describe_relation_op => {
             let mut inner = inner.children();
             let rels_p = inner.expect("the relation's name")?;

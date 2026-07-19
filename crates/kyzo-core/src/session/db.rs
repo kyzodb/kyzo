@@ -51,11 +51,8 @@
  *   read the stale claim as ground truth, which is exactly the failure a
  *   comment in this codebase must never cause. Still deferred, still typed:
  *   `::explain` and `::running`/`::kill` (see `IndexOpNotLanded`).
- *   `::verify`'s query-answer comparator is ALSO typed-refused here now —
- *   not merely still-deferred: its prior implementation depended on
- *   `kyzo-oracle` from production code, which the storage-era crate wall
- *   forbids (see `session/verify.rs`'s module doc), so it was removed
- *   rather than left illegally wired.
+ *   `::verify` is landed on the provenance door (`session/verify.rs` →
+ *   `exec/provenance`); root tamper-evidence (#289) is separate.
  * - The imperative script genus (`Script::Imperative`) is refused; the query
  *   and system genera are executed.
  */
@@ -763,11 +760,11 @@ impl<S: Storage> Engine<S> {
             // Jobs / verify (already delegated).
             SysOp::ListRunning => crate::session::jobs::list_running(),
             SysOp::KillRunning(_) => crate::session::jobs::kill_running(),
-            // Query-answer `::verify` is a disclosed [OPEN] to provenance-
-            // backed rebuild (#257/#258). Until premise attribution lands,
-            // typed IndexOpNotLanded — same honesty as `::explain`. Oracle-
-            // differential coverage lives in kyzo-trials (not here).
-            SysOp::Verify(_) => bail!(EngineRefuse::IndexOpNotLanded("::verify")),
+            // Query-answer `::verify` — provenance door (session/verify.rs).
+            SysOp::Verify(prog) => {
+                let outcome = self.verify_input_program(*prog, cur_vld, options)?;
+                Ok(outcome.into_named_rows())
+            }
             SysOp::Explain(_) => bail!(EngineRefuse::IndexOpNotLanded("::explain")),
         }
     }
@@ -807,7 +804,7 @@ impl<S: Storage> Engine<S> {
 /// `:timeout`. The epoch ceiling is deterministic (checked at epoch
 /// barriers); the derived-tuple ceiling is deterministic; only the deadline
 /// is wall-clock.
-fn build_budget(
+pub(crate) fn build_budget(
     options: &ScriptOptions,
     out_opts: &QueryOutOptions,
     cancel: CancelFlag,

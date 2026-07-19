@@ -93,7 +93,7 @@ pub(crate) struct SemiringOverflow {
 /// The provenance pass exceeded an armed ceiling. Both dimensions are
 /// deterministic (functions of the graph and the ceiling alone), so the
 /// refusal is byte-identical on every run at any thread count.
-#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, Diagnostic, PartialEq, Eq)]
 #[error("provenance budget exceeded: {dimension} spent {spent} of ceiling {ceiling}")]
 #[diagnostic(
     code(provenance::limit_exceeded),
