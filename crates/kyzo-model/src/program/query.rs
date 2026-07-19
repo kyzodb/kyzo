@@ -14,6 +14,9 @@
  */
 
 //! Query-output options vocabulary: what a query asserts, mutates, and returns.
+//!
+//! Also seats the Candidates&lt;K&gt; seam vocabulary (decisions.md seat 14) that
+//! the program-AST search atom lowers onto as an ordinary relation.
 
 use std::fmt::{Debug, Display, Formatter};
 
@@ -22,6 +25,40 @@ use crate::program::expr::Expr;
 use crate::program::symbol::Symbol;
 use crate::schema::relation::StoredRelationMetadata;
 use crate::value::ValidityTs;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Candidates<K> seam (seat 14) — search atom is an ordinary relation here
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Output-cardinality bound K on the Candidates seam.
+///
+/// The Unconstructible law bounds **output cardinality only** — never
+/// scoring work. Exact full-scan top-k is legal under cost refuse. K is a
+/// body-bound [`Expr`] so a correlated subquery may supply it, not only a
+/// script `$param`.
+#[derive(Debug, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct CandidatesBound {
+    pub k: Expr,
+}
+
+impl CandidatesBound {
+    pub fn new(k: Expr) -> Self {
+        Self { k }
+    }
+}
+
+/// Seat 14 selection contract for Candidates membership.
+///
+/// Exact membership is DST bit-identical. Approximate is
+/// benchmark-qualified, not recall-guaranteed — sealed under bench law with
+/// typed provenance on the emitted relation.
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
+pub enum SelectionContract {
+    Exact,
+    Approximate,
+}
 
 /// A `:assert none` / `:assert some` clause: the query fails unless its
 /// result set is empty / non-empty.

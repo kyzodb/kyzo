@@ -478,3 +478,85 @@ impl<'de> serde::Deserialize<'de> for FixedRuleOptionDecl {
             .ok_or_else(|| serde::de::Error::custom(format!("unknown fixed-rule option: {v}")))
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Search modality option declarations — extensible closed vocabulary.
+// Spatial / sparse option names are [OPEN] to #207/#209 (engine SearchConfig
+// variants); add OPT_* here when those modalities gain a query-relation form.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Declaration of a search-atom modality option name. Closed vocabulary:
+/// an unknown name cannot resolve, so it cannot enter a
+/// [`crate::program::rule::SearchModalityOptions`] bag.
+///
+/// Extensible by appending `SEARCH_OPT_*` constants — not by an open string
+/// bag. `query` and `filter` are **not** modality options: they are
+/// first-class fields on [`crate::program::rule::SearchInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SearchModalityOptionDecl {
+    /// Wire / surface name, e.g. `"k"`.
+    pub name: &'static str,
+}
+
+impl SearchModalityOptionDecl {
+    pub const fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+pub const SEARCH_OPT_K: SearchModalityOptionDecl = SearchModalityOptionDecl::new("k");
+pub const SEARCH_OPT_EF: SearchModalityOptionDecl = SearchModalityOptionDecl::new("ef");
+pub const SEARCH_OPT_RADIUS: SearchModalityOptionDecl = SearchModalityOptionDecl::new("radius");
+pub const SEARCH_OPT_BIND_FIELD: SearchModalityOptionDecl =
+    SearchModalityOptionDecl::new("bind_field");
+pub const SEARCH_OPT_BIND_FIELD_IDX: SearchModalityOptionDecl =
+    SearchModalityOptionDecl::new("bind_field_idx");
+pub const SEARCH_OPT_BIND_DISTANCE: SearchModalityOptionDecl =
+    SearchModalityOptionDecl::new("bind_distance");
+pub const SEARCH_OPT_BIND_VECTOR: SearchModalityOptionDecl =
+    SearchModalityOptionDecl::new("bind_vector");
+pub const SEARCH_OPT_BIND_SCORE: SearchModalityOptionDecl =
+    SearchModalityOptionDecl::new("bind_score");
+pub const SEARCH_OPT_SCORE_KIND: SearchModalityOptionDecl =
+    SearchModalityOptionDecl::new("score_kind");
+
+/// Resolve a search modality option surface name to a [`SearchModalityOptionDecl`].
+/// Unknown / misspelled names return `None` — unconstructible into the options bag.
+///
+/// [OPEN] #207/#209: spatial / sparse modality option names land here when
+/// engine `SearchConfig` gains those variants.
+pub fn resolve_search_modality_option(name: &str) -> Option<SearchModalityOptionDecl> {
+    Some(match name {
+        "k" => SEARCH_OPT_K,
+        "ef" => SEARCH_OPT_EF,
+        "radius" => SEARCH_OPT_RADIUS,
+        "bind_field" => SEARCH_OPT_BIND_FIELD,
+        "bind_field_idx" => SEARCH_OPT_BIND_FIELD_IDX,
+        "bind_distance" => SEARCH_OPT_BIND_DISTANCE,
+        "bind_vector" => SEARCH_OPT_BIND_VECTOR,
+        "bind_score" => SEARCH_OPT_BIND_SCORE,
+        "score_kind" => SEARCH_OPT_SCORE_KIND,
+        _ => return None,
+    })
+}
+
+impl serde::Serialize for SearchModalityOptionDecl {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.name)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SearchModalityOptionDecl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = String::deserialize(deserializer)?;
+        resolve_search_modality_option(&v).ok_or_else(|| {
+            serde::de::Error::custom(format!("unknown search modality option: {v}"))
+        })
+    }
+}

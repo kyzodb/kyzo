@@ -762,13 +762,14 @@ fn parse_atom(
             }
 
             InputAtom::Search {
-                inner: SearchInput {
+                inner: SearchInput::from_named_parts(
                     relation,
                     index,
                     bindings,
                     parameters,
                     span,
-                },
+                )
+                .map_err(miette::Report::new)?,
             }
         }
         Rule::relation_named_apply => {

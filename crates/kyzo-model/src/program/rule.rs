@@ -33,7 +33,7 @@ use thiserror::Error;
 use crate::SourceSpan;
 use crate::program::aggregate::Aggregation;
 use crate::program::expr::Expr;
-use crate::program::op::resolve_fixed_rule_option;
+use crate::program::op::{resolve_fixed_rule_option, resolve_search_modality_option};
 use crate::program::query::QueryOutOptions;
 use crate::program::symbol::Symbol;
 use crate::value::{AsOf, DataValue, ValidityTs};
@@ -475,7 +475,12 @@ pub enum InputAtom {
     Unification {
         inner: Unification,
     },
-    /// An index search (`~rel:idx{...}`), still unresolved.
+    /// An index search (`~rel:idx{...}`) as an ordinary relation on the
+    /// Candidates&lt;K&gt; seam (seat 14): joinable, filterable, and
+    /// **negatable-shaped** — it sits under [`InputAtom::Negation`] like any
+    /// other body atom. Engine-side `NegatedSearchUnsupported` retirement is
+    /// [OPEN] to #209; spatial/sparse `SearchConfig` variants [OPEN] to
+    /// #207/#209.
     Search {
         inner: SearchInput,
     },
@@ -533,9 +538,13 @@ impl Display for InputAtom {
                 for (binding, expr) in &inner.bindings {
                     write!(f, "{binding}: {expr}, ")?;
                 }
-                write!(f, "| ")?;
-                for (k, v) in inner.parameters.iter() {
-                    write!(f, "{k}: {v}, ")?;
+                write!(f, "| query: {}", inner.query)?;
+                match &inner.filter {
+                    SearchFilter::Unfiltered => {}
+                    SearchFilter::Pred(pred) => write!(f, ", filter: {pred}")?,
+                }
+                for (k, v) in inner.modality.iter() {
+                    write!(f, ", {k}: {v}")?;
                 }
                 write!(f, "}}")?;
             }
@@ -583,16 +592,201 @@ impl Display for InputAtom {
     }
 }
 
-/// An index search atom as parsed: relation and index names, named-field
-/// bindings, and raw parameters. Purely syntactic. Keys are [`Symbol`].
+/// Residual filter over search hits — named absence, not `Option<Expr>`.
+#[derive(Clone, Debug, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
+pub enum SearchFilter {
+    /// No residual predicate — every Candidates hit is admitted.
+    Unfiltered,
+    /// Predicate over the full output row (parent ++ own bindings).
+    Pred(Expr),
+}
+
+impl SearchFilter {
+    pub fn as_expr(&self) -> Option<&Expr> {
+        match self {
+            SearchFilter::Unfiltered => None,
+            SearchFilter::Pred(e) => Some(e),
+        }
+    }
+}
+
+/// Search atom missing its required `query` argument.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+#[error("search atom requires a `query` argument")]
+#[diagnostic(code(parser::search_query_required))]
+#[diagnostic(help(
+    "supply `query: <expr>` — any body-bound Expr is legal (correlated \
+     subquery), not only a script `$param`"
+))]
+pub struct SearchQueryRequired {
+    #[label]
+    pub span: SourceSpan,
+}
+
+/// Unknown / misspelled search modality option — refused at construction.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+#[error("unknown search modality option '{name}'")]
+#[diagnostic(code(parser::unknown_search_modality_option))]
+#[diagnostic(help(
+    "Modality option names are an extensible closed vocabulary; unknown \
+     names are unconstructible. `query` and `filter` are first-class fields, \
+     not modality options. Spatial/sparse option names are [OPEN] to #207/#209."
+))]
+pub struct UnknownSearchModalityOption {
+    pub name: String,
+    #[label]
+    pub span: SourceSpan,
+}
+
+/// Proven search modality options bag: every key resolved through
+/// [`resolve_search_modality_option`]. Identity keys are [`Symbol`]; an
+/// unknown name cannot enter this type.
+///
+/// Extensible by appending `SEARCH_OPT_*` in `program/op.rs` — spatial /
+/// sparse names [OPEN] to #207/#209 when engine `SearchConfig` grows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SearchModalityOptions {
+    entries: BTreeMap<Symbol, Expr>,
+}
+
+impl SearchModalityOptions {
+    pub fn empty() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// Build from Symbol-keyed pairs; refuses any key that does not resolve.
+    pub fn from_entries(
+        entries: impl IntoIterator<Item = (Symbol, Expr)>,
+    ) -> std::result::Result<Self, UnknownSearchModalityOption> {
+        let mut opts = Self::empty();
+        for (name, value) in entries {
+            opts.insert(name, value)?;
+        }
+        Ok(opts)
+    }
+
+    /// Insert one option. Unknown names are unconstructible here.
+    pub fn insert(
+        &mut self,
+        name: Symbol,
+        value: Expr,
+    ) -> std::result::Result<(), UnknownSearchModalityOption> {
+        if resolve_search_modality_option(&name).is_none() {
+            return Err(UnknownSearchModalityOption {
+                name: name.name.to_string(),
+                span: name.span,
+            });
+        }
+        self.entries.insert(name, value);
+        Ok(())
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Expr> {
+        self.entries
+            .get(&Symbol::new(name, SourceSpan::default()))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Expr)> {
+        self.entries.iter()
+    }
+
+    pub fn as_map(&self) -> &BTreeMap<Symbol, Expr> {
+        &self.entries
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn into_map(self) -> BTreeMap<Symbol, Expr> {
+        self.entries
+    }
+}
+
+impl Serialize for SearchModalityOptions {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        self.entries.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SearchModalityOptions {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let raw = BTreeMap::<Symbol, Expr>::deserialize(deserializer)?;
+        Self::from_entries(raw).map_err(D::Error::custom)
+    }
+}
+
+/// Construction refusal for [`SearchInput::from_named_parts`].
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+pub enum SearchAtomConstructRefuse {
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    QueryRequired(#[from] SearchQueryRequired),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    UnknownModality(#[from] UnknownSearchModalityOption),
+}
+
+/// Index search atom as an ordinary relation on the Candidates&lt;K&gt; seam
+/// (seat 14).
+///
+/// - **query** — first-class body-bound [`Expr`] (correlated subquery;
+///   `$param`-only shape retired)
+/// - **modality** — extensible closed vocabulary ([`SearchModalityOptions`]);
+///   spatial/sparse names [OPEN] to #207/#209 (engine `SearchConfig` variants)
+/// - **negatable-shaped** — sits under [`InputAtom::Negation`] like any
+///   relation; engine `NegatedSearchUnsupported` retirement [OPEN] to #209
 #[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct SearchInput {
     pub relation: Symbol,
     pub index: Symbol,
     pub bindings: BTreeMap<Symbol, Expr>,
-    pub parameters: BTreeMap<Symbol, Expr>,
+    /// Body-bound query argument (correlated subquery allowed).
+    pub query: Expr,
+    pub filter: SearchFilter,
+    pub modality: SearchModalityOptions,
     #[serde(skip)]
     pub span: SourceSpan,
+}
+
+impl SearchInput {
+    /// Lift from a named-parameter bag (parser surface): peels required
+    /// `query` and optional `filter` into first-class fields; remaining keys
+    /// enter the modality bag (unknown names unconstructible).
+    ///
+    /// Construction site: `parse/query.rs` `search_apply`.
+    pub fn from_named_parts(
+        relation: Symbol,
+        index: Symbol,
+        bindings: BTreeMap<Symbol, Expr>,
+        mut parameters: BTreeMap<Symbol, Expr>,
+        span: SourceSpan,
+    ) -> std::result::Result<Self, SearchAtomConstructRefuse> {
+        let query = parameters
+            .remove(&Symbol::new("query", span))
+            .ok_or(SearchAtomConstructRefuse::QueryRequired(SearchQueryRequired {
+                span,
+            }))?;
+        let filter = match parameters.remove(&Symbol::new("filter", span)) {
+            None => SearchFilter::Unfiltered,
+            Some(e) => SearchFilter::Pred(e),
+        };
+        let modality = SearchModalityOptions::from_entries(parameters)
+            .map_err(SearchAtomConstructRefuse::UnknownModality)?;
+        Ok(Self {
+            relation,
+            index,
+            bindings,
+            query,
+            filter,
+            modality,
+            span,
+        })
+    }
 }
 
 /// A rule application in a parsed body: `name[args…]` with expression args.
