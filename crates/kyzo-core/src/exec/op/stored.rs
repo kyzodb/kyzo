@@ -23,11 +23,11 @@ use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{AsOf, DataValue, ScanBound};
 use crate::engines::segments::{Segment, SegmentEngine, SegmentMiss, Segments};
-use crate::query::batch_ops::refine_batch;
-use crate::query::batch_ops::{
+use crate::exec::op::batch_ops::refine_batch;
+use crate::exec::op::batch_ops::{
     Batch, BatchIter, BatchScanFilter, BatchTupleFilter, conjunction_pred,
 };
-use crate::query::ra::join::PrefixProbeBatchJoin;
+use crate::exec::op::join::PrefixProbeBatchJoin;
 use crate::session::catalog::KeyspaceKind;
 use crate::session::catalog::RelationHandle;
 use crate::storage::ReadTx;

@@ -104,9 +104,9 @@ use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, DataValue};
 use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
 use crate::fixed_rule::utilities::*;
-use crate::query::eval::{BudgetDimension, LimitExceeded};
-use crate::query::levels::EpochStore;
-use crate::query::temp_store::{RegularTempStore, TupleInIter};
+use crate::exec::fixpoint::eval::{BudgetDimension, LimitExceeded};
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::delta_store::{RegularTempStore, TupleInIter};
 use kyzo_model::data_value_any;
 use crate::rules::algo::*;
 
@@ -713,7 +713,7 @@ pub struct FixedRuleOutput {
 }
 
 /// A fixed rule's mid-run spend guard — the fixed-rule twin of the per-rule
-/// mid-epoch check in `query::eval::InterruptTicker`. A fixed rule (a graph
+/// mid-epoch check in `exec::fixpoint::eval::InterruptTicker`. A fixed rule (a graph
 /// algorithm) runs to completion *inside one epoch*, filling its output
 /// store before the barrier that merges it ever checks the
 /// `derived_tuple_ceiling`. So a rule whose output is a near-cross-product
@@ -737,7 +737,7 @@ struct OutputSpendGuard {
 }
 
 /// Rows a fixed rule may `put` between mid-run ceiling checks — harmonized
-/// with `query::eval`'s `INTERRUPT_STRIDE`. Non-zero by construction.
+/// with `exec::fixpoint::eval`'s `INTERRUPT_STRIDE`. Non-zero by construction.
 const OUTPUT_STRIDE: u32 = 64;
 
 /// Countdown to the next mid-run ceiling check (P097).
@@ -778,8 +778,8 @@ impl FixedRuleOutput {
     /// As [`Self::new`], but armed with the query's derived-tuple ceiling so
     /// the writer refuses mid-run once `baseline + rows > ceiling`. The
     /// evaluator passes the epoch-0 `spent_derived` as the `baseline`
-    /// argument of `query::eval::FixedRuleEval::run`; the session's fixed-
-    /// rule adapter (`query::normalize::SessionFixedRule`) forwards it here
+    /// argument of `exec::fixpoint::eval::FixedRuleEval::run`; the session's fixed-
+    /// rule adapter (`rules::contract::SessionFixedRule`) forwards it here
     /// unchanged, along with the budget's `derived_tuple_ceiling`. `None`
     /// leaves the writer unbounded.
     pub(crate) fn new_budgeted(

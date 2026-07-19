@@ -161,7 +161,7 @@ Format: `path` — description
 `crates/kyzo-core/src/rules/algo/top_sort.rs` — fixed rule: topological order of a DAG view
 `crates/kyzo-core/src/rules/algo/triangles.rs` — fixed rule: triangle counting on a graph view
 `crates/kyzo-core/src/rules/algo/yen.rs` — fixed rule: Yen’s k-shortest loopless paths
-`crates/kyzo-core/src/rules/contract.rs` — FixedRule trait: typed inputs, named outputs, deterministic run
+`crates/kyzo-core/src/rules/contract.rs` — FixedRule trait + SessionFixedRule: typed inputs, named outputs, deterministic run; session-backed FixedRuleEval adapter
 `crates/kyzo-core/src/rules/gazetteer.rs` — fixed rule that queries the gazetteer projection
 `crates/kyzo-core/src/rules/graph_view.rs` — adapts stored edge/vertex relations into the graph algorithms’ view
 `crates/kyzo-core/src/rules/io/constant.rs` — fixed rule that emits a declared constant table
@@ -177,7 +177,7 @@ Format: `path` — description
 `crates/kyzo-core/src/session/catalog.rs` — named relations, schemas, and metadata visible to the session
 `crates/kyzo-core/src/session/composition.rs` — CompositionId + BestEffort|Saga|ReadAt
 `crates/kyzo-core/src/session/constraint.rs` — integrity constraints checked on mutate/commit
-`crates/kyzo-core/src/session/db.rs` — Engine(Store, Catalog) composition seat: Engine holds Store/Catalog capabilities by composition; not an ambient Db facade. §1 obligation: current currency is still named `Db` until the storage epic demolishes it into Engine composition — do not half-rename here.
+`crates/kyzo-core/src/session/db.rs` — Engine(Store, Catalog) composition seat: Engine holds Store/Catalog capabilities by composition; not an ambient Db facade. Owns SessionView + SessionNormalizer (session-backed catalog/temp view and body normalizer). §1 obligation: current currency is still named `Db` until the storage epic demolishes it into Engine composition — do not half-rename here.
 `crates/kyzo-core/src/session/footprint.rs` — AskShape + Footprint algebra + Frontier
 `crates/kyzo-core/src/session/fts.rs` — session door that builds/queries the FTS projection
 `crates/kyzo-core/src/session/generation.rs` — generation/epoch counters that invalidate stale handles

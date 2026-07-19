@@ -55,7 +55,7 @@
 //! One `ReadTx` is opened once and used for BOTH evaluators — the
 //! production path via [`Db::compile_and_eval`] and the oracle's EDB feed
 //! via [`StoredWithValidityRA::iter_batched`] for current-state relations,
-//! or [`crate::query::ra::temporal::decode_raw_version`]'s raw multi-version
+//! or [`crate::exec::op::temporal::decode_raw_version`]'s raw multi-version
 //! scan for historical ones — the exact scan/decode primitives the
 //! production compiler itself uses for a stored-relation atom, `AsOf`
 //! resolution included — so "byte-identical state" is structural, not a
@@ -80,10 +80,10 @@ use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
-use crate::query::laws;
-use crate::query::normalize::{SessionNormalizer, SessionView};
-use crate::query::ra::stored::StoredWithValidityRA;
-use crate::query::temp_store::TupleInIter;
+use kyzo_oracle::eval as laws;
+use crate::session::db::{SessionNormalizer, SessionView};
+use crate::exec::op::stored::StoredWithValidityRA;
+use crate::exec::fixpoint::delta_store::TupleInIter;
 use crate::session::catalog::get_relation;
 use crate::session::current_validity;
 use crate::session::db::{Db, ScriptOptions, SessionTx};
@@ -484,7 +484,7 @@ fn scan_full_histories(
     tx: &impl ReadTx,
     historical_names: &BTreeSet<laws::Rel>,
 ) -> Result<BTreeMap<laws::Rel, Vec<laws::Event>>> {
-    use crate::query::ra::temporal::{decode_raw_version, relation_keyspace_bounds};
+    use crate::exec::op::temporal::{decode_raw_version, relation_keyspace_bounds};
 
     let mut histories = BTreeMap::new();
     for rel in historical_names {
@@ -496,15 +496,15 @@ fn scan_full_histories(
             let (key, val) = kv?;
             let (_, key_tuple, raw) = decode_raw_version(&key, &val, key_len)?;
             let event = match raw {
-                crate::query::ra::temporal::RawVersion::Assert {
+                crate::exec::op::temporal::RawVersion::Assert {
                     valid,
                     sys,
                     payload,
                 } => laws::Event::assert(key_tuple, payload, valid.raw(), sys.raw())?,
-                crate::query::ra::temporal::RawVersion::Retract { valid, sys } => {
+                crate::exec::op::temporal::RawVersion::Retract { valid, sys } => {
                     laws::Event::retract(key_tuple, valid.raw(), sys.raw())?
                 }
-                crate::query::ra::temporal::RawVersion::Erase { valid, sys } => {
+                crate::exec::op::temporal::RawVersion::Erase { valid, sys } => {
                     laws::Event::erase(key_tuple, valid.raw(), sys.raw())?
                 }
             };
@@ -526,7 +526,7 @@ fn scan_full_histories(
 /// production being evaluated first: the oracle carries its own finite
 /// ceiling regardless of evaluation order. No kill flag (the verify path has
 /// no live session to cancel it from).
-fn oracle_budget(options: &ScriptOptions) -> Result<crate::query::eval::Budget> {
+fn oracle_budget(options: &ScriptOptions) -> Result<crate::exec::fixpoint::eval::Budget> {
     // The default ceilings are the production ones, imported (not re-declared
     // as a local literal) so the oracle path can never silently drift from
     // build_budget's — the exact divergence that once left this path's
@@ -537,7 +537,7 @@ fn oracle_budget(options: &ScriptOptions) -> Result<crate::query::eval::Budget> 
         .unwrap_or(DEFAULT_EPOCH_CEILING)
         .max(1);
     let ceiling = std::num::NonZeroU32::new(ceiling).expect("max(1) is nonzero");
-    let mut budget = crate::query::eval::Budget::new(ceiling).with_derived_tuple_ceiling(
+    let mut budget = crate::exec::fixpoint::eval::Budget::new(ceiling).with_derived_tuple_ceiling(
         options
             .derived_tuple_ceiling
             .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING),
@@ -861,7 +861,8 @@ mod tests {
     /// `verify_matches_a_hand_written_aggregation_query` below.
     #[test]
     fn verify_matches_across_a_generated_corpus() {
-        use crate::query::gauntlet::{Rng, entry_line, facts_script, gen_program, rules_script};
+        // Gauntlet generator: relocated off the former query zone (see kyzo_trials::gauntlet).
+        use kyzo_trials::gauntlet::{Rng, entry_line, facts_script, gen_program, rules_script};
 
         const SEEDS: u64 = 40;
         let mut failures = Vec::new();
@@ -928,8 +929,9 @@ mod tests {
     /// agreement.
     #[test]
     fn verify_never_matches_the_unstratifiable_corpus() {
-        use crate::query::gauntlet::{edb_relations, entry_line, facts_script, rules_script};
-        use crate::query::laws::unstratifiable_corpus;
+        // Gauntlet renderer: relocated off the former query zone (see kyzo_trials::gauntlet).
+        use kyzo_trials::gauntlet::{edb_relations, entry_line, facts_script, rules_script};
+        use kyzo_oracle::eval::unstratifiable_corpus;
 
         let mut failures = Vec::new();
         for (name, program) in unstratifiable_corpus() {

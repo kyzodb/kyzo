@@ -899,7 +899,7 @@ pub(crate) struct InputRuleApplyAtom {
 }
 
 /// Which axis an [`ValidityClause::Delta`] varies, the other held at the
-/// record's current belief — mirrors [`crate::query::laws::Axis`], the
+/// record's current belief — mirrors [`kyzo_oracle::eval::Axis`], the
 /// oracle's own copy of this same distinction.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize,
@@ -921,7 +921,7 @@ pub(crate) enum DeltaAxis {
 /// before time-travel semantics expanded). `Spans` and `Delta` each bind
 /// one EXTRA trailing column
 /// beyond the atom's own `args` — the interval or the signed-fact marker
-/// — the same shape [`crate::query::search::SearchAtom::own_bindings`]
+/// — the same shape [`crate::exec::plan::search::SearchAtom::own_bindings`]
 /// already uses for a search's engine-appended columns; the resolver
 /// (`compile.rs`) appends it to the atom's bindings rather than folding it
 /// into `args`, so relation arity checks against `args` stay exactly what
@@ -1579,8 +1579,8 @@ pub(crate) enum NormalFormAtom {
     Unification(Unification),
     /// A resolved index search (`~rel:idx{…}`): binds its `own_bindings`,
     /// requires its query expression's variables. Resolved against the
-    /// catalog by the body normalizer (`query::search::resolve_search`).
-    Search(Box<crate::query::search::SearchAtom>),
+    /// catalog by the body normalizer (`exec::plan::search::resolve_search`).
+    Search(Box<crate::exec::plan::search::SearchAtom>),
 }
 
 /// A rule application over plain symbols.
@@ -2125,7 +2125,7 @@ pub(crate) enum MagicAtom {
     Unification(Unification),
     /// A resolved index search: adornment-inert (like `Relation`), passed
     /// through the magic rewrite with its dataflow facts intact.
-    Search(Box<crate::query::search::SearchAtom>),
+    Search(Box<crate::exec::plan::search::SearchAtom>),
 }
 
 /// A rule application naming a [`MagicSymbol`].

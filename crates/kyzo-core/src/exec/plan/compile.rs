@@ -76,7 +76,7 @@
  *   2. compile.rs:655  `ret_vars_set.difference(..).next().unwrap()` under
  *      an `ensure!` — restructured: the unbound symbol is matched, and the
  *      impossible empty-difference case is a typed
- *      [`PlanInvariantError`](crate::query::ra::PlanInvariantError).
+ *      [`PlanInvariantError`](crate::exec::op::PlanInvariantError).
  *   3. compile.rs:501,535,569 `debug_assert!(seen_variables.contains(..))`
  *      in the search arms — gone with the search seams (the index tier
  *      re-establishes them as typed checks when those atoms land).
@@ -148,13 +148,13 @@ use crate::data::program::{
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
 use kyzo_model::value::DataValue;
-use crate::query::eval::{
+use crate::exec::fixpoint::eval::{
     AtomOccurrence, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum, FixedRuleEval, Premises,
     RuleBody,
 };
-use crate::query::levels::EpochStore;
-use crate::query::ra::{PlanInvariantError, RelAlgebra, SearchRA};
-use crate::query::temp_store::{RegularTempStore, TupleInIter};
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::op::{PlanInvariantError, RelAlgebra, SearchRA};
+use crate::exec::fixpoint::delta_store::{RegularTempStore, TupleInIter};
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, IndexRef, RelationHandle, get_relation};
 use crate::storage::ReadTx;
@@ -638,7 +638,7 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.scan = crate::query::ra::temporal::DeltaScan::Accelerated {
+                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
                                 posting: idx_store,
                             };
                         }
@@ -867,7 +867,7 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.scan = crate::query::ra::temporal::DeltaScan::Accelerated {
+                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
                                 posting: idx_store,
                             };
                         }
@@ -974,9 +974,9 @@ pub(crate) fn compile_magic_rule_body(
                         u.binding.clone(),
                         u.expr.clone(),
                         if u.one_many_unif {
-                            crate::query::ra::UnificationKind::Spread
+                            crate::exec::op::UnificationKind::Spread
                         } else {
-                            crate::query::ra::UnificationKind::Single
+                            crate::exec::op::UnificationKind::Single
                         },
                         u.span,
                     );
@@ -1042,7 +1042,7 @@ pub(crate) struct CompiledRuleBody<'a, T> {
     segments: Segments<'a>,
 }
 
-impl<T: ReadTx> crate::query::eval::seal::Sealed for CompiledRuleBody<'_, T> {}
+impl<T: ReadTx> crate::exec::fixpoint::eval::seal::Sealed for CompiledRuleBody<'_, T> {}
 
 impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
     fn for_each_derivation(
@@ -1087,7 +1087,7 @@ impl FixedRuleEval for NoFixedRules {
         &self,
         _stores: &BTreeMap<MagicSymbol, EpochStore>,
         _out: &mut RegularTempStore,
-        _budget: &crate::query::eval::Budget,
+        _budget: &crate::exec::fixpoint::eval::Budget,
         _baseline: u64,
     ) -> Result<()> {
         match *self {}
@@ -1157,8 +1157,8 @@ mod tests {
     };
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::Tuple;
-    use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
-    use crate::query::laws::{Literal, Program, Rel, Rule, Term, naive_eval};
+    use crate::exec::fixpoint::eval::{Budget, RowLimit, stratified_evaluate};
+    use kyzo_oracle::eval::{Literal, Program, Rel, Rule, Term, naive_eval};
     use crate::session::access::AccessLevel;
     use crate::session::catalog::KeyspaceKind;
     use crate::session::catalog::{create_relation, set_access_level};
@@ -2625,7 +2625,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.downcast_ref::<crate::query::ra::StoredRowTooShortError>()
+            err.downcast_ref::<crate::exec::op::StoredRowTooShortError>()
                 .is_some(),
             "expected StoredRowTooShortError, got {err:?}"
         );
@@ -2668,7 +2668,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.downcast_ref::<crate::query::ra::StoredRowTooShortError>()
+            err.downcast_ref::<crate::exec::op::StoredRowTooShortError>()
                 .is_some(),
             "expected StoredRowTooShortError, got {err:?}"
         );

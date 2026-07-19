@@ -83,7 +83,7 @@ use crate::fixed_rule::NamedRows;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{ConstraintRef, get_relation, list_relations, write_relation_row};
 use crate::session::db::{Db, ScriptOptions, SessionTx, status_ok};
-use crate::query::temp_store::TupleInIter;
+use crate::exec::fixpoint::delta_store::TupleInIter;
 use crate::storage::retry::RetryError;
 use crate::storage::temp::TempTx;
 use crate::storage::{ReadTx, Storage, WriteTx};

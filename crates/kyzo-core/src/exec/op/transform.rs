@@ -25,10 +25,10 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 use crate::engines::segments::Segments;
-use crate::query::batch_ops::{Batch, BatchIter};
-use crate::query::eval::AtomOccurrence;
-use crate::query::levels::EpochStore;
-use crate::query::ra::join::{eliminate_from_tuple, get_eliminate_indices};
+use crate::exec::op::batch_ops::{Batch, BatchIter};
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::op::join::{eliminate_from_tuple, get_eliminate_indices};
 use crate::storage::ReadTx;
 use miette::{Diagnostic, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -230,11 +230,11 @@ impl UnificationRA {
                 let width = rows.first().map_or(0, |r| r.len());
                 let owned_rows: Vec<Tuple> =
                     rows.iter().map(|r| Tuple::from_vec(r.to_vec())).collect();
-                let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width)?;
-                let values = crate::query::vm::eval_expr_batched(
+                let columns = crate::exec::expr::batch::ColumnBatch::from_rows(owned_rows, width)?;
+                let values = crate::exec::expr::eval::eval_expr_batched(
                     &ra.expr,
                     &columns,
-                    &crate::query::batch::Selection::all(rows.len())?,
+                    &crate::exec::expr::batch::Selection::all(rows.len())?,
                 )?;
                 let mut out = Batch::new();
                 let mut emit = |row: &[DataValue], v: DataValue| -> Result<()> {

@@ -9,7 +9,7 @@
 
 //! Story #61's standing-query lifecycle: registration, snapshot-consistent
 //! initialization, patch application, and teardown — built on
-//! [`crate::query::incremental`]'s translator and evaluator, and on
+//! [`crate::react::incremental`]'s translator and evaluator, and on
 //! `runtime::callback`'s existing per-relation commit-notification seam.
 //!
 //! ## Snapshot consistency, for free
@@ -73,9 +73,9 @@ use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
-use crate::query::incremental::{self, IncrementalProgram, MaintainedState};
-use crate::query::normalize::{SessionNormalizer, SessionView};
-use crate::query::ra::temporal::SignedFact;
+use crate::react::incremental::{self, IncrementalProgram, MaintainedState};
+use crate::session::db::{SessionNormalizer, SessionView};
+use crate::exec::op::temporal::SignedFact;
 use crate::session::observe::{CallbackEvent, CallbackOp};
 use crate::session::current_validity;
 use crate::session::db::{Db, ScriptOptions, SessionTx};
@@ -420,7 +420,7 @@ impl<S: Storage> Db<S> {
     /// [`StandingQuery::register`] instead of continuing on to
     /// `stratified_magic_compile`'s RA lowering (which is exactly the
     /// erasure this story's translator cannot afford — see
-    /// `query::incremental`'s module doc on why `MagicAtom`, not
+    /// `react::incremental`'s module doc on why `MagicAtom`, not
     /// `RelAlgebra`, is the translation source).
     pub fn register_standing(
         &self,

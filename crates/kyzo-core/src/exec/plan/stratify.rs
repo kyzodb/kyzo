@@ -76,7 +76,7 @@ use crate::data::program::{
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
-use crate::query::graph::{
+use crate::exec::plan::graph::{
     Graph, StratifiedGraph, generalized_kahn, reachable_components, strongly_connected_components,
 };
 
@@ -525,7 +525,7 @@ mod tests {
     };
     use kyzo_model::program::symbol::SymbolKind;
     use kyzo_model::value::DataValue;
-    use crate::query::laws;
+    use kyzo_oracle::eval as laws;
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan(0, 0))

@@ -25,9 +25,9 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 use crate::engines::segments::Segments;
-use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter};
-use crate::query::eval::AtomOccurrence;
-use crate::query::levels::EpochStore;
+use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter};
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::storage::ReadTx;
 use itertools::Itertools;
 use miette::Result;
@@ -206,7 +206,7 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                 }
                 let left_row = {
                     let Some((b, idx)) = self.cur.as_ref() else {
-                        return Some(Err(crate::query::ra::PlanInvariantError(
+                        return Some(Err(crate::exec::op::PlanInvariantError(
                             "join left cursor missing after batch advance",
                         )
                         .into()));
@@ -223,7 +223,7 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
             }
 
             let Some((b, idx)) = self.cur.as_ref() else {
-                return Some(Err(crate::query::ra::PlanInvariantError(
+                return Some(Err(crate::exec::op::PlanInvariantError(
                     "join left cursor missing while probing",
                 )
                 .into()));
@@ -234,7 +234,7 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
             };
             let mut exhausted = false;
             let Some(active) = self.active.as_mut() else {
-                return Some(Err(crate::query::ra::PlanInvariantError(
+                return Some(Err(crate::exec::op::PlanInvariantError(
                     "join active probe missing after setup",
                 )
                 .into()));

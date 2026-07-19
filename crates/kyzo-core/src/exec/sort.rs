@@ -35,8 +35,8 @@ use crate::data::program::SortDir;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
-use crate::query::levels::EpochStore;
-use crate::query::temp_store::TupleInIter;
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::delta_store::TupleInIter;
 
 /// An `:order` clause names a variable that is not in the entry head.
 /// (The CozoDB original panicked on this shape.)
@@ -91,7 +91,7 @@ pub(crate) fn sort_and_collect(
 mod tests {
     use super::*;
     use kyzo_model::value::DataValue;
-    use crate::query::temp_store::RegularTempStore;
+    use crate::exec::fixpoint::delta_store::RegularTempStore;
 
     fn store_of(rows: &[Vec<i64>]) -> EpochStore {
         let mut fresh = RegularTempStore::default();

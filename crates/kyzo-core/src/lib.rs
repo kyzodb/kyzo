@@ -84,7 +84,7 @@
 //! cannot panic, hang, or overflow the native stack (`NestingTooDeep`,
 //! refused by a structural scan before any recursive work).
 //!
-//! ## Query — the answer the logic says, whatever the plan (`query`)
+//! ## Exec — the answer the logic says, whatever the plan (`exec`)
 //!
 //! The Datalog engine is a **typestate pipeline**: each stage's output type
 //! is the proof its checks passed, so an unstratifiable or entryless program
@@ -92,19 +92,19 @@
 //! present, as a field) → `NormalFormProgram` (bodies flat and deduplicated)
 //! → `StratifiedNormalFormProgram` (strata in execution order, entry proven
 //! to sit in the last) → `StratifiedMagicProgram` (demand-rewritten, entry
-//! proven to survive unadorned) → compiled relational algebra (`query::ra`,
+//! proven to survive unadorned) → compiled relational algebra (`exec::op`,
 //! where `NegRight` is the constructor proof that negation's illegal right
-//! sides are unreachable) → semi-naive fixpoint evaluation (`query::eval`).
-//! Execution is **vectorized**: rows flow as batches (`query::batch_ops`)
-//! through the columnar expression evaluator (`query::vm`), law-bound
+//! sides are unreachable) → semi-naive fixpoint evaluation (`exec::fixpoint::eval`).
+//! Execution is **vectorized**: rows flow as batches (`exec::op::batch_ops`)
+//! through the columnar expression evaluator (`exec::expr::eval`), law-bound
 //! observationally identical — values, presence, and error identity — to
 //! scalar `Expr` evaluation; the connectives `&&`/`||`/`~` short-circuit as
 //! `Expr::Lazy`, and no strict boolean ops exist. Fixpoint state lives as
-//! level-merged immutable sorted runs (`query::levels`): each epoch's
-//! accumulator seals as the newest level — the delta IS the newest level —
-//! and compaction is a logarithmic pure function of level sizes.
+//! level-merged immutable sorted runs (`exec::fixpoint::delta_store`): each
+//! epoch's accumulator seals as the newest level — the delta IS the newest
+//! level — and compaction is a logarithmic pure function of level sizes.
 //! The tier's seven laws and where each is enforced are documented in
-//! `query/mod.rs`; the load-bearing ones: optimized evaluation equals the
+//! `exec/mod.rs`; the load-bearing ones: optimized evaluation equals the
 //! naive fixpoint, unstratifiable programs are *refused* rather than
 //! mis-answered, recursion terminates, and no query text or stored bytes can
 //! panic the process. Evaluation is governed by a `Budget` — required by
@@ -136,18 +136,18 @@
 //! typed catalog (`session::catalog`, whose `SystemKey` is the closed set
 //! of system-keyspace shapes, so no third shape appears by accident),
 //! transaction-scoped constraints, and change callbacks. The fixpoint
-//! stores' `Admitted` count (`query::levels`) is the budget's deterministic
-//! unit of account. [`Db::run_script_json`] (`session::json`) is the one
-//! JSON-params-in, JSON-envelope-out surface every binding shares; it
-//! composes `data::json`'s wire format ([`DataValue`] <-> JSON, `NamedRows`
-//! <-> JSON, error reports -> JSON) rather than reimplementing it — a
-//! binding adds transport, not JSON shaping.
+//! stores' `Admitted` count (`exec::fixpoint::delta_store`) is the budget's
+//! deterministic unit of account. [`Db::run_script_json`] (`session::json`)
+//! is the one JSON-params-in, JSON-envelope-out surface every binding
+//! shares; it composes `data::json`'s wire format ([`DataValue`] <-> JSON,
+//! `NamedRows` <-> JSON, error reports -> JSON) rather than reimplementing
+//! it — a binding adds transport, not JSON shaping.
 //!
 //! ## Engines — the derived-index organs (`engines`)
 //!
 //! HNSW vector search, full-text search, MinHash-LSH, spatial, sparse
 //! vectors, and the gazetteer — each an index engine whose search surface
-//! joins into query plans as a relation (`query::ra::search`), with the
+//! joins into query plans as a relation (`exec::op::search`), with the
 //! text-analysis pipeline (`engines::text`) feeding the ones that read
 //! prose. Each engine's laws are pinned by its own harness in-tree.
 //!
@@ -190,12 +190,12 @@
 //!   the epoch ceiling. Possession of the output type *is* the proof.
 //! - **Test.** What cannot yet be a type is pinned by executable law: the
 //!   memcmp round-trip and order-embedding property tests (`storage`), the naive
-//!   reference oracle and the refusal corpus (`query::laws`), the determinism
-//!   law, and the campaigns below.
+//!   reference oracle and the refusal corpus (`kyzo_oracle::eval`), the
+//!   determinism law, and the campaigns below.
 //!
 //! # Verification is architecture, not an afterthought
 //!
-//! - **The oracle** (`query::laws`, `cfg(test)` — judge, never production): a
+//! - **The oracle** (`kyzo_oracle::eval`, `cfg(test)` — judge, never production): a
 //!   deliberately naive fixpoint evaluator, written to be obviously correct,
 //!   that folds through the *real* landed aggregation ops. Optimized
 //!   evaluation must produce byte-identical answer sets to it, and the oracle
@@ -217,13 +217,13 @@
 //! The **kernel is complete and load-bearing**: `data` and `storage` are the
 //! substrate everything else stands on. The **engine is live end to end**:
 //! the public surface is the kernel re-exports plus the [`Db`] session
-//! entrypoint below; the tiers between (parse, query, engines, session,
-//! fixed_rule) stay `pub(crate)` — internal organs, not API. `format`,
+//! entrypoint below; the tiers between (parse, exec, react, engines, session,
+//! fixed_rule, rules) stay `pub(crate)` — internal organs, not API. `format`,
 //! `parse`, and `fixed_rule` carry no module-level `allow(dead_code)` —
 //! their host doors are real (`format_program` / `parse_script` /
 //! `FixedRule::run`); any unused residual is a rustc warning, not a
 //! blanket lie about a consumer that "lands later". The same P112 posture
-//! now applies to `query`, `session`, `engines`, and the value plane's
+//! now applies to `exec`, `react`, `session`, `engines`, and the value plane's
 //! production modules (`SearchHits::admit_decoded`, canonical encode/decode):
 //! module-level `allow(dead_code)` is gone; unlanded surfaces are
 //! `#[cfg(test)]`, wired, or left to warn honestly. What refuses
@@ -261,9 +261,16 @@ pub(crate) mod capacity;
 pub(crate) mod data;
 // Target-zone seats landing mid-cut (ideal map: kyzo-model / exec / rules).
 pub(crate) mod exec;
-pub(crate) mod rules;
+// Fixed-rule zone: contract + algo. Inline so `contract` is wired without
+// editing `rules/mod.rs` (not on this task's allowlist). `mod rules;` would
+// use `rules/mod.rs` and ignore the inline block — this form loads
+// `rules/algo` and `rules/contract.rs` directly.
+pub(crate) mod rules {
+    pub(crate) mod algo;
+    pub(crate) mod contract;
+}
 // Engines production host doors: `session/ops.rs` (fts/hnsw/lsh create/drop),
-// `query/search.rs` (`RelationIndexSearch::search_relation`),
+// `exec/plan/search.rs` (`RelationIndexSearch::search_relation`),
 // `engines::admit_relation_search_hits` → `SearchHits::admit_decoded`.
 // Unlanded kind engines (gazetteer/sparse/spatial) are `#[cfg(test)]` until
 // their `db.rs` surface lands. No module-level `allow(dead_code)` (P112).
@@ -284,11 +291,12 @@ pub(crate) mod fixed_rule;
 // execution (`ImperativeNotWired`); its AST is still constructed by the
 // parser and exercised in-file — no module-level `allow(dead_code)` (P112).
 pub(crate) mod parse;
-// Query production host doors: `session/db.rs::compile_and_eval` (compile,
-// magic, stratify, ra, eval, normalize, search, sort, batch_ops, vm) and
-// `session/verify.rs` (`laws::naive_eval_at_budgeted`). No module-level
-// `allow(dead_code)` (P112); unlanded oracle/eval surface warns honestly.
-pub(crate) mod query;
+// React: standing-query lifecycle + incremental maintenance (relocated
+// from the former query zone).
+pub(crate) mod react {
+    pub(crate) mod incremental;
+    pub(crate) mod standing;
+}
 // Session production host doors: `Db::run_script` / `compile_and_eval`,
 // `admit`/`ops` mutation and index create/drop, `catalog`, `observe`
 // notifications, and `constraint` enforcement at commit (P112). No
@@ -333,7 +341,7 @@ pub use session::db::{Db, ScriptOptions};
 pub use session::verify::VerifyOutcome;
 
 pub use exec::op::temporal::SignedFact;
-pub use query::standing::StandingQuery;
+pub use react::standing::StandingQuery;
 
 // Sealed doors deleted (bench_api / fuzz_api / lsp_api). Tooling speaks the
 // sealed contract or goes red — bespoke façades were contract debt.

@@ -150,7 +150,7 @@ use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
 use kyzo_model::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
-use crate::query::batch_ops::{Batch, BatchIter};
+use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::session::catalog::RelationHandle;
 use crate::storage::ReadTx;
 
@@ -211,7 +211,7 @@ pub(crate) fn compose(
                 out.insert(SignedFact::Minus(t.clone()));
             }
             n => {
-                return Err(crate::query::laws::ComposeNetOutOfRange { net: n }.into());
+                return Err(kyzo_oracle::temporal::ComposeNetOutOfRange { net: n }.into());
             }
         }
     }

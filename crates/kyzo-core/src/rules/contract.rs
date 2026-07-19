@@ -6,14 +6,15 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! The parallelism seam for the graph algorithms.
+//! The fixed-rule contract surface: order-preserving parallelism and the
+//! session-backed [`SessionFixedRule`] evaluation adapter.
 //!
 //! Several fixed rules fan out an independent, side-effect-free computation
 //! per node / per start / per node-pair, then fold the results. Upstream ran
 //! those fan-outs under `rayon`; the port left them sequential behind
 //! `SEAM(parallelism)` markers while the workspace carried no `rayon`. The
-//! query engine (`query/eval.rs`) has since taken a direct `rayon`
-//! dependency, so the seam can close.
+//! query engine has since taken a direct `rayon` dependency, so the seam
+//! can close.
 //!
 //! The one law here is **determinism**: parallel execution must produce
 //! byte-identical output to the sequential path. [`par_try_map`] is the only
@@ -22,10 +23,25 @@
 //! Cross-item float reductions (which are *not* order-independent) stay in a
 //! sequential fold the caller runs over the returned, canonically ordered
 //! `Vec`; they are never handed to a parallel reduction.
+//!
+//! [`SessionFixedRule`] bridges one `MagicFixedRuleApply` to `FixedRule::run`
+//! at evaluation time. Output is branded with the manifest arity (never a
+//! caller-supplied one); the budget's cancel poll is shared so a cancelled
+//! query stops the rule; budgeted output is armed with the true global
+//! admitted total.
+
+use std::collections::BTreeMap;
 
 use miette::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
+
+use crate::data::program::{MagicFixedRuleApply, MagicSymbol};
+use crate::exec::fixpoint::delta_store::{EpochStore, RegularTempStore};
+use crate::exec::fixpoint::eval::{Budget, FixedRuleEval};
+use crate::fixed_rule::{
+    CancelFlag, FixedRuleOutput, FixedRulePayload, StoredInputSource,
+};
 
 /// Order-preserving fallible parallel map: apply `f` to every item, collect
 /// the results into a `Vec` **in the same order as `items`**, and
@@ -61,6 +77,75 @@ where
     F: Fn(T) -> Result<R>,
 {
     items.into_iter().map(f).collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The fixed-rule evaluation adapter
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Bridges one `MagicFixedRuleApply` to `FixedRule::run` at evaluation time.
+/// It assembles the payload (in-memory rule inputs from the epoch stores,
+/// stored-relation inputs through a [`StoredInputSource`]), brands the output
+/// store with the manifest arity (never a caller-supplied one), and shares the
+/// budget's cancel poll as the rule's [`CancelFlag`] so a cancelled query stops
+/// the rule too. This is the concrete `F` that `bind_for_eval`'s `make_fixed`
+/// factory produces — the seam that lets a stored/derived query APPLY a fixed
+/// rule (including the `Constant` rule behind every `<- [[…]]` inline datum).
+///
+/// `S` is the session read surface (production: `SessionView`); rules never
+/// import the concrete session type — only the [`StoredInputSource`] seam.
+pub(crate) struct SessionFixedRule<'a, S> {
+    apply: &'a MagicFixedRuleApply,
+    view: S,
+    cancel: CancelFlag,
+}
+
+impl<'a, S> SessionFixedRule<'a, S> {
+    pub(crate) fn new(
+        apply: &'a MagicFixedRuleApply,
+        view: S,
+        cancel: CancelFlag,
+    ) -> Self {
+        Self {
+            apply,
+            view,
+            cancel,
+        }
+    }
+}
+
+impl<S: StoredInputSource + Send + Sync> FixedRuleEval for SessionFixedRule<'_, S> {
+    fn run(
+        &self,
+        stores: &BTreeMap<MagicSymbol, EpochStore>,
+        out: &mut RegularTempStore,
+        budget: &Budget,
+        baseline: u64,
+    ) -> Result<()> {
+        let payload = FixedRulePayload {
+            manifest: self.apply,
+            stores,
+            stored: &self.view,
+        };
+        // Armed with the query's derived-tuple ceiling and the true global
+        // admitted total as of this stratum's epoch-0 barrier, so a
+        // row-amplifying algorithm refuses mid-run — counting every prior
+        // admission, not just this writer's own rows — instead of
+        // materializing unbounded output.
+        let mut output = FixedRuleOutput::new_budgeted(
+            self.apply.arity,
+            self.apply.span,
+            baseline,
+            budget.derived_tuple_ceiling(),
+        );
+        self.apply
+            .fixed_impl
+            .clone()
+            .run(payload, &mut output, self.cancel.clone())?;
+        // Replace eval's fresh epoch-0 store with the branded output wholesale.
+        *out = output.into_store();
+        Ok(())
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

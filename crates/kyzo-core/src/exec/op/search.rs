@@ -23,10 +23,10 @@ use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, SearchHits, Tag};
 use crate::engines::segments::Segments;
-use crate::query::batch_ops::{Batch, BatchIter};
-use crate::query::eval::AtomOccurrence;
-use crate::query::levels::EpochStore;
-use crate::query::search::SearchConfig;
+use crate::exec::op::batch_ops::{Batch, BatchIter};
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::plan::search::SearchConfig;
 use crate::storage::ReadTx;
 use miette::{Diagnostic, Result, bail};
 use std::collections::BTreeMap;
@@ -38,10 +38,10 @@ use thiserror::Error;
 /// columns, in the engine's fixed order — [`SearchAtom::own_bindings`]
 /// names them) extends the parent row. "A vector search is a join."
 ///
-/// [`SearchAtom::own_bindings`]: crate::query::search::SearchAtom
+/// [`SearchAtom::own_bindings`]: crate::exec::plan::search::SearchAtom
 pub(crate) struct SearchRA {
     pub(crate) parent: Box<RelAlgebra>,
-    pub(crate) atom: crate::query::search::SearchAtom,
+    pub(crate) atom: crate::exec::plan::search::SearchAtom,
 }
 
 #[derive(Debug, Error, Diagnostic)]
@@ -176,7 +176,7 @@ impl SearchBatches<'_> {
             // Drain in-flight hits for the current parent row first.
             if self.hit_idx < self.hits.len() {
                 let Some(batch) = &self.parent_batch else {
-                    return Err(crate::query::ra::PlanInvariantError(
+                    return Err(crate::exec::op::PlanInvariantError(
                         "hits in flight imply a parent batch",
                     )
                     .into());

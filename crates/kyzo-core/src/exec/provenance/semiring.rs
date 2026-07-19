@@ -62,8 +62,8 @@
 //! (annotation `1`), and full provenance is claimed only for the positive
 //! plain-rule fragment above them. Stated, not smuggled.
 //!
-//! [`RuleBody`]: crate::query::eval::RuleBody
-//! [`WitnessTable`]: crate::query::eval::WitnessTable
+//! [`RuleBody`]: crate::exec::fixpoint::eval::RuleBody
+//! [`WitnessTable`]: crate::exec::provenance::eval::WitnessTable
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;

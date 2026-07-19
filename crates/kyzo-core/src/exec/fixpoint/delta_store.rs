@@ -20,11 +20,6 @@ use kyzo_model::value::DataValue;
 use kyzo_model::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
 };
-use crate::query::temp_store::{
-    AdmissionSink, Admitted, LimiterSkip, MeetAggrStore, MeetLayout, OwnBareKey, TempStore,
-    TempStoreCorruptRefuse, TupleInIter,
-};
-
 #[derive(Debug, Error, Diagnostic)]
 #[error("level arena overflow: flattened byte length {len} exceeds u32::MAX")]
 #[diagnostic(code(query::level_arena_overflow))]
@@ -1106,7 +1101,6 @@ fn meet_ranged<'s>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::temp_store::RegularTempStore;
 
     /// A converging fixpoint's level stack stays bounded: epochs that
     /// admit nothing must not accumulate levels (the consumed empty delta
@@ -1412,7 +1406,7 @@ impl RegularTempStore {
     /// total before putting), so this is *both* the resident memory and the
     /// count the barrier will admit — the budget's mid-epoch spend guard
     /// reads it directly as the rule's in-flight admission count (see
-    /// `query::eval::InterruptTicker`). Contrast
+    /// `exec::fixpoint::eval::InterruptTicker`). Contrast
     /// [`MeetAggrStore::len`](MeetAggrStore::len), whose fresh out-store also
     /// holds re-derived unchanged groups, so it is resident memory but NOT an
     /// admission count.
@@ -1677,7 +1671,7 @@ impl MeetAggrStore {
     pub(crate) fn meet_put_admission_faithful(
         &mut self,
         tuple: &[DataValue],
-        total: &crate::query::levels::MeetTotalView<'_>,
+        total: &MeetTotalView<'_>,
     ) -> Result<bool> {
         // The group key is encoded once and reused for both probes.
         let group_key = self.layout.borrow_key(tuple);
@@ -2173,7 +2167,6 @@ mod tests {
     use super::*;
     use crate::data::aggr::parse_aggr;
     use kyzo_model::value::ScanBound;
-    use crate::query::levels::{EpochStore, LevelKind};
 
     fn t(vals: &[i64]) -> Tuple {
         vals.iter().map(|v| DataValue::from(*v)).collect()

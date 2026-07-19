@@ -595,17 +595,17 @@ mod tests {
         assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
     }
 
-    /// Cross-check against the reference oracle: `query::laws::resolve_relation`
+    /// Cross-check against the reference oracle: `kyzo_oracle::temporal::resolve_relation`
     /// implements the same resolution kernel, mirrored across the sign
     /// boundary on both axes (valid and system coordinates spanning
     /// negative and positive). This test probes coordinates on both sides
     /// of every stored one, using `bikey` and `skip_walk` directly from
     /// this module (the exhaustive case with 2000 generated histories,
-    /// vs. the small fixed fixture in `query/laws.rs` used as a fast
+    /// vs. the small fixed fixture in `kyzo_oracle::temporal` used as a fast
     /// sanity check).
     #[test]
     fn reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps() {
-        use crate::query::laws;
+        use kyzo_oracle::temporal as laws;
         let mut state: u64 = 0xDEAD_BEEF_CAFE_F00D;
         let mut next = move |m: usize| -> usize {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.

@@ -28,7 +28,7 @@
  *   atomic with the query and roll back on abort. Mutation returns nothing
  *   but the rows.
  * - **Budget is required by parameter.** Evaluation takes a
- *   [`crate::query::eval::Budget`] built from the query's options and the
+ *   [`crate::exec::fixpoint::eval::Budget`] built from the query's options and the
  *   caller's [`ScriptOptions`]: a deterministic epoch ceiling checked at
  *   epoch barriers, an optional deterministic derived-tuple ceiling, and an
  *   optional wall-clock deadline. There is no cooperative-poison thread and
@@ -39,7 +39,7 @@
  *
  * - **Fixed rules run.** Registration (register/unregister/re-exports) and
  *   evaluation are both wired: a query that APPLIES a fixed rule builds the
- *   `FixedRuleEval` adapter ([`crate::query::normalize::SessionFixedRule`])
+ *   `FixedRuleEval` adapter ([`crate::rules::contract::SessionFixedRule`])
  *   that bridges `MagicFixedRuleApply` to `FixedRule::run`, sharing the
  *   budget's cancel poll as the rule's `CancelFlag`. This includes the
  *   `Constant` rule behind every `<- [[…]]` inline datum.
@@ -83,21 +83,26 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::program::{
-    InputProgram, QueryAssertion, QueryOutOptions, RelationOp, ReturnMutation,
+    BodyNormalizer, InputAtom, InputProgram, NormalFormInlineRule, QueryAssertion, QueryOutOptions,
+    RelationOp, ReturnMutation, TempSymbGen,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, DataValue, ValidityTs};
-use crate::fixed_rule::{CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows, StoredInputSource,
+    TupleIter,
+};
+use crate::data::relation::StoredRelationMetadata;
+use crate::exec::plan::magic::StoredRelationSchemaSource;
 use crate::parse::sys::{AccessLevel as ParseAccessLevel, SysOp};
 use crate::parse::{Script, parse_script};
-use crate::query::compile::stratified_magic_compile;
-use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
-use crate::query::levels::EpochStore;
-use crate::query::normalize::{SessionFixedRule, SessionNormalizer, SessionView};
-use crate::query::sort::sort_and_collect;
-use crate::query::temp_store::TupleInIter;
+use crate::exec::plan::compile::stratified_magic_compile;
+use crate::exec::fixpoint::eval::{Budget, RowLimit, stratified_evaluate};
+use crate::exec::fixpoint::delta_store::{EpochStore, TupleInIter};
+use crate::rules::contract::SessionFixedRule;
+use crate::exec::sort::sort_and_collect;
 use crate::session::observe::{CallbackCollector, EventCallbackRegistry};
 use crate::session::current_validity;
 use crate::session::access::AccessLevel;
@@ -504,7 +509,7 @@ impl<S: Storage> Db<S> {
         // a loaded 32-core box had it losing or tying everywhere it was
         // measured against the batch pipeline.)
         let eval_prog =
-            crate::query::compile::bind_for_eval(&compiled, store, segments, &mut |app| {
+            crate::exec::plan::compile::bind_for_eval(&compiled, store, segments, &mut |app| {
                 Ok(SessionFixedRule::new(app, view, cancel.clone()))
             })?;
 
@@ -1183,6 +1188,140 @@ impl<T: WriteTx> SessionTx<T> {
 
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// The session view: what the query tier reads from a session
+// ─────────────────────────────────────────────────────────────────────────
+
+/// The read surface of one session, as the query tier consumes it: the
+/// kernel transaction for stored relations, the scratch store for temp
+/// relations, and name-routed catalog access over both. `Copy` by design —
+/// it is two references.
+pub(crate) struct SessionView<'a, T> {
+    pub(crate) store: &'a T,
+    pub(crate) temp: &'a TempTx,
+}
+
+impl<T> Clone for SessionView<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for SessionView<'_, T> {}
+
+impl<'a, T: ReadTx> SessionView<'a, T> {
+    /// Catalog lookup, routed by the relation-name namespace: `_`-prefixed
+    /// names resolve in the session's temp catalog, everything else in the
+    /// persistent catalog.
+    pub(crate) fn handle(&self, name: &str) -> Result<RelationHandle> {
+        if name.starts_with('_') {
+            get_relation(self.temp, name)
+        } else {
+            get_relation(self.store, name)
+        }
+    }
+
+    /// Scan every row of a relation through the routed reader, as-of
+    /// `as_of` when time travel is requested.
+    pub(crate) fn scan_all(&self, handle: &RelationHandle, as_of: Option<AsOf>) -> TupleIter<'a> {
+        match (handle.residency(), as_of) {
+            (Residency::Temp, None) => handle.scan_all(self.temp),
+            (Residency::Temp, Some(vld)) => handle.skip_scan_all(self.temp, vld),
+            (Residency::Stored, None) => handle.scan_all(self.store),
+            (Residency::Stored, Some(vld)) => handle.skip_scan_all(self.store, vld),
+        }
+    }
+
+    /// Prefix scan through the routed reader.
+    pub(crate) fn scan_prefix(
+        &self,
+        handle: &RelationHandle,
+        prefix: &Tuple,
+        as_of: Option<AsOf>,
+    ) -> TupleIter<'a> {
+        match (handle.residency(), as_of) {
+            (Residency::Temp, None) => handle.scan_prefix(self.temp, prefix),
+            (Residency::Temp, Some(vld)) => handle.skip_scan_prefix(self.temp, prefix, vld),
+            (Residency::Stored, None) => handle.scan_prefix(self.store, prefix),
+            (Residency::Stored, Some(vld)) => handle.skip_scan_prefix(self.store, prefix, vld),
+        }
+    }
+}
+
+/// The magic tier's schema seam, served by the session view.
+impl<T: ReadTx> StoredRelationSchemaSource for SessionView<'_, T> {
+    fn stored_relation_schema(
+        &self,
+        name: &Symbol,
+        _span: SourceSpan,
+    ) -> Result<StoredRelationMetadata> {
+        Ok(self.handle(&name.name)?.metadata)
+    }
+}
+
+/// The fixed-rule payload's stored-input seam, served by the session view.
+impl<T: ReadTx> StoredInputSource for SessionView<'_, T> {
+    fn stored_arity(&self, name: &Symbol) -> Result<usize> {
+        Ok(self.handle(&name.name)?.arity())
+    }
+
+    fn stored_scan_all<'b>(&'b self, name: &Symbol, as_of: Option<AsOf>) -> Result<TupleIter<'b>> {
+        let handle = self.handle(&name.name)?;
+        Ok(self.scan_all(&handle, as_of))
+    }
+
+    fn stored_scan_prefix<'b>(
+        &'b self,
+        name: &Symbol,
+        prefix: &DataValue,
+        as_of: Option<AsOf>,
+    ) -> Result<TupleIter<'b>> {
+        let handle = self.handle(&name.name)?;
+        Ok(self.scan_prefix(&handle, &Tuple::from_vec(vec![prefix.clone()]), as_of))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The normalizer: NNF → DNF → well-ordering via exec/plan/normalize
+// ─────────────────────────────────────────────────────────────────────────
+
+/// The session's [`BodyNormalizer`]: DNF conversion (which resolves
+/// named-field relation atoms against the catalog) plus binding-safety
+/// well-ordering. Pure NNF/DNF/reorder live in [`crate::exec::plan::normalize`].
+pub(crate) struct SessionNormalizer<'a, T> {
+    pub(crate) view: SessionView<'a, T>,
+    cancel: CancelFlag,
+    symb_gen: TempSymbGen,
+}
+
+impl<'a, T> SessionNormalizer<'a, T> {
+    pub(crate) fn new(view: SessionView<'a, T>, cancel: CancelFlag) -> Self {
+        Self {
+            view,
+            cancel,
+            symb_gen: TempSymbGen::default(),
+        }
+    }
+}
+
+impl<T: ReadTx> BodyNormalizer for SessionNormalizer<'_, T> {
+    fn disjunctive_normal_form(&mut self, body: InputAtom) -> Result<Vec<Vec<crate::data::program::NormalFormAtom>>> {
+        use crate::exec::plan::normalize::{do_disjunctive_normal_form, negation_normal_form};
+        let nnf = negation_normal_form(body)?;
+        let disjunction = do_disjunctive_normal_form(
+            nnf,
+            &mut self.symb_gen,
+            &|name| self.view.handle(name).map(|h| h.metadata),
+            &|name| self.view.handle(name),
+            &self.cancel,
+        )?;
+        Ok(disjunction)
+    }
+
+    fn well_order(&mut self, rule: NormalFormInlineRule) -> Result<NormalFormInlineRule> {
+        crate::exec::plan::normalize::convert_to_well_ordered_rule(rule)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1437,11 +1576,11 @@ mod tests {
             .expect_err(
                 "the fixed rule's mid-run guard must refuse, counting the r-stratum's baseline",
             );
-        let refusal: &crate::query::eval::LimitExceeded =
+        let refusal: &crate::exec::fixpoint::eval::LimitExceeded =
             err.downcast_ref().expect("typed budget refusal");
         assert_eq!(
             refusal.dimension,
-            crate::query::eval::BudgetDimension::InFlightDerivations,
+            crate::exec::fixpoint::eval::BudgetDimension::InFlightDerivations,
             "must refuse INSIDE the fixed rule's own mid-run guard, not the later epoch \
              barrier — a `DerivedTuples` refusal here means the guard never tripped, i.e. \
              the forwarded baseline was too small (e.g. zeroed)"
@@ -2160,12 +2299,12 @@ mod tests {
                 opts,
             )
             .expect_err("a recursion with no fixpoint must refuse, never hang");
-        let refusal: &crate::query::eval::LimitExceeded = err
+        let refusal: &crate::exec::fixpoint::eval::LimitExceeded = err
             .downcast_ref()
             .expect("typed budget refusal, not a panic or a hang");
         assert_eq!(
             refusal.dimension,
-            crate::query::eval::BudgetDimension::DerivedTuples,
+            crate::exec::fixpoint::eval::BudgetDimension::DerivedTuples,
             "must name the derived-tuple dimension specifically"
         );
         assert_eq!(refusal.ceiling, 10);
@@ -2200,12 +2339,12 @@ mod tests {
                 no_params(),
             )
             .expect_err("the DEFAULT budget alone must refuse a fixpoint-less, widening recursion");
-        let refusal: &crate::query::eval::LimitExceeded = err
+        let refusal: &crate::exec::fixpoint::eval::LimitExceeded = err
             .downcast_ref()
             .expect("typed budget refusal, not a panic or a hang");
         assert_eq!(
             refusal.dimension,
-            crate::query::eval::BudgetDimension::DerivedTuples,
+            crate::exec::fixpoint::eval::BudgetDimension::DerivedTuples,
             "the default derived-tuple ceiling, not the pre-existing epoch ceiling, must be \
              what catches this — a fall-through to Epochs would mean the fix did nothing for \
              a widening recursion, which can exhaust memory in far fewer than 1,000,000 epochs"
@@ -2256,13 +2395,13 @@ mod tests {
         let err = db
             .run_script_with(q, no_params(), low_opts)
             .expect_err("~999_000 true spend must exceed a 200_000 ceiling");
-        let refusal: &crate::query::eval::LimitExceeded =
+        let refusal: &crate::exec::fixpoint::eval::LimitExceeded =
             err.downcast_ref().expect("typed budget refusal");
         assert!(
             matches!(
                 refusal.dimension,
-                crate::query::eval::BudgetDimension::DerivedTuples
-                    | crate::query::eval::BudgetDimension::InFlightDerivations
+                crate::exec::fixpoint::eval::BudgetDimension::DerivedTuples
+                    | crate::exec::fixpoint::eval::BudgetDimension::InFlightDerivations
             ),
             "expected a derived-tuple-ceiling refusal, got {:?}",
             refusal.dimension
@@ -2349,7 +2488,7 @@ mod tests {
     /// leaked demand returns the wrong rows, not merely a slower plan.
     #[test]
     fn magic_sets_demand_matches_naive_oracle_end_to_end() {
-        use crate::query::laws::{Literal, Program, Rule, Term, naive_eval};
+        use kyzo_oracle::eval::{Literal, Program, Rule, Term, naive_eval};
 
         let edges = [(1, 2), (2, 3), (3, 4), (5, 6)];
         let var = |s: &'static str| Term::Var(s);
@@ -2674,8 +2813,8 @@ mod tests {
         /// identity and against `compiled_magic_symbols` for the expected
         /// (minimal, non-proliferated) adorned shape. Every program below is
         /// queried with a FULLY UNBOUND entry — the theorem's domain.
-        fn oracle_answer(program: &crate::query::laws::Program, target: &str) -> Vec<Vec<i64>> {
-            use crate::query::laws::naive_eval;
+        fn oracle_answer(program: &kyzo_oracle::eval::Program, target: &str) -> Vec<Vec<i64>> {
+            use kyzo_oracle::eval::naive_eval;
             let mut rows: Vec<Vec<i64>> = naive_eval(program)
                 .expect("naive oracle evaluates")
                 .get(target)
@@ -2696,7 +2835,7 @@ mod tests {
         /// reference back from `r` to `p` must redirect onto `p|Mff`.
         #[test]
         fn mutual_recursion_bf_and_ff_stays_correctly_reachable() {
-            use crate::query::laws::{Literal, Program, Rule, Term};
+            use kyzo_oracle::eval::{Literal, Program, Rule, Term};
             let var = |s: &'static str| Term::Var(s);
             let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
             let v = |i: i64| DataValue::from(i);
@@ -2801,7 +2940,7 @@ mod tests {
         /// must be completely inert to the redirect/sweep machinery.
         #[test]
         fn negation_with_ff_sibling_stays_correct() {
-            use crate::query::laws::{Literal, Program, Rule, Term};
+            use kyzo_oracle::eval::{Literal, Program, Rule, Term};
             let var = |s: &'static str| Term::Var(s);
             let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
             let neg = |rel: &'static str, args: Vec<Term>| Literal::neg(rel, args);
@@ -2909,7 +3048,7 @@ mod tests {
         /// repeated-argument adornment.
         #[test]
         fn repeated_var_partial_adornment_matches_oracle() {
-            use crate::query::laws::{Literal, Program, Rule, Term};
+            use kyzo_oracle::eval::{Literal, Program, Rule, Term};
             let var = |s: &'static str| Term::Var(s);
             let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
             let v = |i: i64| DataValue::from(i);
@@ -2990,7 +3129,7 @@ mod tests {
         /// of those tests catch directly.
         #[test]
         fn helper_via_relation_bound_var_inside_self_join_survives_correctly() {
-            use crate::query::laws::{Literal, Program, Rule, Term};
+            use kyzo_oracle::eval::{Literal, Program, Rule, Term};
             let var = |s: &'static str| Term::Var(s);
             let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
             let v = |i: i64| DataValue::from(i);

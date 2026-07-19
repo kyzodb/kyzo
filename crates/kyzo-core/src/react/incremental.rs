@@ -18,7 +18,7 @@
 //! `naive_eval` recompute (`laws.rs`'s own differential), the transitive
 //! proof issue #61's DoD demands.
 //!
-//! [`SignedFact`] is reused directly from `query::ra::temporal` — it is
+//! [`SignedFact`] is reused directly from `exec::op::temporal` — it is
 //! ALREADY production code (story #62's `DeltaRA` fast path is its first
 //! caller), not oracle-only, so there is no test/production boundary to
 //! cross by depending on it here. `compose` is not: candidates-then-
@@ -77,7 +77,7 @@ use crate::data::program::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::query::ra::temporal::SignedFact;
+use crate::exec::op::temporal::SignedFact;
 
 /// One rule-body argument: a bound value, or a variable to unify.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,12 +91,12 @@ pub(crate) enum Term {
 pub(crate) struct Literal {
     pub(crate) rel: Symbol,
     pub(crate) args: Vec<Term>,
-    pub(crate) polarity: crate::query::laws::Polarity,
+    pub(crate) polarity: kyzo_oracle::eval::Polarity,
 }
 
 impl Literal {
     pub(crate) fn is_negated(&self) -> bool {
-        matches!(self.polarity, crate::query::laws::Polarity::Negative)
+        matches!(self.polarity, kyzo_oracle::eval::Polarity::Negative)
     }
 }
 
@@ -583,9 +583,9 @@ fn translate_rule(
             rel,
             args: args.iter().map(|v| substitute(v, &subst)).collect(),
             polarity: if negated {
-                crate::query::laws::Polarity::Negative
+                kyzo_oracle::eval::Polarity::Negative
             } else {
-                crate::query::laws::Polarity::Positive
+                kyzo_oracle::eval::Polarity::Positive
             },
         });
     }
@@ -936,7 +936,7 @@ mod tests {
     use super::*;
     use kyzo_model::SourceSpan;
     use kyzo_model::value::Num;
-    use crate::query::laws;
+    use kyzo_oracle::eval as laws;
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan::default())
@@ -955,9 +955,9 @@ mod tests {
             rel: sym(rel),
             args,
             polarity: if negated {
-                crate::query::laws::Polarity::Negative
+                kyzo_oracle::eval::Polarity::Negative
             } else {
-                crate::query::laws::Polarity::Positive
+                kyzo_oracle::eval::Polarity::Positive
             },
         }
     }

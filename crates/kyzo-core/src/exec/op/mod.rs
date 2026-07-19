@@ -153,14 +153,14 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, MAX_VALIDITY_TS};
 use crate::engines::segments::Segments;
-use crate::query::batch_ops::{Batch, BatchIter};
-use crate::query::eval::AtomOccurrence;
-use crate::query::levels::EpochStore;
+use crate::exec::op::batch_ops::{Batch, BatchIter};
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::session::catalog::RelationHandle;
 use crate::storage::ReadTx;
 
 #[cfg(test)]
-use crate::query::batch_ops::{BATCH_ROWS, BatchTupleFilter};
+use crate::exec::op::batch_ops::{BATCH_ROWS, BatchTupleFilter};
 #[cfg(test)]
 use crate::session::catalog::KeyspaceKind;
 
@@ -1009,7 +1009,7 @@ mod tests {
     use kyzo_model::schema::{ColumnDef, StoredRelationMetadata};
     use kyzo_model::value::{DataValue, ValidityTs};
     use crate::engines::segments::SegmentEngine;
-    use crate::query::temp_store::RegularTempStore;
+    use crate::exec::fixpoint::delta_store::RegularTempStore;
     use crate::session::catalog::create_relation;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
@@ -1844,7 +1844,7 @@ mod tests {
     /// diagnosis's isolated single-match 2315ns-vs-694ns (3.34x) figure
     /// because this shape's average fan-out amortizes the segment's binary
     /// search over more than one emitted row per probe. Run explicitly:
-    /// `cargo test -p kyzo --release query::ra::tests::stored_prefix_join_segment_probe_cost_vs_storage -- --ignored --nocapture`
+    /// `cargo test -p kyzo --release exec::op::tests::stored_prefix_join_segment_probe_cost_vs_storage -- --ignored --nocapture`
     #[test]
     #[ignore = "cost probe; run explicitly to compare segment vs storage prefix-join cost"]
     fn stored_prefix_join_segment_probe_cost_vs_storage() {
