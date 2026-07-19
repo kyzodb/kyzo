@@ -9,7 +9,7 @@ Format: `path` — description
 `crates/kyzo-arrow-interop/src/lib.rs` — foreign Arrow bytes lifted into Kyzo wire values at the interop boundary
 `crates/kyzo-arrow-interop/tests/decode_kyzo_stream.rs` — proves the Arrow decode door refuses garbage and round-trips lawful streams
 `crates/kyzo-bin/src/bulk.rs` — native host path that streams bulk facts into the engine without a query script
-`crates/kyzo-bin/src/engine.rs` — process-local capability that opens and holds a live Db for the binary hosts
+`crates/kyzo-bin/src/engine.rs` — holds the Engine composition (config-once genesis/arm injection through the composition root; not a live Db)
 `crates/kyzo-bin/src/main.rs` — composition root that wires config into REPL or HTTP and never imports engine internals past the sealed door
 `crates/kyzo-bin/src/repl/commands.rs` — maps typed REPL verbs onto sealed engine calls
 `crates/kyzo-bin/src/repl/editor.rs` — interactive line editing and history for the console host
@@ -175,8 +175,10 @@ Format: `path` — description
 `crates/kyzo-core/src/session/admit.rs` — admits external requests into typed engine work or refuses with reason
 `crates/kyzo-core/src/session/capacity.rs` — enforces memory/row/time budgets on a live session
 `crates/kyzo-core/src/session/catalog.rs` — named relations, schemas, and metadata visible to the session
+`crates/kyzo-core/src/session/composition.rs` — CompositionId + BestEffort|Saga|ReadAt
 `crates/kyzo-core/src/session/constraint.rs` — integrity constraints checked on mutate/commit
-`crates/kyzo-core/src/session/db.rs` — primary Db capability handle: open, query, mutate, close
+`crates/kyzo-core/src/session/db.rs` — Engine(Store, Catalog) composition seat: Engine holds Store/Catalog capabilities by composition; not an ambient Db facade
+`crates/kyzo-core/src/session/footprint.rs` — AskShape + Footprint algebra + Frontier
 `crates/kyzo-core/src/session/fts.rs` — session door that builds/queries the FTS projection
 `crates/kyzo-core/src/session/generation.rs` — generation/epoch counters that invalidate stale handles
 `crates/kyzo-core/src/session/hnsw.rs` — session door that builds/queries the HNSW projection
@@ -190,17 +192,33 @@ Format: `path` — description
 `crates/kyzo-core/src/session/pinned_handle.hex` — golden bytes for pinned handle layout / stability checks
 `crates/kyzo-core/src/session/spatial.rs` — session door that builds/queries the spatial projection
 `crates/kyzo-core/src/session/verify.rs` — session door that runs store integrity verification
+`crates/kyzo-core/src/store/authority.rs` — WriteAuthority + IncarnationMintCap/IncarnationId + RecoveryMatrix + address fence
 `crates/kyzo-core/src/store/backup.rs` — backup and restore of the ordered substrate
+`crates/kyzo-core/src/store/commit_cap.rs` — StableCommitCap closed sum + SnapshotFork + ForkGenerationWitness
+`crates/kyzo-core/src/store/compact.rs` — pace=f(debt) + MergeProof + range-class classifier
 `crates/kyzo-core/src/store/contract.rs` — store trait: ordered put/get/scan/commit the rest of the engine depends on
+`crates/kyzo-core/src/store/crypto.rs` — DEK/KEK/ShredSalt/WrappedShredSalt/AuditKey/AEAD pipeline
+`crates/kyzo-core/src/store/epoch.rs` — FenceEpoch + CryptoDomain + EpochGrant + IntentClear
+`crates/kyzo-core/src/store/failure.rs` — StoreRefuse closed enum + failure lattice + debt + operator surface
 `crates/kyzo-core/src/store/fjall.rs` — fjall-backed implementation of the store contract
+`crates/kyzo-core/src/store/grants.rs` — ForkGrant/RecoveryGrant + materialize + AncestorReadGrant
+`crates/kyzo-core/src/store/idempotency.rs` — OperationKey + OperationOutcome + request_digest memo
 `crates/kyzo-core/src/store/keys.rs` — key layout so binary order of stored keys matches semantic order
 `crates/kyzo-core/src/store/merkle.rs` — merkle proofs over stored ranges for integrity
+`crates/kyzo-core/src/store/nonce.rs` — NonceLease + MintDomain + DomainCounter + pure nonce fn
+`crates/kyzo-core/src/store/objects.rs` — ObjectSlot/staging/permanence/GC seam
+`crates/kyzo-core/src/store/open.rs` — StoreId + StoreOpen + genesis construction
+`crates/kyzo-core/src/store/replica.rs` — AdmissionCertificate + verify_replica + ReplicaCustody
 `crates/kyzo-core/src/store/retry.rs` — retry policy for transient store IO failures
 `crates/kyzo-core/src/store/scratch.rs` — ephemeral scratch space for evaluation that must not leak into durable state
+`crates/kyzo-core/src/store/seal.rs` — CheckpointSeal + truncate(consumes seal) + seal verification
 `crates/kyzo-core/src/store/skip_walk.rs` — skip-list style walk over ordered keys
+`crates/kyzo-core/src/store/sweep.rs` — SweepDoor + IntentionQueue + AdmittedIntent + IntentOrdinal/CommitOrdinal + Committed
 `crates/kyzo-core/src/store/time.rs` — validity timestamps and temporal addressing in the store
+`crates/kyzo-core/src/store/transcript.rs` — CanonicalTranscript + golden vectors + unknown-version refuse
 `crates/kyzo-core/src/store/tx.rs` — write transactions with commit/abort over the substrate
 `crates/kyzo-core/src/store/verify_walk.rs` — full ordered walk used by integrity verification
+`crates/kyzo-core/src/store/wal.rs` — WAL segment format + cross-segment hash chain + replay + mutable floors
 `crates/kyzo-core/tests/adversarial_robustness.rs` — public-surface cases that try to break order, admission, or safety
 `crates/kyzo-core/tests/aggregation.rs` — public-surface aggregation behavior through the sealed API
 `crates/kyzo-core/tests/arity_compile_fail.rs` — trybuild suite: illegal arities must not compile
