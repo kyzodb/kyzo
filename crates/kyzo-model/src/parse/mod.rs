@@ -81,6 +81,12 @@ pub struct ParseError {
     pub span: SourceSpan,
 }
 
+/// Pest delivered a rule the lift seat does not own — grammar/lift drift, not user input.
+#[derive(Debug, Error, Diagnostic)]
+#[error("unexpected grammar rule while lifting KyzoScript")]
+#[diagnostic(code(parser::unexpected_rule))]
+pub(crate) struct UnexpectedRule(#[label] pub(crate) SourceSpan);
+
 /// Public language door: source text + param pool → typed [`Script`] with
 /// spans, or a labeled refusal. Resolves `kyzo_model::parse::parse_script`
 /// for kyzo-lsp validation.
@@ -114,7 +120,7 @@ pub fn parse_script(
         Rule::sys_script => Script::Sys {
             span: parsed.extract_span(),
         },
-        _ => unreachable!(),
+        _ => bail!(UnexpectedRule(parsed.extract_span())),
     })
 }
 

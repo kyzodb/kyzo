@@ -44,7 +44,7 @@ use crate::value::validity_coerce::data_value_to_vld_spec;
 
 use super::expr::build_expr;
 use super::schema::parse_schema;
-use super::{ExtractSpan, KyzoScriptParser, Pair, Pairs, Rule};
+use super::{ExtractSpan, Pair, Pairs, Rule, UnexpectedRule};
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Query option {0} is not constant")]
@@ -236,8 +236,8 @@ pub(crate) fn parse_query(
                     ensure!(!a.is_aggregated(), AggrInConstRuleError(v.span));
                 }
                 let data_part = src.next().unwrap();
-                let data_part_str = data_part.as_str();
-                let data = build_expr(data_part.clone(), param_pool)?;
+                let entry_param_head = extract_entry_param_head(data_part.clone());
+                let data = build_expr(data_part, param_pool)?;
                 let mut options = BTreeMap::new();
                 options.insert(SmartString::from("data"), data.clone());
                 let handle = FixedRuleHandle {
@@ -261,17 +261,8 @@ pub(crate) fn parse_query(
                     );
                 }
                 if head.is_empty() && matches!(name.kind(), SymbolKind::Entry) {
-                    if let Ok(mut datalist) =
-                        KyzoScriptParser::parse(Rule::param_list, data_part_str)
-                    {
-                        for s in datalist.next().unwrap().into_inner() {
-                            if s.as_rule() == Rule::param {
-                                head.push(Symbol::new(
-                                    s.as_str().strip_prefix('$').unwrap(),
-                                    Default::default(),
-                                ));
-                            }
-                        }
+                    if let Some(params) = entry_param_head {
+                        head.extend(params);
                     }
                 }
                 let arity = if head.is_empty() { arity } else { head.len() };
@@ -356,7 +347,7 @@ pub(crate) fn parse_query(
                             }
                             Rule::sort_asc => dir = SortDir::Asc,
                             Rule::sort_desc => dir = SortDir::Dsc,
-                            _ => unreachable!(),
+                            _ => bail!(UnexpectedRule(a.extract_span())),
                         }
                     }
                     out_opts.sorters.push((Symbol::new(var, span), dir));
@@ -368,7 +359,8 @@ pub(crate) fn parse_query(
             Rule::relation_option => {
                 let span = pair.extract_span();
                 let mut args = pair.into_inner();
-                let op = match args.next().unwrap().as_rule() {
+                let op_pair = args.next().unwrap();
+                let op = match op_pair.as_rule() {
                     Rule::relation_create => RelationOp::Create,
                     Rule::relation_replace => RelationOp::Replace,
                     Rule::relation_put => RelationOp::Put,
@@ -378,7 +370,7 @@ pub(crate) fn parse_query(
                     Rule::relation_delete => RelationOp::Delete,
                     Rule::relation_ensure => RelationOp::Ensure,
                     Rule::relation_ensure_not => RelationOp::EnsureNot,
-                    _ => unreachable!(),
+                    _ => bail!(UnexpectedRule(op_pair.extract_span())),
                 };
 
                 let name_p = args.next().unwrap();
@@ -434,7 +426,7 @@ pub(crate) fn parse_query(
                 disable_magic_rewrite = val;
             }
             Rule::EOI => break,
-            r => unreachable!("{:?}", r),
+            _ => bail!(UnexpectedRule(pair.extract_span())),
         }
     }
 
@@ -529,38 +521,37 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
     struct RelationHasNoKeys(String, #[label] SourceSpan);
 
     let empty_mutation_head = match &prog.out_opts().store_relation {
-        None => false,
+        None => None,
         Some((handle, _, _, _)) => {
             if handle.key_bindings.is_empty() {
                 if handle.dep_bindings.is_empty() {
-                    true
+                    Some((handle.name.to_string(), handle.span))
                 } else {
                     bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
                 }
             } else {
-                false
+                None
             }
         }
     };
 
-    if empty_mutation_head {
+    if let Some((name, span)) = empty_mutation_head {
         let head_args = prog.get_entry_out_head()?;
-        if let Some((handle, _, _, _)) = prog.out_opts_mut().store_relation.as_mut() {
-            if head_args.is_empty() {
-                bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
-            }
-            handle.key_bindings = head_args.clone();
-            handle.metadata.keys = head_args
-                .iter()
-                .map(|s| ColumnDef {
-                    name: s.name.clone(),
-                    typing: NullableColType::optional(ColType::Any),
-                    default_gen: None,
-                })
-                .collect();
-        } else {
-            unreachable!()
+        let Some((handle, _, _, _)) = prog.out_opts_mut().store_relation.as_mut() else {
+            bail!(RelationHasNoKeys(name, span));
+        };
+        if head_args.is_empty() {
+            bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
         }
+        handle.key_bindings = head_args.clone();
+        handle.metadata.keys = head_args
+            .iter()
+            .map(|s| ColumnDef {
+                name: s.name.clone(),
+                typing: NullableColType::optional(ColType::Any),
+                default_gen: None,
+            })
+            .collect();
     }
 
     Ok(prog)
@@ -808,7 +799,7 @@ fn parse_atom(
                 },
             }
         }
-        r => unreachable!("{:?}", r),
+        _ => bail!(UnexpectedRule(src.extract_span())),
     })
 }
 
@@ -874,7 +865,7 @@ fn parse_rule_head_arg(
                 HeadAggrSlot::Aggregated { aggr, args },
             )
         }
-        _ => unreachable!(),
+        _ => bail!(UnexpectedRule(src.extract_span())),
     })
 }
 
@@ -968,7 +959,7 @@ fn parse_fixed_rule(
                                     let vld_expr = build_expr(vld_inner, param_pool)?;
                                     as_of = Some(AsOf::current(expr2vld_spec(vld_expr, cur_vld)?))
                                 }
-                                _ => unreachable!(),
+                                _ => bail!(UnexpectedRule(v.extract_span())),
                             }
                         }
                         rule_args.push(FixedRuleArg::Stored {
@@ -1013,7 +1004,7 @@ fn parse_fixed_rule(
                                     let vld_expr = build_expr(vld_inner, param_pool)?;
                                     as_of = Some(AsOf::current(expr2vld_spec(vld_expr, cur_vld)?))
                                 }
-                                _ => unreachable!(),
+                                _ => bail!(UnexpectedRule(p.extract_span())),
                             }
                         }
 
@@ -1027,7 +1018,7 @@ fn parse_fixed_rule(
                             span,
                         })
                     }
-                    _ => unreachable!(),
+                    _ => bail!(UnexpectedRule(inner.extract_span())),
                 }
             }
             Rule::fixed_opt_pair => {
@@ -1037,7 +1028,7 @@ fn parse_fixed_rule(
                 let val = build_expr(val, param_pool)?;
                 options.insert(SmartString::from(name), val);
             }
-            _ => unreachable!(),
+            _ => bail!(UnexpectedRule(nxt.extract_span())),
         }
     }
 
@@ -1100,6 +1091,49 @@ fn insert_empty_const_rule(
             },
         },
     );
+}
+
+/// Derive `?[] <- [[$a, $b]]` head bindings from the already-parsed data
+/// expr pairs — same shape as grammar `param_list`, without re-entering pest.
+fn extract_entry_param_head(data_part: Pair<'_>) -> Option<Vec<Symbol>> {
+    let outer_list = sole_expr_term(data_part)?;
+    if outer_list.as_rule() != Rule::list {
+        return None;
+    }
+    let mut outer_elems: Vec<_> = outer_list.into_inner().collect();
+    if outer_elems.len() != 1 {
+        return None;
+    }
+    let inner_list = sole_expr_term(outer_elems.pop()?)?;
+    if inner_list.as_rule() != Rule::list {
+        return None;
+    }
+    let mut head = Vec::new();
+    for elem in inner_list.into_inner() {
+        let param = sole_expr_term(elem)?;
+        if param.as_rule() != Rule::param {
+            return None;
+        }
+        let name = param.as_str().strip_prefix('$')?;
+        head.push(Symbol::new(name, Default::default()));
+    }
+    Some(head)
+}
+
+/// Bare expr child with no unary ops or infix chain — the param_list shape.
+fn sole_expr_term(expr: Pair<'_>) -> Option<Pair<'_>> {
+    if expr.as_rule() != Rule::expr {
+        return None;
+    }
+    let mut inner = expr.into_inner();
+    let first = inner.next()?;
+    if matches!(first.as_rule(), Rule::minus | Rule::negate) {
+        return None;
+    }
+    if inner.next().is_some() {
+        return None;
+    }
+    Some(first)
 }
 
 fn expr2vld_spec(expr: Expr, cur_vld: ValidityTs) -> Result<ValidityTs> {

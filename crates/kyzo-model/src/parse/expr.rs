@@ -31,7 +31,7 @@ use crate::program::span::SourceSpan;
 use crate::program::symbol::Symbol;
 use crate::value::DataValue;
 
-use super::{ExtractSpan, Pair, Rule};
+use super::{ExtractSpan, Pair, Rule, UnexpectedRule};
 
 fn pratt_parser() -> &'static PrattParser<Rule> {
     static PARSER: OnceLock<PrattParser<Rule>> = OnceLock::new();
@@ -89,7 +89,7 @@ pub(crate) fn build_expr(
                     args: [rhs].into(),
                     span: op.extract_span().merge(rhs_span),
                 },
-                _ => unreachable!(),
+                _ => bail!(UnexpectedRule(op.extract_span())),
             })
         })
         .parse(pair.into_inner())
@@ -187,7 +187,7 @@ fn build_expr_infix(lhs: Result<Expr>, op: Pair<'_>, rhs: Result<Expr>) -> Resul
             args: args.into(),
             span,
         },
-        _ => unreachable!(),
+        _ => bail!(UnexpectedRule(op.extract_span())),
     })
 }
 
@@ -427,7 +427,7 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             }
         }
         Rule::grouping => build_expr(pair.into_inner().next().unwrap(), param_pool)?,
-        r => unreachable!("Encountered unknown op {:?}", r),
+        _ => bail!(UnexpectedRule(pair.extract_span())),
     })
 }
 
@@ -441,7 +441,7 @@ pub(crate) fn parse_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
         Rule::s_quoted_string => Ok(parse_s_quoted_string(pair)?),
         Rule::raw_string => Ok(parse_raw_string(pair)?),
         Rule::ident => Ok(SmartString::from(pair.as_str())),
-        t => unreachable!("{:?}", t),
+        _ => bail!(UnexpectedRule(pair.extract_span())),
     }
 }
 

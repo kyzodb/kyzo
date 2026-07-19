@@ -26,7 +26,7 @@ use crate::schema::relation::StoredRelationMetadata;
 use crate::value::DataValue;
 
 use super::expr::build_expr;
-use super::{ExtractSpan, Pair, Rule};
+use super::{ExtractSpan, Pair, Rule, UnexpectedRule};
 
 /// Parse a `{ keys => dependents }` table schema pair.
 pub(crate) fn parse_schema(
@@ -89,7 +89,7 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
             Rule::out_arg => {
                 binding_candidate = Some(Symbol::new(nxt.as_str(), nxt.extract_span()))
             }
-            r => unreachable!("{:?}", r),
+            _ => bail!(UnexpectedRule(nxt.extract_span())),
         }
     }
     let binding =
@@ -153,10 +153,18 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
         }
         Rule::vec_type => {
             let mut inner = pair.into_inner();
-            let eltype = match inner.next().unwrap().as_str() {
+            let el_p = inner.next().unwrap();
+            let eltype = match el_p.as_str() {
                 "F32" | "Float" => VecElementType::F32,
                 "F64" | "Double" => VecElementType::F64,
-                _ => unreachable!(),
+                other => {
+                    #[derive(Debug, Error, Diagnostic)]
+                    #[error("unknown vector element type '{0}'")]
+                    #[diagnostic(code(parser::bad_vec_eltype))]
+                    struct BadVecElType(String, #[label] SourceSpan);
+
+                    bail!(BadVecElType(other.to_string(), el_p.extract_span()))
+                }
             };
             let len = inner.next().unwrap();
             let len: usize = len
@@ -176,6 +184,6 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
             }
             ColType::Tuple(cols)
         }
-        _ => unreachable!(),
+        _ => bail!(UnexpectedRule(pair.extract_span())),
     })
 }
