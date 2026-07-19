@@ -9,6 +9,9 @@
 # Cursor allowlist arm / hook session state (local, per-task)
 .kyzo/
 
+# Cursor ↔ Claude Code handoff mailbox (local/remote agent notes, never committed)
+CLAUDE-AND-CURSOR.md
+
 # Board context (#140) — generated from GitHub, never truth
 .claude/active-story.md
 .claude/next-work.md
