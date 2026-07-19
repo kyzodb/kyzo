@@ -9,7 +9,7 @@
 //! Rendering one query result for a human: a table on stdout, or — when
 //! `%save <path>` armed it — a JSON file of `{column: value}` records. The
 //! one place in the REPL that turns a [`NamedRows`] into something shown to
-//! the user (as opposed to [`crate::client`]'s or [`crate::relations`]'s
+//! the user (as opposed to [`crate::repl::fetch`]'s or [`crate::bulk`]'s
 //! machine-to-machine JSON, which goes through kyzo-core's own envelope).
 
 use std::fs::File;

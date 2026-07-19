@@ -350,5 +350,22 @@ pub use session::db::{Engine, ScriptOptions};
 pub use exec::op::temporal::SignedFact;
 pub use react::standing::StandingQuery;
 
+/// Sanctioned oracle/trials harness door — residual RuleBody seam at the
+/// crate boundary (01-query-tree.json). `kyzo-trials` Cap1/Cap2 drive the
+/// fixpoint through this path; production hosts use [`Engine`] only.
+pub mod oracle_harness {
+    pub use crate::exec::fixpoint::delta_store::{
+        EpochStore, RegularTempStore, TempStoreCorruptRefuse, TupleInIter, collect_materialized,
+    };
+    pub use crate::exec::fixpoint::eval::seal::Sealed;
+    pub use crate::exec::fixpoint::eval::{
+        AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalOutcome, EvalProgram,
+        EvalRuleSet, EvalStratum, FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody,
+        RuleSetShapeError, stratified_evaluate,
+    };
+    pub use crate::exec::plan::program::{MagicSymbol, StoreLifetimes};
+    pub use crate::exec::provenance::eval::{Witness, WitnessTable};
+}
+
 // Sealed single-host doors deleted. Tooling speaks the sealed contract or
 // goes red — bespoke façades were contract debt.

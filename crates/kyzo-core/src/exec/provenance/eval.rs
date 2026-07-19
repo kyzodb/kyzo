@@ -40,10 +40,10 @@ use kyzo_model::value::Tuple;
 /// per-row derivation: normal-aggregation folds (their support is a whole
 /// group), fixed-rule output, and the meet identity row.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Witness {
-    pub(crate) store: MagicSymbol,
-    pub(crate) tuple: Tuple,
-    pub(crate) derivation: Option<(usize, Vec<Tuple>)>,
+pub struct Witness {
+    pub store: MagicSymbol,
+    pub tuple: Tuple,
+    pub derivation: Option<(usize, Vec<Tuple>)>,
 }
 
 /// The witness table of one query: append-only, one entry per admission,
@@ -52,12 +52,12 @@ pub(crate) struct Witness {
 /// tests). Passing one to [`crate::exec::fixpoint::eval::stratified_evaluate`]
 /// opts the query in; `None` evaluates through the `()` sink at zero cost.
 #[derive(Debug, Default)]
-pub(crate) struct WitnessTable {
+pub struct WitnessTable {
     entries: Vec<Witness>,
 }
 
 impl WitnessTable {
-    pub(crate) fn entries(&self) -> &[Witness] {
+    pub fn entries(&self) -> &[Witness] {
         &self.entries
     }
 }

@@ -55,17 +55,15 @@ use std::sync::Arc;
 
 use miette::Result;
 
-use kyzo_core::data::aggr::parse_aggr;
-use kyzo_core::data::program::{HeadAggrSlot, MagicSymbol, StoreLifetimes};
-use kyzo_core::exec::fixpoint::delta_store::{
-    EpochStore, RegularTempStore, collect_materialized,
+use kyzo::oracle_harness::{
+    AtomOccurrence, Budget, BudgetDimension, EpochStore, EvalDefinition, EvalProgram, EvalRuleSet,
+    EvalStratum, FixedRuleEval, LimitExceeded, MagicSymbol, Premises, RegularTempStore, RowLimit,
+    RuleBody, Sealed, StoreLifetimes, WitnessTable, collect_materialized,
+    stratified_evaluate,
 };
-use kyzo_core::exec::fixpoint::eval::{
-    AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum,
-    FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody, stratified_evaluate,
-};
-use kyzo_core::exec::provenance::eval::{Witness, WitnessTable};
 use kyzo_model::SourceSpan;
+use kyzo_model::program::aggregate::parse_aggr;
+use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
@@ -126,7 +124,7 @@ pub(crate) fn entry_symbol() -> MagicSymbol {
     }
 }
 
-struct ModelBody {
+pub(crate) struct ModelBody {
     head: Vec<Term>,
     body: Vec<Literal>,
     facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>>,
@@ -143,7 +141,7 @@ impl ModelBody {
     ) -> Self {
         let mut contained: BTreeMap<AtomOccurrence, MagicSymbol> = BTreeMap::new();
         for (i, l) in body.iter().enumerate() {
-            if idb.contains(l.rel) {
+            if idb.contains(&l.rel) {
                 contained.insert(AtomOccurrence(i), muggle(&l.rel));
             }
         }
@@ -168,8 +166,10 @@ impl ModelBody {
                 .expect("harness: IDB store present");
             if use_delta {
                 collect_materialized(store.delta_all_iter().expect("harness: store iter"))
+                    .expect("harness: materialize")
             } else {
                 collect_materialized(store.all_iter().expect("harness: store iter"))
+                    .expect("harness: materialize")
             }
         } else {
             self.facts
@@ -193,16 +193,15 @@ impl ModelBody {
                 .prefix_iter(probe)
                 .expect("harness: store iter")
                 .next()
-                .is_some_and(|t| t.try_into_tuple().ok() == Some(probe.clone()))
+                .is_some_and(|t| t.try_into_tuple().ok().as_ref() == Some(probe))
         } else {
             self.facts.get(&rel).is_some_and(|set| set.contains(probe))
         }
     }
 }
 
-// Sealed seam: story-#80 style; external trials need seal reachable (or a
-// core-side harness factory). Written honestly at the eval path.
-impl kyzo_core::exec::fixpoint::eval::seal::Sealed for ModelBody {}
+// Sealed seam: story-#80 style; external trials reach seal via `oracle_harness`.
+impl Sealed for ModelBody {}
 
 impl RuleBody for ModelBody {
     fn for_each_derivation(
@@ -227,12 +226,12 @@ impl RuleBody for ModelBody {
             if l.is_negated() {
                 for (bound, premises) in &frontier {
                     let probe = ground(&l.args, bound);
-                    if !self.negated_probe_hits(stores, l.rel, &probe) {
+                    if !self.negated_probe_hits(stores, l.rel.clone(), &probe) {
                         next.push((bound.clone(), premises.clone()));
                     }
                 }
             } else {
-                let rows = self.rows_of(stores, l.rel, is_delta);
+                let rows = self.rows_of(stores, l.rel.clone(), is_delta);
                 for (bound, premises) in &frontier {
                     for row in &rows {
                         if let Some(b) = unify(&l.args, row.as_slice(), bound) {
@@ -266,7 +265,7 @@ impl RuleBody for ModelBody {
     }
 }
 
-struct ModelFixed {
+pub(crate) struct ModelFixed {
     inputs: Vec<Rel>,
     eval: fn(&[BTreeSet<Tuple>]) -> BTreeSet<Tuple>,
     facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>>,
@@ -293,6 +292,9 @@ impl FixedRuleEval for ModelFixed {
                             .all_iter()
                             .expect("harness: store iter"),
                     )
+                    .expect("harness: materialize")
+                    .into_iter()
+                    .collect()
                 } else {
                     self.facts.get(rel).cloned().unwrap_or_default()
                 }
@@ -382,7 +384,10 @@ fn to_engine_aggr(slot: &HeadAggr) -> HeadAggrSlot {
     match slot {
         HeadAggr::Plain => HeadAggrSlot::Plain,
         HeadAggr::Aggregated { fold, args } => HeadAggrSlot::Aggregated {
-            aggr: parse_aggr(fold.name()).expect("engine aggregation exists for oracle fold"),
+            aggr: parse_aggr(fold.name())
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| panic!("engine aggregation exists for oracle fold {}", fold.name())),
             args: args.clone(),
         },
     }
@@ -482,11 +487,11 @@ pub(crate) fn compile_for(
         .collect();
     let entry_body = ModelBody::new(
         vars.clone(),
-        vec![Literal::pos(target, vars)],
+        vec![Literal::pos(target.clone(), vars)],
         facts.clone(),
         idb.clone(),
     );
-    lifetimes.note_use(muggle(target), entry_stratum);
+    lifetimes.note_use(muggle(&target), entry_stratum);
     let entry_set = EvalRuleSet::new(
         std::iter::repeat_n(HeadAggrSlot::Plain, target_arity).collect(),
         vec![entry_body],
@@ -508,7 +513,7 @@ pub(crate) fn model_arities(model: &Program) -> BTreeMap<Rel, usize> {
                 e.insert(n);
             }
             std::collections::btree_map::Entry::Occupied(o) => {
-                assert_eq!(*o.get(), n, "model uses '{rel}' at two arities");
+                assert_eq!(*o.get(), n, "model uses '{}' at two arities", o.key());
             }
         }
     }
@@ -556,7 +561,7 @@ pub(crate) fn real_eval(
     budget: &Budget,
 ) -> Result<BTreeSet<Tuple>> {
     let target = target.into();
-    let compiled = compile_for(model, target, target_arity, fixed_arities);
+    let compiled = compile_for(model, target.clone(), target_arity, fixed_arities);
     let outcome = stratified_evaluate(
         &compiled.program,
         &compiled.lifetimes,
@@ -564,9 +569,9 @@ pub(crate) fn real_eval(
         budget,
         None,
     )?;
-    Ok(collect_materialized(
-        outcome.store.all_iter().expect("harness: store iter"),
-    ))
+    Ok(collect_materialized(outcome.store.all_iter()?)?
+        .into_iter()
+        .collect())
 }
 
 pub(crate) fn generous_budget() -> Budget {
@@ -585,7 +590,8 @@ pub(crate) fn y() -> Term {
 pub(crate) fn z() -> Term {
     Term::Var("Z".into())
 }
-pub(crate) fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
+pub(crate) fn lit(rel: impl Into<Rel>, args: Vec<Term>, negated: bool) -> Literal {
+    let rel = rel.into();
     if negated {
         Literal::neg(rel, args)
     } else {
@@ -962,7 +968,7 @@ fn eval_fingerprint(g: &Generated, threads: usize) -> (BTreeSet<Tuple>, Vec<Stri
     at_thread_count(threads, || {
         let arities = model_arities(&g.program);
         let fixed_arities = fixed_arities_of(&g.program, &arities);
-        let compiled = compile_for(&g.program, g.entry, g.entry_arity, &fixed_arities);
+        let compiled = compile_for(&g.program, g.entry.clone(), g.entry_arity, &fixed_arities);
         let mut table = WitnessTable::default();
         let outcome = stratified_evaluate(
             &compiled.program,
@@ -972,12 +978,15 @@ fn eval_fingerprint(g: &Generated, threads: usize) -> (BTreeSet<Tuple>, Vec<Stri
             Some(&mut table),
         )
         .expect("evaluates");
-        let rows = collect_materialized(
+        let rows: BTreeSet<Tuple> = collect_materialized(
             outcome
                 .store
                 .all_iter()
                 .expect("harness: store iter"),
-        );
+        )
+        .expect("harness: materialize")
+        .into_iter()
+        .collect();
         (rows, render_witnesses(&table))
     })
 }
@@ -991,7 +1000,7 @@ fn refusal_fingerprint(
     at_thread_count(threads, || {
         let arities = model_arities(&g.program);
         let fixed_arities = fixed_arities_of(&g.program, &arities);
-        let compiled = compile_for(&g.program, g.entry, g.entry_arity, &fixed_arities);
+        let compiled = compile_for(&g.program, g.entry.clone(), g.entry_arity, &fixed_arities);
         let err = stratified_evaluate(
             &compiled.program,
             &compiled.lifetimes,

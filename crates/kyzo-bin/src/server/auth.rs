@@ -12,7 +12,7 @@
  * check) — this file is the mechanism, that doc is the account of what
  * changed and why. The token-table relation name (an operator-supplied
  * `--token-table` value, not per-request attacker input) is spliced into
- * composed KyzoScript the same way `relations.rs` splices caller-supplied
+ * composed KyzoScript the same way `bulk.rs` splices caller-supplied
  * relation names, so it gets the same validation — see that module's doc
  * for why this hardens rather than closes an escalation.
  */

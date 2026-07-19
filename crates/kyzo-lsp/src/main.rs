@@ -31,7 +31,7 @@
 //!
 //! Scope: diagnostics-on-type, plus catalog-aware hover and completion.
 //! `initialize`'s `initializationOptions.dbPath`, when the client supplies
-//! one, opens a real on-disk `Db` (the same `fjall` backend every other
+//! one, opens a real on-disk `Engine` (the same `fjall` backend every other
 //! entry point uses) so hover-over-a-relation and completion can answer
 //! from the connected store's actual catalog (`::relations`/`::columns`,
 //! the same sys-ops the CLI's `\d`-style introspection uses) — not a
@@ -144,7 +144,7 @@ fn validate(text: &str) -> Vec<Diagnostic> {
 // ─────────────────────────────────────────────────────────────────────────
 // Catalog-aware hover and completion. Every relation/column fact here comes
 // from actually running `::relations`/`::columns` against the connected
-// store through the same public `Db::run_script` every other caller uses —
+// store through the same public `Engine::run_script` every other caller uses —
 // no shadow catalog kept in sync by hand.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -227,7 +227,7 @@ const KEYWORDS: &[&str] = &[
     "%return",
 ];
 
-/// Open the `Db` an editor session's catalog features answer from, if the
+/// Open the `Engine` an editor session's catalog features answer from, if the
 /// client supplied one. `initializationOptions.dbPath` is the only source
 /// consulted — no guessing from `rootUri`, since pointing an LSP session at
 /// the wrong on-disk store (or silently creating one nobody asked for) is

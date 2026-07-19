@@ -2258,6 +2258,15 @@ dependencies = [
 [[package]]
 name = "kyzo-trials"
 version = "0.8.2"
+dependencies = [
+ "kyzo",
+ "kyzo-model",
+ "kyzo-oracle",
+ "miette",
+ "rayon",
+ "tempfile",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "lazy_static"

@@ -14,7 +14,7 @@
 //! Bulk data movement: `GET /export/{relations}`, `PUT /import`, and
 //! `POST /backup` (a whole-store dump via `kyzo::dump_storage`). The
 //! row-level composition (`::columns` + a scan/mutation query) lives in
-//! `crate::relations`; these handlers are the HTTP plumbing around it.
+//! `crate::bulk`; these handlers are the HTTP plumbing around it.
 
 use axum::Json;
 use axum::extract::{Path, State};

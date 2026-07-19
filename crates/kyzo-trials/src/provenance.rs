@@ -21,9 +21,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use kyzo_core::exec::fixpoint::delta_store::collect_materialized;
-use kyzo_core::exec::fixpoint::eval::{RowLimit, stratified_evaluate};
-use kyzo_core::exec::provenance::eval::{Witness, WitnessTable};
+use kyzo::oracle_harness::{
+    RowLimit, Witness, WitnessTable, collect_materialized, stratified_evaluate,
+};
 use kyzo_model::value::Tuple;
 use kyzo_oracle::{Bindings, Literal, Program, Rel, Rule, unify};
 
@@ -56,7 +56,7 @@ enum Proof {
 impl Proof {
     fn head(&self) -> (Rel, &Tuple) {
         match self {
-            Proof::Ground { rel, tuple } | Proof::Step { rel, tuple, .. } => (rel, tuple),
+            Proof::Ground { rel, tuple } | Proof::Step { rel, tuple, .. } => (rel.clone(), tuple),
         }
     }
 }
@@ -95,14 +95,14 @@ fn reconstruct(
     }
     let w = witnesses.get(&(rel.to_string(), tuple.clone()))?;
     let (rule_idx, premise_rows) = w.derivation.as_ref()?;
-    let rule = &per_head[rel][*rule_idx];
+    let rule = &per_head[&rel][*rule_idx];
     let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
     if positives.len() != premise_rows.len() {
         return None;
     }
     let mut premises = Vec::new();
     for (l, row) in positives.iter().zip(premise_rows) {
-        premises.push(reconstruct(l.rel, row, witnesses, per_head, idb)?);
+        premises.push(reconstruct(l.rel.clone(), row, witnesses, per_head, idb)?);
     }
     Some(Proof::Step {
         rel,
@@ -269,7 +269,7 @@ fn run_with_witnesses(
 ) {
     let arities = model_arities(model);
     let fixed_arities = fixed_arities_of(model, &arities);
-    let compiled = compile_for(model, entry, entry_arity, &fixed_arities);
+    let compiled = compile_for(model, entry.clone(), entry_arity, &fixed_arities);
     let mut table = WitnessTable::default();
     let outcome = stratified_evaluate(
         &compiled.program,
@@ -279,12 +279,15 @@ fn run_with_witnesses(
         Some(&mut table),
     )
     .expect("evaluates");
-    let rows = collect_materialized(
+    let rows: BTreeSet<Tuple> = collect_materialized(
         outcome
             .store
             .all_iter()
             .expect("harness: store iter"),
-    );
+    )
+    .expect("harness: materialize")
+    .into_iter()
+    .collect();
     (
         rows,
         index_witnesses(&table),
@@ -296,13 +299,13 @@ fn run_with_witnesses(
 #[test]
 fn provenance_reconstructs_and_verifies_every_derived_fact() {
     let (model, entry) = provenance_fixture();
-    let (rows, witnesses, per_head, idb) = run_with_witnesses(&model, entry, 2);
+    let (rows, witnesses, per_head, idb) = run_with_witnesses(&model, entry.clone(), 2);
     assert!(!rows.is_empty(), "the fixture derives facts");
 
     for tuple in &rows {
-        let proof = reconstruct(entry, tuple, &witnesses, &per_head, &idb)
+        let proof = reconstruct(entry.clone(), tuple, &witnesses, &per_head, &idb)
             .unwrap_or_else(|| panic!("reconstruct {entry}{tuple:?}"));
-        assert_eq!(proof.head(), (entry, tuple));
+        assert_eq!(proof.head(), (entry.clone(), tuple));
         verify(&proof, &per_head, &model.facts)
             .unwrap_or_else(|e| panic!("checker rejected an honest proof of {tuple:?}: {e}"));
         assert!(all_leaves_ground(&proof, &model.facts));
@@ -310,7 +313,7 @@ fn provenance_reconstructs_and_verifies_every_derived_fact() {
 
     let path_rows = real_eval(&model, "path", 2, &BTreeMap::new(), &generous_budget()).unwrap();
     for tuple in &path_rows {
-        let proof = reconstruct("path", tuple, &witnesses, &per_head, &idb)
+        let proof = reconstruct("path".into(), tuple, &witnesses, &per_head, &idb)
             .unwrap_or_else(|| panic!("reconstruct path{tuple:?}"));
         verify(&proof, &per_head, &model.facts)
             .unwrap_or_else(|e| panic!("checker rejected honest path proof: {e}"));
@@ -327,16 +330,16 @@ fn all_leaves_ground(proof: &Proof, facts: &BTreeMap<Rel, BTreeSet<Tuple>>) -> b
 #[test]
 fn provenance_negative_control_checker_rejects_corruption() {
     let (model, entry) = provenance_fixture();
-    let (rows, witnesses, per_head, idb) = run_with_witnesses(&model, entry, 2);
+    let (rows, witnesses, per_head, idb) = run_with_witnesses(&model, entry.clone(), 2);
 
     let target = rows
         .iter()
         .find(|t| {
-            let proof = reconstruct(entry, t, &witnesses, &per_head, &idb).unwrap();
+            let proof = reconstruct(entry.clone(), t, &witnesses, &per_head, &idb).unwrap();
             proof_depth(&proof) >= 3
         })
         .expect("a multi-step labeled fact exists");
-    let honest = reconstruct(entry, target, &witnesses, &per_head, &idb).unwrap();
+    let honest = reconstruct(entry.clone(), target, &witnesses, &per_head, &idb).unwrap();
     verify(&honest, &per_head, &model.facts).expect("honest proof verifies");
 
     // (a) Corrupt an interior premise tuple.
@@ -416,7 +419,7 @@ fn flip_interior_rule(proof: &Proof, per_head: &BTreeMap<Rel, Vec<Rule>>) -> Pro
             let n_rules = per_head.get(rel).map(|r| r.len()).unwrap_or(0);
             if n_rules > 1 {
                 return Proof::Step {
-                    rel,
+                    rel: rel.clone(),
                     tuple: tuple.clone(),
                     rule_idx: (rule_idx + 1) % n_rules,
                     premises: premises.clone(),
@@ -431,7 +434,7 @@ fn flip_interior_rule(proof: &Proof, per_head: &BTreeMap<Rel, Vec<Rule>>) -> Pro
                 }
             }
             Proof::Step {
-                rel,
+                rel: rel.clone(),
                 tuple: tuple.clone(),
                 rule_idx: *rule_idx,
                 premises,
@@ -466,7 +469,7 @@ fn corrupt_first_step_premise(proof: &Proof) -> Proof {
         *p = with_bumped_tuple(p);
     }
     Proof::Step {
-        rel,
+        rel: rel.clone(),
         tuple: tuple.clone(),
         rule_idx: *rule_idx,
         premises,
@@ -478,7 +481,10 @@ fn with_bumped_tuple(p: &Proof) -> Proof {
         Proof::Ground { rel, tuple } => {
             let mut t = tuple.clone();
             t[0] = v(7777);
-            Proof::Ground { rel, tuple: t }
+            Proof::Ground {
+                rel: rel.clone(),
+                tuple: t,
+            }
         }
         Proof::Step {
             rel,
@@ -489,7 +495,7 @@ fn with_bumped_tuple(p: &Proof) -> Proof {
             let mut t = tuple.clone();
             t[0] = v(7777);
             Proof::Step {
-                rel,
+                rel: rel.clone(),
                 tuple: t,
                 rule_idx: *rule_idx,
                 premises: premises.clone(),

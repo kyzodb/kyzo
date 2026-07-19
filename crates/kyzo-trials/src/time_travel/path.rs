@@ -123,7 +123,7 @@ fn gen_temporal_histories(rng: &mut Rng, p: &TemporalGenParams) -> TemporalHisto
 }
 
 impl TemporalHistories {
-    fn flat(&self, rel: Rel) -> Vec<Event> {
+    fn flat(&self, rel: &Rel) -> Vec<Event> {
         self.per_relation[rel].values().flatten().cloned().collect()
     }
 }
@@ -140,12 +140,12 @@ fn shuffle_body(rng: &mut Rng, body: &mut [Literal]) {
 
 fn temporal_program(rng: &mut Rng, hist: &TemporalHistories) -> Program {
     let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
-    for &rel in hist.per_relation.keys() {
-        histories.insert(rel, hist.flat(rel));
+    for rel in hist.per_relation.keys() {
+        histories.insert(rel.clone(), hist.flat(rel));
     }
     let mut rules: Vec<Rule> = histories
         .keys()
-        .map(|&rel| Rule::plain("out", vec![x(), y()], vec![lit(rel, vec![x(), y()], false)]))
+        .map(|rel| Rule::plain("out", vec![x(), y()], vec![lit(rel.clone(), vec![x(), y()], false)]))
         .collect();
     if histories.contains_key("ha") && histories.contains_key("hb") {
         rules.push(Rule::plain(
@@ -200,7 +200,7 @@ fn grid_differential_over_generated_temporal_programs() {
         let hist = gen_temporal_histories(&mut rng, &params);
         let program = temporal_program(&mut rng, &hist);
 
-        for (&rel, history) in &program.histories {
+        for (rel, history) in &program.histories {
             let keys: BTreeSet<&Tuple> = history.iter().map(|e| e.key()).collect();
             for key in keys {
                 let valid_grid = program_grid(history, Axis::Valid);
@@ -371,7 +371,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
     );
 }
 
-fn lit_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Literal {
+fn lit_at(rel: impl Into<Rel>, args: Vec<Term>, at: AsOf) -> Literal {
     Literal::pos_at(rel, args, at)
 }
 
@@ -823,7 +823,7 @@ fn gen_temporal_existential_history(
     history
 }
 
-fn neg_lit_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Literal {
+fn neg_lit_at(rel: impl Into<Rel>, args: Vec<Term>, at: AsOf) -> Literal {
     Literal::neg_at(rel, args, at)
 }
 

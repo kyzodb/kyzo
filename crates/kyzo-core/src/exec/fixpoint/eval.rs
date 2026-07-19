@@ -229,7 +229,7 @@ type HeadAggr = HeadAggrSlot;
 /// byte-identical on every run at any thread count. `Deadline` is an
 /// interrupt: its spend is wall-clock elapsed milliseconds.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(crate) enum BudgetDimension {
+pub enum BudgetDimension {
     /// Derivations admitted to any store's total, summed over the whole
     /// query — the [`Admitted`](crate::exec::fixpoint::delta_store::Admitted)
     /// counts of the admission seam, checked at the epoch **barrier**.
@@ -274,17 +274,17 @@ impl std::fmt::Display for BudgetDimension {
     code(eval::limit_exceeded),
     help("raise the corresponding budget ceiling, or narrow the query")
 )]
-pub(crate) struct LimitExceeded {
-    pub(crate) dimension: BudgetDimension,
-    pub(crate) spent: u64,
-    pub(crate) ceiling: u64,
+pub struct LimitExceeded {
+    pub dimension: BudgetDimension,
+    pub spent: u64,
+    pub ceiling: u64,
     /// The rule whose in-flight materialization crossed the ceiling
     /// (mid-epoch dimension only); `None` for the barrier dimensions.
-    pub(crate) rule: Option<MagicSymbol>,
+    pub rule: Option<MagicSymbol>,
     /// The offending rule's source span, so the diagnostic points back at
     /// the query text. `None` for the barrier dimensions.
     #[label("this rule's in-flight derivations crossed the budget ceiling")]
-    pub(crate) span: Option<SourceSpan>,
+    pub span: Option<SourceSpan>,
 }
 
 /// A cross-stage invariant that construction should have made impossible
@@ -315,7 +315,7 @@ struct Deadline {
 /// checked at epoch barriers only. The deadline and the cancel poll are
 /// checked at every barrier *and* inside rule iteration.
 #[derive(Debug, Clone)]
-pub(crate) struct Budget {
+pub struct Budget {
     epoch_ceiling: NonZeroU32,
     derived_tuple_ceiling: Option<u64>,
     deadline: Option<Deadline>,
@@ -327,7 +327,7 @@ impl Budget {
     /// deriving anything needs at least two epochs (one to derive, one to
     /// observe the empty delta), so a ceiling of 1 refuses every non-empty
     /// program — deterministically.
-    pub(crate) fn new(epoch_ceiling: NonZeroU32) -> Self {
+    pub fn new(epoch_ceiling: NonZeroU32) -> Self {
         Self {
             epoch_ceiling,
             derived_tuple_ceiling: None,
@@ -355,7 +355,7 @@ impl Budget {
         self.epoch_ceiling
     }
 
-    pub(crate) fn with_derived_tuple_ceiling(mut self, ceiling: u64) -> Self {
+    pub fn with_derived_tuple_ceiling(mut self, ceiling: u64) -> Self {
         self.derived_tuple_ceiling = Some(ceiling);
         self
     }
@@ -608,12 +608,12 @@ impl InterruptTicker<'_> {
 /// accumulated relation every epoch — no delta narrowing at all for
 /// exactly this rule shape (issue #68's dominant memory-blowup driver).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct AtomOccurrence(pub(crate) usize);
+pub struct AtomOccurrence(pub usize);
 
 /// The premise rows of one derivation, for provenance. `NotRequested` when
 /// eval did not ask (`want_premises` false) — the body implementation must
 /// not pay to collect them in that case.
-pub(crate) enum Premises<'a> {
+pub enum Premises<'a> {
     NotRequested,
     Rows(&'a [Tuple]),
 }
@@ -636,7 +636,7 @@ impl Premises<'_> {
 /// rows); a body that cannot returns `None` and provenance refuses,
 /// typed — it never guesses.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum PremiseSource {
+pub enum PremiseSource {
     /// The literal reads an in-memory rule store.
     Rule(MagicSymbol),
     /// The literal reads a base (ground-fact) relation, by name. The rows
@@ -649,7 +649,7 @@ pub(crate) enum PremiseSource {
 /// (via an explicit `impl seal::Sealed`) can implement the eval seam.
 /// Crate visibility alone is not the seal — when the crate splits, an open
 /// `pub(crate)` trait would reopen.
-pub(crate) mod seal {
+pub mod seal {
     pub trait Sealed {}
 }
 
@@ -685,7 +685,7 @@ pub(crate) mod seal {
 ///   the body alone (the landed stores iterate in canonical order; stored
 ///   relations scan in key order). The limiter's early-stop point depends
 ///   on it.
-pub(crate) trait RuleBody: Send + Sync + seal::Sealed {
+pub trait RuleBody: Send + Sync + seal::Sealed {
     /// `delta_from: Some(occ)` means the ONE body-atom occurrence `occ`
     /// reads that store's delta instead of its total; every other
     /// occurrence — including another occurrence of the SAME store name —
@@ -732,7 +732,7 @@ pub(crate) trait RuleBody: Send + Sync + seal::Sealed {
 /// inline rules, so a fixed rule's own mid-run spend guard (e.g.
 /// [`crate::rules::contract::FixedRuleOutput::new_budgeted`]) can count prior
 /// admissions instead of starting from zero.
-pub(crate) trait FixedRuleEval: Send + Sync {
+pub trait FixedRuleEval: Send + Sync {
     fn run(
         &self,
         stores: &BTreeMap<MagicSymbol, EpochStore>,
@@ -776,7 +776,7 @@ pub(crate) enum HeadAggrKind {
 /// grouping positions may sit anywhere in the head — [`MeetAggrStore`]
 /// groups positionally via [`MeetLayout`].
 #[derive(Debug)]
-pub(crate) struct EvalRuleSet<R> {
+pub struct EvalRuleSet<R> {
     pub(crate) aggr: Vec<HeadAggr>,
     pub(crate) kind: HeadAggrKind,
     pub(crate) bodies: Vec<R>,
@@ -784,7 +784,7 @@ pub(crate) struct EvalRuleSet<R> {
 
 /// A rule-set shape the evaluator refuses at construction.
 #[derive(Debug, Error, Diagnostic)]
-pub(crate) enum RuleSetShapeError {
+pub enum RuleSetShapeError {
     #[error("a rule set must contain at least one rule")]
     #[diagnostic(code(eval::empty_rule_set))]
     Empty,
@@ -795,7 +795,7 @@ impl<R> EvalRuleSet<R> {
     /// per-position aggregation signature (uniform across the head's rules
     /// — the parser refuses disagreement as `parser::head_aggr_mismatch`,
     /// so the signature travels once, on the set).
-    pub(crate) fn new(aggr: Vec<HeadAggr>, bodies: Vec<R>) -> Result<Self, RuleSetShapeError> {
+    pub fn new(aggr: Vec<HeadAggr>, bodies: Vec<R>) -> Result<Self, RuleSetShapeError> {
         if bodies.is_empty() {
             return Err(RuleSetShapeError::Empty);
         }
@@ -833,7 +833,7 @@ impl<R> EvalRuleSet<R> {
 /// One definition in a stratum: an inline rule set, or a fixed rule with
 /// its declared output arity.
 #[derive(Debug)]
-pub(crate) enum EvalDefinition<R, F> {
+pub enum EvalDefinition<R, F> {
     Rules(EvalRuleSet<R>),
     Fixed { arity: usize, rule: F },
 }
@@ -841,8 +841,8 @@ pub(crate) enum EvalDefinition<R, F> {
 /// One stratum, keyed by store name in canonical order — the order of the
 /// merge barrier.
 #[derive(Debug)]
-pub(crate) struct EvalStratum<R, F> {
-    pub(crate) defs: BTreeMap<MagicSymbol, EvalDefinition<R, F>>,
+pub struct EvalStratum<R, F> {
+    pub defs: BTreeMap<MagicSymbol, EvalDefinition<R, F>>,
 }
 
 // Manual: the derive would needlessly bound `R: Default, F: Default`.
@@ -859,7 +859,7 @@ impl<R, F> Default for EvalStratum<R, F> {
 /// [`crate::exec::plan::program::StratifiedMagicProgram`] stratum by stratum,
 /// carrying that tier's entry proof forward.
 #[derive(Debug)]
-pub(crate) struct EvalProgram<R, F> {
+pub struct EvalProgram<R, F> {
     pub(crate) strata: Vec<EvalStratum<R, F>>,
     entry: MagicSymbol,
 }
@@ -867,7 +867,7 @@ pub(crate) struct EvalProgram<R, F> {
 impl<R, F> EvalProgram<R, F> {
     /// Mint from execution-ordered strata; proves the entry sits in the
     /// final stratum (the mirror of `StratifiedMagicProgram`'s proof).
-    pub(crate) fn from_execution_order(strata: Vec<EvalStratum<R, F>>) -> Result<Self> {
+    pub fn from_execution_order(strata: Vec<EvalStratum<R, F>>) -> Result<Self> {
         let entry = strata
             .last()
             .and_then(|last| last.defs.keys().find(|k| k.is_prog_entry()))
@@ -887,11 +887,11 @@ impl<R, F> EvalProgram<R, F> {
 /// The row limit of a query: how many entry rows to produce before
 /// stopping early, and how many of the first to flag as offset-skipped.
 #[derive(Debug, Copy, Clone, Default)]
-pub(crate) struct RowLimit {
+pub struct RowLimit {
     /// `limit + offset` when a limit is given (see
     /// `QueryOutOptions::num_to_take`); `None` disables the limiter.
-    pub(crate) num_to_take: Option<usize>,
-    pub(crate) num_to_skip: Option<usize>,
+    pub num_to_take: Option<usize>,
+    pub num_to_skip: Option<usize>,
 }
 
 /// The shared early-return counter. Only entry-rule evaluations advance it
@@ -948,9 +948,9 @@ impl QueryLimiter {
 /// [`EpochStore::early_returned_iter`] — offset-skipped rows excluded —
 /// rather than the full contents).
 #[derive(Debug)]
-pub(crate) struct EvalOutcome {
-    pub(crate) store: EpochStore,
-    pub(crate) limited: bool,
+pub struct EvalOutcome {
+    pub store: EpochStore,
+    pub limited: bool,
 }
 
 /// Typed lookup for the cross-stage invariant "every referenced rule has a
@@ -983,7 +983,7 @@ fn store_of_mut<'m>(
 /// - `limit`: `:limit`/`:offset` early return, applied to the entry rule.
 /// - `budget`: required — see [`Budget`].
 /// - `witnesses`: `Some` opts in to first-witness provenance recording.
-pub(crate) fn stratified_evaluate<R: RuleBody, F: FixedRuleEval>(
+pub fn stratified_evaluate<R: RuleBody, F: FixedRuleEval>(
     program: &EvalProgram<R, F>,
     lifetimes: &crate::exec::plan::program::StoreLifetimes,
     limit: RowLimit,

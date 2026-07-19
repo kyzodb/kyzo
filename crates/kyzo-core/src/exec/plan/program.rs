@@ -364,12 +364,12 @@ impl StratifiedNormalFormProgram {
 /// program; consumed by evaluation, which drops a store before running
 /// stratum `s` unless `last_use >= s` (see [`Self::is_live_at`]).
 #[derive(Debug, Default)]
-pub(crate) struct StoreLifetimes(BTreeMap<MagicSymbol, usize>);
+pub struct StoreLifetimes(BTreeMap<MagicSymbol, usize>);
 
 impl StoreLifetimes {
     /// Record that `store` is read by the stratum at execution-order index
     /// `last_use`; keeps the maximum across calls.
-    pub(crate) fn note_use(&mut self, store: MagicSymbol, last_use: usize) {
+    pub fn note_use(&mut self, store: MagicSymbol, last_use: usize) {
         match self.0.entry(store) {
             Entry::Vacant(e) => {
                 e.insert(last_use);
@@ -423,7 +423,7 @@ pub(crate) type Adornment = Vec<AdornmentMark>;
 /// analysis in the name itself: evaluation of a magic program computes only
 /// what the entry demands, and the names prove which role each store plays.
 #[derive(Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub(crate) enum MagicSymbol {
+pub enum MagicSymbol {
     /// An unadorned rule, exempt from the rewrite (the entry always is).
     Muggle { inner: Symbol },
     /// An adorned rule: computes only rows matching the demand pattern.
@@ -442,7 +442,7 @@ pub(crate) enum MagicSymbol {
 
 impl MagicSymbol {
     /// The underlying rule name, adornment stripped.
-    pub(crate) fn as_plain_symbol(&self) -> &Symbol {
+    pub fn as_plain_symbol(&self) -> &Symbol {
         match self {
             MagicSymbol::Muggle { inner, .. }
             | MagicSymbol::Magic { inner, .. }
@@ -461,7 +461,7 @@ impl MagicSymbol {
     pub(crate) fn has_bound_adornment(&self) -> bool {
         self.magic_adornment().iter().any(|m| m.is_bound())
     }
-    pub(crate) fn is_prog_entry(&self) -> bool {
+    pub fn is_prog_entry(&self) -> bool {
         if let MagicSymbol::Muggle { inner } = self {
             inner.kind() == SymbolKind::Entry
         } else {

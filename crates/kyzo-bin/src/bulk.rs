@@ -10,10 +10,10 @@
 //!
 //! The CozoDB original (`cozo-core/src/runtime/db.rs::export_relations` /
 //! `import_relations`) reached directly into a live transaction's storage —
-//! `Db`'s internals in this port are crate-private (`runtime/db.rs`'s
+//! `Engine`'s internals in this port are crate-private (`session/db.rs`'s
 //! `SessionTx` constructors are `pub(crate)`; there is no equivalent public
 //! surface), so this is composed instead from the same public entry point
-//! every other caller uses: [`Db::run_script`]. `::columns` gives the
+//! every other caller uses: [`Engine::run_script`]. `::columns` gives the
 //! column list, a plain `*rel{...}` scan gives the rows, and a `<-` mutation
 //! with `$data` bound to the rows writes them back — the same query shape
 //! the CozoDB original used for its `NamedRows::into_payload` convenience

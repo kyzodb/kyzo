@@ -21,7 +21,7 @@
  *   extension, and `text_query` could additionally downgrade an
  *   authenticated mutable request to read-only via `{"immutable": true}` in
  *   the payload; `DbInstance::run_script` enforced the mismatch internally.
- *   kyzo-core's `Db::run_script` takes no mutability parameter at all — a
+ *   kyzo-core's `Engine::run_script` takes no mutability parameter at all — a
  *   script's mutability is a property the engine reads off the parsed
  *   program itself (`needs_write_lock`), not a caller-supplied claim to
  *   check against — and there is no public hook to ask "would this script
@@ -35,7 +35,7 @@
  *   `DbInstance::multi_transaction`/`run_multi_transaction` held a live
  *   transaction across several HTTP requests. kyzo-core's transaction type
  *   (`SessionTx`) has only `pub(crate)` constructors (`session/db.rs`) and
- *   `Db` exposes no equivalent of `multi_transaction` — there is nothing to
+ *   `Engine` exposes no equivalent of `multi_transaction` — there is nothing to
  *   call. Dropped, not stubbed; the fix is new kyzo-core runtime-tier API,
  *   not a bin-crate workaround.
  * - **No `/import-from-backup`.** Upstream partially restored named
@@ -46,7 +46,7 @@
  *   (whole-store dump) and `bulk::import_relations` (row-level) remain and
  *   together cover the same ground through different, real entry points.
  * - **`query::text_query` is one line of engine logic** —
- *   `kyzo::Db::run_script_json` — because the JSON envelope (params in,
+ *   `kyzo::Engine::run_script_json` — because the JSON envelope (params in,
  *   `{ok, headers, rows, took}`/error out) now lives in kyzo-core itself
  *   (`session::json`), shared with every future binding. This file only
  *   maps the envelope's `ok` field to an HTTP status code
@@ -73,7 +73,7 @@
  * - `rand::thread_rng()` / `Alphanumeric` sampling (0.8 API) becomes
  *   `rand::rng()` / `Alphanumeric.sample_string` (0.9's `SampleString`
  *   trait) for the auth-token generator.
- * - `lazy_static!`/lifetime-annotated `Db<'s, S>` are gone: kyzo-core's `Db`
+ * - `lazy_static!`/lifetime-annotated `Db<'s, S>` are gone: kyzo-core's `Engine`
  *   is not lifetime-parameterized (its sessions own their transactions
  *   rather than borrowing one — `session/db.rs`'s module doc), so
  *   `DbState`/`MyAuth` hold plain owned clones.

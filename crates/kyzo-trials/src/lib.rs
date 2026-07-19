@@ -15,3 +15,6 @@ pub mod determinism;
 pub mod gauntlet;
 pub mod provenance;
 pub mod time_travel;
+/// Oracle-differential verify corpus (re-homed from kyzo-core session/verify).
+/// Test-only module (`#![cfg(test)]` inside).
+pub mod verify_differential;

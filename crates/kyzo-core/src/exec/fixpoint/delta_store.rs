@@ -614,7 +614,7 @@ impl MeetTotalView<'_> {
 /// store's delta is empty ([`Self::has_delta`]); the contents then equal
 /// the naive fixpoint.
 #[derive(Debug)]
-pub(crate) struct EpochStore {
+pub struct EpochStore {
     pub(crate) kind: LevelKind,
     pub(crate) arity: usize,
 }
@@ -811,7 +811,7 @@ impl EpochStore {
             true,
         )
     }
-    pub(crate) fn prefix_iter<'s>(
+    pub fn prefix_iter<'s>(
         &'s self,
         prefix: &Tuple,
     ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
@@ -880,12 +880,12 @@ impl EpochStore {
         }
     }
 
-    pub(crate) fn all_iter(
+    pub fn all_iter(
         &self,
     ) -> Result<impl Iterator<Item = TupleInIter<'_>>, TempStoreCorruptRefuse> {
         self.prefix_iter(&Tuple::new())
     }
-    pub(crate) fn delta_all_iter(
+    pub fn delta_all_iter(
         &self,
     ) -> Result<impl Iterator<Item = TupleInIter<'_>>, TempStoreCorruptRefuse> {
         self.delta_prefix_iter(&Tuple::new())
@@ -1237,7 +1237,7 @@ pub(crate) struct OwnBareKey(Box<[u8]>);
 #[derive(Debug, Error, Diagnostic)]
 #[error("temp store row bytes failed bare decode")]
 #[diagnostic(code(query::temp_store_corrupt))]
-pub(crate) struct TempStoreCorruptRefuse(#[source] DecodeError);
+pub struct TempStoreCorruptRefuse(#[source] DecodeError);
 
 /// `meet_put` must leave the folded group resident — typed refuse if not.
 #[derive(Debug, Error, Diagnostic)]
@@ -1805,7 +1805,7 @@ impl TempStore {}
 /// reference; decoding produces a value, not a borrow. Byte-backed rows
 /// were sealed at an encode door before reaching this view.
 #[derive(Clone, Debug)]
-pub(crate) enum TupleInIter<'a> {
+pub enum TupleInIter<'a> {
     /// A regular store's row: memcmp bytes (chunk 1's bare codec), whole
     /// row in `key` — a regular row has no separate value region.
     Bytes {
@@ -1897,7 +1897,7 @@ impl TupleInIter<'_> {
             | TupleInIter::Owned { skip, .. } => skip.excludes_from_return(),
         }
     }
-    pub(crate) fn try_into_tuple(self) -> Result<Tuple, TempStoreCorruptRefuse> {
+    pub fn try_into_tuple(self) -> Result<Tuple, TempStoreCorruptRefuse> {
         match self {
             TupleInIter::Owned { row, .. } => Ok(row),
             other => other.try_materialize(),
@@ -1997,7 +1997,7 @@ fn bare_nth(bytes: &[u8], idx: usize) -> Result<Option<DataValue>, TempStoreCorr
 }
 
 /// Materialize every view in a store scan.
-pub(crate) fn collect_materialized<'a>(
+pub fn collect_materialized<'a>(
     iter: impl IntoIterator<Item = TupleInIter<'a>>,
 ) -> Result<Vec<Tuple>, TempStoreCorruptRefuse> {
     iter.into_iter().map(TupleInIter::try_into_tuple).collect()
@@ -2046,7 +2046,7 @@ enum TupleInIterState<'a> {
     },
 }
 
-pub(crate) struct TupleInIterIterator<'a> {
+pub struct TupleInIterIterator<'a> {
     state: TupleInIterState<'a>,
 }
 

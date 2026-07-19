@@ -72,13 +72,11 @@
 
 use std::collections::BTreeSet;
 
-use crate::data::value::{DataValue, Tuple};
-use crate::query::laws;
-use crate::runtime::db::Db;
-use crate::storage::Storage;
-use crate::storage::fjall::{FjallStorage, new_fjall_storage};
-use crate::storage::sim::SimRng;
-use crate::data::value::data_value_any;
+use kyzo::{Catalog, DataValue, Engine, FjallStorage, Storage, Tuple, new_fjall_storage};
+use kyzo_model::data_value_any;
+use kyzo_oracle::{AsOf, Event as TemporalEvent, resolve_relation};
+
+use crate::gauntlet::Rng;
 
 fn no_params() -> std::collections::BTreeMap<String, DataValue> {
     std::collections::BTreeMap::new()
@@ -133,7 +131,7 @@ impl Event {
 /// superseded; a dead one is (usually) asserted, occasionally hit with a
 /// redundant retract to prove that's a harmless no-op.
 fn seeded_history(seed: u64, n_entities: i64, n_events: usize, chunk: usize) -> Vec<Vec<Event>> {
-    let mut rng = SimRng::new(seed);
+    let mut rng = Rng::new(seed);
     let mut ts = 10i64;
     let mut alive: std::collections::BTreeMap<i64, bool> = std::collections::BTreeMap::new();
     let mut version_ctr = 0u64;
@@ -169,7 +167,7 @@ fn seeded_history(seed: u64, n_entities: i64, n_events: usize, chunk: usize) -> 
 }
 
 /// Write one chunk's worth of events against a real relation over a real
-/// `Db<FjallStorage>`, through PURE KYZOSCRIPT — one `db.run_script` call
+/// `Engine<FjallStorage>`, through PURE KYZOSCRIPT — one `db.run_script` call
 /// per event, each carrying an explicit `@ <ts>` clause, executed in
 /// strict generation order. One script call is one committed transaction,
 /// so this reproduces the oracle's "last write in event order wins at a
@@ -179,7 +177,7 @@ fn seeded_history(seed: u64, n_entities: i64, n_events: usize, chunk: usize) -> 
 /// `collapsed` map. Returns the number of scripts run (transactions
 /// committed), for the anti-vacuity check.
 fn write_transaction(
-    db: &Db<FjallStorage>,
+    db: &Engine<FjallStorage>,
     rel_name: &str,
     events: &[Event],
     first: bool,
@@ -217,8 +215,8 @@ fn write_transaction(
 /// `(entity, val)`, a retraction emits nothing.
 ///
 /// Routed through the UNIFIED temporal oracle (story #62,
-/// `query::laws::resolve_relation`) instead of a bespoke collapse-then-
-/// group algorithm: each event becomes a `laws::Event` at its own
+/// `query::resolve_relation`) instead of a bespoke collapse-then-
+/// group algorithm: each event becomes a `TemporalEvent` at its own
 /// `(entity, ts)` valid coordinate, with write order riding the SYSTEM
 /// axis (`sys = list index`) — "last write in write order governs" is
 /// exactly `laws::resolve`'s "newest system version at or before
@@ -228,14 +226,14 @@ fn write_transaction(
 /// of `at`, excluding the queried instant — still the one real
 /// resolution function, just a deliberately wrong coordinate.
 fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i64, String)> {
-    let history: Vec<laws::Event> = events
+    let history: Vec<TemporalEvent> = events
         .iter()
         .enumerate()
         .map(|(i, ev)| {
             // Timestamps here are small generated/fixture values: never the
             // reserved terminal tick.
             match ev {
-                Event::Assert { entity, ts, val } => laws::Event::assert(
+                Event::Assert { entity, ts, val } => TemporalEvent::assert(
                     Tuple::from_vec(vec![DataValue::from(*entity)]),
                     Tuple::from_vec(vec![DataValue::from(val.clone())]),
                     *ts,
@@ -243,7 +241,7 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
                 )
                 .expect("event timestamps in this file are never the reserved terminal tick"),
                 Event::Retract { entity, ts } => {
-                    laws::Event::retract(
+                    TemporalEvent::retract(
                         Tuple::from_vec(vec![DataValue::from(*entity)]),
                         *ts,
                         i as i64,
@@ -254,9 +252,9 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
         })
         .collect();
     let probe_at = if boundary_inclusive { at } else { at - 1 };
-    laws::resolve_relation(
+    resolve_relation(
         &history,
-        laws::AsOf {
+        AsOf {
             valid: probe_at,
             sys: i64::MAX,
         },
@@ -328,7 +326,7 @@ fn independent_oracle_at_reference(
 
 /// A random event sequence over a handful of entities and small,
 /// often-colliding timestamps, mixing asserts and retracts.
-fn gen_events(rng: &mut SimRng, n_entities: i64, n_events: usize) -> Vec<Event> {
+fn gen_events(rng: &mut Rng, n_entities: i64, n_events: usize) -> Vec<Event> {
     let mut version_ctr = 0u64;
     (0..n_events)
         .map(|_| {
@@ -348,7 +346,7 @@ fn gen_events(rng: &mut SimRng, n_entities: i64, n_events: usize) -> Vec<Event> 
         .collect()
 }
 
-/// The bridge: `oracle_at` (now backed by `laws::resolve_relation`)
+/// The bridge: `oracle_at` (now backed by `resolve_relation`)
 /// against the from-scratch reference above, over hundreds of generated
 /// event sequences, every probed instant, and both boundary
 /// configurations.
@@ -357,7 +355,7 @@ fn oracle_at_matches_an_independent_reference_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = SimRng::new(0xACE0_ACE0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0xACE0_ACE0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let n_entities = 1 + rng.below(4) as i64;
         let n_events = 1 + rng.below(20) as usize;
         let events = gen_events(&mut rng, n_entities, n_events);
@@ -407,12 +405,12 @@ fn probe_instants(events: &[Event]) -> Vec<i64> {
 /// Run the as-of query for `rel_name` at `at` through `Db::run_script` —
 /// real KyzoScript text, the real parser, the real compiler and evaluator —
 /// and return the rows as `(k0, val)` pairs, sorted.
-fn engine_asof(db: &Db<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(i64, String)> {
+fn engine_asof(db: &Engine<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(i64, String)> {
     let script = format!("?[k0, val] := *{rel_name}{{k0, val @ {at}}}");
     let rows = db
         .run_script(&script, no_params())
         .expect("as-of script runs");
-    rows.rows
+    rows.into_rows()
         .into_iter()
         .map(|r| {
             let k0 = r[0].get_int().expect("k0 is an int");
@@ -426,12 +424,12 @@ fn engine_asof(db: &Db<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(i64,
 }
 
 /// Run the CURRENT (no `@` clause) read through `Db::run_script`.
-fn engine_current(db: &Db<FjallStorage>, rel_name: &str) -> BTreeSet<(i64, String)> {
+fn engine_current(db: &Engine<FjallStorage>, rel_name: &str) -> BTreeSet<(i64, String)> {
     let script = format!("?[k0, val] := *{rel_name}{{k0, val}}");
     let rows = db
         .run_script(&script, no_params())
         .expect("plain script runs");
-    rows.rows
+    rows.into_rows()
         .into_iter()
         .map(|r| {
             let k0 = r[0].get_int().expect("k0 is an int");
@@ -453,7 +451,7 @@ fn engine_current(db: &Db<FjallStorage>, rel_name: &str) -> BTreeSet<(i64, Strin
 #[test]
 fn asof_script_matches_naive_oracle_over_seeded_history() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
 
     let history = seeded_history(0xC0FFEE_u64, 6, 60, 5);
     let all_events: Vec<Event> = history.iter().flatten().cloned().collect();
@@ -525,7 +523,7 @@ fn asof_script_matches_naive_oracle_over_seeded_history() {
 #[test]
 fn asof_script_boundary_mutation_is_caught() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
 
     let history = seeded_history(0x5EED_u64, 6, 60, 5);
     let all_events: Vec<Event> = history.iter().flatten().cloned().collect();
@@ -566,7 +564,8 @@ fn asof_script_boundary_mutation_is_caught() {
 #[test]
 fn two_coordinate_asof_script_sees_the_record_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+    let store = new_fjall_storage(dir.path()).unwrap();
+    let db = Engine::compose(store.clone(), Catalog::new()).unwrap();
 
     db.run_script(":create corr {k0: Int => val: Any}", no_params())
         .expect("create relation");
@@ -576,8 +575,7 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
         no_params(),
     )
     .expect("first write");
-    let s1 = db
-        .storage
+    let s1 = store
         .clock_floor()
         .expect("floor after first write")
         .raw();
@@ -587,8 +585,7 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
         no_params(),
     )
     .expect("second write");
-    let s2 = db
-        .storage
+    let s2 = store
         .clock_floor()
         .expect("floor after second write")
         .raw();
@@ -601,7 +598,7 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
         let script = format!("?[k0, val] := *corr{{k0, val @ {sys}, {valid}}}");
         db.run_script(&script, no_params())
             .expect("two-coordinate as-of script runs")
-            .rows
+            .into_rows()
             .into_iter()
             .map(|r| {
                 let k0 = r[0].get_int().expect("int");
@@ -641,7 +638,7 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
 #[test]
 fn per_row_at_clause_gives_each_row_its_own_valid_instant() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
 
     db.run_script(":create backfill {k0: Int => val: Any}", no_params())
         .expect("create relation");
@@ -695,7 +692,7 @@ fn per_row_at_clause_gives_each_row_its_own_valid_instant() {
 #[test]
 fn historical_correction_via_put_stays_consistent_with_its_index() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
 
     db.run_script(":create ereg {k0: Int => val: Any}", no_params())
         .expect("create");
@@ -730,8 +727,8 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
         .run_script("?[k0, val] := *ereg{k0, val @ 300}", no_params())
         .expect("base as-of read");
     assert_eq!(
-        base.rows,
-        vec![crate::data::value::Tuple::from_vec(vec![
+        base.rows(),
+        &[Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::from("A"),
         ])],
@@ -742,7 +739,7 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
         .run_script("?[k0, val] := *ereg:byval{val, k0 @ 300}", no_params())
         .expect("index as-of read");
     assert_eq!(
-        idx.rows, base.rows,
+        idx.rows(), base.rows(),
         "the index must agree with the base exactly at the same as-of coordinate"
     );
 
@@ -755,7 +752,7 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
         )
         .expect("index read for the superseded value");
     assert!(
-        idx_c.rows.is_empty(),
+        idx_c.rows().is_empty(),
         "the index must not still show the superseded 'C' as of instant 300: {idx_c:?}"
     );
 }
@@ -768,7 +765,7 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
 #[test]
 fn historical_update_carries_forward_the_targeted_instants_own_value() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
 
     db.run_script(":create t2 {k0: Int => x: Any, y: Any}", no_params())
         .expect("create");
@@ -797,10 +794,10 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
     let historical = db
         .run_script("?[x, y] := *t2{k0, x, y @ 150}", no_params())
         .expect("as-of read at 150")
-        .rows;
+        .into_rows();
     assert_eq!(
         historical,
-        vec![crate::data::value::Tuple::from_vec(vec![
+        vec![Tuple::from_vec(vec![
             DataValue::from("X_old_corrected"),
             DataValue::from("Y_old")
         ])],
@@ -811,10 +808,10 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
     let current = db
         .run_script("?[x, y] := *t2{k0, x, y}", no_params())
         .expect("current read")
-        .rows;
+        .into_rows();
     assert_eq!(
         current,
-        vec![crate::data::value::Tuple::from_vec(vec![
+        vec![Tuple::from_vec(vec![
             DataValue::from("X_new"),
             DataValue::from("Y_new")
         ])],
@@ -830,7 +827,7 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
 #[test]
 fn historical_insert_checks_existence_at_its_own_instant_not_current() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
 
     db.run_script(":create t3 {k0: Int => val: Any}", no_params())
         .expect("create");

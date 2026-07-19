@@ -136,7 +136,7 @@ pub(crate) fn repl_main(args: ReplArgs) -> Result<()> {
 
 /// One input line: a `%`-command (routed through `commands::dispatch`) or a
 /// script handed straight to the engine. Either way, whatever rows come
-/// back are rendered through `output::render`.
+/// back are rendered through `render::render`.
 fn process_line(
     line: &str,
     db: &Engine<FjallStorage>,

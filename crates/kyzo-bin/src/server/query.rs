@@ -8,7 +8,7 @@
 
 //! `POST /text-query`: run a script. All the JSON shaping — params in,
 //! `{ok, headers, rows, took}`/error envelope out — is
-//! `kyzo::Db::run_script_json`; this handler only runs it off the async
+//! `kyzo::Engine::run_script_json`; this handler only runs it off the async
 //! runtime's blocking pool and maps the envelope to an HTTP status.
 
 use axum::Json;

@@ -16,7 +16,7 @@
  */
 
 //! `GET /changes/{relation}`: an SSE stream of put/retract events on a
-//! relation, bridged from `kyzo::Db::register_callback`'s
+//! relation, bridged from `kyzo::Engine::register_callback`'s
 //! `std::sync::mpsc::Receiver`.
 
 use std::collections::BTreeMap;
@@ -87,7 +87,7 @@ pub(super) async fn observe_changes(
 // `GET /standing?query=...&params=...`: an SSE stream of a standing
 // query's OWN answer — the initial snapshot, then each subsequent
 // signed delta as commits land — bridged from
-// `kyzo::Db::register_standing`'s `StandingQuery`. The per-query analog
+// `kyzo::Engine::register_standing`'s `StandingQuery`. The per-query analog
 // of `GET /changes/{relation}` one tier up: that streams one relation's
 // raw put/retract events, this streams a QUERY's own maintained answer.
 //
