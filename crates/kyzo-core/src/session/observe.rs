@@ -7,7 +7,7 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (`runtime/callback.rs`, MPL-2.0):
+ * (`session/observe.rs`, MPL-2.0):
  *
  * - The registry tuple `(BTreeMap<u32, decl>, BTreeMap<name, ids>)` is a
  *   named struct ([`EventCallbackRegistry`]) — the two halves' coherence
@@ -25,7 +25,7 @@
  * - The retry law (story #3): the collector is built fresh per commit
  *   attempt and delivered only after a successful commit, so a conflicted
  *   attempt can never leak phantom events. The reset lives at the retry
- *   sites in `runtime/db.rs`; this file's contribution is that
+ *   sites in `session/db.rs`; this file's contribution is that
  *   [`CallbackCollector`] is plain data with no channel side effects until
  *   [`Db::send_callbacks`].
  */
@@ -55,7 +55,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use smartstring::{LazyCompact, SmartString};
 
 use crate::fixed_rule::NamedRows;
-use crate::runtime::db::Db;
+use crate::session::db::Db;
 use crate::storage::Storage;
 
 /// Represents the kind of operation that triggered the callback.
@@ -208,5 +208,106 @@ impl<S: Storage> Db<S> {
                 registry.unregister(id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod exactly_once_battery {
+    //! Absorbed from runtime/db_battery.rs (story #350 T2): callback
+    //! exactly-once under contention and seeded spurious conflicts.
+
+    use std::collections::BTreeMap;
+
+    use kyzo_model::value::DataValue;
+    use crate::session::db::Db;
+    use crate::storage::fjall::new_fjall_storage;
+    use crate::storage::sim::{FaultConfig, SimStorage};
+
+    fn no_params() -> BTreeMap<String, DataValue> {
+        BTreeMap::new()
+    }
+
+    /// The phantom-event law, actually exercised: a callback registered on a
+    /// contended counter must deliver exactly one Put event per COMMITTED
+    /// increment — the new values are exactly {1..=N}, no duplicates from
+    /// conflicted-and-retried attempts, none missing.
+    #[test]
+    fn rs3_callbacks_exactly_once_under_contention() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
+            .expect("create counter");
+
+        let (_id, receiver) = db.register_callback("ctr");
+
+        const PER_THREAD: i64 = 15;
+        const THREADS: i64 = 2;
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let db = db.clone();
+                scope.spawn(move || {
+                    for _ in 0..PER_THREAD {
+                        db.run_script(
+                            "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
+                            no_params(),
+                        )
+                        .expect("increment");
+                    }
+                });
+            }
+        });
+
+        let mut new_values: Vec<i64> = vec![];
+        while let Ok((op, new, _old)) = receiver.try_recv() {
+            assert_eq!(op.as_str(), "Put");
+            for row in &new.rows {
+                new_values.push(row[1].get_int().expect("int"));
+            }
+        }
+        new_values.sort();
+        let want: Vec<i64> = (1..=THREADS * PER_THREAD).collect();
+        assert_eq!(
+            new_values, want,
+            "exactly one event per committed increment: a conflicted attempt must \
+             leak nothing and a committed one must lose nothing"
+        );
+    }
+
+    /// DETERMINISTIC phantom-event detector: seeded spurious conflicts force the
+    /// retry loop to replay commits with no thread races. A collector that is
+    /// not rebuilt per attempt (or delivered pre-commit) duplicates events; the
+    /// callback stream must be exactly one Put event per committed increment.
+    #[test]
+    fn rs3_callbacks_exactly_once_under_seeded_spurious_conflicts() {
+        let faults = FaultConfig {
+            spurious_conflict_ppm: 400_000, // ~40% of commits conflict spuriously
+            ..Default::default()
+        };
+        let db = Db::new(SimStorage::with_faults(77, faults)).unwrap();
+        db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
+            .expect("create counter (retries through spurious conflicts)");
+
+        let (_id, receiver) = db.register_callback("ctr");
+        const N: i64 = 20;
+        for _ in 0..N {
+            db.run_script(
+                "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
+                no_params(),
+            )
+            .expect("increment (retries through spurious conflicts)");
+        }
+
+        let mut new_values: Vec<i64> = vec![];
+        while let Ok((_op, new, _old)) = receiver.try_recv() {
+            for row in &new.rows {
+                new_values.push(row[1].get_int().expect("int"));
+            }
+        }
+        new_values.sort();
+        let want: Vec<i64> = (1..=N).collect();
+        assert_eq!(
+            new_values, want,
+            "spurious-conflict retries must leak no phantom events and lose none"
+        );
     }
 }

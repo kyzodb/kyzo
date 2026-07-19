@@ -40,7 +40,7 @@ use miette::Result;
 
 use crate::data::bitemporal::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
 use kyzo_model::value::{DataValue, RelationId, decode_tuple_from_key, extend_tuple_from_v};
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::{ReadTx, Storage};
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption

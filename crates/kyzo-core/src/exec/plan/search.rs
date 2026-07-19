@@ -47,7 +47,7 @@ use crate::engines::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
 use crate::engines::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};
 use crate::engines::projection::RelationIndexSearch;
 use crate::engines::text::tokenizer::TextAnalyzer;
-use crate::runtime::relation::{IndexKind, RelationHandle};
+use crate::session::catalog::{IndexKind, RelationHandle};
 use crate::storage::ReadTx;
 
 /// A search atom the catalog has proven: live handles, decoded manifest,

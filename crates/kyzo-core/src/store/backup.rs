@@ -27,7 +27,7 @@ use thiserror::Error;
 use crate::data::bitemporal::system_stamp_of_key;
 use kyzo_model::value::ValidityTs;
 use kyzo_model::value::{StorageKey, RelationId};
-use crate::runtime::relation::{KeyspaceKind, list_relations};
+use crate::session::catalog::{KeyspaceKind, list_relations};
 use crate::storage::{FormatVersion, ReadTx, Storage};
 
 const MAGIC: &[u8; 8] = b"KYZODMP2";

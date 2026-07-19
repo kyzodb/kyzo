@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 
 use crate::data::json::format_error_as_json;
 use kyzo_model::value::DataValue;
-use crate::runtime::db::Db;
+use crate::session::db::Db;
 use crate::storage::Storage;
 
 impl<S: Storage> Db<S> {
@@ -102,7 +102,7 @@ impl<S: Storage> Db<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::db::Db;
+    use crate::session::db::Db;
     use crate::storage::fjall::new_fjall_storage;
 
     #[test]

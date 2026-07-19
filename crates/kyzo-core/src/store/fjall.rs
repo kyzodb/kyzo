@@ -406,7 +406,7 @@ pub fn new_fjall_storage_with(
     let ks = db
         .keyspace(KEYSPACE_NAME, || tuning::main_keyspace_options(opts))
         .map_err(FjallRefuse::OpenKeyspace)?;
-    let now = crate::runtime::current_validity()?.raw();
+    let now = crate::session::current_validity()?.raw();
     let watermark = match meta
         .get(SYSTEM_CLOCK_WATERMARK_KEY)
         .map_err(FjallRefuse::ReadWatermark)?
@@ -468,7 +468,7 @@ impl FjallStorage {
             .watermark_lock
             .lock()
             .map_err(|_| miette!("watermark lock poisoned"))?;
-        let now = crate::runtime::current_validity()?.raw();
+        let now = crate::session::current_validity()?.raw();
         let stamp = self.clock.stamp(now)?;
         self.meta
             .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.raw().to_be_bytes())

@@ -37,7 +37,7 @@ use crate::data::program::Comment;
 use kyzo_model::value::DataValue;
 use crate::fixed_rule::{FixedRule, SimpleFixedRule};
 use crate::parse::{Script, parse_expressions, parse_script};
-use crate::runtime::current_validity;
+use crate::session::current_validity;
 
 use super::{format_expr, format_program, format_program_with_comments};
 

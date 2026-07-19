@@ -156,13 +156,13 @@ use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::ReadTx;
 
 #[cfg(test)]
 use crate::query::batch_ops::{BATCH_ROWS, BatchTupleFilter};
 #[cfg(test)]
-use crate::runtime::relation::KeyspaceKind;
+use crate::session::catalog::KeyspaceKind;
 
 pub(crate) mod batch_ops;
 pub(crate) mod delta;
@@ -1010,7 +1010,7 @@ mod tests {
     use kyzo_model::value::{DataValue, ValidityTs};
     use crate::engines::segments::SegmentEngine;
     use crate::query::temp_store::RegularTempStore;
-    use crate::runtime::relation::create_relation;
+    use crate::session::catalog::create_relation;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
 

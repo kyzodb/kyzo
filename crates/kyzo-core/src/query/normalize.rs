@@ -75,7 +75,7 @@ use crate::query::eval::{Budget, FixedRuleEval};
 use crate::query::levels::EpochStore;
 use crate::query::magic::StoredRelationSchemaSource;
 use crate::query::temp_store::RegularTempStore;
-use crate::runtime::relation::{RelationHandle, Residency, get_relation};
+use crate::session::catalog::{RelationHandle, Residency, get_relation};
 use crate::storage::ReadTx;
 use crate::storage::temp::TempTx;
 
@@ -307,7 +307,7 @@ type SchemaLookup<'f> = dyn Fn(&str) -> Result<StoredRelationMetadata> + 'f;
 
 /// Catalog lookup for search-atom resolution: the full [`RelationHandle`],
 /// not just the schema (a search needs indices and manifests).
-type HandleLookup<'f> = dyn Fn(&str) -> Result<crate::runtime::relation::RelationHandle> + 'f;
+type HandleLookup<'f> = dyn Fn(&str) -> Result<crate::session::catalog::RelationHandle> + 'f;
 
 /// DNF conversion over an NNF atom. (Upstream logical.rs; the `unreachable!`
 /// dispatch arm is a typed invariant error.)

@@ -76,10 +76,10 @@ use crate::parse::{Script, parse_script};
 use crate::query::incremental::{self, IncrementalProgram, MaintainedState};
 use crate::query::normalize::{SessionNormalizer, SessionView};
 use crate::query::ra::temporal::SignedFact;
-use crate::runtime::callback::{CallbackEvent, CallbackOp};
-use crate::runtime::current_validity;
-use crate::runtime::db::{Db, ScriptOptions, SessionTx};
-use crate::runtime::relation::get_relation;
+use crate::session::observe::{CallbackEvent, CallbackOp};
+use crate::session::current_validity;
+use crate::session::db::{Db, ScriptOptions, SessionTx};
+use crate::session::catalog::get_relation;
 use crate::storage::Storage;
 
 /// Named refusal when [`Db::register_standing`] is given a non-standing script.

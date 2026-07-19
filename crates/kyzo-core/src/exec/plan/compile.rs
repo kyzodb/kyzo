@@ -13,7 +13,7 @@
  *   methods.** The original hung compilation off `impl SessionTx`; here
  *   [`stratified_magic_compile`] and [`compile_magic_rule_body`] take
  *   `&impl ReadTx` and resolve stored relations through the landed catalog
- *   (`runtime/relation.rs::get_relation`). `runtime/db.rs` threads the
+ *   (`session/catalog.rs::get_relation`). `session/db.rs` threads the
  *   real transaction when it lands; a `WriteTx` is a `ReadTx`, so either
  *   species works (SEAM, db tier). Temp (`_`-prefixed) relations resolve
  *   through the session's temp store — `get_relation` refuses them typed
@@ -155,10 +155,81 @@ use crate::query::eval::{
 use crate::query::levels::EpochStore;
 use crate::query::ra::{PlanInvariantError, RelAlgebra, SearchRA};
 use crate::query::temp_store::{RegularTempStore, TupleInIter};
-use crate::runtime::relation::{
-    AccessLevel, IndexKind, IndexPositionUse, InsufficientAccessLevel, RelationHandle, get_relation,
-};
+use crate::session::access::{AccessLevel, InsufficientAccessLevel};
+use crate::session::catalog::{IndexKind, IndexRef, RelationHandle, get_relation};
 use crate::storage::ReadTx;
+
+/// How the compile tier uses each argument position of a stored-relation
+/// atom, for index selection. Owns [`RelationHandle::choose_index`] so the
+/// catalog seat does not import this type (avoids a session↔exec cycle).
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(crate) enum IndexPositionUse {
+    /// The position is bound and can seed an index prefix scan.
+    Join,
+    /// The position is needed later but not bound for the scan.
+    BindForLater,
+    /// The position is not used at all.
+    Ignored,
+}
+
+impl RelationHandle {
+    /// Choose the plain index whose column mapper matches the longest
+    /// prefix of bound (`Join`) argument positions. Returns the chosen
+    /// index reference and whether a back-join to the base relation is
+    /// still required (some needed position is not covered by the index).
+    ///
+    /// By reference: the caller resolves the index relation's handle via
+    /// [`IndexRef::relation_name`] and [`get_relation`] — this handle does
+    /// not embed a copy of it. Manifest-backed indices (HNSW/FTS/LSH) are
+    /// never chosen here; their own operators own their access paths.
+    pub(crate) fn choose_index(
+        &self,
+        arg_uses: &[IndexPositionUse],
+        validity_query: bool,
+    ) -> Option<(IndexRef, bool)> {
+        // Law 5: the original `unwrap`ped `first()`; a zero-arity atom
+        // simply has no index to choose.
+        let first = arg_uses.first()?;
+        if *first == IndexPositionUse::Join {
+            // The base relation's own key prefix is already usable.
+            return None;
+        }
+        let required_positions: Vec<usize> = arg_uses
+            .iter()
+            .enumerate()
+            .filter_map(|(i, pos_use)| (*pos_use != IndexPositionUse::Ignored).then_some(i))
+            .collect();
+        let mut max_prefix_len = 0usize;
+        let mut chosen = None;
+        for index in &self.indices {
+            let IndexKind::Plain { mapper } = &index.kind else {
+                continue;
+            };
+            // As-of queries use plain indexes freely: every plain index
+            // row carries the base row's bitemporal coordinate and
+            // polarity (the mutation tier mirrors them), so an index scan
+            // resolves at any coordinate exactly like the base.
+            let _ = validity_query;
+            let mut cur_prefix_len = 0usize;
+            for i in mapper {
+                // A mapper position beyond the argument list would mean a
+                // stale catalog row; it ends the usable prefix rather than
+                // panicking (law 5: the original indexed unchecked).
+                match arg_uses.get(*i) {
+                    Some(IndexPositionUse::Join) => cur_prefix_len += 1,
+                    _ => break,
+                }
+            }
+            if cur_prefix_len > max_prefix_len {
+                max_prefix_len = cur_prefix_len;
+                let requires_back_join =
+                    required_positions.iter().any(|need| !mapper.contains(need));
+                chosen = Some((index.clone(), requires_back_join));
+            }
+        }
+        chosen
+    }
+}
 
 /// One head position's aggregation slot — the same shape carried by
 /// every program tier (`MagicInlineRule::aggr`) and by eval's rule sets.
@@ -1088,8 +1159,9 @@ mod tests {
     use kyzo_model::value::Tuple;
     use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
     use crate::query::laws::{Literal, Program, Rel, Rule, Term, naive_eval};
-    use crate::runtime::relation::KeyspaceKind;
-    use crate::runtime::relation::{create_relation, set_access_level};
+    use crate::session::access::AccessLevel;
+    use crate::session::catalog::KeyspaceKind;
+    use crate::session::catalog::{create_relation, set_access_level};
     use crate::storage::fjall::{FjallStorage, new_fjall_storage};
     use crate::storage::{Storage, WriteTx};
 
@@ -2991,5 +3063,86 @@ mod tests {
             let survivors = (threshold.max(-1) + 1..n as i64).count();
             assert_eq!(seen.len(), survivors, "survivor count at n={n}");
         }
+    }
+
+    /// Index selection over by-reference plain indices: longest bound
+    /// prefix wins, coverage decides the back-join, and the law-5 edges
+    /// (empty argument list, stale mapper) degrade to "no index".
+    /// Relocated from session/catalog (née runtime/relation) with
+    /// [`IndexPositionUse`] (story #350 T2).
+    #[test]
+    fn choose_index_prefers_longest_prefix_and_survives_edges() {
+        use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+        use crate::data::program::InputRelationHandle;
+        use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle};
+        use kyzo_model::value::RelationId;
+        use IndexPositionUse::*;
+
+        fn col(name: &str, coltype: ColType) -> ColumnDef {
+            ColumnDef {
+                name: SmartString::from(name),
+                typing: NullableColType::required(coltype),
+                default_gen: None,
+            }
+        }
+        fn input_handle(
+            name: &str,
+            keys: Vec<ColumnDef>,
+            non_keys: Vec<ColumnDef>,
+        ) -> InputRelationHandle {
+            let key_bindings = keys
+                .iter()
+                .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
+                .collect();
+            let dep_bindings = non_keys
+                .iter()
+                .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
+                .collect();
+            InputRelationHandle {
+                name: Symbol::new(name, SourceSpan(0, 0)),
+                metadata: StoredRelationMetadata { keys, non_keys },
+                key_bindings,
+                dep_bindings,
+                span: SourceSpan(0, 0),
+            }
+        }
+
+        let mut handle = RelationHandle::new_from_input(
+            input_handle(
+                "base",
+                vec![col("a", ColType::Int), col("b", ColType::Int)],
+                vec![col("c", ColType::Int)],
+            ),
+            RelationId::new(7).expect("below cap"),
+            KeyspaceKind::Facts,
+        );
+        handle.indices = vec![
+            IndexRef {
+                name: SmartString::from("by_b"),
+                kind: IndexKind::Plain { mapper: vec![1, 0] },
+            },
+            IndexRef {
+                name: SmartString::from("by_c_b"),
+                kind: IndexKind::Plain { mapper: vec![2, 1] },
+            },
+        ];
+
+        assert!(handle.choose_index(&[Join, Join, Ignored], false).is_none());
+        let (chosen, back_join) = handle
+            .choose_index(&[Ignored, Join, Join], false)
+            .expect("an index applies");
+        assert_eq!(chosen.name, "by_c_b");
+        assert!(!back_join);
+        let (chosen, back_join) = handle
+            .choose_index(&[BindForLater, Join, BindForLater], false)
+            .expect("an index applies");
+        assert_eq!(chosen.name, "by_b");
+        assert!(back_join, "position 2 is not covered by by_b");
+        assert!(handle.choose_index(&[], false).is_none());
+        assert!(handle.choose_index(&[Ignored], false).is_none());
+        let (chosen, _) = handle
+            .choose_index(&[Ignored, Join, Join], true)
+            .expect("by_c_b ends on the validity (last key) column");
+        assert_eq!(chosen.name, "by_c_b");
     }
 }

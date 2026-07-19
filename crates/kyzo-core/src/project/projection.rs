@@ -24,7 +24,7 @@
 //! protocol types. Segment freshness (T5) consumes [`Generation::classify`]
 //! at [`crate::engines::segments`] — staleness is [`Stale`], never an
 //! `Option` from a get-shaped call. The segment cache is rebuildable
-//! acceleration only: meaning clocks come from [`crate::runtime::generation`];
+//! acceleration only: meaning clocks come from [`crate::session::generation`];
 //! the cache cannot own truth (P106).
 
 use std::fmt;
@@ -76,7 +76,7 @@ pub(crate) trait RelationIndexSearch: ProjectionKind {
 /// Generation stamp carried by a sealed projection.
 ///
 /// Private field: the stamp is minted only through
-/// [`CatalogGeneration::projection_stamp`](crate::runtime::generation::CatalogGeneration)
+/// [`CatalogGeneration::projection_stamp`](crate::session::generation::CatalogGeneration)
 /// (story #337 / P099). There is no public `Generation::new(raw)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Generation(u64);
@@ -84,8 +84,8 @@ pub struct Generation(u64);
 impl Generation {
     /// Crate-internal admit from a catalog-proven counter.
     ///
-    /// Call sites outside [`crate::runtime::generation`] must not mint
-    /// stamps — [`CatalogGeneration::projection_stamp`](crate::runtime::generation::CatalogGeneration)
+    /// Call sites outside [`crate::session::generation`] must not mint
+    /// stamps — [`CatalogGeneration::projection_stamp`](crate::session::generation::CatalogGeneration)
     /// is the authority door. Name avoids the raw-door constructor heuristic.
     pub(crate) fn stamp_from_counter(raw: u64) -> Self {
         Generation(raw)
@@ -240,7 +240,7 @@ impl<K> Stale<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::generation::{CatalogGeneration, RelationGeneration};
+    use crate::session::generation::{CatalogGeneration, RelationGeneration};
 
     fn stamp(raw: u64) -> Generation {
         CatalogGeneration::from_relation(RelationGeneration::witness(raw)).projection_stamp()

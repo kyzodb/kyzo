@@ -109,7 +109,7 @@ use thiserror::Error;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::ReadTx;
 
 // ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ mod tests {
     use crate::data::program::InputRelationHandle;
     use kyzo_model::SourceSpan;
     use kyzo_model::program::symbol::Symbol;
-    use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
+    use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
 

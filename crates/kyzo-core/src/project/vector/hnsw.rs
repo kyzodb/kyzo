@@ -227,7 +227,7 @@ use kyzo_model::value::{
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
@@ -3110,7 +3110,7 @@ mod tests {
     }
     use kyzo_model::program::symbol::Symbol;
     use crate::fixed_rule::CancelFlag;
-    use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
+    use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 

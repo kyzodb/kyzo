@@ -49,7 +49,7 @@ use std::sync::{Arc, Mutex};
 
 use kyzo_model::value::{DataValue, RelationId, Tuple};
 use crate::engines::projection::{Generation, ProjectionBuilder, ResidentIndexKey, Sealed, Stale};
-use crate::runtime::generation::RelationGeneration;
+use crate::session::generation::RelationGeneration;
 use crate::storage::ReadTx;
 
 /// Consecutive misses at one live generation before a rebuild is admitted.
@@ -100,7 +100,7 @@ pub(crate) enum SegmentMiss {
 }
 
 /// The session's segment engine: per-relation write counters plus the
-/// sealed-segment cache. One per [`Db`](crate::runtime::db::Db), shared by
+/// sealed-segment cache. One per [`Db`](crate::session::db::Db), shared by
 /// all its transactions.
 #[derive(Debug, Default)]
 pub(crate) struct SegmentEngine {
@@ -136,7 +136,7 @@ impl SegmentEngine {
     /// # Non-transition (proven invariant)
     ///
     /// Story #302 T4: not a Domain-style consuming field transition. The engine is an
-    /// `Arc`-shared capability handle ([`crate::runtime::db::Db::segments`]);
+    /// `Arc`-shared capability handle ([`crate::session::db::Db::segments`]);
     /// the per-relation counter is an [`AtomicU64`] under a stated
     /// concurrent-access requirement (many writers/readers across
     /// transactions). The bump is a monotone counter advance on that shared

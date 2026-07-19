@@ -84,9 +84,9 @@ use crate::query::laws;
 use crate::query::normalize::{SessionNormalizer, SessionView};
 use crate::query::ra::stored::StoredWithValidityRA;
 use crate::query::temp_store::TupleInIter;
-use crate::runtime::current_validity;
-use crate::runtime::db::{Db, ScriptOptions, SessionTx};
-use crate::runtime::relation::get_relation;
+use crate::session::catalog::get_relation;
+use crate::session::current_validity;
+use crate::session::db::{Db, ScriptOptions, SessionTx};
 use crate::storage::{ReadTx, Storage};
 
 /// The outcome of one `::verify` run. Never a bare bool: a MATCH, a
@@ -531,7 +531,7 @@ fn oracle_budget(options: &ScriptOptions) -> Result<crate::query::eval::Budget> 
     // as a local literal) so the oracle path can never silently drift from
     // build_budget's — the exact divergence that once left this path's
     // derived-tuple ceiling unbounded.
-    use crate::runtime::db::{DEFAULT_DERIVED_TUPLE_CEILING, DEFAULT_EPOCH_CEILING};
+    use crate::session::db::{DEFAULT_DERIVED_TUPLE_CEILING, DEFAULT_EPOCH_CEILING};
     let ceiling = options
         .epoch_ceiling
         .unwrap_or(DEFAULT_EPOCH_CEILING)
@@ -1203,7 +1203,7 @@ mod tests {
     /// and gigabytes for no extra coverage of THIS guarantee).
     #[test]
     fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
-        use crate::runtime::db::DEFAULT_DERIVED_TUPLE_CEILING;
+        use crate::session::db::DEFAULT_DERIVED_TUPLE_CEILING;
 
         // Default options (derived_tuple_ceiling: None) → the production default.
         let defaulted = oracle_budget(&ScriptOptions::default()).expect("budget builds");

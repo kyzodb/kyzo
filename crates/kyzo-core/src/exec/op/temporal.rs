@@ -151,7 +151,7 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
 use kyzo_model::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
 use crate::query::batch_ops::{Batch, BatchIter};
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::ReadTx;
 
 /// A signed fact: present in the later snapshot only (`Plus`) or the
@@ -800,7 +800,7 @@ mod tests {
     use kyzo_model::SourceSpan;
     use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::{MAX_VALIDITY_TS, ValidityTs};
-    use crate::runtime::relation::{KeyspaceKind, create_relation};
+    use crate::session::catalog::{KeyspaceKind, create_relation};
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
     use itertools::Itertools;
@@ -1175,8 +1175,8 @@ mod tests {
     // this cross-module reuse.
     // ─────────────────────────────────────────────────────────────────
 
-    use crate::runtime::db::{ScriptOptions, SessionTx};
-    use crate::runtime::relation::get_relation;
+    use crate::session::db::{ScriptOptions, SessionTx};
+    use crate::session::catalog::get_relation;
 
     /// A one-key relation with a temporal posting index attached,
     /// returning `(base handle, posting handle)` — both already resolved,

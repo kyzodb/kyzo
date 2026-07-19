@@ -36,7 +36,8 @@ use crate::data::bitemporal::ClaimPolarity;
 use crate::data::relation::StoredRelationMetadata;
 use kyzo_model::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValiditySlot, ValidityTs, Vector};
 use kyzo_model::value::{StorageKey, RelationId, Tuple, TupleT};
-use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
+use crate::session::access::AccessLevel;
+use crate::session::catalog::{KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
 use crate::storage::{ReadTx, Storage, WriteTx};
@@ -717,7 +718,7 @@ fn dump_refuses_a_row_stamped_above_its_own_floor() {
     // "now" could possibly report (mirrors the existing
     // `restore_raises_clock_floor_past_imported_stamps` convention).
     let bad_sys =
-        ValidityTs::from_raw(crate::runtime::current_validity().unwrap().raw() + 1_000_000_000);
+        ValidityTs::from_raw(crate::session::current_validity().unwrap().raw() + 1_000_000_000);
     let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
 
     let mut tx = db.write_tx().unwrap();
@@ -1586,7 +1587,7 @@ fn conflict_is_typed_and_options_and_stats_work() {
 fn verify_storage_reports_injected_corruption() {
     use crate::storage::verify::verify_storage;
 
-    use crate::runtime::db::Db;
+    use crate::session::db::Db;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
@@ -1650,7 +1651,7 @@ fn verify_storage_reports_injected_corruption() {
 /// per-format value verification is real, not decorative.
 #[test]
 fn verify_storage_catches_a_corrupt_value() {
-    use crate::runtime::db::Db;
+    use crate::session::db::Db;
     use crate::storage::verify::verify_storage;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3225,7 +3226,7 @@ fn restore_raises_clock_floor_past_imported_stamps() {
     let src = new_fjall_storage(src_dir.path()).unwrap();
     // Push the source clock far into the future, then write one row so
     // the dump carries both data and the inflated floor.
-    let far_future = crate::runtime::current_validity().unwrap().raw() + 1_000_000_000;
+    let far_future = crate::session::current_validity().unwrap().raw() + 1_000_000_000;
     src.raise_clock_floor(ValidityTs::from_raw(far_future))
         .unwrap();
     {

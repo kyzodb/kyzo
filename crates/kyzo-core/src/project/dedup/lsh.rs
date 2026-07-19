@@ -123,7 +123,7 @@ use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
@@ -944,12 +944,12 @@ fn lsh_search_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::relation::KeyspaceKind;
+    use crate::session::catalog::KeyspaceKind;
 
     use crate::data::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
     use crate::fixed_rule::CancelFlag;
-    use crate::runtime::relation::create_relation;
+    use crate::session::catalog::create_relation;
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 

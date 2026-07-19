@@ -30,7 +30,7 @@ use kyzo_model::value::DataValue;
 use crate::engines::gazetteer::{
     Gazetteer, GazetteerConfig, Tag, compile_dictionary, gazetteer_dict_metadata,
 };
-use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
+use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::storage::fjall::new_fjall_storage;
 use crate::storage::{Storage, WriteTx};
 

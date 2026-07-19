@@ -116,7 +116,7 @@ use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, ScanBound, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
 
 // ---------------------------------------------------------------------------
@@ -1046,8 +1046,8 @@ mod tests {
     use super::*;
     use crate::data::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
-    use crate::runtime::relation::KeyspaceKind;
-    use crate::runtime::relation::create_relation;
+    use crate::session::catalog::KeyspaceKind;
+    use crate::session::catalog::create_relation;
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 

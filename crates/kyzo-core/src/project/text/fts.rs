@@ -114,7 +114,7 @@ use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
@@ -782,7 +782,7 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use crate::engines::text::TokenizerConfig;
     use crate::fixed_rule::CancelFlag;
-    use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
+    use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 

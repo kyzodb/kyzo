@@ -127,17 +127,17 @@
 //! never a per-tuple or per-kind signed delta formula, which does not
 //! exist in general (retracting the current `min`/`max` is the reason).
 //!
-//! ## Runtime — the session tier (`runtime`)
+//! ## Session — the session tier (`session`)
 //!
 //! Everything between a caller and the engine organs: the [`Db`] entrypoint
 //! (`run_query`, sessions, cooperative cancellation, commit retry with
-//! backoff), the mutation tier (`runtime::mutate` — puts, retractions at
+//! backoff), the mutation tier (`session::admit` — puts, retractions at
 //! bitemporal coordinates, index creation with resumable backfill), the
-//! typed catalog (`runtime::relation`, whose `SystemKey` is the closed set
+//! typed catalog (`session::catalog`, whose `SystemKey` is the closed set
 //! of system-keyspace shapes, so no third shape appears by accident),
 //! transaction-scoped constraints, and change callbacks. The fixpoint
 //! stores' `Admitted` count (`query::levels`) is the budget's deterministic
-//! unit of account. [`Db::run_script_json`] (`runtime::json`) is the one
+//! unit of account. [`Db::run_script_json`] (`session::json`) is the one
 //! JSON-params-in, JSON-envelope-out surface every binding shares; it
 //! composes `data::json`'s wire format ([`DataValue`] <-> JSON, `NamedRows`
 //! <-> JSON, error reports -> JSON) rather than reimplementing it — a
@@ -217,13 +217,13 @@
 //! The **kernel is complete and load-bearing**: `data` and `storage` are the
 //! substrate everything else stands on. The **engine is live end to end**:
 //! the public surface is the kernel re-exports plus the [`Db`] session
-//! entrypoint below; the tiers between (parse, query, engines, runtime,
+//! entrypoint below; the tiers between (parse, query, engines, session,
 //! fixed_rule) stay `pub(crate)` — internal organs, not API. `format`,
 //! `parse`, and `fixed_rule` carry no module-level `allow(dead_code)` —
 //! their host doors are real (`format_program` / `parse_script` /
 //! `FixedRule::run`); any unused residual is a rustc warning, not a
 //! blanket lie about a consumer that "lands later". The same P112 posture
-//! now applies to `query`, `runtime`, `engines`, and the value plane's
+//! now applies to `query`, `session`, `engines`, and the value plane's
 //! production modules (`SearchHits::admit_decoded`, canonical encode/decode):
 //! module-level `allow(dead_code)` is gone; unlanded surfaces are
 //! `#[cfg(test)]`, wired, or left to warn honestly. What refuses
@@ -262,7 +262,7 @@ pub(crate) mod data;
 // Target-zone seats landing mid-cut (ideal map: kyzo-model / exec / rules).
 pub(crate) mod exec;
 pub(crate) mod rules;
-// Engines production host doors: `runtime/mutate.rs` (fts/hnsw/lsh create/drop),
+// Engines production host doors: `session/ops.rs` (fts/hnsw/lsh create/drop),
 // `query/search.rs` (`RelationIndexSearch::search_relation`),
 // `engines::admit_relation_search_hits` → `SearchHits::admit_decoded`.
 // Unlanded kind engines (gazetteer/sparse/spatial) are `#[cfg(test)]` until
@@ -274,26 +274,26 @@ pub(crate) mod engines;
 // format-document will call the same doors. No module-level
 // `allow(dead_code)` — unused helpers warn honestly until that call site.
 pub(crate) mod format;
-// Fixed-rule production consumer landed (`runtime/db.rs` →
+// Fixed-rule production consumer landed (`session/db.rs` →
 // `SessionFixedRule` → `FixedRule::run`, plus `StoredInputSource` via
 // `SessionView`). No module-level `allow(dead_code)` (P112); residual
 // unused symbols warn rather than hide behind a blanket.
 pub(crate) mod fixed_rule;
-// Parse production consumer landed (`runtime/db.rs` via `parse_script`)
+// Parse production consumer landed (`session/db.rs` via `parse_script`)
 // for query and system genera. `Script::Imperative` is a typed refusal at
 // execution (`ImperativeNotWired`); its AST is still constructed by the
 // parser and exercised in-file — no module-level `allow(dead_code)` (P112).
 pub(crate) mod parse;
-// Query production host doors: `runtime/db.rs::compile_and_eval` (compile,
+// Query production host doors: `session/db.rs::compile_and_eval` (compile,
 // magic, stratify, ra, eval, normalize, search, sort, batch_ops, vm) and
-// `runtime/verify.rs` (`laws::naive_eval_at_budgeted`). No module-level
+// `session/verify.rs` (`laws::naive_eval_at_budgeted`). No module-level
 // `allow(dead_code)` (P112); unlanded oracle/eval surface warns honestly.
 pub(crate) mod query;
-// Runtime production host doors: `Db::run_script` / `compile_and_eval`,
-// `mutate` index create/drop, `relation` catalog, `callback` notifications,
-// and `constraint` enforcement at commit (P112). No module-level
-// `allow(dead_code)` (P112).
-pub(crate) mod runtime;
+// Session production host doors: `Db::run_script` / `compile_and_eval`,
+// `admit`/`ops` mutation and index create/drop, `catalog`, `observe`
+// notifications, and `constraint` enforcement at commit (P112). No
+// module-level `allow(dead_code)` (P112).
+pub(crate) mod session;
 pub(crate) mod storage;
 pub(crate) mod typestate;
 
@@ -328,9 +328,9 @@ pub use fixed_rule::{
     CancelAuthority, CancelFlag, Cancelled, EmptyNamedRowsBody, FixedRule, FixedRuleInputRelation,
     FixedRulePayload, NamedRows, SimpleFixedRule, SimpleRuleBody,
 };
-pub use runtime::callback::{CallbackEvent, CallbackOp};
-pub use runtime::db::{Db, ScriptOptions};
-pub use runtime::verify::VerifyOutcome;
+pub use session::observe::{CallbackEvent, CallbackOp};
+pub use session::db::{Db, ScriptOptions};
+pub use session::verify::VerifyOutcome;
 
 pub use exec::op::temporal::SignedFact;
 pub use query::standing::StandingQuery;

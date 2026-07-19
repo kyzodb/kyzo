@@ -26,7 +26,7 @@ use kyzo_model::value::DataValue;
 use crate::engines::sparse::{
     Sparse, SparseSearchParams, sparse_index_metadata, sparse_put, sparse_total_docs,
 };
-use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
+use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::storage::fjall::new_fjall_storage;
 use crate::storage::{Storage, WriteTx};
 use smartstring::SmartString;

@@ -28,8 +28,8 @@ use crate::query::batch_ops::{
     Batch, BatchIter, BatchScanFilter, BatchTupleFilter, conjunction_pred,
 };
 use crate::query::ra::join::PrefixProbeBatchJoin;
-use crate::runtime::relation::KeyspaceKind;
-use crate::runtime::relation::RelationHandle;
+use crate::session::catalog::KeyspaceKind;
+use crate::session::catalog::RelationHandle;
 use crate::storage::ReadTx;
 use itertools::Itertools;
 use miette::Result;
@@ -495,7 +495,7 @@ mod segment_gate_tests {
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
     use crate::engines::segments::SegmentEngine;
-    use crate::runtime::relation::create_relation;
+    use crate::session::catalog::create_relation;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
 
@@ -538,7 +538,7 @@ mod segment_gate_tests {
     /// its bound key is exactly the relation's key (`prefix_join_batched`'s
     /// point-lookup case shares `segment_at` with this one; both dispatch
     /// through the same gate).
-    fn kv_relation(db: &impl Storage, name: &str) -> crate::runtime::relation::RelationHandle {
+    fn kv_relation(db: &impl Storage, name: &str) -> crate::session::catalog::RelationHandle {
         let mut tx = db.write_tx().unwrap();
         let handle = create_relation(
             &mut tx,
@@ -554,7 +554,7 @@ mod segment_gate_tests {
         handle
     }
 
-    fn ra_over(handle: &crate::runtime::relation::RelationHandle) -> StoredRA {
+    fn ra_over(handle: &crate::session::catalog::RelationHandle) -> StoredRA {
         StoredRA {
             bindings: vec![sym("k"), sym("v")],
             storage: handle.clone(),
@@ -576,7 +576,7 @@ mod segment_gate_tests {
 
     fn put(
         db: &impl Storage,
-        handle: &crate::runtime::relation::RelationHandle,
+        handle: &crate::session::catalog::RelationHandle,
         engine: &SegmentEngine,
         k: i64,
         val: i64,
