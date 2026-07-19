@@ -225,11 +225,7 @@ impl TDigest {
             pooled.push((c.mean, c.weight));
         }
         // Canonical order: by mean, then weight — a total order on the pool.
-        pooled.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap()
-                .then(a.1.partial_cmp(&b.1).unwrap())
-        });
+        pooled.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
         let mut merged = Self::from_sorted_weighted(pooled, self.compression);
         merged.min = match (self.min, other.min) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -433,12 +429,12 @@ mod tests {
         let base: Vec<f64> = (0..5000).map(|i| (i as f64 * 2.7).sin() * 1000.0).collect();
         let asc = {
             let mut v = base.clone();
-            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v.sort_by(|a, b| a.total_cmp(b));
             digest_of(v, 100.0)
         };
         let desc = {
             let mut v = base.clone();
-            v.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            v.sort_by(|a, b| b.total_cmp(a));
             digest_of(v, 100.0)
         };
         // A deterministic shuffle (index-scramble) of the same multiset.

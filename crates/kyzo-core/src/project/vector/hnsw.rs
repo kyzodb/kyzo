@@ -3780,7 +3780,7 @@ mod tests {
                     (d, id as i64)
                 })
                 .collect();
-            truth.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            truth.sort_by(|a, b| a.0.total_cmp(&b.0));
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
             let hits = crate::project::contract::search_rows(
@@ -3940,7 +3940,7 @@ mod tests {
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
             "typed refusal, got: {err:?}"
         );
-        drop(tx);
+        let _ = tx.abort();
 
         // Query refusal.
         let rtx = db.read_tx().unwrap();
@@ -4001,6 +4001,7 @@ mod tests {
         ];
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
+        let _ = tx.abort();
     }
 
     /// Removal takes a vector out of the results; removing the last vector

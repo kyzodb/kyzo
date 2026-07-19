@@ -206,7 +206,7 @@ fn naive_dot_f64(docs: &[Doc], query: &[(u32, f32)]) -> Vec<(i64, f64)> {
             out.push((*key, score));
         }
     }
-    out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
+    out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     out
 }
 

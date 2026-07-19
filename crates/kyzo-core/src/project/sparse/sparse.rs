@@ -717,7 +717,7 @@ mod tests {
                 out.push((*key, score));
             }
         }
-        out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
+        out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
         out
     }
 
@@ -1026,6 +1026,7 @@ mod tests {
         );
         // A clean vector still admits.
         assert!(put(&mut tx, &[(0, 1.0), (2, 0.5)]).is_ok());
+        let _ = tx.abort();
     }
 
     /// A filter runs AFTER scoring and `k` counts matching rows (mirrors the

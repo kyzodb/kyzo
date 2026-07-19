@@ -1220,7 +1220,7 @@ mod tests {
             .iter()
             .map(|(id, lat, lon)| (angular_distance(q.lat(), q.lon(), *lat, *lon), *id))
             .collect();
-        scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         scored.into_iter().take(k).map(|(_, id)| id).collect()
     }
 
