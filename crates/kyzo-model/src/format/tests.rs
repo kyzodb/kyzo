@@ -5,14 +5,22 @@
 //! - **Law 1 (round-trip)**: decode(encode(v)) == v
 //! - **Law 2 (order embedding)**: encode(a) cmp encode(b) == a cmp b — exhaustive pairwise
 //! - **Law 3 (no panic on corrupt)**: decode arbitrary / byte-flipped bytes never panics
+//! - **Expr codec (seat 59)**: serde round-trip under one normative encoding,
+//!   pinned by a golden Binding vector (and a multi-variant tree).
 //!
 //! DEVIATIONS note: `kyzo-model/src/lib.rs` is not on this task's allowlist, so
 //! `pub mod format` is not wired at the crate root yet — path meters still hold.
+//! The Expr golden is also compile-checked under `program/expr.rs` tests until
+//! that door opens.
 
+use crate::program::expr::{BindingPos, Expr, LazyOp};
+use crate::program::op;
+use crate::program::symbol::Symbol;
 use crate::value::{
     Bound, DataValue, Interval, Num, RegexFlags, RegexSource, UuidWrapper, ValiditySlot,
     ValidityTs, Vector, append_canonical,
 };
+use crate::SourceSpan;
 
 fn corpus() -> Vec<DataValue> {
     let mut c = vec![
@@ -142,4 +150,63 @@ fn law_scalar_num_negative_zero_collapses_to_positive() {
     let a = DataValue::Num(Num::float(-0.0));
     let b = DataValue::Num(Num::float(0.0));
     assert_eq!(encode(&a), encode(&b));
+}
+
+/// Permanent Binding wire form — seat 59 / story #352 T1 golden vector.
+const EXPR_BINDING_GOLDEN: &str =
+    r#"{"Binding":{"var":{"name":"x"},"tuple_pos":"Unresolved"}}"#;
+
+/// Expr under one complete canonical serde codec, both directions:
+/// encode → decode identity, and the Binding golden bytes stay put.
+#[test]
+fn expr_canonical_round_trip_golden() {
+    let binding: Expr =
+        serde_json::from_str(EXPR_BINDING_GOLDEN).expect("binding golden decodes");
+    assert_eq!(
+        serde_json::to_string(&binding).expect("binding encodes"),
+        EXPR_BINDING_GOLDEN,
+        "Binding golden vector moved"
+    );
+
+    let span = SourceSpan::default();
+    let tree = Expr::Lazy {
+        op: LazyOp::And,
+        args: Box::new([
+            Expr::Apply {
+                op: op::OP_EQ,
+                args: Box::new([
+                    Expr::Binding {
+                        var: Symbol::new("a", span),
+                        tuple_pos: BindingPos::Resolved(0),
+                    },
+                    Expr::Const {
+                        val: DataValue::from(1i64),
+                        span,
+                    },
+                ]),
+                span,
+            },
+            Expr::Cond {
+                clauses: vec![(
+                    Expr::Const {
+                        val: DataValue::from(true),
+                        span,
+                    },
+                    Expr::UnboundApply {
+                        op: "custom".into(),
+                        args: Box::new([Expr::Const {
+                            val: DataValue::Null,
+                            span,
+                        }]),
+                        span,
+                    },
+                )],
+                span,
+            },
+        ]),
+        span,
+    };
+    let bytes = serde_json::to_vec(&tree).expect("encode Expr tree");
+    let back: Expr = serde_json::from_slice(&bytes).expect("decode Expr tree");
+    assert_eq!(back, tree, "Expr tree round-trip changed identity");
 }

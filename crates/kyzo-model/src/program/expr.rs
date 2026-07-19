@@ -33,16 +33,15 @@ use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 
 use miette::{Diagnostic, Result, bail};
-use serde::de::{Error, Visitor};
-use serde::{Deserializer, Serializer};
+use serde::de::Error;
+use serde::Deserializer;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::SourceSpan;
-use crate::program::op::{self as opdecl, OpDecl, resolve_decl};
+use crate::program::op::{self as opdecl, OpDecl};
 use crate::program::symbol::Symbol;
 use crate::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
-use crate::data_value_any;
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("The variable '{0}' is unbound")]
@@ -86,6 +85,12 @@ impl BindingPos {
 
 /// The language's expression tree: a KyzoScript expression as parsed,
 /// evaluable to a [`DataValue`] against a tuple of bindings.
+///
+/// **Canonical codec (seat 59):** one normative serde encoding — derived
+/// [`Serialize`] for the wire shape, custom [`Deserialize`] via [`ExprDe`]
+/// that re-proves Apply arity before minting. Spans are not persisted
+/// (`#[serde(skip)]`). A second serialization path is unconstructible here;
+/// golden round-trip vectors live in `format/tests.rs`.
 #[derive(Clone, PartialEq, Eq, serde_derive::Serialize)]
 pub enum Expr {
     /// Binding to variables
@@ -860,5 +865,87 @@ impl Default for ValueRange {
             lower: ScanBound::Least,
             upper: ScanBound::Greatest,
         }
+    }
+}
+
+/// Executable twin of the format-seat Expr golden (story #352 T1).
+/// `format` is not yet wired at the crate root; this module keeps the
+/// round-trip law compile-checked until that door opens.
+#[cfg(test)]
+mod canonical_codec_tests {
+    use super::*;
+    use crate::program::op;
+
+    /// Permanent Binding wire form — seat 59 golden vector.
+    const BINDING_GOLDEN: &str =
+        r#"{"Binding":{"var":{"name":"x"},"tuple_pos":"Unresolved"}}"#;
+
+    #[test]
+    fn expr_canonical_round_trip_golden() {
+        let binding: Expr = serde_json::from_str(BINDING_GOLDEN).expect("binding golden decodes");
+        assert_eq!(
+            serde_json::to_string(&binding).expect("binding encodes"),
+            BINDING_GOLDEN,
+            "Binding golden vector moved"
+        );
+
+        let span = SourceSpan::default();
+        let tree = Expr::Lazy {
+            op: LazyOp::And,
+            args: Box::new([
+                Expr::Apply {
+                    op: op::OP_EQ,
+                    args: Box::new([
+                        Expr::Binding {
+                            var: Symbol::new("a", span),
+                            tuple_pos: BindingPos::Resolved(0),
+                        },
+                        Expr::Const {
+                            val: DataValue::from(1i64),
+                            span,
+                        },
+                    ]),
+                    span,
+                },
+                Expr::Cond {
+                    clauses: vec![(
+                        Expr::Const {
+                            val: DataValue::from(true),
+                            span,
+                        },
+                        Expr::UnboundApply {
+                            op: "custom".into(),
+                            args: Box::new([Expr::Const {
+                                val: DataValue::Null,
+                                span,
+                            }]),
+                            span,
+                        },
+                    )],
+                    span,
+                },
+            ]),
+            span,
+        };
+        let bytes = serde_json::to_vec(&tree).expect("encode Expr tree");
+        let back: Expr = serde_json::from_slice(&bytes).expect("decode Expr tree");
+        assert_eq!(back, tree, "Expr tree round-trip changed identity");
+    }
+
+    #[test]
+    fn expr_deserialize_refuses_arity_mismatch() {
+        // OP_EQ requires exactly 2 args; one Const is an arity crime.
+        let bad = serde_json::json!({
+            "Apply": {
+                "op": "OP_EQ",
+                "args": [{ "Const": { "val": DataValue::from(1i64) } }]
+            }
+        });
+        let err = serde_json::from_value::<Expr>(bad).expect_err("arity must refuse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("OP_EQ") || msg.contains("argument"),
+            "expected arity refusal, got: {msg}"
+        );
     }
 }
