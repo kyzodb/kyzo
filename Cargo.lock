@@ -2251,6 +2251,9 @@ dependencies = [
 [[package]]
 name = "kyzo-oracle"
 version = "0.8.2"
+dependencies = [
+ "kyzo-model",
+]
 
 [[package]]
 name = "kyzo-trials"

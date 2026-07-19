@@ -51,6 +51,11 @@
  *   read the stale claim as ground truth, which is exactly the failure a
  *   comment in this codebase must never cause. Still deferred, still typed:
  *   `::explain` and `::running`/`::kill` (see `IndexOpNotLanded`).
+ *   `::verify`'s query-answer comparator is ALSO typed-refused here now —
+ *   not merely still-deferred: its prior implementation depended on
+ *   `kyzo-oracle` from production code, which the storage-era crate wall
+ *   forbids (see `session/verify.rs`'s module doc), so it was removed
+ *   rather than left illegally wired.
  * - The imperative script genus (`Script::Imperative`) is refused; the query
  *   and system genera are executed.
  */
@@ -743,10 +748,12 @@ impl<S: Storage> Engine<S> {
             // Jobs / verify (already delegated).
             SysOp::ListRunning => crate::session::jobs::list_running(),
             SysOp::KillRunning(_) => crate::session::jobs::kill_running(),
-            SysOp::Verify(prog) => {
-                let outcome = self.verify_input_program(*prog, cur_vld, options)?;
-                Ok(outcome.into_named_rows())
-            }
+            // The oracle-differential query-answer `::verify` was removed
+            // from kyzo-core (the storage-era crate wall forbids a
+            // kyzo-core → kyzo-oracle edge in production or test code —
+            // see `session/verify.rs`'s module doc); typed "parses, not
+            // landed" refuse, the same posture `::explain` already uses.
+            SysOp::Verify(_) => bail!(EngineRefuse::IndexOpNotLanded("::verify")),
             SysOp::Explain(_) => bail!(EngineRefuse::IndexOpNotLanded("::explain")),
         }
     }

@@ -211,7 +211,7 @@ pub(crate) fn compose(
                 out.insert(SignedFact::Minus(t.clone()));
             }
             n => {
-                return Err(kyzo_oracle::temporal::ComposeNetOutOfRange { net: n }.into());
+                bail!("compose net tally {n} is outside {{-1, 0, +1}}");
             }
         }
     }

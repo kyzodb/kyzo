@@ -87,17 +87,28 @@ pub(crate) enum Term {
     Var(Symbol),
 }
 
+/// A rule-body literal's sign: read positively, or negated. Minted locally
+/// rather than reused from the oracle's `eval::Polarity` — this module is an
+/// independently-written twin of `laws::incremental_eval` (see the module
+/// doc), and the oracle crate wall forbids kyzo-core from depending on
+/// kyzo-oracle at all, test code included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Polarity {
+    Positive,
+    Negative,
+}
+
 /// One rule-body literal: a relation read, optionally negated.
 #[derive(Debug, Clone)]
 pub(crate) struct Literal {
     pub(crate) rel: Symbol,
     pub(crate) args: Vec<Term>,
-    pub(crate) polarity: kyzo_oracle::eval::Polarity,
+    pub(crate) polarity: Polarity,
 }
 
 impl Literal {
     pub(crate) fn is_negated(&self) -> bool {
-        matches!(self.polarity, kyzo_oracle::eval::Polarity::Negative)
+        matches!(self.polarity, Polarity::Negative)
     }
 }
 
@@ -584,9 +595,9 @@ fn translate_rule(
             rel,
             args: args.iter().map(|v| substitute(v, &subst)).collect(),
             polarity: if negated {
-                kyzo_oracle::eval::Polarity::Negative
+                Polarity::Negative
             } else {
-                kyzo_oracle::eval::Polarity::Positive
+                Polarity::Positive
             },
         });
     }
