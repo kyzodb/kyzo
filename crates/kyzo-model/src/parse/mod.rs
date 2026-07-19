@@ -3,6 +3,11 @@
 //! Pest owns KyzoScript surface syntax ([`grammar.pest`]); lift modules
 //! turn pairs into program / schema IR. The language door lives entirely
 //! in this crate — never imports the engine.
+//!
+//! [`search`] is the pure-data FTS/search AST seat (phrase / proximity /
+//! scoring nodes as ordinary AST). Evaluation (`eval_near`, scoring,
+//! analyzer tokenize) stays in kyzo-core — see that module's crate-wall
+//! note.
 
 /*
  * Copyright 2022, The Cozo Project Authors.

@@ -7,16 +7,27 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): permanent home of the FTS query AST pure-data half. Analyzer-
- * coupled tokenize lives in kyzo-core `project/text/ast.rs` as an extension
- * over these types (crate wall: kyzo-model cannot depend on the engine).
+ * (MPL-2.0): seated as the pure-data FTS/search AST behind the crate wall.
+ * Phrase / proximity / scoring nodes are ordinary program-AST data here;
+ * posting walks, `eval_near`, and score materialization live in kyzo-core
+ * (`project/text/fts.rs`). Analyzer-coupled tokenize is an engine extension
+ * over these types (`project/text/ast.rs`) — kyzo-model never depends on
+ * the engine.
  */
 
-//! The FTS query AST: what an FTS search string *means* once parsed.
+//! Pure-data FTS/search AST seat: what an FTS search string *means* once
+//! parsed — phrase literals, proximity (`Near`), boolean structure, and
+//! score boosters as ordinary AST data.
 //!
-//! Pure data plus total rewrites [`FtsExpr::flatten`] and
-//! [`FtsExpr::is_empty`]. Analyzer-coupled tokenize is an extension in the
-//! engine crate over these types.
+//! # Crate wall (load-bearing)
+//!
+//! This module holds **data and total AST rewrites only**
+//! ([`FtsExpr::flatten`], [`FtsExpr::is_empty`], mint doors). It must not
+//! grow evaluation: no posting-list walks, no proximity matching, no
+//! score aggregation, no analyzer coupling. Those verbs stay engine-side
+//! in kyzo-core (`eval_near` / `eval_ast` in `project/text/fts.rs`;
+//! tokenize in `project/text/ast.rs`). Crossing that wall here would
+//! pull storage and analyzer truth into the model crate.
 //!
 //! # Depth invariant (load-bearing)
 //!
