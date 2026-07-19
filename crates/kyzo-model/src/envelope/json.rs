@@ -234,6 +234,7 @@ impl From<&DataValue> for JsonValue {
                     JsonValue::Array(vec![l, h])
                 }
             },
+            DataValue::Geometry(g) => json!([g.lat().get(), g.lon().get()]),
             DataValue::Json(j) => serde_from_json(j),
         }
     }

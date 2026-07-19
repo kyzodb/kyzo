@@ -14,7 +14,7 @@
 //!
 //! ## `DataValue`: one owned logical value
 //!
-//! The 13 canonical kinds as an owned tree. Its trait surfaces are the
+//! The 14 canonical kinds as an owned tree. Its trait surfaces are the
 //! identity laws made ergonomic, each with a single authority:
 //!
 //! - `Eq`/`Hash` ARE the identity laws (Num's representation-faithful
@@ -86,7 +86,7 @@ pub use crate::value::kind::validity::{
     AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValiditySeekBound,
     ValiditySlot, ValidityTs,
 };
-pub use crate::value::kind::{Vector, VectorComponent, VectorDimension};
+pub use crate::value::kind::{CellCoord, Geometry, Vector, VectorComponent, VectorDimension};
 
 /// The engine-facing UUID value (16 bytes; identity and order are the
 /// bytes, per the uuid face's law). Field is private — construction and
@@ -132,6 +132,7 @@ pub enum DataValue {
     Set(BTreeSet<DataValue>),
     Validity(ValiditySlot),
     Interval(Interval),
+    Geometry(Geometry),
 }
 
 /// Exhaustive [`DataValue`] or-pattern for refuse / default arms under
@@ -153,6 +154,7 @@ macro_rules! data_value_any {
             | $crate::value::DataValue::Set(_)
             | $crate::value::DataValue::Validity(_)
             | $crate::value::DataValue::Interval(_)
+            | $crate::value::DataValue::Geometry(_)
     };
 }
 
@@ -173,6 +175,7 @@ impl DataValue {
             DataValue::Set(_) => Tag::Set,
             DataValue::Validity(_) => Tag::Validity,
             DataValue::Interval(_) => Tag::Interval,
+            DataValue::Geometry(_) => Tag::Geometry,
         }
     }
 
@@ -257,6 +260,13 @@ impl DataValue {
             return None;
         };
         Some(v)
+    }
+
+    pub fn get_geometry(&self) -> Option<Geometry> {
+        let DataValue::Geometry(g) = self else {
+            return None;
+        };
+        Some(*g)
     }
 }
 
@@ -364,6 +374,7 @@ impl Ord for DataValue {
             }
             (DataValue::Validity(a), DataValue::Validity(b)) => a.cmp(b),
             (DataValue::Interval(a), DataValue::Interval(b)) => interval_storage_cmp(a, b),
+            (DataValue::Geometry(a), DataValue::Geometry(b)) => a.cmp(b),
             // Tags already agreed; every same-kind arm is covered above.
             // Equal is the total-order refuse of panic — compare never panics
             // for any constructible DataValue pair (the T4 law).
@@ -508,6 +519,9 @@ impl std::fmt::Display for DataValue {
                 write!(f, "validity({}, {})", v.ts_micros(), v.is_assert())
             }
             DataValue::Interval(_) => write!(f, "interval(…)"),
+            DataValue::Geometry(g) => {
+                write!(f, "geometry({}, {})", g.lat().get(), g.lon().get())
+            }
         }
     }
 }
@@ -884,7 +898,7 @@ mod facade_tests {
     }
 
     fn random_value(rng: &mut Rng, depth: usize) -> DataValue {
-        let roll = rng.below(if depth == 0 { 13 } else { 7 });
+        let roll = rng.below(if depth == 0 { 14 } else { 7 });
         match roll {
             0 => DataValue::Null,
             1 => DataValue::Bool(rng.next().is_multiple_of(2)),
@@ -929,6 +943,7 @@ mod facade_tests {
             } else {
                 Interval::new(Bound::Closed(rng.next() as i64 % 1000), Bound::Unbounded)
             }),
+            12 => DataValue::Geometry(Geometry::from_cells(rng.next() as u32, rng.next() as u32)),
             _ => DataValue::Json(if rng.next().is_multiple_of(2) {
                 Json::Null
             } else {

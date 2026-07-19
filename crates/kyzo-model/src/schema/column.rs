@@ -527,6 +527,9 @@ impl NullableColType {
                     DataValue::Interval(iv) => {
                         json!([iv.start(), iv.end()])
                     }
+                    DataValue::Geometry(g) => {
+                        json!([g.lat().get(), g.lon().get()])
+                    }
                 };
                 DataValue::Json(json_from_serde(&serde_val))
             }

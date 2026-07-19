@@ -60,6 +60,9 @@ pub fn to_json(d: &DataValue) -> JsonValue {
             json!([vld.ts_micros(), vld.is_assert()])
         }
         DataValue::Interval(iv) => interval_to_json(iv),
+        DataValue::Geometry(g) => {
+            json!([g.lat().get(), g.lon().get()])
+        }
     }
 }
 

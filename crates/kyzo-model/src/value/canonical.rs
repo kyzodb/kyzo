@@ -49,6 +49,9 @@
 //! - `Interval`: `0x01` for the one empty value, or `0x02` + lower end +
 //!   upper end, each end `0x01` (unbounded) or `0x02` + the 8-byte
 //!   ascending timestamp key. Closed normal form is enforced on decode.
+//! - `Geometry`: eight big-endian bytes of the Hilbert curve key of the
+//!   point's fixed-point `(lat, lon)` cells — memcmp of the payload
+//!   equals Hilbert order; no float floor in the encoding path.
 //!
 //! ## `CanonicalBytes` is a witness, not a costume
 //!
@@ -70,7 +73,7 @@ use super::kind::interval::{Hi, Interval, Lo};
 use super::kind::json::{Json, JsonNum, JsonObj, fnv1a64};
 use super::kind::regex::{RegexFlags, RegexSource};
 use super::kind::validity::{Validity, ValiditySlot, ValidityTs};
-use super::{DataValue, UuidWrapper, Vector};
+use super::{DataValue, Geometry, UuidWrapper, Vector};
 
 /// A lawful canonical encoding: mintable only by [`encode`]. Derived
 /// `Ord`/`Eq` are the storage total order over values, byte for byte.
@@ -127,6 +130,7 @@ pub enum Datum<'a> {
     Vector(&'a Vector),
     Validity(Validity),
     Interval(Interval),
+    Geometry(Geometry),
 }
 
 /// Encode a value into its canonical form: the one mint of
@@ -243,6 +247,7 @@ fn skip_at(bytes: &[u8], depth: usize) -> Result<usize, DecodeError> {
             }
             Some(_) => Err(DecodeError::IntervalNotCanonical),
         },
+        Tag::Geometry => need(8),
     }
 }
 
@@ -388,6 +393,10 @@ fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
             out.push(Tag::Interval.byte());
             encode_interval_body(out, iv);
         }
+        DataValue::Geometry(g) => {
+            out.push(Tag::Geometry.byte());
+            out.extend_from_slice(&g.curve_key_bytes());
+        }
     }
 }
 
@@ -489,6 +498,10 @@ fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
         Datum::Interval(iv) => {
             out.push(Tag::Interval.byte());
             encode_interval_body(out, &iv);
+        }
+        Datum::Geometry(g) => {
+            out.push(Tag::Geometry.byte());
+            out.extend_from_slice(&g.curve_key_bytes());
         }
     }
 }
@@ -796,6 +809,15 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             Some(_) => Err(DecodeError::IntervalNotCanonical),
             None => Err(DecodeError::Truncated),
         },
+        Tag::Geometry => {
+            if body.len() < 8 {
+                return Err(DecodeError::Truncated);
+            }
+            let mut key = [0u8; 8];
+            key.copy_from_slice(&body[..8]);
+            let code = u64::from_be_bytes(key);
+            Ok((DataValue::Geometry(Geometry::from_curve_key(code)), 9))
+        }
     }
 }
 
@@ -978,6 +1000,7 @@ mod tests {
             DataValue::Vector(_) => Tag::Vector,
             DataValue::Validity(_) => Tag::Validity,
             DataValue::Interval(_) => Tag::Interval,
+            DataValue::Geometry(_) => Tag::Geometry,
         }
     }
 
@@ -1030,6 +1053,7 @@ mod tests {
             }
             (DataValue::Validity(x), DataValue::Validity(y)) => x.cmp_as_of_order(*y),
             (DataValue::Interval(x), DataValue::Interval(y)) => semantic_interval_cmp(x, y),
+            (DataValue::Geometry(x), DataValue::Geometry(y)) => x.cmp(y),
             _ => unreachable!("tags equal"),
         }
     }
@@ -1217,6 +1241,10 @@ mod tests {
             Bound::Unbounded,
             Bound::Unbounded,
         )));
+        out.push(DataValue::Geometry(Geometry::from_cells(0, 0)));
+        out.push(DataValue::Geometry(Geometry::from_cells(1, 0)));
+        out.push(DataValue::Geometry(Geometry::from_cells(0, 1)));
+        out.push(DataValue::Geometry(Geometry::from_cells(u32::MAX, u32::MAX)));
         out
     }
 
@@ -1393,7 +1421,7 @@ mod tests {
     #[test]
     fn law_datavalue_order_is_total_no_holes() {
         // One representative per kind — tag-byte order IS cross-kind order.
-        let kinds: [DataValue; 13] = [
+        let kinds: [DataValue; 14] = [
             DataValue::Null,
             DataValue::Bool(false),
             DataValue::Num(Num::float(f64::NAN)), // NaN is a Float, greatest Num
@@ -1413,6 +1441,7 @@ mod tests {
                     .into(),
             ),
             DataValue::Interval(Interval::EMPTY),
+            DataValue::Geometry(Geometry::from_cells(0, 0)),
         ];
         // Cross-kind: every pair is comparable; PartialOrd never None;
         // cmp never panics; byte == Ord == semantic.
@@ -1475,8 +1504,8 @@ mod tests {
     }
 
     fn random_datum(rng: &mut Rng, depth: usize) -> DataValue {
-        // Depth 0: all 13 kinds. Nested: scalars + List/Set only.
-        let roll = rng.below(if depth == 0 { 13 } else { 7 });
+        // Depth 0: all 14 kinds. Nested: scalars + List/Set only.
+        let roll = rng.below(if depth == 0 { 14 } else { 7 });
         match roll {
             0 => DataValue::Null,
             1 => DataValue::Bool(rng.next().is_multiple_of(2)),
@@ -1535,6 +1564,7 @@ mod tests {
                 let span = (rng.next() % 50) as i64;
                 Interval::new(Bound::Closed(lo), Bound::Closed(lo.saturating_add(span)))
             }),
+            12 => DataValue::Geometry(Geometry::from_cells(rng.next() as u32, rng.next() as u32)),
             _ => DataValue::Json(random_json(rng, 0)),
         }
     }
@@ -1613,6 +1643,20 @@ mod tests {
                 Bound::Unbounded
             )))),
             "600202800000000000000001"
+        );
+        // Hilbert @ 32-bit depth: origin 2×2 is {0,1,2,3} contiguous
+        // (orientation reflected vs order-1 by odd empty high levels).
+        assert_eq!(
+            hex(&encode(Datum::Geometry(Geometry::from_cells(0, 0)))),
+            "680000000000000000"
+        );
+        assert_eq!(
+            hex(&encode(Datum::Geometry(Geometry::from_cells(1, 0)))),
+            "680000000000000001"
+        );
+        assert_eq!(
+            hex(&encode(Datum::Geometry(Geometry::from_cells(0, 1)))),
+            "680000000000000003"
         );
         // Json: the value bytes are pinned exactly; the trailing hash is
         // verified against an INDEPENDENT in-test FNV implementation.

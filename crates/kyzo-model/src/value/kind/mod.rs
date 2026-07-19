@@ -13,6 +13,7 @@
 //! (inline vs arena) is the cell's threshold law, not a per-kind decision.
 
 pub mod collection;
+pub mod geometry;
 pub mod interval;
 pub mod json;
 pub mod regex;
@@ -20,4 +21,5 @@ pub mod uuid;
 pub mod validity;
 pub mod vector;
 
+pub use geometry::{CellCoord, Geometry};
 pub use vector::{Vector, VectorComponent, VectorDimension};

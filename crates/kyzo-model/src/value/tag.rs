@@ -34,7 +34,8 @@
 //! | 0x48 | List     | 0x49..=0x4F        |
 //! | 0x50 | Set      | 0x51..=0x57        |
 //! | 0x58 | Validity | 0x59..=0x5F        |
-//! | 0x60 | Interval | 0x61..=0xFF        |
+//! | 0x60 | Interval | 0x61..=0x67        |
+//! | 0x68 | Geometry | 0x69..=0xFF        |
 //!
 //! **Structural bytes**: `0x00` and `0x01` are reserved for the encoding
 //! grammar (`0x00` opens string escapes/terminators, `0x01` closes
@@ -57,10 +58,10 @@
 //!
 //! **The cross-type order (v1, permanent)**: `Null < Bool < Num <
 //! Str < Bytes < Uuid < Regex < Json < Vector < List < Set < Validity <
-//! Interval` — scalars, then identifiers, then documents, then sequences,
-//! then the temporal kinds. This is the *storage* total order over kinds;
-//! expression-level comparability is a separate, refusable authority and
-//! is not implied by this table.
+//! Interval < Geometry` — scalars, then identifiers, then documents, then
+//! sequences, then the temporal kinds, then geometry. This is the
+//! *storage* total order over kinds; expression-level comparability is a
+//! separate, refusable authority and is not implied by this table.
 
 /// Structural byte: opens string escapes and terminates string payloads.
 /// Never a tag.
@@ -68,7 +69,7 @@ pub const STRUCT_STRING: u8 = 0x00;
 /// Structural byte: terminates sequence payloads. Never a tag.
 pub const STRUCT_SEQ_END: u8 = 0x01;
 
-/// The 13 value kinds in fixed cross-type byte order: the sole
+/// The 14 value kinds in fixed cross-type byte order: the sole
 /// discriminant and order authority every encoding derives from. The
 /// discriminant *is* the canonical tag byte.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -87,6 +88,7 @@ pub enum Tag {
     Set = 0x50,
     Validity = 0x58,
     Interval = 0x60,
+    Geometry = 0x68,
 }
 
 impl Tag {
@@ -113,12 +115,13 @@ impl Tag {
             0x50 => Tag::Set,
             0x58 => Tag::Validity,
             0x60 => Tag::Interval,
+            0x68 => Tag::Geometry,
             _ => return None,
         })
     }
 
-    /// All 13 kinds in cross-type order.
-    pub const ALL: [Tag; 13] = [
+    /// All 14 kinds in cross-type order.
+    pub const ALL: [Tag; 14] = [
         Tag::Null,
         Tag::Bool,
         Tag::Num,
@@ -132,6 +135,7 @@ impl Tag {
         Tag::Set,
         Tag::Validity,
         Tag::Interval,
+        Tag::Geometry,
     ];
 }
 
@@ -143,7 +147,7 @@ mod tests {
     /// format moved, which is forbidden.
     #[test]
     fn format_v1_tag_table_is_pinned() {
-        let expected: [(Tag, u8); 13] = [
+        let expected: [(Tag, u8); 14] = [
             (Tag::Null, 0x05),
             (Tag::Bool, 0x08),
             (Tag::Num, 0x10),
@@ -157,6 +161,7 @@ mod tests {
             (Tag::Set, 0x50),
             (Tag::Validity, 0x58),
             (Tag::Interval, 0x60),
+            (Tag::Geometry, 0x68),
         ];
         for (tag, byte) in expected {
             assert_eq!(tag.byte(), byte, "format v1 violation: {tag:?} moved");
@@ -187,6 +192,6 @@ mod tests {
                 tags += 1;
             }
         }
-        assert_eq!(tags, 13, "exactly the 13 kinds decode");
+        assert_eq!(tags, 14, "exactly the 14 kinds decode");
     }
 }
