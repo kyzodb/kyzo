@@ -91,6 +91,30 @@ fn match_row_count(rows: &NamedRows) -> usize {
     n
 }
 
+/// Plain eval answer cardinality — independent of `::verify`. A verify
+/// Match whose row count disagrees with this is a silent wrong answer.
+fn eval_answer_count<S: Storage>(db: &Engine<S>, payload: &str) -> usize {
+    db.run_script(payload, no_params())
+        .unwrap_or_else(|e| panic!("plain eval of `{payload}` failed: {e}"))
+        .rows()
+        .len()
+}
+
+/// Verify Match must agree with plain eval on cardinality — checker vs
+/// evaluator differential. Soft "status == match" alone cannot catch a
+/// ghosted or truncated certificate that still says match.
+fn assert_verify_matches_eval<S: Storage>(db: &Engine<S>, payload: &str, options: ScriptOptions) {
+    let expected = eval_answer_count(db, payload);
+    let rows = run_verify(db, payload, options).expect("::verify runs");
+    assert_eq!(
+        match_row_count(&rows),
+        expected,
+        "verify Match count must equal plain-eval answer size for `{payload}` \
+         (summary={})",
+        summary_of(&rows)
+    );
+}
+
 fn run_verify<S: Storage>(
     db: &Engine<S>,
     payload: &str,
@@ -98,6 +122,11 @@ fn run_verify<S: Storage>(
 ) -> Result<NamedRows, miette::Report> {
     db.run_script_with(&wrap_verify(payload), no_params(), options)
 }
+
+/// Seeded chain 1→2→3→4 transitive closure: six pairs.
+const SEEDED_TC_ROWS: usize = 6;
+/// After retracting edge (3,4): only 1→2→3 remains → three pairs.
+const REDUCED_TC_ROWS: usize = 3;
 
 // ════════════════════════════════════════════════════════════════════════
 // Corpus render helpers — laws::Program → KyzoScript (fixture mint only)
@@ -351,34 +380,33 @@ const DENSE_SELF_JOIN_PATH: &str = "path[x, y] := *edge[x, y]
          path[x, z] := path[x, y], path[y, z]
          ?[x, y] := path[x, y]";
 
-/// The MATCH case: a real recursive query (transitive closure) verifies
-/// under the provenance door.
+/// Checker-vs-evaluator differential on transitive closure: Match count
+/// must equal plain-eval answer size (six seeded pairs). A ghosted or
+/// truncated certificate that still says `"match"` goes red here.
 #[test]
 fn verify_matches_on_a_real_recursive_query() {
     let db = seeded_db();
-    let rows =
-        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default()).expect("::verify runs");
-    assert_eq!(rows.headers(), &["status", "summary", "detail"]);
     assert_eq!(
-        match_row_count(&rows),
-        6,
-        "unexpected row count for the seeded chain"
+        eval_answer_count(&db, TRANSITIVE_CLOSURE),
+        SEEDED_TC_ROWS,
+        "fixture mint drifted — seeded TC must stay six pairs"
     );
+    assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, ScriptOptions::default());
 }
 
-/// Store-side sabotage (oracle half is gone): retract an edge, then
-/// `::verify` must Match the **reduced** world — never ghost the
-/// pre-sabotage answer set.
-///
-/// Certificate-injection NamedRows `mismatch` is not reachable from the
-/// public `::verify` door without a sabotage hook; Cap2
-/// (`kyzo-trials::provenance`) covers checker rejection of corrupted proofs.
+/// Store-side sabotage: retract edge (3,4). `::verify` must Match the
+/// **exact** reduced TC (three pairs), never ghost the pre-sabotage six.
+/// NamedRows `"mismatch"` is the certificate-injector sibling — not this.
 #[test]
 fn verify_catches_a_deliberately_sabotaged_oracle_fact() {
     let db = seeded_db();
     let before = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
         .expect("::verify before sabotage");
-    assert_eq!(match_row_count(&before), 6);
+    assert_eq!(match_row_count(&before), SEEDED_TC_ROWS);
+    assert_eq!(
+        match_row_count(&before),
+        eval_answer_count(&db, TRANSITIVE_CLOSURE)
+    );
 
     db.run_script(
         "?[a, b] <- $rows :rm edge {a, b}",
@@ -392,38 +420,101 @@ fn verify_catches_a_deliberately_sabotaged_oracle_fact() {
     )
     .expect("retract sabotaged edge");
 
+    let reduced_eval = eval_answer_count(&db, TRANSITIVE_CLOSURE);
+    assert_eq!(
+        reduced_eval, REDUCED_TC_ROWS,
+        "retract (3,4) must leave exactly the 1→2→3 closure"
+    );
     let after = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
         .expect("::verify after store sabotage");
-    let n = match_row_count(&after);
-    assert!(
-        n < 6,
-        "sabotaged store must shrink the verified answer, got {n} (summary={})",
+    assert_eq!(
+        match_row_count(&after),
+        REDUCED_TC_ROWS,
+        "sabotaged store must Match the reduced world exactly, not ghost \
+         pre-sabotage answers (summary={})",
         summary_of(&after)
+    );
+    assert_ne!(
+        match_row_count(&after),
+        SEEDED_TC_ROWS,
+        "reduced Match must diverge from the pre-sabotage count"
     );
 }
 
-/// Predicate/filter atoms are in-door on the provenance path (they bind
-/// no premises). Honest filtered reads Match — never silent pass-as-error,
-/// never the old IndexOpNotLanded stub.
+/// Seat 59 mutation campaign: sealed golden verifies; each structural
+/// fault is rejected by production `verify_proof` with a typed
+/// `BadCertificate`; NamedRows status is `"mismatch"` — never reduced
+/// `"match"`. No Engine forge API.
 #[test]
-fn verify_refuses_a_predicate_atom_by_name() {
-    let db = seeded_db();
-    let rows = run_verify(
-        &db,
-        "?[x, y] := *edge[x, y], y > 2",
-        ScriptOptions::default(),
-    )
-    .expect("::verify runs");
-    assert_eq!(status_of(&rows), "match", "summary={}", summary_of(&rows));
-    assert_eq!(match_row_count(&rows), 2);
+fn verify_mismatch_under_certificate_mutation_injector() {
+    use kyzo::oracle_harness::{
+        CertificateFault, golden_certificate_verifies, mismatch_named_rows_under_fault,
+    };
+
+    golden_certificate_verifies();
+
+    for fault in [
+        CertificateFault::CorruptClaimedCost,
+        CertificateFault::OutOfRangeDerivation,
+        CertificateFault::CorruptPremiseNode,
+    ] {
+        let rows = mismatch_named_rows_under_fault(fault);
+        assert_eq!(rows.headers(), &["status", "summary", "detail"]);
+        assert_eq!(
+            status_of(&rows),
+            "mismatch",
+            "fault {fault:?}: summary={}",
+            summary_of(&rows)
+        );
+        assert_ne!(
+            status_of(&rows),
+            "match",
+            "injected corruption must not soft-green as Match"
+        );
+        let detail: &str = match rows.rows().first().and_then(|r| r.get(2)) {
+            Some(DataValue::Str(s)) => s.as_ref(),
+            other => panic!("expected detail Str, got {other:?}"),
+        };
+        assert!(
+            detail.contains("verify_proof")
+                && detail.contains("injected certificate")
+                && detail.contains(&format!("{fault:?}")),
+            "fault {fault:?}: detail must name the typed injected rejection, got {detail}"
+        );
+        assert!(
+            summary_of(&rows).contains("evaluated")
+                && summary_of(&rows).contains("provenance"),
+            "mismatch summary must name both sets, got {}",
+            summary_of(&rows)
+        );
+    }
 }
 
-/// Production `::verify` returns NamedRows status `match` for an honest
-/// recursive program (no longer IndexOpNotLanded).
+/// Filter atoms bind no premises — still Match, but cardinality must
+/// equal plain eval (two edges with `y > 2`), and must be strictly
+/// smaller than the unfiltered edge relation (three).
+#[test]
+fn verify_matches_filtered_edges_against_eval_count() {
+    let db = seeded_db();
+    let filtered = "?[x, y] := *edge[x, y], y > 2";
+    let unfiltered = "?[x, y] := *edge[x, y]";
+    let all = eval_answer_count(&db, unfiltered);
+    let want = eval_answer_count(&db, filtered);
+    assert_eq!(all, 3, "seeded edge relation");
+    assert_eq!(want, 2, "y > 2 keeps (2,3) and (3,4)");
+    assert!(want < all, "filter must shrink the answer");
+    assert_verify_matches_eval(&db, filtered, ScriptOptions::default());
+}
+
+/// Production `::verify` via `run_script` must bit-agree with the
+/// `run_script_with` wrap door on status + Match count — door differential,
+/// not a second happy-path Match.
 #[test]
 fn verify_directive_runs_through_run_script() {
     let db = seeded_db();
-    let rows = db
+    let via_wrap = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
+        .expect("wrap ::verify");
+    let via_directive = db
         .run_script(
             "::verify { path[x, y] := *edge[x, y]
          path[x, z] := path[x, y], *edge[y, z]
@@ -431,33 +522,47 @@ fn verify_directive_runs_through_run_script() {
             no_params(),
         )
         .expect("production ::verify runs");
-    assert_eq!(rows.headers(), &["status", "summary", "detail"]);
-    assert_eq!(status_of(&rows), "match");
-    assert_eq!(match_row_count(&rows), 6);
+    assert_eq!(via_directive.headers(), &["status", "summary", "detail"]);
+    assert_eq!(status_of(&via_directive), status_of(&via_wrap));
+    assert_eq!(
+        match_row_count(&via_directive),
+        match_row_count(&via_wrap)
+    );
+    assert_eq!(match_row_count(&via_directive), SEEDED_TC_ROWS);
+    assert_eq!(
+        match_row_count(&via_directive),
+        eval_answer_count(&db, TRANSITIVE_CLOSURE)
+    );
 }
 
-/// Production `::verify` names unsupported constructs via NamedRows status
-/// `unsupported` (`:order` / `:limit` / `:offset` / mutations) — not Err.
+/// `:order` is NamedRows `unsupported` naming order — never Err, never
+/// silent Match. Control: the same query without `:order` still Matches
+/// against eval (proves the door did not start always-returning unsupported).
 #[test]
 fn verify_directive_names_unsupported_constructs() {
     let db = seeded_db();
+    let honest = "?[x, y] := *edge[x, y]";
+    assert_verify_matches_eval(&db, honest, ScriptOptions::default());
+
     let rows = db
         .run_script("::verify { ?[x, y] := *edge[x, y] :order x }", no_params())
         .expect("::verify returns NamedRows for unsupported");
     assert_eq!(status_of(&rows), "unsupported");
+    assert_ne!(status_of(&rows), "match");
     assert!(
-        summary_of(&rows).contains("order") || summary_of(&rows).contains("limit"),
-        "expected order/limit unsupported summary, got {}",
+        summary_of(&rows).contains("order"),
+        "expected order named in unsupported summary, got {}",
         summary_of(&rows)
     );
 }
 
-/// Every accepted query in a wide, seeded, randomly generated corpus
-/// returns status `match` through the provenance door.
+/// Generated corpus: every accepted entry must Match **and** agree with
+/// plain-eval cardinality. Status-only Match cannot catch a wrong count.
 #[test]
 fn verify_matches_across_a_generated_corpus() {
     const SEEDS: u64 = 40;
     let mut failures = Vec::new();
+    let mut exercised = 0usize;
     for seed in 0..SEEDS {
         let mut rng = Rng::new(seed);
         let (program, entries) = gen_program(&mut rng);
@@ -481,8 +586,24 @@ fn verify_matches_across_a_generated_corpus() {
         for (entry_rel, arity) in entries {
             let line = entry_line(&entry_rel, &vec![None; arity]);
             let script = format!("{rules_text}\n{line}");
+            let eval_n = match db.run_script(&script, no_params()) {
+                Ok(r) => r.rows().len(),
+                Err(e) => {
+                    failures.push(format!("seed {seed} entry {entry_rel}: plain eval {e}"));
+                    continue;
+                }
+            };
             match run_verify(&db, &script, ScriptOptions::default()) {
-                Ok(rows) if status_of(&rows) == "match" => {}
+                Ok(rows) if status_of(&rows) == "match" => {
+                    let n = match_row_count(&rows);
+                    if n != eval_n {
+                        failures.push(format!(
+                            "seed {seed} entry {entry_rel}: verify Match {n} != eval {eval_n}"
+                        ));
+                    } else {
+                        exercised += 1;
+                    }
+                }
                 Ok(rows) => failures.push(format!(
                     "seed {seed} entry {entry_rel}: expected match, got {} ({})",
                     status_of(&rows),
@@ -493,34 +614,35 @@ fn verify_matches_across_a_generated_corpus() {
         }
     }
     assert!(
+        exercised > 0,
+        "generated corpus exercised zero Match+eval agreements — vacuous"
+    );
+    assert!(
         failures.is_empty(),
-        "generated-corpus verify FINDINGS ({} of {SEEDS} seeds):\n{}",
+        "generated-corpus verify FINDINGS ({} of {SEEDS} seeds; exercised {exercised}):\n{}",
         failures.len(),
         failures.join("\n")
     );
 }
 
-/// Aggregation (normal + meet), the one construct `gen_program` never
-/// emits, still Matches — closing the gap the generated corpus above
-/// leaves named. Aggregated heads ground out in the provenance graph.
+/// Aggregation: three seeded targets → three groups. Match without a
+/// count is soft; disagreeing with plain eval goes red.
 #[test]
 fn verify_matches_a_hand_written_aggregation_query() {
     let db = seeded_db();
-    let rows = run_verify(
-        &db,
-        "?[y, count(x)] := *edge[x, y]",
-        ScriptOptions::default(),
-    )
-    .expect("::verify runs");
-    assert_eq!(status_of(&rows), "match", "summary={}", summary_of(&rows));
+    let q = "?[y, count(x)] := *edge[x, y]";
+    assert_eq!(eval_answer_count(&db, q), 3, "one count row per target");
+    assert_verify_matches_eval(&db, q, ScriptOptions::default());
 }
 
-/// The refusal-corpus proof: `unstratifiable_corpus()` must never Match.
+/// Unstratifiable corpus must never Match. Anti-vacuity: at least one
+/// program is exercised; silent Match is the only red we care about.
 #[test]
 fn verify_never_matches_the_unstratifiable_corpus() {
     use kyzo_oracle::unstratifiable_corpus;
 
     let mut failures = Vec::new();
+    let mut exercised = 0usize;
     for (name, program) in unstratifiable_corpus() {
         if !program.fixed.is_empty() {
             continue;
@@ -545,6 +667,7 @@ fn verify_never_matches_the_unstratifiable_corpus() {
                 .len();
             let line = entry_line(&rel, &vec![None; arity]);
             let script = format!("{rules_text}\n{line}");
+            exercised += 1;
             match run_verify(&db, &script, ScriptOptions::default()) {
                 Err(_) => {}
                 Ok(rows) if status_of(&rows) == "match" => failures.push(format!(
@@ -555,13 +678,19 @@ fn verify_never_matches_the_unstratifiable_corpus() {
         }
     }
     assert!(
+        exercised > 0,
+        "unstratifiable corpus exercised nothing — vacuous green"
+    );
+    assert!(
         failures.is_empty(),
         "refusal-corpus verify FINDINGS:\n{}",
         failures.join("\n")
     );
 }
 
-/// Two versions of the same fact: provenance `::verify` agrees at EACH instant.
+/// Point-in-time reads: each instant's verify Match equals plain eval.
+/// Cross-instant: @100 and @200 both size 1, but @50 is empty — a door
+/// that ignored validity would ghost the later put into @50.
 #[test]
 fn verify_matches_a_point_in_time_historical_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -596,14 +725,27 @@ fn verify_matches_a_point_in_time_historical_read() {
     for (q, expect) in [
         ("?[k, v] := *hist[k, v @ 100]", 1usize),
         ("?[k, v] := *hist[k, v @ 200]", 1),
+        ("?[k, v] := *hist[k, v @ 150]", 1),
         ("?[k, v] := *hist[k, v @ 50]", 0),
     ] {
+        assert_eq!(
+            eval_answer_count(&db, q),
+            expect,
+            "plain eval drift at {q}"
+        );
         let rows = run_verify(&db, q, ScriptOptions::default()).expect("::verify historical");
         assert_eq!(match_row_count(&rows), expect, "query {q}");
     }
+    // Ghost-future check: @50 must stay empty even though @200 exists.
+    assert_eq!(
+        eval_answer_count(&db, "?[k, v] := *hist[k, v @ 50]"),
+        0
+    );
 }
 
-/// A negated historical read still matches (variables bound positively first).
+/// Negated historical: `@ 50` (empty hist) keeps both probe rows; `@ 100`
+/// excludes `(1,a)` → one row. A door that ignored the as-of would not
+/// shrink — soft count-only on the empty-hist arm alone cannot catch that.
 #[test]
 fn verify_matches_a_negated_historical_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -637,22 +779,22 @@ fn verify_matches_a_negated_historical_read() {
     )
     .expect("seed probe");
 
-    let rows = run_verify(
-        &db,
-        "?[k, v] := *probe[k, v], not *hist[k, v @ 50]",
-        ScriptOptions::default(),
-    )
-    .expect("::verify negated historical");
-    assert_eq!(match_row_count(&rows), 2);
+    let empty_hist = "?[k, v] := *probe[k, v], not *hist[k, v @ 50]";
+    let live_hist = "?[k, v] := *probe[k, v], not *hist[k, v @ 100]";
+    assert_eq!(eval_answer_count(&db, empty_hist), 2);
+    assert_eq!(eval_answer_count(&db, live_hist), 1);
+    assert_verify_matches_eval(&db, empty_hist, ScriptOptions::default());
+    assert_verify_matches_eval(&db, live_hist, ScriptOptions::default());
+    assert_ne!(
+        eval_answer_count(&db, empty_hist),
+        eval_answer_count(&db, live_hist),
+        "as-of must change the negated answer — otherwise the arms are not a differential"
+    );
 }
 
-/// Interval-derivation / ordered-answer boundary, named specifically.
-///
-/// `@spans` is not yet on the kyzo-model parse door (only point-in-time
-/// `@ <expr>` is) — a spans script fails at parse, never silently Matches.
-/// The NamedRows `unsupported` seat this cut does expose is exercised via
-/// `:order` (same product status the historical oracle translator reserved
-/// for interval derivation).
+/// `@spans` fails at the language door (never silent Match). `:limit`
+/// returns NamedRows `unsupported` naming limit specifically. Control:
+/// the unlimited query still Matches against eval.
 #[test]
 fn verify_refuses_a_spans_read_by_name() {
     let db = seeded_db();
@@ -668,6 +810,9 @@ fn verify_refuses_a_spans_read_by_name() {
         "@spans must fail at the language door, got {spans:?}"
     );
 
+    let unlimited = "?[x, y] := *edge[x, y]";
+    assert_verify_matches_eval(&db, unlimited, ScriptOptions::default());
+
     let rows = run_verify(
         &db,
         "?[x, y] := *edge[x, y] :limit 1",
@@ -675,34 +820,73 @@ fn verify_refuses_a_spans_read_by_name() {
     )
     .expect("::verify returns NamedRows for :limit");
     assert_eq!(status_of(&rows), "unsupported");
+    assert_ne!(status_of(&rows), "match");
     assert!(
-        summary_of(&rows).contains("limit") || summary_of(&rows).contains("order"),
-        "expected order/limit unsupported, got {}",
+        summary_of(&rows).contains("limit"),
+        "expected limit named in unsupported summary, got {}",
         summary_of(&rows)
     );
 }
 
-/// A starved provenance derivation ceiling refuses as NamedRows `refused`
-/// (eval completes; enumeration crosses the ceiling).
+/// Dense self-join under a starved derived-tuple ceiling → `refused`.
+/// Same DB + same program under a generous ceiling → Match equal to eval.
+/// Either arm alone is soft; the differential catches a door that always
+/// refuses or always matches.
 #[test]
 fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
     let db = dense_path_db();
-    let options = ScriptOptions {
+    let starved = ScriptOptions {
         derived_tuple_ceiling: Some(500),
         epoch_ceiling: Some(1_000_000),
         ..ScriptOptions::default()
     };
-    let rows = run_verify(&db, DENSE_SELF_JOIN_PATH, options)
+    let generous = ScriptOptions {
+        derived_tuple_ceiling: Some(10_000_000),
+        epoch_ceiling: Some(1_000_000),
+        ..ScriptOptions::default()
+    };
+
+    let refused = run_verify(&db, DENSE_SELF_JOIN_PATH, starved)
         .expect("starved provenance ceiling returns NamedRows, not Err");
-    assert_eq!(status_of(&rows), "refused", "summary={}", summary_of(&rows));
-    assert!(
-        summary_of(&rows).contains("provenance") || summary_of(&rows).contains("budget"),
-        "expected a provenance-budget refusal, got {}",
-        summary_of(&rows)
+    assert_eq!(
+        status_of(&refused),
+        "refused",
+        "summary={}",
+        summary_of(&refused)
     );
+    assert_ne!(status_of(&refused), "match");
+    assert!(
+        summary_of(&refused).contains("provenance") || summary_of(&refused).contains("budget"),
+        "expected a provenance-budget refusal, got {}",
+        summary_of(&refused)
+    );
+
+    // Generous arm: eval may itself be large; verify must Match that size
+    // (or refuse for a different reason — but must not soft-green as Match
+    // with a wrong count). Prefer Match against eval when eval completes.
+    match db.run_script_with(DENSE_SELF_JOIN_PATH, no_params(), generous.clone()) {
+        Ok(eval_rows) => {
+            let verified = run_verify(&db, DENSE_SELF_JOIN_PATH, generous).expect("generous verify");
+            assert_eq!(status_of(&verified), "match", "summary={}", summary_of(&verified));
+            assert_eq!(match_row_count(&verified), eval_rows.rows().len());
+        }
+        Err(_) => {
+            // Eval itself refused under the generous budget — then verify
+            // must not silently Match either.
+            let verified = run_verify(&db, DENSE_SELF_JOIN_PATH, generous);
+            if let Ok(rows) = verified {
+                assert_ne!(
+                    status_of(&rows),
+                    "match",
+                    "verify must not Match when plain eval failed"
+                );
+            }
+        }
+    }
 }
 
-/// A generous ceiling on the SAME program still matches.
+/// Seeded TC under an explicit generous budget must still Match eval —
+/// a budget door that always refuses would go red; a wrong count too.
 #[test]
 fn verify_still_matches_under_a_generous_budget() {
     let db = seeded_db();
@@ -711,14 +895,16 @@ fn verify_still_matches_under_a_generous_budget() {
         derived_tuple_ceiling: Some(10_000),
         ..ScriptOptions::default()
     };
-    let rows = run_verify(&db, TRANSITIVE_CLOSURE, options).expect("::verify runs");
-    assert_eq!(match_row_count(&rows), 6);
+    assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, options);
+    assert_eq!(
+        eval_answer_count(&db, TRANSITIVE_CLOSURE),
+        SEEDED_TC_ROWS
+    );
 }
 
-/// Production budget defaults keep derived-tuple spend bounded: default
-/// `ScriptOptions` (no explicit ceiling) Match on the seeded TC, and an
-/// explicit derived-tuple ceiling override refuses on the dense multi-path
-/// graph — never unbounded enumeration.
+/// Default options Match the seeded TC against eval; the same dense
+/// program under an explicit low derived-tuple ceiling refuses — never
+/// unbounded enumeration, never always-Match.
 #[test]
 fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
     let db = seeded_db();
@@ -727,9 +913,7 @@ fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
         "default ScriptOptions leaves derived_tuple_ceiling unset so production \
          applies its finite default at the door"
     );
-    let defaulted =
-        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default()).expect("default ::verify");
-    assert_eq!(status_of(&defaulted), "match");
+    assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, ScriptOptions::default());
 
     let dense = dense_path_db();
     let refused = run_verify(
@@ -743,4 +927,5 @@ fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
     )
     .expect("override ceiling returns NamedRows");
     assert_eq!(status_of(&refused), "refused");
+    assert_ne!(status_of(&refused), "match");
 }

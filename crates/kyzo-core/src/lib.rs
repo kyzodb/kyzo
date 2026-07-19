@@ -363,6 +363,11 @@ pub mod oracle_harness {
     };
     pub use crate::exec::plan::program::{MagicSymbol, StoreLifetimes};
     pub use crate::exec::provenance::eval::{Witness, WitnessTable};
+    /// Trials-only certificate mutation injector (seats 8 + 59).
+    /// Not a production `Engine` / `::verify` forge door.
+    pub use crate::session::certificate_inject::{
+        CertificateFault, golden_certificate_verifies, mismatch_named_rows_under_fault,
+    };
 }
 
 // Sealed single-host doors deleted. Tooling speaks the sealed contract or
