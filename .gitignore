@@ -28,3 +28,7 @@ __pycache__/
 
 # VS Code extension build artifact (packaged by vsce, shipped via releases, never committed)
 *.vsix
+
+# Claude Code kyzo-plan 0.2.9 sync copies (operator-ordered; not story allowlist)
+.claude/agents/kyzo-plan-*.md
+.claude/skills/kyzo-plan-*/
