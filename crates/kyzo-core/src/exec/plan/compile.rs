@@ -140,7 +140,7 @@ use miette::{Context, Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
 use crate::data::aggr::Aggregation;
-use crate::data::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::{BindingPos, Expr};
 use crate::data::program::{
     DeltaAxis, HeadAggrSlot, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed,
     MagicSymbol, StratifiedMagicProgram, ValidityClause,
@@ -1084,7 +1084,7 @@ mod tests {
         InputRelationHandle, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom,
         StoreLifetimes, Unification,
     };
-    use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::Tuple;
     use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
     use crate::query::laws::{Literal, Program, Rel, Rule, Term, naive_eval};
@@ -2616,7 +2616,7 @@ mod tests {
     /// `c1 > k` as a body predicate atom.
     fn pred_gt(col: Symbol, k: i64) -> MagicAtom {
         MagicAtom::Predicate(Expr::Apply {
-            op: &crate::data::functions::OP_GT,
+            op: kyzo_model::program::op::OP_GT,
             args: Box::new([
                 Expr::Binding {
                     var: col,
@@ -2639,12 +2639,12 @@ mod tests {
     /// for a poison row landing mid-stream.
     #[test]
     fn batched_unification_matches_iterator() {
-        use crate::data::functions::{OP_ADD, OP_LIST};
+        use kyzo_model::program::op::{OP_ADD, OP_LIST};
         let unify_prog = |multi: bool| -> StratifiedMagicProgram {
             let (c0, c1, w) = (sym("c0"), sym("c1"), sym("w"));
             let expr = if multi {
                 Expr::Apply {
-                    op: &OP_LIST,
+                    op: OP_LIST,
                     args: Box::new([
                         Expr::Binding {
                             var: c0.clone(),
@@ -2659,7 +2659,7 @@ mod tests {
                 }
             } else {
                 Expr::Apply {
-                    op: &OP_ADD,
+                    op: OP_ADD,
                     args: Box::new([
                         Expr::Binding {
                             var: c0.clone(),
@@ -2731,7 +2731,7 @@ mod tests {
             .to_string()
         };
         fn unify_prog_err() -> StratifiedMagicProgram {
-            use crate::data::functions::OP_ADD;
+            use kyzo_model::program::op::OP_ADD;
             let (c0, c1, w) = (sym("c0"), sym("c1"), sym("w"));
             program_of(vec![vec![(
                 entry_symbol(),
@@ -2742,7 +2742,7 @@ mod tests {
                         MagicAtom::Unification(Unification {
                             binding: w,
                             expr: Expr::Apply {
-                                op: &OP_ADD,
+                                op: OP_ADD,
                                 args: Box::new([
                                     Expr::Binding {
                                         var: c0,

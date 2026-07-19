@@ -22,8 +22,8 @@ use itertools::Itertools;
 use miette::{Result, bail};
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{BindingPos, Expr};
-use crate::data::functions::OP_LIST;
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::op::OP_LIST;
 use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -192,7 +192,7 @@ mod tests {
             (
                 SmartString::from("out"),
                 Expr::Apply {
-                    op: &OP_LIST,
+                    op: OP_LIST,
                     args: Box::new([binding("id")]),
                     span: SourceSpan::default(),
                 },

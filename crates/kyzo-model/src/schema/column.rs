@@ -1,54 +1,19 @@
-/*
- * Copyright 2022, The Cozo Project Authors.
- *
- * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
- * If a copy of the MPL was not distributed with this file,
- * You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-/*
- * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): `VecElementType` is imported from the value model instead of
- * redefined here; the base64 vector decode is safe and little-endian by
- * definition (the original used an unsafe, unaligned, native-endian pointer
- * cast) and rejects length mismatches instead of truncating; pre-epoch
- * validity timestamps parse to signed microseconds instead of panicking;
- * and the list-to-vector coercion builds arrays directly from collected
- * values.
- */
-
-//! The schema vocabulary: what a stored relation promises about its rows.
-//!
-//! A column's typing ([`NullableColType`]) is a **contract facts must pass
-//! to rest in a relation**: nothing enters storage without satisfying it.
-//! [`NullableColType::coerce`] is that contract applied at the data
-//! boundary — fallible parsing, not validation. It consumes an untyped
-//! [`DataValue`] and returns the value in its typed, storable shape (or an
-//! error); downstream code never re-checks what coercion already proved.
-//!
-//! [`StoredRelationMetadata`] is a stored relation's whole schema — its key
-//! columns and its dependent columns, each a named, typed [`ColumnDef`].
-//!
-//! Input-to-stored schema compatibility is proved whole at construction
-//! ([`CompatibleInputSchema::prove`]): the constructor either yields a
-//! branded proof or refuses the whole schema. There is no column-by-column
-//! approval API — per-column checks are private internals of that proof.
+//! Column typing and coerce — the contract facts must pass to rest in a relation.
 
 use std::fmt::{Display, Formatter};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, ensure};
 use serde_json::json;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
-use crate::data::functions::to_json;
-use kyzo_model::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
-
-use crate::data::json::{json_from_serde, serde_from_json};
-use kyzo_model::data_value_any;
+use crate::envelope::{json_from_serde, serde_from_json};
+use crate::program::expr::Expr;
+use crate::value::json_convert::to_json;
+use crate::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
+use crate::data_value_any;
 
 /// Schema vocabulary: a vector column's declared element width. Stored
 /// vector VALUES are always f64 canonical (format v1); `F32` columns
@@ -57,7 +22,7 @@ use kyzo_model::data_value_any;
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize,
 )]
-pub(crate) enum VecElementType {
+pub enum VecElementType {
     F32,
     F64,
 }
@@ -246,115 +211,10 @@ pub enum ColType {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
-pub(crate) struct ColumnDef {
-    pub(crate) name: SmartString<LazyCompact>,
-    pub(crate) typing: NullableColType,
-    pub(crate) default_gen: Option<Expr>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
-pub(crate) struct StoredRelationMetadata {
-    pub(crate) keys: Vec<ColumnDef>,
-    pub(crate) non_keys: Vec<ColumnDef>,
-}
-
-/// Write shape that decides which stored columns an input must satisfy.
-/// Variants are constructed by the mutation tier (unlanded) and by tests
-/// that exercise [`CompatibleInputSchema::prove`].
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[allow(dead_code)]
-pub(crate) enum RelationWriteShape {
-    /// Full put: every stored key and non-key must be provided (or defaulted).
-    Put,
-    /// Removal or update: only stored keys must be provided (or defaulted).
-    RemoveOrUpdate,
-}
-
-/// Branded proof that an input schema is compatible with a stored schema
-/// for one [`RelationWriteShape`]. The type *is* the certificate — mint it
-/// only through [`CompatibleInputSchema::prove`], which constructs whole
-/// or refuses whole.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct CompatibleInputSchema {
-    _private: (),
-}
-
-impl CompatibleInputSchema {
-    /// Prove that `input` may write against `stored` under `shape`.
-    ///
-    /// All column obligations are discharged inside this constructor: either
-    /// every obligation holds and a proof is returned, or the whole schema
-    /// is refused. Callers never approve columns one at a time.
-    pub(crate) fn prove(
-        stored: &StoredRelationMetadata,
-        input: &StoredRelationMetadata,
-        shape: RelationWriteShape,
-    ) -> Result<Self> {
-        for col in input.keys.iter().chain(input.non_keys.iter()) {
-            stored.require_compatible_column(col)?;
-        }
-        for col in &stored.keys {
-            input.require_provides(col)?;
-        }
-        if matches!(shape, RelationWriteShape::Put) {
-            for col in &stored.non_keys {
-                input.require_provides(col)?;
-            }
-        }
-        Ok(Self { _private: () })
-    }
-}
-
-impl StoredRelationMetadata {
-    /// Private whole-proof helper: this schema provides `col` (by name) or
-    /// `col` carries a default. Not a public approval surface.
-    fn require_provides(&self, col: &ColumnDef) -> Result<()> {
-        for target in self.keys.iter().chain(self.non_keys.iter()) {
-            if target.name == col.name {
-                return Ok(());
-            }
-        }
-        if col.default_gen.is_none() {
-            #[derive(Debug, Error, Diagnostic)]
-            #[error("required column {0} not provided by input")]
-            #[diagnostic(code(eval::required_col_not_provided))]
-            struct ColumnNotProvided(String);
-
-            bail!(ColumnNotProvided(col.name.to_string()))
-        }
-        Ok(())
-    }
-
-    /// Private whole-proof helper: `col` names a column here with compatible
-    /// typing (`Any?` remains a wildcard). Not a public approval surface.
-    fn require_compatible_column(&self, col: &ColumnDef) -> Result<()> {
-        for target in self.keys.iter().chain(self.non_keys.iter()) {
-            if target.name == col.name {
-                #[derive(Debug, Error, Diagnostic)]
-                #[error("requested column {0} has typing {1}, but the requested typing is {2}")]
-                #[diagnostic(code(eval::col_type_mismatch))]
-                struct IncompatibleTyping(String, NullableColType, NullableColType);
-                if (!col.typing.is_nullable() || *col.typing.coltype() != ColType::Any)
-                    && target.typing != col.typing
-                {
-                    bail!(IncompatibleTyping(
-                        col.name.to_string(),
-                        target.typing.clone(),
-                        col.typing.clone()
-                    ))
-                }
-
-                return Ok(());
-            }
-        }
-
-        #[derive(Debug, Error, Diagnostic)]
-        #[error("required column {0} not found")]
-        #[diagnostic(code(eval::required_col_not_found))]
-        struct ColumnNotFound(String);
-
-        bail!(ColumnNotFound(col.name.to_string()))
-    }
+pub struct ColumnDef {
+    pub name: SmartString<LazyCompact>,
+    pub typing: NullableColType,
+    pub default_gen: Option<Expr>,
 }
 
 impl NullableColType {
@@ -368,7 +228,7 @@ impl NullableColType {
     // `expect`: an item-level dead_code expectation marks the item a live
     // root, so it can never be fulfilled.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn coerce(&self, data: DataValue, cur_vld: ValidityTs) -> Result<DataValue> {
+    pub fn coerce(&self, data: DataValue, cur_vld: ValidityTs) -> Result<DataValue> {
         if matches!(data, DataValue::Null) {
             return if self.is_nullable() {
                 Ok(data)
@@ -396,7 +256,7 @@ impl NullableColType {
 
         Ok(match &self.coltype {
             ColType::Any => match data {
-                DataValue::Set(s) => DataValue::List(s.into_iter().collect_vec()),
+                DataValue::Set(s) => DataValue::List(s.into_iter().collect::<Vec<_>>()),
                 d @ (data_value_any!()) => d,
             },
             ColType::Bool => DataValue::from(data.get_bool().ok_or_else(make_err)?),
@@ -443,7 +303,7 @@ impl NullableColType {
                     DataValue::List(
                         l.into_iter()
                             .map(|el| eltype.coerce(el, cur_vld))
-                            .try_collect()?,
+                            .collect::<Result<Vec<_>, _>>()?,
                     )
                 } else {
                     bail!(make_err())
@@ -464,7 +324,7 @@ impl NullableColType {
                                 })
                                 .ok_or_else(make_err)
                         })
-                        .try_collect()?;
+                        .collect::<Result<Vec<_>, _>>()?;
                     DataValue::Vector(
                         Vector::try_new(collected).ok_or_else(|| make_err())?,
                     )
@@ -537,7 +397,7 @@ impl NullableColType {
                         l.into_iter()
                             .zip(typ.iter())
                             .map(|(el, t)| t.coerce(el, cur_vld))
-                            .try_collect()?,
+                            .collect::<Result<Vec<_>, _>>()?,
                     )
                 } else {
                     bail!(make_err())
@@ -578,7 +438,7 @@ impl NullableColType {
                             // date is a negative count, not a panic (the CozoDB
                             // original unwrapped `duration_since(UNIX_EPOCH)` on
                             // a `SystemTime` and aborted on any pre-epoch input).
-                            let microseconds = kyzo_model::timestamp_to_micros(ts);
+                            let microseconds = crate::timestamp_to_micros(ts);
 
                             if microseconds == i64::MAX || microseconds == i64::MIN {
                                 bail!(InvalidValidity(DataValue::Str(s.into())))

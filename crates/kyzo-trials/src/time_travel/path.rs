@@ -41,14 +41,14 @@ use std::num::NonZeroU32;
 use smartstring::SmartString;
 
 use crate::data::aggr::parse_aggr;
-use crate::data::expr::{BindingPos, Expr};
-use crate::data::functions::{OP_GE, OP_LE};
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::op::{OP_GE, OP_LE};
 use crate::data::program::{
     DeltaAxis, HeadAggrSlot, InputAtom, InputInlineRulesOrFixed, InputRelationHandle, MagicAtom,
     MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed,
     MagicSymbol, StoreLifetimes, StratifiedMagicProgram, ValidityClause,
 };
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{AsOf, Bound, DataValue, Interval, MAX_VALIDITY_TS, Tuple, ValidityTs};
@@ -140,7 +140,7 @@ fn binding(var: &str) -> Expr {
 /// `var >= k` — a lower-bound predicate `compute_bounds` recognizes.
 fn pred_ge(var: &str, k: i64) -> MagicAtom {
     MagicAtom::Predicate(Expr::Apply {
-        op: &OP_GE,
+        op: OP_GE,
         args: Box::new([
             binding(var),
             Expr::Const {
@@ -154,7 +154,7 @@ fn pred_ge(var: &str, k: i64) -> MagicAtom {
 /// `var <= k` — an upper-bound predicate `compute_bounds` recognizes.
 fn pred_le(var: &str, k: i64) -> MagicAtom {
     MagicAtom::Predicate(Expr::Apply {
-        op: &OP_LE,
+        op: OP_LE,
         args: Box::new([
             binding(var),
             Expr::Const {

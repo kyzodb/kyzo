@@ -8,10 +8,11 @@
 
 pub mod envelope;
 pub mod program;
+pub mod schema;
 pub mod typestate;
 pub mod value;
 
-pub use program::{SourceSpan, Symbol, SymbolKind};
+pub use program::{BindingPos, Decision, Expr, LazyOp, OpDecl, SourceSpan, Symbol, SymbolKind, resolve_decl};
 pub use value::{
     Admission, Arity, AsOf, Bound, CompiledRegexV1, DataValue, DecodeError, Denial, Interval,
     Json, JsonNum, JsonObj, MAX_VALIDITY_TS, Num, NumRepr, NumericOrd, RegexFlags, RegexSource,
@@ -23,3 +24,4 @@ pub use value::validity_coerce::{
     BadValiditySpecification, data_value_to_vld_spec, str2vld, timestamp_to_micros,
 };
 pub use envelope::{JsonData, JsonValue, json_from_serde, json_to_datavalue, serde_from_json};
+pub use value::json_convert::{to_json, json2val, interval_to_json};

@@ -88,6 +88,7 @@ flatbuffers = { version = "25.12.19", default-features = false, features = ["std
 rayon = "1"
 
 [dev-dependencies]
+kyzo-model = { path = "../kyzo-model" }
 tempfile = "3"
 proptest = "1"
 criterion = "0.8.2"

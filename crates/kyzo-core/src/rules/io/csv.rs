@@ -31,12 +31,12 @@ use csv::StringRecord;
 use miette::{IntoDiagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
-use crate::data::functions::{op_to_float, op_to_uuid};
+use kyzo_model::program::expr::Expr;
+use crate::exec::stdlib::convert::{op_to_float, op_to_uuid};
 use crate::data::program::{
     FixedRuleOptionNotFoundError, WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
 };
-use crate::data::relation::{ColType, NullableColType};
+use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;

@@ -65,14 +65,13 @@ Format: `path` — description
 `crates/kyzo-core/src/exec/provenance/eval.rs` — evaluates provenance alongside ordinary derivation
 `crates/kyzo-core/src/exec/provenance/semiring.rs` — semiring algebra that defines how provenance combines
 `crates/kyzo-core/src/exec/sort.rs` — orders result rows under the one law’s semantic order
-`crates/kyzo-core/src/exec/stdlib/bind.rs` — sole door that mints BoundOp from OpDecl + body; owns the builtin registry pairing
+`crates/kyzo-core/src/exec/stdlib/bind.rs` — bind_op + bind::resolve_op: sole mint of BoundOp from OpDecl + body, and the sole public name→BoundOp registry
 `crates/kyzo-core/src/exec/stdlib/bound_op.rs` — BoundOp: OpDecl paired with a total body fn; private mint via bind only
 `crates/kyzo-core/src/exec/stdlib/collection.rs` — list and JSON algebra kernels (not evidence/chunks-as-truth)
 `crates/kyzo-core/src/exec/stdlib/compare.rs` — language equality/order/type predicates and assert; cross-type refuse (not Tag order)
 `crates/kyzo-core/src/exec/stdlib/convert.rs` — eval-time value construction/conversion (to_*, vec, uuid fields, validity mint)
 `crates/kyzo-core/src/exec/stdlib/errors.rs` — typed numeric/domain refuse + NaN checkpoint helpers both evaluators share
-`crates/kyzo-core/src/exec/stdlib/expr.rs` — built-in expression forms callable from KyzoScript
-`crates/kyzo-core/src/exec/stdlib/exprs.rs` — registry of built-in expression implementations
+`crates/kyzo-core/src/exec/stdlib/geo.rs` — geospatial numeric kernels
 `crates/kyzo-core/src/exec/stdlib/interval.rs` — Allen and interval-value kernels beside the Interval kind
 `crates/kyzo-core/src/exec/stdlib/metric.rs` — ResultValue distance/score kernels for Candidates membership (never TagOrdered; not vec ctor)
 `crates/kyzo-core/src/exec/stdlib/mod.rs` — stdlib module tree and re-exports; owns no domain meaning
@@ -325,3 +324,5 @@ Format: `path` — description
 `fuzz/fuzz_targets/kyzoscript_parser.rs` — fuzzes KyzoScript parse for refusals and no-panic
 `fuzz/fuzz_targets/memcmp_codec.rs` — fuzzes memcmp codec against semantic order
 `fuzz/fuzz_targets/table_read.rs` — fuzzes table read paths over crafted bytes
+
+`crates/kyzo-model/src/value/json_convert.rs` — DataValue ↔ JSON conversion vocabulary

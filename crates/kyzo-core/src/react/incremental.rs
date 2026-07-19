@@ -535,7 +535,7 @@ fn collect_const_substitutions(
                     "a non-constant unification",
                 ));
             }
-            let crate::data::expr::Expr::Const { val, .. } = &u.expr else {
+            let kyzo_model::program::expr::Expr::Const { val, .. } = &u.expr else {
                 return Err(TranslationRejection::Unsupported(
                     "a non-constant unification (is_const disagreed with Expr shape)",
                 ));
@@ -1394,7 +1394,7 @@ mod tests {
     fn const_unif(binding: &str, val: DataValue) -> MagicAtom {
         MagicAtom::Unification(Unification {
             binding: sym(binding),
-            expr: crate::data::expr::Expr::Const {
+            expr: kyzo_model::program::expr::Expr::Const {
                 val,
                 span: SourceSpan::default(),
             },
@@ -1541,7 +1541,7 @@ mod tests {
                 vec!["X"],
                 vec![
                     rel_atom("p", vec!["X"], false),
-                    MagicAtom::Predicate(crate::data::expr::Expr::Const {
+                    MagicAtom::Predicate(kyzo_model::program::expr::Expr::Const {
                         val: DataValue::Bool(true),
                         span: SourceSpan::default(),
                     }),
@@ -1564,8 +1564,8 @@ mod tests {
                     rel_atom("p", vec!["X"], false),
                     MagicAtom::Unification(Unification {
                         binding: sym("Y"),
-                        expr: crate::data::expr::Expr::Apply {
-                            op: &crate::data::functions::OP_ADD,
+                        expr: kyzo_model::program::expr::Expr::Apply {
+                            op: kyzo_model::program::op::OP_ADD,
                             args: Box::new([]),
                             span: SourceSpan::default(),
                         },

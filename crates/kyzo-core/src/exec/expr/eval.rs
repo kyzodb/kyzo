@@ -35,11 +35,17 @@
 //!   hot operators substitute into `apply_op` as measured optimizations,
 //!   never as semantic forks.
 
-use miette::Result;
+use miette::{Result, bail, miette};
 
-use crate::data::expr::{BindingPos, Decision, Expr};
+use kyzo_model::data_value_any;
+use kyzo_model::program::expr::{
+    BindingPos, Decision, EvalRaisedError, Expr, LazyOp, NoImplementationError,
+    PredicateTypeError, TupleTooShortError, UnboundVariableError,
+};
+use kyzo_model::program::op::OpDecl;
 use kyzo_model::value::DataValue;
-use crate::query::batch::{ColumnBatch, ErrorMin, Selection};
+use crate::exec::expr::batch::{ColumnBatch, ErrorMin, Selection};
+use crate::exec::stdlib::resolve_op;
 
 /// Selection indexes are `u32`; [`Selection::iter`] widens stored ids to
 /// `usize`. Narrowing is total — overflow is refused at [`Selection::all`].
@@ -48,6 +54,93 @@ fn row_sel(row: usize) -> u32 {
     debug_assert!(u32::try_from(row).is_ok());
     row as u32
 }
+
+fn bound_of(op: OpDecl) -> Result<&'static crate::exec::stdlib::BoundOp> {
+    resolve_op(&op.display_name()).ok_or_else(|| miette!("unknown builtin op {}", op.name))
+}
+
+/// Row-path expression evaluation — sole door that applies [`BoundOp::apply`].
+pub(crate) fn eval_expr(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Result<DataValue> {
+    let bindings = bindings.as_ref();
+    match expr {
+        Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
+            BindingPos::Unresolved => {
+                bail!(UnboundVariableError(var.name.to_string(), var.span))
+            }
+            BindingPos::Resolved(i) => Ok(bindings
+                .get(*i)
+                .ok_or_else(|| {
+                    TupleTooShortError(
+                        var.name.to_string(),
+                        *i,
+                        bindings.len(),
+                        var.span,
+                    )
+                })?
+                .clone()),
+        },
+        Expr::Const { val, .. } => Ok(val.clone()),
+        Expr::Apply { op, args, .. } => {
+            let args: Vec<DataValue> = args
+                .iter()
+                .map(|v| eval_expr(v, bindings))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(bound_of(*op)?
+                .apply(&args)
+                .map_err(|err| EvalRaisedError(expr.span(), err.to_string()))?)
+        }
+        Expr::Cond { clauses, .. } => {
+            for (cond, val) in clauses {
+                let cond_val = eval_expr(cond, bindings)?;
+                let cond_val = cond_val
+                    .get_bool()
+                    .ok_or_else(|| PredicateTypeError(cond.span(), cond_val))?;
+                if cond_val {
+                    return eval_expr(val, bindings);
+                }
+            }
+            Ok(DataValue::Null)
+        }
+        Expr::Lazy { op, args, .. } => {
+            for arg in args.iter() {
+                let v = eval_expr(arg, bindings)?;
+                match op.decide(&v) {
+                    Decision::Decided(d) => return Ok(d),
+                    Decision::Continue => {}
+                    Decision::Refused => bail!(PredicateTypeError(arg.span(), v)),
+                }
+            }
+            Ok(op.identity())
+        }
+        Expr::UnboundApply { op, span, .. } => {
+            bail!(NoImplementationError(*span, op.to_string()));
+        }
+    }
+}
+
+pub(crate) fn eval_pred(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Result<bool> {
+    match eval_expr(expr, bindings)? {
+        DataValue::Bool(b) => Ok(b),
+        v @ (data_value_any!()) => bail!(PredicateTypeError(expr.span(), v)),
+    }
+}
+
+/// Fold then evaluate closed expressions (including nondeterministic ops once).
+pub(crate) fn eval_to_const(mut expr: Expr) -> Result<DataValue> {
+    expr.partial_eval()?;
+    if let Expr::Const { val, .. } = expr {
+        return Ok(val);
+    }
+    if expr.bindings()?.is_empty() {
+        return eval_expr(&expr, &[] as &[DataValue]);
+    }
+    #[derive(Debug, thiserror::Error, miette::Diagnostic)]
+    #[error("Expression contains unevaluated constant")]
+    #[diagnostic(code(eval::not_constant))]
+    struct NotConstError(#[label("not a constant")] kyzo_model::SourceSpan);
+    bail!(NotConstError(expr.span()))
+}
+
 
 /// A column of values ALIGNED TO A SELECTION: `values[i]` is the result
 /// for the `i`-th live row of the selection it was computed under. The
@@ -108,7 +201,7 @@ pub(crate) fn eval_pred_batched(
     batch: &ColumnBatch,
     selection: &Selection,
 ) -> Result<Selection> {
-    use crate::data::expr::PredicateTypeError;
+    use kyzo_model::program::expr::PredicateTypeError;
     let values = eval_expr_batched(expr, batch, selection)?;
     let mut keep = Vec::with_capacity(values.len());
     for (v, row) in values.iter().zip(selection.iter()) {
@@ -130,12 +223,12 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
     match expr {
         Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
             BindingPos::Unresolved => {
-                use crate::data::expr::UnboundVariableError;
+                use kyzo_model::program::expr::UnboundVariableError;
                 Err(UnboundVariableError(var.name.to_string(), var.span).into())
             }
             BindingPos::Resolved(i) => {
                 if *i >= state.batch.width() {
-                    use crate::data::expr::TupleTooShortError;
+                    use kyzo_model::program::expr::TupleTooShortError;
                     return Err(TupleTooShortError(
                         var.name.to_string(),
                         *i,
@@ -169,37 +262,14 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
             for (i, row) in sel.iter().enumerate() {
                 frame.clear();
                 frame.extend(arg_cols.iter().map(|c| c.values[i].clone()));
-                match (op.inner)(&frame) {
-                    // THE columnar-lane checkpoint (row path's counterpart
-                    // is `data::expr::apply_op`): a `NaN` float or
-                    // vector-lane result is refused here regardless of
-                    // whether the op itself remembered its own `no_nan`
-                    // guard, so no op — present or future — can hand a
-                    // poison value out of this evaluator either. Same typed
-                    // diagnostic, same text, as if the op had refused it
-                    // directly, which keeps this lane observationally
-                    // identical to the row evaluator per this module's law.
-                    Ok(v) if crate::data::functions::result_has_nan(&v) => {
-                        use crate::data::expr::{EvalRaisedError, op_display_name};
-                        use crate::data::functions::DomainError;
-                        let span = *span;
-                        let op_name = op_display_name(op.name);
-                        state.errors.offer(row_sel(row), apply_node, || {
-                            EvalRaisedError(span, DomainError { op: op_name.into() }.to_string())
-                                .into()
-                        });
-                        out.push(DataValue::Null);
-                    }
+                match bound_of(*op).and_then(|b| b.apply(&frame)) {
+                    // Sole apply door: BoundOp::apply (typed NaN Refuse inside).
                     Ok(v) => out.push(v),
                     Err(err) => {
-                        use crate::data::expr::EvalRaisedError;
                         let span = *span;
                         state.errors.offer(row_sel(row), apply_node, || {
                             EvalRaisedError(span, err.to_string()).into()
                         });
-                        // The row is poisoned; its value is unobservable
-                        // (extraction raises first), any placeholder is
-                        // sound.
                         out.push(DataValue::Null);
                     }
                 }
@@ -231,7 +301,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                             decided.push((row_sel(row), v));
                         }
                         Decision::Refused => {
-                            use crate::data::expr::PredicateTypeError;
+                            use kyzo_model::program::expr::PredicateTypeError;
                             let span = arg.span();
                             let val = vals.values[i].clone();
                             state.errors.offer(row_sel(row), decide_node, || {
@@ -276,7 +346,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                             passed.push(row_sel(row));
                         }
                         None => {
-                            use crate::data::expr::PredicateTypeError;
+                            use kyzo_model::program::expr::PredicateTypeError;
                             let span = cond.span();
                             let v = cond_vals.values[i].clone();
                             state.errors.offer(row_sel(row), decide_node, || {
@@ -305,7 +375,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
             })
         }
         Expr::UnboundApply { op, span, .. } => {
-            use crate::data::expr::NoImplementationError;
+            use kyzo_model::program::expr::NoImplementationError;
             Err(NoImplementationError(*span, op.to_string()).into())
         }
     }
@@ -314,8 +384,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::expr::LazyOp;
-    use crate::data::functions::{OP_ADD, OP_EQ, OP_GT};
+    use kyzo_model::program::op::{OP_ADD, OP_EQ, OP_GT};
     use kyzo_model::value::DataValue;
 
     fn cnst(v: impl Into<DataValue>) -> Expr {
@@ -330,7 +399,7 @@ mod tests {
             tuple_pos: BindingPos::Resolved(pos),
         }
     }
-    fn apply(op: &'static crate::data::expr::Op, args: Vec<Expr>) -> Expr {
+    fn apply(op: OpDecl, args: Vec<Expr>) -> Expr {
         Expr::Apply {
             op,
             args: args.into(),
@@ -354,7 +423,7 @@ mod tests {
         let mut oracle_vals = vec![];
         let mut oracle_err: Option<String> = None;
         for row in rows {
-            match expr.eval(row.as_slice()) {
+            match eval_expr(expr, row.as_slice()) {
                 Ok(v) => oracle_vals.push(v),
                 Err(e) => {
                     oracle_err = Some(e.to_string());
@@ -377,8 +446,8 @@ mod tests {
         let rows: Vec<Vec<DataValue>> = (0..10)
             .map(|i| vec![DataValue::from(i), DataValue::from(i * 2)])
             .collect();
-        differential(&apply(&OP_ADD, vec![binding(0), binding(1)]), &rows);
-        differential(&apply(&OP_EQ, vec![binding(0), cnst(4)]), &rows);
+        differential(&apply(OP_ADD, vec![binding(0), binding(1)]), &rows);
+        differential(&apply(OP_EQ, vec![binding(0), cnst(4)]), &rows);
     }
 
     #[test]
@@ -388,10 +457,10 @@ mod tests {
         let guard = Expr::Lazy {
             op: LazyOp::And,
             args: Box::new([
-                apply(&OP_GT, vec![binding(0), cnst(0)]),
+                apply(OP_GT, vec![binding(0), cnst(0)]),
                 apply(
                     &OP_GT,
-                    vec![apply(&OP_ADD, vec![binding(1), cnst(1)]), cnst(0)],
+                    vec![apply(OP_ADD, vec![binding(1), cnst(1)]), cnst(0)],
                 ),
             ]),
             span: Default::default(),
@@ -414,7 +483,7 @@ mod tests {
     #[test]
     fn error_identity_is_first_failing_row() {
         // Rows 1 and 3 both poison; row eval reports row 1's error.
-        let expr = apply(&OP_ADD, vec![binding(0), cnst(1)]);
+        let expr = apply(OP_ADD, vec![binding(0), cnst(1)]);
         let rows = vec![
             vec![DataValue::from(1)],
             vec![DataValue::from("a")],
@@ -429,8 +498,8 @@ mod tests {
         let cond = Expr::Cond {
             clauses: vec![
                 (
-                    apply(&OP_GT, vec![binding(0), cnst(5)]),
-                    apply(&OP_ADD, vec![binding(0), cnst(100)]),
+                    apply(OP_GT, vec![binding(0), cnst(5)]),
+                    apply(OP_ADD, vec![binding(0), cnst(100)]),
                 ),
                 (cnst(true), binding(0)),
             ],

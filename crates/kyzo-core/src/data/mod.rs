@@ -16,16 +16,9 @@ pub(crate) mod arrow_ipc;
 pub(crate) mod bitemporal;
 // expr: bottom-up landing per the module-order note above; dead in the
 // lib build until its first engine consumer lands.
-#[expect(dead_code)]
-pub(crate) mod expr;
-pub(crate) mod functions;
 pub(crate) mod json;
 // program: bottom-up landing per the module-order note above; dead in
 // the lib build until its first engine consumer lands.
-#[allow(dead_code)]
 pub(crate) mod program;
-pub(crate) mod relation;
 pub(crate) mod sketch;
 
-#[cfg(test)]
-mod tests;

@@ -111,8 +111,8 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
-use crate::data::expr::{BindingPos, Expr};
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
@@ -1032,7 +1032,7 @@ mod tests {
         let f = setup(&db, docs);
         // Filter: tag == "keep". Column layout of the candidate: [k, tag, score].
         let filter = Expr::Apply {
-            op: &crate::data::functions::OP_EQ,
+            op: kyzo_model::program::op::OP_EQ,
             args: Box::new([
                 Expr::Binding {
                     var: Symbol::new("tag", SourceSpan(0, 0)),

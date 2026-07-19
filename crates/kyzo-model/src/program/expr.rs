@@ -1,3 +1,7 @@
+//! Expression AST vocabulary shared by parse and exec.
+//!
+//! Holds the language tree only. Evaluation and builtin bodies live elsewhere.
+
 /*
  * Copyright 2022, The Cozo Project Authors.
  *
@@ -7,7 +11,7 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): `Op` carries a `deterministic` flag that gates constant
+ * (MPL-2.0): `OpDecl` carries a `deterministic` flag that gates constant
  * folding; deserialized expressions re-prove their arity; the eval loop
  * and serde visitors return errors where the original panicked.
  * `eval_to_const` also accepts closed deterministic constructs the
@@ -21,61 +25,39 @@
  * intentionally: T2 rebuilds each one on `Expr::eval` directly.
  */
 
-//! Expressions, and the operations that give them meaning.
-//!
-//! Two essences live here:
-//!
-//! - [`Expr`] is the language's expression tree: what a KyzoScript
-//!   expression *is* after parsing — bindings, constants, applications, and
-//!   conditionals, each carrying its source span. It is evaluated directly
-//!   by walking the tree ([`Expr::eval`]) — the one expression-semantics
-//!   owner.
-//! - [`Op`] is a total function over values. Applied to arguments of any
-//!   shape it returns a value or an error — never panics; errors are values.
-//!   Each op also states, as data, whether it is *deterministic*: whether the
-//!   same arguments always yield the same result. That single bit is what
-//!   licenses (or forbids) constant folding.
-//!
-//! The load-bearing law: by the time an op body runs, its argument slice has
-//! the arity the op declared. The parser proves this at build time
-//! (`parse/expr.rs`), and the serde boundary re-proves it on deserialization
-//! — so op bodies may index `args[N]` below their declared minimum arity
-//! without checking, and nothing else may construct an `Apply`.
+//! Expression tree and lazy connectives. [`OpDecl`] is declaration-only.
 
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 
-use itertools::Itertools;
 use miette::{Diagnostic, Result, bail};
 use serde::de::{Error, Visitor};
 use serde::{Deserializer, Serializer};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::functions::*;
-// Only the `CustomOp` return-type contract needs the schema vocabulary.
-use crate::data::relation::NullableColType;
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
-use kyzo_model::data_value_any;
+use crate::SourceSpan;
+use crate::program::op::{self as opdecl, OpDecl, resolve_decl};
+use crate::program::symbol::Symbol;
+use crate::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
+use crate::data_value_any;
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("The variable '{0}' is unbound")]
 #[diagnostic(code(eval::unbound))]
-pub(crate) struct UnboundVariableError(pub(crate) String, #[label] pub(crate) SourceSpan);
+pub struct UnboundVariableError(pub String, #[label] pub SourceSpan);
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("The tuple bound by variable '{0}' is too short: index is {1}, length is {2}")]
 #[diagnostic(help("This is definitely a bug. Please report it."))]
 #[diagnostic(code(eval::tuple_too_short))]
-pub(crate) struct TupleTooShortError(
-    pub(crate) String,
-    pub(crate) usize,
-    pub(crate) usize,
-    #[label] pub(crate) SourceSpan,
+pub struct TupleTooShortError(
+    pub String,
+    pub usize,
+    pub usize,
+    #[label] pub SourceSpan,
 );
 
 /// Deserialized data applied an op to an argument count the op does not
@@ -126,8 +108,8 @@ pub enum Expr {
     },
     /// Function application
     Apply {
-        /// Op representing the function to apply
-        op: &'static Op,
+        /// OpDecl representing the function to apply
+        op: OpDecl,
         /// Arguments to the application
         args: Box<[Expr]>,
         /// Source span
@@ -136,7 +118,7 @@ pub enum Expr {
     },
     /// Unbound function application
     UnboundApply {
-        /// Op representing the function to apply
+        /// OpDecl representing the function to apply
         op: SmartString<LazyCompact>,
         /// Arguments to the application
         args: Box<[Expr]>,
@@ -194,7 +176,7 @@ pub enum LazyOp {
 }
 
 /// What one evaluated argument means to a [`LazyOp`].
-pub(crate) enum Decision {
+pub enum Decision {
     /// This argument ends evaluation with this value; later arguments are
     /// dead and are never touched.
     Decided(DataValue),
@@ -208,7 +190,7 @@ pub(crate) enum Decision {
 impl LazyOp {
     /// The identity element: the value of the empty form, and of any form
     /// whose arguments are all inert.
-    pub(crate) fn identity(self) -> DataValue {
+    pub fn identity(self) -> DataValue {
         match self {
             LazyOp::And => DataValue::from(true),
             LazyOp::Or => DataValue::from(false),
@@ -218,7 +200,7 @@ impl LazyOp {
     /// THE truth table. Every machine that evaluates a lazy connective —
     /// the tree evaluator and the constant folder — derives from this
     /// single declaration.
-    pub(crate) fn decide(self, val: &DataValue) -> Decision {
+    pub fn decide(self, val: &DataValue) -> Decision {
         match self {
             LazyOp::And => match val.get_bool() {
                 Some(true) => Decision::Continue,
@@ -258,7 +240,7 @@ enum ExprDe {
         span: SourceSpan,
     },
     Apply {
-        op: &'static Op,
+        op: OpDecl,
         args: Box<[Expr]>,
         #[serde(skip)]
         span: SourceSpan,
@@ -335,7 +317,7 @@ impl Display for Expr {
             }
             Expr::Apply { op, args, .. } => {
                 // Every op name is `OP_`-prefixed by construction
-                // (`define_op!` stringifies the const's own name); fall back
+                // (OpDecl names are OP_-prefixed by construction); fall back
                 // to the raw name rather than panic if that ever changes.
                 let mut writer = f.debug_tuple(
                     op.name
@@ -383,20 +365,20 @@ impl Display for Expr {
 #[derive(Debug, Error, Diagnostic)]
 #[error("No implementation found for op `{1}`")]
 #[diagnostic(code(eval::no_implementation))]
-pub(crate) struct NoImplementationError(#[label] pub(crate) SourceSpan, pub(crate) String);
+pub struct NoImplementationError(#[label] pub SourceSpan, pub String);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Found value {1:?} where a boolean value is expected")]
 #[diagnostic(code(eval::predicate_not_bool))]
-pub(crate) struct PredicateTypeError(#[label] pub(crate) SourceSpan, pub(crate) DataValue);
+pub struct PredicateTypeError(#[label] pub SourceSpan, pub DataValue);
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Evaluation of expression failed")]
 #[diagnostic(code(eval::throw))]
-pub(crate) struct EvalRaisedError(#[label] pub(crate) SourceSpan, #[help] pub(crate) String);
+pub struct EvalRaisedError(#[label] pub SourceSpan, #[help] pub String);
 
 impl Expr {
-    pub(crate) fn span(&self) -> SourceSpan {
+    pub fn span(&self) -> SourceSpan {
         match self {
             Expr::Binding { var, .. } => var.span,
             Expr::Const { span, .. }
@@ -406,49 +388,49 @@ impl Expr {
             Expr::UnboundApply { span, .. } => *span,
         }
     }
-    pub(crate) fn get_binding(&self) -> Option<&Symbol> {
+    pub fn get_binding(&self) -> Option<&Symbol> {
         if let Expr::Binding { var, .. } = self {
             Some(var)
         } else {
             None
         }
     }
-    pub(crate) fn get_const(&self) -> Option<&DataValue> {
+    pub fn get_const(&self) -> Option<&DataValue> {
         if let Expr::Const { val, .. } = self {
             Some(val)
         } else {
             None
         }
     }
-    pub(crate) fn build_equate(exprs: Vec<Expr>, span: SourceSpan) -> Self {
+    pub fn build_equate(exprs: Vec<Expr>, span: SourceSpan) -> Self {
         Expr::Apply {
-            op: &OP_EQ,
+            op: opdecl::OP_EQ,
             args: exprs.into(),
             span,
         }
     }
-    pub(crate) fn build_and(exprs: Vec<Expr>, span: SourceSpan) -> Self {
+    pub fn build_and(exprs: Vec<Expr>, span: SourceSpan) -> Self {
         Expr::Lazy {
             op: LazyOp::And,
             args: exprs.into(),
             span,
         }
     }
-    pub(crate) fn build_is_in(exprs: Vec<Expr>, span: SourceSpan) -> Self {
+    pub fn build_is_in(exprs: Vec<Expr>, span: SourceSpan) -> Self {
         Expr::Apply {
-            op: &OP_IS_IN,
+            op: opdecl::OP_IS_IN,
             args: exprs.into(),
             span,
         }
     }
-    pub(crate) fn negate(self, span: SourceSpan) -> Self {
+    pub fn negate(self, span: SourceSpan) -> Self {
         Expr::Apply {
-            op: &OP_NEGATE,
+            op: opdecl::OP_NEGATE,
             args: Box::new([self]),
             span,
         }
     }
-    pub(crate) fn to_conjunction(&self) -> Vec<Self> {
+    pub fn to_conjunction(&self) -> Vec<Self> {
         match self {
             Expr::Lazy {
                 op: LazyOp::And,
@@ -458,7 +440,7 @@ impl Expr {
             v @ Expr::Binding { .. } | v @ Expr::Const { .. } | v @ Expr::Apply { .. } | v @ Expr::UnboundApply { .. } | v @ Expr::Cond { .. } | v @ Expr::Lazy { .. } => vec![v.clone()],
         }
     }
-    pub(crate) fn fill_binding_indices(
+    pub fn fill_binding_indices(
         &mut self,
         binding_map: &BTreeMap<Symbol, usize>,
     ) -> Result<()> {
@@ -492,7 +474,7 @@ impl Expr {
         }
         Ok(())
     }
-    pub(crate) fn binding_indices(&self) -> Result<BTreeSet<usize>> {
+    pub fn binding_indices(&self) -> Result<BTreeSet<usize>> {
         let mut ret = BTreeSet::default();
         self.do_binding_indices(&mut ret)?;
         Ok(ret)
@@ -547,14 +529,11 @@ impl Expr {
         if let Expr::Const { val, .. } = self {
             return Ok(val);
         }
-        // Not folded, but closed: evaluate once against the empty tuple.
-        // Anything with free variables is genuinely not constant.
-        if self.bindings()?.is_empty() {
-            return self.eval(&[] as &[DataValue]);
-        }
+        // Closed nondeterministic / unfolder-able forms are evaluated in the
+        // engine crate; this seat only returns values already folded to Const.
         bail!(NotConstError(span))
     }
-    pub(crate) fn partial_eval(&mut self) -> Result<()> {
+    pub fn partial_eval(&mut self) -> Result<()> {
         if let Expr::Lazy { op, args, span } = self {
             let span = *span;
             let op = *op;
@@ -608,23 +587,22 @@ impl Expr {
             // into a single per-query number. If per-query-constant semantics
             // is ever wanted for `now()`, that is an engine decision to make
             // deliberately later, not a side effect of folding.
-            if all_evaluated && op.is_deterministic() {
-                let result = self.eval(vec![])?;
-                *self = Expr::Const { val: result, span };
-            }
+            // Deterministic Apply folding requires the engine apply door;
+            // leave the Apply here for the engine folder/evaluator.
+            let _ = (all_evaluated, op, span);
             // nested not's can accumulate during conversion to normal form
             if let Expr::Apply {
                 op: op1,
                 args: arg1,
                 ..
             } = self
-                && op1.name == OP_NEGATE.name
+                && op1.name == opdecl::OP_NEGATE.name
                 && let Some(Expr::Apply {
                     op: op2,
                     args: arg2,
                     ..
                 }) = arg1.first()
-                && op2.name == OP_NEGATE.name
+                && op2.name == opdecl::OP_NEGATE.name
             {
                 let mut new_self = arg2[0].clone();
                 mem::swap(self, &mut new_self);
@@ -632,12 +610,12 @@ impl Expr {
         }
         Ok(())
     }
-    pub(crate) fn bindings(&self) -> Result<BTreeSet<Symbol>> {
+    pub fn bindings(&self) -> Result<BTreeSet<Symbol>> {
         let mut ret = BTreeSet::new();
         self.collect_bindings(&mut ret)?;
         Ok(ret)
     }
-    pub(crate) fn collect_bindings(&self, coll: &mut BTreeSet<Symbol>) -> Result<()> {
+    pub fn collect_bindings(&self, coll: &mut BTreeSet<Symbol>) -> Result<()> {
         match self {
             Expr::Binding { var, .. } => {
                 coll.insert(var.clone());
@@ -660,78 +638,14 @@ impl Expr {
         }
         Ok(())
     }
-    pub(crate) fn eval(&self, bindings: impl AsRef<[DataValue]>) -> Result<DataValue> {
-        match self {
-            Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
-                BindingPos::Unresolved => {
-                    bail!(UnboundVariableError(var.name.to_string(), var.span))
-                }
-                BindingPos::Resolved(i) => Ok(bindings
-                    .as_ref()
-                    .get(*i)
-                    .ok_or_else(|| {
-                        TupleTooShortError(
-                            var.name.to_string(),
-                            *i,
-                            bindings.as_ref().len(),
-                            var.span,
-                        )
-                    })?
-                    .clone()),
-            },
-            Expr::Const { val, .. } => Ok(val.clone()),
-            Expr::Apply { op, args, .. } => {
-                let args: Box<[DataValue]> = args
-                    .iter()
-                    .map(|v| v.eval(bindings.as_ref()))
-                    .try_collect()?;
-                Ok(apply_op(op, &args)
-                    .map_err(|err| EvalRaisedError(self.span(), err.to_string()))?)
-            }
-            Expr::Cond { clauses, .. } => {
-                for (cond, val) in clauses {
-                    let cond_val = cond.eval(bindings.as_ref())?;
-                    let cond_val = cond_val
-                        .get_bool()
-                        .ok_or_else(|| PredicateTypeError(cond.span(), cond_val))?;
 
-                    if cond_val {
-                        return val.eval(bindings.as_ref());
-                    }
-                }
-                Ok(DataValue::Null)
-            }
-            Expr::Lazy { op, args, .. } => {
-                for arg in args.iter() {
-                    let v = arg.eval(bindings.as_ref())?;
-                    match op.decide(&v) {
-                        Decision::Decided(d) => return Ok(d),
-                        Decision::Continue => {}
-                        Decision::Refused => bail!(PredicateTypeError(arg.span(), v)),
-                    }
-                }
-                Ok(op.identity())
-            }
-            Expr::UnboundApply { op, span, .. } => {
-                bail!(NoImplementationError(*span, op.to_string()));
-            }
-        }
-    }
-    /// Evaluate as a predicate: `true`/`false`, or a typed refusal when the
-    /// value is not a boolean.
-    pub(crate) fn eval_pred(&self, bindings: impl AsRef<[DataValue]>) -> Result<bool> {
-        match self.eval(bindings)? {
-            DataValue::Bool(b) => Ok(b),
-            v @ (data_value_any!()) => bail!(PredicateTypeError(self.span(), v)),
-        }
-    }
-    pub(crate) fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
+    pub fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
         Ok(match self {
             Expr::Binding { .. } | Expr::Const { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
                 ValueRange::default()
             }
             Expr::Apply { op, args, .. } => match op.name {
-                n if n == OP_GE.name || n == OP_GT.name => {
+                n if n == opdecl::OP_GE.name || n == opdecl::OP_GT.name => {
                     if let Some(symb) = args[0].get_binding()
                         && let Some(val) = args[1].get_const()
                         && target == symb
@@ -754,7 +668,7 @@ impl Expr {
                     }
                     ValueRange::default()
                 }
-                n if n == OP_LE.name || n == OP_LT.name => {
+                n if n == opdecl::OP_LE.name || n == opdecl::OP_LT.name => {
                     if let Some(symb) = args[0].get_binding()
                         && let Some(val) = args[1].get_const()
                         && target == symb
@@ -779,7 +693,7 @@ impl Expr {
                     }
                     ValueRange::default()
                 }
-                n if n == OP_STARTS_WITH.name => {
+                n if n == opdecl::OP_STARTS_WITH.name => {
                     if let Some(symb) = args[0].get_binding()
                         && let Some(val) = args[1].get_const()
                         && target == symb
@@ -808,7 +722,7 @@ impl Expr {
             }
         })
     }
-    pub(crate) fn get_variables(&self) -> Result<BTreeSet<String>> {
+    pub fn get_variables(&self) -> Result<BTreeSet<String>> {
         let mut ret = BTreeSet::new();
         self.do_get_variables(&mut ret)?;
         Ok(ret)
@@ -836,7 +750,7 @@ impl Expr {
         }
         Ok(())
     }
-    pub(crate) fn to_var_list(&self) -> Result<Vec<SmartString<LazyCompact>>> {
+    pub fn to_var_list(&self) -> Result<Vec<SmartString<LazyCompact>>> {
         #[derive(Error, Diagnostic, Debug)]
         #[error("Invalid fields specification: {0}")]
         #[diagnostic(code(parser::invalid_fields))]
@@ -848,7 +762,7 @@ impl Expr {
 
         match self {
             Expr::Apply { op, args, span } => {
-                if op.name != "OP_LIST" {
+                if op.name != opdecl::OP_LIST.name {
                     Err(
                         InvalidFieldsError(format!("expected a list, got `{}`", op.name), *span)
                             .into(),
@@ -880,7 +794,7 @@ impl Expr {
     }
 }
 
-pub(crate) fn compute_bounds(
+pub fn compute_bounds(
     filters: &[Expr],
     symbols: &[Symbol],
 ) -> Result<(Vec<ScanBound>, Vec<ScanBound>)> {
@@ -900,7 +814,7 @@ pub(crate) fn compute_bounds(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ValueRange {
+pub struct ValueRange {
     pub(crate) lower: ScanBound,
     pub(crate) upper: ScanBound,
 }
@@ -945,363 +859,6 @@ impl Default for ValueRange {
         Self {
             lower: ScanBound::Least,
             upper: ScanBound::Greatest,
-        }
-    }
-}
-
-/// A built-in operation: a total function over values. Every field is a
-/// compile-time fact about the operation, declared once in `define_op!` so
-/// the name, the implementing function, the arity, and the determinism claim
-/// cannot drift apart.
-///
-/// `vararg` / `deterministic` are private — sealed at [`Op::define`] (via
-/// `define_op!`). Hot-path reads of name / arity / body stay `pub(crate)`.
-#[derive(Clone)]
-pub struct Op {
-    /// The const's own name (`"OP_ADD"`); `define_op!` stringifies it, so
-    /// the `OP_` prefix is guaranteed by construction.
-    pub(crate) name: &'static str,
-    /// Fewest arguments the op accepts. With `vararg` this is a floor;
-    /// without, it is exact.
-    pub(crate) min_arity: usize,
-    /// Whether the op accepts more than `min_arity` arguments.
-    vararg: bool,
-    /// Same arguments ⇒ same result. `false` for the clock and randomness
-    /// ops; a `false` here forbids constant folding, so the op evaluates
-    /// per row at runtime.
-    deterministic: bool,
-    /// The implementation. Total: returns a value or an error for any
-    /// argument slice satisfying the declared arity; never panics.
-    pub(crate) inner: fn(&[DataValue]) -> Result<DataValue>,
-}
-
-/// The KyzoScript-facing spelling of an op: [`Op::name`] is the
-/// screaming-case Rust const identifier (`"OP_ADD"`, guaranteed by
-/// `define_op!`'s `stringify!`), never what a user typed or should read.
-/// Every place that shows an op's name to a user needs this same transform
-/// (strip the `OP_` prefix, lowercase); one shared function so the
-/// pretty-printer (`format.rs`) and the op-application NaN checkpoints
-/// below can never drift apart on it.
-pub(crate) fn op_display_name(name: &'static str) -> String {
-    name.strip_prefix("OP_").unwrap_or(name).to_lowercase()
-}
-
-/// THE enforced checkpoint every row-path op application routes through —
-/// the tree-walking `Expr::Apply` arm. Calls the op, then refuses a `NaN`
-/// float or vector-lane result the same way regardless of whether the op
-/// remembered its own `no_nan` guard: the per-op guards in
-/// `data/functions.rs` stay as a belt-and-suspenders first line (they carry
-/// a more specific domain diagnosis before the result even exists), but no
-/// op — present or future — can bypass this backstop and hand a poison
-/// value to a caller.
-pub(crate) fn apply_op(op: &Op, args: &[DataValue]) -> Result<DataValue> {
-    let result = (op.inner)(args)?;
-    if crate::data::functions::result_has_nan(&result) {
-        bail!(DomainError {
-            op: op_display_name(op.name).into()
-        });
-    }
-    Ok(result)
-}
-
-/// Used as `Arc<dyn CustomOp>`
-pub trait CustomOp {
-    fn name(&self) -> &'static str;
-    fn min_arity(&self) -> usize;
-    fn vararg(&self) -> bool;
-    /// Same arguments ⇒ same result. Defaults to `false`: foreign code is
-    /// assumed nondeterministic unless it says otherwise, which only ever
-    /// costs a missed folding opportunity, never a wrong one.
-    fn deterministic(&self) -> bool {
-        false
-    }
-    fn return_type(&self) -> NullableColType;
-    fn call(&self, args: &[DataValue]) -> Result<DataValue>;
-}
-
-impl serde::Serialize for &'_ Op {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.name)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for &'static Op {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_str(OpVisitor)
-    }
-}
-
-struct OpVisitor;
-
-impl<'de> Visitor<'de> for OpVisitor {
-    type Value = &'static Op;
-
-    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("name of the op")
-    }
-
-    fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
-    where
-        E: Error,
-    {
-        // Serialized data is hostile until proven: a name without the `OP_`
-        // prefix is a decode error, never a panic (the original unwrapped).
-        let name = v
-            .strip_prefix("OP_")
-            .ok_or_else(|| E::custom(format!("malformed op name in serialized data: {v}")))?
-            .to_ascii_lowercase();
-        get_op(&name).ok_or_else(|| E::custom(format!("op not found in serialized data: {v}")))
-    }
-}
-
-impl PartialEq for Op {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for Op {}
-
-impl Debug for Op {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
-pub(crate) fn get_op(name: &str) -> Option<&'static Op> {
-    Some(match name {
-        "list" => &OP_LIST,
-        "json" => &OP_JSON,
-        "set_json_path" => &OP_SET_JSON_PATH,
-        "remove_json_path" => &OP_REMOVE_JSON_PATH,
-        "parse_json" => &OP_PARSE_JSON,
-        "dump_json" => &OP_DUMP_JSON,
-        "json_object" => &OP_JSON_OBJECT,
-        "is_json" => &OP_IS_JSON,
-        "json_to_scalar" => &OP_JSON_TO_SCALAR,
-        "add" => &OP_ADD,
-        "sub" => &OP_SUB,
-        "mul" => &OP_MUL,
-        "div" => &OP_DIV,
-        "minus" => &OP_MINUS,
-        "abs" => &OP_ABS,
-        "signum" => &OP_SIGNUM,
-        "floor" => &OP_FLOOR,
-        "ceil" => &OP_CEIL,
-        "round" => &OP_ROUND,
-        "mod" => &OP_MOD,
-        "max" => &OP_MAX,
-        "min" => &OP_MIN,
-        "pow" => &OP_POW,
-        "sqrt" => &OP_SQRT,
-        "exp" => &OP_EXP,
-        "exp2" => &OP_EXP2,
-        "ln" => &OP_LN,
-        "log2" => &OP_LOG2,
-        "log10" => &OP_LOG10,
-        "sin" => &OP_SIN,
-        "cos" => &OP_COS,
-        "tan" => &OP_TAN,
-        "asin" => &OP_ASIN,
-        "acos" => &OP_ACOS,
-        "atan" => &OP_ATAN,
-        "atan2" => &OP_ATAN2,
-        "sinh" => &OP_SINH,
-        "cosh" => &OP_COSH,
-        "tanh" => &OP_TANH,
-        "asinh" => &OP_ASINH,
-        "acosh" => &OP_ACOSH,
-        "atanh" => &OP_ATANH,
-        "eq" => &OP_EQ,
-        "neq" => &OP_NEQ,
-        "gt" => &OP_GT,
-        "ge" => &OP_GE,
-        "lt" => &OP_LT,
-        "le" => &OP_LE,
-        "negate" => &OP_NEGATE,
-        "bit_and" => &OP_BIT_AND,
-        "bit_or" => &OP_BIT_OR,
-        "bit_not" => &OP_BIT_NOT,
-        "bit_xor" => &OP_BIT_XOR,
-        "pack_bits" => &OP_PACK_BITS,
-        "unpack_bits" => &OP_UNPACK_BITS,
-        "concat" => &OP_CONCAT,
-        "str_includes" => &OP_STR_INCLUDES,
-        "lowercase" => &OP_LOWERCASE,
-        "uppercase" => &OP_UPPERCASE,
-        "trim" => &OP_TRIM,
-        "trim_start" => &OP_TRIM_START,
-        "trim_end" => &OP_TRIM_END,
-        "starts_with" => &OP_STARTS_WITH,
-        "ends_with" => &OP_ENDS_WITH,
-        "is_null" => &OP_IS_NULL,
-        "is_int" => &OP_IS_INT,
-        "is_float" => &OP_IS_FLOAT,
-        "is_num" => &OP_IS_NUM,
-        "is_string" => &OP_IS_STRING,
-        "is_list" => &OP_IS_LIST,
-        "is_bytes" => &OP_IS_BYTES,
-        "is_in" => &OP_IS_IN,
-        "is_finite" => &OP_IS_FINITE,
-        "is_infinite" => &OP_IS_INFINITE,
-        "is_nan" => &OP_IS_NAN,
-        "is_uuid" => &OP_IS_UUID,
-        "is_vec" => &OP_IS_VEC,
-        "length" => &OP_LENGTH,
-        "sorted" => &OP_SORTED,
-        "reverse" => &OP_REVERSE,
-        "append" => &OP_APPEND,
-        "prepend" => &OP_PREPEND,
-        "unicode_normalize" => &OP_UNICODE_NORMALIZE,
-        "haversine" => &OP_HAVERSINE,
-        "haversine_deg_input" => &OP_HAVERSINE_DEG_INPUT,
-        "deg_to_rad" => &OP_DEG_TO_RAD,
-        "rad_to_deg" => &OP_RAD_TO_DEG,
-        "get" => &OP_GET,
-        "maybe_get" => &OP_MAYBE_GET,
-        "chars" => &OP_CHARS,
-        "slice_string" => &OP_SLICE_STRING,
-        "from_substrings" => &OP_FROM_SUBSTRINGS,
-        "slice" => &OP_SLICE,
-        "regex_matches" => &OP_REGEX_MATCHES,
-        "regex_replace" => &OP_REGEX_REPLACE,
-        "regex_replace_all" => &OP_REGEX_REPLACE_ALL,
-        "regex_extract" => &OP_REGEX_EXTRACT,
-        "regex_extract_first" => &OP_REGEX_EXTRACT_FIRST,
-        "t2s" => &OP_T2S,
-        "encode_base64" => &OP_ENCODE_BASE64,
-        "decode_base64" => &OP_DECODE_BASE64,
-        "first" => &OP_FIRST,
-        "last" => &OP_LAST,
-        "chunks" => &OP_CHUNKS,
-        "chunks_exact" => &OP_CHUNKS_EXACT,
-        "windows" => &OP_WINDOWS,
-        "to_int" => &OP_TO_INT,
-        "to_float" => &OP_TO_FLOAT,
-        "to_string" => &OP_TO_STRING,
-        "l2_dist" => &OP_L2_DIST,
-        "l2_normalize" => &OP_L2_NORMALIZE,
-        "ip_dist" => &OP_IP_DIST,
-        "cos_dist" => &OP_COS_DIST,
-        "int_range" => &OP_INT_RANGE,
-        "rand_float" => &OP_RAND_FLOAT,
-        "rand_bernoulli" => &OP_RAND_BERNOULLI,
-        "rand_int" => &OP_RAND_INT,
-        "rand_choose" => &OP_RAND_CHOOSE,
-        "assert" => &OP_ASSERT,
-        "union" => &OP_UNION,
-        "intersection" => &OP_INTERSECTION,
-        "difference" => &OP_DIFFERENCE,
-        "to_uuid" => &OP_TO_UUID,
-        "to_bool" => &OP_TO_BOOL,
-        "to_unity" => &OP_TO_UNITY,
-        "rand_uuid_v1" => &OP_RAND_UUID_V1,
-        "rand_uuid_v4" => &OP_RAND_UUID_V4,
-        "uuid_timestamp" => &OP_UUID_TIMESTAMP,
-        "validity" => &OP_VALIDITY,
-        "make_interval" => &OP_MAKE_INTERVAL,
-        "interval_start" => &OP_INTERVAL_START,
-        "interval_end" => &OP_INTERVAL_END,
-        "interval_has_start" => &OP_INTERVAL_HAS_START,
-        "interval_has_end" => &OP_INTERVAL_HAS_END,
-        "interval_is_start_unbounded" => &OP_INTERVAL_IS_START_UNBOUNDED,
-        "interval_is_end_unbounded" => &OP_INTERVAL_IS_END_UNBOUNDED,
-        "interval_before" => &OP_INTERVAL_BEFORE,
-        "interval_meets" => &OP_INTERVAL_MEETS,
-        "interval_overlaps" => &OP_INTERVAL_OVERLAPS,
-        "interval_starts" => &OP_INTERVAL_STARTS,
-        "interval_during" => &OP_INTERVAL_DURING,
-        "interval_finishes" => &OP_INTERVAL_FINISHES,
-        "interval_intersects" => &OP_INTERVAL_INTERSECTS,
-        "now" => &OP_NOW,
-        "format_timestamp" => &OP_FORMAT_TIMESTAMP,
-        "parse_timestamp" => &OP_PARSE_TIMESTAMP,
-        "vec" => &OP_VEC,
-        "rand_vec" => &OP_RAND_VEC,
-        _ => return None,
-    })
-}
-
-impl Op {
-    /// The sole mint for a built-in op — used by `define_op!` and by
-    /// test-only synthetic ops. Keeps name / arity / determinism / body
-    /// welded together at one door.
-    pub(crate) const fn define(
-        name: &'static str,
-        min_arity: usize,
-        vararg: bool,
-        deterministic: bool,
-        inner: fn(&[DataValue]) -> Result<DataValue>,
-    ) -> Op {
-        Op {
-            name,
-            min_arity,
-            vararg,
-            deterministic,
-            inner,
-        }
-    }
-
-    /// Whether this op accepts more than [`Self::min_arity`] arguments.
-    pub(crate) const fn is_vararg(&self) -> bool {
-        self.vararg
-    }
-
-    /// Whether same arguments always yield the same result (foldable).
-    pub(crate) const fn is_deterministic(&self) -> bool {
-        self.deterministic
-    }
-
-    /// Whether `n` arguments satisfy this op's declared arity: at least
-    /// `min_arity` when vararg, exactly `min_arity` otherwise. The parser
-    /// and the serde boundary both enforce arity through this one predicate.
-    pub(crate) fn arity_matches(&self, n: usize) -> bool {
-        if self.is_vararg() {
-            n >= self.min_arity
-        } else {
-            n == self.min_arity
-        }
-    }
-
-    /// Human phrasing of the arity law, for diagnostics.
-    pub(crate) fn arity_requirement(&self) -> String {
-        if self.is_vararg() {
-            format!("at least {}", self.min_arity)
-        } else {
-            format!("exactly {}", self.min_arity)
-        }
-    }
-
-    /// ⚠ HIDDEN AST REWRITE — the one place an op edits its own arguments.
-    ///
-    /// For every `OP_REGEX_*` op, the second argument (the pattern) is
-    /// wrapped in an `OP_REGEX` application at *parse time*, hoisting regex
-    /// compilation to compile time: a constant pattern is compiled once by
-    /// constant folding instead of once per row, and an invalid constant
-    /// pattern is reported before the query runs. The cost is that the AST
-    /// no longer matches the source text — `regex_matches(x, p)` becomes
-    /// `regex_matches(x, regex(p))` — which anything walking or
-    /// pretty-printing expressions must know.
-    ///
-    /// Called by the parser before its arity check; the CozoDB original
-    /// indexed `args[1]` here and panicked on `regex_matches(x)`. A missing
-    /// second argument is now left alone — the caller's arity check is about
-    /// to reject it with a proper error.
-    pub(crate) fn post_process_args(&self, args: &mut [Expr]) {
-        if self.name.starts_with("OP_REGEX_")
-            && let Some(pattern) = args.get_mut(1)
-        {
-            *pattern = Expr::Apply {
-                op: &OP_REGEX,
-                args: [pattern.clone()].into(),
-                span: pattern.span(),
-            }
         }
     }
 }

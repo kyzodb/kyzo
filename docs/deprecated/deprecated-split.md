@@ -87,7 +87,7 @@ uuid ops, and the interval section
 (validity coerce ALREADY CUT → kyzo-model `value/validity_coerce.rs`),
 (`two_intervals`, make/start/end, boundary-shape predicates, six Allen
 primitives + intersects) — closed)
-- **L1:** destinies ruled in `docs/deprecated/move_plan.json` v9 (OpDecl /
+- **L1:** destinies ruled in `docs/deprecated/move_plan.json` v10 (OpDecl /
   BoundOp / bind::resolve_op / errors / ten kernel seats incl. minted `geo.rs`;
   model `program/expr.rs` + `value/json_convert.rs`; condemned currents are
   Delete evidence only). ALREADY SEATED outside this bag: ValidityCoerce →

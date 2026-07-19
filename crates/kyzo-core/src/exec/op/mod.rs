@@ -146,7 +146,7 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::{BindingPos, Expr};
 use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -1005,8 +1005,8 @@ mod tests {
 
     use super::*;
     use crate::data::program::InputRelationHandle;
-    use crate::data::relation::{ColType, NullableColType};
-    use crate::data::relation::{ColumnDef, StoredRelationMetadata};
+    use kyzo_model::schema::{ColType, NullableColType};
+    use kyzo_model::schema::{ColumnDef, StoredRelationMetadata};
     use kyzo_model::value::{DataValue, ValidityTs};
     use crate::engines::segments::SegmentEngine;
     use crate::query::temp_store::RegularTempStore;
@@ -1962,9 +1962,9 @@ mod tests {
     /// identical first failure (hostile-review reproducer).
     #[test]
     fn batched_filter_reports_earlier_predicate_error_before_stream_error() {
-        use crate::data::functions::OP_GT;
+        use kyzo_model::program::op::OP_GT;
         let gt_zero = Expr::Apply {
-            op: &OP_GT,
+            op: OP_GT,
             args: Box::new([
                 Expr::Binding {
                     var: Symbol::new("c0", Default::default()),

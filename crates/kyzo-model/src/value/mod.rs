@@ -63,6 +63,7 @@ pub mod row;
 pub mod search_hits;
 pub mod string;
 pub mod tag;
+pub mod json_convert;
 pub mod kind;
 pub mod validity_coerce;
 
