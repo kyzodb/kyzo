@@ -244,7 +244,7 @@ fn k_shortest_path_yen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -254,14 +254,14 @@ mod tests {
         Tuple::from_vec(vec![s(a), s(b), DataValue::from(w)])
     }
 
-    fn k_opt(k: i64) -> BTreeMap<smartstring::SmartString<smartstring::LazyCompact>, Expr> {
-        BTreeMap::from([(
+    fn k_opt(k: i64) -> FixedRuleOptions {
+        opts_map(BTreeMap::from([(
             smartstring::SmartString::from("k"),
             Expr::Const {
                 val: DataValue::from(k),
                 span: SourceSpan::default(),
             },
-        )])
+        )]))
     }
 
     /// A deterministic pseudo-random weighted graph plus multi-node start and
@@ -388,13 +388,13 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
             ],
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 smartstring::SmartString::from("k"),
                 Expr::Const {
                     val: DataValue::from(2i64),
                     span: SourceSpan::default(),
                 },
-            )]),
+            )])),
             CancelFlag::default(),
         )
         .unwrap();
@@ -466,13 +466,13 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
             ],
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 smartstring::SmartString::from("k"),
                 Expr::Const {
                     val: DataValue::from(2i64),
                     span: SourceSpan::default(),
                 },
-            )]),
+            )])),
             cancel,
         )
         .unwrap_err();

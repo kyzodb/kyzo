@@ -200,7 +200,7 @@ mod tests {
     use kyzo_model::program::expr::Expr;
     use kyzo_model::SourceSpan;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
 
     #[test]
     #[ignore = "timing-evidence rig; run explicitly with --ignored --nocapture to print APSP timings"]
@@ -233,13 +233,13 @@ mod tests {
             DataValue::from(1.0),
         ]));
         let opt = || {
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 smartstring::SmartString::from("undirected"),
                 Expr::Const {
                     val: DataValue::from(true),
                     span: SourceSpan::default(),
                 },
-            )])
+            )]))
         };
         let run = || {
             run_fixed_rule(
@@ -283,14 +283,14 @@ mod tests {
         )
     }
 
-    fn undirected_opt() -> BTreeMap<smartstring::SmartString<smartstring::LazyCompact>, Expr> {
-        BTreeMap::from([(
+    fn undirected_opt() -> FixedRuleOptions {
+        opts_map(BTreeMap::from([(
             smartstring::SmartString::from("undirected"),
             Expr::Const {
                 val: DataValue::from(true),
                 span: SourceSpan::default(),
             },
-        )])
+        )]))
     }
 
     /// A deterministic pseudo-random weighted graph (LCG), large enough that

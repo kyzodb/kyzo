@@ -21,7 +21,7 @@ use super::RelAlgebra;
 use crate::exec::plan::program::MagicSymbol;
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
-use kyzo_model::value::{DataValue, SearchHits, Tag};
+use kyzo_model::value::{DataValue, SearchHits, Tag, Tuple};
 use crate::project::current::Segments;
 use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::fixpoint::eval::AtomOccurrence;
@@ -91,6 +91,7 @@ impl SearchRA {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         let span = self.atom.span;
         let fts_n_total = match &self.atom.cfg {
@@ -106,6 +107,7 @@ impl SearchRA {
         let query_expr = self.atom.query.clone();
         let cancel = self.atom.cancel.clone();
         let cfg = &self.atom.cfg;
+        let base_arity = self.atom.cfg.base().arity();
 
         let search = move |row: &[DataValue]| -> Result<SearchHits> {
             cancel.check()?;
@@ -144,13 +146,17 @@ impl SearchRA {
         };
 
         Ok(Box::new(SearchBatches {
-            parent: self.parent.iter_batched(tx, delta_rule, stores, segments)?,
+            parent: self
+                .parent
+                .iter_batched(tx, delta_rule, stores, segments, want_premises)?,
             parent_batch: None,
             parent_row: 0,
             hits: SearchHits::empty(),
             hit_idx: 0,
             search: Box::new(search),
             pending_err: None,
+            want_premises,
+            base_arity,
         }))
     }
 }
@@ -164,6 +170,9 @@ struct SearchBatches<'a> {
     hit_idx: usize,
     search: Box<dyn FnMut(&[DataValue]) -> Result<SearchHits> + 'a>,
     pending_err: Option<miette::Error>,
+    want_premises: bool,
+    /// Leading columns of each hit that form the base-relation premise row.
+    base_arity: usize,
 }
 
 impl SearchBatches<'_> {
@@ -185,13 +194,35 @@ impl SearchBatches<'_> {
                     Ok(r) => r.to_vec(),
                     Err(e) => return Err(e.into()),
                 };
+                let left_premises = if self.want_premises {
+                    batch.row_premises(self.parent_row)
+                } else {
+                    Vec::new()
+                };
                 while self.hit_idx < self.hits.len() {
                     let hit = self.hits.materialize_hit(self.hit_idx)?;
+                    let right_premise = if self.want_premises {
+                        Some(
+                            hit.iter()
+                                .take(self.base_arity)
+                                .cloned()
+                                .collect::<Tuple>(),
+                        )
+                    } else {
+                        None
+                    };
                     out.push_with(|buf| {
                         buf.extend_from_slice(&row);
                         buf.extend(hit);
                         Ok(())
                     })?;
+                    if self.want_premises {
+                        let mut premises = left_premises.clone();
+                        if let Some(r) = right_premise {
+                            premises.push(r);
+                        }
+                        out.push_premise_list(premises);
+                    }
                     self.hit_idx += 1;
                     if out.is_full() {
                         return Ok(Some(out));

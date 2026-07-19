@@ -3,6 +3,7 @@ use std::f64::consts::{E, PI};
 use serde_json::json;
 use kyzo_model::data_value_any;
 use kyzo_model::schema::{ColType, NullableColType};
+use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs, Vector};
 use crate::exec::stdlib::collection::*;
 use crate::exec::stdlib::compare::*;

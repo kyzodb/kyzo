@@ -426,9 +426,16 @@ fn seeded_db() -> Engine<kyzo::FjallStorage> {
     let storage = new_fjall_storage(dir.path()).expect("open fjall storage");
     std::mem::forget(dir);
     let db = open_engine(storage);
+    db.run_script(":create edge {a: Int, b: Int}", no_params())
+        .expect("create edge schema");
+    let rows = DataValue::List(vec![
+        DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
+        DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
+        DataValue::List(vec![DataValue::from(3i64), DataValue::from(4i64)]),
+    ]);
     db.run_script(
-        "?[a, b] <- [[1, 2], [2, 3], [3, 4]] :create edge {a, b}",
-        no_params(),
+        "?[a, b] <- $rows :put edge {a, b}",
+        BTreeMap::from([("rows".into(), rows)]),
     )
     .expect("seed edge");
     db
@@ -644,24 +651,27 @@ fn rules_script(program: &Program) -> String {
         .join("\n")
 }
 
-fn facts_script(rel: &Rel, arity: usize, rows: &BTreeSet<Tuple>) -> String {
+fn facts_create_schema(rel: &Rel, arity: usize) -> String {
     let names: Vec<&str> = (0..arity).map(var).collect();
-    let body: Vec<String> = rows
+    let cols = names
         .iter()
-        .map(|t| {
-            format!(
-                "[{}]",
-                t.iter()
-                    .map(|v| v.get_int().expect("corpus facts are ints").to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
-        .collect();
-    format!(
-        "?[{n}] <- [{b}] :create {rel} {{{n}}}",
-        n = names.join(", "),
-        b = body.join(", ")
+        .map(|n| format!("{n}: Int"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(":create {rel} {{{cols}}}")
+}
+
+fn facts_put_script(rel: &Rel, arity: usize) -> String {
+    let names: Vec<&str> = (0..arity).map(var).collect();
+    let cols = names.join(", ");
+    format!("?[{cols}] <- $rows :put {rel} {{{cols}}}")
+}
+
+fn facts_rows_param(rows: &BTreeSet<Tuple>) -> DataValue {
+    DataValue::List(
+        rows.iter()
+            .map(|t| DataValue::List(t.iter().cloned().collect()))
+            .collect(),
     )
 }
 
@@ -925,8 +935,15 @@ fn verify_matches_across_a_generated_corpus() {
         let db = open_engine(storage);
         for (rel, rows) in &program.facts {
             let arity = rows.iter().next().map(|t| t.len()).unwrap_or(0);
-            db.run_script(&facts_script(rel, arity, rows), no_params())
+            db.run_script(&facts_create_schema(rel, arity), no_params())
+                .unwrap_or_else(|e| panic!("seed {seed}: create {rel}: {e}"));
+            if !rows.is_empty() {
+                db.run_script(
+                    &facts_put_script(rel, arity),
+                    BTreeMap::from([("rows".into(), facts_rows_param(rows))]),
+                )
                 .unwrap_or_else(|e| panic!("seed {seed}: fact load for {rel}: {e}"));
+            }
         }
         let rules_text = rules_script(&program);
         for (entry_rel, arity) in entries {
@@ -985,7 +1002,7 @@ fn verify_never_matches_the_unstratifiable_corpus() {
         std::mem::forget(dir);
         let db = open_engine(storage);
         for (rel, arity) in edb_relations(&program) {
-            db.run_script(&facts_script(&rel, arity, &BTreeSet::new()), no_params())
+            db.run_script(&facts_create_schema(&rel, arity), no_params())
                 .unwrap_or_else(|e| panic!("{name}: create EDB {rel}: {e}"));
         }
         let rules_text = rules_script(&program);
@@ -1041,13 +1058,30 @@ fn verify_matches_a_point_in_time_historical_read() {
     let storage = new_fjall_storage(dir.path()).unwrap();
     std::mem::forget(dir);
     let db = open_engine(storage);
+    db.run_script(":create hist {k: Int => v: Any}", no_params())
+        .expect("create hist schema");
     db.run_script(
-        "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
-        no_params(),
+        "?[k, v] <- $rows :put hist {k => v} @ 100",
+        BTreeMap::from([(
+            "rows".into(),
+            DataValue::List(vec![DataValue::List(vec![
+                DataValue::from(1i64),
+                DataValue::from("a"),
+            ])]),
+        )]),
     )
-    .expect("create at valid=100");
-    db.run_script("?[k, v] <- [[1, 'b']] :put hist {k => v} @ 200", no_params())
-        .expect("put at valid=200");
+    .expect("put hist @100");
+    db.run_script(
+        "?[k, v] <- $rows :put hist {k => v} @ 200",
+        BTreeMap::from([(
+            "rows".into(),
+            DataValue::List(vec![DataValue::List(vec![
+                DataValue::from(1i64),
+                DataValue::from("b"),
+            ])]),
+        )]),
+    )
+    .expect("put hist @200");
 
     let histories = hist_events();
     for (q, expect) in [
@@ -1077,16 +1111,32 @@ fn verify_matches_a_negated_historical_read() {
     let storage = new_fjall_storage(dir.path()).unwrap();
     std::mem::forget(dir);
     let db = open_engine(storage);
+    db.run_script(":create hist {k: Int => v: Any}", no_params())
+        .expect("create hist schema");
     db.run_script(
-        "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
-        no_params(),
+        "?[k, v] <- $rows :put hist {k => v} @ 100",
+        BTreeMap::from([(
+            "rows".into(),
+            DataValue::List(vec![DataValue::List(vec![
+                DataValue::from(1i64),
+                DataValue::from("a"),
+            ])]),
+        )]),
     )
-    .expect("create at valid=100");
+    .expect("put hist @100");
+    db.run_script(":create probe {k: Int => v: Any}", no_params())
+        .expect("create probe schema");
     db.run_script(
-        "?[k, v] <- [[1, 'a'], [2, 'z']] :create probe {k => v}",
-        no_params(),
+        "?[k, v] <- $rows :put probe {k => v}",
+        BTreeMap::from([(
+            "rows".into(),
+            DataValue::List(vec![
+                DataValue::List(vec![DataValue::from(1i64), DataValue::from("a")]),
+                DataValue::List(vec![DataValue::from(2i64), DataValue::from("z")]),
+            ]),
+        )]),
     )
-    .expect("create probe");
+    .expect("seed probe");
 
     let outcome = verify_script_with_histories(
         &db,
@@ -1103,30 +1153,33 @@ fn verify_matches_a_negated_historical_read() {
 }
 
 /// The interval-derivation/diff boundary, named specifically.
+///
+/// `@spans` / `@delta` are not yet on the kyzo-model parse door (only
+/// point-in-time `@ <expr>` is). The translator's typed refusal is still
+/// exercised here against the IR [`ValidityClause::Spans`] shape production
+/// will emit once that parse seat lands — same named outcome the historical
+/// `::verify` corpus asserted.
 #[test]
 fn verify_refuses_a_spans_read_by_name() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = new_fjall_storage(dir.path()).unwrap();
-    std::mem::forget(dir);
-    let db = open_engine(storage);
-    db.run_script(
-        "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
-        no_params(),
-    )
-    .expect("create at valid=100");
+    use kyzo_model::SourceSpan;
+    use kyzo_model::program::rule::InputNamedFieldRelationApplyAtom;
+    use kyzo_model::value::MAX_VALIDITY_TS;
 
-    let outcome = verify_script(
-        &db,
-        "?[k, v, iv] := *hist{k, v @spans iv}",
-        no_params(),
-        ScriptOptions::default(),
-    )
-    .expect("verify_script runs");
-    match outcome {
-        VerifyOutcome::Unsupported {
-            reason:
-                VerifyUnsupported::Translate(TranslateUnsupported::IntervalDerivation { name }),
-        } => {
+    let atom = InputAtom::NamedFieldRelation {
+        inner: InputNamedFieldRelationApplyAtom {
+            name: Symbol::new("hist", SourceSpan(0, 0)),
+            args: BTreeMap::new(),
+            validity: Some(ValidityClause::Spans {
+                sys: MAX_VALIDITY_TS,
+                var: Symbol::new("iv", SourceSpan(0, 0)),
+            }),
+            span: SourceSpan(0, 0),
+        },
+    };
+    let mut edb = BTreeSet::new();
+    let mut historical = BTreeSet::new();
+    match translate_body_atom(&atom, &mut edb, &mut historical) {
+        Err(TranslateUnsupported::IntervalDerivation { name }) => {
             assert!(
                 name.name.contains("hist"),
                 "expected the hist relation in the @spans refusal, got: {name}"

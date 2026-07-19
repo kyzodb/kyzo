@@ -35,7 +35,7 @@ fn grouped_count_sum_min_max_mean() {
         )
         .expect("grouped aggregation");
     let mut got: Vec<(String, i64, i64, i64, i64, f64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| {
             (
@@ -75,11 +75,11 @@ fn global_aggregation() {
             no_params(),
         )
         .expect("global aggregation");
-    assert_eq!(out.rows.len(), 1);
-    assert_eq!(out.rows[0][0].get_int(), Some(4));
-    assert_eq!(out.rows[0][1].get_int(), Some(100));
-    assert_eq!(out.rows[0][2].get_int(), Some(10));
-    assert_eq!(out.rows[0][3].get_int(), Some(40));
+    assert_eq!(out.rows().len(), 1);
+    assert_eq!(out.rows()[0][0].get_int(), Some(4));
+    assert_eq!(out.rows()[0][1].get_int(), Some(100));
+    assert_eq!(out.rows()[0][2].get_int(), Some(10));
+    assert_eq!(out.rows()[0][3].get_int(), Some(40));
 }
 
 /// `collect` gathers every group member into a list — checked by sorting
@@ -99,7 +99,7 @@ fn collect_aggregation() {
         .run_script("?[dept, collect(name)] := *emp{dept, name}", no_params())
         .expect("collect");
     let mut got: Vec<(String, Vec<String>)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| {
             let dept = r[0].get_str().unwrap().to_string();
@@ -142,7 +142,7 @@ fn min_recomputes_after_retracting_the_current_minimum() {
     let out = db
         .run_script("?[x, min(y)] := *p{x, y}", no_params())
         .expect("initial min");
-    assert_eq!(out.rows[0][1].get_int(), Some(10), "min starts at 10");
+    assert_eq!(out.rows()[0][1].get_int(), Some(10), "min starts at 10");
 
     // Retract the row holding the current min (10).
     db.run_script("?[x, y] <- [[1, 10]] :rm p {x, y}", no_params())
@@ -152,7 +152,7 @@ fn min_recomputes_after_retracting_the_current_minimum() {
         .run_script("?[x, min(y)] := *p{x, y}", no_params())
         .expect("recomputed min");
     assert_eq!(
-        out.rows[0][1].get_int(),
+        out.rows()[0][1].get_int(),
         Some(20),
         "min must recompute to 20 after 10 is gone, not stay stale at 10"
     );
@@ -163,7 +163,7 @@ fn min_recomputes_after_retracting_the_current_minimum() {
     let out = db
         .run_script("?[x, min(y)] := *p{x, y}", no_params())
         .expect("recomputed min again");
-    assert_eq!(out.rows[0][1].get_int(), Some(30));
+    assert_eq!(out.rows()[0][1].get_int(), Some(30));
 
     // Retract the last row: the group itself must vanish, not report
     // min of nothing.
@@ -172,5 +172,5 @@ fn min_recomputes_after_retracting_the_current_minimum() {
     let out = db
         .run_script("?[x, min(y)] := *p{x, y}", no_params())
         .expect("empty relation");
-    assert!(out.rows.is_empty(), "an empty group must vanish entirely");
+    assert!(out.rows().is_empty(), "an empty group must vanish entirely");
 }

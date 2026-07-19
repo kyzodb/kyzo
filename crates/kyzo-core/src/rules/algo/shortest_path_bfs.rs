@@ -175,7 +175,7 @@ impl FixedRule for ShortestPathBFS {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -209,7 +209,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("alice")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("bob")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -222,7 +222,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("alice")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("george")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -262,7 +262,7 @@ mod tests {
             TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("n0")])]),
             TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("absent")])]),
         ];
-        let prepared = prepare_fixed_rule(&ShortestPathBFS, inputs, BTreeMap::new()).unwrap();
+        let prepared = prepare_fixed_rule(&ShortestPathBFS, inputs, empty_opts()).unwrap();
 
         // Baseline: no cancellation. The whole chain is expanded.
         take_bfs_nodes_expanded(); // clear any leftover from a reused thread
@@ -307,7 +307,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("c")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();

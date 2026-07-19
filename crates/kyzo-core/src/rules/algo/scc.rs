@@ -217,7 +217,7 @@ impl TarjanSccG {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -240,7 +240,7 @@ mod tests {
                 ),
                 TestInput::new(vec!["id"], vec![Tuple::from_vec(vec![s("lonely")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();

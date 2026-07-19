@@ -204,13 +204,13 @@ impl FixedRule for Constant {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::run_fixed_rule;
+    use crate::rules::contract::tests_support::{empty_opts, opts_map, run_fixed_rule};
 
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the
     /// rows (the harness drives all three in order, as parse/eval do).
     #[test]
     fn constant_round_trip() {
-        let options = BTreeMap::from([(
+        let options = opts_map(BTreeMap::from([(
             SmartString::from("data"),
             Expr::Const {
                 val: DataValue::List(vec![
@@ -219,7 +219,7 @@ mod tests {
                 ]),
                 span: SourceSpan::default(),
             },
-        )]);
+        )]));
         let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
         let want: Tuple = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("x")]);
@@ -231,20 +231,20 @@ mod tests {
     #[test]
     fn drifted_options_refuse_typed() {
         // `arity` before `init_options`, with a non-const option: refused.
-        let options = BTreeMap::from([(
+        let options = opts_map(BTreeMap::from([(
             SmartString::from("data"),
             Expr::Const {
                 val: DataValue::from("not a list"),
                 span: SourceSpan::default(),
             },
-        )]);
+        )]));
         let err = Constant
             .arity(&options, &[], SourceSpan::default())
             .unwrap_err();
         assert!(err.to_string().contains("Wrong value"), "{err}");
 
         // Ragged rows are refused at normalization.
-        let options = BTreeMap::from([(
+        let options = opts_map(BTreeMap::from([(
             SmartString::from("data"),
             Expr::Const {
                 val: DataValue::List(vec![
@@ -253,7 +253,7 @@ mod tests {
                 ]),
                 span: SourceSpan::default(),
             },
-        )]);
+        )]));
         let err = Constant
             .init_options(options, SourceSpan::default())
             .unwrap_err();

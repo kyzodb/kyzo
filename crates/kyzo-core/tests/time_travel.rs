@@ -43,7 +43,7 @@ fn as_of_read_across_corrections() {
     let before_any = db
         .run_script("?[price] := *quote{id, price @ 50}", no_params())
         .expect("as-of before creation");
-    assert!(before_any.rows.is_empty(), "nothing existed yet at 50");
+    assert!(before_any.rows().is_empty(), "nothing existed yet at 50");
 
     let at_150 = db
         .run_script("?[price] := *quote{id, price @ 150}", no_params())
@@ -87,7 +87,7 @@ fn as_of_read_survives_a_later_removal() {
     let after = db
         .run_script("?[v] := *rec{id, v @ 250}", no_params())
         .expect("as-of after removal");
-    assert!(after.rows.is_empty(), "removed by 250");
+    assert!(after.rows().is_empty(), "removed by 250");
 }
 
 /// `@spans iv`: one output row per maximal equal-payload run along the
@@ -127,9 +127,9 @@ fn spans_derives_maximal_runs() {
             no_params(),
         )
         .expect("spans");
-    assert_eq!(out.rows.len(), 3, "three maximal runs, one per correction");
+    assert_eq!(out.rows().len(), 3, "three maximal runs, one per correction");
     let got: Vec<(String, i64, DataValue, bool, bool)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| {
             (
@@ -206,10 +206,10 @@ fn end_sentinel_never_leaks_through_interval_end() {
         )
         .expect("spans");
     assert!(
-        out.rows.len() >= 2,
+        out.rows().len() >= 2,
         "at least the clipped run and the open run"
     );
-    for r in &out.rows {
+    for r in out.rows() {
         match &r[0] {
             DataValue::Null => {} // the open run — correct
             other @ (DataValue::Bool(_)
@@ -223,7 +223,8 @@ fn end_sentinel_never_leaks_through_interval_end() {
                 | DataValue::List(_)
                 | DataValue::Set(_)
                 | DataValue::Validity(_)
-                | DataValue::Interval(_)) => {
+                | DataValue::Interval(_)
+                | DataValue::Geometry(_)) => {
                 assert_ne!(
                     other.get_int(),
                     Some(i64::MAX),
@@ -234,7 +235,7 @@ fn end_sentinel_never_leaks_through_interval_end() {
     }
     // And exactly one open run (the last), so Null actually occurred.
     let nulls = out
-        .rows
+        .rows()
         .iter()
         .filter(|r| matches!(r[0], DataValue::Null))
         .count();
@@ -288,7 +289,7 @@ fn delta_reports_signed_net_change() {
         )
         .expect("delta");
     let mut got: Vec<(i64, String, i64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| {
             (

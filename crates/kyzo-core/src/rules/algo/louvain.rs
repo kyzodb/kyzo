@@ -288,10 +288,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use kyzo_model::value::{DataValue, Tuple};
-    use crate::rules::contract::CancelFlag;
+    use crate::rules::contract::{CancelAuthority, CancelFlag};
     use super::{CommunityDetectionLouvain, louvain};
     use crate::rules::graph_view::DirectedCsrGraph;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     #[test]
     fn sample() {
@@ -383,7 +383,7 @@ mod tests {
                     Tuple::from_vec(vec![s("c"), s("b")]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             cancel,
         )
         .unwrap_err();

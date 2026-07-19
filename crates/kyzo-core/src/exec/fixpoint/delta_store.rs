@@ -1191,7 +1191,7 @@ fn meet_ranged<'s>(
 }
 
 #[cfg(test)]
-mod tests {
+mod level_stack_tests {
     use super::*;
 
     /// A converging fixpoint's level stack stays bounded: epochs that
@@ -2690,6 +2690,22 @@ mod tests {
     // P036: no by_row twin. The scan surface of a sealed meet store must
     // equal `{ interleave(k, v) : (k, v) ∈ groups }` in head-tuple order
     // for every regime; the out-store's by_group is the sole authority.
+
+
+    /// P036: `by_group` is the sole MeetAggrStore authority — every group
+    /// interleaves to a head tuple that `exists` recognizes.
+    fn rev_assert_lockstep(store: &MeetAggrStore) {
+        for (k, v) in &store.by_group {
+            let row = store
+                .layout
+                .interleave(k.as_ref(), v.as_slice())
+                .expect("group interleaves");
+            assert!(
+                store.exists(row.as_slice()),
+                "interleaved head must exist for its group"
+            );
+        }
+    }
 
     /// Scan surface equals the interleave of every sealed meet level's groups
     /// (newest owner wins per group key).

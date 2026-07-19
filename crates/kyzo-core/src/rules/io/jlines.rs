@@ -218,11 +218,12 @@ impl FixedRule for JsonReader {
 
 #[cfg(test)]
 mod tests {
+    use kyzo_model::program::rule::FixedRuleOptions;
     use super::*;
-    use crate::rules::contract::tests_support::run_fixed_rule;
+    use crate::rules::contract::tests_support::{empty_opts, opts_map, run_fixed_rule};
 
-    fn options(content: &str) -> BTreeMap<SmartString<LazyCompact>, Expr> {
-        BTreeMap::from([
+    fn options(content: &str) -> FixedRuleOptions {
+        opts_map(BTreeMap::from([
             (
                 SmartString::from("content"),
                 Expr::Const {
@@ -244,7 +245,7 @@ mod tests {
                     span: SourceSpan::default(),
                 },
             ),
-        ])
+        ]))
     }
 
     /// JSON-lines host content: fields projected, absent fields Null.
@@ -280,7 +281,7 @@ mod tests {
         let err = run_fixed_rule(
             &JsonReader,
             vec![],
-            BTreeMap::from([
+            opts_map(BTreeMap::from([
                 (
                     SmartString::from("url"),
                     Expr::Const {
@@ -295,7 +296,7 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ]),
+            ])),
             CancelFlag::default(),
         )
         .unwrap_err();
@@ -308,7 +309,7 @@ mod tests {
         let err = run_fixed_rule(
             &JsonReader,
             vec![],
-            BTreeMap::from([
+            opts_map(BTreeMap::from([
                 (
                     SmartString::from("url"),
                     Expr::Const {
@@ -323,7 +324,7 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ]),
+            ])),
             CancelFlag::default(),
         )
         .unwrap_err();

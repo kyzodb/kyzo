@@ -167,7 +167,7 @@ impl FixedRule for ReorderSort {
 mod tests {
     use super::*;
     use crate::rules::contract::CancelFlag;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{opts_map, TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -188,7 +188,7 @@ mod tests {
     }
 
     /// `out: [x], sort_by: x` over one column of mixed types.
-    fn opts(extra: &[(&str, DataValue)]) -> BTreeMap<SmartString<LazyCompact>, Expr> {
+    fn opts(extra: &[(&str, DataValue)]) -> FixedRuleOptions {
         let mut m = BTreeMap::from([
             (
                 SmartString::from("out"),
@@ -203,7 +203,7 @@ mod tests {
         for (name, val) in extra {
             m.insert(SmartString::from(*name), c(val.clone()));
         }
-        m
+        opts_map(m)
     }
 
     /// VALUE ORACLE: mixed-type sort keys order per the `DataValue` total

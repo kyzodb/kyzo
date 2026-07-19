@@ -32,6 +32,7 @@ pub(crate) struct ColumnBatchWidthMismatch {
 }
 
 /// A row set pivoted to columns for the columnar expression evaluator.
+#[derive(Debug)]
 pub(crate) struct ColumnBatch {
     cols: Vec<BatchColumn>,
     height: usize,
@@ -74,6 +75,7 @@ impl ColumnBatch {
 
 /// One batch column; `get` clones the row's value (the packed-code form
 /// replaces this with a spend through an admitted observer, per #120).
+#[derive(Debug)]
 pub(crate) struct BatchColumn(Vec<DataValue>);
 
 impl BatchColumn {

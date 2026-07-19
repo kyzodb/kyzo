@@ -49,7 +49,7 @@ use std::collections::BTreeMap;
 use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use kyzo::{DataValue, Db, new_fjall_storage};
+use kyzo::{Catalog, DataValue, Engine, new_fjall_storage};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -202,8 +202,8 @@ fn value_str(i: u64) -> String {
     format!("payload:{i:012}")
 }
 
-fn seeded_string_db(n: u64, dir: &std::path::Path) -> Db<kyzo::FjallStorage> {
-    let db = Db::new(new_fjall_storage(dir).expect("storage")).expect("db");
+fn seeded_string_db(n: u64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage> {
+    let db = Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
     let mut script = String::from("?[k, v] <- [");
     for i in 0..n {
         script.push_str(&format!(

@@ -108,8 +108,8 @@ fn hnsw_knn_joined_to_a_relation() {
             no_params(),
         )
         .expect("knn joined to label");
-    assert_eq!(out.rows.len(), 1);
-    assert_eq!(out.rows[0][0].get_str(), Some("north"));
+    assert_eq!(out.rows().len(), 1);
+    assert_eq!(out.rows()[0][0].get_str(), Some("north"));
 }
 
 /// Plain FTS search: one document actually contains the query term.

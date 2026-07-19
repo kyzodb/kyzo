@@ -205,7 +205,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -278,7 +278,7 @@ mod tests {
         let got = run_fixed_rule(
             &KCoreDecomposition,
             vec![TestInput::new(vec!["fr", "to"], rows)],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -414,7 +414,7 @@ mod tests {
             .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&KCoreDecomposition, inputs, BTreeMap::new()).unwrap();
+        let prepared = prepare_fixed_rule(&KCoreDecomposition, inputs, empty_opts()).unwrap();
 
         // Baseline: no cancellation. Every vertex is peeled.
         take_kcore_verts_peeled(); // clear any leftover from a reused thread

@@ -66,7 +66,7 @@ fn multi_relation_join() {
         )
         .expect("three-way join");
     let mut got: Vec<(String, i64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| (r[0].get_str().unwrap().to_string(), r[1].get_int().unwrap()))
         .collect();
@@ -159,7 +159,7 @@ fn put_then_rm() {
         .run_script("?[id, qty] := *widget{id, qty}", no_params())
         .expect("scan after put");
     let mut got: Vec<(i64, i64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| (r[0].get_int().unwrap(), r[1].get_int().unwrap()))
         .collect();
@@ -307,6 +307,6 @@ fn sort_limit_offset() {
             no_params(),
         )
         .expect("page 2 (skip 2, take 2)");
-    assert_eq!(page2.rows.len(), 2, "one page of 2 rows");
+    assert_eq!(page2.rows().len(), 2, "one page of 2 rows");
     assert_eq!(ints(&page2, 1), vec![30, 20], "third and fourth highest");
 }

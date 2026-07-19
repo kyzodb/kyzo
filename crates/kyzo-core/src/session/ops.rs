@@ -801,6 +801,7 @@ mod temporal_index_tests {
     use std::cmp::Reverse;
 
     use super::*;
+    use kyzo_model::data_value_any;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::schema::ColType;
     use crate::session::catalog::Catalog;

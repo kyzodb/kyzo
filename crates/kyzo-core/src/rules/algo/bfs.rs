@@ -137,7 +137,7 @@ impl FixedRule for Bfs {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -179,7 +179,7 @@ mod tests {
                 ),
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
-            BTreeMap::from([
+            opts_map(BTreeMap::from([
                 (
                     SmartString::from("condition"),
                     Expr::Const {
@@ -194,7 +194,7 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ]),
+            ])),
             CancelFlag::default(),
         )
         .unwrap();

@@ -116,10 +116,12 @@ enum StoredRelationBuild {
         name: Symbol,
         span: SourceSpan,
         op: RelationOp,
+        write_vld: WriteValidity,
     },
     WithSchema {
         handle: InputRelationHandle,
         op: RelationOp,
+        write_vld: WriteValidity,
     },
 }
 
@@ -375,9 +377,42 @@ pub(crate) fn parse_query(
 
                 let name_p = args.next().unwrap();
                 let name = Symbol::new(name_p.as_str(), name_p.extract_span());
-                match args.next() {
+                let schema_or_vld = args.next();
+                let (schema_p, vld_p) = match schema_or_vld {
+                    None => (None, None),
+                    Some(p) if p.as_rule() == Rule::validity_clause => (None, Some(p)),
+                    Some(p) => {
+                        let vld = args.next();
+                        (Some(p), vld)
+                    }
+                };
+                let write_vld = match vld_p {
+                    None => WriteValidity::Now,
+                    Some(p) => {
+                        ensure!(
+                            p.as_rule() == Rule::validity_clause,
+                            UnexpectedRule(p.extract_span())
+                        );
+                        let vld_inner = p.into_inner().next().unwrap();
+                        let vld_expr = build_expr(vld_inner, param_pool)?;
+                        match vld_expr.clone().eval_to_const() {
+                            Ok(val) => WriteValidity::Fixed(data_value_to_vld_spec(
+                                val,
+                                vld_expr.span(),
+                                cur_vld,
+                            )?),
+                            Err(_) => WriteValidity::PerRow(vld_expr),
+                        }
+                    }
+                };
+                match schema_p {
                     None => {
-                        stored_relation = Some(StoredRelationBuild::NameOnly { name, span, op })
+                        stored_relation = Some(StoredRelationBuild::NameOnly {
+                            name,
+                            span,
+                            op,
+                            write_vld,
+                        })
                     }
                     Some(schema_p) => {
                         let (mut metadata, mut key_bindings, mut dep_bindings) =
@@ -397,6 +432,7 @@ pub(crate) fn parse_query(
                                 span,
                             },
                             op,
+                            write_vld,
                         })
                     }
                 }
@@ -439,6 +475,7 @@ pub(crate) fn parse_query(
                     ..
                 },
             op: RelationOp::Create,
+            ..
         }) = &stored_relation
         {
             let mut bindings = key_bindings.clone();
@@ -449,7 +486,12 @@ pub(crate) fn parse_query(
 
     match stored_relation {
         None => {}
-        Some(StoredRelationBuild::NameOnly { name, span, op }) => {
+        Some(StoredRelationBuild::NameOnly {
+            name,
+            span,
+            op,
+            write_vld,
+        }) => {
             // Need an entry to derive head — ensure Constant placeholder if empty.
             if progs.is_empty() {
                 insert_empty_const_rule(&mut progs, &[]);
@@ -480,17 +522,20 @@ pub(crate) fn parse_query(
                 span,
             };
             prog.out_opts_mut().store_relation =
-                Some((handle, op, returning_mutation, WriteValidity::Now));
+                Some((handle, op, returning_mutation, write_vld));
             return finalize_program(prog);
         }
-        Some(StoredRelationBuild::WithSchema { handle, op }) => {
+        Some(StoredRelationBuild::WithSchema {
+            handle,
+            op,
+            write_vld,
+        }) => {
             if progs.is_empty() && matches!(op, RelationOp::Create) {
                 let mut bindings = handle.dep_bindings.clone();
                 bindings.extend_from_slice(&handle.key_bindings);
                 insert_empty_const_rule(&mut progs, &bindings);
             }
-            out_opts.store_relation =
-                Some((handle, op, returning_mutation, WriteValidity::Now));
+            out_opts.store_relation = Some((handle, op, returning_mutation, write_vld));
         }
     }
 

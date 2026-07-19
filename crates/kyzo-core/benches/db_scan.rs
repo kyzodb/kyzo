@@ -7,7 +7,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Repeated read-path scans through the public [`Db`] session — the
+//! Repeated read-path scans through the public [`Engine`] session — the
 //! current-state segment engine's kill-gate instrument. Steady-state
 //! iterations here run entirely against the served segment; the same bench
 //! on a segments-reverted tree is the A/B baseline.
@@ -15,15 +15,15 @@
 use std::collections::BTreeMap;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use kyzo::{DataValue, Db, new_fjall_storage};
+use kyzo::{Catalog, DataValue, Engine, new_fjall_storage};
 use std::hint::black_box;
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
-fn seeded_db(n: i64, dir: &std::path::Path) -> Db<kyzo::FjallStorage> {
-    let db = Db::new(new_fjall_storage(dir).expect("storage")).expect("db");
+fn seeded_db(n: i64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage> {
+    let db = Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
     let mut script = String::from("?[k, v] <- [");
     for i in 0..n {
         script.push_str(&format!("[{i}, {}],", i * 3));

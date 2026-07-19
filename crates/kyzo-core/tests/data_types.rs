@@ -20,7 +20,7 @@
 mod common;
 use common::*;
 
-use kyzo::{DataValue, UuidWrapper, Validity, ValidityTs};
+use kyzo::{DataValue, UuidWrapper, ValiditySlot, ValidityTs};
 
 #[test]
 fn every_data_type_round_trips_through_a_stored_relation() {
@@ -43,8 +43,8 @@ fn every_data_type_round_trips_through_a_stored_relation() {
             no_params(),
         )
         .expect("scan allt");
-    assert_eq!(out.rows.len(), 1);
-    let row = &out.rows[0];
+    assert_eq!(out.rows().len(), 1);
+    let row = &out.rows()[0];
 
     assert_eq!(row[0].get_int(), Some(42), "Int");
     assert_eq!(row[1].get_float(), Some(3.5), "Float");
@@ -68,7 +68,7 @@ fn every_data_type_round_trips_through_a_stored_relation() {
     let expected_json = DataValue::from(serde_json::json!({"a": 1}));
     assert_eq!(row[7], expected_json, "Json");
 
-    let expected_validity = DataValue::Validity(Validity::new(ValidityTs::from_raw(100), true));
+    let expected_validity = DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(100), true));
     assert_eq!(row[8], expected_validity, "Validity");
 
     assert_eq!(row[9].get_int(), Some(10), "Interval start");
@@ -91,9 +91,9 @@ fn validity_polarity_is_part_of_the_value() {
     let out = db
         .run_script("?[id, val] := *v{id, val}", no_params())
         .expect("scan v");
-    let asserted = DataValue::Validity(Validity::new(ValidityTs::from_raw(100), true));
-    let retracted = DataValue::Validity(Validity::new(ValidityTs::from_raw(100), false));
-    for r in &out.rows {
+    let asserted = DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(100), true));
+    let retracted = DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(100), false));
+    for r in out.rows() {
         let id = r[0].get_int().unwrap();
         if id == 1 {
             assert_eq!(r[1], asserted, "id 1 keeps its asserted polarity");
@@ -123,7 +123,7 @@ fn vector_round_trips_through_a_stored_relation() {
         )
         .expect("vector equality check");
     assert_eq!(
-        out.rows[0][0].get_bool(),
+        out.rows()[0][0].get_bool(),
         Some(true),
         "vector round-trips byte-exact"
     );
@@ -135,7 +135,7 @@ fn vector_round_trips_through_a_stored_relation() {
         )
         .expect("vector inequality check");
     assert_eq!(
-        out2.rows[0][0].get_bool(),
+        out2.rows()[0][0].get_bool(),
         Some(false),
         "a different vector must not compare equal"
     );
@@ -158,7 +158,7 @@ fn integral_float_coerces_into_an_int_column() {
         .run_script("?[id, n] := *ic{id, n} :order id", no_params())
         .expect("scan");
     let got: Vec<(i64, i64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| (r[0].get_int().unwrap(), r[1].get_int().unwrap()))
         .collect();

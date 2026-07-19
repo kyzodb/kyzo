@@ -26,9 +26,10 @@
 //! (`session/db.rs::run_sys_op`). That is not a silent stub: it is an honest
 //! [OPEN] to the witness/checker work (`#257` Witness Law / `#258` The
 //! Checker): provenance-backed `::verify` via
-//! [`crate::exec::provenance`] (`provenance_graph` / `verify_proof`) once
-//! `CompiledRuleBody::premise_sources` attributes premises (today the trait
-//! default is always `None`). Do not fake that door here.
+//! [`crate::exec::provenance`] (`provenance_graph` / `verify_proof`).
+//! RA premise attribution is landed (`CompiledRuleBody::premise_sources`
+//! + `want_premises` grounding rows); session wiring of `SysOp::Verify` is
+//! the remaining door. Do not fake that door here.
 
 use miette::Result;
 

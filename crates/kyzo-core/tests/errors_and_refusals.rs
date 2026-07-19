@@ -69,7 +69,7 @@ fn recursive_standing_query_is_refused() {
         .run_script(query, no_params())
         .expect("ordinary recursive read");
     let mut got: Vec<(i64, i64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| (r[0].get_int().unwrap(), r[1].get_int().unwrap()))
         .collect();

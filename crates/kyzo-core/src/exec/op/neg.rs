@@ -143,6 +143,7 @@ impl NegJoin {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         let bindings = self.left.bindings_after_eliminate();
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
@@ -351,7 +352,9 @@ impl NegJoin {
         };
 
         Ok(Box::new(NegBatchFilter {
-            left: self.left.iter_batched(tx, delta_rule, stores, segments)?,
+            left: self
+                .left
+                .iter_batched(tx, delta_rule, stores, segments, want_premises)?,
             has_match,
             eliminate_indices,
             pending_err: None,
@@ -362,7 +365,8 @@ impl NegJoin {
 /// The anti-join's batch executor: survivors accumulate densely across
 /// input batches; a probe error is stashed so already-accepted rows emit
 /// FIRST, in row order, before the error surfaces (the error-identity
-/// discipline every batch node keeps).
+/// discipline every batch node keeps). Negation contributes no premise —
+/// left premises pass through unchanged.
 struct NegBatchFilter<'a> {
     left: BatchIter<'a>,
     has_match: Box<dyn FnMut(&[DataValue]) -> Result<bool> + 'a>,
@@ -388,6 +392,7 @@ impl NegBatchFilter<'_> {
                     return Ok(Some(out));
                 }
             };
+            let tracking = batch.premises().is_some();
             for i in 0..batch.len() {
                 let row = batch.row(i).expect("i < batch.len()");
                 match (self.has_match)(row) {
@@ -401,6 +406,9 @@ impl NegBatchFilter<'_> {
                             }
                             Ok(())
                         })?;
+                        if tracking {
+                            out.push_premise_list(batch.row_premises(i));
+                        }
                     }
                     Err(e) => {
                         if out.is_empty() {

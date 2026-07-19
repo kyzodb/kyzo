@@ -71,8 +71,9 @@ fn multiple_commits_between_one_poll_match_a_fresh_recompute() {
     let fresh: BTreeSet<Tuple> = db
         .run_script(query, no_params())
         .expect("fresh recompute")
-        .rows
-        .into_iter()
+        .rows()
+        .iter()
+        .cloned()
         .collect();
     assert_eq!(
         maintained, fresh,
@@ -146,8 +147,9 @@ fn standing_query_recomputes_min_after_retracting_it_mid_batch() {
     let fresh: BTreeSet<Tuple> = db
         .run_script(query, no_params())
         .expect("fresh recompute")
-        .rows
-        .into_iter()
+        .rows()
+        .iter()
+        .cloned()
         .collect();
     assert_eq!(
         maintained, fresh,

@@ -531,7 +531,7 @@ pub fn incremental_eval(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::{Literal, Rule};
+    use crate::eval::{HeadAggr, Literal, Rule};
 
     fn v(i: i64) -> DataValue {
         DataValue::from(i)
@@ -550,7 +550,7 @@ mod tests {
         Term::var("Y")
     }
     fn patch_of(
-        entries: Vec<(&str, SignedFact)>,
+        entries: Vec<(&'static str, SignedFact)>,
     ) -> BTreeMap<Rel, BTreeSet<SignedFact>> {
         let mut out: BTreeMap<Rel, BTreeSet<SignedFact>> = BTreeMap::new();
         for (rel, fact) in entries {

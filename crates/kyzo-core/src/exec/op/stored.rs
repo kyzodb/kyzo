@@ -168,6 +168,8 @@ impl StoredRA {
         (left_join_indices, right_join_indices): (Vec<usize>, Vec<usize>),
         eliminate_indices: BTreeSet<usize>,
         segments: Segments<'a>,
+        want_premises: bool,
+        capture_right_as_premise: bool,
     ) -> Result<BatchIter<'a>> {
         let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();
         right_invert_indices.sort_by_key(|(_, b)| **b);
@@ -314,6 +316,8 @@ impl StoredRA {
             eliminate_indices,
             cur: None,
             active: None,
+            want_premises,
+            capture_right_as_premise,
         }))
     }
 }
@@ -420,6 +424,8 @@ impl StoredWithValidityRA {
         left: BatchIter<'a>,
         (left_join_indices, right_join_indices): (Vec<usize>, Vec<usize>),
         eliminate_indices: BTreeSet<usize>,
+        want_premises: bool,
+        capture_right_as_premise: bool,
     ) -> Result<BatchIter<'a>> {
         let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();
         right_invert_indices.sort_by_key(|(_, b)| **b);
@@ -474,6 +480,8 @@ impl StoredWithValidityRA {
             eliminate_indices,
             cur: None,
             active: None,
+            want_premises,
+            capture_right_as_premise,
         }))
     }
 }

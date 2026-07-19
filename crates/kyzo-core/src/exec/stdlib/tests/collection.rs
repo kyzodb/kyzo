@@ -3,6 +3,7 @@ use std::f64::consts::{E, PI};
 use serde_json::json;
 use kyzo_model::data_value_any;
 use kyzo_model::schema::{ColType, NullableColType};
+use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs, Vector};
 use crate::exec::stdlib::collection::*;
 use crate::exec::stdlib::compare::*;
@@ -463,7 +464,9 @@ fn format_timestamp_validity_input_agreed() {
     use kyzo_model::value::Validity;
     let f = |micros: i64| {
         let vld = DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(micros), true).expect("non-reserved"),
+            Validity::new(ValidityTs::from_raw(micros), true)
+                .expect("non-reserved")
+                .into(),
         );
         fmt(&[vld]).unwrap()
     };

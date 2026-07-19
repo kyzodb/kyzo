@@ -27,7 +27,7 @@ use kyzo_model::value::ScanBound;
 use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter, BatchTupleFilter, conjunction_pred};
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::exec::op::join::push_joined_row;
+use crate::exec::op::join::{push_join_premises, push_joined_row};
 use crate::exec::fixpoint::delta_store::TupleInIter;
 use itertools::Either::{Left, Right};
 use itertools::Itertools;
@@ -124,6 +124,8 @@ impl TempStoreRA {
         eliminate_indices: BTreeSet<usize>,
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
+        want_premises: bool,
+        capture_right_as_premise: bool,
     ) -> Result<BatchIter<'a>> {
         let storage = epoch_store_of(stores, &self.storage_key)?;
 
@@ -158,6 +160,8 @@ impl TempStoreRA {
             eliminate_indices,
             cur: None,
             active: None,
+            want_premises,
+            capture_right_as_premise,
         }))
     }
 }
@@ -179,6 +183,8 @@ struct TempStorePrefixBatchJoin<'a> {
     cur: Option<(Batch, usize)>,
     /// The in-flight match iterator for the row at `cur`'s cursor.
     active: Option<Box<dyn Iterator<Item = TupleInIter<'a>> + 'a>>,
+    want_premises: bool,
+    capture_right_as_premise: bool,
 }
 
 impl<'a> TempStorePrefixBatchJoin<'a> {
@@ -276,9 +282,15 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                 )
                 .into()));
             };
-            let left_row = match b.row(*idx) {
-                Ok(r) => r,
+            let left_idx = *idx;
+            let left_owned = match b.row(left_idx) {
+                Ok(r) => r.to_vec(),
                 Err(e) => return Some(Err(e.into())),
+            };
+            let left_premises = if self.want_premises {
+                b.row_premises(left_idx)
+            } else {
+                Vec::new()
             };
             let Some(active) = self.active.as_mut() else {
                 return Some(Err(crate::exec::op::PlanInvariantError(
@@ -294,25 +306,12 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                         break;
                     }
                     Some(found) => {
-                        if self.inner.filters.is_empty() {
-                            let found_tuple = match found.try_into_tuple() {
-                                Ok(t) => t,
-                                Err(e) => return Some(Err(e.into())),
-                            };
-                            if let Err(e) = push_joined_row(
-                                &mut out,
-                                left_row,
-                                found_tuple.into_iter(),
-                                &self.eliminate_indices,
-                            ) {
-                                return Some(Err(e));
-                            }
-                        } else {
-                            let found_tuple = match found.try_into_tuple() {
-                                Ok(t) => t,
-                                Err(e) => return Some(Err(e.into())),
-                            };
-                            let mut keep = true;
+                        let found_tuple = match found.try_into_tuple() {
+                            Ok(t) => t,
+                            Err(e) => return Some(Err(e.into())),
+                        };
+                        let mut keep = true;
+                        if !self.inner.filters.is_empty() {
                             for p in self.inner.filters.iter() {
                                 match crate::exec::expr::eval_pred(p, &found_tuple) {
                                     Ok(true) => {}
@@ -323,16 +322,28 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                                     Err(e) => return Some(Err(e)),
                                 }
                             }
-                            if keep
-                                && let Err(e) = push_joined_row(
-                                    &mut out,
-                                    left_row,
-                                    found_tuple.into_iter(),
-                                    &self.eliminate_indices,
-                                )
-                            {
+                        }
+                        if keep {
+                            let right_premise =
+                                if self.want_premises && self.capture_right_as_premise {
+                                    Some(found_tuple.clone())
+                                } else {
+                                    None
+                                };
+                            if let Err(e) = push_joined_row(
+                                &mut out,
+                                &left_owned,
+                                found_tuple.into_iter(),
+                                &self.eliminate_indices,
+                            ) {
                                 return Some(Err(e));
                             }
+                            push_join_premises(
+                                &mut out,
+                                left_premises.clone(),
+                                right_premise.as_ref(),
+                                self.want_premises,
+                            );
                         }
                     }
                 }

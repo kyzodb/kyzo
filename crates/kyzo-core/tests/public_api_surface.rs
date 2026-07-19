@@ -21,7 +21,8 @@
 use std::collections::BTreeMap;
 
 use kyzo::{
-    DataValue, Db, FjallStorage, dump_storage, new_fjall_storage, restore_storage, verify_storage,
+    Catalog, DataValue, Engine, FjallStorage, dump_storage, new_fjall_storage, restore_storage,
+    verify_storage,
 };
 
 fn np() -> BTreeMap<String, DataValue> {
@@ -40,7 +41,7 @@ fn fresh_storage() -> FjallStorage {
 #[test]
 fn public_api_full_surface_smoke() {
     let storage = fresh_storage();
-    let db = Db::new(storage.clone()).expect("Db::new");
+    let db = Engine::compose(storage.clone(), Catalog::new()).expect("Engine::compose");
 
     // ---- relational CRUD + a spread of value kinds through the API ----
     db.run_script(
@@ -59,9 +60,9 @@ fn public_api_full_surface_smoke() {
     let all = db
         .run_script("?[id, name] := *item{id, name} :order id", np())
         .expect("scan item");
-    assert_eq!(all.rows.len(), 2);
-    assert_eq!(all.rows[0][0].get_int(), Some(1));
-    assert_eq!(all.rows[1][1].get_str(), Some("beta"));
+    assert_eq!(all.rows().len(), 2);
+    assert_eq!(all.rows()[0][0].get_int(), Some(1));
+    assert_eq!(all.rows()[1][1].get_str(), Some("beta"));
 
     // an integral float coerces into the Int column (the coercion contract)
     db.run_script(
@@ -85,7 +86,7 @@ fn public_api_full_surface_smoke() {
         )
         .expect("transitive closure");
     // 1->2,1->3,1->4, 2->3,2->4, 3->4 = 6 pairs
-    assert_eq!(reach.rows.len(), 6);
+    assert_eq!(reach.rows().len(), 6);
 
     // ---- aggregation ----
     db.run_script(
@@ -99,9 +100,9 @@ fn public_api_full_surface_smoke() {
             np(),
         )
         .expect("aggregation");
-    assert_eq!(agg.rows.len(), 2);
-    assert_eq!(agg.rows[0][1].get_int(), Some(2)); // count for 'a'
-    assert_eq!(agg.rows[0][2].get_int(), Some(3)); // sum for 'a'
+    assert_eq!(agg.rows().len(), 2);
+    assert_eq!(agg.rows()[0][1].get_int(), Some(2)); // count for 'a'
+    assert_eq!(agg.rows()[0][2].get_int(), Some(3)); // sum for 'a'
 
     // ---- a vector index + k-NN search (a derived-index access path) ----
     db.run_script(
@@ -122,9 +123,9 @@ fn public_api_full_surface_smoke() {
             np(),
         )
         .expect("k-NN search");
-    assert!(!knn.rows.is_empty(), "k-NN returns neighbours");
+    assert!(!knn.rows().is_empty(), "k-NN returns neighbours");
     assert_eq!(
-        knn.rows[0][0].get_int(),
+        knn.rows()[0][0].get_int(),
         Some(1),
         "nearest to [1,0] is id 1"
     );
@@ -137,11 +138,11 @@ fn public_api_full_surface_smoke() {
     let at150 = db
         .run_script("?[v] := *hist{k, v @ 150}", np())
         .expect("as-of 150");
-    assert_eq!(at150.rows[0][0].get_int(), Some(100), "as-of 150 sees 100");
+    assert_eq!(at150.rows()[0][0].get_int(), Some(100), "as-of 150 sees 100");
     let now = db
         .run_script("?[v] := *hist{k, v}", np())
         .expect("current read");
-    assert_eq!(now.rows[0][0].get_int(), Some(200), "current sees 200");
+    assert_eq!(now.rows()[0][0].get_int(), Some(200), "current sees 200");
 
     // ---- the typed-refusal path: a bad coercion is refused, not silent ----
     let refused = db.run_script(
@@ -160,21 +161,21 @@ fn public_api_full_surface_smoke() {
 
     let restored_storage = fresh_storage();
     restore_storage(&restored_storage, &dump_path).expect("restore_storage");
-    let db2 = Db::new(restored_storage.clone()).expect("Db::new on restored");
+    let db2 = Engine::compose(restored_storage.clone(), Catalog::new()).expect("Engine::compose on restored");
     let restored = db2
         .run_script("?[id, name] := *item{id, name} :order id", np())
         .expect("scan restored item");
     assert_eq!(
-        restored.rows.len(),
+        restored.rows().len(),
         2,
         "every relation survives dump/restore"
     );
-    assert_eq!(restored.rows[1][1].get_str(), Some("beta"));
+    assert_eq!(restored.rows()[1][1].get_str(), Some("beta"));
     // the vector index rebuilds and still searches after restore
     let restored_knn = db2
         .run_script("?[id] := ~emb:idx{id | query: vec([1.0, 0.0]), k: 1}", np())
         .expect("k-NN on restored index");
-    assert_eq!(restored_knn.rows.len(), 1);
+    assert_eq!(restored_knn.rows().len(), 1);
 
     // ---- verify_storage: the store is structurally sound, no corruption ----
     let report = verify_storage(&storage).expect("verify_storage");

@@ -306,17 +306,14 @@ pub(crate) mod store;
 // this crate calls `crate::typestate::` — the decl pointed at a directory
 // that no longer exists here, with zero real call sites to rewire.
 
-// Trial (issue #34): single-node SSI serializability checker. Test-only,
-// touches no engine source — consumes the public `Storage`/`Db` surface
-// exactly as an outside caller would (see the module docs for scope).
-#[cfg(test)]
-mod jepsen_trials;
+// Trial (issue #34): single-node SSI serializability checker lives in
+// `kyzo-trials::serializability` — outside the engine crate wall.
 
 pub use data::json::JsonData;
 pub use data::json::format_error_as_json;
 pub use kyzo_model::value::{
     Arity, AsOf, DataValue, Num, RegexSource, RelationId, StorageKey, Tuple, TupleKey, TupleT,
-    UuidWrapper, Validity, ValidityTs, Vector, decode_tuple_from_key,
+    UuidWrapper, Validity, ValiditySlot, ValidityTs, Vector, decode_tuple_from_key,
 };
 pub use store::backup::{dump_storage, restore_storage};
 pub use store::fjall::{

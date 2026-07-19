@@ -496,7 +496,7 @@ mod tests {
             args: Box::new([
                 apply(OP_GT, vec![binding(0), cnst(0)]),
                 apply(
-                    &OP_GT,
+                    OP_GT,
                     vec![apply(OP_ADD, vec![binding(1), cnst(1)]), cnst(0)],
                 ),
             ]),
@@ -572,9 +572,9 @@ mod tests {
                 },
                 3 => Expr::Apply {
                     op: if next(rng).is_multiple_of(2) {
-                        &OP_ADD
+                        OP_ADD
                     } else {
-                        &OP_GT
+                        OP_GT
                     },
                     args: Box::new([gen_expr(rng, depth - 1), gen_expr(rng, depth - 1)]),
                     span: Default::default(),

@@ -31,15 +31,15 @@ fn relations_and_columns_listing() {
     let rels = db
         .run_script("::relations", no_params())
         .expect("::relations");
-    assert_eq!(rels.headers, vec!["name", "arity", "access_level"]);
+    assert_eq!(rels.headers(), vec!["name", "arity", "access_level"]);
     let mut names: Vec<String> = rels
-        .rows
+        .rows()
         .iter()
         .map(|r| r[0].get_str().unwrap().to_string())
         .collect();
     names.sort();
     assert_eq!(names, vec!["edge", "person"]);
-    for r in &rels.rows {
+    for r in rels.rows() {
         let name = r[0].get_str().unwrap();
         let arity = r[1].get_int().unwrap();
         match name {
@@ -52,9 +52,9 @@ fn relations_and_columns_listing() {
     let cols = db
         .run_script("::columns person", no_params())
         .expect("::columns");
-    assert_eq!(cols.headers, vec!["column", "is_key"]);
+    assert_eq!(cols.headers(), vec!["column", "is_key"]);
     let mut got: Vec<(String, bool)> = cols
-        .rows
+        .rows()
         .iter()
         .map(|r| {
             (
@@ -93,9 +93,9 @@ fn index_create_list_and_drop() {
     let idxs = db
         .run_script("::indices t", no_params())
         .expect("::indices");
-    assert_eq!(idxs.headers, vec!["name", "kind"]);
+    assert_eq!(idxs.headers(), vec!["name", "kind"]);
     let names: Vec<String> = idxs
-        .rows
+        .rows()
         .iter()
         .map(|r| r[0].get_str().unwrap().to_string())
         .collect();
@@ -104,7 +104,7 @@ fn index_create_list_and_drop() {
         "by_v must be listed, got {names:?}"
     );
     let kind = idxs
-        .rows
+        .rows()
         .iter()
         .find(|r| r[0].get_str() == Some("by_v"))
         .map(|r| r[1].get_str().unwrap().to_string())
@@ -124,7 +124,7 @@ fn index_create_list_and_drop() {
         .run_script("::indices t", no_params())
         .expect("::indices after drop");
     let names_after: Vec<String> = idxs_after
-        .rows
+        .rows()
         .iter()
         .map(|r| r[0].get_str().unwrap().to_string())
         .collect();

@@ -429,7 +429,7 @@ mod tests {
     /// oracle above.
     #[test]
     fn through_rule_matches_reference() {
-        use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+        use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
         let s = |v: &str| DataValue::from(v);
         // Symbols a,b,c,d intern to node ids 0,1,2,3 in first-seen order.
@@ -446,7 +446,7 @@ mod tests {
                     Tuple::from_vec(vec![s("b"), s("d")]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();

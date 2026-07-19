@@ -80,7 +80,7 @@ fn graph_vector_text_and_aggregation_compose_in_one_query() {
     let out = db.run_script(query, no_params()).expect("unified query");
 
     let mut got: Vec<(String, i64, f64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| {
             (

@@ -149,10 +149,11 @@ fn negation_and_named_field_through_public_api() {
 /// rewrite actually fired (a non-`Muggle` symbol) rather than trusting a
 /// bound-recursive query to have triggered it.
 fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
-    let _ = db; // fixed rules bind later at session normalize; parse is params-only
-    let prog = match parse_script(script, &no_params()).unwrap() {
-        Script::Query(p) => p,
-        Script::Imperative { .. } | Script::Sys { .. } => panic!("expected a single query"),
+    let cur_vld = current_validity().unwrap();
+    let fixed = db.fixed_rules();
+    let prog = match parse_script(script, &no_params(), &fixed, cur_vld).unwrap() {
+        Script::Single(p) => *p,
+        Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
     };
     let tx = SessionTx::new_read(db.store.read_tx().unwrap(), ScriptOptions::default());
     let view = SessionView {
@@ -182,8 +183,49 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
 /// leaked demand returns the wrong rows, not merely a slower plan.
 #[test]
 fn magic_sets_demand_matches_naive_oracle_end_to_end() {
-    // Hand-checked fixpoint on edges 1→2→3→4 plus disconnected 5→6
-    // (oracle differential lives in kyzo-trials; crate wall forbids kyzo_oracle here).
+    use kyzo_oracle::eval::{Literal, Program, Rule, Term, naive_eval};
+
+    let edges = [(1, 2), (2, 3), (3, 4), (5, 6)];
+    let var = |s: &'static str| Term::Var(s);
+    let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+
+    // The reference program: path = edge ∪ edge∘path, full fixpoint.
+    let program = Program {
+        rules: vec![
+            Rule::plain(
+                "path",
+                vec![var("a"), var("b")],
+                vec![lit("edge", vec![var("a"), var("b")])],
+            ),
+            Rule::plain(
+                "path",
+                vec![var("a"), var("b")],
+                vec![
+                    lit("edge", vec![var("a"), var("c")]),
+                    lit("path", vec![var("c"), var("b")]),
+                ],
+            ),
+        ],
+        facts: [(
+            "edge",
+            edges
+                .iter()
+                .map(|(a, b)| {
+                    Tuple::from_vec(vec![
+                        DataValue::from(*a as i64),
+                        DataValue::from(*b as i64),
+                    ])
+                })
+                .collect(),
+        )]
+        .into_iter()
+        .collect(),
+        ..Program::default()
+    };
+    let oracle = naive_eval(&program).expect("reference program evaluates");
+    let full_path = &oracle["path"];
+
+    // The same program+facts through the real engine.
     let db = open_engine(SimStorage::new(17));
     db.run_script(
         "?[a, b] <- [[1, 2], [2, 3], [3, 4], [5, 6]] :create edge {a, b}",
@@ -205,6 +247,17 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
         "the bound-first-arg query must trigger the magic-sets rewrite; symbols were {syms1:?}"
     );
     let got1 = int_rows(&db.run_script(&q1, no_params()).expect("bound-first query"));
+    let want1: Vec<Vec<i64>> = {
+        let mut v: Vec<Vec<i64>> = full_path
+            .iter()
+            .filter(|t| t[0] == DataValue::from(1i64))
+            .map(|t| vec![t[1].get_int().unwrap()])
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    assert_eq!(got1, want1, "forward-demand result must match the oracle");
     assert_eq!(got1, vec![vec![2], vec![3], vec![4]]); // excludes the 5→6 component
 
     // Demand pattern 2: second argument bound (who reaches 4).
@@ -215,7 +268,17 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
         "the bound-second-arg query must trigger the magic-sets rewrite; symbols were {syms2:?}"
     );
     let got2 = int_rows(&db.run_script(&q2, no_params()).expect("bound-second query"));
-    assert_eq!(got2, vec![vec![1], vec![2], vec![3]], "backward-demand who reaches 4");
+    let want2: Vec<Vec<i64>> = {
+        let mut v: Vec<Vec<i64>> = full_path
+            .iter()
+            .filter(|t| t[1] == DataValue::from(4i64))
+            .map(|t| vec![t[0].get_int().unwrap()])
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    assert_eq!(got2, want2, "backward-demand result must match the oracle");
     assert_eq!(got2, vec![vec![1], vec![2], vec![3]]);
 }
 
@@ -439,6 +502,25 @@ mod magic_bypass_differential {
         );
     }
 
+    /// Hostile-review corpus, added post-landing: four adversarial shapes
+    /// beyond points-to's plain self-join, each checked against the
+    /// sealed naive oracle (`query::laws::naive_eval`) for answer
+    /// identity and against `compiled_magic_symbols` for the expected
+    /// (minimal, non-proliferated) adorned shape. Every program below is
+    /// queried with a FULLY UNBOUND entry — the theorem's domain.
+    fn oracle_answer(program: &kyzo_oracle::eval::Program, target: &str) -> Vec<Vec<i64>> {
+        use kyzo_oracle::eval::naive_eval;
+        let mut rows: Vec<Vec<i64>> = naive_eval(program)
+            .expect("naive oracle evaluates")
+            .get(target)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| t.into_iter().map(|v| v.get_int().expect("int")).collect())
+            .collect();
+        rows.sort();
+        rows
+    }
 
     /// Mutual recursion where only ONE of the two predicates (`p`) is
     /// demanded fully-free (from the entry); `r` is reached only through
@@ -448,7 +530,63 @@ mod magic_bypass_differential {
     /// reference back from `r` to `p` must redirect onto `p|Mff`.
     #[test]
     fn mutual_recursion_bf_and_ff_stays_correctly_reachable() {
-        let expected: Vec<Vec<i64>> = vec![vec![1, 2], vec![2, 4]];
+        use kyzo_oracle::eval::{Literal, Program, Rule, Term};
+        let var = |s: &'static str| Term::Var(s);
+        let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+        let v = |i: i64| DataValue::from(i);
+
+        let program = Program {
+            rules: vec![
+                Rule::plain(
+                    "p",
+                    vec![var("a"), var("b")],
+                    vec![lit("seedp", vec![var("a"), var("b")])],
+                ),
+                Rule::plain(
+                    "p",
+                    vec![var("a"), var("b")],
+                    vec![
+                        lit("linkp", vec![var("a"), var("c")]),
+                        lit("r", vec![var("c"), var("b")]),
+                    ],
+                ),
+                Rule::plain(
+                    "r",
+                    vec![var("a"), var("b")],
+                    vec![lit("seedr", vec![var("a"), var("b")])],
+                ),
+                Rule::plain(
+                    "r",
+                    vec![var("a"), var("b")],
+                    vec![
+                        lit("linkr", vec![var("a"), var("c")]),
+                        lit("p", vec![var("c"), var("b")]),
+                    ],
+                ),
+            ],
+            facts: [
+                (
+                    "seedp",
+                    [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
+                ),
+                (
+                    "linkp",
+                    [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect(),
+                ),
+                (
+                    "seedr",
+                    [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect(),
+                ),
+                (
+                    "linkr",
+                    [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Program::default()
+        };
+        let expected = oracle_answer(&program, "p");
 
         let db = open_engine(SimStorage::new(68_101));
         for (name, rows) in [
@@ -474,7 +612,7 @@ mod magic_bypass_differential {
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(
             got, expected,
-            "mutual recursion answer"
+            "mutual recursion must match the naive oracle"
         );
 
         let syms = sorted_syms(&db, script);
@@ -497,7 +635,69 @@ mod magic_bypass_differential {
     /// must be completely inert to the redirect/sweep machinery.
     #[test]
     fn negation_with_ff_sibling_stays_correct() {
-        let expected: Vec<Vec<i64>> = vec![vec![2, 3]];
+        use kyzo_oracle::eval::{Literal, Program, Rule, Term};
+        let var = |s: &'static str| Term::Var(s);
+        let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+        let neg = |rel: &'static str, args: Vec<Term>| Literal::neg(rel, args);
+        let v = |i: i64| DataValue::from(i);
+
+        // Stratum 0: `pt`, self-joining exactly like points-to (gains
+        // Mff from the entry, Mbf/Mbb from its own self-reference).
+        // Stratum 1: `excluded`, negating `blocked` (an ordinary base
+        // relation) — independent of pt's adornment activity entirely.
+        let program = Program {
+            rules: vec![
+                Rule::plain(
+                    "pt",
+                    vec![var("y"), var("x")],
+                    vec![lit("addr_of", vec![var("y"), var("x")])],
+                ),
+                Rule::plain(
+                    "pt",
+                    vec![var("y"), var("x")],
+                    vec![
+                        lit("assign", vec![var("y"), var("z")]),
+                        lit("pt", vec![var("z"), var("x")]),
+                    ],
+                ),
+                Rule::plain(
+                    "excluded",
+                    vec![var("y"), var("x")],
+                    vec![
+                        lit("pt", vec![var("y"), var("x")]),
+                        neg("blocked", vec![var("y"), var("x")]),
+                    ],
+                ),
+            ],
+            facts: [
+                (
+                    "addr_of",
+                    [
+                        Tuple::from_vec(vec![v(1), v(2)]),
+                        Tuple::from_vec(vec![v(2), v(3)]),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                (
+                    "assign",
+                    [
+                        Tuple::from_vec(vec![v(2), v(3)]),
+                        Tuple::from_vec(vec![v(3), v(4)]),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                (
+                    "blocked",
+                    [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Program::default()
+        };
+        let expected = oracle_answer(&program, "excluded");
 
         let db = open_engine(SimStorage::new(68_102));
         for (name, rows) in [
@@ -521,7 +721,7 @@ mod magic_bypass_differential {
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(
             got, expected,
-            "negation alongside ff-sibling answer"
+            "negation alongside an ff-sibling predicate must match the oracle"
         );
         assert_eq!(
             sorted_syms(&db, script),
@@ -543,7 +743,44 @@ mod magic_bypass_differential {
     /// repeated-argument adornment.
     #[test]
     fn repeated_var_partial_adornment_matches_oracle() {
-        let expected: Vec<Vec<i64>> = vec![vec![2]];
+        use kyzo_oracle::eval::{Literal, Program, Rule, Term};
+        let var = |s: &'static str| Term::Var(s);
+        let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+        let v = |i: i64| DataValue::from(i);
+
+        let program = Program {
+            rules: vec![
+                Rule::plain(
+                    "q",
+                    vec![var("a"), var("b"), var("c")],
+                    vec![lit("baseq", vec![var("a"), var("b"), var("c")])],
+                ),
+                Rule::plain(
+                    "dup",
+                    vec![var("y")],
+                    vec![
+                        lit("seedv", vec![var("v")]),
+                        lit("q", vec![var("v"), var("y"), var("y")]),
+                    ],
+                ),
+            ],
+            facts: [
+                (
+                    "baseq",
+                    [
+                        Tuple::from_vec(vec![v(1), v(2), v(2)]),
+                        Tuple::from_vec(vec![v(1), v(3), v(4)]),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                ("seedv", [Tuple::from_vec(vec![v(1)])].into_iter().collect()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Program::default()
+        };
+        let expected = oracle_answer(&program, "dup");
 
         let db = open_engine(SimStorage::new(68_103));
         db.run_script(
@@ -561,7 +798,7 @@ mod magic_bypass_differential {
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(
             got, expected,
-            "repeated-variable adornment answer"
+            "repeated-variable adornment must match the oracle"
         );
     }
 
@@ -587,7 +824,89 @@ mod magic_bypass_differential {
     /// of those tests catch directly.
     #[test]
     fn helper_via_relation_bound_var_inside_self_join_survives_correctly() {
-        let expected: Vec<Vec<i64>> = vec![vec![1, 2]];
+        use kyzo_oracle::eval::{Literal, Program, Rule, Term};
+        let var = |s: &'static str| Term::Var(s);
+        let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+        let v = |i: i64| DataValue::from(i);
+
+        let program = Program {
+            rules: vec![
+                Rule::plain(
+                    "pt",
+                    vec![var("y"), var("x")],
+                    vec![lit("addr_of", vec![var("y"), var("x")])],
+                ),
+                Rule::plain(
+                    "pt",
+                    vec![var("y"), var("x")],
+                    vec![
+                        lit("assign", vec![var("y"), var("z")]),
+                        lit("pt", vec![var("z"), var("x")]),
+                    ],
+                ),
+                Rule::plain(
+                    "pt",
+                    vec![var("y"), var("w")],
+                    vec![
+                        lit("load", vec![var("y"), var("x")]),
+                        lit("helper", vec![var("x"), var("z")]),
+                        lit("pt", vec![var("z"), var("w")]),
+                    ],
+                ),
+                Rule::plain(
+                    "pt",
+                    vec![var("z"), var("w")],
+                    vec![
+                        lit("store", vec![var("y"), var("x")]),
+                        lit("pt", vec![var("y"), var("z")]),
+                        lit("pt", vec![var("x"), var("w")]),
+                    ],
+                ),
+                Rule::plain(
+                    "helper",
+                    vec![var("a"), var("b")],
+                    vec![lit("baseh", vec![var("a"), var("b")])],
+                ),
+                Rule::plain(
+                    "helper",
+                    vec![var("a"), var("b")],
+                    vec![
+                        lit("linkh", vec![var("a"), var("c")]),
+                        lit("helper", vec![var("c"), var("b")]),
+                    ],
+                ),
+            ],
+            facts: [
+                (
+                    "addr_of",
+                    [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
+                ),
+                (
+                    "assign",
+                    [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect(),
+                ),
+                (
+                    "load",
+                    [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect(),
+                ),
+                (
+                    "store",
+                    [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect(),
+                ),
+                (
+                    "baseh",
+                    [Tuple::from_vec(vec![v(4), v(5)])].into_iter().collect(),
+                ),
+                (
+                    "linkh",
+                    [Tuple::from_vec(vec![v(5), v(6)])].into_iter().collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Program::default()
+        };
+        let expected = oracle_answer(&program, "pt");
 
         let db = open_engine(SimStorage::new(68_104));
         for (name, rows) in [
@@ -617,7 +936,7 @@ mod magic_bypass_differential {
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(
             got, expected,
-            "helper-inside-self-join answer"
+            "helper-inside-self-join must match the oracle"
         );
 
         let syms = sorted_syms(&db, script);

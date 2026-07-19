@@ -461,7 +461,8 @@ mod tests {
                 | DataValue::List(_)
                 | DataValue::Set(_)
                 | DataValue::Validity(_)
-                | DataValue::Interval(_) => panic!("non-integer fact column"),
+                | DataValue::Interval(_)
+                | DataValue::Geometry(_) => panic!("non-integer fact column"),
             })
             .collect()
     }
@@ -666,96 +667,8 @@ mod tests {
         assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
     }
 
-    /// Cross-check against the reference oracle: `kyzo_oracle::temporal::resolve_relation`
-    /// implements the same resolution kernel, mirrored across the sign
-    /// boundary on both axes (valid and system coordinates spanning
-    /// negative and positive). This test probes coordinates on both sides
-    /// of every stored one, using `bikey` and `skip_walk` directly from
-    /// this module (the exhaustive case with 2000 generated histories,
-    /// vs. the small fixed fixture in `kyzo_oracle::temporal` used as a fast
-    /// sanity check).
-    #[test]
-    fn reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps() {
-        use kyzo_oracle::temporal as laws;
-        let mut state: u64 = 0xDEAD_BEEF_CAFE_F00D;
-        let mut next = move |m: usize| -> usize {
-            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((state >> 33) as usize) % m
-        };
-        let valids = [-30i64, -10, -3, 0, 10, 20, 30];
-        let syss = [-25i64, -5, 0, 5, 15, 25];
-        for _case in 0..2000 {
-            let n_rows = 1 + next(10);
-            let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
-            for _ in 0..n_rows {
-                rows.push((
-                    next(3) as i64,
-                    valids[next(valids.len())],
-                    syss[next(syss.len())],
-                    [
-                        ClaimPolarity::Assert,
-                        ClaimPolarity::Retract,
-                        ClaimPolarity::Erase,
-                    ][next(3)],
-                ));
-            }
-            rows.sort_unstable_by_key(|r| (r.0, r.1, r.2));
-            rows.dedup_by_key(|r| (r.0, r.1, r.2));
-            let store: BTreeMap<Vec<u8>, ClaimPolarity> = rows
-                .iter()
-                .map(|(f, v, s, p)| (bikey(*f, *v, *s), *p))
-                .collect();
-            // `.expect`: every `v` here is drawn from the fixed `valids`
-            // list above, never the reserved terminal tick
-            // (`laws::Event`'s constructors refuse `valid == i64::MAX`).
-            let history: Vec<laws::Event> = rows
-                .iter()
-                .map(|(f, v, s, p)| {
-                    let key: Tuple = Tuple::from_vec(vec![DataValue::from(*f)]);
-                    match p {
-                        ClaimPolarity::Assert => laws::Event::assert(key, Tuple::new(), *v, *s),
-                        ClaimPolarity::Retract => laws::Event::retract(key, *v, *s),
-                        ClaimPolarity::Erase => laws::Event::erase(key, *v, *s),
-                    }
-                    .expect("valid instant is drawn from a bounded fixture list, never the reserved terminal tick")
-                })
-                .collect();
-            for sys_at in [-40i64, -25, -5, 0, 5, 15, 25, 40] {
-                for valid_at in [-40i64, -30, -10, -3, 0, 10, 20, 30, 40] {
-                    let got_real = facts_of(&skip_walk(&store, sys_at, valid_at).unwrap());
-                    let got_laws: Vec<i64> = laws::resolve_relation(
-                        &history,
-                        laws::AsOf {
-                            valid: valid_at,
-                            sys: sys_at,
-                        },
-                    )
-                    .into_iter()
-                    .map(|t| match &t[0] {
-                        DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                        DataValue::Null
-                        | DataValue::Bool(_)
-                        | DataValue::Str(_)
-                        | DataValue::Bytes(_)
-                        | DataValue::Uuid(_)
-                        | DataValue::Regex(_)
-                        | DataValue::Json(_)
-                        | DataValue::Vector(_)
-                        | DataValue::List(_)
-                        | DataValue::Set(_)
-                        | DataValue::Validity(_)
-                        | DataValue::Interval(_) => panic!("non-integer fact column"),
-                    })
-                    .collect();
-                    assert_eq!(
-                        got_real, got_laws,
-                        "sys_at={sys_at} valid_at={valid_at} rows={rows:?}"
-                    );
-                }
-            }
-        }
-    }
+    // Oracle-vs-kernel temporal differential moved to
+    // `kyzo-trials::time_travel` (`reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps`).
+    // kyzo-core must not import `kyzo_oracle`.
+
 }

@@ -82,8 +82,8 @@ fn deep_but_legal_nesting_evaluates_correctly() {
     let out = db
         .run_script(&query, no_params())
         .expect("20 levels of nesting is well under the ceiling and must succeed");
-    assert_eq!(out.rows.len(), 1);
-    assert_eq!(out.rows[0][0].get_int(), Some(1));
+    assert_eq!(out.rows().len(), 1);
+    assert_eq!(out.rows()[0][0].get_int(), Some(1));
 }
 
 /// The classic unstratifiable negation cycle (`p` depends on `not q`, `q`
@@ -134,7 +134,7 @@ fn self_cross_product_is_the_full_cardinality() {
             no_params(),
         )
         .expect("a 4-way self cross-product of 3 rows must succeed");
-    assert_eq!(out.rows.len(), 81, "3^4 = 81 rows expected");
+    assert_eq!(out.rows().len(), 81, "3^4 = 81 rows expected");
 }
 
 /// Global aggregation (`count`/`min`, no bare head variable) over a
@@ -151,16 +151,16 @@ fn aggregation_over_empty_relation_is_the_identity_result() {
         .run_script("?[count(x), min(x)] := *empty_rel{x}", no_params())
         .expect("aggregation over an empty relation must succeed, not error");
     assert_eq!(
-        out.rows.len(),
+        out.rows().len(),
         1,
         "a global aggregate always yields one row"
     );
-    assert_eq!(out.rows[0][0].get_int(), Some(0), "count of nothing is 0");
+    assert_eq!(out.rows()[0][0].get_int(), Some(0), "count of nothing is 0");
     assert_eq!(
-        out.rows[0][1],
+        out.rows()[0][1],
         DataValue::Null,
         "min of nothing is Null, got {:?}",
-        out.rows[0][1]
+        out.rows()[0][1]
     );
 }
 
@@ -214,7 +214,7 @@ fn math_domain_error_surfaces_through_query() {
     let ok = db
         .run_script("?[x] := x = sqrt(4.0)", no_params())
         .expect("in-domain sqrt must answer");
-    assert_eq!(ok.rows, vec![Tuple::from_vec(vec![DataValue::from(2.0)])]);
+    assert_eq!(ok.rows(), vec![Tuple::from_vec(vec![DataValue::from(2.0)])]);
 }
 
 /// Story #62's structural checkpoint, not another op-specific guard: an op
@@ -246,7 +246,7 @@ fn to_float_nan_is_now_a_typed_refusal() {
     let ok = db
         .run_script("?[x] := x = to_float('3.5')", no_params())
         .expect("in-domain to_float must still answer");
-    assert_eq!(ok.rows, vec![Tuple::from_vec(vec![DataValue::from(3.5)])]);
+    assert_eq!(ok.rows(), vec![Tuple::from_vec(vec![DataValue::from(3.5)])]);
 }
 
 /// The row evaluator's checkpoint is proven above through expressions a

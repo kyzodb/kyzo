@@ -476,7 +476,7 @@ mod tests {
 
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -490,9 +490,9 @@ mod tests {
             .iter()
             .map(|&(a, b)| Tuple::from_vec(vec![s(a), s(b)]))
             .collect::<Vec<Tuple>>();
-        let mut opts = BTreeMap::new();
+        let mut opts_pairs: BTreeMap<SmartString<LazyCompact>, Expr> = BTreeMap::new();
         if let Some(mc) = max_cliques {
-            opts.insert(
+            opts_pairs.insert(
                 SmartString::from("max_cliques"),
                 Expr::Const {
                     val: DataValue::from(mc),
@@ -503,7 +503,7 @@ mod tests {
         let got = run_fixed_rule(
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
-            opts,
+            opts_map(opts_pairs),
             CancelFlag::default(),
         )
         .unwrap();
@@ -735,13 +735,13 @@ mod tests {
         let err = run_fixed_rule(
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 SmartString::from("max_cliques"),
                 Expr::Const {
                     val: DataValue::from(3i64),
                     span: SourceSpan::default(),
                 },
-            )]),
+            )])),
             CancelFlag::default(),
         )
         .unwrap_err();
@@ -778,7 +778,7 @@ mod tests {
         let got = run_fixed_rule(
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -802,7 +802,7 @@ mod tests {
             .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, BTreeMap::new()).unwrap();
+        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, empty_opts()).unwrap();
 
         // Baseline: no cancellation. Every vertex is removed.
         take_clique_counters(); // clear any leftover from a reused thread
@@ -845,7 +845,7 @@ mod tests {
             .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, BTreeMap::new()).unwrap();
+        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, empty_opts()).unwrap();
 
         let (auth, flag) = CancelAuthority::arm();
         take_clique_counters();

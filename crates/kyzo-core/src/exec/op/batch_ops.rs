@@ -63,6 +63,11 @@ pub(crate) struct Batch {
     /// Row end offsets into `values`: row `i` is `offsets[i-1]..offsets[i]`
     /// (row 0 starts at 0).
     offsets: Vec<usize>,
+    /// Positive-literal grounding rows collected so far for each batch row,
+    /// in body order. `None` when the caller did not ask for premises
+    /// (`want_premises` false) — operators must not allocate or touch this
+    /// channel in that case. When `Some`, length equals [`Self::len`].
+    premises: Option<Vec<Vec<Tuple>>>,
 }
 
 impl Default for Batch {
@@ -81,6 +86,7 @@ impl Batch {
         Batch {
             values: Vec::new(),
             offsets: Vec::new(),
+            premises: None,
         }
     }
 
@@ -158,11 +164,35 @@ impl Batch {
         self.values.extend(row);
         self.offsets.push(self.values.len());
     }
+
+    /// Premises already collected for row `i`, or empty when this batch is
+    /// not tracking (`premises` is `None`).
+    pub(crate) fn row_premises(&self, i: usize) -> Vec<Tuple> {
+        self.premises
+            .as_ref()
+            .map(|p| p[i].clone())
+            .unwrap_or_default()
+    }
+
+    /// Record the premise list for the row just pushed. Only call when
+    /// `want_premises` is true — keeps the `None` fast path allocation-free.
+    pub(crate) fn push_premise_list(&mut self, premises: Vec<Tuple>) {
+        self.premises.get_or_insert_with(Vec::new).push(premises);
+    }
+
+    /// Borrowed view of every row's premise list when tracking.
+    pub(crate) fn premises(&self) -> Option<&[Vec<Tuple>]> {
+        self.premises.as_deref()
+    }
+
     /// Consume the batch into owned rows, in stream order. Used only at
     /// the RA-internal seams where a batched operator feeds a row-oriented
     /// one (general join, unification); each call mints one `Tuple` per
     /// row. The eval boundary instead consumes rows as borrowed slices
     /// ([`Self::iter_rows`]) and mints only on admission.
+    ///
+    /// Premise lists are dropped — callers that need them must read
+    /// [`Self::premises`] before consuming.
     pub(crate) fn into_rows(self) -> Vec<Tuple> {
         let mut out = Vec::with_capacity(self.offsets.len());
         let mut values = self.values.into_iter();
@@ -199,6 +229,7 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
     if batch.is_empty() {
         return Ok(batch);
     }
+    let tracking = batch.premises.is_some();
     let rows: Vec<Tuple> = batch
         .iter_rows()
         .map(|r| Tuple::from_vec(r.to_vec()))
@@ -218,6 +249,9 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
             buf.extend_from_slice(row);
             Ok(())
         })?;
+        if tracking {
+            out.push_premise_list(batch.row_premises(r));
+        }
     }
     Ok(out)
 }

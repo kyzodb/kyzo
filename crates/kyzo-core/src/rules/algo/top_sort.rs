@@ -102,7 +102,7 @@ pub(crate) fn kahn_g(graph: &DirectedCsrGraph, cancel: CancelFlag) -> Result<Vec
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -122,7 +122,7 @@ mod tests {
                     Tuple::from_vec(vec![s("c"), s("d")]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -163,7 +163,7 @@ mod tests {
                     Tuple::from_vec(vec![s("c"), s("d")]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();

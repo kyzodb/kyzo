@@ -197,7 +197,7 @@ fn astar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -242,7 +242,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["goal"], vec![Tuple::from_vec(vec![s("c")])]),
             ],
-            BTreeMap::from([(SmartString::from("heuristic"), h_binding)]),
+            opts_map(BTreeMap::from([(SmartString::from("heuristic"), h_binding)])),
             CancelFlag::default(),
         )
         .unwrap();

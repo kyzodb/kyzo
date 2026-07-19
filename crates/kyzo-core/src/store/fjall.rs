@@ -1006,7 +1006,8 @@ impl Drop for FjallWriteTx {
 
 #[cfg(test)]
 mod pins {
-    //! Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).
+    use kyzo_model::TupleT;
+    /// Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).
 
     use std::collections::BTreeMap;
 
@@ -1270,6 +1271,10 @@ mod pins {
         assert!(FormatVersion::parse(b"6").is_ok());
         assert!(FormatVersion::parse(b"06").is_err());
         assert!(FormatVersion::parse(b"4").is_ok()); // older stamps parse so mismatch can NAME them
-        let _ = (StorageOptions::default(), new_fjall_storage_with);
+        let _opts = StorageOptions::default();
+        let _ctor = |path: &std::path::Path, opts: StorageOptions| {
+            new_fjall_storage_with(path, opts)
+        };
+        let _ = (_opts, _ctor);
     }
 }

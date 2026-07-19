@@ -134,6 +134,24 @@ pub(crate) fn push_joined_row(
     })
 }
 
+/// When `want_premises`, extend `out`'s premise channel: the left row's
+/// premises so far, plus the right grounding row when this join captures a
+/// positive body literal.
+pub(crate) fn push_join_premises(
+    out: &mut Batch,
+    mut left_premises: Vec<Tuple>,
+    right_premise: Option<&Tuple>,
+    want_premises: bool,
+) {
+    if !want_premises {
+        return;
+    }
+    if let Some(right) = right_premise {
+        left_premises.push(right.clone());
+    }
+    out.push_premise_list(left_premises);
+}
+
 /// A native batched prefix/point-lookup join against a stored relation
 /// (current or as-of): shared by [`StoredRA`] and [`StoredWithValidityRA`],
 /// whose row-at-a-time `prefix_join`s differ only in which storage method
@@ -160,6 +178,8 @@ pub(crate) struct PrefixProbeBatchJoin<'a> {
     pub(crate) cur: Option<(Batch, usize)>,
     /// The in-flight match iterator for the row at `cur`'s cursor.
     pub(crate) active: Option<TupleIter<'a>>,
+    pub(crate) want_premises: bool,
+    pub(crate) capture_right_as_premise: bool,
 }
 
 impl<'a> PrefixProbeBatchJoin<'a> {
@@ -228,9 +248,15 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                 )
                 .into()));
             };
-            let left_row = match b.row(*idx) {
-                Ok(r) => r,
+            let left_idx = *idx;
+            let left_owned = match b.row(left_idx) {
+                Ok(r) => r.to_vec(),
                 Err(e) => return Some(Err(e.into())),
+            };
+            let left_premises = if self.want_premises {
+                b.row_premises(left_idx)
+            } else {
+                Vec::new()
             };
             let mut exhausted = false;
             let Some(active) = self.active.as_mut() else {
@@ -258,15 +284,27 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                                 Err(e) => return Some(Err(e)),
                             }
                         }
-                        if keep
-                            && let Err(e) = push_joined_row(
+                        if keep {
+                            let right_premise = if self.want_premises && self.capture_right_as_premise
+                            {
+                                Some(found.clone())
+                            } else {
+                                None
+                            };
+                            if let Err(e) = push_joined_row(
                                 &mut out,
-                                left_row,
+                                &left_owned,
                                 found.iter().cloned(),
                                 &self.eliminate_indices,
-                            )
-                        {
-                            return Some(Err(e));
+                            ) {
+                                return Some(Err(e));
+                            }
+                            push_join_premises(
+                                &mut out,
+                                left_premises.clone(),
+                                right_premise.as_ref(),
+                                self.want_premises,
+                            );
                         }
                     }
                 }
@@ -376,6 +414,11 @@ pub(crate) struct InnerJoin {
     pub(crate) joiner: Joiner,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub(crate) span: SourceSpan,
+    /// When true, each right-side grounding row is appended to the premise
+    /// channel for the joined output (one positive body literal). Index
+    /// acceleration joins leave this false so only the base-relation join
+    /// of a covering/back-join plan contributes a premise.
+    pub(crate) capture_right_as_premise: bool,
 }
 
 impl InnerJoin {
@@ -489,21 +532,40 @@ impl InnerJoin {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
+        let capture = self.capture_right_as_premise;
         if self.left.is_unit() {
             let bindings = self.bindings();
             let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
-            let right = self.right.iter_batched(tx, delta_rule, stores, segments)?;
-            if eliminate_indices.is_empty() {
+            let right = self
+                .right
+                .iter_batched(tx, delta_rule, stores, segments, want_premises)?;
+            // Fast path: no eliminate, no premise tracking — identical to
+            // today's unit-left scan delegation.
+            if eliminate_indices.is_empty() && !want_premises {
                 return Ok(right);
             }
             return Ok(Box::new(right.map(move |b| -> Result<Batch> {
-                let rows = b?
-                    .into_rows()
-                    .into_iter()
-                    .map(|t| eliminate_from_tuple(t, &eliminate_indices))
-                    .collect();
-                Ok(Batch::with_rows(rows))
+                let src = b?;
+                let mut out = Batch::new();
+                for (i, row) in src.iter_rows().enumerate() {
+                    let full = Tuple::from_vec(row.to_vec());
+                    let right_premise = if want_premises && capture {
+                        Some(full.clone())
+                    } else {
+                        None
+                    };
+                    out.push(eliminate_from_tuple(full, &eliminate_indices));
+                    if want_premises {
+                        let mut premises = src.row_premises(i);
+                        if let Some(r) = right_premise {
+                            premises.push(r);
+                        }
+                        out.push_premise_list(premises);
+                    }
+                }
+                Ok(out)
             })));
         }
         match &self.right {
@@ -515,13 +577,17 @@ impl InnerJoin {
                 if join_is_prefix(&join_indices.1) {
                     let bindings = self.bindings();
                     let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
-                    let left = self.left.iter_batched(tx, delta_rule, stores, segments)?;
+                    let left =
+                        self.left
+                            .iter_batched(tx, delta_rule, stores, segments, want_premises)?;
                     return r.prefix_join_batched(
                         left,
                         join_indices,
                         eliminate_indices,
                         delta_rule,
                         stores,
+                        want_premises,
+                        capture,
                     );
                 }
             }
@@ -533,13 +599,17 @@ impl InnerJoin {
                 if join_is_prefix(&join_indices.1) {
                     let bindings = self.bindings();
                     let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
-                    let left = self.left.iter_batched(tx, delta_rule, stores, segments)?;
+                    let left =
+                        self.left
+                            .iter_batched(tx, delta_rule, stores, segments, want_premises)?;
                     return r.prefix_join_batched(
                         tx,
                         left,
                         join_indices,
                         eliminate_indices,
                         segments,
+                        want_premises,
+                        capture,
                     );
                 }
             }
@@ -551,15 +621,39 @@ impl InnerJoin {
                 if join_is_prefix(&join_indices.1) {
                     let bindings = self.bindings();
                     let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
-                    let left = self.left.iter_batched(tx, delta_rule, stores, segments)?;
-                    return r.prefix_join_batched(tx, left, join_indices, eliminate_indices);
+                    let left =
+                        self.left
+                            .iter_batched(tx, delta_rule, stores, segments, want_premises)?;
+                    return r.prefix_join_batched(
+                        tx,
+                        left,
+                        join_indices,
+                        eliminate_indices,
+                        want_premises,
+                        capture,
+                    );
                 }
             }
-            RelAlgebra::Fixed(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => {}
+            RelAlgebra::Fixed(_)
+            | RelAlgebra::Join(_)
+            | RelAlgebra::NegJoin(_)
+            | RelAlgebra::Reorder(_)
+            | RelAlgebra::Filter(_)
+            | RelAlgebra::Unification(_)
+            | RelAlgebra::Search(_)
+            | RelAlgebra::Spans(_)
+            | RelAlgebra::Delta(_) => {}
         }
         let bindings = self.bindings();
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
-        self.materialized_join_batched(tx, eliminate_indices, delta_rule, stores, segments)
+        self.materialized_join_batched(
+            tx,
+            eliminate_indices,
+            delta_rule,
+            stores,
+            segments,
+            want_premises,
+        )
     }
 
     /// The general join, batch-native: materialize the right side ONCE into
@@ -577,6 +671,7 @@ impl InnerJoin {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         let right_bindings = self.right.bindings_after_eliminate();
         let (left_join_indices, right_join_indices) = self
@@ -599,7 +694,10 @@ impl InnerJoin {
 
         let materialized = {
             let mut cache = BTreeSet::new();
-            for batch in self.right.iter_batched(tx, delta_rule, stores, segments)? {
+            for batch in self
+                .right
+                .iter_batched(tx, delta_rule, stores, segments, want_premises)?
+            {
                 let batch = batch?;
                 for row in batch.iter_rows() {
                     cache.insert(
@@ -614,7 +712,9 @@ impl InnerJoin {
         };
 
         Ok(Box::new(MaterializedBatchJoin {
-            left: self.left.iter_batched(tx, delta_rule, stores, segments)?,
+            left: self
+                .left
+                .iter_batched(tx, delta_rule, stores, segments, want_premises)?,
             left_batch: None,
             left_row: 0,
             run_idx: usize::MAX,
@@ -622,6 +722,8 @@ impl InnerJoin {
             left_join_indices,
             right_invert_indices,
             eliminate_indices,
+            want_premises,
+            capture_right_as_premise: self.capture_right_as_premise,
         }))
     }
 }
@@ -639,6 +741,8 @@ struct MaterializedBatchJoin<'a> {
     left_join_indices: Vec<usize>,
     right_invert_indices: Vec<usize>,
     eliminate_indices: BTreeSet<usize>,
+    want_premises: bool,
+    capture_right_as_premise: bool,
 }
 
 impl MaterializedBatchJoin<'_> {
@@ -661,8 +765,13 @@ impl MaterializedBatchJoin<'_> {
                 continue;
             }
             let left = match batch.row(self.left_row) {
-                Ok(r) => r,
+                Ok(r) => r.to_vec(),
                 Err(e) => return Err(e.into()),
+            };
+            let left_premises = if self.want_premises {
+                batch.row_premises(self.left_row)
+            } else {
+                Vec::new()
             };
             if self.run_idx == usize::MAX {
                 // New left row: binary-search the run start by comparing
@@ -687,12 +796,28 @@ impl MaterializedBatchJoin<'_> {
                 if !matches {
                     break;
                 }
+                let right_tuple: Tuple = self
+                    .right_invert_indices
+                    .iter()
+                    .map(|i| stored[*i].clone())
+                    .collect();
+                let right_premise = if self.want_premises && self.capture_right_as_premise {
+                    Some(right_tuple.clone())
+                } else {
+                    None
+                };
                 push_joined_row(
                     &mut out,
-                    left,
-                    self.right_invert_indices.iter().map(|i| stored[*i].clone()),
+                    &left,
+                    right_tuple.into_iter(),
                     &self.eliminate_indices,
                 )?;
+                push_join_premises(
+                    &mut out,
+                    left_premises.clone(),
+                    right_premise.as_ref(),
+                    self.want_premises,
+                );
                 self.run_idx += 1;
                 if out.is_full() {
                     advanced = true;

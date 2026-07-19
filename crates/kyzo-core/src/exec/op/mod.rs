@@ -211,8 +211,10 @@ impl Iterator for BatchFilter<'_> {
                 Ok(b) => b,
                 Err(e) => return Some(Err(e)),
             };
+            let tracking = batch.premises().is_some();
             let mut out = Batch::new();
-            for t in batch.into_rows() {
+            for (i, t) in batch.iter_rows().enumerate() {
+                let t = Tuple::from_vec(t.to_vec());
                 let mut keep = true;
                 for p in self.filters.iter() {
                     match crate::exec::expr::eval_pred(p, &t) {
@@ -226,6 +228,9 @@ impl Iterator for BatchFilter<'_> {
                 }
                 if keep {
                     out.push(eliminate_from_tuple(t, &self.eliminate_indices));
+                    if tracking {
+                        out.push_premise_list(batch.row_premises(i));
+                    }
                 }
             }
             if !out.is_empty() {
@@ -614,6 +619,7 @@ impl RelAlgebra {
                     joiner,
                     to_eliminate,
                     span,
+                    capture_right_as_premise,
                 } = *inner;
                 for filter in filters {
                     let f_bindings = filter.bindings()?;
@@ -631,6 +637,7 @@ impl RelAlgebra {
                     joiner,
                     to_eliminate,
                     span,
+                    capture_right_as_premise,
                 }));
                 if !remaining.is_empty() {
                     joined = RelAlgebra::Filter(FilteredRA {
@@ -667,12 +674,39 @@ impl RelAlgebra {
     /// shape and `panic!`d at iteration time. (A reorder is only ever the
     /// plan root; a negation join is a filter over its left side, not a
     /// row source — neither has join semantics as an RHS.)
+    ///
+    /// Does **not** capture the right row as a provenance premise; use
+    /// [`Self::join_capturing_premise`] for positive body literals.
     pub(crate) fn join(
         self,
         right: RelAlgebra,
         left_keys: Vec<Symbol>,
         right_keys: Vec<Symbol>,
         span: SourceSpan,
+    ) -> Result<Self> {
+        self.join_inner(right, left_keys, right_keys, span, false)
+    }
+
+    /// Like [`Self::join`], but each right-side grounding row is appended
+    /// to the premise channel when `want_premises` is true — one positive
+    /// body literal's contribution.
+    pub(crate) fn join_capturing_premise(
+        self,
+        right: RelAlgebra,
+        left_keys: Vec<Symbol>,
+        right_keys: Vec<Symbol>,
+        span: SourceSpan,
+    ) -> Result<Self> {
+        self.join_inner(right, left_keys, right_keys, span, true)
+    }
+
+    fn join_inner(
+        self,
+        right: RelAlgebra,
+        left_keys: Vec<Symbol>,
+        right_keys: Vec<Symbol>,
+        span: SourceSpan,
+        capture_right_as_premise: bool,
     ) -> Result<Self> {
         match &right {
             RelAlgebra::Reorder(_) => {
@@ -685,7 +719,16 @@ impl RelAlgebra {
                     "a NegJoin cannot be the right side of a join"
                 ))
             }
-            RelAlgebra::Fixed(_) | RelAlgebra::TempStore(_) | RelAlgebra::Stored(_) | RelAlgebra::StoredWithValidity(_) | RelAlgebra::Join(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => {}
+            RelAlgebra::Fixed(_)
+            | RelAlgebra::TempStore(_)
+            | RelAlgebra::Stored(_)
+            | RelAlgebra::StoredWithValidity(_)
+            | RelAlgebra::Join(_)
+            | RelAlgebra::Filter(_)
+            | RelAlgebra::Unification(_)
+            | RelAlgebra::Search(_)
+            | RelAlgebra::Spans(_)
+            | RelAlgebra::Delta(_) => {}
         }
         Ok(RelAlgebra::Join(Box::new(InnerJoin {
             left: self,
@@ -696,6 +739,7 @@ impl RelAlgebra {
             },
             to_eliminate: Default::default(),
             span,
+            capture_right_as_premise,
         })))
     }
 
@@ -823,18 +867,27 @@ impl RelAlgebra {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         match self {
-            RelAlgebra::Filter(r) => r.iter_batched(tx, delta_rule, stores, segments),
-            RelAlgebra::Reorder(r) => r.iter_batched(tx, delta_rule, stores, segments),
+            RelAlgebra::Filter(r) => r.iter_batched(tx, delta_rule, stores, segments, want_premises),
+            RelAlgebra::Reorder(r) => r.iter_batched(tx, delta_rule, stores, segments, want_premises),
             RelAlgebra::TempStore(r) => r.iter_batched(delta_rule, stores),
             RelAlgebra::Stored(v) => v.iter_batched(tx, segments),
-            RelAlgebra::Join(j) => j.iter_batched(tx, delta_rule, stores, segments),
-            RelAlgebra::Unification(u) => u.iter_batched(tx, delta_rule, stores, segments),
+            RelAlgebra::Join(j) => {
+                j.iter_batched(tx, delta_rule, stores, segments, want_premises)
+            }
+            RelAlgebra::Unification(u) => {
+                u.iter_batched(tx, delta_rule, stores, segments, want_premises)
+            }
             RelAlgebra::Fixed(f) => f.iter_batched(),
-            RelAlgebra::NegJoin(n) => n.iter_batched(tx, delta_rule, stores, segments),
+            RelAlgebra::NegJoin(n) => {
+                n.iter_batched(tx, delta_rule, stores, segments, want_premises)
+            }
             RelAlgebra::StoredWithValidity(v) => v.iter_batched(tx),
-            RelAlgebra::Search(r) => r.iter_batched(tx, delta_rule, stores, segments),
+            RelAlgebra::Search(r) => {
+                r.iter_batched(tx, delta_rule, stores, segments, want_premises)
+            }
             RelAlgebra::Spans(v) => v.iter_batched(tx),
             RelAlgebra::Delta(v) => v.iter_batched(tx),
         }
@@ -978,7 +1031,7 @@ mod tests {
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<Box<dyn Iterator<Item = Result<Tuple>> + 'a>> {
-        let mut batches = ra.iter_batched(tx, None, stores, segments)?;
+        let mut batches = ra.iter_batched(tx, None, stores, segments, false)?;
         let mut current: Vec<Tuple> = Vec::new();
         let mut idx = 0usize;
         Ok(Box::new(std::iter::from_fn(move || {
@@ -1570,6 +1623,7 @@ mod tests {
             },
             to_eliminate: [sym("extra"), sym("k2")].into_iter().collect(),
             span: sp(),
+            capture_right_as_premise: false,
         }));
         ra.fill_binding_indices_and_compile().unwrap();
         let stores = no_stores();
@@ -1642,13 +1696,13 @@ mod tests {
 
         // Against the DELTA, only key 2 (this epoch's fresh row) may join.
         let it: Vec<Tuple> = ra
-            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF)
+            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF, false)
             .unwrap()
             .map(Result::unwrap)
             .flat_map(Batch::into_rows)
             .collect();
         let ba: Vec<Tuple> = ra
-            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF)
+            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF, false)
             .unwrap()
             .map(Result::unwrap)
             .flat_map(Batch::into_rows)
@@ -1908,6 +1962,8 @@ mod tests {
                 join_indices(),
                 Default::default(),
                 Segments::OFF,
+                false,
+                false,
             )
             .unwrap()
         {
@@ -1928,6 +1984,8 @@ mod tests {
                 join_indices(),
                 Default::default(),
                 segments,
+                false,
+                false,
             )
             .unwrap()
         {
@@ -1942,6 +2000,8 @@ mod tests {
                 join_indices(),
                 Default::default(),
                 segments,
+                false,
+                false,
             )
             .unwrap()
         {

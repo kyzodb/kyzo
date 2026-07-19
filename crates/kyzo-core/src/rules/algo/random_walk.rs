@@ -193,7 +193,7 @@ impl FixedRule for RandomWalk {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -204,7 +204,7 @@ mod tests {
     /// `WeightedIndex::new(..).unwrap()`).
     #[test]
     fn all_zero_weights_refuse_typed() {
-        let options = BTreeMap::from([
+        let options = opts_map(BTreeMap::from([
             (
                 SmartString::from("steps"),
                 Expr::Const {
@@ -219,7 +219,7 @@ mod tests {
                     span: SourceSpan::default(),
                 },
             ),
-        ]);
+        ]));
         let res = run_fixed_rule(
             &RandomWalk,
             vec![
@@ -247,13 +247,13 @@ mod tests {
     /// edges never run out.
     #[test]
     fn unweighted_walk_runs() {
-        let options = BTreeMap::from([(
+        let options = opts_map(BTreeMap::from([(
             SmartString::from("steps"),
             Expr::Const {
                 val: DataValue::from(4i64),
                 span: SourceSpan::default(),
             },
-        )]);
+        )]));
         let got = run_fixed_rule(
             &RandomWalk,
             vec![
@@ -314,13 +314,13 @@ mod tests {
             ]
         };
         let steps_opt = |n: i64| {
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 SmartString::from("steps"),
                 Expr::Const {
                     val: DataValue::from(n),
                     span: SourceSpan::default(),
                 },
-            )])
+            )]))
         };
         for (steps, expected_path) in [
             (3, Tuple::from_vec(vec![s("a"), s("b"), s("c"), s("d")])),
@@ -377,7 +377,7 @@ mod tests {
             ]
         };
         let opts = || {
-            BTreeMap::from([
+            opts_map(BTreeMap::from([
                 (
                     SmartString::from("steps"),
                     Expr::Const {
@@ -392,7 +392,7 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])
+            ]))
         };
         let first = run_fixed_rule(&RandomWalk, inputs(), opts(), CancelFlag::default()).unwrap();
         // A genuinely random walk: the paths are not all length-1 (choices
@@ -433,7 +433,7 @@ mod tests {
             ]
         };
         let opts = |seed: i64| {
-            BTreeMap::from([
+            opts_map(BTreeMap::from([
                 (
                     SmartString::from("steps"),
                     Expr::Const {
@@ -448,7 +448,7 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])
+            ]))
         };
         let run = |seed: i64| {
             run_fixed_rule(&RandomWalk, inputs(), opts(seed), CancelFlag::default()).unwrap()
@@ -490,13 +490,13 @@ mod tests {
             TestInput::new(vec!["id"], nodes),
             TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("v0")])]),
         ];
-        let opts = BTreeMap::from([(
+        let opts = opts_map(BTreeMap::from([(
             SmartString::from("steps"),
             Expr::Const {
                 val: DataValue::from(4i64),
                 span: SourceSpan::default(),
             },
-        )]);
+        )]));
         let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::default()).unwrap();
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1i64),

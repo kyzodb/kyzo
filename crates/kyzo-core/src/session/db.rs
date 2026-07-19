@@ -448,33 +448,42 @@ impl<S: Storage> Engine<S> {
                     crate::store::retry::write_tx_attempt(&self.store)?,
                     options.clone(),
                 );
-                let rows = self
-                    .run_query(
-                        &mut tx,
-                        program.clone(),
-                        cur_vld,
-                        &callback_targets,
-                        &mut collector,
-                        0,
-                    )
-                    .map_err(RetryError::session_report)?;
+                let rows = match self.run_query(
+                    &mut tx,
+                    program.clone(),
+                    cur_vld,
+                    &callback_targets,
+                    &mut collector,
+                    0,
+                ) {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tx.abort_write();
+                        return Err(RetryError::session_report(e));
+                    }
+                };
                 // Integrity constraints: the denial check. Every constraint
                 // of every relation this transaction mutated (user writes
                 // and trigger writes alike) is evaluated against the
                 // post-write state; a non-empty result is a typed refusal
                 // and the whole transaction rolls back.
-                self.enforce_constraints(&mut tx, cur_vld)
-                    .map_err(RetryError::session_report)?;
+                if let Err(e) = self.enforce_constraints(&mut tx, cur_vld) {
+                    tx.abort_write();
+                    return Err(RetryError::session_report(e));
+                }
                 // Segment soundness: bumps precede the commit, so any
                 // snapshot that can see these writes sees the new generation.
                 for rel in &tx.touched_relations {
                     self.segments.bump_before_commit(*rel);
                 }
-                tx.store.commit()?;
+                let retired = std::mem::take(&mut tx.retired_relations);
+                if let Err(e) = tx.commit_write() {
+                    return Err(RetryError::from(e));
+                }
                 // Post-commit only: retirements are durable, so their
                 // segments and generation slots leave the engine now (a
                 // rolled-back destroy never reaches this line).
-                for rel in &tx.retired_relations {
+                for rel in &retired {
                     self.segments.evict(*rel);
                 }
                 // The universe is durable, now tell observers.
@@ -774,12 +783,19 @@ impl<S: Storage> Engine<S> {
                 crate::store::retry::write_tx_attempt(&self.store)?,
                 ScriptOptions::default(),
             );
-            let out = f(&mut tx).map_err(RetryError::session_report)?;
+            let out = match f(&mut tx) {
+                Ok(out) => out,
+                Err(e) => {
+                    tx.abort_write();
+                    return Err(RetryError::session_report(e));
+                }
+            };
             for rel in &tx.touched_relations {
                 self.segments.bump_before_commit(*rel);
             }
-            tx.store.commit()?;
-            for rel in &tx.retired_relations {
+            let retired = std::mem::take(&mut tx.retired_relations);
+            tx.commit_write().map_err(RetryError::from)?;
+            for rel in &retired {
                 self.segments.evict(*rel);
             }
             Ok(out)
@@ -976,6 +992,27 @@ impl<T: WriteTx> SessionTx<T> {
             touched_relations: std::collections::BTreeSet::new(),
             retired_relations: std::collections::BTreeSet::new(),
         }
+    }
+
+    /// Spend both the persistent write tx and the session scratch Open —
+    /// error / rollback path. Consumes `self` so Drop cannot bomb either.
+    pub(crate) fn abort_write(self) {
+        let SessionTx {
+            store, mut temp, ..
+        } = self;
+        temp.discard();
+        let _ = store.abort();
+    }
+
+    /// Commit the persistent write tx and spend the session scratch Open.
+    /// Consumes `self` so Drop cannot bomb either side.
+    pub(crate) fn commit_write(self) -> std::result::Result<(), crate::store::CommitFailure> {
+        let SessionTx {
+            store, mut temp, ..
+        } = self;
+        store.commit()?;
+        temp.discard();
+        Ok(())
     }
 
     /// The system stamp every bitemporal row written to the given store
@@ -1732,7 +1769,7 @@ mod db_battery {
 
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
-            .rows
+            .rows()
             .iter()
             .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
             .collect();
@@ -1741,7 +1778,7 @@ mod db_battery {
     }
 
     fn raw_int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
-        nr.rows
+        nr.rows()
             .iter()
             .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
             .collect()

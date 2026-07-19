@@ -79,7 +79,7 @@ fn same_generation() {
                  ?[a, b] := sg[a, b], a != b";
     let out = db.run_script(query, no_params()).expect("same generation");
     let mut got: Vec<(String, String)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| {
             (
@@ -128,8 +128,8 @@ fn shortest_path_dijkstra() {
             no_params(),
         )
         .expect("shortest path");
-    assert_eq!(out.rows.len(), 1);
-    let cost = out.rows[0][2].get_float().expect("cost");
+    assert_eq!(out.rows().len(), 1);
+    let cost = out.rows()[0][2].get_float().expect("cost");
     // FRA-CDG-LAX = 900 + 3000 = 3900, cheaper than FRA-JFK-LAX = 9000.
     assert!(
         (cost - 3900.0).abs() < 1e-6,
@@ -153,7 +153,7 @@ fn connected_components() {
         .run_script("?[node, grp] <~ ConnectedComponents(*edge[])", no_params())
         .expect("connected components");
     let mut by_group: std::collections::BTreeMap<i64, Vec<i64>> = Default::default();
-    for r in &out.rows {
+    for r in out.rows() {
         let node = r[0].get_int().expect("node");
         let grp = r[1].get_int().expect("group");
         by_group.entry(grp).or_default().push(node);

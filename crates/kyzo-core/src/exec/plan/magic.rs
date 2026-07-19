@@ -1157,7 +1157,7 @@ mod tests {
     use super::*;
     use kyzo_model::program::aggregate::parse_aggr;
     use kyzo_model::program::expr::{BindingPos, Expr};
-    use kyzo_model::program::rule::{FixedRuleHandle, Trivia, Unification};
+    use kyzo_model::program::rule::{FixedRuleOptions, FixedRuleHandle, Trivia, Unification};
     use crate::exec::plan::program::{NormalFormRelationApplyAtom, NormalFormRuleApplyAtom};
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::AsOf;
@@ -1468,7 +1468,7 @@ mod tests {
         assert_eq!(tc_rules.len(), 2);
         for rule in tc_rules {
             assert_eq!(head_names(rule), vec!["a", "b"]);
-            assert!(rule.aggr.iter().all(Option::is_none));
+            assert!(rule.aggr.iter().all(|a| matches!(a, HeadAggrSlot::Plain)));
         }
 
         // Base rule: sup₀ (the demand) then the original stored scan.
@@ -1772,12 +1772,12 @@ mod tests {
                 name: sym("edges"),
                 bindings: bindings
                     .iter()
-                    .map(|(k, v)| (SmartString::from(*k), sym(v)))
+                    .map(|(k, v)| (sym(k), sym(v)))
                     .collect(),
                 as_of: None,
                 span: SourceSpan(0, 0),
             }],
-            options: Arc::new(BTreeMap::new()),
+            options: FixedRuleOptions::empty(),
             head: vec![],
             arity: 1,
             span: SourceSpan(0, 0),
@@ -1819,7 +1819,7 @@ mod tests {
                 as_of: Some(AsOf::current(ValidityTs::from_raw(0))),
                 span: SourceSpan(0, 0),
             }],
-            options: Arc::new(BTreeMap::new()),
+            options: FixedRuleOptions::empty(),
             head: vec![],
             arity: 1,
             span: SourceSpan(0, 0),

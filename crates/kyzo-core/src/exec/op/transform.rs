@@ -57,6 +57,7 @@ impl ReorderRA {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         let old_order = self.relation.bindings_after_eliminate();
         let old_order_indices: BTreeMap<_, _> = old_order
@@ -75,19 +76,22 @@ impl ReorderRA {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Box::new(
             self.relation
-                .iter_batched(tx, delta_rule, stores, segments)?
+                .iter_batched(tx, delta_rule, stores, segments, want_premises)?
                 .map(move |batch| -> Result<Batch> {
-                    let rows = batch?
-                        .into_rows()
-                        .into_iter()
-                        .map(|tuple| {
-                            reorder_indices
-                                .iter()
-                                .map(|i| tuple[*i].clone())
-                                .collect::<Tuple>()
-                        })
-                        .collect();
-                    Ok(Batch::with_rows(rows))
+                    let src = batch?;
+                    let tracking = src.premises().is_some();
+                    let mut out = Batch::new();
+                    for (i, tuple) in src.iter_rows().enumerate() {
+                        let reordered: Tuple = reorder_indices
+                            .iter()
+                            .map(|j| tuple[*j].clone())
+                            .collect();
+                        out.push(reordered);
+                        if tracking {
+                            out.push_premise_list(src.row_premises(i));
+                        }
+                    }
+                    Ok(out)
                 }),
         ))
     }
@@ -146,11 +150,14 @@ impl FilteredRA {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         let bindings = self.parent.bindings_after_eliminate();
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
         Ok(Box::new(BatchFilter {
-            parent: self.parent.iter_batched(tx, delta_rule, stores, segments)?,
+            parent: self
+                .parent
+                .iter_batched(tx, delta_rule, stores, segments, want_premises)?,
             filters: &self.filters,
             eliminate_indices,
         }))
@@ -217,15 +224,19 @@ impl UnificationRA {
         delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
+        want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         let mut bindings = self.parent.bindings_after_eliminate();
         bindings.push(self.binding.clone());
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
-        let parent = self.parent.iter_batched(tx, delta_rule, stores, segments)?;
+        let parent = self
+            .parent
+            .iter_batched(tx, delta_rule, stores, segments, want_premises)?;
         let ra = self;
         let it = parent
             .map(move |batch| -> Result<Batch> {
                 let batch = batch?;
+                let tracking = batch.premises().is_some();
                 let rows: Vec<&[DataValue]> = batch.iter_rows().collect();
                 let width = rows.first().map_or(0, |r| r.len());
                 let owned_rows: Vec<Tuple> =
@@ -237,32 +248,37 @@ impl UnificationRA {
                     &crate::exec::expr::batch::Selection::all(rows.len())?,
                 )?;
                 let mut out = Batch::new();
-                let mut emit = |row: &[DataValue], v: DataValue| -> Result<()> {
+                let mut emit = |row_idx: usize, row: &[DataValue], v: DataValue| -> Result<()> {
                     let mut ret: Tuple = Tuple::from_vec(row.to_vec());
                     ret.push(v);
                     out.push(eliminate_from_tuple(ret, &eliminate_indices));
+                    if tracking {
+                        out.push_premise_list(batch.row_premises(row_idx));
+                    }
                     Ok(())
                 };
                 match ra.kind {
                     UnificationKind::Spread => {
-                    for (row, list) in rows.iter().zip(values) {
-                        let items = list.get_slice().ok_or_else(|| {
-                            #[derive(Debug, Error, Diagnostic)]
-                            #[error("Invalid spread unification")]
-                            #[diagnostic(code(eval::invalid_spread_unif))]
-                            #[diagnostic(help("Spread unification requires a list at the right"))]
-                            struct BadSpreadUnification(#[label] SourceSpan);
+                        for (i, (row, list)) in rows.iter().zip(values).enumerate() {
+                            let items = list.get_slice().ok_or_else(|| {
+                                #[derive(Debug, Error, Diagnostic)]
+                                #[error("Invalid spread unification")]
+                                #[diagnostic(code(eval::invalid_spread_unif))]
+                                #[diagnostic(help(
+                                    "Spread unification requires a list at the right"
+                                ))]
+                                struct BadSpreadUnification(#[label] SourceSpan);
 
-                            BadSpreadUnification(ra.span)
-                        })?;
-                        for item in items {
-                            emit(row, item.clone())?;
+                                BadSpreadUnification(ra.span)
+                            })?;
+                            for item in items {
+                                emit(i, row, item.clone())?;
+                            }
                         }
                     }
-                    }
                     UnificationKind::Single => {
-                        for (row, v) in rows.iter().zip(values) {
-                            emit(row, v)?;
+                        for (i, (row, v)) in rows.iter().zip(values).enumerate() {
+                            emit(i, row, v)?;
                         }
                     }
                 }

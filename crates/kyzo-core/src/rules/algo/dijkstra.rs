@@ -418,7 +418,7 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -478,7 +478,7 @@ mod tests {
             run_fixed_rule(
                 &ShortestPathDijkstra,
                 pseudo_random_inputs(),
-                BTreeMap::new(),
+                empty_opts(),
                 CancelFlag::default(),
             )
             .unwrap()
@@ -487,7 +487,7 @@ mod tests {
             let par = run_fixed_rule(
                 &ShortestPathDijkstra,
                 pseudo_random_inputs(),
-                BTreeMap::new(),
+                empty_opts(),
                 CancelFlag::default(),
             )
             .unwrap();
@@ -509,7 +509,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -554,13 +554,13 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
             ],
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 SmartString::from("keep_ties"),
                 Expr::Const {
                     val: DataValue::from(true),
                     span: SourceSpan::default(),
                 },
-            )]),
+            )])),
             CancelFlag::default(),
         )
         .unwrap();
@@ -600,13 +600,13 @@ mod tests {
                     vec![Tuple::from_vec(vec![s("b")]), Tuple::from_vec(vec![s("d")])],
                 ),
             ],
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 SmartString::from("keep_ties"),
                 Expr::Const {
                     val: DataValue::from(true),
                     span: SourceSpan::default(),
                 },
-            )]),
+            )])),
             CancelFlag::default(),
         )
         .unwrap();
@@ -646,7 +646,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();

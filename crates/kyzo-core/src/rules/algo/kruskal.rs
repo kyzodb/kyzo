@@ -155,7 +155,7 @@ impl UnionFind {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -202,7 +202,7 @@ mod tests {
                     Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -234,7 +234,7 @@ mod tests {
                     Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(3.0)]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -264,7 +264,7 @@ mod tests {
                     Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();

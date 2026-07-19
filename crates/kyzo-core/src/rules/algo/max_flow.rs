@@ -348,7 +348,7 @@ struct SourceIsSinkError(#[label] SourceSpan);
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -372,7 +372,7 @@ mod tests {
                 TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s(source)])]),
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s(sink)])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -559,7 +559,7 @@ mod tests {
                 TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("nope")])]),
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap_err();
@@ -579,7 +579,7 @@ mod tests {
                 TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap_err();
@@ -600,7 +600,7 @@ mod tests {
                 TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap_err();
@@ -636,7 +636,7 @@ mod tests {
                 vec![Tuple::from_vec(vec![s(&format!("v{}", n - 1))])],
             ),
         ];
-        let prepared = prepare_fixed_rule(&MaxFlow, inputs, BTreeMap::new()).unwrap();
+        let prepared = prepare_fixed_rule(&MaxFlow, inputs, empty_opts()).unwrap();
 
         // Baseline: no cancellation. The first BFS walks the whole chain.
         take_maxflow_bfs_pops(); // clear any leftover from a reused thread
@@ -679,7 +679,7 @@ mod tests {
                     TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("s")])]),
                     TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("t")])]),
                 ],
-                BTreeMap::new(),
+                empty_opts(),
                 CancelFlag::default(),
             )
             .unwrap_err();

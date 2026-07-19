@@ -885,7 +885,7 @@ impl SimWriteTx {
             .push((lower.to_vec(), upper.map(<[u8]>::to_vec)));
     }
 
-    fn commit_inner(mut self, durable: bool) -> std::result::Result<Committed, CommitFailure> {
+    fn commit_inner(mut self, durable: bool) -> std::result::Result<(), CommitFailure> {
         let mut inner = self
             .inner
             .take()
@@ -923,7 +923,7 @@ impl SimWriteTx {
                 }
                 st.synced_seq = st.commit_seq;
             }
-            return Ok(Committed);
+            return Ok(());
         }
 
         // Spurious-conflict injection: SSI permits false positives, so a
@@ -980,7 +980,7 @@ impl SimWriteTx {
             }
             st.synced_seq = st.commit_seq;
         }
-        Ok(Committed)
+        Ok(())
     }
 }
 
@@ -1247,11 +1247,11 @@ impl WriteTx for SimWriteTx {
         Ok(())
     }
 
-    fn commit(self) -> std::result::Result<Committed, CommitFailure> {
+    fn commit(self) -> std::result::Result<(), CommitFailure> {
         self.commit_inner(false)
     }
 
-    fn commit_durable(self) -> std::result::Result<Committed, CommitFailure> {
+    fn commit_durable(self) -> std::result::Result<(), CommitFailure> {
         self.commit_inner(true)
     }
 
@@ -1271,7 +1271,8 @@ impl Drop for SimWriteTx {
 
 #[cfg(test)]
 mod battery {
-    //! DST instrument proof battery (re-homed from storage/tests.rs).
+    use kyzo_model::TupleT;
+    /// DST instrument proof battery (re-homed from storage/tests.rs).
 
     use std::collections::BTreeMap;
     use std::num::NonZeroUsize;

@@ -519,7 +519,7 @@ mod tests {
     use super::*;
     use kyzo_model::program::aggregate::parse_aggr;
     use kyzo_model::program::query::QueryOutOptions;
-    use kyzo_model::program::rule::{
+    use kyzo_model::program::rule::{FixedRuleOptions, 
         FixedRuleApply, FixedRuleArg, FixedRuleHandle, HeadAggrSlot, InputAtom, InputInlineRule,
         InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom, Trivia,
     };
@@ -528,7 +528,6 @@ mod tests {
     };
     use kyzo_model::program::symbol::SymbolKind;
     use kyzo_model::value::DataValue;
-    use kyzo_oracle::eval as laws;
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan(0, 0))
@@ -669,7 +668,7 @@ mod tests {
                         span: SourceSpan(0, 0),
                     })
                     .collect(),
-                options: Arc::new(BTreeMap::new()),
+                options: FixedRuleOptions::empty(),
                 head: vec![],
                 arity: 1,
                 span: SourceSpan(0, 0),
@@ -760,49 +759,46 @@ mod tests {
         );
     }
 
-    /// Law 2's refusal corpus, run through the *real* stratifier: every
-    /// program the reference checker (`query/laws.rs`) refuses as
-    /// unstratifiable, this module must refuse too — the two must never
-    /// drift. The corpus covers direct/mutual/cycle-mediated negation,
-    /// recursive normal aggregation, mixed meet+normal aggregation,
-    /// meet self-negation, and a fixed rule inside recursion.
+    /// Law 2 refusal shapes, run through the *real* stratifier. The sealed
+    /// oracle corpus lives in `kyzo_oracle::unstratifiable_corpus` and is
+    /// re-checked from `kyzo-trials`; this in-crate pin keeps a few named
+    /// shapes local so the stratifier cannot drift without a core-local meter.
     #[test]
     fn the_oracle_refusal_corpus_is_refused() {
-        for (name, oracle_program) in laws::unstratifiable_corpus() {
-            let mut prog = Prog::default();
-            // An entry reading every head, so nothing is pruned as
-            // unreachable before the check.
-            let mut heads: BTreeSet<&str> = BTreeSet::new();
-            for rule in &oracle_program.rules {
-                heads.insert(rule.head_rel);
-            }
-            for fixed in &oracle_program.fixed {
-                heads.insert(fixed.head_rel);
-            }
-            prog = prog.rule("?", &[None], heads.iter().map(|h| dep(h)).collect());
-            for rule in &oracle_program.rules {
-                prog = prog.rule_raw(
-                    rule.head_rel,
-                    rule.aggr.clone(),
-                    rule.body
-                        .iter()
-                        .map(|l| {
-                            if l.is_negated() {
-                                neg_dep(l.rel)
-                            } else {
-                                dep(l.rel)
-                            }
-                        })
-                        .collect(),
-                );
-            }
-            for fixed in &oracle_program.fixed {
-                prog = prog.fixed(fixed.head_rel, &fixed.inputs);
-            }
-            let err = prog.stratify().expect_err(&format!("must refuse: {name}"));
+        let cases: [(&str, fn() -> Prog); 3] = [
+            (
+                "direct negation cycle",
+                || {
+                    Prog::default()
+                        .rule("p", &[None], vec![neg_dep("p")])
+                        .rule("?", &[None], vec![dep("p")])
+                },
+            ),
+            (
+                "mutual negation",
+                || {
+                    Prog::default()
+                        .rule("p", &[None], vec![neg_dep("q")])
+                        .rule("q", &[None], vec![neg_dep("p")])
+                        .rule("?", &[None], vec![dep("p")])
+                },
+            ),
+            (
+                "negation through positive edge to negated",
+                || {
+                    Prog::default()
+                        .rule("a", &[None], vec![dep("b")])
+                        .rule("b", &[None], vec![neg_dep("a")])
+                        .rule("?", &[None], vec![dep("a")])
+                },
+            ),
+        ];
+        for (name, build) in cases {
+            let err = build().stratify().expect_err(&format!("must refuse: {name}"));
             assert_unstratifiable(&err, name);
         }
     }
+
 
     /// Recursion through a *normal* aggregation is refused: the fold is
     /// only correct over the finished set, and the set is never finished

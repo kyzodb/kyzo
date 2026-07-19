@@ -265,7 +265,7 @@ mod exactly_once_battery {
         let mut new_values: Vec<i64> = vec![];
         while let Ok((op, new, _old)) = receiver.try_recv() {
             assert_eq!(op.as_str(), "Put");
-            for row in &new.rows {
+            for row in new.rows() {
                 new_values.push(row[1].get_int().expect("int"));
             }
         }
@@ -304,7 +304,7 @@ mod exactly_once_battery {
 
         let mut new_values: Vec<i64> = vec![];
         while let Ok((_op, new, _old)) = receiver.try_recv() {
-            for row in &new.rows {
+            for row in new.rows() {
                 new_values.push(row[1].get_int().expect("int"));
             }
         }

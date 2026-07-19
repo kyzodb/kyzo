@@ -13,6 +13,8 @@
 //! cross the query seam — the same execution currency as [`Rows`] /
 //! [`ExecRows`], not a private `Vec<DataValue>` intern table.
 
+use std::fmt;
+
 use super::admission::Denial;
 use super::arena::Arena;
 use super::arity::Arity;
@@ -33,6 +35,14 @@ use super::{DataValue, Tuple};
 pub struct SearchHits {
     arena: Arena,
     rows: Rows,
+}
+
+impl fmt::Debug for SearchHits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SearchHits")
+            .field("row_count", &self.rows.len())
+            .finish()
+    }
 }
 
 impl SearchHits {

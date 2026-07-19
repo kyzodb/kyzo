@@ -8,7 +8,7 @@
  */
 
 //! The KyzoScript language tour (story #73): every chapter runs a real
-//! script through the real public `Db::run_script` entry point and asserts
+//! script through the real public `Engine::run_script` entry point and asserts
 //! on its actual output — this file is not narration *about* the language,
 //! it is a KyzoScript program that the engine executes every time `cargo
 //! test`/`cargo run --example` touches it. A comment describing a construct
@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use kyzo::{DataValue, Db, FjallStorage, NamedRows, new_fjall_storage};
+use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
@@ -39,15 +39,15 @@ fn no_params() -> BTreeMap<String, DataValue> {
 /// embedder does. Leaks its tempdir on purpose: an example process is
 /// short-lived, and every chapter needs its own store torn down only at
 /// exit, not mid-run.
-fn db() -> Db<FjallStorage> {
+fn db() -> Engine<FjallStorage> {
     let dir = tempfile::tempdir().expect("tempdir");
     let storage = new_fjall_storage(dir.path()).expect("fjall storage");
     std::mem::forget(dir);
-    Db::new(storage).expect("db")
+    Engine::compose(storage, Catalog::new()).expect("engine")
 }
 
 fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
-    rows.rows
+    rows.rows()
         .iter()
         .map(|r| r[col].get_int().expect("int column"))
         .collect()
@@ -72,7 +72,7 @@ fn chapter_1_relations() {
     let out = db
         .run_script("?[name, age] := *person{name, age}, age > 35", no_params())
         .expect("scan person");
-    let mut names: Vec<&str> = out.rows.iter().map(|r| r[0].get_str().unwrap()).collect();
+    let mut names: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
     names.sort_unstable();
     assert_eq!(names, vec!["Ada", "Alan"], "age > 35 filters to Ada, Alan");
 }
@@ -105,7 +105,7 @@ fn chapter_2_rules() {
             no_params(),
         )
         .expect("joined rule");
-    let mut names: Vec<&str> = out.rows.iter().map(|r| r[0].get_str().unwrap()).collect();
+    let mut names: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
     names.sort_unstable();
     assert_eq!(names, vec!["Ada", "Alan"], "Ada and Alan both work in math");
 }
@@ -134,7 +134,7 @@ fn chapter_3_recursion() {
             no_params(),
         )
         .expect("transitive closure");
-    let mut dests: Vec<&str> = out.rows.iter().map(|r| r[0].get_str().unwrap()).collect();
+    let mut dests: Vec<&str> = out.rows().iter().map(|r| r[0].get_str().unwrap()).collect();
     dests.sort_unstable();
     assert_eq!(
         dests,
@@ -163,7 +163,7 @@ fn chapter_4_aggregation() {
         .run_script("?[dept, count(name)] := *works_in{dept, name}", no_params())
         .expect("group + count");
     let mut counts: Vec<(String, i64)> = out
-        .rows
+        .rows()
         .iter()
         .map(|r| (r[0].get_str().unwrap().to_string(), r[1].get_int().unwrap()))
         .collect();
@@ -304,8 +304,8 @@ fn chapter_8_graph_algorithms() {
             no_params(),
         )
         .expect("shortest path");
-    assert_eq!(out.rows.len(), 1, "one path found");
-    let cost = out.rows[0][2].get_float().expect("cost");
+    assert_eq!(out.rows().len(), 1, "one path found");
+    let cost = out.rows()[0][2].get_float().expect("cost");
     assert!(
         (cost - 9000.0).abs() < 1e-6,
         "FRA-JFK-LAX costs 9000, got {cost}"

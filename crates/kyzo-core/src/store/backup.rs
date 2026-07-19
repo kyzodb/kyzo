@@ -428,8 +428,9 @@ pub fn import_verify(
 
 #[cfg(test)]
 mod pins {
-    //! Backup floor law pins (re-homed from storage/tests.rs).
+    /// Backup floor law pins (re-homed from storage/tests.rs).
 
+    use kyzo_model::TupleT;
     use kyzo_model::value::{DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs};
 
     use crate::store::time::ClaimPolarity;

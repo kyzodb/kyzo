@@ -1354,6 +1354,34 @@ pub(crate) mod tests_support {
         }
     }
 
+
+    /// Empty options bag for harness call sites.
+
+    /// Lift a legacy SmartString-keyed options map into [`FixedRuleOptions`].
+    pub(crate) fn opts_map(
+        map: BTreeMap<SmartString<LazyCompact>, Expr>,
+    ) -> FixedRuleOptions {
+        FixedRuleOptions::from_entries(map.into_iter().map(|(k, v)| {
+            (Symbol::new(k, SourceSpan::default()), v)
+        }))
+        .expect("test options use known fixed-rule option names")
+    }
+
+    pub(crate) fn empty_opts() -> FixedRuleOptions {
+        FixedRuleOptions::empty()
+    }
+
+    /// Build options from string keys (known fixed-rule option names only).
+    pub(crate) fn opts(pairs: &[(&str, Expr)]) -> FixedRuleOptions {
+        FixedRuleOptions::from_entries(pairs.iter().map(|(k, v)| {
+            (
+                Symbol::new(*k, SourceSpan::default()),
+                v.clone(),
+            )
+        }))
+        .expect("test options use known fixed-rule option names")
+    }
+
     /// Test-only stored-input double: every stored read refuses. Not the
     /// demolished production `NoStoredInputs` seam (P090) — harness door only.
     pub(crate) struct HarnessStoredClosed;
@@ -1494,7 +1522,7 @@ pub(crate) mod tests_support {
     impl FixedRule for NeverRun {
         fn arity(
             &self,
-            _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+            _options: &FixedRuleOptions,
             _rule_head: &[Symbol],
             _span: SourceSpan,
         ) -> Result<usize> {
@@ -1552,7 +1580,7 @@ mod par_try_map_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::tests_support::{TestInput, run_fixed_rule};
+    use super::tests_support::{TestInput, run_fixed_rule, empty_opts, opts_map};
     use super::*;
 
     fn s(v: &str) -> DataValue {
@@ -1577,7 +1605,7 @@ mod tests {
         impl FixedRule for Liar {
             fn arity(
                 &self,
-                _o: &BTreeMap<SmartString<LazyCompact>, Expr>,
+                _o: &FixedRuleOptions,
                 _h: &[Symbol],
                 _s: SourceSpan,
             ) -> Result<usize> {
@@ -1593,14 +1621,14 @@ mod tests {
                 Ok(())
             }
         }
-        let res = run_fixed_rule(&Liar, vec![], BTreeMap::new(), CancelFlag::default());
+        let res = run_fixed_rule(&Liar, vec![], empty_opts(), CancelFlag::default());
         assert!(res.is_err());
     }
 
     #[test]
     fn simple_fixed_rule_arity_check_is_universal() {
         let rule = SimpleFixedRule::new(2, MismatchedArityBody);
-        let res = run_fixed_rule(&rule, vec![], BTreeMap::new(), CancelFlag::default());
+        let res = run_fixed_rule(&rule, vec![], empty_opts(), CancelFlag::default());
         assert!(res.is_err());
 
         let rule = SimpleFixedRule::new(1, IdentityNamedRowsBody);
@@ -1610,7 +1638,7 @@ mod tests {
                 vec!["x"],
                 vec![Tuple::from_vec(vec![s("p")]), Tuple::from_vec(vec![s("q")])],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -1650,13 +1678,13 @@ mod tests {
                 ),
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
-            BTreeMap::from([(
+            opts_map(BTreeMap::from([(
                 SmartString::from("condition"),
                 Expr::Const {
                     val: DataValue::from(true),
                     span: SourceSpan::default(),
                 },
-            )]),
+            )])),
             cancel,
         );
         let err = res.unwrap_err();
@@ -1678,7 +1706,7 @@ mod tests {
         }
         let pr = DEFAULT_FIXED_RULES.get("PageRank").unwrap().clone();
         assert_eq!(
-            pr.arity(&BTreeMap::new(), &[], SourceSpan::default())
+            pr.arity(&empty_opts(), &[], SourceSpan::default())
                 .unwrap(),
             2
         );
@@ -1700,7 +1728,7 @@ mod tests {
                 vec!["x"],
                 vec![Tuple::from_vec(vec![s("z")])],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -1715,7 +1743,7 @@ mod tests {
         impl FixedRule for Probe {
             fn arity(
                 &self,
-                _o: &BTreeMap<SmartString<LazyCompact>, Expr>,
+                _o: &FixedRuleOptions,
                 _h: &[Symbol],
                 _s: SourceSpan,
             ) -> Result<usize> {
@@ -1755,7 +1783,7 @@ mod tests {
                     Tuple::from_vec(vec![DataValue::from("b"), DataValue::from("c")]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();
@@ -1764,7 +1792,7 @@ mod tests {
         impl FixedRule for BadEdge {
             fn arity(
                 &self,
-                _o: &BTreeMap<SmartString<LazyCompact>, Expr>,
+                _o: &FixedRuleOptions,
                 _h: &[Symbol],
                 _s: SourceSpan,
             ) -> Result<usize> {
@@ -1786,7 +1814,7 @@ mod tests {
                 vec!["x"],
                 vec![Tuple::from_vec(vec![DataValue::from("a")])],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap_err();
@@ -1796,7 +1824,7 @@ mod tests {
         impl FixedRule for BadWeight {
             fn arity(
                 &self,
-                _o: &BTreeMap<SmartString<LazyCompact>, Expr>,
+                _o: &FixedRuleOptions,
                 _h: &[Symbol],
                 _s: SourceSpan,
             ) -> Result<usize> {
@@ -1824,7 +1852,7 @@ mod tests {
                     DataValue::from(f64::NAN),
                 ])],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap_err();
@@ -1865,7 +1893,7 @@ mod tests {
                         nullary(),
                         TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")])]),
                     ],
-                    BTreeMap::new(),
+                    empty_opts(),
                     CancelFlag::default(),
                 ),
             ),
@@ -1878,7 +1906,7 @@ mod tests {
                         nullary(),
                         TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")])]),
                     ],
-                    BTreeMap::from([(SmartString::from("k"), const_expr(DataValue::from(1i64)))]),
+                    opts_map(BTreeMap::from([(SmartString::from("k"), const_expr(DataValue::from(1i64)))])),
                     CancelFlag::default(),
                 ),
             ),
@@ -1898,10 +1926,10 @@ mod tests {
                         nullary(),
                         TestInput::new(vec!["goal"], vec![Tuple::from_vec(vec![s("b")])]),
                     ],
-                    BTreeMap::from([(
+                    opts_map(BTreeMap::from([(
                         SmartString::from("heuristic"),
                         const_expr(DataValue::from(0.0)),
-                    )]),
+                    )])),
                     CancelFlag::default(),
                 ),
             ),
@@ -1920,10 +1948,10 @@ mod tests {
                         ),
                         nullary(),
                     ],
-                    BTreeMap::from([(
+                    opts_map(BTreeMap::from([(
                         SmartString::from("condition"),
                         const_expr(DataValue::from(true)),
-                    )]),
+                    )])),
                     CancelFlag::default(),
                 ),
             ),
@@ -1942,10 +1970,10 @@ mod tests {
                         ),
                         nullary(),
                     ],
-                    BTreeMap::from([(
+                    opts_map(BTreeMap::from([(
                         SmartString::from("condition"),
                         const_expr(DataValue::from(true)),
-                    )]),
+                    )])),
                     CancelFlag::default(),
                 ),
             ),
@@ -1958,7 +1986,7 @@ mod tests {
                         nullary(),
                         TestInput::new(vec!["sink"], vec![Tuple::from_vec(vec![s("b")])]),
                     ],
-                    BTreeMap::new(),
+                    empty_opts(),
                     CancelFlag::default(),
                 ),
             ),
@@ -1970,7 +1998,7 @@ mod tests {
                         TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
                         nullary(),
                     ],
-                    BTreeMap::new(),
+                    empty_opts(),
                     CancelFlag::default(),
                 ),
             ),
@@ -1985,7 +2013,7 @@ mod tests {
                         ),
                         nullary(),
                     ],
-                    BTreeMap::new(),
+                    empty_opts(),
                     CancelFlag::default(),
                 ),
             ),
@@ -2004,10 +2032,10 @@ mod tests {
                         ),
                         nullary(),
                     ],
-                    BTreeMap::from([(
+                    opts_map(BTreeMap::from([(
                         SmartString::from("steps"),
                         const_expr(DataValue::from(1i64)),
-                    )]),
+                    )])),
                     CancelFlag::default(),
                 ),
             ),
@@ -2022,7 +2050,7 @@ mod tests {
                         ),
                         nullary(),
                     ],
-                    BTreeMap::new(),
+                    empty_opts(),
                     CancelFlag::default(),
                 ),
             ),

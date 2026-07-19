@@ -129,9 +129,10 @@ fn label_propagation(
 
 #[cfg(test)]
 mod tests {
+    use kyzo_model::program::symbol::Symbol;
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -149,25 +150,26 @@ mod tests {
         vec![TestInput::new(vec!["fr", "to"], edges)]
     }
 
-    fn undirected_opt() -> BTreeMap<SmartString<LazyCompact>, Expr> {
-        BTreeMap::from([(
+    fn undirected_opt() -> FixedRuleOptions {
+        opts_map(BTreeMap::from([(
             SmartString::from("undirected"),
             Expr::Const {
                 val: DataValue::from(true),
                 span: SourceSpan::default(),
             },
-        )])
+        )]))
     }
 
-    fn seed_opt(seed: i64) -> BTreeMap<SmartString<LazyCompact>, Expr> {
+    fn seed_opt(seed: i64) -> FixedRuleOptions {
         let mut o = undirected_opt();
         o.insert(
-            SmartString::from("seed"),
+            Symbol::new("seed", SourceSpan::default()),
             Expr::Const {
                 val: DataValue::from(seed),
                 span: SourceSpan::default(),
             },
-        );
+        )
+        .expect("seed is a known fixed-rule option");
         o
     }
 
@@ -255,7 +257,7 @@ mod tests {
                     Tuple::from_vec(vec![s("z"), s("x")]),
                 ],
             )],
-            BTreeMap::new(),
+            empty_opts(),
             CancelFlag::default(),
         )
         .unwrap();

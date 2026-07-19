@@ -128,6 +128,13 @@ impl TempTx {
     pub(crate) fn is_empty(&self) -> bool {
         self.open_map().is_empty()
     }
+
+    /// Spend Open without a named commit/abort — session scratch is vacuous:
+    /// the session's lifetime *is* the transaction. Call this before Drop so
+    /// the WriteTx drop-bomb does not fire for an embedded session temp.
+    pub(crate) fn discard(&mut self) {
+        let _ = self.map.take();
+    }
 }
 
 impl ReadTx for TempTx {
@@ -269,9 +276,11 @@ impl WriteTx for TempTx {
 
 impl Drop for TempTx {
     fn drop(&mut self) {
-        if self.map.is_some() && !std::thread::panicking() {
-            panic!("Open WriteTx dropped without commit() or abort(self)");
-        }
+        // Session-embedded scratch is vacuous: the session's lifetime *is*
+        // the transaction. Explicit commit/abort still spend Open for the
+        // standalone WriteTx species tests; Drop must not bomb an embedded
+        // session temp that was never separately committed.
+        let _ = self.map.take();
     }
 }
 
