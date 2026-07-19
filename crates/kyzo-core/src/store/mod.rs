@@ -126,8 +126,10 @@ pub use failure::{
     DebtLedger, FailureLattice, KeyspaceId, OperatorHealthSurface, QuarantineRange, StoreRefuse,
 };
 pub use replica::{
-    AdmissionCertificate, AdmissionCertificateParts, LocalProjection, ReplicaCustody, ReplicaKey,
-    ReplicaRefuse, anchor_pending, verify_replica,
+    AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
+    AuthorizingKeyTable, LocalProjection, OriginContinuity, ReplicaCustody, ReplicaKey,
+    ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, anchor_pending,
+    verify_replica,
 };
 pub use idempotency::{IdempotencyEntry, IdempotencyMemo, OperationKey, OperationOutcome};
 pub use keys::{Secret, SecretKeyRefuse, refuse_if_secret};

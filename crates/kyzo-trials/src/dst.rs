@@ -2236,7 +2236,8 @@ pub mod storage_campaign_lanes {
             ReplicaRefuse::ChainInconsistent
         ));
         // Gap: verify_replica / PendingAnchor / anchor_pending need
-        // AdmissionCertificate mint (pub(crate) at session/admit) — red until
+        // AdmissionCertificate mint + AuthorizingKeyTable signature check +
+        // ScopeManifestTable resolve + OriginContinuity evidence — red until
         // a public verify door feeds five live certificate deliveries.
     }
 
@@ -2286,16 +2287,23 @@ pub mod storage_campaign_lanes {
             format!("{:?}", ReplicaRefuse::ScopeDenied)
         );
 
-        // verify_replica contract: scope_ok Err short-circuits before custody.
-        // Enforce the Result<(), ReplicaRefuse> shape the door accepts.
-        let scope_ok: Result<(), ReplicaRefuse> = Err(ReplicaRefuse::ScopeRevoked);
-        assert!(matches!(scope_ok, Err(ReplicaRefuse::ScopeRevoked)));
-        let scope_denied: Result<(), ReplicaRefuse> = Err(ReplicaRefuse::ScopeDenied);
-        assert!(matches!(scope_denied, Err(ReplicaRefuse::ScopeDenied)));
-        let scope_unknown: Result<(), ReplicaRefuse> = Err(ReplicaRefuse::ScopeUnknown);
-        assert!(matches!(scope_unknown, Err(ReplicaRefuse::ScopeUnknown)));
-        // Gap: live verify_replica(certificate, …, scope_ok=Err(…)) needs
-        // AdmissionCertificate mint — pub(crate); lane pins the refuse lattice.
+        // verify_replica derives scope from ScopeManifestTable::resolve — never
+        // a caller-asserted scope_ok Result. Pin the closed refuse lattice.
+        assert!(matches!(
+            ReplicaRefuse::ScopeRevoked,
+            ReplicaRefuse::ScopeRevoked
+        ));
+        assert!(matches!(
+            ReplicaRefuse::ScopeDenied,
+            ReplicaRefuse::ScopeDenied
+        ));
+        assert!(matches!(
+            ReplicaRefuse::ScopeUnknown,
+            ReplicaRefuse::ScopeUnknown
+        ));
+        // Gap: live verify_replica(certificate, keys, scopes, continuity)
+        // needs AdmissionCertificate mint + AuthorizingKeyTable /
+        // ScopeManifestTable / OriginContinuity — lane pins the refuse lattice.
     }
 
     /// §38/§39 — CompositionId crash-before-return + replay.

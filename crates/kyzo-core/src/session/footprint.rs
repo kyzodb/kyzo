@@ -11,15 +11,15 @@
 //!
 //! Owns: [`AskShape`], [`Footprint`], [`Frontier`], [`EdgePredicate`],
 //! accelerator contract, `(FenceEpoch, IncarnationId)` footprint index,
-//! fence-pressure operator feed.
+//! fence-pressure operator feed, overlap adjudication, Envelope soundness.
 //!
 //! Bans: Underivable inside Fenced; under-approximating footprints;
-//! accelerator-as-admission-authority; durable lock organs, expiry timers,
-//! abandonment ceremonies.
+//! accelerator-as-admission-authority; caller-asserted accelerator
+//! confirmation; durable lock organs, expiry timers, abandonment ceremonies.
 //!
 //! Live footprints exist only while the owning incarnation's write session
 //! is live (session-memory). Prior-epoch / prior-incarnation footprints are
-//! not live locks.
+//! not live locks. Overlapping Fenced footprints refuse at the door.
 
 use crate::store::authority::IncarnationId;
 use crate::store::epoch::FenceEpoch;
@@ -41,8 +41,8 @@ pub enum AskShape {
 pub enum Footprint {
     /// Exact key ranges.
     Exact(Vec<ByteRange>),
-    /// Sound-superset envelope over ranges.
-    Envelope(Vec<ByteRange>),
+    /// Sound-superset envelope — only via [`SoundEnvelope::seal`].
+    Envelope(SoundEnvelope),
     /// Index-domain projection.
     IndexDomain {
         /// Projection identity (relation / index name digest).
@@ -66,6 +66,100 @@ pub struct ByteRange {
     pub start: Vec<u8>,
     /// Inclusive end.
     pub end: Vec<u8>,
+}
+
+/// Envelope ranges proven to be a sound superset of declared access (§36).
+///
+/// Under-approximating an Envelope is Unconstructible — the only constructor
+/// is [`SoundEnvelope::seal`], which refuses when `ranges` fail to cover
+/// every declared-access range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoundEnvelope {
+    ranges: Vec<ByteRange>,
+}
+
+impl SoundEnvelope {
+    /// Seal envelope ranges as a sound superset of `declared_access`.
+    ///
+    /// Every declared range must be covered by at least one envelope range.
+    /// Under-approximation → [`FootprintRefuse::UnderApproximatingEnvelope`].
+    pub fn seal(
+        ranges: Vec<ByteRange>,
+        declared_access: &[ByteRange],
+    ) -> Result<Self, FootprintRefuse> {
+        if !ranges_cover(&ranges, declared_access) {
+            return Err(FootprintRefuse::UnderApproximatingEnvelope);
+        }
+        Ok(Self { ranges })
+    }
+
+    /// Borrow the sealed envelope ranges.
+    pub fn ranges(&self) -> &[ByteRange] {
+        &self.ranges
+    }
+}
+
+/// True when every `declared` range is covered by some range in `superset`.
+pub fn ranges_cover(superset: &[ByteRange], declared: &[ByteRange]) -> bool {
+    declared
+        .iter()
+        .all(|d| superset.iter().any(|s| range_covers(s, d)))
+}
+
+fn range_covers(outer: &ByteRange, inner: &ByteRange) -> bool {
+    outer.start.as_slice() <= inner.start.as_slice()
+        && outer.end.as_slice() >= inner.end.as_slice()
+}
+
+/// Inclusive byte-range overlap.
+pub fn ranges_overlap(a: &[ByteRange], b: &[ByteRange]) -> bool {
+    a.iter().any(|ra| {
+        b.iter().any(|rb| {
+            ra.start.as_slice() <= rb.end.as_slice() && rb.start.as_slice() <= ra.end.as_slice()
+        })
+    })
+}
+
+/// Overlap adjudication between two footprints (§36).
+///
+/// Same-kind range / identity checks when decisive; cross-kind pairs that
+/// cannot prove disjointness are treated as overlapping (conservative refuse).
+pub fn footprints_overlap(a: &Footprint, b: &Footprint) -> bool {
+    match (a, b) {
+        (Footprint::Exact(ra), Footprint::Exact(rb))
+        | (Footprint::Envelope(SoundEnvelope { ranges: ra }), Footprint::Envelope(SoundEnvelope { ranges: rb }))
+        | (Footprint::Exact(ra), Footprint::Envelope(SoundEnvelope { ranges: rb }))
+        | (Footprint::Envelope(SoundEnvelope { ranges: ra }), Footprint::Exact(rb)) => {
+            ranges_overlap(ra, rb)
+        }
+        (Footprint::WholeRelation { relation: r1 }, Footprint::WholeRelation { relation: r2 }) => {
+            r1 == r2
+        }
+        (Footprint::IndexDomain { projection: p1 }, Footprint::IndexDomain { projection: p2 }) => {
+            p1 == p2
+        }
+        (Footprint::Frontier(f1), Footprint::Frontier(f2)) => f1.edge == f2.edge,
+        (Footprint::Underivable, _) | (_, Footprint::Underivable) => true,
+        // Cross-kind: cannot prove disjoint without a shared coordinate → overlap.
+        _ => true,
+    }
+}
+
+/// Adjudicate a candidate Fenced footprint against already-live shapes (§36).
+///
+/// Overlapping Fenced refuse at the door. Optimistic live shapes do not block.
+pub fn adjudicate_fenced_overlap(
+    candidate: &FencedFootprint,
+    live: impl Iterator<Item = &AskShape>,
+) -> Result<(), FootprintRefuse> {
+    for shape in live {
+        if let AskShape::Fenced(other) = shape {
+            if footprints_overlap(candidate.footprint(), other.footprint()) {
+                return Err(FootprintRefuse::OverlappingFenced);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Frontier direction — only Forward is representable (reverse fails to compile).
@@ -133,21 +227,51 @@ pub enum AcceleratorVerdict {
     NegativeConclusive,
     /// Positive conclusive (present).
     PositiveConclusive,
-    /// Neither conclusive nor confirmable against the reachability projection.
+    /// Neither conclusive nor confirmable against the reachability projection
+    /// without authenticated confirmation evidence.
     Neither,
+}
+
+/// Authenticated confirmation against the authority reachability projection (§36).
+///
+/// Minted only by the projection door — caller-forged confirmation is
+/// Unconstructible (no public constructor).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProjectionConfirmation {
+    /// Admission-snapshot digest the projection confirmed against.
+    snapshot_digest: [u8; 32],
+}
+
+impl ProjectionConfirmation {
+    /// Mint confirmation from the authority reachability projection.
+    ///
+    /// Sole constructor — session/store projection seams only.
+    pub(crate) fn mint(snapshot_digest: [u8; 32]) -> Self {
+        Self { snapshot_digest }
+    }
+
+    /// Snapshot digest this confirmation binds.
+    pub fn snapshot_digest(&self) -> &[u8; 32] {
+        &self.snapshot_digest
+    }
 }
 
 /// Apply accelerator against the authority projection.
 ///
-/// `Neither` that is also unconfirmable → [`FootprintRefuse::FrontierUnprovable`].
+/// Conclusive verdicts admit without confirmation. [`AcceleratorVerdict::Neither`]
+/// requires [`ProjectionConfirmation`] minted by the projection door;
+/// absent confirmation → [`FootprintRefuse::FrontierUnprovable`].
+/// Caller-asserted `confirmable: bool` is Unconstructible.
 pub fn admit_accelerator(
     verdict: AcceleratorVerdict,
-    confirmable: bool,
+    confirmation: Option<&ProjectionConfirmation>,
 ) -> Result<(), FootprintRefuse> {
     match verdict {
         AcceleratorVerdict::NegativeConclusive | AcceleratorVerdict::PositiveConclusive => Ok(()),
-        AcceleratorVerdict::Neither if confirmable => Ok(()),
-        AcceleratorVerdict::Neither => Err(FootprintRefuse::FrontierUnprovable),
+        AcceleratorVerdict::Neither => match confirmation {
+            Some(_) => Ok(()),
+            None => Err(FootprintRefuse::FrontierUnprovable),
+        },
     }
 }
 
@@ -184,6 +308,18 @@ impl Ord for FootprintIndexKey {
     }
 }
 
+/// Typed outcome of a live-table insert — never a silent overwrite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveInsert {
+    /// No prior shape at this key.
+    Fresh,
+    /// Prior shape at this key replaced; previous returned.
+    Replaced {
+        /// Shape that occupied the key before this insert.
+        previous: AskShape,
+    },
+}
+
 /// Session-memory live footprint table — no durable lock organ.
 #[derive(Debug, Default)]
 pub struct LiveFootprintTable {
@@ -197,8 +333,29 @@ impl LiveFootprintTable {
     }
 
     /// Register a live footprint for the owning incarnation.
-    pub fn insert(&mut self, key: FootprintIndexKey, shape: AskShape) {
-        self.live.insert(key, shape);
+    ///
+    /// Fenced candidates are overlap-adjudicated against every other live
+    /// Fenced shape (same key excluded — replacement is explicit via
+    /// [`LiveInsert::Replaced`]). Overlapping Fenced → refuse. Silent
+    /// overwrite is Unconstructible.
+    pub fn insert(
+        &mut self,
+        key: FootprintIndexKey,
+        shape: AskShape,
+    ) -> Result<LiveInsert, FootprintRefuse> {
+        if let AskShape::Fenced(ref fenced) = shape {
+            adjudicate_fenced_overlap(
+                fenced,
+                self.live
+                    .iter()
+                    .filter(|(k, _)| **k != key)
+                    .map(|(_, s)| s),
+            )?;
+        }
+        match self.live.insert(key, shape) {
+            None => Ok(LiveInsert::Fresh),
+            Some(previous) => Ok(LiveInsert::Replaced { previous }),
+        }
     }
 
     /// Drop footprints for a dead incarnation (next open / session end).
@@ -242,7 +399,7 @@ pub enum FootprintRefuse {
     #[diagnostic(code(session::footprint::underivable_in_fenced))]
     UnderivableInFenced,
     /// Frontier neither conclusive nor confirmable (§36).
-    #[error("FrontierUnprovable: accelerator Neither and unconfirmable — never admit")]
+    #[error("FrontierUnprovable: accelerator Neither without ProjectionConfirmation — never admit")]
     #[diagnostic(code(session::footprint::frontier_unprovable))]
     FrontierUnprovable,
     /// Terminal Optimistic SSI conflict — caller re-derives; no retry counters.
@@ -256,4 +413,12 @@ pub enum FootprintRefuse {
     #[error("CatalogGenerationMismatch: footprint sealed against a stale Catalog generation")]
     #[diagnostic(code(session::footprint::catalog_generation_mismatch))]
     CatalogGenerationMismatch,
+    /// Overlapping live Fenced footprints (§36) — refuse at the door.
+    #[error("OverlappingFenced: overlapping Fenced footprints refuse at admission")]
+    #[diagnostic(code(session::footprint::overlapping_fenced))]
+    OverlappingFenced,
+    /// Envelope ranges under-approximate declared access (§36).
+    #[error("UnderApproximatingEnvelope: Envelope must be a sound superset of declared access")]
+    #[diagnostic(code(session::footprint::under_approximating_envelope))]
+    UnderApproximatingEnvelope,
 }
