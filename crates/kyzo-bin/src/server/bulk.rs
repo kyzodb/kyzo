@@ -26,7 +26,7 @@ use tokio::task::spawn_blocking;
 use kyzo::NamedRows;
 
 use super::{DbState, internal_error};
-use crate::relations;
+use crate::bulk;
 
 pub(super) async fn export_relations(
     State(st): State<DbState>,
@@ -38,7 +38,7 @@ pub(super) async fn export_relations(
         .map(str::to_string)
         .collect_vec();
     let result =
-        spawn_blocking(move || relations::export_relations(&st.db, names.into_iter())).await;
+        spawn_blocking(move || bulk::export_relations(&st.db, names.into_iter())).await;
     match result {
         Ok(Ok(exported)) => {
             let data: serde_json::Map<_, _> = exported
@@ -80,7 +80,7 @@ pub(super) async fn import_relations(
         }
     }
 
-    let result = spawn_blocking(move || relations::import_relations(&st.db, mapping)).await;
+    let result = spawn_blocking(move || bulk::import_relations(&st.db, mapping)).await;
     match result {
         Ok(Ok(())) => (StatusCode::OK, json!({"ok": true}).into()),
         Ok(Err(err)) => (

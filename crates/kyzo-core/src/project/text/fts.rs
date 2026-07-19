@@ -114,7 +114,7 @@ use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use kyzo_model::parse::search::{FtsExpr, FtsLiteral, FtsNear};
 use crate::project::text::ast::TokenizeFtsExpr;
 use crate::project::text::tokenizer::TextAnalyzer;
-use crate::parse::fts::parse_fts_query;
+use crate::parse::parse_fts_query;
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;

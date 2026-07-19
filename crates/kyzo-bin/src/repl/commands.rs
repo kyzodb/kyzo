@@ -33,7 +33,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use kyzo::{DataValue, Db, FjallStorage, NamedRows};
+use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
 use miette::{IntoDiagnostic, Result, bail, miette};
 use serde_json::{Value, json};
 
@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 pub(super) fn dispatch(
     op: &str,
     payload: &str,
-    db: &Db<FjallStorage>,
+    db: &Engine<FjallStorage>,
     storage: &FjallStorage,
     params: &mut BTreeMap<String, DataValue>,
     save_next: &mut Option<String>,
@@ -129,7 +129,7 @@ fn save(payload: &str, save_next: &mut Option<String>) {
 
 fn run(
     payload: &str,
-    db: &Db<FjallStorage>,
+    db: &Engine<FjallStorage>,
     params: &BTreeMap<String, DataValue>,
 ) -> Result<NamedRows> {
     let path = payload.trim();
@@ -140,10 +140,10 @@ fn run(
     db.run_script(&content, params.clone())
 }
 
-fn import(payload: &str, db: &Db<FjallStorage>) -> Result<()> {
+fn import(payload: &str, db: &Engine<FjallStorage>) -> Result<()> {
     let url = payload.trim();
     let content = if url.starts_with("http://") || url.starts_with("https://") {
-        crate::client::get(url)?
+        crate::repl::fetch::get(url)?
     } else {
         let file_path = url.strip_prefix("file://").unwrap_or(url);
         fs::read_to_string(file_path).into_diagnostic()?
@@ -158,7 +158,7 @@ fn import(payload: &str, db: &Db<FjallStorage>) -> Result<()> {
             Ok((k.to_string(), NamedRows::from_json(v)?))
         })
         .collect::<Result<_>>()?;
-    crate::relations::import_relations(db, mapping)?;
+    crate::bulk::import_relations(db, mapping)?;
     println!("Imported data from {url}");
     Ok(())
 }

@@ -30,9 +30,8 @@ use env_logger::Env;
 use crate::repl::{ReplArgs, repl_main};
 use crate::server::{ServerArgs, server_main};
 
-mod client;
+mod bulk;
 mod engine;
-mod relations;
 mod repl;
 mod server;
 

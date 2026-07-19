@@ -38,9 +38,11 @@ pub mod expr;
 pub mod query;
 pub mod schema;
 pub mod search;
+pub mod sys;
 
 pub use search::{
     FtsBooster, FtsExpr, FtsLiteral, FtsNear, NonEmptyFtsExprs, NonEmptyFtsLiterals,
+    parse_fts_query,
 };
 
 #[derive(pest_derive::Parser)]
@@ -147,6 +149,40 @@ pub fn parse_expressions(
     expr::build_expr(parsed.into_inner().next().unwrap(), param_pool)
 }
 
+/// Engine-facing language door for `::…` system scripts: source text +
+/// param pool → pure-data [`sys::SysScript`] syntax, or a labeled refusal.
+///
+/// The pure-data half of the sys-op lift. The grammar walk, option
+/// validation, and constant folding land here (parse zone, no engine
+/// types); the engine-typed second half — admitting tokenizers to analyzer
+/// configs and sealing index configurations — lives in kyzo-core's
+/// `parse::sys`, which lifts this `SysScript` into its `SysOp`. See
+/// [`sys`]'s module doc for the seam.
+///
+/// Current validity for embedded `@` clauses defaults to the open (latest)
+/// coordinate, exactly as [`parse_script`] does; fixed-rule binding is
+/// exec-tier and never happens here.
+pub fn parse_sys(
+    src: &str,
+    param_pool: &BTreeMap<String, DataValue>,
+) -> Result<sys::SysScript> {
+    let cur_vld = MAX_VALIDITY_TS;
+    let parsed = KyzoScriptParser::parse(Rule::script, src)
+        .map_err(|err| {
+            let span = match err.location {
+                InputLocation::Pos(p) => SourceSpan(p, 0),
+                InputLocation::Span((start, end)) => SourceSpan(start, end - start),
+            };
+            ParseError { span }
+        })?
+        .next()
+        .unwrap();
+    match parsed.as_rule() {
+        Rule::sys_script => sys::parse_sys(parsed.into_inner(), param_pool, cur_vld),
+        _ => bail!(UnexpectedRule(parsed.extract_span())),
+    }
+}
+
 /// Parse a standalone column type string.
 pub fn parse_type(src: &str) -> Result<crate::schema::NullableColType> {
     let parsed = KyzoScriptParser::parse(Rule::col_type_with_term, src)
@@ -172,6 +208,130 @@ impl ExtractSpan for Pair<'_> {
         let start = span.start();
         let end = span.end();
         SourceSpan(start, end - start)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Typed access to the parse tree (restored for the sys-op lift).
+//
+// pest already proved the input matches the grammar; these accessors carry
+// that proof into Rust instead of re-asserting it with `unwrap`. Each one
+// produces a spanned error naming the grammar rule when the tree's shape
+// disagrees with what the consumer expects — which can only happen if
+// `grammar.pest` and the consuming code have drifted apart (an internal
+// bug, but a *diagnosable* one).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// The parse tree lacks a child the grammar promises. Reachable only through
+/// grammar/consumer drift; an error, never an abort.
+#[derive(Debug, Error, Diagnostic)]
+#[error("parse-tree shape violates the grammar: rule `{rule:?}` promised {expected}")]
+#[diagnostic(code(parser::grammar_shape))]
+#[diagnostic(help("This is a bug: grammar.pest and its consumer disagree. Please report it."))]
+pub(crate) struct GrammarShapeError {
+    /// What the consumer expected to find, in grammar terms.
+    expected: &'static str,
+    /// The grammar rule whose children were being consumed.
+    rule: Rule,
+    #[label]
+    span: SourceSpan,
+}
+
+/// The parse tree contains a rule the consumer has no arm for. The typed
+/// replacement for an `unreachable!` dispatch arm; reachable only through
+/// grammar/consumer drift.
+#[derive(Debug, Error, Diagnostic)]
+#[error("parse-tree shape violates the grammar: `{found:?}` cannot appear in {context}")]
+#[diagnostic(code(parser::grammar_shape))]
+#[diagnostic(help("This is a bug: grammar.pest and its consumer disagree. Please report it."))]
+pub(crate) struct UnexpectedRuleError {
+    found: Rule,
+    context: &'static str,
+    #[label]
+    span: SourceSpan,
+}
+
+/// A rule the grammar cannot put here appeared anyway: the typed
+/// replacement for an `unreachable!` dispatch arm. Use as
+/// `r => return Err(unexpected("a body atom", &pair))`.
+pub(crate) fn unexpected(context: &'static str, pair: &Pair<'_>) -> miette::Report {
+    UnexpectedRuleError {
+        found: pair.as_rule(),
+        context,
+        span: pair.extract_span(),
+    }
+    .into()
+}
+
+/// A pair's children, remembering the parent rule and span so a missing
+/// child is a spanned error naming the grammar rule. The typed replacement
+/// for `pair.into_inner()` + `next().unwrap()`.
+pub(crate) struct GrammarChildren<'a> {
+    rule: Rule,
+    span: SourceSpan,
+    inner: Pairs<'a>,
+}
+
+impl<'a> GrammarChildren<'a> {
+    /// The next child, which the grammar guarantees to exist here.
+    /// `expected` names it for the drift diagnostic.
+    pub(crate) fn expect(&mut self, expected: &'static str) -> Result<Pair<'a>> {
+        self.inner.next().ok_or_else(|| {
+            GrammarShapeError {
+                expected,
+                rule: self.rule,
+                span: self.span,
+            }
+            .into()
+        })
+    }
+
+    /// The next `N` children at once, each named for diagnostics:
+    /// `let [k, v] = pair.children().expect_n(["a key", "a value"])?;`
+    pub(crate) fn expect_n<const N: usize>(
+        &mut self,
+        expected: [&'static str; N],
+    ) -> Result<[Pair<'a>; N]> {
+        let mut out = Vec::with_capacity(N);
+        for what in expected {
+            out.push(self.expect(what)?);
+        }
+        match out.try_into() {
+            Ok(arr) => Ok(arr),
+            // In bounds: the loop above pushed exactly N elements.
+            Err(_) => bail!(GrammarShapeError {
+                expected: "an exact child count",
+                rule: self.rule,
+                span: self.span,
+            }),
+        }
+    }
+}
+
+/// Remaining children iterate as plain pairs (grammar-repeated tails such
+/// as `(compound_ident ~ ",")*`).
+impl<'a> Iterator for GrammarChildren<'a> {
+    type Item = Pair<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+/// Entry point of the typed-accessor layer: consume a pair's children with
+/// the parent's identity retained for diagnostics.
+pub(crate) trait IntoChildren<'a> {
+    fn children(self) -> GrammarChildren<'a>;
+}
+
+impl<'a> IntoChildren<'a> for Pair<'a> {
+    fn children(self) -> GrammarChildren<'a> {
+        let parent_rule = self.as_rule();
+        let span = self.extract_span();
+        GrammarChildren {
+            rule: parent_rule,
+            span,
+            inner: self.into_inner(),
+        }
     }
 }
 

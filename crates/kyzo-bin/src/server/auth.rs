@@ -28,21 +28,21 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use futures::future::BoxFuture;
-use kyzo::{DataValue, Db, FjallStorage};
+use kyzo::{DataValue, Engine, FjallStorage};
 use tower_http::auth::AsyncAuthorizeRequest;
 
 #[derive(Clone)]
 pub(super) struct MyAuth {
     skip_auth: bool,
     auth_guard: String,
-    token_table: Option<Arc<(String, Db<FjallStorage>)>>,
+    token_table: Option<Arc<(String, Engine<FjallStorage>)>>,
 }
 
 impl MyAuth {
     pub(super) fn new(
         skip_auth: bool,
         auth_guard: String,
-        token_table: Option<Arc<(String, Db<FjallStorage>)>>,
+        token_table: Option<Arc<(String, Engine<FjallStorage>)>>,
     ) -> Self {
         Self {
             skip_auth,
@@ -55,9 +55,9 @@ impl MyAuth {
     /// token-table relation? `false` on any error (a broken auth check
     /// refuses, it never fails open) — including an invalid relation name,
     /// which is an operator misconfiguration, not a request to satisfy.
-    fn token_table_authorizes(table: &(String, Db<FjallStorage>), token: &str) -> bool {
+    fn token_table_authorizes(table: &(String, Engine<FjallStorage>), token: &str) -> bool {
         let (name, db) = table;
-        if crate::relations::validate_identifier(name).is_err() {
+        if crate::bulk::validate_identifier(name).is_err() {
             eprintln!("token-table auth check failed: '{name}' is not a valid relation name");
             return false;
         }
@@ -65,7 +65,7 @@ impl MyAuth {
             &format!("?[token] := *{name}{{token: $token}}"),
             BTreeMap::from([("token".to_string(), DataValue::from(token))]),
         ) {
-            Ok(rows) => !rows.rows.is_empty(),
+            Ok(rows) => !rows.rows().is_empty(),
             Err(err) => {
                 eprintln!("token-table auth check failed: {err}");
                 false

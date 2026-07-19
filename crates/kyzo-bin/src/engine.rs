@@ -31,8 +31,8 @@
 use std::path::Path;
 
 use kyzo::{
-    Db, EntropyArm, FjallStorage, GenesisParams, GenesisSealedView, SizeClass, StagingTtl,
-    StableCommitCapArm, StorageOptions, WriteAuthority, genesis, new_fjall_storage_with,
+    Catalog, Engine, EntropyArm, FjallStorage, GenesisParams, GenesisSealedView, SizeClass,
+    StagingTtl, StableCommitCapArm, StorageOptions, WriteAuthority, genesis, new_fjall_storage_with,
 };
 use miette::{IntoDiagnostic, Result, miette};
 
@@ -103,16 +103,16 @@ impl Default for GenesisConfig {
 
 /// A running database plus everything needed to keep it alive and to reach
 /// its storage directly for whole-store dump/restore/verify — operations
-/// that take `&FjallStorage`, not `&Db<_>` (`Db`'s `storage` field is
+/// that take `&FjallStorage`, not `&Engine<_>` (`Engine`'s `store` field is
 /// crate-private by design: nothing outside kyzo-core reaches into a live
 /// session's transactions). `FjallStorage` is a cheap `Clone` (a handle to
 /// one shared store), so kyzo-bin keeps its own clone from before handing
-/// one to `Db::new` instead of asking kyzo-core to expose an accessor.
+/// one to `Engine::compose` instead of asking kyzo-core to expose an accessor.
 ///
 /// Genesis facts and the affine WriteAuthority (keystore) are held here as
 /// config-once injection results — engine-accountable, not host shadow state.
 pub struct DbHandle {
-    pub db: Db<FjallStorage>,
+    pub db: Engine<FjallStorage>,
     pub storage: FjallStorage,
     /// Genesis-sealed identity / open capability / CryptoDomain (WriteAuthority moved out).
     pub genesis: GenesisSealedView,
@@ -176,7 +176,7 @@ pub fn open_with_genesis(
     });
     let (genesis_view, write_authority) = sealed.take_write_authority();
 
-    let db = Db::new(storage.clone())?;
+    let db = Engine::compose(storage.clone(), Catalog::new())?;
     Ok(DbHandle {
         db,
         storage,

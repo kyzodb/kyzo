@@ -428,11 +428,9 @@ impl<S: Storage> Engine<S> {
         query: &str,
         params: BTreeMap<String, DataValue>,
     ) -> Result<StandingQuery<S>> {
-        let cur_vld = current_validity()?;
-        let fixed = self.fixed_rules();
-        let program = match parse_script(query, &params, &fixed, cur_vld)? {
-            Script::Single(prog) => *prog,
-            Script::Sys(_) | Script::Imperative(_) => {
+        let program = match parse_script(query, &params)? {
+            Script::Query(prog) => prog,
+            Script::Sys { .. } | Script::Imperative { .. } => {
                 return Err(StandingRegisterRefusal::NotSingleRead.into());
             }
         };

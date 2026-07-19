@@ -786,7 +786,11 @@ pub trait SimpleRuleBody: Send + Sync + 'static {
 }
 
 /// Channel-backed simple-rule body: one named owner (P083).
-struct ChannelRuleBody {
+///
+/// Public because [`SimpleFixedRule::rule_with_channel`] is a sealed host
+/// door that returns `impl FixedRule` backed by this type — the concrete
+/// name must be visible at the crate root for that opaque return.
+pub struct ChannelRuleBody {
     db2app: SyncSender<(
         Vec<NamedRows>,
         BTreeMap<String, DataValue>,

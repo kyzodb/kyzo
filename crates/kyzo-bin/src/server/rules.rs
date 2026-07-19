@@ -33,7 +33,7 @@ use log::{error, info};
 use miette::miette;
 use serde_json::{Value as JsonValue, json};
 
-use kyzo::{Db, FjallStorage, NamedRows, SimpleFixedRule};
+use kyzo::{Engine, FjallStorage, NamedRows, SimpleFixedRule};
 
 use super::DbState;
 
@@ -123,7 +123,7 @@ pub(super) async fn register_rule(
 
     struct Guard {
         name: String,
-        db: Db<FjallStorage>,
+        db: Engine<FjallStorage>,
     }
 
     impl Drop for Guard {

@@ -47,8 +47,21 @@
 
 use std::hash::{Hash, Hasher};
 use std::ops::Index;
+use std::sync::OnceLock;
 
+use miette::{Diagnostic, Result};
+use pest::Parser;
+use pest::error::InputLocation;
+use pest::pratt_parser::{Assoc, Op, PrattParser};
 use smartstring::{LazyCompact, SmartString};
+use thiserror::Error;
+
+use crate::program::span::SourceSpan;
+
+use super::expr::parse_string;
+use super::{
+    ExtractSpan, IntoChildren, KyzoScriptParser, Pair, ParseError, Rule, unexpected,
+};
 
 /// Score booster for one FTS literal (`^n`). Bit-identity Eq/Hash so NaN
 /// boosters are representable without a float-order crate at the model wall.
@@ -330,6 +343,308 @@ impl FtsExpr {
             FtsExpr::Near(n) => FtsExpr::Near(n),
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The FTS query parser (pure-data-in / AST-out door).
+//
+// Parallel to `parse_expressions` / `parse_type`: a *value* (the query
+// string handed to an FTS search) becomes an [`FtsExpr`] AST. Distinct from
+// KyzoScript proper — this grammar (`fts_doc`) applies to a search string at
+// runtime, not to script text — but the same totality law holds: no query
+// string may panic the parser, and no query shape may exhaust the stack.
+// Group / `NOT` depth is counted against [`FTS_NESTING_CEILING`] and the
+// total operator count against [`FTS_OPS_CEILING`]; together with the flat
+// `And`/`Or` construction in `build_infix`, that is what guarantees the
+// depth invariant documented on [`FtsExpr`].
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Ceiling on `AND`/`OR`/`NOT`/group *depth* in one FTS query — the FTS
+/// counterpart of the expression builder's nesting ceiling. A recursive
+/// parse deeper than this is a native stack overflow (an uncatchable
+/// process abort), so the language itself has a nesting ceiling. 64 is deep
+/// enough for any legitimate search and low enough that the recursive walk
+/// (and the derived recursive `Drop`) can never exhaust a default stack.
+pub(crate) const FTS_NESTING_CEILING: usize = 64;
+
+/// Ceiling on the total `AND`/`OR`/`NOT` operator *count* in one FTS query.
+///
+/// Depth is bounded separately ([`FTS_NESTING_CEILING`]); this bounds
+/// *breadth*. A bracket-free `w AND w AND …` chain nests nothing, yet each
+/// operator costs parse work, tree size, and downstream search work. 1024
+/// is comfortably above every real query — and since `build_infix` builds
+/// chains flat, the bound is a refusal of absurd inputs, not the only thing
+/// standing between us and an abort.
+pub(crate) const FTS_OPS_CEILING: usize = 1024;
+
+/// An FTS query nesting deeper than [`FTS_NESTING_CEILING`]. Law-5
+/// enforcement (refusal over resource death): raised by the depth counter
+/// threaded through `parse_fts_expr` before the offending level recurses.
+#[derive(Debug, Error, Diagnostic)]
+#[error("FTS query nests {depth} levels deep, over the ceiling of {ceiling}")]
+#[diagnostic(code(parser::fts_nesting_too_deep))]
+#[diagnostic(help(
+    "The nesting ceiling is a limit of the FTS query language, deep enough \
+     for any legitimate search and low enough that a recursive parse can \
+     never exhaust the stack. Flatten the query."
+))]
+pub(crate) struct FtsNestingTooDeep {
+    depth: usize,
+    ceiling: usize,
+    #[label("nesting passes the ceiling here")]
+    span: SourceSpan,
+}
+
+/// An FTS query with more operators than [`FTS_OPS_CEILING`] allows. The
+/// breadth counterpart of [`FtsNestingTooDeep`]; raised by the flat-chain
+/// operator count in `parse_fts_expr`, before any tree is built.
+#[derive(Debug, Error, Diagnostic)]
+#[error("FTS query has more than {ceiling} operators")]
+#[diagnostic(code(parser::fts_too_many_ops))]
+#[diagnostic(help(
+    "The operator ceiling is a limit of the FTS query language, deep enough \
+     for any legitimate search. Split the query, or drop the explicit \
+     operators: a plain sequence of terms is already a conjunction."
+))]
+pub(crate) struct FtsTooManyOps {
+    ceiling: usize,
+    #[label("this operator passes the ceiling")]
+    span: SourceSpan,
+}
+
+/// A numeric literal in an FTS query — a `NEAR` distance or a `^` booster —
+/// that does not fit its target type, spanned at the offending digits.
+#[derive(Debug, Error, Diagnostic)]
+#[error("Invalid number in FTS query: {0}")]
+#[diagnostic(code(parser::fts_bad_number))]
+#[diagnostic(help(
+    "An FTS `NEAR` distance or `^` booster must be a number that fits its \
+     target type."
+))]
+struct BadFtsNumber(String, #[label("not a valid number here")] SourceSpan);
+
+/// A malformed FTS literal reached the mint: empty text carrying a prefix or
+/// booster, or a searchable term without a positive finite booster.
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "invalid FTS literal: empty text must not carry a prefix or booster, and \
+     searchable terms require a positive finite booster"
+)]
+#[diagnostic(code(parser::fts_bad_literal))]
+struct BadFtsLiteral(#[label] SourceSpan);
+
+/// Parse an FTS search string into its [`FtsExpr`] AST. Pure-data-in /
+/// AST-out, mirroring [`super::parse_expressions`]; the sole non-test
+/// constructor of [`FtsExpr`], and the one that enforces the depth
+/// invariant every recursive walk over the AST relies on.
+pub fn parse_fts_query(q: &str) -> Result<FtsExpr> {
+    // A grammar mismatch is the user's error in the FTS query text: label it
+    // at pest's reported location (the same conversion the script door uses).
+    let parsed = KyzoScriptParser::parse(Rule::fts_doc, q)
+        .map_err(|err| {
+            let span = match err.location {
+                InputLocation::Pos(p) => SourceSpan(p, 0),
+                InputLocation::Span((start, end)) => SourceSpan(start, end - start),
+            };
+            ParseError { span }
+        })?
+        .next()
+        .unwrap();
+    // One operator budget for the whole query, threaded through every level.
+    let mut ops_left = FTS_OPS_CEILING;
+    let pairs = parsed
+        .into_inner()
+        .filter(|r| r.as_rule() != Rule::EOI)
+        .map(|p| parse_fts_expr(p, 0, &mut ops_left))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(if pairs.len() == 1 {
+        let mut pairs = pairs;
+        // In bounds: length checked to be exactly 1.
+        pairs.remove(0)
+    } else {
+        FtsExpr::and(pairs)
+    })
+}
+
+/// Parse one `fts_expr` sitting `depth` levels deep, spending operators from
+/// `ops_left`. The guards run on the *flat* child list before the recursive
+/// work: `NOT` counts against the nesting ceiling (each `Not` boxes its
+/// operands and adds a tree level); `AND`/`OR` count only against the
+/// operator budget (`build_infix` extends their vectors in place — breadth,
+/// not depth).
+fn parse_fts_expr(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<FtsExpr> {
+    if pair.as_rule() != Rule::fts_expr {
+        return Err(unexpected("an fts_expr", &pair));
+    }
+
+    let mut weight = depth + 1;
+    if weight > FTS_NESTING_CEILING {
+        return Err(FtsNestingTooDeep {
+            depth: weight,
+            ceiling: FTS_NESTING_CEILING,
+            span: pair.extract_span(),
+        }
+        .into());
+    }
+    for child in pair.clone().into_inner() {
+        match child.as_rule() {
+            Rule::fts_and | Rule::fts_or | Rule::fts_not => {
+                if *ops_left == 0 {
+                    return Err(FtsTooManyOps {
+                        ceiling: FTS_OPS_CEILING,
+                        span: child.extract_span(),
+                    }
+                    .into());
+                }
+                *ops_left -= 1;
+                if child.as_rule() == Rule::fts_not {
+                    weight += 1;
+                    if weight > FTS_NESTING_CEILING {
+                        return Err(FtsNestingTooDeep {
+                            depth: weight,
+                            ceiling: FTS_NESTING_CEILING,
+                            span: child.extract_span(),
+                        }
+                        .into());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fts_pratt()
+        .map_primary(|p| build_term(p, weight, ops_left))
+        .map_infix(build_infix)
+        .parse(pair.into_inner())
+}
+
+fn build_infix(lhs: Result<FtsExpr>, op: Pair<'_>, rhs: Result<FtsExpr>) -> Result<FtsExpr> {
+    let lhs = lhs?;
+    let rhs = rhs?;
+    // `And`/`Or` extend an existing vector instead of nesting a fresh
+    // two-element node around it: the Pratt build is left-associative, so a
+    // flat `w AND w AND …` chain arrives with `lhs` already the accumulated
+    // `And`, and pushing keeps the tree one level deep. Semantically
+    // identical to `flatten`'s collapse; this just never builds the deep form.
+    Ok(match op.as_rule() {
+        Rule::fts_and => match lhs {
+            FtsExpr::And(mut es) => {
+                es.push(rhs);
+                FtsExpr::And(es)
+            }
+            lhs @ (FtsExpr::Literal(_) | FtsExpr::Near(_) | FtsExpr::Or(_) | FtsExpr::Not(..)) => {
+                FtsExpr::and(vec![lhs, rhs])
+            }
+        },
+        Rule::fts_or => match lhs {
+            FtsExpr::Or(mut es) => {
+                es.push(rhs);
+                FtsExpr::Or(es)
+            }
+            lhs @ (FtsExpr::Literal(_) | FtsExpr::Near(_) | FtsExpr::And(_) | FtsExpr::Not(..)) => {
+                FtsExpr::or(vec![lhs, rhs])
+            }
+        },
+        Rule::fts_not => FtsExpr::Not(Box::new(lhs), Box::new(rhs)),
+        _ => return Err(unexpected("an FTS operator", &op)),
+    })
+}
+
+fn build_term(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<FtsExpr> {
+    Ok(match pair.as_rule() {
+        Rule::fts_grouped => {
+            let collected = pair
+                .into_inner()
+                .map(|p| parse_fts_expr(p, depth, &mut *ops_left))
+                .collect::<Result<Vec<_>>>()?;
+            if collected.len() == 1 {
+                let mut collected = collected;
+                // In bounds: length checked to be exactly 1.
+                collected.remove(0)
+            } else {
+                FtsExpr::and(collected)
+            }
+        }
+        Rule::fts_near => {
+            let mut literals = vec![];
+            let mut distance = 10;
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::pos_int => {
+                        let span = pair.extract_span();
+                        let i = pair
+                            .as_str()
+                            .replace('_', "")
+                            .parse::<i64>()
+                            .map_err(|_| BadFtsNumber(pair.as_str().to_string(), span))?;
+                        distance = u32::try_from(i)
+                            .map_err(|_| BadFtsNumber(pair.as_str().to_string(), span))?;
+                    }
+                    _ => literals.push(build_phrase(pair)?),
+                }
+            }
+            FtsExpr::near(literals, distance)
+        }
+        Rule::fts_phrase => FtsExpr::Literal(build_phrase(pair)?),
+        _ => return Err(unexpected("an FTS term", &pair)),
+    })
+}
+
+fn build_phrase(pair: Pair<'_>) -> Result<FtsLiteral> {
+    let span = pair.extract_span();
+    let mut inner = pair.children();
+    let kernel = inner.expect("the phrase kernel")?;
+    let core_text = match kernel.as_rule() {
+        Rule::fts_phrase_group => SmartString::from(kernel.as_str().trim()),
+        Rule::quoted_string | Rule::s_quoted_string | Rule::raw_string => parse_string(kernel)?,
+        _ => return Err(unexpected("a phrase kernel", &kernel)),
+    };
+    let mut is_prefix = false;
+    let mut booster = 1.0;
+    for pair in inner {
+        match pair.as_rule() {
+            Rule::fts_prefix_marker => is_prefix = true,
+            Rule::fts_booster => {
+                let boosted = pair.children().expect("the booster value")?;
+                match boosted.as_rule() {
+                    Rule::dot_float => {
+                        let span = boosted.extract_span();
+                        booster = boosted
+                            .as_str()
+                            .replace('_', "")
+                            .parse::<f64>()
+                            .map_err(|_| BadFtsNumber(boosted.as_str().to_string(), span))?;
+                    }
+                    // An integer booster (`word^22`) is valid syntax.
+                    Rule::pos_int => {
+                        let span = boosted.extract_span();
+                        let i = boosted
+                            .as_str()
+                            .replace('_', "")
+                            .parse::<i64>()
+                            .map_err(|_| BadFtsNumber(boosted.as_str().to_string(), span))?;
+                        booster = i as f64;
+                    }
+                    _ => return Err(unexpected("a booster value", &boosted)),
+                }
+            }
+            _ => return Err(unexpected("a phrase modifier", &pair)),
+        }
+    }
+    FtsLiteral::new(core_text, is_prefix, booster).ok_or_else(|| BadFtsLiteral(span).into())
+}
+
+/// The FTS boolean precedence: `NOT` binds tightest, then `AND`, then `OR`,
+/// all left-associative — the same ladder the CozoDB original used.
+fn fts_pratt() -> &'static PrattParser<Rule> {
+    static PARSER: OnceLock<PrattParser<Rule>> = OnceLock::new();
+    PARSER.get_or_init(|| {
+        PrattParser::new()
+            .op(Op::infix(Rule::fts_not, Assoc::Left))
+            .op(Op::infix(Rule::fts_and, Assoc::Left))
+            .op(Op::infix(Rule::fts_or, Assoc::Left))
+    })
 }
 
 #[cfg(test)]

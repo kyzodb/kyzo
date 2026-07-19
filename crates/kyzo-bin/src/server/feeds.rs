@@ -19,17 +19,21 @@
 //! relation, bridged from `kyzo::Db::register_callback`'s
 //! `std::sync::mpsc::Receiver`.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::time::Duration;
 
-use axum::extract::{Path, State};
-use axum::response::Sse;
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive};
+use axum::response::{IntoResponse, Response, Sse};
 use futures::stream::Stream;
 use log::{error, info};
-use serde_json::json;
+use serde_json::{Value as JsonValue, json};
 use tokio::task::spawn_blocking;
 
-use kyzo::{Db, FjallStorage, NamedRows};
+use kyzo::{DataValue, Engine, FjallStorage, NamedRows, SignedFact, StandingQuery, Storage, Tuple};
 
 use super::DbState;
 
@@ -41,7 +45,7 @@ pub(super) async fn observe_changes(
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     struct Guard {
         id: u32,
-        db: Db<FjallStorage>,
+        db: Engine<FjallStorage>,
         relation: String,
     }
 
@@ -79,47 +83,17 @@ pub(super) async fn observe_changes(
     };
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
-/*
- * Copyright 2026, The KyzoDB Authors.
- *
- * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
- * If a copy of the MPL was not distributed with this file,
- * You can obtain one at https://mozilla.org/MPL/2.0/.
- */
 
-//! `GET /standing?query=...&params=...`: an SSE stream of a standing
-//! query's OWN answer — the initial snapshot, then each subsequent
-//! signed delta as commits land — bridged from
-//! `kyzo::Db::register_standing`'s `StandingQuery`. The per-query analog
-//! of `changes.rs`'s `GET /changes/{relation}` one tier up: that streams
-//! one relation's raw put/retract events, this streams a QUERY's own
-//! maintained answer (including a full aggregation, e.g.
-//! `?[region, min(amt)] := *sales[region, amt]`), recomputed correctly
-//! across retraction the same way `kyzo::StandingQuery` proves itself
-//! against the real engine in `query::standing`'s own tests.
-//!
-//! `apply_pending` is pull-based (see `query::standing`'s module doc for
-//! why), so this handler polls it on a short fixed interval rather than
-//! blocking on a multi-channel wait — the same tradeoff that module's
-//! doc already accepts for the library API, carried through here rather
-//! than inventing a second drive model at the HTTP tier.
-
-use std::collections::BTreeMap;
-use std::convert::Infallible;
-use std::time::Duration;
-
-use axum::Json;
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive};
-use axum::response::{IntoResponse, Response, Sse};
-use log::{error, info};
-use serde_json::{Value as JsonValue, json};
-use tokio::task::spawn_blocking;
-
-use kyzo::{DataValue, SignedFact, StandingQuery, Storage, Tuple};
-
-use super::DbState;
+// `GET /standing?query=...&params=...`: an SSE stream of a standing
+// query's OWN answer — the initial snapshot, then each subsequent
+// signed delta as commits land — bridged from
+// `kyzo::Db::register_standing`'s `StandingQuery`. The per-query analog
+// of `GET /changes/{relation}` one tier up: that streams one relation's
+// raw put/retract events, this streams a QUERY's own maintained answer.
+//
+// `apply_pending` is pull-based (see `query::standing`'s module doc), so
+// this handler polls on a short fixed interval rather than inventing a
+// second drive model at the HTTP tier.
 
 #[derive(serde_derive::Deserialize)]
 pub(super) struct StandingQueryParams {

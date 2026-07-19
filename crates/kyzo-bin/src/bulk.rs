@@ -37,7 +37,7 @@
 
 use std::collections::BTreeMap;
 
-use kyzo::{DataValue, Db, FjallStorage, NamedRows};
+use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
 use miette::{Result, bail, miette};
 
 /// Is `name` safe to splice into composed KyzoScript as a bare identifier
@@ -62,10 +62,10 @@ pub(crate) fn validate_identifier(name: &str) -> Result<()> {
 /// Column names of `relation`, key columns first (the same order
 /// `::columns` reports and the same order a bare `*relation{cols}` pattern
 /// binds them in).
-fn columns_of(db: &Db<FjallStorage>, relation: &str) -> Result<Vec<String>> {
+fn columns_of(db: &Engine<FjallStorage>, relation: &str) -> Result<Vec<String>> {
     validate_identifier(relation)?;
     let out = db.run_script(&format!("::columns {relation}"), BTreeMap::new())?;
-    out.rows
+    out.into_rows()
         .into_iter()
         .map(|row| {
             row.into_iter()
@@ -81,7 +81,7 @@ fn columns_of(db: &Db<FjallStorage>, relation: &str) -> Result<Vec<String>> {
 
 /// Export the named relations as `{relation_name: NamedRows}`.
 pub fn export_relations<I, T>(
-    db: &Db<FjallStorage>,
+    db: &Engine<FjallStorage>,
     relations: I,
 ) -> Result<BTreeMap<String, NamedRows>>
 where
@@ -104,26 +104,26 @@ where
 /// `-` deletes the given rows from that relation instead of writing them
 /// (`:rm` instead of `:put` — the same convention the CozoDB original's
 /// direct-storage `import_relations` used).
-pub fn import_relations(db: &Db<FjallStorage>, data: BTreeMap<String, NamedRows>) -> Result<()> {
+pub fn import_relations(db: &Engine<FjallStorage>, data: BTreeMap<String, NamedRows>) -> Result<()> {
     for (relation_op, rows) in data {
         let (op, relation) = match relation_op.strip_prefix('-') {
             Some(rel) => (":rm", rel),
             None => (":put", relation_op.as_str()),
         };
         validate_identifier(relation)?;
-        if rows.headers.is_empty() {
+        if rows.headers().is_empty() {
             continue;
         }
         // Column names come from the caller's JSON, the same as the
         // relation name, and are spliced into the same query — the same
         // grammar-shaped validation applies.
-        for col in &rows.headers {
+        for col in rows.headers() {
             validate_identifier(col)?;
         }
-        let cols_str = rows.headers.join(", ");
+        let cols_str = rows.headers().join(", ");
         let query = format!("?[{cols_str}] <- $data {op} {relation} {{{cols_str}}}");
         let data_value = DataValue::List(
-            rows.rows
+            rows.into_rows()
                 .into_iter()
                 .map(|row| DataValue::List(row.into_vec()))
                 .collect(),

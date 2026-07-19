@@ -46,12 +46,13 @@
 
 mod commands;
 mod editor;
-mod output;
+mod fetch;
+mod render;
 
 use std::collections::BTreeMap;
 
 use clap::Args;
-use kyzo::{DataValue, Db, FjallStorage};
+use kyzo::{DataValue, Engine, FjallStorage};
 use miette::{IntoDiagnostic, Result};
 use rustyline::history::DefaultHistory;
 
@@ -138,7 +139,7 @@ pub(crate) fn repl_main(args: ReplArgs) -> Result<()> {
 /// back are rendered through `output::render`.
 fn process_line(
     line: &str,
-    db: &Db<FjallStorage>,
+    db: &Engine<FjallStorage>,
     storage: &FjallStorage,
     params: &mut BTreeMap<String, DataValue>,
     save_next: &mut Option<String>,
@@ -154,11 +155,11 @@ fn process_line(
             .split_once(|c: char| c.is_whitespace())
             .unwrap_or((remaining, ""));
         if let Some(rows) = commands::dispatch(op, payload, db, storage, params, save_next)? {
-            output::render(rows, save_next)?;
+            render::render(rows, save_next)?;
         }
     } else {
         let out = db.run_script(line, params.clone())?;
-        output::render(out, save_next)?;
+        render::render(out, save_next)?;
     }
     Ok(())
 }

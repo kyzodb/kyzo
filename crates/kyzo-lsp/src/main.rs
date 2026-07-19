@@ -51,7 +51,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
 
-use kyzo::{Db, FjallStorage, new_fjall_storage};
+use kyzo::{Catalog, Engine, FjallStorage, new_fjall_storage};
 use kyzo_model::DataValue;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, Diagnostic, Hover, HoverContents,
@@ -232,21 +232,21 @@ const KEYWORDS: &[&str] = &[
 /// consulted — no guessing from `rootUri`, since pointing an LSP session at
 /// the wrong on-disk store (or silently creating one nobody asked for) is
 /// a worse failure mode than "no catalog features this session."
-fn open_catalog_db(initialize_params: &Value) -> Option<Db<FjallStorage>> {
+fn open_catalog_db(initialize_params: &Value) -> Option<Engine<FjallStorage>> {
     let db_path = initialize_params
         .get("initializationOptions")?
         .get("dbPath")?
         .as_str()?;
     let storage = new_fjall_storage(db_path).ok()?;
-    Db::new(storage).ok()
+    Engine::compose(storage, Catalog::new()).ok()
 }
 
 /// `::relations`' rows as `(name, arity)` pairs.
-fn list_relations(db: &Db<FjallStorage>) -> Vec<(String, i64)> {
+fn list_relations(db: &Engine<FjallStorage>) -> Vec<(String, i64)> {
     let Ok(rows) = db.run_script("::relations", Default::default()) else {
         return Vec::new();
     };
-    rows.rows
+    rows.rows()
         .iter()
         .filter_map(|row| Some((row.first()?.get_str()?.to_string(), row.get(1)?.get_int()?)))
         .collect()
@@ -255,7 +255,7 @@ fn list_relations(db: &Db<FjallStorage>) -> Vec<(String, i64)> {
 /// `::columns <name>`'s rows as `(column name, is_key)` pairs, or `None` if
 /// `name` isn't a relation the store knows (a hover-worthy fact on its
 /// own, but the caller decides what to do with "no such relation").
-fn columns_for_relation(db: &Db<FjallStorage>, name: &str) -> Option<Vec<(String, bool)>> {
+fn columns_for_relation(db: &Engine<FjallStorage>, name: &str) -> Option<Vec<(String, bool)>> {
     // `name` is the word the editor's cursor is touching, so it's already
     // identifier-shaped (`word_at`'s whole contract) -- never
     // interpolated from arbitrary text, but a relation name can still
@@ -264,14 +264,14 @@ fn columns_for_relation(db: &Db<FjallStorage>, name: &str) -> Option<Vec<(String
     let script = format!("::columns {name}");
     let rows = db.run_script(&script, Default::default()).ok()?;
     Some(
-        rows.rows
+        rows.rows()
             .iter()
             .filter_map(|row| Some((row.first()?.get_str()?.to_string(), row.get(1)?.get_bool()?)))
             .collect(),
     )
 }
 
-fn completion_items(db: Option<&Db<FjallStorage>>) -> Vec<CompletionItem> {
+fn completion_items(db: Option<&Engine<FjallStorage>>) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     for (name, doc) in AGGREGATIONS {
         items.push(CompletionItem {
@@ -306,7 +306,7 @@ fn completion_items(db: Option<&Db<FjallStorage>>) -> Vec<CompletionItem> {
 /// store's columns if it names a relation, an aggregation's one-line
 /// description if it names one of those, or `None` (no hover) otherwise —
 /// including "no catalog is connected", rather than guessing.
-fn hover_at(db: Option<&Db<FjallStorage>>, text: &str, position: Position) -> Option<Hover> {
+fn hover_at(db: Option<&Engine<FjallStorage>>, text: &str, position: Position) -> Option<Hover> {
     let index = LineIndex::new(text);
     let byte_offset = index.offset(text, position);
     let (word, start, end) = word_at(text, byte_offset)?;
@@ -526,7 +526,7 @@ fn main() -> io::Result<()> {
     // The connected store, if `initialize` named one -- `None` throughout
     // the session otherwise, which every catalog-backed handler already
     // treats as "degrade, don't fail".
-    let mut db: Option<Db<FjallStorage>> = None;
+    let mut db: Option<Engine<FjallStorage>> = None;
 
     loop {
         let Some(msg) = read_message(&mut reader)? else {

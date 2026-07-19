@@ -348,7 +348,7 @@ impl ConstraintRef {
         cur_vld: ValidityTs,
     ) -> Result<ConstraintRef> {
         let program =
-            parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?.get_single_program()?;
+            parse_script(source, &BTreeMap::new())?.get_single_program()?;
         Ok(ConstraintRef {
             name: name.into(),
             program,
@@ -479,7 +479,7 @@ impl Trigger {
         cur_vld: ValidityTs,
     ) -> Result<Trigger> {
         let program =
-            parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?.get_single_program()?;
+            parse_script(source, &BTreeMap::new())?.get_single_program()?;
         Ok(Trigger { program })
     }
 

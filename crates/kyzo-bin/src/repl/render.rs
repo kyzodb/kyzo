@@ -34,14 +34,14 @@ pub(super) fn render(out: NamedRows, save_next: &mut Option<String>) -> Result<(
 fn save_to_file(out: &NamedRows, path: &str) -> Result<()> {
     println!(
         "Query has returned {} rows, saving to file {path}",
-        out.rows.len()
+        out.rows().len()
     );
     let records: Vec<Value> = out
-        .rows
+        .rows()
         .iter()
         .map(|row| -> Value {
             row.iter()
-                .zip(out.headers.iter())
+                .zip(out.headers().iter())
                 .map(|(v, k)| (k.to_string(), Value::from(v)))
                 .collect()
         })
@@ -55,12 +55,12 @@ fn print_table(out: &NamedRows) {
     use prettytable::format;
     let mut table = prettytable::Table::new();
     let headers = out
-        .headers
+        .headers()
         .iter()
         .map(prettytable::Cell::from)
         .collect::<Vec<_>>();
     table.set_titles(prettytable::Row::new(headers));
-    for row in &out.rows {
+    for row in out.rows() {
         let cells = row.iter().map(|c| format!("{c}")).collect::<Vec<_>>();
         let cells = cells.iter().map(prettytable::Cell::from).collect();
         table.add_row(prettytable::Row::new(cells));

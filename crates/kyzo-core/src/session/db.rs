@@ -395,11 +395,17 @@ impl<S: Storage> Engine<S> {
         options: ScriptOptions,
     ) -> Result<NamedRows> {
         let cur_vld = current_validity()?;
-        let fixed = self.fixed_rules();
-        match parse_script(payload, &params, &fixed, cur_vld)? {
-            Script::Single(prog) => self.execute_single(*prog, cur_vld, &options),
-            Script::Sys(op) => self.run_sys_op(op, cur_vld, &options),
-            Script::Imperative(_) => bail!(EngineRefuse::ImperativeNotWired),
+        match parse_script(payload, &params)? {
+            Script::Query(prog) => self.execute_single(prog, cur_vld, &options),
+            // The parsed `::…` script validated as syntax; the engine-typed
+            // lift (`crate::parse::sys`) admits it into a `SysOp` — sealing
+            // index configs and admitting tokenizers — before dispatch. The
+            // whole payload is the sys script, so it re-parses cleanly.
+            Script::Sys { .. } => {
+                let op = crate::parse::sys::lift(crate::parse::parse_sys(payload, &params)?)?;
+                self.run_sys_op(op, cur_vld, &options)
+            }
+            Script::Imperative { .. } => bail!(EngineRefuse::ImperativeNotWired),
         }
     }
 

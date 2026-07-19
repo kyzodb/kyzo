@@ -120,7 +120,7 @@ use tower_http::auth::AsyncRequireAuthorizationLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 
-use kyzo::{Db, FjallStorage, NamedRows};
+use kyzo::{Engine, FjallStorage, NamedRows};
 
 use crate::engine::{self, StorageArgs};
 use auth::MyAuth;
@@ -171,7 +171,7 @@ pub(crate) struct ServerArgs {
 /// for the whole-store dump/restore ops that need the backend directly.
 #[derive(Clone)]
 struct DbState {
-    db: Db<FjallStorage>,
+    db: Engine<FjallStorage>,
     storage: FjallStorage,
     rule_senders: Arc<Mutex<BTreeMap<u32, SyncSender<miette::Result<NamedRows>>>>>,
     rule_counter: Arc<AtomicU32>,
