@@ -754,11 +754,10 @@ impl<S: Storage> Engine<S> {
             // Jobs / verify (already delegated).
             SysOp::ListRunning => crate::session::jobs::list_running(),
             SysOp::KillRunning(_) => crate::session::jobs::kill_running(),
-            // The oracle-differential query-answer `::verify` was removed
-            // from kyzo-core (the storage-era crate wall forbids a
-            // kyzo-core → kyzo-oracle edge in production or test code —
-            // see `session/verify.rs`'s module doc); typed "parses, not
-            // landed" refuse, the same posture `::explain` already uses.
+            // Query-answer `::verify` is a disclosed [OPEN] to provenance-
+            // backed rebuild (#257/#258). Until premise attribution lands,
+            // typed IndexOpNotLanded — same honesty as `::explain`. Oracle-
+            // differential coverage lives in kyzo-trials (not here).
             SysOp::Verify(_) => bail!(EngineRefuse::IndexOpNotLanded("::verify")),
             SysOp::Explain(_) => bail!(EngineRefuse::IndexOpNotLanded("::explain")),
         }

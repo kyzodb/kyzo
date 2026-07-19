@@ -13,32 +13,22 @@
 //! is always a cold rescan — a caller-supplied root is never an input to
 //! this door.
 //!
-//! ## The query-answer `::verify` capability is retired from this crate
+//! ## Query-answer `::verify` — disclosed [OPEN]
 //!
-//! This module used to also carry `::verify { <query> }`: a self-adversary
-//! that ran one query through the production evaluator AND a sealed naive
-//! reference oracle (`kyzo_oracle::eval`) against one shared snapshot and
-//! reported MATCH / MISMATCH. That design put a `kyzo-core` → `kyzo-oracle`
-//! edge in production code, which the storage-era crate wall forbids
-//! outright (see `.claude/rules/zone-oracle.md`, `zone-session.md`, and the
-//! Storage Decisions ruling on the oracle boundary): the oracle is a
-//! reference-semantics judge kyzo-core may never depend on, in production
-//! or in tests — differential comparison against it is Trials-zone work
-//! (`.claude/rules/zone-trials.md`: "Differential trials judge against the
-//! oracle, never against the engine's own second opinion").
+//! The query-answer capability (`::verify { <query> }`) that once ran the
+//! production evaluator against `kyzo_oracle::eval` was **removed** from this
+//! crate (storage-era crate wall: kyzo-core must never depend on kyzo-oracle).
+//! The oracle-differential corpus is re-homed into `kyzo-trials` (zone-trials),
+//! preserved pending the provenance rebuild.
 //!
-//! The oracle-differential logic and its ~20-test corpus were REMOVED here,
-//! not weakened or stubbed — recoverable from this file's git history for
-//! whoever relocates it into `kyzo-trials` as a proper differential trial.
-//! A production replacement backed by [`crate::exec::provenance`]'s
-//! derivation-graph checker (`provenance_graph` / `verify_proof`) is the
-//! named follow-on: it requires `CompiledRuleBody::premise_sources` to
-//! actually attribute premises (today it always returns the trait's default
-//! `None`, so `provenance_graph` would refuse every plain rule body
-//! immediately) — real, load-bearing RA-layer work, not a glue fix, so it
-//! is not attempted in this pass. `::verify` typed-refuses via
-//! `EngineRefuse::IndexOpNotLanded`, the same "parses, not yet landed"
-//! posture `::explain` already uses (`session/db.rs::run_sys_op`).
+//! Until then, `SysOp::Verify` returns [`EngineRefuse::IndexOpNotLanded`] —
+//! the same **disclosed** "parses, not landed" door as `::explain`
+//! (`session/db.rs::run_sys_op`). That is not a silent stub: it is an honest
+//! [OPEN] to the witness/checker work (`#257` Witness Law / `#258` The
+//! Checker): provenance-backed `::verify` via
+//! [`crate::exec::provenance`] (`provenance_graph` / `verify_proof`) once
+//! `CompiledRuleBody::premise_sources` attributes premises (today the trait
+//! default is always `None`). Do not fake that door here.
 
 use miette::Result;
 
