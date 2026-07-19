@@ -1336,8 +1336,8 @@ pub mod storage_campaign_lanes {
     /// §62/§2 — IncarnationId at-rest; gates nonce/authority signature freeze.
     #[test]
     #[ignore = "red until seats green: two-clone at-rest DST"]
-    fn two_clone_at_rest_dst() {
-        unimplemented!("two-clone at-rest DST: equal OpenOrdinals, differing Entropy, zero (key,nonce) collisions; dual-chain poison at chain-meet");
+    fn two_clone_at_rest() {
+        unimplemented!("two-clone at-rest DST: equal OpenOrdinals, differing Entropy, zero (key,nonce) collisions under the approved entropy arm");
     }
 
     /// §27/§62 — live-fork; gates SIV arm and signature freeze.
@@ -1370,16 +1370,23 @@ pub mod storage_campaign_lanes {
 
     /// §2 — RecoveryGrant physics.
     #[test]
-    #[ignore = "red until seats green: partitioned-old-writer-through-recovery DST"]
-    fn partitioned_old_writer_through_recovery_dst() {
-        unimplemented!("partitioned-old-writer-through-recovery DST: Unexposed until chain-meet, then dual-chain poison");
+    #[ignore = "red until seats green: partitioned-writer-through-recovery DST"]
+    fn partitioned_writer_through_recovery() {
+        unimplemented!("partitioned-writer-through-recovery DST: Unexposed until chain-meet, then dual-chain poison");
     }
 
-    /// §68 — grants are seeds.
+    /// §68 — grants are seeds (ForkGrant).
     #[test]
     #[ignore = "red until seats green: ForkGrant double-discovery DST"]
-    fn fork_grant_double_discovery_dst() {
-        unimplemented!("ForkGrant double-discovery DST: identical successor or GrantAlreadyMaterialized; RecoveryGrant equivocation poison");
+    fn fork_grant_double_discovery() {
+        unimplemented!("ForkGrant double-discovery DST: identical successor identity or GrantAlreadyMaterialized carrying the existing identity");
+    }
+
+    /// §68 — grants are seeds (RecoveryGrant equivocation).
+    #[test]
+    #[ignore = "red until seats green: RecoveryGrant equivocation DST"]
+    fn recovery_grant_equivocation() {
+        unimplemented!("RecoveryGrant equivocation DST: second RecoveryGrant for one predecessor epoch → equivocation poison");
     }
 
     /// §22/§23 — staging + idle law.
