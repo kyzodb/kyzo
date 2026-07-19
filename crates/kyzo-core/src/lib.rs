@@ -292,61 +292,9 @@ pub(crate) mod react {
 // notifications, and `constraint` enforcement at commit (P112). No
 // module-level `allow(dead_code)` (P112).
 pub(crate) mod session;
-/// Ordered substrate: contract, transactions, fjall adapter, backup, walks.
-/// Module tree is inline so seats load from `store/*.rs` without a
-/// `store/mod.rs` (that path is not required by the cut destiny).
-pub(crate) mod store {
-    pub(crate) mod contract;
-    pub(crate) mod tx;
-    pub(crate) mod fjall;
-    pub(crate) mod backup;
-    pub(crate) mod verify_walk;
-    pub(crate) mod skip_walk;
-    #[allow(dead_code)]
-    pub(crate) mod merkle;
-    pub(crate) mod retry;
-    #[allow(dead_code)]
-    pub(crate) mod scratch;
-    pub(crate) mod keys;
-    pub(crate) mod time;
-    /// Identity + open capability + genesis (07 seat).
-    pub(crate) mod open;
-    /// WriteAuthority + incarnation + RecoveryMatrix + address fence (07 seat).
-    pub(crate) mod authority;
-    /// FenceEpoch + CryptoDomain + EpochGrant advance (07 seat).
-    pub(crate) mod epoch;
-    /// ForkGrant / RecoveryGrant + pure materialize (07 seat).
-    pub(crate) mod grants;
-    // Sim instrument lives at kyzo-crashfs (seat); path-included here so the
-    // sealed Storage trait can admit it as the contract's own test double.
-    #[cfg(any(test, feature = "bench-internals"))]
-    #[cfg_attr(all(feature = "bench-internals", not(test)), allow(dead_code))]
-    #[path = "../../kyzo-crashfs/src/sim.rs"]
-    pub(crate) mod sim;
-
-    pub use contract::{FormatVersion, Storage};
-    pub(crate) use contract::{SystemClock, SystemClockRefuse};
-    pub use tx::{
-        Aborted, BackendIoError, CommitCorruption, CommitFailure, CommitIo, Committed,
-        ConflictError, ReadTx, Slice, WriteTx,
-    };
-    pub use open::{
-        EntropyArm, GenesisParams, GenesisSealed, GenesisSealedView, SizeClass, StagingTtl,
-        StableCommitCapArm, StoreId, StoreOpen, StoreOpenVerb, genesis, open_with_capability,
-    };
-    pub use authority::{
-        AddressFence, AddressFenceRefuse, AddressFenceTable, Entropy, IncarnationId,
-        IncarnationMintCap, OpenOrdinal, RecoveryMatrix, RecoveryPublicKey, WriteAuthority,
-    };
-    pub use epoch::{
-        CryptoDomain, EpochAdvanceCommitted, EpochGrant, FenceEpoch, IntentClear, advance,
-        advance_recovery,
-    };
-    pub use grants::{
-        AncestorReadGrant, ForkGrant, Grant, GrantId, MaterializedGrant, PriorMaterialization,
-        RecoveryGrant, materialize,
-    };
-}
+/// Ordered substrate: contract, transactions, fjall adapter, backup, walks,
+/// and the 07 storage-Spec seats. Module tree lives in `store/mod.rs`.
+pub(crate) mod store;
 pub(crate) mod typestate;
 
 // Trial (issue #34): single-node SSI serializability checker. Test-only,

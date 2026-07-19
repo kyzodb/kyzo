@@ -15,6 +15,11 @@
 //! module owns the RESOLUTION algebra over it — the skip-scan decision
 //! kernel ([`check_key_for_bitemporal`]) and the value-side polarity
 //! ([`ClaimPolarity`]).
+//!
+//! Also owns transaction-time mint at the durable commit door
+//! (decisions.md §30/§31): order within one Store is dense
+//! [`CommitOrdinal`](super::sweep::CommitOrdinal); client-supplied and
+//! foreign timestamps that would reorder local commits are refused.
 
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
@@ -24,6 +29,9 @@ use kyzo_model::value::{
     append_canonical, decode_tuple_from_key, decode_values_all,
 };
 use kyzo_model::data_value_any;
+
+use super::open::StoreId;
+use super::sweep::{CommitOrdinal, Committed};
 
 /// Named refusals on the bitemporal decode / polarity path — never a bare
 /// `bail!(String)`.
@@ -71,6 +79,69 @@ pub enum BitemporalDecodeError {
     )]
     #[diagnostic(code(bitemporal::stamp_sys_retract))]
     StampSysRetract,
+}
+
+/// Named refusals for transaction-time at the durable commit door
+/// (decisions.md §30/§31).
+#[derive(Debug, Error, Diagnostic, Clone, Copy, PartialEq, Eq)]
+pub enum TxnTimeRefuse {
+    /// Client-supplied transaction time is Unconstructible — Store assigns
+    /// time at the durable event only.
+    #[error("ClientTxnTimeForbidden: transaction time is assigned at the Store commit door, never by the client")]
+    #[diagnostic(code(store::time::client_txn_time_forbidden))]
+    ClientTxnTimeForbidden,
+    /// A peer/client timestamp that would reorder another Store's commits.
+    #[error("ForeignTxnTime: foreign timestamps cannot order this Store's commits")]
+    #[diagnostic(code(store::time::foreign_txn_time))]
+    ForeignTxnTime,
+}
+
+/// Transaction time bound to a dense [`CommitOrdinal`] at the durable event.
+///
+/// Physical observation is optional for humans — order authority is the
+/// ordinal, never a shared wall clock. Minted only from a SweepDoor
+/// [`Committed`] proof (or an equivalent commit-door seal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TxnTime {
+    store_id: StoreId,
+    commit_ordinal: CommitOrdinal,
+}
+
+impl TxnTime {
+    /// Mint transaction time from a SweepDoor [`Committed`] proof.
+    ///
+    /// This is the sole public mint — client-supplied and Engine-before-append
+    /// paths have no constructor (see [`TxnTimeRefuse`]).
+    pub fn at_commit_door(committed: Committed) -> Self {
+        Self {
+            store_id: committed.store_id(),
+            commit_ordinal: committed.commit_ordinal(),
+        }
+    }
+
+    /// Store identity this txn time is namespaced by.
+    pub fn store_id(self) -> StoreId {
+        self.store_id
+    }
+
+    /// Dense CommitOrdinal — sole order authority within the Store.
+    pub fn commit_ordinal(self) -> CommitOrdinal {
+        self.commit_ordinal
+    }
+
+    /// Refuse a client-supplied txn-time claim (no mint path exists).
+    pub fn refuse_client_supplied() -> TxnTimeRefuse {
+        TxnTimeRefuse::ClientTxnTimeForbidden
+    }
+
+    /// Refuse a foreign Store timestamp that would reorder local commits.
+    pub fn refuse_foreign(foreign_store: StoreId, local_store: StoreId) -> Result<(), TxnTimeRefuse> {
+        if foreign_store != local_store {
+            Err(TxnTimeRefuse::ForeignTxnTime)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Fact-payload format v1: a stored row VALUE opens directly with its

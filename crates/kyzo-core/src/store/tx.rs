@@ -7,11 +7,16 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Transactions: snapshot isolation, typed conflicts, consuming commit.
+//! Transactions: snapshot isolation, typed conflicts, physical apply.
 //!
 //! [`ReadTx`] / [`WriteTx`] / [`ConflictError`] / [`Slice`] (refcount currency)
 //! live here. The [`Storage`](super::contract::Storage) trait and sealed
 //! admission live in [`super::contract`].
+//!
+//! [`Committed`](super::sweep::Committed) mint moved to [`super::sweep`] —
+//! the SweepDoor wraps [`WriteTx::commit`] / [`WriteTx::commit_durable`] as
+//! the first StableCommitCap arm's physical apply. Adapter `commit` returns
+//! `()` on successful apply; only the SweepDoor mints [`Committed`](super::sweep::Committed).
 
 use std::fmt;
 
@@ -27,6 +32,10 @@ use super::contract::{Storage, sealed::Sealed};
 /// heap copy. Absolute path: sibling modules declare `fjall` and would
 /// shadow the extern crate for a plain `use fjall::...`.
 pub use ::fjall::Slice;
+
+/// Re-export the SweepDoor commit proof so existing `store::tx` import paths
+/// keep resolving the type name — construction remains private to sweep.
+pub use super::sweep::Committed;
 
 /// A transaction commit failed because a concurrently committed transaction
 /// modified something this one READ (a point read or a scanned range) or
@@ -55,12 +64,6 @@ impl fmt::Display for ConflictError {
 }
 
 impl std::error::Error for ConflictError {}
-
-/// Proof that an Open write transaction committed. Carries no Open methods —
-/// use-after-commit is a type error, not a runtime guard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
-pub struct Committed;
 
 /// Proof that an Open write transaction aborted without applying its writes.
 /// Carries no Open methods — use-after-abort is a type error.
@@ -245,7 +248,10 @@ pub trait ReadTx: Sealed + Sync {
 
 /// The **Open** write-transaction species: everything a [`ReadTx`] can do —
 /// seeing the transaction's own writes, conflict-tracked — plus mutation.
-/// Open / [`Committed`] / [`Aborted`] are three types; there is no flag.
+/// Open / sealed-[`Committed`](super::sweep::Committed) / [`Aborted`] are
+/// three types; there is no flag. Physical `commit` / `commit_durable`
+/// consume Open into `()` on apply success; [`Committed`](super::sweep::Committed)
+/// is minted only by [`super::sweep::SweepDoor`].
 ///
 /// MVCC semantics: `commit` must fail with [`CommitFailure::Conflict`] —
 /// discarding all of the transaction's changes — if anything this
@@ -290,23 +296,25 @@ pub trait WriteTx: ReadTx {
     /// empty" protection must pass forward bounds.
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()>;
 
-    /// Commit, consuming Open into [`Committed`] (or a closed
-    /// [`CommitFailure`]). Durability: survives a process crash; for
-    /// power-cut durability use [`commit_durable`](Self::commit_durable) or
-    /// [`Storage::sync`].
-    fn commit(self) -> std::result::Result<Committed, CommitFailure>
+    /// Physical apply for the StableCommitCap barrier: consume Open on
+    /// success (`()`), or a closed [`CommitFailure`]. Durability: survives a
+    /// process crash. Does **not** mint [`Committed`](super::sweep::Committed)
+    /// — that is the SweepDoor's job. Power-cut durability:
+    /// [`commit_durable`](Self::commit_durable) or [`Storage::sync`].
+    fn commit(self) -> std::result::Result<(), CommitFailure>
     where
         Self: Sized;
 
-    /// Commit and fsync before returning: the transaction survives a power
-    /// cut, not just a process crash. Costs an fsync; the engine chooses per
-    /// transaction where that price is worth paying.
+    /// Physical apply + fsync before returning: survives a power cut, not
+    /// just a process crash. First StableCommitCap arm's barrier when the
+    /// SweepDoor seals durable. Does **not** mint
+    /// [`Committed`](super::sweep::Committed).
     ///
-    /// Failure semantics: if the commit applies but the fsync then fails,
-    /// the transaction IS committed — visible, process-crash durable, not
+    /// Failure semantics: if the apply succeeds but the fsync then fails,
+    /// the transaction IS applied — visible, process-crash durable, not
     /// yet power-cut durable. The error is [`CommitFailure::Io`], reporting
     /// the durability shortfall, not a rollback.
-    fn commit_durable(self) -> std::result::Result<Committed, CommitFailure>
+    fn commit_durable(self) -> std::result::Result<(), CommitFailure>
     where
         Self: Sized;
 
