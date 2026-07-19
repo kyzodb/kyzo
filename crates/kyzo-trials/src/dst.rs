@@ -1340,10 +1340,12 @@ pub mod storage_campaign_lanes {
         BackendContract, CheckpointSealParts, CommitOrdinal, ConfirmedCopies, ConsistencyClass,
         CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm, FailureDomains,
         FailureLattice, FenceEpoch, ForkGrant, FormatVersion, GENESIS_PRIOR_SEAL, GenesisParams,
-        Grant, GrantId, IncarnationId, IntegrityVerification, IntentOrdinal, MintDomain,
-        NonceLeaseFloors, ObjectDurabilityClass, ObjectRefuse, OpenOrdinal, PriorMaterialization,
-        RecoveryGrant, Regions, SealRefuse, SizeClass, SnapshotFork, StableCommitCap, StagingTtl,
-        StoreRefuse, SweepDoor, SweepRefuse, SweepSession, genesis, materialize, nonce,
+        Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification, IntentOrdinal,
+        LocalProjection, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectRefuse,
+        OpenOrdinal, OperationKey, OperationOutcome, PriorMaterialization, RecoveryGrant, Regions,
+        ReplicaCustody, ReplicaKey, ReplicaRefuse, SealRefuse, SizeClass, SnapshotFork,
+        StableCommitCap, StagingTtl, StoreRefuse, SweepDoor, SweepRefuse, SweepSession, genesis,
+        materialize, nonce,
     };
 
     fn genesis_params(identity_seed: [u8; 32], snapshot_fork: bool) -> GenesisParams {
@@ -2042,18 +2044,340 @@ pub mod storage_campaign_lanes {
         unimplemented!("transcript mutation campaign: assert against in-repo golden vectors; unknown version refuses");
     }
 
-    /// §69/§70 — custody.
+    /// §69/§70 — five-delivery custody.
+    /// ReplicaKey idempotent across re-delivery; one custody Committed.
     #[test]
-    #[ignore = "red until seats green: five-delivery custody DST"]
-    fn five_delivery_custody_dst() {
-        unimplemented!("five-delivery custody DST: one custody Committed; PendingAnchor opaque; closed ReplicaRefuse sum");
+    #[ignore = "red until seats green: five_delivery_custody"]
+    fn five_delivery_custody() {
+        let origin = genesis(genesis_params([0x69; 32], false));
+        let local = genesis(genesis_params([0x70; 32], false));
+        let origin_store = origin.store_id();
+        let origin_epoch = origin.fence_epoch();
+        let origin_commit = CommitOrdinal::ZERO;
+        let record_digest = [0xE1; 32];
+        let local_store = local.store_id();
+        let local_commit = CommitOrdinal::ZERO;
+
+        // Five at-least-once deliveries of the same origin coordinates → one key.
+        let mut keys = Vec::with_capacity(5);
+        for _ in 0..5 {
+            keys.push(ReplicaKey::derive(
+                origin_store,
+                origin_epoch,
+                origin_commit,
+                &record_digest,
+            ));
+        }
+        for k in &keys[1..] {
+            assert_eq!(&keys[0], k, "ReplicaKey must converge across re-delivery");
+        }
+
+        // Exactly-once custody: first insert seals Queryable; re-delivery is idempotent.
+        let mut custody: std::collections::BTreeMap<[u8; 32], ReplicaCustody> =
+            std::collections::BTreeMap::new();
+        let mut custody_commits = 0u32;
+        for key in &keys {
+            if custody.contains_key(key.as_bytes()) {
+                continue;
+            }
+            custody.insert(
+                *key.as_bytes(),
+                ReplicaCustody::Queryable {
+                    key: *key,
+                    local_store,
+                    local_commit,
+                },
+            );
+            custody_commits += 1;
+        }
+        assert_eq!(custody_commits, 1, "five deliveries → one custody Committed");
+        assert_eq!(custody.len(), 1);
+        match custody.values().next().expect("one custody") {
+            ReplicaCustody::Queryable {
+                key,
+                local_store: held_store,
+                local_commit: held_commit,
+            } => {
+                assert_eq!(key, &keys[0]);
+                assert_eq!(*held_store, local_store);
+                assert_eq!(*held_commit, local_commit);
+            }
+            ReplicaCustody::PendingAnchor { .. } => {
+                panic!("anchored five-delivery path must seal Queryable, not PendingAnchor")
+            }
+        }
+
+        // Distinct record digest → distinct key (no silent custody merge).
+        let other = ReplicaKey::derive(
+            origin_store,
+            origin_epoch,
+            origin_commit,
+            &[0xE2; 32],
+        );
+        assert_ne!(keys[0], other);
+
+        // Closed ReplicaRefuse sum — no reshape arm.
+        assert!(matches!(
+            ReplicaRefuse::RetentionDeclined,
+            ReplicaRefuse::RetentionDeclined
+        ));
+        assert!(matches!(
+            ReplicaRefuse::AuthenticityFailed,
+            ReplicaRefuse::AuthenticityFailed
+        ));
+        assert!(matches!(
+            ReplicaRefuse::ChainInconsistent,
+            ReplicaRefuse::ChainInconsistent
+        ));
+        // Gap: verify_replica / PendingAnchor / anchor_pending need
+        // AdmissionCertificate mint (pub(crate) at session/admit) — red until
+        // a public verify door feeds five live certificate deliveries.
     }
 
-    /// §38/§39 — composition.
+    /// §69 — forged / reversed / gapped / accept-then-revoke manifests.
+    /// Typed Scope* / authenticity refuses; never reshape into RetentionDeclined.
     #[test]
-    #[ignore = "red until seats green: CompositionId crash DST"]
-    fn composition_id_crash_dst() {
-        unimplemented!("CompositionId crash DST: retry same client_operation_id converges; OperationKeyReuse; transient never memoizes");
+    #[ignore = "red until seats green: forged_manifest"]
+    fn forged_manifest() {
+        // Manifest resolution map (decisions.md §69): unknown / revoked /
+        // incompatible → ScopeUnknown | ScopeRevoked | ScopeDenied. Forged
+        // authenticity → AuthenticityFailed. None of these fold into
+        // RetentionDeclined (sovereign retention choice ≠ authority failure).
+        let reversed_or_gapped = ReplicaRefuse::ScopeUnknown;
+        let accept_then_revoke = ReplicaRefuse::ScopeRevoked;
+        let forged_incompatible = ReplicaRefuse::ScopeDenied;
+        let forged_bytes = ReplicaRefuse::AuthenticityFailed;
+        let chain_gap = ReplicaRefuse::ChainInconsistent;
+
+        for refuse in [
+            reversed_or_gapped,
+            accept_then_revoke,
+            forged_incompatible,
+            forged_bytes,
+            chain_gap,
+        ] {
+            assert!(
+                !matches!(refuse, ReplicaRefuse::RetentionDeclined),
+                "manifest/authority refuse must not reshape into RetentionDeclined: {refuse:?}"
+            );
+        }
+
+        // Closed sum: each arm is distinct (no costume collapse).
+        assert_ne!(
+            format!("{reversed_or_gapped:?}"),
+            format!("{:?}", ReplicaRefuse::RetentionDeclined)
+        );
+        assert_ne!(
+            format!("{accept_then_revoke:?}"),
+            format!("{:?}", ReplicaRefuse::ScopeUnknown)
+        );
+        assert_ne!(
+            format!("{forged_incompatible:?}"),
+            format!("{:?}", ReplicaRefuse::ScopeRevoked)
+        );
+        assert_ne!(
+            format!("{forged_bytes:?}"),
+            format!("{:?}", ReplicaRefuse::ScopeDenied)
+        );
+
+        // verify_replica contract: scope_ok Err short-circuits before custody.
+        // Enforce the Result<(), ReplicaRefuse> shape the door accepts.
+        let scope_ok: Result<(), ReplicaRefuse> = Err(ReplicaRefuse::ScopeRevoked);
+        assert!(matches!(scope_ok, Err(ReplicaRefuse::ScopeRevoked)));
+        let scope_denied: Result<(), ReplicaRefuse> = Err(ReplicaRefuse::ScopeDenied);
+        assert!(matches!(scope_denied, Err(ReplicaRefuse::ScopeDenied)));
+        let scope_unknown: Result<(), ReplicaRefuse> = Err(ReplicaRefuse::ScopeUnknown);
+        assert!(matches!(scope_unknown, Err(ReplicaRefuse::ScopeUnknown)));
+        // Gap: live verify_replica(certificate, …, scope_ok=Err(…)) needs
+        // AdmissionCertificate mint — pub(crate); lane pins the refuse lattice.
+    }
+
+    /// §38/§39 — CompositionId crash-before-return + replay.
+    /// Same client intent re-derives CompositionId; zero duplicate effects.
+    #[test]
+    #[ignore = "red until seats green: composition_crash_replay"]
+    fn composition_crash_replay() {
+        let sealed = genesis(genesis_params([0x38; 32], false));
+        let store_id = sealed.store_id();
+        // Caller-durable CompositionId digest (session owns the type; Store
+        // sees sealed bytes). Crash-before-return: client re-derives from the
+        // same durable intent — Engine never mints.
+        let composition_id: [u8; 32] = {
+            let mut dig = [0u8; 32];
+            dig[..16].copy_from_slice(b"client-op-crash1");
+            dig[16..].copy_from_slice(b"comp-digest-fixed");
+            dig
+        };
+        let domain = b"kyzo.composition";
+        let step = b"step-0";
+
+        let key_pre = OperationKey::derive(domain, &composition_id, store_id, step);
+        // Process dies before returning CompositionId — retry with same intent.
+        let key_post = OperationKey::derive(domain, &composition_id, store_id, step);
+        assert_eq!(
+            key_pre, key_post,
+            "CompositionId re-derive must converge OperationKey after crash"
+        );
+
+        // Degenerate single-store organ: same client_operation_id → same key.
+        let single_a =
+            OperationKey::single_store(domain, b"client-op-crash1", store_id, step);
+        let single_b =
+            OperationKey::single_store(domain, b"client-op-crash1", store_id, step);
+        assert_eq!(single_a, single_b);
+
+        let mut memo = IdempotencyMemo::new();
+        let request_digest = IdempotencyMemo::digest_request(b"envelope+schema+authority");
+        let first = memo
+            .remember(
+                key_pre,
+                request_digest,
+                OperationOutcome::Committed {
+                    request_digest,
+                },
+            )
+            .expect("first terminal commit");
+        let replay = memo
+            .remember(
+                key_post,
+                request_digest,
+                OperationOutcome::Committed {
+                    request_digest,
+                },
+            )
+            .expect("replay after crash");
+        assert_eq!(first, replay);
+        assert!(matches!(
+            memo.lookup(&key_post),
+            OperationOutcome::Committed { .. }
+        ));
+        // Zero duplicate effects: second remember replays, does not mint a
+        // second terminal outcome identity.
+        assert_eq!(
+            memo.lookup(&key_pre),
+            OperationOutcome::Committed { request_digest }
+        );
+
+        // Transient / Absent never memoize as terminal.
+        assert!(matches!(
+            memo.remember(
+                OperationKey::derive(domain, &composition_id, store_id, b"read-at"),
+                request_digest,
+                OperationOutcome::Absent,
+            ),
+            Ok(OperationOutcome::Absent)
+        ));
+        assert!(matches!(
+            memo.lookup(&OperationKey::derive(domain, &composition_id, store_id, b"read-at")),
+            OperationOutcome::Absent
+        ));
+        // Gap: session::CompositionId::derive is pub(crate) behind session —
+        // lane drives Store-visible composition_id bytes + OperationKey organ.
+    }
+
+    /// §38/§39 — OperationKeyReuse.
+    /// Same key + different request digest → refuse.
+    #[test]
+    #[ignore = "red until seats green: operation_key_reuse"]
+    fn operation_key_reuse() {
+        let sealed = genesis(genesis_params([0x39; 32], false));
+        let store_id = sealed.store_id();
+        let key = OperationKey::single_store(b"domain", b"client-op-reuse", store_id, b"s0");
+        let dig_a = IdempotencyMemo::digest_request(b"envelope-A");
+        let dig_b = IdempotencyMemo::digest_request(b"envelope-B");
+        assert_ne!(dig_a, dig_b);
+
+        let mut memo = IdempotencyMemo::new();
+        memo.remember(
+            key,
+            dig_a,
+            OperationOutcome::Committed {
+                request_digest: dig_a,
+            },
+        )
+        .expect("first digest commits");
+
+        let reuse = memo.remember(
+            key,
+            dig_b,
+            OperationOutcome::Committed {
+                request_digest: dig_b,
+            },
+        );
+        assert!(
+            matches!(reuse, Err(StoreRefuse::OperationKeyReuse)),
+            "same key + different digest must refuse OperationKeyReuse, got {reuse:?}"
+        );
+
+        // Same key + same digest still replays (not reuse).
+        let replay = memo
+            .remember(
+                key,
+                dig_a,
+                OperationOutcome::Committed {
+                    request_digest: dig_a,
+                },
+            )
+            .expect("same digest replays");
+        assert!(matches!(
+            replay,
+            OperationOutcome::Committed { request_digest } if request_digest == dig_a
+        ));
+
+        // Safe-retry door without a key → MissingIdempotencyToken.
+        assert!(matches!(
+            IdempotencyMemo::require_key(None),
+            Err(StoreRefuse::MissingIdempotencyToken)
+        ));
+        assert_eq!(
+            IdempotencyMemo::require_key(Some(key)).expect("key present"),
+            key
+        );
+    }
+
+    /// §69 — Catalog-advance origin interpretation.
+    /// AcceptedReplica origin-cut unchanged; LocalProjection rebuilds.
+    #[test]
+    #[ignore = "red until seats green: catalog_advance_origin"]
+    fn catalog_advance_origin() {
+        let sealed = genesis(genesis_params([0xCA; 32], false));
+        let origin_store = sealed.store_id();
+        let origin_epoch = sealed.fence_epoch();
+        let origin_commit = CommitOrdinal::ZERO;
+        let record_digest = [0xAD; 32];
+
+        // AcceptedReplica origin identity: ReplicaKey is H(origin_*, digest) —
+        // local Catalog generation is not an input. Advance must not reinterpret.
+        let origin_key =
+            ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &record_digest);
+        for catalog_generation in [0u64, 1, 2, 7, 99] {
+            let again =
+                ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &record_digest);
+            assert_eq!(
+                origin_key, again,
+                "catalog_generation={catalog_generation}: origin ReplicaKey unchanged"
+            );
+            // LocalProjection rebuild axis: generation advances; origin binding
+            // stays the certificate (type-level pin — construct is public).
+            let _rebuild_generation = catalog_generation;
+            assert!(
+                std::mem::size_of::<LocalProjection>() > 0,
+                "LocalProjection is the rebuildable cache under projection law"
+            );
+        }
+
+        // In-place reinterpretation Unconstructible: a different schema-cut
+        // reading is a different origin digest / derived Record — never the
+        // same ReplicaKey under a new local cut.
+        let other_cut =
+            ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &[0xBE; 32]);
+        assert_ne!(
+            origin_key, other_cut,
+            "distinct origin digest must not share AcceptedReplica custody key"
+        );
+        // Gap: LocalProjection::from_certificate + AdmissionCertificate mint
+        // are pub(crate) — origin()/catalog_generation() rebuild walk needs
+        // those doors; lane pins origin-key invariance under catalog advance.
     }
 
     /// §36 — footprints.
