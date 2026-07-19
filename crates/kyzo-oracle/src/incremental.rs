@@ -18,8 +18,8 @@ use kyzo_model::value::{DataValue, Tuple};
 
 use crate::eval::{
     body_bindings_from, check_safety, check_stratifiable, check_wellformed, dependency_edges,
-    ground, head_classes, literal_rows, naive_eval, unify, Bindings, HeadAggr, Program, Rejection,
-    Rel, Rule, Term,
+    ground, head_classes, literal_rows, naive_eval, unify, Bindings, Program, Rejection, Rel, Rule,
+    Term,
 };
 use crate::temporal::{AsOf, SignedFact};
 use crate::{AggrFold, NormalAccum};

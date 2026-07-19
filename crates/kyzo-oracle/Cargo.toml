@@ -11,3 +11,6 @@ description = "KyzoDB naive reference-semantics seat. Empty scaffold until reloc
 
 [lints]
 workspace = true
+
+[dependencies]
+kyzo-model = { path = "../kyzo-model" }
