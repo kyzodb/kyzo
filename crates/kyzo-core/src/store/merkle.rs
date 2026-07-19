@@ -65,7 +65,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use kyzo_model::value::RelationId;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 
 /// The number of `(k,v)` pairs a root scan may touch before it refuses. The
 /// root is `O(n)` in the range's size; an unbounded scan over a hostile
@@ -261,8 +261,8 @@ mod tests {
         MerkleHash, empty_hash, leaf_hash, node_hash, relation_root, root_over, state_root,
     };
     use kyzo_model::value::RelationId;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::{Storage, WriteTx};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
 
     fn big_budget() -> NonZeroU64 {
         NonZeroU64::new(1_000_000).unwrap()

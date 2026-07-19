@@ -32,16 +32,21 @@
 //! strictly ascending order (a store-level ordering violation means the KV
 //! engine itself is unwell). A data entry for a relation absent from the
 //! catalog is a dangling-data corruption, reported too.
+//!
+//! ## Pins (re-homed from storage/tests.rs)
+//!
+//! `verify_storage_catches_a_corrupt_value` and the injected-corruption walk
+//! pin that BadTag surfaces and THE WALK CONTINUES past the wound.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use fjall::Slice;
 use miette::Result;
 
-use crate::data::bitemporal::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
+use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
 use kyzo_model::value::{DataValue, RelationId, decode_tuple_from_key, extend_tuple_from_v};
 use crate::session::catalog::RelationHandle;
-use crate::storage::{ReadTx, Storage};
+use crate::store::{ReadTx, Storage};
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption
 /// without itself growing unboundedly on a badly damaged store.
@@ -224,4 +229,87 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
         prev_key = Some(k);
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod pins {
+    //! verify_storage battery (re-homed from storage/tests.rs).
+
+    use crate::session::db::Db;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::verify_walk::verify_storage;
+    use crate::store::{ReadTx, Storage};
+
+    #[test]
+    fn verify_storage_catches_a_corrupt_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let data_key: Vec<u8> = {
+            let storage = new_fjall_storage(&path).unwrap();
+            let db = Db::new(storage.clone()).unwrap();
+            db.run_script(
+                "?[k, v] <- [[1, 7]] :create rel {k => v}",
+                std::collections::BTreeMap::new(),
+            )
+            .unwrap();
+            let tx = storage.read_tx().unwrap();
+            tx.total_scan()
+                .filter_map(Result::ok)
+                .map(|(k, _)| k.to_vec())
+                .find(|k| k.len() >= 8 && k[..8].iter().any(|&b| b != 0))
+                .expect("a rel base-relation data row")
+        };
+        {
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+            let ks = raw
+                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)
+                .unwrap();
+            ks.insert(data_key, [0xFFu8]).unwrap();
+            raw.persist(fjall::PersistMode::SyncAll).unwrap();
+        }
+        let storage = new_fjall_storage(&path).unwrap();
+        let report = verify_storage(&storage).unwrap();
+        assert!(!report.is_clean());
+        assert!(
+            !report.corrupt.is_empty(),
+            "corrupt polarity value must be caught: {report:?}"
+        );
+    }
+
+    #[test]
+    fn verify_storage_reports_injected_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let clean_checked;
+        {
+            let storage = new_fjall_storage(&path).unwrap();
+            let db = Db::new(storage.clone()).unwrap();
+            db.run_script(
+                "?[k, v] <- [[1, 7], [2, 14], [3, 21], [4, 28], [5, 35]] :create rel {k => v}",
+                std::collections::BTreeMap::new(),
+            )
+            .unwrap();
+            let report = verify_storage(&storage).unwrap();
+            assert!(report.is_clean(), "healthy store: {report:?}");
+            clean_checked = report.checked;
+        }
+        {
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+            let ks = raw
+                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)
+                .unwrap();
+            ks.insert([0u8, 0, 0, 0, 0, 0, 0, 7, 0xEE, 0xEE], b"?")
+                .unwrap();
+            raw.persist(fjall::PersistMode::SyncAll).unwrap();
+        }
+        let storage = new_fjall_storage(&path).unwrap();
+        let report = verify_storage(&storage).unwrap();
+        assert!(!report.is_clean());
+        assert_eq!(report.checked, clean_checked + 1, "walk continues: {report:?}");
+        assert!(
+            report.corrupt[0].error.contains("BadTag"),
+            "names BadTag: {}",
+            report.corrupt[0].error
+        );
+    }
 }

@@ -118,7 +118,7 @@ use kyzo_model::value::{DataValue, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
-use crate::storage::{ReadTx, WriteTx};
+use crate::store::{ReadTx, WriteTx};
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -580,8 +580,8 @@ mod tests {
     use crate::data::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
-    use crate::storage::Storage;
-    use crate::storage::fjall::new_fjall_storage;
+    use crate::store::Storage;
+    use crate::store::fjall::new_fjall_storage;
 
     macro_rules! sparse_rows {
         ($($arg:expr),* $(,)?) => {

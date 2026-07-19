@@ -84,9 +84,9 @@ use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{ConstraintRef, get_relation, list_relations, write_relation_row};
 use crate::session::db::{Db, ScriptOptions, SessionTx, status_ok};
 use crate::exec::fixpoint::delta_store::TupleInIter;
-use crate::storage::retry::RetryError;
-use crate::storage::temp::TempTx;
-use crate::storage::{ReadTx, Storage, WriteTx};
+use crate::store::retry::RetryError;
+use crate::store::scratch::TempTx;
+use crate::store::{ReadTx, Storage, WriteTx};
 
 /// How many witness rows a refusal names. The rows shown are the smallest
 /// in value order (witnesses are sorted before capping), so the selection
@@ -367,9 +367,9 @@ impl<S: Storage> Db<S> {
             }
         }
 
-        crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
+        crate::store::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                crate::storage::retry::write_tx_attempt(&self.storage)?,
+                crate::store::retry::write_tx_attempt(&self.storage)?,
                 options.clone(),
             );
 
@@ -440,9 +440,9 @@ impl<S: Storage> Db<S> {
     /// established it, or `::set_access_level r read_only` would become a
     /// backdoor to lifting a denial that the relation's writers still rely on.
     pub(crate) fn sys_remove_constraint(&self, name: &Symbol) -> Result<NamedRows> {
-        crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
+        crate::store::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                crate::storage::retry::write_tx_attempt(&self.storage)?,
+                crate::store::retry::write_tx_attempt(&self.storage)?,
                 ScriptOptions::default(),
             );
             let mut found = false;
@@ -497,8 +497,8 @@ impl<S: Storage> Db<S> {
 mod tests {
     use super::*;
     use crate::session::catalog::RelationHasConstraints;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::sim::SimStorage;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::sim::SimStorage;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()

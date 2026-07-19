@@ -143,7 +143,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use fjall::Slice;
 use miette::{Result, bail, miette};
 
-use crate::data::bitemporal::{
+use crate::store::time::{
     ClaimPolarity, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
 };
 use kyzo_model::SourceSpan;
@@ -152,7 +152,7 @@ use kyzo_model::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, Va
 use kyzo_model::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
 use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::session::catalog::RelationHandle;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 
 /// A signed fact: present in the later snapshot only (`Plus`) or the
 /// earlier only (`Minus`) — the production twin of `query/laws.rs`'s
@@ -801,8 +801,8 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::{MAX_VALIDITY_TS, ValidityTs};
     use crate::session::catalog::{KeyspaceKind, create_relation};
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::{Storage, WriteTx};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
     use itertools::Itertools;
 
     fn sp() -> SourceSpan {
@@ -827,7 +827,7 @@ mod tests {
 
     /// A one-key, one-value relation, `key_arity` key columns.
     fn make_relation(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         name: &str,
         key_arity: usize,
     ) -> RelationHandle {
@@ -853,7 +853,7 @@ mod tests {
     /// genuinely distinct, monotonically increasing system stamp — every
     /// commit mints one).
     fn assert_at(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         key: i64,
         valid: i64,
@@ -867,7 +867,7 @@ mod tests {
     }
 
     fn retract_at(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         key: i64,
         valid: i64,
@@ -884,7 +884,7 @@ mod tests {
     /// is test-only plumbing through the same `pub(crate)` encoders
     /// `put_fact`/`retract_fact` themselves use).
     fn erase_at(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         key: i64,
         valid: i64,
@@ -906,7 +906,7 @@ mod tests {
     /// converted to the old `i64::MAX` sentinel. `@spans` starts are always
     /// finite, so a missing start is a bug, not an open end.
     fn spans_rows(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         sys: ValidityTs,
     ) -> Vec<(i64, i64, i64, Option<i64>)> {
@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     fn delta_rows(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         from: AsOf,
         to: AsOf,
@@ -1068,7 +1068,7 @@ mod tests {
     }
 
     fn delta_rows_with_posting(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         from: AsOf,
         to: AsOf,
@@ -1182,7 +1182,7 @@ mod tests {
     /// returning `(base handle, posting handle)` — both already resolved,
     /// ready to feed a fresh write session or `DeltaRA` directly.
     fn make_indexed_relation(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         name: &str,
     ) -> (RelationHandle, RelationHandle) {
         let mut stx =
@@ -1214,7 +1214,7 @@ mod tests {
     /// through the real `update_indices` seam, so the posting index and
     /// the base relation advance in lockstep.
     fn write_indexed_event(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         base: &RelationHandle,
         key: i64,
         valid: i64,
@@ -1260,7 +1260,7 @@ mod tests {
     /// canonically sorted by `DeltaRA::iter_batched` itself, so direct
     /// `Vec` equality is the whole law.
     fn assert_paths_agree(
-        db: &crate::storage::fjall::FjallStorage,
+        db: &crate::store::fjall::FjallStorage,
         base: &RelationHandle,
         idx: &RelationHandle,
         from: AsOf,

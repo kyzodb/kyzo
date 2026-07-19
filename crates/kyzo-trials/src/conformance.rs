@@ -13,6 +13,14 @@
 //! module, not by a maintainer hand-copying fjall's test file and swapping
 //! type names.
 //!
+//! ## Necessary-not-sufficient (carried obligation)
+//!
+//! A green [`run_full_battery`] pass is **necessary but not sufficient** for
+//! production `Committed` durability. Per decisions.md §27/§85 the kit is
+//! public law for second backends; the StableCommitCap arm requirement lands
+//! with `07-storage-seats.json` (`store/commit_cap.rs`). Do not read kit-green
+//! as a durability license.
+//!
 //! ## Scope (maintainer-ratified, see the story #78/#79 dictation)
 //!
 //! Three arms, and nothing else:

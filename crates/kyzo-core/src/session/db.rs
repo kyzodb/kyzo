@@ -17,7 +17,7 @@
  *   transaction lifetime is threaded through the engine; the session owns
  *   its transaction and is `Send`.
  * - **Conflict retry.** Every write commit is wrapped by
- *   [`crate::storage::retry::retry_on_conflict`]: a `ConflictError` at commit
+ *   [`crate::store::retry::retry_on_conflict`]: a `ConflictError` at commit
  *   rebuilds a fresh transaction AND a fresh callback collector and replays
  *   the query. The collector is plain data collected during the attempt and
  *   delivered only after a successful commit, so a conflicted attempt leaks
@@ -111,9 +111,9 @@ use crate::session::catalog::{
     describe_relation, destroy_relation, get_relation, list_relations, rename_relation,
     set_access_level, set_relation_triggers, write_relation_row,
 };
-use crate::storage::retry::RetryError;
-use crate::storage::temp::TempTx;
-use crate::storage::{ReadTx, Storage, WriteTx};
+use crate::store::retry::RetryError;
+use crate::store::scratch::TempTx;
+use crate::store::{ReadTx, Storage, WriteTx};
 
 /// The deterministic default ceiling on evaluation epochs (semi-naive
 /// iterations). High enough for real recursion over finite data; bounds a
@@ -129,7 +129,7 @@ pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 /// three writers under a loaded machine, which is contention working,
 /// not failing.
 ///
-/// [`ConflictError`]: crate::storage::ConflictError
+/// [`ConflictError`]: crate::store::ConflictError
 const MAX_COMMIT_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(128).unwrap();
 
 /// A script asked for the imperative genus (`?[…] <- …` control flow), which
@@ -424,12 +424,12 @@ impl<S: Storage> Db<S> {
         }
         if program.needs_write_lock().is_some() {
             let callback_targets = self.current_callback_targets();
-            crate::storage::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
+            crate::store::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
                 // Fresh transaction AND fresh collector per attempt: a
                 // conflicted attempt is discarded whole, so no phantom events.
                 let mut collector = CallbackCollector::default();
                 let mut tx = SessionTx::new_write(
-                    crate::storage::retry::write_tx_attempt(&self.storage)?,
+                    crate::store::retry::write_tx_attempt(&self.storage)?,
                     options.clone(),
                 );
                 let rows = self
@@ -817,15 +817,15 @@ impl<S: Storage> Db<S> {
                 // scanning anything.
                 let ceiling = match options.derived_tuple_ceiling {
                     Some(c) => NonZeroU64::new(c)
-                        .ok_or(crate::storage::merkle::MerkleScanExceeded { ceiling: 0 })?,
+                        .ok_or(crate::store::merkle::MerkleScanExceeded { ceiling: 0 })?,
                     None => DEFAULT_MERKLE_SCAN_CEILING,
                 };
                 let rtx = self.storage.read_tx()?;
                 let root = match rel {
-                    None => crate::storage::merkle::state_root(&rtx, ceiling)?,
+                    None => crate::store::merkle::state_root(&rtx, ceiling)?,
                     Some(name) => {
                         let id = get_relation(&rtx, &name.name)?.id;
-                        crate::storage::merkle::relation_root(&rtx, id, ceiling)?
+                        crate::store::merkle::relation_root(&rtx, id, ceiling)?
                     }
                 };
                 Ok(NamedRows::try_new(
@@ -884,9 +884,9 @@ impl<S: Storage> Db<S> {
         &self,
         f: impl Fn(&mut SessionTx<S::WriteTx>) -> Result<NamedRows>,
     ) -> Result<NamedRows> {
-        crate::storage::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
+        crate::store::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                crate::storage::retry::write_tx_attempt(&self.storage)?,
+                crate::store::retry::write_tx_attempt(&self.storage)?,
                 ScriptOptions::default(),
             );
             let out = f(&mut tx).map_err(RetryError::session_report)?;
@@ -1325,8 +1325,8 @@ impl<T: ReadTx> BodyNormalizer for SessionNormalizer<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::sim::SimStorage;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::sim::SimStorage;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
@@ -1978,7 +1978,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         drive(Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap());
-        drive(Db::new(crate::storage::sim::SimStorage::new(7)).unwrap());
+        drive(Db::new(crate::store::sim::SimStorage::new(7)).unwrap());
     }
 
     /// The language surface's coordinate ORDER, pinned with a
@@ -3274,9 +3274,9 @@ mod db_battery {
     use kyzo_model::value::DataValue;
     use crate::fixed_rule::NamedRows;
     use crate::session::db::{Db, ScriptOptions};
-    use crate::storage::Storage;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::sim::SimStorage;
+    use crate::store::Storage;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::sim::SimStorage;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()

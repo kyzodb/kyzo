@@ -32,7 +32,7 @@
 //!    the parser; the kernel's fallible-decode laws already cover stored
 //!    bytes.
 //! 6. **Concurrency liveness** — write queries retry typed conflicts to
-//!    completion ([`crate::storage::retry`]); concurrent writers make
+//!    completion ([`crate::store::retry`]); concurrent writers make
 //!    progress without lost updates.
 //!    *Enforcement:* multi-threaded contention tests over the retry helper.
 //! 7. **Operator coherence** — an index search (HNSW, LSH, FTS) is a

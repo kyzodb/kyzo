@@ -19,12 +19,12 @@
 //!
 //! ## Why this module ships nowhere
 //!
-//! It is declared `#[cfg(test)]` in `storage/mod.rs`: compiled only into the
-//! test harness, never into the published library — yet visible to every
-//! in-crate `#[cfg(test)]` module (storage tests today, query/runtime tests
-//! tomorrow) as `crate::storage::sim`. The alternative — a `test-support`
-//! cargo feature — would leak a fake backend into the shipped API surface
-//! and invite depending on it; rejected.
+//! It is path-included as `crate::store::sim` from kyzo-core's store module
+//! (`lib.rs`): compiled into the test harness (and `bench-internals`), never
+//! into the published library as a foreign backend — yet visible to every
+//! in-crate `#[cfg(test)]` module as `crate::store::sim`. The alternative —
+//! a `test-support` cargo feature — would leak a fake backend into the
+//! shipped API surface and invite depending on it; rejected.
 //!
 //! ## Determinism doctrine
 //!
@@ -93,13 +93,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use fjall::Slice;
 use miette::{Result, miette};
 
-use crate::data::value::Tuple;
-use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, ValidityTs};
+use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
+use crate::store::{
     Aborted, CommitFailure, CommitIo, Committed, ConflictError, ReadTx, Storage, WriteTx,
 };
-use crate::storage::retry::StorageOpFailure;
+use crate::store::retry::StorageOpFailure;
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
 
@@ -1266,5 +1266,220 @@ impl Drop for SimWriteTx {
         if self.inner.is_some() && !std::thread::panicking() {
             panic!("Open WriteTx dropped without commit() or abort(self)");
         }
+    }
+}
+
+#[cfg(test)]
+mod battery {
+    //! DST instrument proof battery (re-homed from storage/tests.rs).
+
+    use std::collections::BTreeMap;
+    use std::num::NonZeroUsize;
+
+    use fjall::Slice;
+    use kyzo_model::value::{
+        AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
+    };
+
+    use crate::store::time::ClaimPolarity;
+    use crate::store::retry::{
+        get_attempt, put_attempt, retry_on_conflict, write_tx_attempt,
+    };
+    use crate::store::sim::{FaultConfig, SimStorage};
+    use crate::store::{ConflictError, ReadTx, Storage, WriteTx};
+
+    /// Naive as-of oracle — same reference the fjall pin uses.
+    fn as_of_oracle(history: &[(&str, i64, bool)], at: i64) -> Vec<(String, i64)> {
+        let mut newest: BTreeMap<String, (i64, bool)> = BTreeMap::new();
+        for (name, ts, assert) in history {
+            if *ts <= at {
+                let e = newest.entry(name.to_string()).or_insert((*ts, *assert));
+                if *ts > e.0 {
+                    *e = (*ts, *assert);
+                }
+            }
+        }
+        newest
+            .into_iter()
+            .filter(|(_, (_, assert))| *assert)
+            .map(|(name, (ts, _))| (name, ts))
+            .collect()
+    }
+
+    fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
+        let slot =
+            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(t), true));
+        let tuple: Tuple =
+            Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
+        tuple.encode_as_key(rel)
+    }
+
+    fn pol_val(assert: bool) -> Vec<u8> {
+        vec![if assert {
+            ClaimPolarity::Assert
+        } else {
+            ClaimPolarity::Retract
+        }
+        .encode()]
+    }
+
+    fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (StorageKey, Vec<u8>) {
+        (bitemp_key(rel, name, ts, 1), pol_val(assert))
+    }
+
+    #[test]
+    fn write_write_race_aborts_second_committer() {
+        let db = SimStorage::new(1);
+        let mut tx1 = db.write_tx().unwrap();
+        let mut tx2 = db.write_tx().unwrap();
+        tx1.put(b"ww", b"1").unwrap();
+        tx2.put(b"ww", b"2").unwrap();
+        tx1.commit().expect("the FIRST committer must never abort");
+        let err = tx2
+            .commit()
+            .expect_err("a write-write race must abort the second committer");
+        assert!(err.is_conflict(), "typed conflict, got {err:?}");
+        let _ = ConflictError;
+        assert_eq!(
+            db.read_tx().unwrap().get(b"ww").unwrap(),
+            Some(Slice::from(b"1"))
+        );
+    }
+
+    #[test]
+    fn sim_time_travel_matches_naive_oracle() {
+        let history: &[(&str, i64, bool)] = &[
+            ("a", 1, true),
+            ("a", 3, true),
+            ("a", 5, false),
+            ("a", 7, true),
+            ("b", 2, true),
+            ("b", 6, false),
+        ];
+        let rel = RelationId::new(7).expect("below cap");
+        let db = SimStorage::new(2);
+        let mut tx = db.write_tx().unwrap();
+        for (name, ts, assert) in history {
+            let (k, v) = vld_row(rel, name, *ts, *assert);
+            tx.put(&k, &v).unwrap();
+        }
+        tx.commit().unwrap();
+        let lower = rel.raw_encode().to_vec();
+        let upper = rel.next().expect("below cap").raw_encode().to_vec();
+        let tx = db.read_tx().unwrap();
+        for at in 0..=8i64 {
+            let got: Vec<(String, i64)> = tx
+                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
+                .map(|r| {
+                    let t = r.unwrap();
+                    let name = match &t.as_slice()[0] {
+                        DataValue::Str(s) => s.to_string(),
+                        other => panic!("unexpected {other:?}"),
+                    };
+                    let ts = match &t.as_slice()[1] {
+                        DataValue::Validity(v) => v.ts_micros(),
+                        other => panic!("unexpected {other:?}"),
+                    };
+                    (name, ts)
+                })
+                .collect();
+            assert_eq!(got, as_of_oracle(history, at), "as-of {at}");
+        }
+    }
+
+    #[test]
+    fn sim_fault_plan_identical_at_any_thread_count() {
+        const KEYS: usize = 32;
+        const ATTEMPTS: usize = 4;
+        type Matrix = Vec<Vec<bool>>;
+
+        fn observe(seed: u64, threads: usize) -> (Matrix, Matrix) {
+            let db = SimStorage::with_faults(
+                seed,
+                FaultConfig {
+                    read_fail_ppm: 400_000,
+                    spurious_conflict_ppm: 400_000,
+                    sync_fail_ppm: 0,
+                },
+            );
+            retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+                let mut tx = write_tx_attempt(&db)?;
+                for i in 0..KEYS {
+                    put_attempt(&mut tx, format!("r{i:02}").as_bytes(), b"v")?;
+                }
+                {
+                    let _ = tx.commit()?;
+                    Ok(())
+                }
+            })
+            .unwrap();
+
+            let mut reads: Matrix = vec![vec![]; KEYS];
+            let mut commits: Matrix = vec![vec![]; KEYS];
+            std::thread::scope(|s| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|t| {
+                        let db = db.clone();
+                        s.spawn(move || {
+                            let mut out = Vec::new();
+                            let tx = db.read_tx().unwrap();
+                            for i in (t..KEYS).step_by(threads) {
+                                let key = format!("r{i:02}").into_bytes();
+                                let r: Vec<bool> =
+                                    (0..ATTEMPTS).map(|_| tx.get(&key).is_err()).collect();
+                                let c: Vec<bool> = (0..ATTEMPTS)
+                                    .map(|_| {
+                                        let mut w = db.write_tx().unwrap();
+                                        w.put(format!("c{i:02}").as_bytes(), b"v").unwrap();
+                                        w.commit().is_err()
+                                    })
+                                    .collect();
+                                out.push((i, r, c));
+                            }
+                            out
+                        })
+                    })
+                    .collect();
+                for h in handles {
+                    for (i, r, c) in h.join().unwrap() {
+                        reads[i] = r;
+                        commits[i] = c;
+                    }
+                }
+            });
+            (reads, commits)
+        }
+
+        let base = observe(42, 1);
+        let fired = |m: &Matrix| m.iter().flatten().any(|b| *b);
+        let missed = |m: &Matrix| m.iter().flatten().any(|b| !*b);
+        assert!(
+            fired(&base.0) && missed(&base.0) && fired(&base.1) && missed(&base.1),
+            "both streams must contain hits and misses"
+        );
+        for threads in [2usize, 4, 8] {
+            assert_eq!(base, observe(42, threads), "identical at {threads} threads");
+        }
+        assert_ne!(base, observe(43, 1), "different seeds differ");
+    }
+
+    #[test]
+    fn sim_retry_liveness_escapes_injected_faults() {
+        let db = SimStorage::with_faults(
+            7,
+            FaultConfig {
+                read_fail_ppm: 900_000,
+                spurious_conflict_ppm: 900_000,
+                sync_fail_ppm: 0,
+            },
+        );
+        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+            let mut tx = write_tx_attempt(&db)?;
+            put_attempt(&mut tx, b"k", b"v")?;
+            let _ = tx.commit()?;
+            Ok(())
+        })
+        .expect("90% storms must not pin a bounded retry forever");
+        let _ = get_attempt(&db.read_tx().unwrap(), b"k");
     }
 }

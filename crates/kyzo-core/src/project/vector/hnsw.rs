@@ -228,7 +228,7 @@ use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
 use crate::session::catalog::RelationHandle;
-use crate::storage::{ReadTx, WriteTx};
+use crate::store::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
@@ -3111,8 +3111,8 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use crate::fixed_rule::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
-    use crate::storage::Storage;
-    use crate::storage::fjall::new_fjall_storage;
+    use crate::store::Storage;
+    use crate::store::fjall::new_fjall_storage;
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {

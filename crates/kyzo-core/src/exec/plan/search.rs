@@ -48,7 +48,7 @@ use crate::engines::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchReque
 use crate::engines::projection::RelationIndexSearch;
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::session::catalog::{IndexKind, RelationHandle};
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 
 /// A search atom the catalog has proven: live handles, decoded manifest,
 /// engine parameters, and the output frame. Carried by

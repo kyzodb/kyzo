@@ -9,12 +9,18 @@
 
 //! Deterministic simulation testing (DST) **up the query path**.
 //!
-//! The storage-seam DST (`storage/sim.rs`, exercised by `storage/tests.rs`)
-//! proves the KV contract is seed-reproducible under faults, crashes, and
-//! contention. This module carries that proof one tier up: it runs *compiled
-//! Datalog programs* — recursion, joins, aggregation, stratified negation —
-//! over [`SimStorage`], while the seeded fault plan injects storage errors,
-//! and pins the query-visible laws the README promises:
+//! ## Campaign shapes registry (fed by sim battery)
+//!
+//! Shapes seated beside the sim instrument (`kyzo-crashfs/src/sim.rs`) that
+//! this lane reuses by name:
+//! - **write-skew** — overlapping snapshots with crossed read/write sets;
+//!   at least one side aborts in every seed; final state one of two serial outcomes.
+//! - **lost-phantom** — commit order observed through the serialized scheduler
+//!   with per-branch assertions; no phantom insert survives unnoticed.
+//!
+//! The storage-seam DST (`kyzo-crashfs/src/sim.rs`) proves the KV contract is
+//! seed-reproducible under faults, crashes, and contention. This module carries
+//! that proof one tier up.
 //!
 //! 1. **Read-path faults never lie.** With storage errors injected mid-scan,
 //!    a query either returns the exact answer a clean store gives (a

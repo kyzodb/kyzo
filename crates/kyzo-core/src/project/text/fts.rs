@@ -115,7 +115,7 @@ use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
 use crate::session::catalog::RelationHandle;
-use crate::storage::{ReadTx, WriteTx};
+use crate::store::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
@@ -783,8 +783,8 @@ mod tests {
     use crate::engines::text::TokenizerConfig;
     use crate::fixed_rule::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
-    use crate::storage::Storage;
-    use crate::storage::fjall::new_fjall_storage;
+    use crate::store::Storage;
+    use crate::store::fjall::new_fjall_storage;
 
     macro_rules! fts_rows {
         ($($arg:expr),* $(,)?) => {

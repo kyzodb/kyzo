@@ -393,3 +393,72 @@ fn compaction_segment_torn_write_campaign_never_returns_wrong_bytes() {
         );
     }
 }
+
+/// Process-crash consistency: a child process commits one transaction,
+/// stages a second without committing, then `abort()`s. Reopening the store
+/// must show every committed write and nothing from the uncommitted one.
+///
+/// # SCOPE HONESTY (carried obligation — power-cut-honesty)
+///
+/// `abort()` simulates a process crash (committed data has reached OS buffers —
+/// fjall's `Buffer` persist mode). A power cut is a stronger event; surviving
+/// it is what `Storage::sync` (fsync) is for, and testing THAT honestly requires
+/// fault-injection infrastructure (kyzo-crashfs / dm-flakey class), not a unit
+/// test that lies about what it simulates. Until decisions.md §29's
+/// power-cut-at-commit-door campaign is green, the word `durable` is not
+/// licensed in Spec claims from this test alone.
+#[test]
+fn crash_consistency_process_abort() {
+    use fjall::Slice;
+    use kyzo::{ReadTx, Storage, WriteTx, new_fjall_storage};
+
+    if let Ok(dir) = std::env::var("KYZO_CRASH_CHILD_DIR") {
+        let db = new_fjall_storage(&dir).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        tx.put(b"committed", b"survives").unwrap();
+        tx.commit().unwrap();
+        let mut tx = db.write_tx().unwrap();
+        tx.put(b"synced", b"survives-power-cut-too").unwrap();
+        tx.commit().unwrap();
+        db.sync().unwrap();
+        let mut tx = db.write_tx().unwrap();
+        tx.put(b"durable", b"per-tx-fsync").unwrap();
+        tx.commit_durable().unwrap();
+        let mut tx = db.write_tx().unwrap();
+        tx.put(b"uncommitted", b"must-vanish").unwrap();
+        std::process::abort();
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(exe)
+        .args([
+            "crash::crash_consistency_process_abort",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("KYZO_CRASH_CHILD_DIR", dir.path().join("db"))
+        .status()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "child must die by abort, not exit cleanly"
+    );
+
+    let db = new_fjall_storage(dir.path().join("db")).unwrap();
+    let tx = db.read_tx().unwrap();
+    assert_eq!(
+        tx.get(b"committed").unwrap(),
+        Some(Slice::from(b"survives")),
+        "committed (unsynced) data must survive a process crash"
+    );
+    assert_eq!(
+        tx.get(b"synced").unwrap(),
+        Some(Slice::from(b"survives-power-cut-too"))
+    );
+    assert_eq!(
+        tx.get(b"durable").unwrap(),
+        Some(Slice::from(b"per-tx-fsync"))
+    );
+    assert_eq!(tx.get(b"uncommitted").unwrap(), None);
+}

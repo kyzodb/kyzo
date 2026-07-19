@@ -24,11 +24,11 @@ use std::path::Path;
 use miette::{Diagnostic, IntoDiagnostic, Result, bail, miette};
 use thiserror::Error;
 
-use crate::data::bitemporal::system_stamp_of_key;
+use crate::store::time::system_stamp_of_key;
 use kyzo_model::value::ValidityTs;
 use kyzo_model::value::{StorageKey, RelationId};
 use crate::session::catalog::{KeyspaceKind, list_relations};
-use crate::storage::{FormatVersion, ReadTx, Storage};
+use crate::store::{FormatVersion, ReadTx, Storage};
 
 const MAGIC: &[u8; 8] = b"KYZODMP2";
 
@@ -56,7 +56,7 @@ pub struct DumpClockFloorViolation {
 /// whose rows this dump is about to scan — by reference: there is no way
 /// to call this before a snapshot exists, so the snapshot-then-floor
 /// order the proof below depends on cannot be reordered by a future edit,
-/// exactly like [`FjallStorage::stamp_after_snapshot`](crate::storage::fjall::FjallStorage).
+/// exactly like [`FjallStorage::stamp_after_snapshot`](crate::store::fjall::FjallStorage).
 ///
 /// PROOF the recorded floor bounds every stamp `_snapshot` can show: a
 /// write transaction mints its system stamp — and bumps the clock's
@@ -244,4 +244,80 @@ fn read_pair(r: &mut impl Read) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         bail!("truncated dump: key without a value");
     };
     Ok(Some((k, v)))
+}
+
+#[cfg(test)]
+mod pins {
+    //! Backup floor law pins (re-homed from storage/tests.rs).
+
+    use kyzo_model::value::{DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs};
+
+    use crate::store::time::ClaimPolarity;
+    use crate::data::relation::StoredRelationMetadata;
+    use crate::session::access::AccessLevel;
+    use crate::session::catalog::{KeyspaceKind, RelationHandle, SystemKey};
+    use crate::store::backup::{DumpClockFloorViolation, dump_storage};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
+
+    fn facts_handle(id: RelationId, name: &str) -> RelationHandle {
+        use smartstring::{LazyCompact, SmartString};
+        RelationHandle {
+            name: SmartString::<LazyCompact>::from(name),
+            id,
+            metadata: StoredRelationMetadata {
+                keys: vec![],
+                non_keys: vec![],
+            },
+            put_triggers: vec![],
+            rm_triggers: vec![],
+            replace_triggers: vec![],
+            access_level: AccessLevel::default(),
+            indices: vec![],
+            description: SmartString::default(),
+            constraints: vec![],
+            keyspace_kind: KeyspaceKind::Facts,
+        }
+    }
+
+    fn stamped_row(
+        rel: RelationId,
+        name: &str,
+        valid_ts: i64,
+        sys: ValidityTs,
+    ) -> (StorageKey, Vec<u8>) {
+        let slot = |ts: ValidityTs| DataValue::Validity(ValiditySlot::from_stored(ts, true));
+        let tuple: Tuple = Tuple::from_vec(vec![
+            DataValue::Str(name.into()),
+            slot(ValidityTs::from_raw(valid_ts)),
+            slot(sys),
+        ]);
+        (tuple.encode_as_key(rel), vec![ClaimPolarity::Assert.encode()])
+    }
+
+    #[test]
+    fn dump_refuses_a_row_stamped_above_its_own_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rel = RelationId::new(100).expect("below cap");
+        let handle = facts_handle(rel, "floor_test");
+        let bad_sys = ValidityTs::from_raw(
+            crate::session::current_validity().unwrap().raw() + 1_000_000_000,
+        );
+        let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
+        let mut tx = db.write_tx().unwrap();
+        tx.put(
+            &SystemKey::Relation("floor_test").encode(),
+            &handle.encode().unwrap(),
+        )
+        .unwrap();
+        tx.put(&key, &val).unwrap();
+        tx.commit().unwrap();
+        let dump = dir.path().join("dump.kyzo");
+        let err = dump_storage(&db, &dump).unwrap_err();
+        assert!(
+            err.downcast_ref::<DumpClockFloorViolation>().is_some(),
+            "expected a typed DumpClockFloorViolation, got: {err}"
+        );
+    }
 }

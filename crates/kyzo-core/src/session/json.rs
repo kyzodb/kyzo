@@ -41,7 +41,7 @@ use std::collections::BTreeMap;
 use crate::data::json::format_error_as_json;
 use kyzo_model::value::DataValue;
 use crate::session::db::Db;
-use crate::storage::Storage;
+use crate::store::Storage;
 
 impl<S: Storage> Db<S> {
     /// Run a script with JSON-encoded parameters, returning a JSON envelope
@@ -103,7 +103,7 @@ impl<S: Storage> Db<S> {
 mod tests {
     use super::*;
     use crate::session::db::Db;
-    use crate::storage::fjall::new_fjall_storage;
+    use crate::store::fjall::new_fjall_storage;
 
     #[test]
     fn run_script_json_success_envelope_has_ok_headers_rows() {

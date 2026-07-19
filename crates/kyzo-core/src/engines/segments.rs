@@ -28,7 +28,7 @@
 //!
 //! - **Readers witness AFTER opening a snapshot**
 //!   ([`SegmentEngine::generation_after_snapshot`]): the open
-//!   [`ReadTx`](crate::storage::ReadTx) is required by signature so a
+//!   [`ReadTx`](crate::store::ReadTx) is required by signature so a
 //!   generation cannot be sampled before the snapshot that must see it.
 //! - **Writers bump BEFORE commit** ([`SegmentEngine::bump_before_commit`]):
 //!   if a commit's rows are visible to any snapshot, its bump already
@@ -50,7 +50,7 @@ use std::sync::{Arc, Mutex};
 use kyzo_model::value::{DataValue, RelationId, Tuple};
 use crate::engines::projection::{Generation, ProjectionBuilder, ResidentIndexKey, Sealed, Stale};
 use crate::session::generation::RelationGeneration;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 
 /// Consecutive misses at one live generation before a rebuild is admitted.
 /// One miss declines (not yet proven stable); the second at the same
@@ -334,8 +334,8 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sim::SimStorage;
-    use crate::storage::Storage;
+    use crate::store::sim::SimStorage;
+    use crate::store::Storage;
 
     fn row(vals: &[i64]) -> Tuple {
         vals.iter().map(|&i| DataValue::from(i)).collect()

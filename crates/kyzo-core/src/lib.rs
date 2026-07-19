@@ -302,7 +302,37 @@ pub(crate) mod react {
 // notifications, and `constraint` enforcement at commit (P112). No
 // module-level `allow(dead_code)` (P112).
 pub(crate) mod session;
-pub(crate) mod storage;
+/// Ordered substrate: contract, transactions, fjall adapter, backup, walks.
+/// Module tree is inline so seats load from `store/*.rs` without a
+/// `store/mod.rs` (that path is not required by the cut destiny).
+pub(crate) mod store {
+    pub(crate) mod contract;
+    pub(crate) mod tx;
+    pub(crate) mod fjall;
+    pub(crate) mod backup;
+    pub(crate) mod verify_walk;
+    pub(crate) mod skip_walk;
+    #[allow(dead_code)]
+    pub(crate) mod merkle;
+    pub(crate) mod retry;
+    #[allow(dead_code)]
+    pub(crate) mod scratch;
+    pub(crate) mod keys;
+    pub(crate) mod time;
+    // Sim instrument lives at kyzo-crashfs (seat); path-included here so the
+    // sealed Storage trait can admit it as the contract's own test double.
+    #[cfg(any(test, feature = "bench-internals"))]
+    #[cfg_attr(all(feature = "bench-internals", not(test)), allow(dead_code))]
+    #[path = "../../kyzo-crashfs/src/sim.rs"]
+    pub(crate) mod sim;
+
+    pub use contract::{FormatVersion, Storage};
+    pub(crate) use contract::{SystemClock, SystemClockRefuse};
+    pub use tx::{
+        Aborted, BackendIoError, CommitCorruption, CommitFailure, CommitIo, Committed,
+        ConflictError, ReadTx, Slice, WriteTx,
+    };
+}
 pub(crate) mod typestate;
 
 // Trial (issue #34): single-node SSI serializability checker. Test-only,
@@ -317,14 +347,14 @@ pub use kyzo_model::value::{
     Arity, AsOf, DataValue, Num, RegexSource, RelationId, StorageKey, Tuple, TupleKey, TupleT,
     UuidWrapper, Validity, ValidityTs, Vector, decode_tuple_from_key,
 };
-pub use storage::backup::{dump_storage, restore_storage};
-pub use storage::fjall::{
+pub use store::backup::{dump_storage, restore_storage};
+pub use store::fjall::{
     FjallReadTx, FjallStorage, FjallWriteTx, StorageOptions, StorageStats, new_fjall_storage,
     new_fjall_storage_with,
 };
-pub use storage::retry::retry_on_conflict;
-pub use storage::verify::{CorruptEntry, VerifyReport, verify_storage};
-pub use storage::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+pub use store::retry::retry_on_conflict;
+pub use store::verify_walk::{CorruptEntry, VerifyReport, verify_storage};
+pub use store::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 
 /// Build→seal→query projection machine (story #305). Public so compile-fail
 /// proofs and later kind parameterizations share one crate-root door.

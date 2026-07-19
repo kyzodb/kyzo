@@ -56,7 +56,7 @@ use smartstring::{LazyCompact, SmartString};
 
 use crate::fixed_rule::NamedRows;
 use crate::session::db::Db;
-use crate::storage::Storage;
+use crate::store::Storage;
 
 /// Represents the kind of operation that triggered the callback.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -220,8 +220,8 @@ mod exactly_once_battery {
 
     use kyzo_model::value::DataValue;
     use crate::session::db::Db;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::sim::{FaultConfig, SimStorage};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::sim::{FaultConfig, SimStorage};
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()

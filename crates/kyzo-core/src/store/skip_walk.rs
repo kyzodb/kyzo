@@ -75,7 +75,7 @@
 //!    next poll re-seeks the identical (already-known-bad) range and
 //!    re-yields the same error, so a caller that keeps polling past an
 //!    `Err` cannot silently skip bytes it never judged.
-//! 3. Peeks the row's [`ClaimPolarity`](crate::data::bitemporal::ClaimPolarity)
+//! 3. Peeks the row's [`ClaimPolarity`](crate::store::time::ClaimPolarity)
 //!    from its value (`claim_polarity_of_value`) and hands `(key, polarity,
 //!    as_of)` to the kernel (`check_key_for_bitemporal`), which returns
 //!    an optional tuple to emit and the SPLICED bound for the next seek —
@@ -135,7 +135,7 @@
 
 use miette::Result;
 
-use crate::data::bitemporal::{
+use crate::store::time::{
     check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
 };
 use kyzo_model::value::AsOf;
@@ -254,7 +254,7 @@ mod tests {
     use std::ops::Bound;
 
     use super::*;
-    use crate::data::bitemporal::ClaimPolarity;
+    use crate::store::time::ClaimPolarity;
     use kyzo_model::value::{DataValue, Validity, ValiditySlot, ValidityTs};
     use kyzo_model::value::{RelationId, TupleT};
 

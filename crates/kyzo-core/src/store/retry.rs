@@ -20,7 +20,7 @@ use std::num::NonZeroUsize;
 
 use miette::Result;
 
-use crate::storage::{
+use crate::store::{
     CommitCorruption, CommitFailure, CommitIo, ConflictError, ReadTx, Storage, WriteTx,
 };
 
@@ -190,7 +190,7 @@ pub(crate) fn put_attempt(
 /// `attempt` must be a complete transaction cycle — create, read/write,
 /// commit — so each retry sees a fresh snapshot. Non-conflict errors
 /// propagate immediately. `max_attempts` bounds pathological contention;
-/// exhausting it returns the final [`crate::storage::ConflictError`].
+/// exhausting it returns the final [`crate::store::ConflictError`].
 /// Zero attempts are unrepresentable: the budget is [`NonZeroUsize`] at the
 /// API, not a runtime check after mint.
 ///

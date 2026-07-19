@@ -256,7 +256,7 @@ Format: `path` — description
 `crates/kyzo-model/src/envelope/json.rs` — DataValue ↔ JSON / serde wire conversions (NamedRows diagnostic envelopes stay in kyzo-core data/json)
 `crates/kyzo-model/src/envelope/arrow.rs` — Arrow-shaped wire envelope for values crossing process boundaries
 `crates/kyzo-model/src/format.rs` — KyzoScript pretty-printer (proof → one canonical source text); value byte encode is value/canonical.rs
-`crates/kyzo-model/src/format/tests.rs` — property and round-trip tests for the one-law encoding
+`crates/kyzo-model/src/format/tests.rs` — encoding-law battery ownership: corpus + laws 1–3 (round-trip, exhaustive-pairwise order embedding, no-panic / byte-flip harness); the one law's property suite, not store scenarios
 `crates/kyzo-model/src/lib.rs` — vocabulary crate root: types and parse, no engine state
 `crates/kyzo-model/src/parse/expr.rs` — lifts KyzoScript expression syntax into program IR
 `crates/kyzo-model/src/parse/grammar.pest` — pest grammar that owns KyzoScript surface syntax

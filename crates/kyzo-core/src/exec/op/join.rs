@@ -28,7 +28,7 @@ use crate::engines::segments::Segments;
 use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter};
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 use itertools::Itertools;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};

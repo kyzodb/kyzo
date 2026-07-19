@@ -35,8 +35,8 @@ use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
 use crate::data::program::InputRelationHandle;
 use kyzo_model::program::symbol::Symbol;
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
-use crate::storage::Storage;
-use crate::storage::fjall::new_fjall_storage;
+use crate::store::Storage;
+use crate::store::fjall::new_fjall_storage;
 use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------

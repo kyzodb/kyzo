@@ -110,7 +110,7 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use kyzo_model::value::DataValue;
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::session::catalog::RelationHandle;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 
 // ---------------------------------------------------------------------------
 // Config.
@@ -370,8 +370,8 @@ mod tests {
     use kyzo_model::SourceSpan;
     use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::{Storage, WriteTx};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
 
     // -- fixture construction -------------------------------------------------
 

@@ -113,13 +113,13 @@ use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::bitemporal::ClaimPolarity;
+use crate::store::time::ClaimPolarity;
 use crate::data::program::{InputProgram, InputRelationHandle};
 use crate::data::relation::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
 use crate::fixed_rule::{DEFAULT_FIXED_RULES, FixedRule};
 use crate::parse::parse_script;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
-use crate::storage::{ReadTx, WriteTx};
+use crate::store::{ReadTx, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{
@@ -1548,8 +1548,8 @@ mod tests {
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
     use kyzo_model::value::decode_tuple_from_key;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::{ConflictError, Storage};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{ConflictError, Storage};
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {

@@ -87,7 +87,7 @@ use crate::exec::fixpoint::delta_store::TupleInIter;
 use crate::session::catalog::get_relation;
 use crate::session::current_validity;
 use crate::session::db::{Db, ScriptOptions, SessionTx};
-use crate::storage::{ReadTx, Storage};
+use crate::store::{ReadTx, Storage};
 
 /// The outcome of one `::verify` run. Never a bare bool: a MATCH, a
 /// reproducible MISMATCH (both answer sets, for a filed engine issue), or a
@@ -686,13 +686,13 @@ impl<S: Storage> Db<S> {
 mod tests {
     use super::*;
     use kyzo_model::value::DataValue;
-    use crate::storage::fjall::new_fjall_storage;
+    use crate::store::fjall::new_fjall_storage;
 
     fn no_params() -> BTreeMap<String, kyzo_model::value::DataValue> {
         BTreeMap::new()
     }
 
-    fn seeded_db() -> Db<crate::storage::fjall::FjallStorage> {
+    fn seeded_db() -> Db<crate::store::fjall::FjallStorage> {
         let dir = tempfile::tempdir().expect("tempdir");
         let storage = new_fjall_storage(dir.path()).expect("open fjall storage");
         // Leak the tempdir so the store outlives this function — the test
@@ -870,7 +870,7 @@ mod tests {
             let mut rng = Rng::new(seed);
             let (program, entries) = gen_program(&mut rng);
             let db =
-                Db::new(crate::storage::sim::SimStorage::new(seed)).expect("open sim-backed db");
+                Db::new(crate::store::sim::SimStorage::new(seed)).expect("open sim-backed db");
             for (rel, rows) in &program.facts {
                 let arity = rows.iter().next().map(|t| t.len()).unwrap_or(0);
                 db.run_script(&facts_script(rel, arity, rows), no_params())
@@ -941,7 +941,7 @@ mod tests {
                 // KyzoScript syntax to invoke an unregistered algorithm.
                 continue;
             }
-            let db = Db::new(crate::storage::sim::SimStorage::new(0xC09A))
+            let db = Db::new(crate::store::sim::SimStorage::new(0xC09A))
                 .unwrap_or_else(|e| panic!("{name}: db open: {e}"));
             for (rel, arity) in edb_relations(&program) {
                 db.run_script(&facts_script(rel, arity, &BTreeSet::new()), no_params())

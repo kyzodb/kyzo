@@ -31,8 +31,8 @@ use crate::engines::gazetteer::{
     Gazetteer, GazetteerConfig, Tag, compile_dictionary, gazetteer_dict_metadata,
 };
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
-use crate::storage::fjall::new_fjall_storage;
-use crate::storage::{Storage, WriteTx};
+use crate::store::fjall::new_fjall_storage;
+use crate::store::{Storage, WriteTx};
 
 fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHandle {
     let key_bindings = metadata

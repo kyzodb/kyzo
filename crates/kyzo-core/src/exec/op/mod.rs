@@ -157,7 +157,7 @@ use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::session::catalog::RelationHandle;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 
 #[cfg(test)]
 use crate::exec::op::batch_ops::{BATCH_ROWS, BatchTupleFilter};
@@ -1011,8 +1011,8 @@ mod tests {
     use crate::engines::segments::SegmentEngine;
     use crate::exec::fixpoint::delta_store::RegularTempStore;
     use crate::session::catalog::create_relation;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::{Storage, WriteTx};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)

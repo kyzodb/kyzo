@@ -27,8 +27,8 @@ use crate::engines::sparse::{
     Sparse, SparseSearchParams, sparse_index_metadata, sparse_put, sparse_total_docs,
 };
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
-use crate::storage::fjall::new_fjall_storage;
-use crate::storage::{Storage, WriteTx};
+use crate::store::fjall::new_fjall_storage;
+use crate::store::{Storage, WriteTx};
 use smartstring::SmartString;
 
 fn col(name: &str, coltype: ColType) -> ColumnDef {

@@ -23,7 +23,7 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::bitemporal::ClaimPolarity;
+use crate::store::time::ClaimPolarity;
 use crate::data::expr::Expr;
 use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::fixed_rule::NamedRows;
@@ -31,7 +31,7 @@ use crate::session::catalog::{
     IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency, TEMPORAL_POSTING_LEADING_COLUMN,
 };
 use crate::session::db::{SessionTx, status_ok};
-use crate::storage::WriteTx;
+use crate::store::WriteTx;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple, ValidityTs, decode_tuple_from_kv};
@@ -323,7 +323,7 @@ impl<T: WriteTx> SessionTx<T> {
                     // collapse the history this backfill must reproduce
                     // whole), and its polarity from the value.
                     let tuple = kyzo_model::value::decode_tuple_from_key(k, keys_len + 2)?;
-                    let polarity = crate::data::bitemporal::claim_polarity_of_value(v)?;
+                    let polarity = crate::store::time::claim_polarity_of_value(v)?;
                     let key_cols = &tuple.as_slice()[..keys_len];
                     let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
                         bail!(
@@ -692,8 +692,8 @@ mod temporal_index_tests {
     use crate::data::program::InputRelationHandle;
     use crate::data::relation::ColType;
     use crate::session::db::{Db, ScriptOptions};
-    use crate::storage::{ReadTx, Storage};
-    use crate::storage::sim::SimStorage;
+    use crate::store::{ReadTx, Storage};
+    use crate::store::sim::SimStorage;
     use kyzo_model::value::{StoredValiditySlot, ValidityTs};
 
     fn vts(t: i64) -> ValidityTs {
@@ -816,7 +816,7 @@ mod temporal_index_tests {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => panic!("expected the tail sys slot, got {other:?}"),
                 };
-                let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
+                let polarity = crate::store::time::claim_polarity_of_value(&v)
                     .expect("posting value decodes cleanly");
                 (leading, key_col, tail_valid, tail_sys, polarity)
             })
@@ -845,7 +845,7 @@ mod temporal_index_tests {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => panic!("expected the sys slot, got {other:?}"),
                 };
-                let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
+                let polarity = crate::store::time::claim_polarity_of_value(&v)
                     .expect("base value decodes cleanly");
                 (valid, key_col, valid, sys, polarity)
             })

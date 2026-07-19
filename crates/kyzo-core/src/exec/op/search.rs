@@ -27,7 +27,7 @@ use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::exec::plan::search::SearchConfig;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 use miette::{Diagnostic, Result, bail};
 use std::collections::BTreeMap;
 use thiserror::Error;

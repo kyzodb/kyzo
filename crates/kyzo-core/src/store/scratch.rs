@@ -83,8 +83,8 @@ use miette::Result;
 
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{Aborted, CommitFailure, Committed, ReadTx, WriteTx};
+use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
+use crate::store::{Aborted, CommitFailure, Committed, ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
 /// One session's temp keyspace: an ordered map with the kernel's
@@ -157,7 +157,7 @@ impl ReadTx for TempTx {
     }
 
     /// The bitemporal skip-scan walk, inherited whole from
-    /// [`crate::storage::skip_walk`]: this backend contributes only the
+    /// [`crate::store::skip_walk`]: this backend contributes only the
     /// [`OpenSkipCursor`] impl below (one cursor over a single `BTreeMap`,
     /// re-seeked forward once per version step), never the walk itself.
     fn range_skip_scan_tuple<'a>(
@@ -279,7 +279,7 @@ impl Drop for TempTx {
 mod tests {
 
     use super::*;
-    use crate::data::bitemporal::ClaimPolarity;
+    use crate::store::time::ClaimPolarity;
     use kyzo_model::value::{DataValue, Validity, ValiditySlot, ValidityTs};
     use kyzo_model::value::{RelationId, TupleT};
 
@@ -469,9 +469,9 @@ mod tests {
     // del_range oracles) while still forcing cross-backend agreement, which
     // independently backstops every mutant above.
 
-    use crate::storage::Storage;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::sim::{SimRng, SimStorage};
+    use crate::store::Storage;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::sim::{SimRng, SimStorage};
 
     const CAP: usize = 10_000;
 

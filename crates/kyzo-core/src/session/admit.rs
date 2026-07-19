@@ -30,7 +30,7 @@ use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::bitemporal::ClaimPolarity;
+use crate::store::time::ClaimPolarity;
 use crate::data::expr::Expr;
 use crate::data::program::{
     FixedRuleApply, InputInlineRulesOrFixed, InputProgram, InputRelationHandle, RelationOp, Trivia,
@@ -45,7 +45,7 @@ use crate::session::catalog::{
 };
 use crate::session::db::{Db, SessionTx};
 use crate::session::observe::{CallbackCollector, CallbackOp};
-use crate::storage::{Storage, WriteTx};
+use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::program::symbol::Symbol;
@@ -1326,8 +1326,8 @@ mod bulk_write_tests {
     use kyzo_model::value::DataValue;
     use kyzo_model::value::Tuple;
     use crate::session::db::Db;
-    use crate::storage::sim::SimStorage;
-    use crate::storage::{ReadTx, Storage};
+    use crate::store::sim::SimStorage;
+    use crate::store::{ReadTx, Storage};
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
@@ -1595,7 +1595,7 @@ mod trigger_cache_battery {
     use kyzo_model::value::DataValue;
     use crate::fixed_rule::NamedRows;
     use crate::session::db::Db;
-    use crate::storage::sim::SimStorage;
+    use crate::store::sim::SimStorage;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()

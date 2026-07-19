@@ -30,7 +30,7 @@ use crate::exec::op::batch_ops::{
 use crate::exec::op::join::PrefixProbeBatchJoin;
 use crate::session::catalog::KeyspaceKind;
 use crate::session::catalog::RelationHandle;
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 use itertools::Itertools;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -496,8 +496,8 @@ mod segment_gate_tests {
     use kyzo_model::value::ValidityTs;
     use crate::engines::segments::SegmentEngine;
     use crate::session::catalog::create_relation;
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::{Storage, WriteTx};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)

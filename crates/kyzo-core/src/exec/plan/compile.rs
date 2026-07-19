@@ -157,7 +157,7 @@ use crate::exec::op::{PlanInvariantError, RelAlgebra, SearchRA};
 use crate::exec::fixpoint::delta_store::{RegularTempStore, TupleInIter};
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, IndexRef, RelationHandle, get_relation};
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 
 /// How the compile tier uses each argument position of a stored-relation
 /// atom, for index selection. Owns [`RelationHandle::choose_index`] so the
@@ -1162,8 +1162,8 @@ mod tests {
     use crate::session::access::AccessLevel;
     use crate::session::catalog::KeyspaceKind;
     use crate::session::catalog::{create_relation, set_access_level};
-    use crate::storage::fjall::{FjallStorage, new_fjall_storage};
-    use crate::storage::{Storage, WriteTx};
+    use crate::store::fjall::{FjallStorage, new_fjall_storage};
+    use crate::store::{Storage, WriteTx};
 
     // ── plumbing ─────────────────────────────────────────────────────────
 

@@ -60,8 +60,8 @@ use thiserror::Error;
 
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{
+use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
+use crate::store::{
     Aborted, BackendIoError, CommitFailure, CommitIo, Committed, ConflictError, FormatVersion,
     ReadTx, Storage, SystemClock, WriteTx,
 };
@@ -1001,5 +1001,275 @@ impl Drop for FjallWriteTx {
         if self.tx.is_some() && !std::thread::panicking() {
             panic!("Open WriteTx dropped without commit() or abort(self)");
         }
+    }
+}
+
+#[cfg(test)]
+mod pins {
+    //! Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).
+
+    use std::collections::BTreeMap;
+
+    use fjall::Slice;
+    use kyzo_model::value::{
+        AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
+    };
+
+    use crate::store::time::ClaimPolarity;
+    use crate::store::fjall::{new_fjall_storage, new_fjall_storage_with, StorageOptions};
+    use crate::store::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+
+    /// Naive as-of reference: full-scan every version, group by payload, pick
+    /// newest at-or-before `at`, keep only assertive. Seek-based scans must match.
+    fn as_of_oracle(history: &[(&str, i64, bool)], at: i64) -> Vec<(String, i64)> {
+        let mut newest: BTreeMap<String, (i64, bool)> = BTreeMap::new();
+        for (name, ts, assert) in history {
+            if *ts <= at {
+                let e = newest.entry(name.to_string()).or_insert((*ts, *assert));
+                if *ts > e.0 {
+                    *e = (*ts, *assert);
+                }
+            }
+        }
+        newest
+            .into_iter()
+            .filter(|(_, (_, assert))| *assert)
+            .map(|(name, (ts, _))| (name, ts))
+            .collect()
+    }
+
+    fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
+        let slot =
+            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(t), true));
+        let tuple: Tuple =
+            Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
+        tuple.encode_as_key(rel)
+    }
+
+    fn pol_val(assert: bool) -> Vec<u8> {
+        vec![if assert {
+            ClaimPolarity::Assert
+        } else {
+            ClaimPolarity::Retract
+        }
+        .encode()]
+    }
+
+    fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (StorageKey, Vec<u8>) {
+        (bitemp_key(rel, name, ts, 1), pol_val(assert))
+    }
+
+    #[test]
+    fn time_travel_matches_naive_oracle() {
+        let history: &[(&str, i64, bool)] = &[
+            ("a", 1, true),
+            ("a", 3, true),
+            ("a", 5, false),
+            ("a", 7, true),
+            ("b", 2, true),
+            ("b", 6, false),
+            ("c", 4, false),
+            ("d", 9, true),
+            ("e", 1, true),
+            ("e", 2, false),
+            ("e", 3, true),
+            ("e", 4, false),
+        ];
+        let rel = RelationId::new(7).expect("below cap");
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        for (name, ts, assert) in history {
+            let (k, v) = vld_row(rel, name, *ts, *assert);
+            tx.put(&k, &v).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let lower = rel.raw_encode().to_vec();
+        let upper = rel.next().expect("below cap").raw_encode().to_vec();
+        let tx = db.read_tx().unwrap();
+        for at in 0..=10i64 {
+            let got: Vec<(String, i64)> = tx
+                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
+                .map(|r| {
+                    let t = r.unwrap();
+                    let name = match &t.as_slice()[0] {
+                        DataValue::Str(s) => s.to_string(),
+                        other => panic!("unexpected {other:?}"),
+                    };
+                    let ts = match &t.as_slice()[1] {
+                        DataValue::Validity(v) => v.ts_micros(),
+                        other => panic!("unexpected {other:?}"),
+                    };
+                    (name, ts)
+                })
+                .collect();
+            let want = as_of_oracle(history, at);
+            assert_eq!(got, want, "as-of {at}");
+        }
+    }
+
+    #[test]
+    fn inverted_ranges_under_contention_commit_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        {
+            let mut tx = db.write_tx().unwrap();
+            tx.put(b"a", b"1").unwrap();
+            tx.put(b"m", b"2").unwrap();
+            tx.commit().unwrap();
+        }
+        let mut tx = db.write_tx().unwrap();
+        assert_eq!(tx.range_scan(b"z", b"a").count(), 0, "inverted scan");
+        assert_eq!(tx.range_scan(b"m", b"m").count(), 0, "empty scan");
+        tx.del_range(b"z", b"a").unwrap();
+        assert_eq!(
+            tx.range_skip_scan_tuple(b"z", b"a", AsOf::current(ValidityTs::from_raw(0)))
+                .count(),
+            0,
+            "inverted skip scan"
+        );
+        {
+            let mut w = db.write_tx().unwrap();
+            w.put(b"c", b"concurrent").unwrap();
+            w.commit().unwrap();
+        }
+        tx.put(b"mine", b"x").unwrap();
+        tx.commit()
+            .expect("inverted ranges tracked nothing: commit must succeed, not panic");
+        let mut tx = db.write_tx().unwrap();
+        tx.put(b"after", b"ok").unwrap();
+        tx.commit().unwrap();
+        let r = db.read_tx().unwrap();
+        assert_eq!(r.get(b"m").unwrap(), Some(Slice::from(b"2")));
+        assert_eq!(r.get(b"mine").unwrap(), Some(Slice::from(b"x")));
+        assert_eq!(r.get(b"after").unwrap(), Some(Slice::from(b"ok")));
+    }
+
+    #[test]
+    fn write_write_race_aborts_second_committer() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut tx1 = db.write_tx().unwrap();
+        let mut tx2 = db.write_tx().unwrap();
+        tx1.put(b"ww", b"1").unwrap();
+        tx2.put(b"ww", b"2").unwrap();
+        tx1.commit().expect("the FIRST committer must never abort");
+        let err = tx2
+            .commit()
+            .expect_err("a write-write race must abort the second committer");
+        assert!(
+            err.is_conflict(),
+            "the write-write abort must be the typed conflict, got {err:?}"
+        );
+        let _ = ConflictError;
+        assert_eq!(
+            db.read_tx().unwrap().get(b"ww").unwrap(),
+            Some(Slice::from(b"1")),
+            "the aborted writer must leave no trace: first committer wins"
+        );
+        // Empty write set certifies nothing.
+        let ro = db.write_tx().unwrap();
+        assert_eq!(ro.get(b"ww").unwrap(), Some(Slice::from(b"1")));
+        let mut w = db.write_tx().unwrap();
+        w.put(b"ww", b"3").unwrap();
+        w.commit().unwrap();
+        ro.commit()
+            .expect("an empty-write-set commit never aborts, clobbered reads or not");
+    }
+
+    #[test]
+    fn concurrent_increments_lose_nothing_at_the_storage_layer() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(new_fjall_storage(dir.path()).unwrap());
+        let rel = RelationId::new(7).expect("below cap");
+        let lower = rel.raw_encode().to_vec();
+        let upper = rel.next().expect("below cap").raw_encode().to_vec();
+
+        let val_of = |v: i64| -> Vec<u8> {
+            let mut out = Vec::new();
+            out.push(ClaimPolarity::Assert.encode());
+            kyzo_model::value::append_canonical(&mut out, &DataValue::from(v));
+            out
+        };
+        let key_at = |stamp: ValidityTs| -> StorageKey {
+            let slot = DataValue::Validity(ValiditySlot::from_stored(stamp, true));
+            let tuple: Tuple = Tuple::from_vec(vec![DataValue::from(0), slot.clone(), slot]);
+            tuple.encode_as_key(rel)
+        };
+        let current = |rows: Vec<Tuple>| -> i64 {
+            assert_eq!(rows.len(), 1, "exactly one live fact, got {rows:?}");
+            rows[0].last().unwrap().get_int().expect("counter int")
+        };
+
+        {
+            let mut tx = db.write_tx().unwrap();
+            let stamp = tx.system_stamp();
+            tx.put(&key_at(stamp), &val_of(0)).unwrap();
+            tx.commit().unwrap();
+        }
+
+        const PER_THREAD: i64 = 200;
+        let commits = AtomicI64::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let db = db.clone();
+                let commits = &commits;
+                let (lower, upper) = (lower.clone(), upper.clone());
+                let (val_of, key_at) = (&val_of, &key_at);
+                scope.spawn(move || {
+                    for _ in 0..PER_THREAD {
+                        loop {
+                            let mut tx = db.write_tx().unwrap();
+                            let stamp = tx.system_stamp();
+                            let rows: Vec<Tuple> = tx
+                                .range_skip_scan_tuple(
+                                    &lower,
+                                    &upper,
+                                    AsOf::current(ValidityTs::from_raw(i64::MAX)),
+                                )
+                                .map(|r| r.unwrap())
+                                .collect();
+                            let old = current(rows);
+                            tx.put(&key_at(stamp), &val_of(old + 1)).unwrap();
+                            match tx.commit() {
+                                Ok(_committed) => {
+                                    commits.fetch_add(1, Ordering::SeqCst);
+                                    break;
+                                }
+                                Err(e) if e.is_conflict() => continue,
+                                Err(e) => panic!("unexpected commit error: {e:?}"),
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        let rtx = db.read_tx().unwrap();
+        let rows: Vec<Tuple> = rtx
+            .range_skip_scan_tuple(
+                &lower,
+                &upper,
+                AsOf::current(ValidityTs::from_raw(i64::MAX)),
+            )
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            current(rows),
+            2 * PER_THREAD,
+            "every Ok commit observed ({} commits)",
+            commits.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn format_version_rejects_noncanonical_and_v4_boundary() {
+        assert!(FormatVersion::parse(b"6").is_ok());
+        assert!(FormatVersion::parse(b"06").is_err());
+        assert!(FormatVersion::parse(b"4").is_ok()); // older stamps parse so mismatch can NAME them
+        let _ = (StorageOptions::default(), new_fjall_storage_with);
     }
 }

@@ -124,7 +124,7 @@ use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::session::catalog::RelationHandle;
-use crate::storage::{ReadTx, WriteTx};
+use crate::store::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
@@ -950,8 +950,8 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use crate::fixed_rule::CancelFlag;
     use crate::session::catalog::create_relation;
-    use crate::storage::Storage;
-    use crate::storage::fjall::new_fjall_storage;
+    use crate::store::Storage;
+    use crate::store::fjall::new_fjall_storage;
 
     macro_rules! lsh_rows {
         ($($arg:expr),* $(,)?) => {

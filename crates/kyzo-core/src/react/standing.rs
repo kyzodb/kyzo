@@ -80,7 +80,7 @@ use crate::session::observe::{CallbackEvent, CallbackOp};
 use crate::session::current_validity;
 use crate::session::db::{Db, ScriptOptions, SessionTx};
 use crate::session::catalog::get_relation;
-use crate::storage::Storage;
+use crate::store::Storage;
 
 /// Named refusal when [`Db::register_standing`] is given a non-standing script.
 #[derive(Debug, Error, Diagnostic)]
@@ -462,7 +462,7 @@ mod tests {
         MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram,
     };
     use kyzo_model::value::{DataValue, Num};
-    use crate::storage::fjall::new_fjall_storage;
+    use crate::store::fjall::new_fjall_storage;
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan::default())
@@ -944,7 +944,7 @@ mod tests {
         ]
     }
 
-    fn create_relation(db: &Db<crate::storage::fjall::FjallStorage>, name: &str, arity: usize) {
+    fn create_relation(db: &Db<crate::store::fjall::FjallStorage>, name: &str, arity: usize) {
         let cols = (0..arity)
             .map(|i| format!("k{i}: Int"))
             .collect::<Vec<_>>()

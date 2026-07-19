@@ -29,7 +29,7 @@ use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::exec::op::join::{eliminate_from_tuple, get_eliminate_indices};
-use crate::storage::ReadTx;
+use crate::store::ReadTx;
 use miette::{Diagnostic, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
