@@ -10,16 +10,20 @@
 //! The ruled commit door (decisions.md §25).
 //!
 //! Owns: [`SweepDoor`], [`IntentionQueue`], [`AdmittedIntent`],
-//! [`IntentOrdinal`], [`CommitOrdinal`], [`Committed`].
+//! [`IntentOrdinal`], [`CommitOrdinal`], [`Applied`], [`Committed`].
 //!
 //! Bans: timers (wake ≠ timer — park only on queue non-empty or shutdown);
 //! early ack before the batch barrier; refuse-as-durable-event to fill
-//! ordinal holes; cut advancement on ghosts; seal without session recheck.
+//! ordinal holes; cut advancement on ghosts; seal without session recheck
+//! against the Store's **current** live session; soft dual-mint of one
+//! proof type across fsync and non-fsync paths; out-of-order IntentOrdinal
+//! seal.
 //!
 //! One-door transition: [`SweepDoor`] wraps existing [`WriteTx`]
 //! `commit` / `commit_durable` as the first [`StableCommitCap`] arm's
-//! physical apply. [`Committed`] is minted only here — never from adapter
-//! `WriteTx` impls.
+//! physical apply. Two proof types for two durability strengths:
+//! [`Applied`] (process-crash) from [`SweepDoor::seal`], [`Committed`]
+//! (backing fsync) from [`SweepDoor::seal_durable`] — mint sites only here.
 
 use std::collections::VecDeque;
 
@@ -86,10 +90,52 @@ impl CommitOrdinal {
     }
 }
 
-/// Proof that an Open write transaction committed through the SweepDoor.
+/// Proof that an Open write transaction applied through the SweepDoor without
+/// a backing fsync (process-crash durable, not power-cut durable).
+///
+/// Distinct from [`Committed`]: soft dual-mint of one proof type across
+/// durability strengths is banned (decisions.md §25). Carries no
+/// [`CommitOrdinal`] — history ordinals mint only at the durable event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[must_use]
+pub struct Applied {
+    store_id: StoreId,
+    fence_epoch: FenceEpoch,
+    intent_ordinal: IntentOrdinal,
+}
+
+impl Applied {
+    /// Store identity this apply sealed under.
+    pub fn store_id(self) -> StoreId {
+        self.store_id
+    }
+
+    /// Fence epoch at the apply event.
+    pub fn fence_epoch(self) -> FenceEpoch {
+        self.fence_epoch
+    }
+
+    /// Intent ordinal that applied (contention carriage — not history).
+    pub fn intent_ordinal(self) -> IntentOrdinal {
+        self.intent_ordinal
+    }
+
+    /// Sole mint site for [`Applied`] — the SweepDoor non-fsync seal path.
+    fn mint(store_id: StoreId, fence_epoch: FenceEpoch, intent_ordinal: IntentOrdinal) -> Self {
+        Self {
+            store_id,
+            fence_epoch,
+            intent_ordinal,
+        }
+    }
+}
+
+/// Proof that an Open write transaction committed through the SweepDoor after
+/// the backing fsync (power-cut durable).
 ///
 /// Carries Store identity, fence epoch, and dense [`CommitOrdinal`]. Private
 /// fields — construction sites only inside this module (the ruled door).
+/// Mintable only after the StableCommitCap barrier returns (§25).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[must_use]
 pub struct Committed {
@@ -114,7 +160,7 @@ impl Committed {
         self.commit_ordinal
     }
 
-    /// Sole mint site for [`Committed`] — the SweepDoor seal path.
+    /// Sole mint site for [`Committed`] — the SweepDoor durable seal path.
     fn mint(store_id: StoreId, fence_epoch: FenceEpoch, commit_ordinal: CommitOrdinal) -> Self {
         Self {
             store_id,
@@ -193,6 +239,10 @@ impl IntentionQueue {
 }
 
 /// Session coordinates the SweepDoor rechecks before sealing any batch.
+///
+/// Open-time snapshot on the door is **not** live authority — admit/seal
+/// paths take a `current: &SweepSession` so a superseded session fails
+/// [`SweepRefuse::WriteSessionDead`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SweepSession {
     store_id: StoreId,
@@ -230,17 +280,21 @@ impl SweepSession {
 /// [`StableCommitCap`] barrier → sweep again.
 ///
 /// First arm: physical apply = today's [`WriteTx::commit_durable`] (native
-/// fsync proof). [`Committed`] mint lives only here.
+/// fsync proof) for [`Committed`]; [`WriteTx::commit`] for [`Applied`].
 pub struct SweepDoor {
     store_id: StoreId,
     fence_epoch: FenceEpoch,
+    /// Session this door opened under — compared to live `current` on every
+    /// admit/seal so a superseded live session cannot resurrect this door.
     session: SweepSession,
     /// Affine WriteAuthority — authorizes this door only.
     _write_authority: WriteAuthority,
     stable_commit_cap: StableCommitCap,
     queue: IntentionQueue,
     next_intent: IntentOrdinal,
-    /// Highest sealed CommitOrdinal (dense floor); next seal assigns successor.
+    /// Highest sealed IntentOrdinal among successful seals (strictly increasing).
+    last_sealed_intent: Option<IntentOrdinal>,
+    /// Highest sealed CommitOrdinal (dense floor); next durable seal assigns successor.
     highest_commit: CommitOrdinal,
     /// Predecessor-hash chain head over CommitOrdinal (sole history seal).
     predecessor_hash: [u8; 32],
@@ -272,6 +326,7 @@ impl SweepDoor {
             stable_commit_cap,
             queue: IntentionQueue::new(),
             next_intent: IntentOrdinal::ZERO,
+            last_sealed_intent: None,
             highest_commit: CommitOrdinal::ZERO,
             predecessor_hash: [0u8; 32],
         })
@@ -292,39 +347,47 @@ impl SweepDoor {
         self.highest_commit
     }
 
+    /// Last successfully sealed IntentOrdinal, if any.
+    pub fn last_sealed_intent_ordinal(&self) -> Option<IntentOrdinal> {
+        self.last_sealed_intent
+    }
+
     /// Admit an intent: mint Store-monotonic IntentOrdinal (may gap later).
-    pub fn admit(&mut self, incarnation_id: IncarnationId) -> Result<AdmittedIntent, SweepRefuse> {
-        self.recheck_session(incarnation_id)?;
+    ///
+    /// `current` is the Store's live session authority — not the open-time
+    /// snapshot alone. A superseded live session → [`SweepRefuse::WriteSessionDead`].
+    pub fn admit(
+        &mut self,
+        incarnation_id: IncarnationId,
+        current: &SweepSession,
+    ) -> Result<AdmittedIntent, SweepRefuse> {
+        self.recheck_session(incarnation_id, current)?;
         let intent_ordinal = self.next_intent;
         self.next_intent = intent_ordinal.successor()?;
         let intent = AdmittedIntent {
             intent_ordinal,
             store_id: self.store_id,
-            fence_epoch: self.fence_epoch,
+            fence_epoch: current.fence_epoch(),
             incarnation_id,
         };
         self.queue.push(intent.clone());
         Ok(intent)
     }
 
-    /// Sweep one intent through the StableCommitCap barrier.
+    /// Sweep one intent through the StableCommitCap barrier (backing fsync).
     ///
     /// Physical apply for the first arm: `WriteTx::commit_durable`.
     /// Assigns dense [`CommitOrdinal`] only on success; refuses advance no cut
-    /// on failure. Session recheck before any seal — mismatch seals zero bytes.
+    /// on failure. Session recheck against live `current` before any seal —
+    /// mismatch seals zero bytes. Intents must seal in strictly increasing
+    /// [`IntentOrdinal`] order.
     pub fn seal_durable<W: WriteTx>(
         &mut self,
         intent: AdmittedIntent,
         tx: W,
+        current: &SweepSession,
     ) -> Result<Committed, SweepSealFailure> {
-        self.recheck_session(intent.incarnation_id())
-            .map_err(SweepSealFailure::Sweep)?;
-        if intent.store_id() != self.store_id {
-            return Err(SweepSealFailure::Sweep(SweepRefuse::SessionStoreMismatch));
-        }
-        if intent.fence_epoch() != self.fence_epoch {
-            return Err(SweepSealFailure::Sweep(SweepRefuse::WriteSessionDead));
-        }
+        self.prepare_seal(&intent, current)?;
 
         // Barrier IS the arm's commit proof — first arm: native fsync apply.
         match self.stable_commit_cap {
@@ -334,6 +397,7 @@ impl SweepDoor {
             }
         }
 
+        self.note_sealed_intent(intent.intent_ordinal());
         let commit_ordinal = self
             .highest_commit
             .successor()
@@ -351,47 +415,80 @@ impl SweepDoor {
 
     /// Sweep one intent through a process-crash-durable (non-fsync) barrier.
     ///
-    /// Same ordinal / recheck law as [`seal_durable`]; physical apply is
-    /// `WriteTx::commit` (survives process crash, not power cut).
+    /// Returns [`Applied`] — never [`Committed`]. Soft dual-mint of one proof
+    /// type across durability strengths is banned. Does not assign
+    /// [`CommitOrdinal`] (history mints only at the durable event).
     pub fn seal<W: WriteTx>(
         &mut self,
         intent: AdmittedIntent,
         tx: W,
-    ) -> Result<Committed, SweepSealFailure> {
-        self.recheck_session(intent.incarnation_id())
+        current: &SweepSession,
+    ) -> Result<Applied, SweepSealFailure> {
+        self.prepare_seal(&intent, current)?;
+
+        tx.commit().map_err(SweepSealFailure::Apply)?;
+
+        self.note_sealed_intent(intent.intent_ordinal());
+        Ok(Applied::mint(
+            self.store_id,
+            self.fence_epoch,
+            intent.intent_ordinal(),
+        ))
+    }
+
+    /// Shared pre-apply law: live session recheck + intent identity + intent order.
+    fn prepare_seal(
+        &self,
+        intent: &AdmittedIntent,
+        current: &SweepSession,
+    ) -> Result<(), SweepSealFailure> {
+        self.recheck_session(intent.incarnation_id(), current)
             .map_err(SweepSealFailure::Sweep)?;
         if intent.store_id() != self.store_id {
             return Err(SweepSealFailure::Sweep(SweepRefuse::SessionStoreMismatch));
         }
-        if intent.fence_epoch() != self.fence_epoch {
+        if intent.fence_epoch() != current.fence_epoch() {
             return Err(SweepSealFailure::Sweep(SweepRefuse::WriteSessionDead));
         }
-
-        tx.commit().map_err(SweepSealFailure::Apply)?;
-
-        let commit_ordinal = self
-            .highest_commit
-            .successor()
+        self.check_intent_order(intent.intent_ordinal())
             .map_err(SweepSealFailure::Sweep)?;
-        self.predecessor_hash =
-            seal_predecessor_hash(self.predecessor_hash, self.store_id, commit_ordinal);
-        self.highest_commit = commit_ordinal;
-
-        Ok(Committed::mint(
-            self.store_id,
-            self.fence_epoch,
-            commit_ordinal,
-        ))
+        Ok(())
     }
 
-    fn recheck_session(&self, incarnation_id: IncarnationId) -> Result<(), SweepRefuse> {
-        if incarnation_id != self.session.incarnation_id()
-            || self.session.fence_epoch() != self.fence_epoch
-            || self.session.store_id() != self.store_id
+    /// Recheck ask + door against the Store's **current** live session.
+    ///
+    /// Comparing only to the open-time snapshot lets a stale door pass its
+    /// own recheck — resurrection cannot fire. Live `current` must still
+    /// equal the session this door opened under; ask incarnation must match
+    /// that live authority.
+    fn recheck_session(
+        &self,
+        incarnation_id: IncarnationId,
+        current: &SweepSession,
+    ) -> Result<(), SweepRefuse> {
+        if current != &self.session {
+            return Err(SweepRefuse::WriteSessionDead);
+        }
+        if incarnation_id != current.incarnation_id()
+            || current.fence_epoch() != self.fence_epoch
+            || current.store_id() != self.store_id
         {
             return Err(SweepRefuse::WriteSessionDead);
         }
         Ok(())
+    }
+
+    fn check_intent_order(&self, intent_ordinal: IntentOrdinal) -> Result<(), SweepRefuse> {
+        if let Some(last) = self.last_sealed_intent {
+            if intent_ordinal <= last {
+                return Err(SweepRefuse::IntentOrderRegression);
+            }
+        }
+        Ok(())
+    }
+
+    fn note_sealed_intent(&mut self, intent_ordinal: IntentOrdinal) {
+        self.last_sealed_intent = Some(intent_ordinal);
     }
 }
 
@@ -427,6 +524,11 @@ pub enum SweepRefuse {
     #[error("CommitOrdinal space exhausted at u64::MAX")]
     #[diagnostic(code(store::sweep::commit_ordinal_exhausted))]
     CommitOrdinalExhausted,
+    #[error(
+        "IntentOrderRegression: seal IntentOrdinal must strictly increase among successful seals"
+    )]
+    #[diagnostic(code(store::sweep::intent_order_regression))]
+    IntentOrderRegression,
 }
 
 /// Seal path refusal: SweepDoor law or physical apply failure.

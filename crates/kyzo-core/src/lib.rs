@@ -316,7 +316,7 @@ pub use store::fjall::{
 };
 pub use store::retry::retry_on_conflict;
 pub use store::verify_walk::{CorruptEntry, VerifyReport, verify_storage};
-pub use store::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+pub use store::{Aborted, Applied, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 // 07 identity + authority seats — host genesis injection (kyzo-bin engine.rs).
 pub use store::{
     CryptoDomain, EntropyArm, FenceEpoch, GenesisParams, GenesisSealed, GenesisSealedView,

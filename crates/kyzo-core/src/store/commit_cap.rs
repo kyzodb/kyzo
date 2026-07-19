@@ -12,7 +12,8 @@
 //! Owns: [`StableCommitCap`], [`SnapshotFork`], [`ForkGenerationWitness`].
 //!
 //! Bans: open bool capability; arm without SnapshotFork declared (omission is
-//! not exclusion); production [`super::sweep::Committed`] from kit pass alone.
+//! not exclusion); production [`super::sweep::Committed`] from kit pass alone
+//! (or from a non-fsync [`super::sweep::Applied`] path).
 //!
 //! Host injection of the arm *choice* lives in
 //! [`super::open::StableCommitCapArm`] (T8). This module owns the closed sum

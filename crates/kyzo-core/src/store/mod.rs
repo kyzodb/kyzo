@@ -31,7 +31,7 @@ pub(crate) mod authority;
 pub(crate) mod epoch;
 /// ForkGrant / RecoveryGrant + pure materialize (07 seat).
 pub(crate) mod grants;
-/// SweepDoor + IntentOrdinal/CommitOrdinal + Committed mint (07 seat).
+/// SweepDoor + IntentOrdinal/CommitOrdinal + Applied/Committed mint (07 seat).
 pub(crate) mod sweep;
 /// StableCommitCap closed sum + SnapshotFork + ForkGenerationWitness (07 seat).
 pub(crate) mod commit_cap;
@@ -67,8 +67,8 @@ pub(crate) mod sim;
 pub use contract::{FormatVersion, Storage};
 pub(crate) use contract::{SystemClock, SystemClockRefuse};
 pub use tx::{
-    Aborted, BackendIoError, CommitCorruption, CommitFailure, CommitIo, Committed, ConflictError,
-    ReadTx, Slice, WriteTx,
+    Aborted, Applied, BackendIoError, CommitCorruption, CommitFailure, CommitIo, Committed,
+    ConflictError, ReadTx, Slice, WriteTx,
 };
 pub use open::{
     EntropyArm, GenesisParams, GenesisSealed, GenesisSealedView, SizeClass, StagingTtl,
