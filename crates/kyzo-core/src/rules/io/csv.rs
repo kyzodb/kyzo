@@ -32,6 +32,7 @@ use miette::{IntoDiagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
 use crate::exec::stdlib::convert::{op_to_float, op_to_uuid};
 use crate::exec::plan::program::{
     FixedRuleOptionNotFoundError, WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
@@ -210,7 +211,7 @@ impl FixedRule for CsvReader {
 
     fn arity(
         &self,
-        options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: &FixedRuleOptions,
         _rule_head: &[Symbol],
         span: SourceSpan,
     ) -> Result<usize> {

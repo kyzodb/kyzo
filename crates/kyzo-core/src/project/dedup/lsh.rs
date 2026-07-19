@@ -727,7 +727,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
         let chunks = decode_inv_chunks(found, inv_idx, inv_key_part)?;
         lsh_del(tx, tuple, Some(chunks), idx, inv_idx)?;
     }
-    let to_index = extractor.eval(tuple)?;
+    let to_index = crate::exec::expr::eval_expr(extractor, tuple)?;
     let min_hash = match &to_index {
         DataValue::Null => return Ok(()),
         DataValue::List(l) => HashValues::new(l.iter().map(element_bytes), perms),
@@ -923,7 +923,7 @@ fn lsh_search_body(
             ))
         })?;
         if let Some(filter_code) = filter_code
-            && !filter_code.eval_pred(&orig_tuple)?
+            && !crate::exec::expr::eval_pred(filter_code, &orig_tuple)?
         {
             continue;
         }

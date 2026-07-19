@@ -215,7 +215,7 @@ impl Iterator for BatchFilter<'_> {
             for t in batch.into_rows() {
                 let mut keep = true;
                 for p in self.filters.iter() {
-                    match p.eval_pred(&t) {
+                    match crate::exec::expr::eval_pred(p, &t) {
                         Ok(true) => {}
                         Ok(false) => {
                             keep = false;

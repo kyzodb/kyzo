@@ -314,7 +314,7 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                             };
                             let mut keep = true;
                             for p in self.inner.filters.iter() {
-                                match p.eval_pred(&found_tuple) {
+                                match crate::exec::expr::eval_pred(p, &found_tuple) {
                                     Ok(true) => {}
                                     Ok(false) => {
                                         keep = false;

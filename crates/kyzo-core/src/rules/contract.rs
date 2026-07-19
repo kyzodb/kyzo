@@ -44,6 +44,7 @@ use thiserror::Error;
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::row::TupleIter;
 use kyzo_model::value::{AsOf, DataValue, Tuple};
@@ -739,19 +740,19 @@ mod fixed_rule_output_budget_tests {
 /// Trait for an implementation of an algorithm or a utility
 pub trait FixedRule: Send + Sync {
     /// Consuming option normalize (P086). Called once before `arity`/`run`.
-    /// Returns the (possibly rewritten) options map; the default is identity.
+    /// Returns the (possibly rewritten) options bag; the default is identity.
     fn init_options(
         &self,
-        options: BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: FixedRuleOptions,
         _span: SourceSpan,
-    ) -> Result<BTreeMap<SmartString<LazyCompact>, Expr>> {
+    ) -> Result<FixedRuleOptions> {
         Ok(options)
     }
     /// You must return the row width of the returned relation and it must be accurate.
     /// This function may be called multiple times.
     fn arity(
         &self,
-        options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: &FixedRuleOptions,
         rule_head: &[Symbol],
         span: SourceSpan,
     ) -> Result<usize>;
@@ -1408,7 +1409,7 @@ pub(crate) mod tests_support {
     pub(crate) fn prepare_fixed_rule(
         rule: &dyn FixedRule,
         inputs: Vec<TestInput>,
-        mut options: BTreeMap<SmartString<LazyCompact>, Expr>,
+        mut options: FixedRuleOptions,
     ) -> Result<PreparedFixedRule> {
         let span = SourceSpan::default();
         options = rule.init_options(options, span)?;
@@ -1439,7 +1440,7 @@ pub(crate) mod tests_support {
         let manifest = MagicFixedRuleApply {
             fixed_handle: FixedRuleHandle::new("TestRule", span),
             rule_args,
-            options: Arc::new(options),
+            options,
             span,
             arity,
             fixed_impl: Arc::new(NeverRun),
@@ -1475,7 +1476,7 @@ pub(crate) mod tests_support {
     pub(crate) fn run_fixed_rule(
         rule: &dyn FixedRule,
         inputs: Vec<TestInput>,
-        options: BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: FixedRuleOptions,
         cancel: CancelFlag,
     ) -> Result<Vec<Tuple>> {
         prepare_fixed_rule(rule, inputs, options)?.run(rule, cancel)

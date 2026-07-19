@@ -231,7 +231,7 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
 /// Evaluate the extractor and return the document text, or `None` when the
 /// extraction is `Null` (a row with no text is simply not indexed).
 fn extract_text(extractor: &Expr, tuple: &[DataValue]) -> Result<Option<String>> {
-    match extractor.eval(tuple)? {
+    match crate::exec::expr::eval_expr(extractor, tuple)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
         other @ (data_value_any!()) => bail!(FtsExtractorType {
@@ -762,7 +762,7 @@ fn fts_search_body(
             cand.push(DataValue::from(score));
         }
         if let Some(code) = filter_code
-            && !code.eval_pred(&cand)?
+            && !crate::exec::expr::eval_pred(code, &cand)?
         {
             continue;
         }

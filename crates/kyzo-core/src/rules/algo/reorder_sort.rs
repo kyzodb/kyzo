@@ -24,6 +24,7 @@ use smartstring::{LazyCompact, SmartString};
 
 use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::program::op::OP_LIST;
+use kyzo_model::program::rule::FixedRuleOptions;
 use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -55,7 +56,7 @@ impl FixedRule for ReorderSort {
                     span,
                 })
                 .collect_vec(),
-            Expr::Apply { op, args, .. } if *op == OP_LIST => args.to_vec(),
+            Expr::Apply { op, args, .. } if op == OP_LIST => args.to_vec(),
             Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
                 bail!(WrongFixedRuleOptionError {
                     name: Symbol::new("out", payload.span()),
@@ -86,8 +87,8 @@ impl FixedRule for ReorderSort {
         let mut buffer = vec![];
         for tuple in in_rel.iter()? {
             let tuple = tuple?;
-            let sorter = sort_by.eval(&tuple)?;
-            let mut s_tuple: Vec<_> = out_list.iter().map(|ex| ex.eval(&tuple)).try_collect()?;
+            let sorter = crate::exec::expr::eval_expr(&sort_by, &tuple)?;
+            let mut s_tuple: Vec<_> = out_list.iter().map(|ex| crate::exec::expr::eval_expr(ex, &tuple)).try_collect()?;
             s_tuple.push(sorter);
             buffer.push(s_tuple);
             cancel.check()?;
@@ -136,7 +137,7 @@ impl FixedRule for ReorderSort {
 
     fn arity(
         &self,
-        opts: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        opts: &FixedRuleOptions,
         _rule_head: &[Symbol],
         span: SourceSpan,
     ) -> Result<usize> {
@@ -152,7 +153,7 @@ impl FixedRule for ReorderSort {
                 val: DataValue::List(l),
                 ..
             } => l.len() + 1,
-            Expr::Apply { op, args, .. } if **op == OP_LIST => args.len() + 1,
+            Expr::Apply { op, args, .. } if *op == OP_LIST => args.len() + 1,
             Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => bail!(CannotDetermineArity(
                 "ReorderSort".to_string(),
                 "invalid option 'out' given, expect a list".to_string(),

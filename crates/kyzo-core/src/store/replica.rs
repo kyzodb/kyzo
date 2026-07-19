@@ -532,7 +532,7 @@ pub(crate) fn mint_admission_certificate(
         // Insert "operation_key" in sorted position (after origin_epoch, before post_state_root).
         let idx = bindings
             .iter()
-            .position(|(k, _)| k.as_slice() > b"operation_key")
+            .position(|(k, _)| k.as_slice() > b"operation_key".as_slice())
             .unwrap_or(bindings.len());
         bindings.insert(idx, (b"operation_key".to_vec(), MapValue::Digest32(op)));
     }

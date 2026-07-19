@@ -109,7 +109,7 @@ impl SearchRA {
 
         let search = move |row: &[DataValue]| -> Result<SearchHits> {
             cancel.check()?;
-            let q = query_expr.eval(row)?;
+            let q = crate::exec::expr::eval_expr(&query_expr, row)?;
             match cfg {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {

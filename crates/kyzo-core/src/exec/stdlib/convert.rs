@@ -70,6 +70,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Vector(_) => true,
         DataValue::Validity(vld) => vld.is_assert(),
         DataValue::Interval(_) => true,
+        DataValue::Geometry(_) => true,
         DataValue::Json(json) => match json {
             Json::Null => false,
             Json::Bool(b) => *b,
@@ -144,6 +145,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Vector(_) => 1,
         DataValue::Validity(vld) => i64::from(vld.is_assert()),
         DataValue::Interval(_) => 1,
+        DataValue::Geometry(_) => 1,
         DataValue::Json(json) => match json {
             Json::Null => 0,
             Json::Bool(b) => *b as i64,

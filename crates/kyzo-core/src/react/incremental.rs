@@ -1536,7 +1536,7 @@ mod tests {
         let fixed = crate::exec::plan::program::MagicFixedRuleApply {
             fixed_handle: FixedRuleHandle::new("?", SourceSpan::default()),
             rule_args: vec![],
-            options: std::sync::Arc::new(BTreeMap::new()),
+            options: kyzo_model::program::rule::FixedRuleOptions::empty(),
             span: SourceSpan::default(),
             arity: 1,
             fixed_impl,

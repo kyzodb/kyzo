@@ -50,7 +50,7 @@ pub(crate) fn filter_iter(
 ) -> impl Iterator<Item = Result<Tuple>> {
     it.filter_map_ok(move |t| -> Option<Result<Tuple>> {
         for p in filters.iter() {
-            match p.eval_pred(&t) {
+            match crate::exec::expr::eval_pred(p, &t) {
                 Ok(false) => return None,
                 Err(e) => return Some(Err(e)),
                 Ok(true) => {}
@@ -249,7 +249,7 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     Some(Ok(found)) => {
                         let mut keep = true;
                         for p in self.filters.iter() {
-                            match p.eval_pred(&found) {
+                            match crate::exec::expr::eval_pred(p, &found) {
                                 Ok(true) => {}
                                 Ok(false) => {
                                     keep = false;

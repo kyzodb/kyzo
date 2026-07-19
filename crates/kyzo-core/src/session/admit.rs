@@ -44,6 +44,7 @@ use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::{
     FixedRuleApply, InputInlineRulesOrFixed, InputProgram, InputRelationHandle, RelationOp, Trivia,
     WriteValidity,
@@ -1324,7 +1325,7 @@ impl<T: WriteTx> SessionTx<T> {
     /// One plain-index mirror row: the base row projected through the
     /// mapper.
     #[allow(clippy::too_many_arguments)]
-    fn plain_index_write(
+    pub(crate) fn plain_index_write(
         &mut self,
         base: &RelationHandle,
         idx_handle: &RelationHandle,
@@ -1342,7 +1343,7 @@ impl<T: WriteTx> SessionTx<T> {
     /// column, followed by the base relation's key columns — see
     /// [`IndexKind::Temporal`]'s doc comment for the key layout and why a
     /// `Plain` mapper cannot express this composition.
-    fn temporal_index_write(
+    pub(crate) fn temporal_index_write(
         &mut self,
         base: &RelationHandle,
         idx_handle: &RelationHandle,
@@ -1514,14 +1515,14 @@ pub(crate) fn make_const_rule(
     data: &[Tuple],
 ) -> Result<()> {
     let rule_symbol = Symbol::new(rule_name, SourceSpan::default());
-    let mut options = BTreeMap::new();
+    let mut options = FixedRuleOptions::empty();
     options.insert(
-        SmartString::from("data"),
+        Symbol::new("data", SourceSpan::default()),
         Expr::Const {
             val: DataValue::List(data.iter().map(|t| DataValue::List(t.to_vec())).collect()),
             span: SourceSpan::default(),
         },
-    );
+    )?;
     let options = Constant.init_options(options, SourceSpan::default())?;
     let bindings_arity = bindings.len();
     program.insert_rule(
@@ -1530,7 +1531,7 @@ pub(crate) fn make_const_rule(
             fixed: FixedRuleApply {
                 fixed_handle: FixedRuleHandle::new("Constant", SourceSpan::default()),
                 rule_args: vec![],
-                options: Arc::new(options),
+                options,
                 head: bindings,
                 arity: bindings_arity,
                 span: SourceSpan::default(),

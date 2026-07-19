@@ -541,18 +541,22 @@ fn adorn_fixed_rule_apply(
                 span,
             } => {
                 let metadata = schemas.stored_relation_schema(name, *span)?;
-                let fields: BTreeSet<_> = metadata
+                // `ColumnDef::name` is a bare `SmartString<LazyCompact>`
+                // (schema-plane, no source span); `bindings` is keyed by
+                // `Symbol` (query-plane, span-carrying but name-only
+                // `Eq`/`Ord`) — compare by string content.
+                let fields: BTreeSet<&str> = metadata
                     .keys
                     .iter()
                     .chain(metadata.non_keys.iter())
-                    .map(|col| &col.name)
+                    .map(|col| col.name.as_str())
                     .collect();
                 for k in bindings.keys() {
                     ensure!(
-                        fields.contains(&k),
+                        fields.contains(k.name.as_str()),
                         NamedFieldNotFound(
                             name.clone(),
-                            Symbol::new(k.clone(), *span),
+                            k.clone(),
                             *span,
                         )
                     );
@@ -562,12 +566,14 @@ fn adorn_fixed_rule_apply(
                     .iter()
                     .chain(metadata.non_keys.iter())
                     .enumerate()
-                    .map(|(i, col)| match bindings.get(&col.name) {
-                        // Unbound columns get positional filler names;
-                        // digit-leading names cannot collide with user
-                        // bindings (not valid identifiers in the grammar).
-                        None => Symbol::new(format!("{i}"), SourceSpan::default()),
-                        Some(k) => k.clone(),
+                    .map(|(i, col)| {
+                        match bindings.get(&Symbol::new(col.name.clone(), *span)) {
+                            // Unbound columns get positional filler names;
+                            // digit-leading names cannot collide with user
+                            // bindings (not valid identifiers in the grammar).
+                            None => Symbol::new(format!("{i}"), SourceSpan::default()),
+                            Some(k) => k.clone(),
+                        }
                     })
                     .collect();
                 MagicFixedRuleRuleArg::Stored {
@@ -579,7 +585,7 @@ fn adorn_fixed_rule_apply(
             }
         });
     }
-    let fixed_impl = bind_fixed_impl(fixed.fixed_handle.name.as_str()).ok_or_else(|| {
+    let fixed_impl = bind_fixed_impl(&fixed.fixed_handle.name).ok_or_else(|| {
         crate::rules::contract::FixedRuleNotFoundError(
             fixed.fixed_handle.name.to_string(),
             fixed.span,

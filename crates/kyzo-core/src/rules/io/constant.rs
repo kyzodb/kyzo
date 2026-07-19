@@ -30,6 +30,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
 use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -88,7 +89,7 @@ impl Constant {
     /// before `init_options`, or the option was replaced after
     /// normalization — drift, not a second validation of list shape.
     fn proven_data(
-        options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: &FixedRuleOptions,
         span: SourceSpan,
     ) -> Result<ConstantData<'_>> {
         match options.get("data") {
@@ -113,7 +114,7 @@ impl FixedRule for Constant {
 
     fn arity(
         &self,
-        options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: &FixedRuleOptions,
         rule_head: &[Symbol],
         span: SourceSpan,
     ) -> Result<usize> {
@@ -138,9 +139,9 @@ impl FixedRule for Constant {
 
     fn init_options(
         &self,
-        options: BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: FixedRuleOptions,
         span: SourceSpan,
-    ) -> Result<BTreeMap<SmartString<LazyCompact>, Expr>> {
+    ) -> Result<FixedRuleOptions> {
         let mut options = options;
         let data = options
             .get("data")
@@ -189,12 +190,12 @@ impl FixedRule for Constant {
         }
 
         options.insert(
-            SmartString::from("data"),
+            Symbol::new("data", span),
             Expr::Const {
                 val: DataValue::List(tuples),
                 span,
             },
-        );
+        )?;
         Ok(options)
     }
 }

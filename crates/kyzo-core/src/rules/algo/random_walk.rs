@@ -38,6 +38,7 @@ use rand::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
@@ -110,7 +111,7 @@ impl FixedRule for RandomWalk {
                             .map(|t| -> Result<f64> {
                                 let mut cand = current_tuple.clone();
                                 cand.extend(t.iter().cloned());
-                                Ok(match weight_expr.eval(&cand)? {
+                                Ok(match crate::exec::expr::eval_expr(weight_expr, &cand)? {
                                     DataValue::Num(n) => {
                                         let f = n.to_f64();
                                         ensure!(
@@ -180,7 +181,7 @@ impl FixedRule for RandomWalk {
 
     fn arity(
         &self,
-        _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        _options: &FixedRuleOptions,
         _rule_head: &[Symbol],
         _span: SourceSpan,
     ) -> Result<usize> {

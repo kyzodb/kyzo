@@ -36,7 +36,7 @@ use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
 use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::{DataValue, Tuple, ValidityTs, decode_tuple_from_kv};
+use kyzo_model::value::{DataValue, Tuple, TupleT, ValidityTs, decode_tuple_from_kv};
 
 /// The scan ceiling for `::merkle_root` when the caller sets no
 /// derived-tuple ceiling: 2^32 key-value pairs. Large enough for any store

@@ -26,6 +26,7 @@ use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
 use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
@@ -75,7 +76,7 @@ impl FixedRule for ShortestPathAStar {
 
     fn arity(
         &self,
-        _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        _options: &FixedRuleOptions,
         _rule_head: &[Symbol],
         _span: SourceSpan,
     ) -> Result<usize> {
@@ -98,7 +99,7 @@ fn astar(
         let mut v = node.clone();
         v.extend(goal.iter().cloned());
         let t = v;
-        let cost_val = heuristic.eval(&t)?;
+        let cost_val = crate::exec::expr::eval_expr(heuristic, &t)?;
         let cost = cost_val.get_float().ok_or_else(|| {
             BadExprValueError(
                 cost_val,

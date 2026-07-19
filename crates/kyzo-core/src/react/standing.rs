@@ -198,7 +198,7 @@ impl<S: Storage> StandingQuery<S> {
             );
         }
 
-        let tx = db.storage.read_tx()?;
+        let tx = db.store.read_tx()?;
         let mut state: MaintainedState = BTreeMap::new();
         for rel in &edb {
             let handle = get_relation(&tx, rel.name.as_str())?;
@@ -440,7 +440,7 @@ impl<S: Storage> Engine<S> {
             return Err(StandingRegisterRefusal::Mutation.into());
         }
 
-        let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
         let view = SessionView {
             store: &tx.store,
             temp: &tx.temp,

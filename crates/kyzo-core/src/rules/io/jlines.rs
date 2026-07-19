@@ -30,6 +30,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
 use crate::data::json::{JsonValue, json_to_datavalue};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -177,7 +178,7 @@ impl FixedRule for JsonReader {
 
     fn arity(
         &self,
-        opts: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        opts: &FixedRuleOptions,
         _rule_head: &[Symbol],
         span: SourceSpan,
     ) -> Result<usize> {

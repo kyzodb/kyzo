@@ -36,6 +36,7 @@ use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
@@ -123,7 +124,7 @@ impl FixedRule for KShortestPathYen {
 
     fn arity(
         &self,
-        _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+        _options: &FixedRuleOptions,
         _rule_head: &[Symbol],
         _span: SourceSpan,
     ) -> Result<usize> {

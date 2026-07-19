@@ -27,7 +27,7 @@ use super::epoch::{CryptoDomain, FenceEpoch};
 /// Path/URL is rebindable location only. Rename/move preserves identity.
 /// Restore preserves readable identity; write continuity requires matching
 /// [`WriteAuthority`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StoreId([u8; 32]);
 
 impl StoreId {

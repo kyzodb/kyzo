@@ -559,7 +559,7 @@ fn sparse_search_body(
             cand.push(DataValue::from(score as f64));
         }
         if let Some(code) = filter_code
-            && !code.eval_pred(&cand)?
+            && !crate::exec::expr::eval_pred(code, &cand)?
         {
             continue;
         }

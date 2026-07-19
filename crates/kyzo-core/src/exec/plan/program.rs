@@ -31,8 +31,8 @@ use thiserror::Error;
 use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::program::query::QueryOutOptions;
 use kyzo_model::program::rule::{
-    FixedRuleApply, FixedRuleHandle, HeadAggrSlot, InputAtom, InputInlineRulesOrFixed,
-    InputProgram, NoEntry, Unification, ValidityClause,
+    FixedRuleApply, FixedRuleHandle, FixedRuleOptions, HeadAggrSlot, InputAtom,
+    InputInlineRulesOrFixed, InputProgram, NoEntry, Unification, ValidityClause,
 };
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
 use kyzo_model::program::span::SourceSpan;
@@ -567,7 +567,7 @@ impl MagicRulesOrFixed {
 pub(crate) struct MagicFixedRuleApply {
     pub(crate) fixed_handle: FixedRuleHandle,
     pub(crate) rule_args: Vec<MagicFixedRuleRuleArg>,
-    pub(crate) options: Arc<BTreeMap<SmartString<LazyCompact>, Expr>>,
+    pub(crate) options: FixedRuleOptions,
     pub(crate) span: SourceSpan,
     pub(crate) arity: usize,
     pub(crate) fixed_impl: Arc<dyn FixedRule>,
@@ -1089,7 +1089,7 @@ mod tests {
         impl FixedRule for NoRule {
             fn arity(
                 &self,
-                _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+                _options: &FixedRuleOptions,
                 _rule_head: &[Symbol],
                 _span: SourceSpan,
             ) -> Result<usize> {
@@ -1114,7 +1114,7 @@ mod tests {
                 as_of: None,
                 span: SourceSpan(0, 0),
             }],
-            options: Arc::new(BTreeMap::new()),
+            options: FixedRuleOptions::empty(),
             span: SourceSpan(0, 0),
             arity: 1,
             fixed_impl: Arc::new(NoRule),

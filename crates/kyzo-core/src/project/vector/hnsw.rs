@@ -215,8 +215,9 @@ use thiserror::Error;
 
 use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::VecElementType;
+use kyzo_model::schema::column::ColLen;
 use kyzo_model::schema::{
-    ColLen, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
+    ColType, ColumnDef, NullableColType, StoredRelationMetadata,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::value::Tuple;
@@ -2113,7 +2114,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
     tuple: &[DataValue],
 ) -> Result<bool> {
     if let Some(code) = filter
-        && !code.eval_pred(tuple)?
+        && !crate::exec::expr::eval_pred(code, tuple)?
     {
         hnsw_remove(tx, base, idx, tuple)?;
         return Ok(false);
@@ -2716,7 +2717,7 @@ fn admit_candidate(
         return Ok(None);
     }
     let cand_tuple = build_cand_tuple(tx, base, idx, params, cand, distance)?;
-    if filter.eval_pred(&cand_tuple)? {
+    if crate::exec::expr::eval_pred(filter, &cand_tuple)? {
         Ok(Some(cand_tuple))
     } else {
         Ok(None)
