@@ -526,6 +526,10 @@ mod tests {
     //! - the **load-bearing** storage test: two real fjall stores with
     //!   identical content but different write histories yield the SAME
     //!   root, and any single-byte edit yields a DIFFERENT one;
+    //! - **cipher-invariance** (§59): identical root for the same logical
+    //!   store observed encrypted vs plaintext — the leaf commits to
+    //!   canonical plaintext outside AEAD; ciphertext bytes are not the
+    //!   leaf input;
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
 
@@ -534,7 +538,8 @@ mod tests {
     use fjall::Slice;
 
     use super::{
-        MerkleHash, empty_hash, leaf_hash, node_hash, relation_root, root_over, state_root,
+        MerkleHash, StateRoot, empty_hash, leaf_hash, node_hash, relation_root, root_over,
+        state_root,
     };
     use kyzo_model::value::RelationId;
     use crate::store::fjall::new_fjall_storage;
@@ -664,6 +669,104 @@ mod tests {
                 "streaming ≠ recursive MTH at n={n}"
             );
         }
+    }
+
+    // ── cipher-invariance (§59): leaf = canonical plaintext, never AEAD ──
+
+    /// Standing cipher-invariance: identical root for the same logical store
+    /// observed encrypted vs plaintext. The built leaf commits to canonical
+    /// plaintext outside AEAD — decrypt-before-merkle feeds the same bytes
+    /// into [`leaf_hash`] whether carriage was ciphertext or plaintext.
+    /// Rooting over ciphertext body would be a different commitment (banned).
+    #[test]
+    fn cipher_invariant_root_identical_encrypted_vs_plaintext() {
+        use crate::store::contract::FormatVersion;
+        use crate::store::epoch::{CryptoDomain, FenceEpoch};
+        use crate::store::open::StoreId;
+        use crate::store::transcript::{
+            CanonicalTranscriptBuilder, FieldId, SealedArtifactKind,
+        };
+        use crate::store::{
+            AeadArm, Kek, KekUnwrapCap, SegmentCounter, ShredSalt, compress_then_encrypt,
+            decrypt, decompress, derive_dek,
+        };
+
+        let store = StoreId::from_digest([0xC1; 32]);
+        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let kek = Kek::from_bytes([0x59; 32]);
+        let cap = KekUnwrapCap::from_kek(kek);
+        let salt = ShredSalt::from_bytes([0xA5; 32]);
+        let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
+
+        let mut aad_b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
+        aad_b
+            .append_u64(FieldId::ARTIFACT_KIND, SealedArtifactKind::AuditKeyLeaf.tag())
+            .unwrap();
+        let aad = aad_b.seal();
+
+        let logical: Vec<(Vec<u8>, Vec<u8>)> = (0..8u32)
+            .map(|i| {
+                (
+                    format!("k{i:03}").into_bytes(),
+                    format!("canonical-plaintext-{i}").into_bytes(),
+                )
+            })
+            .collect();
+
+        // Plaintext observation: leaf over canonical plaintext.
+        let plaintext_root = root_of_pairs(&logical);
+
+        // Encrypted carriage: seal each value; open before the leaf (the
+        // only lawful merkle input). Ciphertext body must not be the leaf.
+        let mut opened_pairs = Vec::with_capacity(logical.len());
+        for (i, (k, plaintext)) in logical.iter().enumerate() {
+            let mut nonce = [0u8; 12];
+            nonce[..4].copy_from_slice(&(i as u32).to_be_bytes());
+            let ct = compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)
+                .expect("encrypt");
+            assert_ne!(
+                ct.body(),
+                plaintext.as_slice(),
+                "AEAD ciphertext must not equal plaintext"
+            );
+            assert_ne!(
+                leaf_hash(k, plaintext),
+                leaf_hash(k, ct.body()),
+                "leaf over ciphertext ≠ leaf over plaintext — cipher-invariance requires plaintext"
+            );
+            let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
+            let round = decompress(&opened).expect("decompress");
+            assert_eq!(&round, plaintext);
+            opened_pairs.push((k.clone(), round));
+        }
+        let encrypted_obs_root = root_of_pairs(&opened_pairs);
+
+        assert_eq!(
+            plaintext_root, encrypted_obs_root,
+            "encrypted vs plaintext observation: identical root — leaf is plaintext-canonical"
+        );
+        assert_eq!(
+            StateRoot::from_merkle(plaintext_root),
+            StateRoot::from_merkle(encrypted_obs_root),
+            "StateRoot lift preserves cipher-invariant digest"
+        );
+
+        // Live store scan over the same plaintext content equals both.
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        for (k, v) in &logical {
+            tx.put(k, v).unwrap();
+        }
+        tx.commit().unwrap();
+        let tx = db.read_tx().unwrap();
+        let store_root = state_root(&tx, big_budget()).unwrap();
+        assert_eq!(store_root, plaintext_root);
+        assert_eq!(
+            StateRoot::from_merkle(store_root),
+            StateRoot::from_merkle(encrypted_obs_root),
+            "encrypted vs plaintext identical StateRoot via state_root"
+        );
     }
 
     // ── content-addressing: same content ⇒ same root, 1 bit ⇒ different ──
