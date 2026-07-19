@@ -519,6 +519,8 @@ fn fixture_digest(kind: SealedArtifactKind, lane: u8) -> [u8; 32] {
     out[0] = kind.tag() as u8;
     out[1] = lane;
     for (i, b) in out.iter_mut().enumerate().skip(2) {
+        // INVARIANT(FixtureDigestMix): deterministic u8 mix for golden digests;
+        // wrap is the intended byte-domain hash, not a size proof.
         *b = ((kind.tag() as u8).wrapping_mul(17))
             .wrapping_add(lane)
             .wrapping_add(i as u8);

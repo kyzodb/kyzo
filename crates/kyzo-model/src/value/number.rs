@@ -407,6 +407,8 @@ impl Magnitude {
     /// Finite magnitude door: `e ∈ [-1073, 1024]` from int/float bit math
     /// ⇒ biased exponent fits `u16` and sits strictly below [`EXP_INF`].
     fn finite(e: i32, frac72: u128) -> Self {
+        // INVARIANT(NumExpBias): e ∈ [-1073, 1024] by the finite-magnitude door;
+        // wrap adds EXP_OFFSET into the proven u16 biased-exponent range.
         let biased = e.wrapping_add(EXP_OFFSET);
         debug_assert!((7..=2104).contains(&biased));
         Magnitude::Finite {

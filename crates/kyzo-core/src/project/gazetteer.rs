@@ -1129,6 +1129,7 @@ mod tests {
             state ^= state >> 12;
             state ^= state << 25;
             state ^= state >> 27;
+            // INVARIANT(Splitmix64FinalMul): splitmix64 final mix step; wrap is the PRNG contract.
             let mut r = state.wrapping_mul(0x2545F4914F6CDD1D);
             let n = 1 + (r % 9) as usize;
             r /= 9;

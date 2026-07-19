@@ -156,7 +156,10 @@ impl FixedRule for Constant {
         let data = options
             .get("data")
             .ok_or_else(|| Self::wrong_option(span))?;
-        let data = match data.clone().eval_to_const()? {
+        // Engine folder: model `Expr::eval_to_const` no longer folds
+        // deterministic Applies (`OP_LIST` list literals stay Apply until
+        // the engine apply door runs).
+        let data = match crate::exec::expr::eval::eval_to_const(data.clone())? {
             DataValue::List(l) => l,
             data_value_any!() => bail!(Self::wrong_option(span)),
         };

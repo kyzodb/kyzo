@@ -51,7 +51,7 @@ impl fmt::Display for ResonanceError {
             ResonanceError::SourceScan(e) => write!(f, "could not scan engine sources: {e:#}"),
             ResonanceError::NoSourceFiles => write!(
                 f,
-                "no source files found under crates/kyzo-core/src or crates/kyzo-bin/src"
+                "no source files found under crates/kyzo-core/src, crates/kyzo-bin/src, or crates/kyzo-model/src"
             ),
             ResonanceError::AllowlistLoad(e) => write!(f, "could not load allowlist: {e:#}"),
             ResonanceError::CheckConfig { check, source } => {
@@ -313,7 +313,7 @@ fn run_agreement_registry(
 ) -> Result<bool, anyhow::Error> {
     println!("== check 5: agreement-law registry ==");
     let registry = checks::agreement_registry::load(root)?;
-    let violations = checks::agreement_registry::check(files, &registry);
+    let violations = checks::agreement_registry::check(files, &registry, root);
     for v in &violations {
         println!(
             "FAIL registry entry \"{}\" ({}::{}): {}",

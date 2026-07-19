@@ -14,10 +14,16 @@
 //! its listed `file`. A law that quietly stopped being tested (renamed,
 //! deleted, moved to a different module without updating the registry) is
 //! exactly the failure mode this check exists to catch — absence is red.
+//!
+//! Cited files may sit outside the engine walk (oracle / trials seats); those
+//! are loaded from disk by path so a re-home does not require expanding every
+//! resonance scan into the judge crates.
+
+use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::fsutil::SourceFile;
+use crate::fsutil::{self, SourceFile};
 
 #[derive(Debug, Deserialize)]
 struct Registry {
@@ -69,13 +75,10 @@ pub struct Violation {
     pub reason: String,
 }
 
-pub fn check(files: &[SourceFile], registry: &[LawEntry]) -> Vec<Violation> {
+pub fn check(files: &[SourceFile], registry: &[LawEntry], root: &Path) -> Vec<Violation> {
     let mut violations = Vec::new();
     for law in registry {
-        let Some(f) = files
-            .iter()
-            .find(|f| f.rel_path.ends_with(law.file.trim_start_matches("./")))
-        else {
+        let Some(text) = resolve_text(root, files, &law.file) else {
             violations.push(Violation {
                 name: law.name.clone(),
                 file: law.file.clone(),
@@ -84,7 +87,7 @@ pub fn check(files: &[SourceFile], registry: &[LawEntry]) -> Vec<Violation> {
             });
             continue;
         };
-        if !contains_fn(&f.text, &law.test_fn) {
+        if !contains_fn(&text, &law.test_fn) {
             violations.push(Violation {
                 name: law.name.clone(),
                 file: law.file.clone(),
@@ -94,4 +97,14 @@ pub fn check(files: &[SourceFile], registry: &[LawEntry]) -> Vec<Violation> {
         }
     }
     violations
+}
+
+fn resolve_text(root: &Path, files: &[SourceFile], law_file: &str) -> Option<String> {
+    let needle = law_file.trim_start_matches("./");
+    if let Some(f) = files.iter().find(|f| f.rel_path.ends_with(needle)) {
+        return Some(f.text.clone());
+    }
+    fsutil::load_source_file(root, needle)
+        .ok()
+        .map(|f| f.text)
 }

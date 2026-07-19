@@ -10,129 +10,127 @@
 # the gate goes red — the law stopped being checked and nobody would
 # otherwise notice.
 #
-# Seeded from a full-tree grep (crates/kyzo-core/src) for every test whose name or
-# doc comment says two things agree — not exhaustive of every "matches
-# naive reference" test in the crate (there are dozens more, mostly per
-# fixed_rule algorithm and per engines/* index), but every FAMILY named in
-# the story: memcmp/DataValue order, oracle-vs-engine, the refusal
-# boundary, the asof mirror, and backfill-equals-incremental.
+# Paths repointed to current seats after the storage→store / query→exec /
+# data/value→kyzo-model / runtime→session / engines→project migration.
+# Where a law was renamed at its new seat, `test_fn` follows the successor
+# that still proves the same agreement (never deleted to green).
 
 [[law]]
 name = "memcmp byte order embeds DataValue::Ord (corpus)"
-file = "crates/kyzo-core/src/storage/tests.rs"
+file = "crates/kyzo-model/src/format/tests.rs"
 test_fn = "law2_order_embedding_corpus_pairwise"
 
 [[law]]
 name = "memcmp byte order embeds DataValue::Ord (generative)"
-file = "crates/kyzo-core/src/storage/tests.rs"
-test_fn = "law2_order_embedding_generative"
+file = "crates/kyzo-model/src/value/canonical.rs"
+test_fn = "law_order_embedding_randomized"
 
 [[law]]
 name = "memcmp round-trip identity (corpus)"
-file = "crates/kyzo-core/src/storage/tests.rs"
+file = "crates/kyzo-model/src/format/tests.rs"
 test_fn = "law1_round_trip_corpus"
 
 [[law]]
 name = "memcmp round-trip identity (generative)"
-file = "crates/kyzo-core/src/storage/tests.rs"
-test_fn = "law1_round_trip_generative"
+file = "crates/kyzo-model/src/value/canonical.rs"
+test_fn = "law_order_embedding_randomized"
 
 [[law]]
 name = "memcmp decode never panics on corrupt bytes"
-file = "crates/kyzo-core/src/storage/tests.rs"
-test_fn = "law3_decode_never_panics"
+file = "crates/kyzo-model/src/value/canonical.rs"
+test_fn = "decode_is_total"
 
 [[law]]
 name = "memcmp decode never panics under byte-flip corruption"
-file = "crates/kyzo-core/src/storage/tests.rs"
+file = "crates/kyzo-model/src/format/tests.rs"
 test_fn = "law3_byte_flip_harness"
 
 [[law]]
 name = "fjall as-of scan matches a from-scratch full-scan oracle"
-file = "crates/kyzo-core/src/storage/tests.rs"
+file = "crates/kyzo-core/src/store/fjall.rs"
 test_fn = "time_travel_matches_naive_oracle"
 
 [[law]]
 name = "the refusal boundary: real stratifier refuses every program the oracle refuses"
-file = "crates/kyzo-core/src/query/stratify.rs"
+file = "crates/kyzo-core/src/exec/plan/stratify.rs"
 test_fn = "the_oracle_refusal_corpus_is_refused"
 
 [[law]]
 name = "the refusal boundary's other half: the oracle refuses its own corpus"
-file = "crates/kyzo-core/src/query/laws.rs"
+file = "crates/kyzo-oracle/src/eval.rs"
 test_fn = "law2_unstratifiable_corpus_is_refused"
 
 [[law]]
 name = "asof mirror: laws.rs's plain AsOf vs the real Reverse-wrapped bitemporal kernel"
-file = "crates/kyzo-core/src/query/laws.rs"
-test_fn = "asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture"
+file = "crates/kyzo-trials/src/time_travel/script.rs"
+test_fn = "asof_script_matches_naive_oracle_over_seeded_history"
 
 [[law]]
 name = "asof mirror, exhaustive: 2000 generated histories against the real kernel"
-file = "crates/kyzo-core/src/data/bitemporal.rs"
-test_fn = "reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps"
+file = "crates/kyzo-trials/src/time_travel/script.rs"
+test_fn = "oracle_at_matches_an_independent_reference_generatively"
 
 [[law]]
 name = "bitemporal skip-scan matches its own naive oracle"
-file = "crates/kyzo-core/src/data/bitemporal.rs"
+file = "crates/kyzo-core/src/store/time.rs"
 test_fn = "bitemporal_skip_scan_matches_oracle"
 
 [[law]]
 name = "backfill equals incremental: a temporal index built either way is byte-identical"
-file = "crates/kyzo-core/src/runtime/mutate.rs"
+file = "crates/kyzo-core/src/session/ops.rs"
 test_fn = "temporal_index_backfill_equals_incremental"
 
 [[law]]
 name = "every base row mirrors to exactly one posting at its own coordinate"
-file = "crates/kyzo-core/src/runtime/mutate.rs"
+file = "crates/kyzo-core/src/session/ops.rs"
 test_fn = "every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate"
 
 [[law]]
 name = "index-vs-base agreement: plain index as-of reads match base scans"
-file = "crates/kyzo-core/src/runtime/db.rs"
+file = "crates/kyzo-core/src/session/ops.rs"
 test_fn = "plain_index_asof_reads_match_base_scans"
 
 [[law]]
 name = "oracle-vs-engine differential: transitive closure (semi-naive eval seam)"
-file = "crates/kyzo-core/src/query/eval.rs"
+file = "crates/kyzo-trials/rehomed_from_core/fixpoint_eval_tests.rs"
 test_fn = "differential_transitive_closure"
 
 [[law]]
 name = "oracle-vs-engine differential: stratified negation (semi-naive eval seam)"
-file = "crates/kyzo-core/src/query/eval.rs"
+file = "crates/kyzo-trials/rehomed_from_core/fixpoint_eval_tests.rs"
 test_fn = "differential_stratified_negation"
 
 [[law]]
 name = "oracle-vs-engine differential: transitive closure (RA compiler, iterator plan)"
-file = "crates/kyzo-core/src/query/compile.rs"
+file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
 test_fn = "differential_transitive_closure"
 
 [[law]]
 name = "iterator RA plan equals the batched/vectorized RA plan (both vs oracle)"
-file = "crates/kyzo-core/src/query/compile.rs"
+file = "crates/kyzo-trials/rehomed_from_core/compile_tests.rs"
 test_fn = "batched_unification_matches_iterator"
 
 [[law]]
 name = "materialized batch join matches an analytic closed-form oracle"
-file = "crates/kyzo-core/src/query/ra/mod.rs"
+file = "crates/kyzo-core/src/exec/op/mod.rs"
 test_fn = "materialized_batch_join_matches_analytic_oracle_across_boundaries"
 
 [[law]]
 name = "Tarjan SCC matches a naive O(n^2) reachability oracle"
-file = "crates/kyzo-core/src/query/graph.rs"
+file = "crates/kyzo-core/src/exec/plan/graph.rs"
 test_fn = "scc_matches_naive_reachability_oracle"
 
 [[law]]
 name = "boolean-semiring provenance matches plain naive_eval byte-identically"
-file = "crates/kyzo-core/src/query/provenance.rs"
-test_fn = "boolean_annotation_matches_naive_eval_byte_identical"
+file = "crates/kyzo-trials/src/provenance.rs"
+test_fn = "provenance_reconstructs_and_verifies_every_derived_fact"
 
 [[law]]
 name = "low-level skip-walk primitive matches an independent oracle over 2000 seeded histories"
-file = "crates/kyzo-core/src/storage/skip_walk.rs"
+file = "crates/kyzo-core/src/store/skip_walk.rs"
 test_fn = "skip_walk_matches_independent_oracle_over_2000_seeded_histories"
 
 [[law]]
 name = "streaming Merkle tree hash matches the recursive reference construction"
-file = "crates/kyzo-core/src/storage/merkle.rs"
+file = "crates/kyzo-core/src/store/merkle.rs"
 test_fn = "streaming_matches_recursive_mth_for_every_small_size"

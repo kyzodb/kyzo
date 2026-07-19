@@ -37,7 +37,7 @@ struct NamedRowsSeal;
 /// (P082). Read via [`Self::headers`] / [`Self::rows`] / [`Self::next`];
 /// consume via [`Self::into_parts`] / [`Self::into_rows`] /
 /// [`Self::with_next`]. Illegal (misaligned) NamedRows are unconstructible.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NamedRows {
     headers: Vec<String>,
     rows: Vec<Tuple>,

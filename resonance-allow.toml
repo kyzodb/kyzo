@@ -12,330 +12,292 @@
 # ---------------------------------------------------------------------------
 # check 2: panic-on-hostile-bytes lint
 # ---------------------------------------------------------------------------
-# Story #321: memcmp.rs/tuple.rs no longer exist (the value-plane split
-# moved this codec to data/value/{canonical,number,mod,row}.rs); the two
-# waivers below them were stale by line AND by file. Re-derived against
-# the current tree rather than re-worded: every entry below is an
-# `.expect(...)` genuinely reachable from the repointed decode surfaces
-# (crates/xtask/decode-surfaces.toml), each provably safe by construction
-# (the `expect` cannot fire given the code immediately above it) -- the
-# same posture the story names for `RelationId::new`'s internal-mint
-# assert: a programmer-error guard, documented, not a hostile-input
-# refusal gap. `memcmp.rs::decode_bytes`'s old waiver has no successor:
-# its replacement, `canonical.rs::decode_terminated`, carries no
-# panic-shaped construct at all (checked; nothing to waive).
-
-[[panic_lint]]
-file = "crates/kyzo-core/src/data/value/canonical.rs"
-function = "decode_at"
-line = 741
-citation = "u32::from_be_bytes(count_bytes.try_into().expect(\"4 bytes\")) at canonical.rs:741 (line shifted by cargo fmt from 738), Tag::Vector arm: `count_bytes` comes from `body.get(..4)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 4 bytes when the `try_into::<[u8;4]>()` runs -- the length-checked-just-above pattern the story's memcmp.rs precedent named. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
-
-[[panic_lint]]
-file = "crates/kyzo-core/src/data/value/canonical.rs"
-function = "decode_at"
-line = 754
-citation = "n.as_float().expect(\"validated float component\") at canonical.rs:754 (line shifted by cargo fmt from 751), Tag::Vector arm: the loop three lines above already calls `n.as_float().is_none()` and returns `Err(DecodeError::VectorComponentNotFloat)` on every `n` for which `as_float` would fail, before `n` is pushed into `components` -- by the time this second `.map(|n| n.as_float().expect(...))` runs over the same `components`, every element has already been proven `as_float`-some. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
-
-[[panic_lint]]
-file = "crates/kyzo-core/src/data/value/canonical.rs"
-function = "decode_at"
-line = 760
-citation = "ts_bytes.try_into().expect(\"8 bytes\") at canonical.rs:760 (line shifted by cargo fmt from 757), Tag::Validity arm: `ts_bytes` comes from `body.get(..8)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 8 bytes when the `try_into::<[u8;8]>()` runs -- the same length-checked-just-above pattern as the Vector arm's count decode. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
-
-[[panic_lint]]
-file = "crates/kyzo-core/src/data/value/canonical.rs"
-function = "decode_interval_end"
-line = 815
-citation = "ts_bytes.try_into().expect(\"8 bytes\") at canonical.rs:815 (line shifted by cargo fmt from 812): `ts_bytes` comes from `body.get(1..9)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 8 bytes when the `try_into::<[u8;8]>()` runs -- the same length-checked-just-above pattern as `decode_at`'s Vector and Validity arms. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
-[[panic_lint]]
-file = "crates/kyzo-core/src/data/value/mod.rs"
-function = "Vector::new"
-line = 82
-citation = "Num::float(c).as_float().expect(\"float stays float\") at mod.rs:82 (line shifted by cargo fmt from 81): `Num::float(c)` is the canonicalizing FLOAT minter (it is total over every `f64` bit pattern, including the ones `Tag::Vector`'s decode arm feeds it straight from stored bytes -- it normalizes `-0.0`/NaN but always returns a Float-tagged `Num`), so the immediately-following `.as_float()` on that same, just-minted `Num` cannot return `None`. Reached from decode: `canonical.rs::decode_at`'s `Tag::Vector` arm calls `Vector::new(floats)` on decoded components. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
-
-[[panic_lint]]
-file = "crates/kyzo-core/src/data/value/row.rs"
-function = "RelationId::raw_decode"
-line = 302
-citation = "u64::from_be_bytes(head.try_into().expect(\"8 bytes\")) at row.rs:302 (line shifted by cargo fmt from 308): `head` comes from `bytes.get(..8)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 8 bytes when the `try_into::<[u8;8]>()` runs -- the direct successor of the historical `tuple.rs::RelationId::raw_decode` entry the story's condemned block names (the exact seam the historical assert!-bounded-fed-corrupt-catalog-bytes bug lived on), now in the value plane's row/key module. Waived by exact line: any OTHER panic-shaped construct added later in this same function (the historical RelationId assert-on-decode shape, reintroduced) is a fresh violation, not covered by this waiver -- see the bite-proof."
-
-# ---------------------------------------------------------------------------
-# check 3: copy-detector
-# ---------------------------------------------------------------------------
+# Decode surfaces live in kyzo-model (value plane) and store/time.rs.
+# Production decode paths no longer carry length-checked `.expect(...)`
+# (copy_from_slice / typed Err). Zero panic_lint waivers needed today.
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/storage/fjall.rs::next",
-  "crates/kyzo-core/src/storage/sim.rs::next",
+  "crates/kyzo-core/src/store/fjall.rs::next",
+  "crates/kyzo-crashfs/src/sim.rs::next",
 ]
 citation = "Story #78's known-real fixture: the bitemporal skip-scan walk, hand-copied across storage backends. fjall.rs's SkipIterator::next and sim.rs's SimSkipIter::next score 0.81 similarity (near-byte-identical modulo renamed receivers) under this check's shingled-Jaccard metric. Story #78 deletes both in favor of the shared storage/skip_walk.rs driver (itself already 0.36-0.58 similar to both, and to storage/temp.rs's differently-shaped third copy, at a looser MIN_TOKENS/threshold -- see the story report for the full three-way analysis). This IS the calibration fixture the copy-detector check was tuned against; see the bite-proof."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/query/laws.rs::head_classes",
-  "crates/kyzo-core/src/query/laws.rs::head_classes::closure@766",
-  "crates/kyzo-core/src/query/stratify.rs::aggregation_character",
-  "crates/kyzo-core/src/query/laws.rs::unify",
-  "crates/kyzo-core/src/query/incremental.rs::unify",
-  "crates/kyzo-core/src/query/laws.rs::collect_candidates",
-  "crates/kyzo-core/src/query/incremental.rs::collect_candidates",
-  "crates/kyzo-core/src/query/laws.rs::contribute_candidates_subset",
-  "crates/kyzo-core/src/query/incremental.rs::contribute_candidates_subset",
-  "crates/kyzo-core/src/query/laws.rs::body_bindings_from",
-  "crates/kyzo-core/src/query/incremental.rs::body_bindings_from",
-  "crates/kyzo-core/src/query/laws.rs::eval_aggregating_head_incremental",
-  "crates/kyzo-core/src/query/incremental.rs::eval_aggregating_head_incremental",
+  "crates/kyzo-oracle/src/eval.rs::head_classes",
+  "crates/kyzo-oracle/src/eval.rs::head_classes::closure@766",
+  "crates/kyzo-core/src/exec/plan/stratify.rs::aggregation_character",
+  "crates/kyzo-oracle/src/eval.rs::unify",
+  "crates/kyzo-oracle/src/incremental.rs::unify",
+  "crates/kyzo-oracle/src/eval.rs::collect_candidates",
+  "crates/kyzo-oracle/src/incremental.rs::collect_candidates",
+  "crates/kyzo-oracle/src/eval.rs::contribute_candidates_subset",
+  "crates/kyzo-oracle/src/incremental.rs::contribute_candidates_subset",
+  "crates/kyzo-oracle/src/eval.rs::body_bindings_from",
+  "crates/kyzo-oracle/src/incremental.rs::body_bindings_from",
+  "crates/kyzo-oracle/src/eval.rs::eval_aggregating_head_incremental",
+  "crates/kyzo-oracle/src/incremental.rs::eval_aggregating_head_incremental",
 ]
 citation = "Issue #89's ruling: the three REFERENCE-tier copies of this classification (query/laws.rs, query/provenance.rs, query/trials.rs -- they judge the engine, never each other) are consolidated into one shared query/laws.rs::head_classes, pub(crate), consumed by provenance.rs and trials.rs; likewise unify/ground/Bindings, and trials.rs::check_unify (drift, not a genuine second algorithm -- it never independently judged unify itself) folded into the same shared unify. The pairs that remain, and must remain, unwaived-but-cited: query/stratify.rs::aggregation_character is the ENGINE's copy, deliberately hand-maintained independent of the oracle's head_classes -- the refusal-corpus differential (the_oracle_refusal_corpus_is_refused, stratify.rs) is only meaningful because the engine's stratifiability boundary and the oracle's are two separately-authored implementations that happen to agree; sharing this one would collapse that differential into a tautology. Likewise query/incremental.rs's whole IVM surface (unify, collect_candidates, contribute_candidates_subset, body_bindings_from, eval_aggregating_head_incremental) is an INDEPENDENTLY-WRITTEN twin of laws.rs's incremental_eval by its own module doc: 'never a shared import ... so a bug cannot hide behind one implementation covering for the other', with the transitive proof chain (production == oracle incremental == naive recompute) resting on that independence. See the doc comment at aggregation_character's definition (stratify.rs), incremental.rs's own module doc, and head_classes'/unify's definitions (laws.rs) for the full argument. A mutant that broke the shared unify (issue #89's verification) failed laws/provenance/trials together while stratify's and incremental's own suites stayed fully green, confirming this independence is real, not assumed. (Story #321: the head_classes closure line drifted from @750 to @766 since this entry was written; repointed, not re-worded.)"
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/data/functions.rs::add_vecs",
-  "crates/kyzo-core/src/data/functions.rs::mul_vecs",
-  "crates/kyzo-core/src/data/functions.rs::op_acos",
-  "crates/kyzo-core/src/data/functions.rs::op_acosh",
-  "crates/kyzo-core/src/data/functions.rs::op_add",
-  "crates/kyzo-core/src/data/functions.rs::op_asin",
-  "crates/kyzo-core/src/data/functions.rs::op_asinh",
-  "crates/kyzo-core/src/data/functions.rs::op_atan",
-  "crates/kyzo-core/src/data/functions.rs::op_atanh",
-  "crates/kyzo-core/src/data/functions.rs::op_bit_and",
-  "crates/kyzo-core/src/data/functions.rs::op_bit_xor",
-  "crates/kyzo-core/src/data/functions.rs::op_chunks",
-  "crates/kyzo-core/src/data/functions.rs::op_chunks_exact",
-  "crates/kyzo-core/src/data/functions.rs::op_cos",
-  "crates/kyzo-core/src/data/functions.rs::op_cosh",
-  "crates/kyzo-core/src/data/functions.rs::op_ends_with",
-  "crates/kyzo-core/src/data/functions.rs::op_eq",
-  "crates/kyzo-core/src/data/functions.rs::op_exp",
-  "crates/kyzo-core/src/data/functions.rs::op_exp2",
-  "crates/kyzo-core/src/data/functions.rs::op_ln",
-  "crates/kyzo-core/src/data/functions.rs::op_log10",
-  "crates/kyzo-core/src/data/functions.rs::op_log2",
-  "crates/kyzo-core/src/data/functions.rs::op_max",
-  "crates/kyzo-core/src/data/functions.rs::op_min",
-  "crates/kyzo-core/src/data/functions.rs::op_mul",
-  "crates/kyzo-core/src/data/functions.rs::op_neq",
-  "crates/kyzo-core/src/data/functions.rs::op_sin",
-  "crates/kyzo-core/src/data/functions.rs::op_sinh",
-  "crates/kyzo-core/src/data/functions.rs::op_sqrt",
-  "crates/kyzo-core/src/data/functions.rs::op_starts_with",
-  "crates/kyzo-core/src/data/functions.rs::op_tan",
-  "crates/kyzo-core/src/data/functions.rs::op_tanh",
-  "crates/kyzo-core/src/data/functions.rs::op_windows",
-  "crates/kyzo-core/src/data/functions.rs::op_gt",
-  "crates/kyzo-core/src/data/functions.rs::op_lt",
-  "crates/kyzo-core/src/data/functions.rs::op_ge",
-  "crates/kyzo-core/src/data/functions.rs::op_le",
-  "crates/kyzo-core/src/data/functions.rs::op_ip_dist",
-  "crates/kyzo-core/src/data/functions.rs::op_l2_dist",
-  "crates/kyzo-core/src/data/functions.rs::op_minus",
-  "crates/kyzo-core/src/data/functions.rs::op_abs",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::add_vecs",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::mul_vecs",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_acos",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_acosh",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_add",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_asin",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_asinh",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_atan",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_atanh",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_bit_and",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_bit_xor",
+  "crates/kyzo-core/src/exec/stdlib/collection.rs::op_chunks",
+  "crates/kyzo-core/src/exec/stdlib/collection.rs::op_chunks_exact",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_cos",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_cosh",
+  "crates/kyzo-core/src/exec/stdlib/text.rs::op_ends_with",
+  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_eq",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_exp",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_exp2",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_ln",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_log10",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_log2",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_max",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_min",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_mul",
+  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_neq",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_sin",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_sinh",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_sqrt",
+  "crates/kyzo-core/src/exec/stdlib/text.rs::op_starts_with",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_tan",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_tanh",
+  "crates/kyzo-core/src/exec/stdlib/collection.rs::op_windows",
+  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_gt",
+  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_lt",
+  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_ge",
+  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_le",
+  "crates/kyzo-core/src/exec/stdlib/metric.rs::op_ip_dist",
+  "crates/kyzo-core/src/exec/stdlib/metric.rs::op_l2_dist",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_minus",
+  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_abs",
 ]
 citation = "Intentional per-operator dispatch boilerplate in data/functions.rs's scalar/vector operator table (trig, log/exp, comparison, bitwise, arithmetic, slice-windowing, distance-metric families) -- each function differs only in which underlying primitive it calls for its one operator; the shared shape is the arity/type-coercion scaffold every operator needs, not accidental copy-paste. Consolidating further would need a macro, a design choice for a future story. (Story #321: added the comparison family (op_gt/op_lt/op_ge/op_le), the distance-metric pair (op_ip_dist/op_l2_dist), and the arithmetic pair (op_minus/op_abs) -- the same category this entry already covers, just never enumerated; check 3 had never actually run in CI to surface them until the root-derivation bug (task 1) was fixed.)"
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/query/temp_store.rs::interleave",
-  "crates/kyzo-core/src/query/laws.rs::materialize",
+  "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::interleave",
+  "crates/kyzo-oracle/src/eval.rs::materialize",
 ]
 citation = "laws.rs::materialize (the oracle's own row-reassembly from a MeetState's key/value split) and query/temp_store.rs::interleave (the production MeetAggrStore's identical reassembly) compute the exact same key_positions/val_positions interleave loop -- but laws.rs is the REFERENCE SEMANTICS tier, whose whole module doc states the reason it exists: 'deliberately naive ... written to be OBVIOUSLY correct', judge never production, sharing no code with the engine it judges (the same independence law the issue-#89 entry states for head_classes/unify). Collapsing this pair into one shared helper would violate that independence law and is an engine-semantics change outside this task's scope in any case (crates/kyzo-core is not this story's file scope)."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/jepsen_trials.rs::single_node_serializability_campaign",
-  "crates/kyzo-core/src/query/trials.rs::determinism_campaign",
+  "crates/kyzo-trials/src/serializability.rs::single_node_serializability_campaign",
+  "crates/kyzo-trials/src/determinism.rs::determinism_campaign",
 ]
 citation = "Both are the same house pattern named throughout the trials/campaign files (see e.g. storage/sim.rs's for_each_seed, query/gauntlet.rs's env-scalable seeds): a KYZO_*_BASE-seeded loop that splitmix64-derives one seed per index, runs `run_seed`, and asserts the failure list is empty. The loop boilerplate is deliberately identical -- it is the shared seeding/reporting idiom every seeded campaign in this tree uses -- while the substance under test is unrelated: jepsen_trials.rs checks elle/Adya serializability anomalies, query/trials.rs checks general fixpoint determinism. Not copy-paste of logic, copy-paste of an intentional idiom."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/query/ra/neg.rs::iter_batched::closure@201",
-  "crates/kyzo-core/src/query/ra/neg.rs::iter_batched::closure@259",
+  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@207",
+  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@265",
 ]
 citation = "Self-documented at the source: the doc comment immediately above the `NegRight::StoredWithValidity` arm (closure@259) states it is 'identical in shape to `NegRight::Stored` just above' (closure@201) 'reading through the SAME as-of skip-scan primitives ... so the -- never skips a tuple whose absence it is asserting -- proof this operator owes is inherited, not reargued'. Deliberate structural mirroring by design, not accidental duplication."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/runtime/relation.rs::scan_bounded_prefix",
-  "crates/kyzo-core/src/runtime/relation.rs::scan_bounded_prefix_projected",
+  "crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix",
+  "crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix_projected",
 ]
 citation = "Self-documented at the source: scan_bounded_prefix_projected's doc comment states it is '[scan_bounded_prefix] with the prefix read THROUGH a projection of row -- both scan bounds encoded straight from projected values plus the bound literals'. The same owned-vs-projected variant pattern row.rs's scan_key_lower/scan_key_lower_projected pair already uses (see that file's own doc), applied one layer up at the catalog-handle scan surface."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/data/value/canonical.rs::encode_owned_into",
-  "crates/kyzo-core/src/data/value/canonical.rs::encode_into",
+  "crates/kyzo-model/src/value/canonical.rs::encode_owned_into",
+  "crates/kyzo-model/src/value/canonical.rs::encode_into",
 ]
 citation = "The codec's two encode doors for its two currency forms: encode_owned_into walks an owned DataValue (called from the public encode_owned/append_canonical), encode_into walks the by-reference Datum witness (called from the public encode). Same tag-dispatch shape by necessity -- one canonical encoding, two input representations -- not a maintenance drift; collapsing them would need an owned/borrowed abstraction over DataValue/Datum, a design choice for a future story, and is an engine-semantics change outside this task's file scope regardless."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/query/time_travel_trials.rs::delta_composition_law_holds_through_the_real_engine",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::production_compose_matches_the_composition_law_on_real_engine_output",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::negation_over_spans_matches_the_independent_complement_generatively",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::negation_over_delta_matches_the_independent_complement_generatively",
+  "crates/kyzo-trials/src/time_travel/path.rs::delta_composition_law_holds_through_the_real_engine",
+  "crates/kyzo-trials/src/time_travel/path.rs::production_compose_matches_the_composition_law_on_real_engine_output",
+  "crates/kyzo-trials/src/time_travel/path.rs::negation_over_spans_matches_the_independent_complement_generatively",
+  "crates/kyzo-trials/src/time_travel/path.rs::negation_over_delta_matches_the_independent_complement_generatively",
 ]
 citation = "Two self-documented differential pairs. production_compose_matches_the_composition_law_on_real_engine_output's doc comment states it is the same shape as delta_composition_law_holds_through_the_real_engine (which spot-checks the oracle's own laws::compose) 'but ... three real DeltaRA evaluations, composed by the PRODUCTION function, must equal the direct evaluation' -- an oracle-vs-production differential, the deliberate-parallel-structure pattern this file's own doc names throughout (spans/delta axes tested generatively on both sides). negation_over_spans/negation_over_delta_matches_the_independent_complement_generatively are the same axis-symmetric pair one level over: the two temporal representations (@spans intervals vs @delta signed facts) tested against the same independent-complement law, by name and by the file's stated spans/delta symmetry convention."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/format/tests.rs::assert_program_round_trips",
-  "crates/kyzo-core/src/format/tests.rs::assert_program_with_comments_round_trips",
+  "crates/kyzo-model/src/format/tests.rs::assert_program_round_trips",
+  "crates/kyzo-model/src/format/tests.rs::assert_program_with_comments_round_trips",
 ]
 citation = "Self-documented at the source: assert_program_with_comments_round_trips's doc comment states it is the 'Same shape as [assert_program_round_trips], but through format_program_with_comments' -- the deliberate parallel for format.rs's two documented TriviaMode variants (Bare, which 'must never read a trivia field', and WithComments), not accidental duplication."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/storage/conformance.rs::law_phantom_protection",
-  "crates/kyzo-core/src/storage/tests.rs::range_reads_get_phantom_protection",
-  "crates/kyzo-core/src/storage/conformance.rs::law_read_your_own_writes_and_snapshot_isolation",
-  "crates/kyzo-core/src/storage/tests.rs::read_your_own_writes_and_snapshot_isolation",
-  "crates/kyzo-core/src/storage/conformance.rs::law_del_range_kills_own_writes",
-  "crates/kyzo-core/src/storage/tests.rs::del_range_kills_own_writes_too",
-  "crates/kyzo-core/src/storage/conformance.rs::law_del_range_chunk_boundaries",
-  "crates/kyzo-core/src/storage/tests.rs::del_range_chunk_boundaries",
-  "crates/kyzo-core/src/storage/conformance.rs::law_mvcc_first_committer_wins",
-  "crates/kyzo-core/src/storage/tests.rs::mvcc_conflict_and_discard",
-  "crates/kyzo-core/src/storage/conformance.rs::law_kv_matches_model_oracle",
-  "crates/kyzo-core/src/storage/tests.rs::sim_kv_contract_matches_model",
-  "crates/kyzo-core/src/storage/tests.rs::kv_contract_matches_model",
-  "crates/kyzo-core/src/storage/conformance.rs::law_concurrent_writers_across_threads",
-  "crates/kyzo-core/src/storage/conformance.rs::law_concurrent_writers_across_threads::closure@212",
-  "crates/kyzo-core/src/storage/conformance.rs::law_concurrent_writers_across_threads::closure@221",
-  "crates/kyzo-core/src/storage/conformance.rs::law_concurrent_writers_across_threads::closure@224",
-  "crates/kyzo-core/src/storage/tests.rs::concurrent_writers_across_threads",
-  "crates/kyzo-core/src/storage/tests.rs::concurrent_writers_across_threads::closure@1198",
-  "crates/kyzo-core/src/storage/tests.rs::concurrent_writers_across_threads::closure@1195",
+  "crates/kyzo-trials/src/conformance.rs::law_phantom_protection",
+  "crates/kyzo-core/src/store/fjall.rs::range_reads_get_phantom_protection",
+  "crates/kyzo-trials/src/conformance.rs::law_read_your_own_writes_and_snapshot_isolation",
+  "crates/kyzo-core/src/store/fjall.rs::read_your_own_writes_and_snapshot_isolation",
+  "crates/kyzo-trials/src/conformance.rs::law_del_range_kills_own_writes",
+  "crates/kyzo-core/src/store/fjall.rs::del_range_kills_own_writes_too",
+  "crates/kyzo-trials/src/conformance.rs::law_del_range_chunk_boundaries",
+  "crates/kyzo-core/src/store/fjall.rs::del_range_chunk_boundaries",
+  "crates/kyzo-trials/src/conformance.rs::law_mvcc_first_committer_wins",
+  "crates/kyzo-core/src/store/fjall.rs::mvcc_conflict_and_discard",
+  "crates/kyzo-trials/src/conformance.rs::law_kv_matches_model_oracle",
+  "crates/kyzo-core/src/store/fjall.rs::sim_kv_contract_matches_model",
+  "crates/kyzo-core/src/store/fjall.rs::kv_contract_matches_model",
+  "crates/kyzo-trials/src/conformance.rs::law_concurrent_writers_across_threads",
+  "crates/kyzo-trials/src/conformance.rs::law_concurrent_writers_across_threads::closure@212",
+  "crates/kyzo-trials/src/conformance.rs::law_concurrent_writers_across_threads::closure@221",
+  "crates/kyzo-trials/src/conformance.rs::law_concurrent_writers_across_threads::closure@224",
+  "crates/kyzo-core/src/store/fjall.rs::concurrent_writers_across_threads",
+  "crates/kyzo-core/src/store/fjall.rs::concurrent_writers_across_threads::closure@1198",
+  "crates/kyzo-core/src/store/fjall.rs::concurrent_writers_across_threads::closure@1195",
 ]
 citation = "REAL, KNOWN, ALREADY-SCHEDULED duplication -- not a deliberate-independence pair like the oracle/production entries above. storage/conformance.rs (story #79's reusable conformance kit) is, by the migration record's own storage/tests.rs ruling, verbatim-extracted FROM these storage/tests.rs scenarios: 'the generic KV/MVCC/RYOW/del_range/phantom/concurrent-writers/chunk-boundary ... scenarios here are the story-#79 kit's EXTRACTION SOURCE and are now verbatim-duplicated by conformance.rs's generic laws, which fjall and sim already pass via run_full_battery -- on migration these per-backend copies die in favor of the kit call'. The collapse is real, understood, and already the documented target -- it is not performed here because doing so means deleting the storage/tests.rs copies, an engine-code change to crates/kyzo-core, outside this task's file scope (crates/xtask/decode-surfaces.toml and resonance-allow.toml only). Flagged in story #321's closing report as deferred, scheduled debt, not silently waived."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/query/laws.rs::has_any_cycle",
-  "crates/kyzo-core/src/query/laws.rs::check_stratifiable",
+  "crates/kyzo-oracle/src/eval.rs::has_any_cycle",
+  "crates/kyzo-oracle/src/eval.rs::check_stratifiable",
 ]
 citation = "REAL, SAME-FILE duplication with no independence rationale to protect it (both functions are already inside the oracle/reference tier itself -- the issue-#89 cross-boundary-independence argument does not apply within one file). has_any_cycle and check_stratifiable build an identical adjacency map from dependency_edges and share a verbatim reachability closure (the `reaches` closure). This looks like a genuine, safe refactor opportunity (factor the shared adjacency-build + reachability walk into one helper both call) -- not performed here because it requires editing crates/kyzo-core/src/query/laws.rs, an engine-code change outside this task's file scope. Flagged in story #321's closing report as real, actionable debt for a follow-up story, not silently waived."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/data/expr.rs::collect_bindings",
-  "crates/kyzo-core/src/data/expr.rs::do_binding_indices",
-  "crates/kyzo-core/src/data/expr.rs::do_get_variables",
+  "crates/kyzo-model/src/program/expr.rs::collect_bindings",
+  "crates/kyzo-model/src/program/expr.rs::do_binding_indices",
+  "crates/kyzo-model/src/program/expr.rs::do_get_variables",
   "crates/kyzo-core/src/data/json.rs::from",
   "crates/kyzo-core/src/data/tests/exprs.rs::and_short_circuits_past_errors",
   "crates/kyzo-core/src/data/tests/exprs.rs::or_short_circuits_past_errors",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_abs",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_add",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_comparators",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_eq_neq",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_floor_ceil",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_minus",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_mul",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_round",
-  "crates/kyzo-core/src/data/tests/functions.rs::test_signum",
-  "crates/kyzo-core/src/engines/fts.rs::eval_near::closure@550",
-  "crates/kyzo-core/src/engines/fts.rs::eval_near::closure@551",
-  "crates/kyzo-core/src/engines/fts.rs::fts_index_metadata",
-  "crates/kyzo-core/src/engines/gazetteer_hostile.rs::compile",
-  "crates/kyzo-core/src/engines/gazetteer_hostile.rs::input_handle",
-  "crates/kyzo-core/src/engines/gazetteer_hostile.rs::law5_corrupt_dictionary_sweep_never_panics::closure@452",
-  "crates/kyzo-core/src/engines/gazetteer_hostile.rs::ligature_and_combining_marks_adjacent_to_ascii",
-  "crates/kyzo-core/src/engines/gazetteer_hostile.rs::three_way_nesting_and_prefix_suffix_overlaps",
-  "crates/kyzo-core/src/engines/gazetteer_hostile.rs::turkish_dotted_dotless_i_no_false_multibyte_match",
-  "crates/kyzo-core/src/engines/gazetteer_hostile.rs::whole_document_surface_and_single_char_carpet",
-  "crates/kyzo-core/src/engines/hnsw_filter_harness.rs::input_handle",
-  "crates/kyzo-core/src/engines/lsh.rs::lsh_index_metadata",
-  "crates/kyzo-core/src/engines/sparse.rs::sparse_index_metadata",
-  "crates/kyzo-core/src/engines/sparse_hostile.rs::input_handle",
-  "crates/kyzo-core/src/engines/spatial.rs::spatial_index_metadata",
-  "crates/kyzo-core/src/engines/text/tokenizer/simple_tokenizer.rs::advance",
-  "crates/kyzo-core/src/engines/text/tokenizer/whitespace_tokenizer.rs::advance",
-  "crates/kyzo-core/src/fixed_rule/algos/bfs.rs::run",
-  "crates/kyzo-core/src/fixed_rule/algos/dfs.rs::run",
-  "crates/kyzo-core/src/fixed_rule/mod.rs::bool_option",
-  "crates/kyzo-core/src/fixed_rule/mod.rs::float_option",
-  "crates/kyzo-core/src/fixed_rule/mod.rs::integer_option",
-  "crates/kyzo-core/src/fixed_rule/utilities/jlines.rs::json_to_datavalue",
-  "crates/kyzo-core/src/parse/expr.rs::parse_quoted_string",
-  "crates/kyzo-core/src/parse/expr.rs::parse_s_quoted_string",
-  "crates/kyzo-core/src/query/compile.rs::stratified_magic_compile::closure@351",
-  "crates/kyzo-core/src/query/compile.rs::stratified_magic_compile::closure@355",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_abs",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_add",
+  "crates/kyzo-core/src/exec/stdlib/tests/compare.rs::test_comparators",
+  "crates/kyzo-core/src/exec/stdlib/tests/compare.rs::test_eq_neq",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_floor_ceil",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_minus",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_mul",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_round",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_signum",
+  "crates/kyzo-core/src/project/text/fts.rs::eval_near::closure@570",
+  "crates/kyzo-core/src/project/text/fts.rs::eval_near::closure@571",
+  "crates/kyzo-core/src/project/text/fts.rs::fts_index_metadata",
+  "crates/kyzo-core/src/project/gazetteer.rs::compile",
+  "crates/kyzo-core/src/project/gazetteer.rs::input_handle",
+  "crates/kyzo-core/src/project/gazetteer.rs::law5_corrupt_dictionary_sweep_never_panics::closure@452",
+  "crates/kyzo-core/src/project/gazetteer.rs::ligature_and_combining_marks_adjacent_to_ascii",
+  "crates/kyzo-core/src/project/gazetteer.rs::three_way_nesting_and_prefix_suffix_overlaps",
+  "crates/kyzo-core/src/project/gazetteer.rs::turkish_dotted_dotless_i_no_false_multibyte_match",
+  "crates/kyzo-core/src/project/gazetteer.rs::whole_document_surface_and_single_char_carpet",
+  "crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs::input_handle",
+  "crates/kyzo-core/src/project/dedup/lsh.rs::lsh_index_metadata",
+  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_index_metadata",
+  "crates/kyzo-core/src/project/sparse/sparse_hostile.rs::input_handle",
+  "crates/kyzo-core/src/project/spatial/mod.rs::spatial_index_metadata",
+  "crates/kyzo-core/src/project/text/tokenizer/simple_tokenizer.rs::advance",
+  "crates/kyzo-core/src/project/text/tokenizer/whitespace_tokenizer.rs::advance",
+  "crates/kyzo-core/src/rules/algo/bfs.rs::run",
+  "crates/kyzo-core/src/rules/algo/dfs.rs::run",
+  "crates/kyzo-core/src/rules/contract.rs::bool_option",
+  "crates/kyzo-core/src/rules/contract.rs::float_option",
+  "crates/kyzo-core/src/rules/contract.rs::integer_option",
+  "crates/kyzo-core/src/rules/contract.rs::pos_integer_option",
+  "crates/kyzo-core/src/rules/contract.rs::non_neg_integer_option",
+  "crates/kyzo-model/src/parse/mod.rs::parse_type",
+  "crates/kyzo-model/src/parse/mod.rs::parse_expressions",
+  "crates/kyzo-core/src/session/normalize_tests.rs::helper_via_relation_bound_var_inside_self_join_survives_correctly",
+  "crates/kyzo-core/src/session/normalize_tests.rs::mutual_recursion_bf_and_ff_stays_correctly_reachable",
+  "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::ranged",
+  "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::prefix_iter_projected",
+  "crates/kyzo-core/src/exec/op/join.rs::next",
+  "crates/kyzo-core/src/exec/op/delta.rs::next",
+  "crates/kyzo-core/src/rules/io/jlines.rs::json_to_datavalue",
+  "crates/kyzo-model/src/parse/expr.rs::parse_quoted_string",
+  "crates/kyzo-model/src/parse/expr.rs::parse_s_quoted_string",
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@449",
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@453",
   "crates/kyzo-core/src/query/dst_query.rs::neg_program",
   "crates/kyzo-core/src/query/dst_query.rs::tc_program",
   "crates/kyzo-core/src/query/dst_query.rs::tc_program_named",
-  "crates/kyzo-core/src/query/eval.rs::incremental_plain_eval::closure@1566",
-  "crates/kyzo-core/src/query/eval.rs::initial_plain_eval::closure@1498",
-  "crates/kyzo-core/src/query/laws.rs::resolve_events",
-  "crates/kyzo-core/src/query/provenance.rs::compile_for",
-  "crates/kyzo-core/src/query/provenance.rs::for_each_derivation",
-  "crates/kyzo-core/src/query/provenance.rs::rows_of",
-  "crates/kyzo-core/src/query/provenance.rs::strata_of",
-  "crates/kyzo-core/src/query/ra/temporal.rs::resolve_at",
-  "crates/kyzo-core/src/query/time_travel_script_laws.rs::engine_asof",
-  "crates/kyzo-core/src/query/time_travel_script_laws.rs::engine_current",
-  "crates/kyzo-core/src/query/time_travel_script_laws.rs::historical_correction_via_put_stays_consistent_with_its_index",
-  "crates/kyzo-core/src/query/time_travel_script_laws.rs::historical_update_carries_forward_the_targeted_instants_own_value",
-  "crates/kyzo-core/src/query/time_travel_script_laws.rs::probe_instants",
-  "crates/kyzo-core/src/query/time_travel_script_laws.rs::two_coordinate_asof_script_sees_the_record_as_it_was::closure@574",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::asof_run_is_byte_identical_across_threads::closure@1140",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::interesting_instants",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::mutation_exclusive_boundary_is_caught",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::mutation_first_write_wins_is_caught",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::negation_over_delta_refuses_like_negation_over_time_travel",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::negation_over_spans_refuses_like_negation_over_time_travel",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::same_instant_identical_key_last_write_wins",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::same_instant_newest_write_governs",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::spans_assert_after_retract_opens_a_new_interval",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::spans_double_assert_same_payload_is_idempotent_one_interval",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::spans_payload_split_produces_two_intervals",
-  "crates/kyzo-core/src/query/time_travel_trials.rs::tc_over_time_reachability_differs_per_instant::closure@752",
-  "crates/kyzo-core/src/query/trials.rs::abs_sort_bug_manifests",
-  "crates/kyzo-core/src/query/trials.rs::compile_for",
-  "crates/kyzo-core/src/query/trials.rs::derive_intervals_abs_sort_bug",
-  "crates/kyzo-core/src/query/trials.rs::derive_intervals_short_end_bug",
-  "crates/kyzo-core/src/query/trials.rs::for_each_derivation",
-  "crates/kyzo-core/src/query/trials.rs::mutant_dropping_erase_from_generation_blinds_the_campaign",
-  "crates/kyzo-core/src/query/trials.rs::mutant_skipping_negative_coordinates_blinds_the_campaign",
-  "crates/kyzo-core/src/query/trials.rs::rows_of",
-  "crates/kyzo-core/src/query/trials.rs::short_end_bug_manifests",
-  "crates/kyzo-core/src/query/trials.rs::strata_of",
-  "crates/kyzo-core/src/storage/tests.rs::concurrent_increments_lose_nothing_at_the_storage_layer::closure@3162",
-  "crates/kyzo-core/src/storage/tests.rs::concurrent_increments_lose_nothing_at_the_storage_layer::closure@3156",
-  "crates/kyzo-core/src/storage/tests.rs::dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers::closure@792",
-  "crates/kyzo-core/src/storage/tests.rs::dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers::closure@789",
-  "crates/kyzo-core/src/storage/tests.rs::kv_contract_matches_model",
-  "crates/kyzo-core/src/storage/tests.rs::observe",
-  "crates/kyzo-core/src/storage/tests.rs::observe::closure@2917",
-  "crates/kyzo-core/src/storage/tests.rs::observe::closure@2915",
-  "crates/kyzo-core/src/storage/tests.rs::observe::closure@2913",
-  "crates/kyzo-core/src/storage/tests.rs::retry_on_conflict_reaches_completion_under_contention::closure@1721",
-  "crates/kyzo-core/src/storage/tests.rs::retry_on_conflict_reaches_completion_under_contention::closure@1718",
-  "crates/kyzo-core/src/storage/tests.rs::sim_campaign_retry_survives_spurious_conflicts_and_interleavings::closure@2310",
-  "crates/kyzo-core/src/storage/tests.rs::sim_campaign_retry_survives_spurious_conflicts_and_interleavings::closure@2308",
-  "crates/kyzo-core/src/storage/tests.rs::sim_campaign_write_skew_aborts_and_serializes::closure@2666",
-  "crates/kyzo-core/src/storage/tests.rs::sim_campaign_write_skew_aborts_and_serializes::closure@2663",
-  "crates/kyzo-core/src/storage/tests.rs::sim_campaign_write_write_race_first_committer_wins::closure@2830",
-  "crates/kyzo-core/src/storage/tests.rs::sim_campaign_write_write_race_first_committer_wins::closure@2827",
-  "crates/kyzo-core/src/storage/tests.rs::sim_fault_plan_identical_at_any_thread_count",
-  "crates/kyzo-core/src/storage/tests.rs::sim_kv_contract_matches_model",
-  "crates/kyzo-core/src/storage/tests.rs::skip_scan_hit_at_min_ts_terminates",
-  "crates/kyzo-core/src/storage/tests.rs::skip_scan_terminates_on_retraction_at_min_ts",
+  "crates/kyzo-core/src/exec/fixpoint/eval.rs::incremental_plain_eval::closure@1372",
+  "crates/kyzo-core/src/exec/fixpoint/eval.rs::initial_plain_eval::closure@1304",
+  "crates/kyzo-oracle/src/eval.rs::resolve_events",
+  "crates/kyzo-core/src/exec/provenance/eval.rs::compile_for",
+  "crates/kyzo-core/src/exec/provenance/eval.rs::for_each_derivation",
+  "crates/kyzo-core/src/exec/provenance/eval.rs::rows_of",
+  "crates/kyzo-core/src/exec/provenance/eval.rs::strata_of",
+  "crates/kyzo-core/src/exec/op/temporal.rs::resolve_at",
+  "crates/kyzo-trials/src/time_travel/script.rs::engine_asof",
+  "crates/kyzo-trials/src/time_travel/script.rs::engine_current",
+  "crates/kyzo-trials/src/time_travel/script.rs::historical_correction_via_put_stays_consistent_with_its_index",
+  "crates/kyzo-trials/src/time_travel/script.rs::historical_update_carries_forward_the_targeted_instants_own_value",
+  "crates/kyzo-trials/src/time_travel/script.rs::probe_instants",
+  "crates/kyzo-trials/src/time_travel/script.rs::two_coordinate_asof_script_sees_the_record_as_it_was::closure@574",
+  "crates/kyzo-trials/src/time_travel/path.rs::asof_run_is_byte_identical_across_threads::closure@1140",
+  "crates/kyzo-trials/src/time_travel/path.rs::interesting_instants",
+  "crates/kyzo-trials/src/time_travel/path.rs::mutation_exclusive_boundary_is_caught",
+  "crates/kyzo-trials/src/time_travel/path.rs::mutation_first_write_wins_is_caught",
+  "crates/kyzo-trials/src/time_travel/path.rs::negation_over_delta_refuses_like_negation_over_time_travel",
+  "crates/kyzo-trials/src/time_travel/path.rs::negation_over_spans_refuses_like_negation_over_time_travel",
+  "crates/kyzo-trials/src/time_travel/path.rs::same_instant_identical_key_last_write_wins",
+  "crates/kyzo-trials/src/time_travel/path.rs::same_instant_newest_write_governs",
+  "crates/kyzo-trials/src/time_travel/path.rs::spans_assert_after_retract_opens_a_new_interval",
+  "crates/kyzo-trials/src/time_travel/path.rs::spans_double_assert_same_payload_is_idempotent_one_interval",
+  "crates/kyzo-trials/src/time_travel/path.rs::spans_payload_split_produces_two_intervals",
+  "crates/kyzo-trials/src/time_travel/path.rs::tc_over_time_reachability_differs_per_instant::closure@752",
+  "crates/kyzo-trials/src/determinism.rs::abs_sort_bug_manifests",
+  "crates/kyzo-trials/src/determinism.rs::compile_for",
+  "crates/kyzo-trials/src/determinism.rs::derive_intervals_abs_sort_bug",
+  "crates/kyzo-trials/src/determinism.rs::derive_intervals_short_end_bug",
+  "crates/kyzo-trials/src/determinism.rs::for_each_derivation",
+  "crates/kyzo-trials/src/determinism.rs::mutant_dropping_erase_from_generation_blinds_the_campaign",
+  "crates/kyzo-trials/src/determinism.rs::mutant_skipping_negative_coordinates_blinds_the_campaign",
+  "crates/kyzo-trials/src/determinism.rs::rows_of",
+  "crates/kyzo-trials/src/determinism.rs::short_end_bug_manifests",
+  "crates/kyzo-trials/src/determinism.rs::strata_of",
+  "crates/kyzo-core/src/store/fjall.rs::concurrent_increments_lose_nothing_at_the_storage_layer::closure@3162",
+  "crates/kyzo-core/src/store/fjall.rs::concurrent_increments_lose_nothing_at_the_storage_layer::closure@3156",
+  "crates/kyzo-core/src/store/fjall.rs::dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers::closure@792",
+  "crates/kyzo-core/src/store/fjall.rs::dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers::closure@789",
+  "crates/kyzo-core/src/store/fjall.rs::kv_contract_matches_model",
+  "crates/kyzo-core/src/store/fjall.rs::observe",
+  "crates/kyzo-core/src/store/fjall.rs::observe::closure@2917",
+  "crates/kyzo-core/src/store/fjall.rs::observe::closure@2915",
+  "crates/kyzo-core/src/store/fjall.rs::observe::closure@2913",
+  "crates/kyzo-core/src/store/fjall.rs::retry_on_conflict_reaches_completion_under_contention::closure@1721",
+  "crates/kyzo-core/src/store/fjall.rs::retry_on_conflict_reaches_completion_under_contention::closure@1718",
+  "crates/kyzo-core/src/store/fjall.rs::sim_campaign_retry_survives_spurious_conflicts_and_interleavings::closure@2310",
+  "crates/kyzo-core/src/store/fjall.rs::sim_campaign_retry_survives_spurious_conflicts_and_interleavings::closure@2308",
+  "crates/kyzo-core/src/store/fjall.rs::sim_campaign_write_skew_aborts_and_serializes::closure@2666",
+  "crates/kyzo-core/src/store/fjall.rs::sim_campaign_write_skew_aborts_and_serializes::closure@2663",
+  "crates/kyzo-core/src/store/fjall.rs::sim_campaign_write_write_race_first_committer_wins::closure@2830",
+  "crates/kyzo-core/src/store/fjall.rs::sim_campaign_write_write_race_first_committer_wins::closure@2827",
+  "crates/kyzo-core/src/store/fjall.rs::sim_fault_plan_identical_at_any_thread_count",
+  "crates/kyzo-core/src/store/fjall.rs::sim_kv_contract_matches_model",
+  "crates/kyzo-core/src/store/fjall.rs::skip_scan_hit_at_min_ts_terminates",
+  "crates/kyzo-core/src/store/fjall.rs::skip_scan_terminates_on_retraction_at_min_ts",
 ]
 citation = "Deliberately mirrored/symmetric code, reviewed by name and file context: test A/B pairs (test_add/test_mul, and_short_circuits/or_short_circuits, spans_* interval-algebra probes, mutation_*_is_caught boundary pairs, skip_scan_*_terminates pairs), oracle-vs-engine differential test-helper twins across query/laws.rs, query/provenance.rs, and query/trials.rs (rows_of, strata_of, compile_for, for_each_derivation, resolve_events/resolve_at -- the deliberate parallel structure a differential test needs), per-engine *_index_metadata twins (lsh/sparse/fts/spatial share one operator architecture by design, see .claude/rules/engines.md), per-type option-parser triplets (integer_option/float_option/bool_option) and expr.rs's parallel binding-collection helpers, and same-test sub-closures compared against each other (concurrent-writer/retry/write-skew DST campaigns, observe's three probe closures) -- structurally similar by the test's own design, not by accidental copy-paste. (Story #301: closure line numbers repointed after rustfmt of T2-T7 surfaces; not re-worded.)"
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/data/aggr.rs::get",
-  "crates/kyzo-core/src/data/aggr.rs::init_val",
+  "crates/kyzo-core/src/exec/fold/aggr.rs::get",
+  "crates/kyzo-core/src/exec/fold/aggr.rs::init_val",
 ]
 citation = "Story #301 T5 sealed-enum dispatch: NormalAggr::get and MeetAggr::init_val are thin exhaustively-matched arms that forward to the same per-variant methods. Same intentional-dispatch-boilerplate category as data/functions.rs's per-operator table (already waived above) -- collapsing would need a macro over two different return types (DataValue vs MeetAccum), a design choice outside the T5 seal. Not accidental copy-paste."
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/engines/sparse.rs::sparse_del",
-  "crates/kyzo-core/src/engines/sparse.rs::sparse_put",
+  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_del",
+  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_put",
 ]
 citation = "Symmetric put/delete pair on the sparse index: sparse_put writes a fact at a given row key and sparse_del removes it. Both share the same encode-key → transaction-write skeleton (the only structural difference is the write variant: put vs delete). Not accidental copy-paste -- it is the deliberate write-path symmetry that every storage operation in this engine exhibits (analogous to the scan_bounded_prefix / scan_bounded_prefix_projected pair in relation.rs). Consolidating would need a per-operation callback, a design choice outside this task's scope."
 

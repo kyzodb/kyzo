@@ -259,9 +259,9 @@ impl ProjectionKind for Hnsw {}
 /// Neighbour degree `m` for HNSW graph construction. Proven `m >= 2` so
 /// `1/ln(m)` (the level multiplier) is always finite — `m = 1` would yield
 /// `Inf` and an unusable layer geometry.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize,
-)]
+// Serialize only: catalog decode admits via [`HnswIndexManifestDe`]'s raw
+// `usize` then [`MNeighbours::new`] — derived Deserialize would bypass `m >= 2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde_derive::Serialize)]
 #[serde(transparent)]
 pub(crate) struct MNeighbours(usize);
 

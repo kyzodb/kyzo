@@ -591,12 +591,15 @@ fn adorn_fixed_rule_apply(
             fixed.span,
         )
     })?;
+    // Seal options through the fixed-rule door (Constant folds Apply(OP_LIST)
+    // list literals to Const List-of-Lists; other rules normalize similarly).
+    let options = fixed_impl.init_options(fixed.options.clone(), fixed.span)?;
     Ok(MagicFixedRuleApply {
         span: fixed.span,
         fixed_handle: fixed.fixed_handle.clone(),
         fixed_impl,
         rule_args,
-        options: fixed.options.clone(),
+        options,
         arity: fixed.arity,
     })
 }

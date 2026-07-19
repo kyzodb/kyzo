@@ -26,13 +26,16 @@ pub struct SourceFile {
     pub ast: syn::File,
 }
 
-/// Every `.rs` file under `crates/kyzo-core/src` and `crates/kyzo-bin/src`, relative to
-/// `root` (the workspace root — a real checkout or a bite-proof's rsync
-/// copy). Both engine crates, never the bindings: the ontology gate is
-/// scoped to the isolated core, same boundary as the pure-Rust gate.
+/// Every `.rs` file under the engine crates that own ontology law:
+/// `kyzo-core`, `kyzo-bin`, and `kyzo-model` (value-plane / one-law codec).
+/// Never the bindings. Relative to `root` (checkout or bite-proof rsync copy).
 pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
     let mut out = Vec::new();
-    for crate_dir in ["crates/kyzo-core/src", "crates/kyzo-bin/src"] {
+    for crate_dir in [
+        "crates/kyzo-core/src",
+        "crates/kyzo-bin/src",
+        "crates/kyzo-model/src",
+    ] {
         let abs = root.join(crate_dir);
         if !abs.exists() {
             continue;
@@ -63,6 +66,22 @@ pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
     }
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     Ok(out)
+}
+
+/// Load one repo-root-relative `.rs` file for checks that cite seats outside
+/// the engine walk (`kyzo-oracle`, `kyzo-trials`, …).
+pub fn load_source_file(root: &Path, rel: &str) -> Result<SourceFile> {
+    let rel = rel.trim_start_matches("./");
+    let path = root.join(rel);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let ast =
+        syn::parse_file(&text).with_context(|| format!("parsing {} as Rust", path.display()))?;
+    Ok(SourceFile {
+        rel_path: rel.replace('\\', "/"),
+        text,
+        ast,
+    })
 }
 
 /// Byte offset -> 1-based line number, for reporting `file:line` against a

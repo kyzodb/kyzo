@@ -136,6 +136,8 @@ fn hilbert_rot(n: Option<u32>, x: &mut u32, y: &mut u32, rx: u32, ry: u32) {
                     *y = !*y;
                 }
                 Some(side) => {
+                    // INVARIANT(HilbertRotReflect): side is a power of two ≥ 2;
+                    // wrap implements (side-1)-x reflection on the u32 grid.
                     *x = side.wrapping_sub(1).wrapping_sub(*x);
                     *y = side.wrapping_sub(1).wrapping_sub(*y);
                 }
@@ -174,6 +176,8 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
         let rx = ((d >> 1) & 1) as u32;
         let ry = ((d ^ u64::from(rx)) & 1) as u32;
         hilbert_rot(Some(s), &mut lat, &mut lon, rx, ry);
+        // INVARIANT(HilbertDecodeStep): s is a power of two on the 32-bit
+        // Hilbert walk; wrap places the bit into lat/lon without overflow checks.
         lat = lat.wrapping_add(s.wrapping_mul(rx));
         lon = lon.wrapping_add(s.wrapping_mul(ry));
         d >>= 2;
@@ -241,6 +245,8 @@ mod tests {
             s ^= s << 13;
             s ^= s >> 7;
             s ^= s << 17;
+            // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
+            // test corpus; wrap is the intended u32 scatter, not a size proof.
             let lat = (s as u32).wrapping_mul(0x9E37_79B9);
             let lon = ((s >> 32) as u32).wrapping_mul(0x85EB_CA6B);
             corpus.push(Geometry::from_cells(lat, lon));
