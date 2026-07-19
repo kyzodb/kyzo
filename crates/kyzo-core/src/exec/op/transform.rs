@@ -18,18 +18,18 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BatchFilter, PlanInvariantError, RelAlgebra};
-use kyzo_model::program::expr::Expr;
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::op::batch_ops::{Batch, BatchIter};
+use crate::exec::op::join::{eliminate_from_tuple, get_eliminate_indices};
 use crate::exec::plan::program::MagicSymbol;
+use crate::project::current::Segments;
+use crate::store::ReadTx;
 use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::project::current::Segments;
-use crate::exec::op::batch_ops::{Batch, BatchIter};
-use crate::exec::fixpoint::eval::AtomOccurrence;
-use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::exec::op::join::{eliminate_from_tuple, get_eliminate_indices};
-use crate::store::ReadTx;
 use miette::{Diagnostic, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -82,10 +82,8 @@ impl ReorderRA {
                     let tracking = src.premises().is_some();
                     let mut out = Batch::new();
                     for (i, tuple) in src.iter_rows().enumerate() {
-                        let reordered: Tuple = reorder_indices
-                            .iter()
-                            .map(|j| tuple[*j].clone())
-                            .collect();
+                        let reordered: Tuple =
+                            reorder_indices.iter().map(|j| tuple[*j].clone()).collect();
                         out.push(reordered);
                         if tracking {
                             out.push_premise_list(src.row_premises(i));

@@ -86,7 +86,12 @@ impl Event {
         Ok(())
     }
 
-    pub fn assert(key: Tuple, payload: Tuple, valid: i64, sys: i64) -> Result<Self, ReservedValidInstant> {
+    pub fn assert(
+        key: Tuple,
+        payload: Tuple,
+        valid: i64,
+        sys: i64,
+    ) -> Result<Self, ReservedValidInstant> {
         Self::check_valid_not_reserved(valid)?;
         Ok(Event::Assert {
             key,
@@ -118,7 +123,9 @@ impl Event {
 
     pub fn key(&self) -> &Tuple {
         match self {
-            Event::Assert { key, .. } | Event::Retract { key, .. } | Event::Erase { key, .. } => key,
+            Event::Assert { key, .. } | Event::Retract { key, .. } | Event::Erase { key, .. } => {
+                key
+            }
         }
     }
 
@@ -213,12 +220,7 @@ pub struct Interval {
 
 pub const OPEN_END: i64 = i64::MAX;
 
-pub fn derive_intervals(
-    history: &[Event],
-    key: &Tuple,
-    axis: Axis,
-    fixed: i64,
-) -> Vec<Interval> {
+pub fn derive_intervals(history: &[Event], key: &Tuple, axis: Axis, fixed: i64) -> Vec<Interval> {
     let events: Vec<&Event> = history.iter().filter(|e| e.key() == key).collect();
     let mut breaks: Vec<i64> = match axis {
         Axis::Valid => events.iter().map(|e| e.valid()).collect(),
@@ -294,11 +296,7 @@ pub struct ComposeNetOutOfRange {
 
 impl fmt::Display for ComposeNetOutOfRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "compose net tally {} is outside {{-1, 0, +1}}",
-            self.net
-        )
+        write!(f, "compose net tally {} is outside {{-1, 0, +1}}", self.net)
     }
 }
 
@@ -572,12 +570,9 @@ mod tests {
         );
         assert_eq!(
             d,
-            [
-                SignedFact::Minus(kv(1, 10)),
-                SignedFact::Plus(kv(1, 30)),
-            ]
-            .into_iter()
-            .collect()
+            [SignedFact::Minus(kv(1, 10)), SignedFact::Plus(kv(1, 30)),]
+                .into_iter()
+                .collect()
         );
     }
 

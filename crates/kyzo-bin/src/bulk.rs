@@ -104,7 +104,10 @@ where
 /// `-` deletes the given rows from that relation instead of writing them
 /// (`:rm` instead of `:put` — the same convention the CozoDB original's
 /// direct-storage `import_relations` used).
-pub fn import_relations(db: &Engine<FjallStorage>, data: BTreeMap<String, NamedRows>) -> Result<()> {
+pub fn import_relations(
+    db: &Engine<FjallStorage>,
+    data: BTreeMap<String, NamedRows>,
+) -> Result<()> {
     for (relation_op, rows) in data {
         let (op, relation) = match relation_op.strip_prefix('-') {
             Some(rel) => (":rm", rel),

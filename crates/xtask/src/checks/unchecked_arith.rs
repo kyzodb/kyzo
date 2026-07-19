@@ -51,9 +51,8 @@ pub const PROOF_LOOKBACK: usize = 8;
 /// Committed ratchet floor: uncommented governed sites must be exactly this.
 pub const BASELINE_UNCOMMENTED: usize = 0;
 
-static PROOF_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*//\s*INVARIANT\([A-Za-z_][A-Za-z0-9_]*\):\s*\S").unwrap()
-});
+static PROOF_LINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*//\s*INVARIANT\([A-Za-z_][A-Za-z0-9_]*\):\s*\S").unwrap());
 
 const GOVERNED_PREFIXES: &[&str] = &["wrapping_", "overflowing_", "unchecked_"];
 
@@ -151,7 +150,10 @@ pub fn walk_examples(root: &Path) -> anyhow::Result<Vec<SourceFile>> {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(&dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(&dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
@@ -182,7 +184,8 @@ pub fn load_baseline(root: &Path) -> Result<usize, String> {
     if !path.is_file() {
         return Ok(BASELINE_UNCOMMENTED);
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
     let n = v
@@ -222,35 +225,29 @@ mod tests {
 
     #[test]
     fn accepts_named_invariant_proof() {
-        let f = src(
-            "fn f(x: u64) -> u64 {\n\
+        let f = src("fn f(x: u64) -> u64 {\n\
              // INVARIANT(token_pos): position is a modular counter; wrap is intentional.\n\
              x.wrapping_add(1)\n\
-             }\n",
-        );
+             }\n");
         assert!(check(&[f]).is_empty());
     }
 
     #[test]
     fn proof_covers_short_method_chain() {
-        let f = src(
-            "fn f(x: u64) -> u64 {\n\
+        let f = src("fn f(x: u64) -> u64 {\n\
              // INVARIANT(splitmix64): modular mix per the splitmix64 contract.\n\
              x.wrapping_add(1)\n\
                  .wrapping_mul(3)\n\
-             }\n",
-        );
+             }\n");
         assert!(check(&[f]).is_empty());
     }
 
     #[test]
     fn empty_proof_body_does_not_count() {
-        let f = src(
-            "fn f(x: u64) -> u64 {\n\
+        let f = src("fn f(x: u64) -> u64 {\n\
              // INVARIANT(empty):\n\
              x.wrapping_add(1)\n\
-             }\n",
-        );
+             }\n");
         assert_eq!(check(&[f]).len(), 1);
     }
 
@@ -262,12 +259,10 @@ mod tests {
 
     #[test]
     fn checked_and_saturating_are_out_of_scope() {
-        let f = src(
-            "fn f(x: u64) -> u64 {\n\
+        let f = src("fn f(x: u64) -> u64 {\n\
              let _ = x.checked_add(1);\n\
              x.saturating_add(1)\n\
-             }\n",
-        );
+             }\n");
         assert!(check(&[f]).is_empty());
     }
 }

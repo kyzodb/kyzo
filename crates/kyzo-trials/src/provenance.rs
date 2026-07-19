@@ -279,15 +279,11 @@ fn run_with_witnesses(
         Some(&mut table),
     )
     .expect("evaluates");
-    let rows: BTreeSet<Tuple> = collect_materialized(
-        outcome
-            .store
-            .all_iter()
-            .expect("harness: store iter"),
-    )
-    .expect("harness: materialize")
-    .into_iter()
-    .collect();
+    let rows: BTreeSet<Tuple> =
+        collect_materialized(outcome.store.all_iter().expect("harness: store iter"))
+            .expect("harness: materialize")
+            .into_iter()
+            .collect();
     (
         rows,
         index_witnesses(&table),

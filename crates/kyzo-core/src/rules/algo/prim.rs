@@ -23,13 +23,13 @@ use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::graph_view::DirectedCsrGraph;
-use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 pub(crate) struct MinimumSpanningTreePrim;
 
@@ -128,8 +128,8 @@ fn prim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

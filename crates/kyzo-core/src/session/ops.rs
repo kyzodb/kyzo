@@ -24,18 +24,18 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::store::time::ClaimPolarity;
 use crate::data::json::NamedRows;
-use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::program::expr::Expr;
 use crate::session::catalog::{
     IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency, TEMPORAL_POSTING_LEADING_COLUMN,
     get_relation,
 };
 use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
+use crate::store::time::ClaimPolarity;
 use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::program::symbol::Symbol;
+use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, Tuple, TupleT, ValidityTs, decode_tuple_from_kv};
 
 /// The scan ceiling for `::merkle_root` when the caller sets no
@@ -278,7 +278,9 @@ impl<T: WriteTx> SessionTx<T> {
         // current-only state.
         let kind = match &index_ref.kind {
             IndexKind::Plain { .. } | IndexKind::Temporal => KeyspaceKind::Facts,
-            IndexKind::Hnsw(_) | IndexKind::Fts(_) | IndexKind::Lsh { .. } => KeyspaceKind::AlgorithmState,
+            IndexKind::Hnsw(_) | IndexKind::Fts(_) | IndexKind::Lsh { .. } => {
+                KeyspaceKind::AlgorithmState
+            }
         };
         for (name, metadata) in index_metas {
             self.create_relation(
@@ -701,8 +703,9 @@ impl<S: Storage> Engine<S> {
         // when the caller sets none. A ceiling of zero refuses before
         // scanning anything.
         let ceiling = match options.derived_tuple_ceiling {
-            Some(c) => NonZeroU64::new(c)
-                .ok_or(crate::store::merkle::MerkleScanExceeded { ceiling: 0 })?,
+            Some(c) => {
+                NonZeroU64::new(c).ok_or(crate::store::merkle::MerkleScanExceeded { ceiling: 0 })?
+            }
             None => DEFAULT_MERKLE_SCAN_CEILING,
         };
         let rtx = self.store.read_tx()?;
@@ -740,7 +743,10 @@ impl<S: Storage> Engine<S> {
                 ])
             })
             .collect();
-        Ok(NamedRows::try_new(vec!["name".into(), "kind".into()], rows)?)
+        Ok(NamedRows::try_new(
+            vec!["name".into(), "kind".into()],
+            rows,
+        )?)
     }
 
     /// `::index create`.
@@ -783,7 +789,6 @@ impl<S: Storage> Engine<S> {
     }
 }
 
-
 /// read-side RA operator that serves window/stab queries over these
 /// postings is a separate chunk, see `IndexKind::Temporal`'s doc comment).
 ///
@@ -801,13 +806,13 @@ mod temporal_index_tests {
     use std::cmp::Reverse;
 
     use super::*;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::{Engine, ScriptOptions};
+    use crate::store::sim::SimStorage;
+    use crate::store::{ReadTx, Storage};
     use kyzo_model::data_value_any;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::schema::ColType;
-    use crate::session::catalog::Catalog;
-    use crate::session::db::{Engine, ScriptOptions};
-    use crate::store::{ReadTx, Storage};
-    use crate::store::sim::SimStorage;
     use kyzo_model::value::{StoredValiditySlot, ValidityTs};
 
     fn vts(t: i64) -> ValidityTs {
@@ -923,16 +928,22 @@ mod temporal_index_tests {
                     .expect("posting key decodes cleanly");
                 let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other @ (data_value_any!()) => panic!("expected the leading Validity column, got {other:?}"),
+                    other @ (data_value_any!()) => {
+                        panic!("expected the leading Validity column, got {other:?}")
+                    }
                 };
                 let key_col = tup[1].get_int().expect("int base key column");
                 let tail_valid = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other @ (data_value_any!()) => panic!("expected the tail valid slot, got {other:?}"),
+                    other @ (data_value_any!()) => {
+                        panic!("expected the tail valid slot, got {other:?}")
+                    }
                 };
                 let tail_sys = match &tup.as_slice()[3] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other @ (data_value_any!()) => panic!("expected the tail sys slot, got {other:?}"),
+                    other @ (data_value_any!()) => {
+                        panic!("expected the tail sys slot, got {other:?}")
+                    }
                 };
                 let polarity = crate::store::time::claim_polarity_of_value(&v)
                     .expect("posting value decodes cleanly");
@@ -1351,8 +1362,8 @@ mod index_surface_tests {
     use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
-    use crate::store::fjall::new_fjall_storage;
     use crate::store::Storage;
+    use crate::store::fjall::new_fjall_storage;
     use kyzo_model::value::{DataValue, Tuple};
 
     fn no_params() -> BTreeMap<String, DataValue> {

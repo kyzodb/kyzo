@@ -192,7 +192,9 @@ impl RecoveryEpochLink {
 /// Typed refuse from epoch advance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum EpochAdvanceRefuse {
-    #[error("EpochAdvanceBlocked: current-epoch Fenced footprints still live (IntentClear required)")]
+    #[error(
+        "EpochAdvanceBlocked: current-epoch Fenced footprints still live (IntentClear required)"
+    )]
     #[diagnostic(code(store::epoch::advance_blocked))]
     EpochAdvanceBlocked,
     #[error("EpochGrant store identity does not match WriteAuthority / current domain")]

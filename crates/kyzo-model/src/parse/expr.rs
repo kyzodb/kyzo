@@ -24,8 +24,8 @@ use thiserror::Error;
 
 use crate::program::expr::{BindingPos, Expr, LazyOp};
 use crate::program::op::{
-    resolve_decl, OP_ADD, OP_CONCAT, OP_DIV, OP_EQ, OP_GE, OP_GT, OP_JSON_OBJECT, OP_LE, OP_LIST,
-    OP_LT, OP_MAYBE_GET, OP_MINUS, OP_MOD, OP_MUL, OP_NEGATE, OP_NEQ, OP_POW, OP_SUB,
+    OP_ADD, OP_CONCAT, OP_DIV, OP_EQ, OP_GE, OP_GT, OP_JSON_OBJECT, OP_LE, OP_LIST, OP_LT,
+    OP_MAYBE_GET, OP_MINUS, OP_MOD, OP_MUL, OP_NEGATE, OP_NEQ, OP_POW, OP_SUB, resolve_decl,
 };
 use crate::program::span::SourceSpan;
 use crate::program::symbol::Symbol;
@@ -63,10 +63,7 @@ fn pratt_parser() -> &'static PrattParser<Rule> {
 pub(crate) struct InvalidExpression(#[label] pub(crate) SourceSpan);
 
 /// Lift one pest `expr` pair into an [`Expr`].
-pub(crate) fn build_expr(
-    pair: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
-) -> Result<Expr> {
+pub(crate) fn build_expr(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Result<Expr> {
     ensure!(
         pair.as_rule() == Rule::expr,
         InvalidExpression(pair.extract_span())

@@ -17,19 +17,19 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::v1::Timestamp;
 
 use kyzo_model::data_value_any;
+use kyzo_model::value::json_convert::to_json;
 use kyzo_model::value::{
     Bound, DataValue, Interval, Json, Num, NumRepr, NumericOrd, RegexFlags, RegexSource, Validity,
     ValidityTs, Vector,
 };
-use kyzo_model::value::json_convert::to_json;
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_chars(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List(
@@ -42,7 +42,6 @@ pub(crate) fn op_chars(args: &[DataValue]) -> Result<DataValue> {
     ))
 }
 
-
 pub(crate) fn op_ends_with(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.ends_with(r.as_str()))),
@@ -50,7 +49,6 @@ pub(crate) fn op_ends_with(args: &[DataValue]) -> Result<DataValue> {
         _ => bail!("'ends_with' requires strings or bytes"),
     }
 }
-
 
 pub(crate) fn op_from_substrings(args: &[DataValue]) -> Result<DataValue> {
     let mut ret = String::new();
@@ -78,14 +76,12 @@ pub(crate) fn op_from_substrings(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(ret))
 }
 
-
 pub(crate) fn op_lowercase(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.to_lowercase())),
         data_value_any!() => bail!("'lowercase' requires strings"),
     }
 }
-
 
 pub(crate) fn op_regex(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
@@ -98,7 +94,6 @@ pub(crate) fn op_regex(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_regex_extract(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(s), DataValue::Regex(r)) => {
@@ -110,7 +105,6 @@ pub(crate) fn op_regex_extract(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_regex_extract_first(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(s), DataValue::Regex(r)) => {
@@ -121,7 +115,6 @@ pub(crate) fn op_regex_extract_first(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_regex_matches(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(s), DataValue::Regex(r)) => {
@@ -130,7 +123,6 @@ pub(crate) fn op_regex_matches(args: &[DataValue]) -> Result<DataValue> {
         _ => bail!("'regex_matches' requires strings"),
     }
 }
-
 
 pub(crate) fn op_regex_replace(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1], &args[2]) {
@@ -141,7 +133,6 @@ pub(crate) fn op_regex_replace(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_regex_replace_all(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1], &args[2]) {
         (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
@@ -150,7 +141,6 @@ pub(crate) fn op_regex_replace_all(args: &[DataValue]) -> Result<DataValue> {
         _ => bail!("'regex_replace' requires strings"),
     }
 }
-
 
 pub(crate) fn op_slice_string(args: &[DataValue]) -> Result<DataValue> {
     let s = args[0]
@@ -175,7 +165,6 @@ pub(crate) fn op_slice_string(args: &[DataValue]) -> Result<DataValue> {
     ))
 }
 
-
 pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.starts_with(r.as_str()))),
@@ -184,14 +173,12 @@ pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_str_includes(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.find(r as &str).is_some())),
         _ => bail!("'str_includes' requires strings"),
     }
 }
-
 
 pub(crate) fn op_t2s(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
@@ -200,14 +187,12 @@ pub(crate) fn op_t2s(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_trim(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim())),
         data_value_any!() => bail!("'trim' requires strings"),
     }
 }
-
 
 pub(crate) fn op_trim_end(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -216,14 +201,12 @@ pub(crate) fn op_trim_end(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_trim_start(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim_start())),
         v @ (data_value_any!()) => bail!("'trim_start' requires strings, got {}", v),
     }
 }
-
 
 pub(crate) fn op_unicode_normalize(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
@@ -238,15 +221,12 @@ pub(crate) fn op_unicode_normalize(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_uppercase(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.to_uppercase())),
         data_value_any!() => bail!("'uppercase' requires strings"),
     }
 }
-
-
 
 /// Compile a regex VALUE for execution. The value itself is storage
 /// identity only (`RegexSource` — deliberately no compiled state inside
@@ -260,18 +240,14 @@ fn compile_regex_value(r: &RegexSource) -> Result<kyzo_model::value::CompiledReg
         .map_err(|err| miette!("stored regex failed to compile: {err:?}"))
 }
 
-
-
 pub(crate) fn val2str(arg: &DataValue) -> String {
     match arg {
         DataValue::Str(s) => s.to_string(),
         DataValue::Json(j) => match j {
             Json::Str(s) => s.clone(),
-            Json::Null
-            | Json::Bool(_)
-            | Json::Num(_)
-            | Json::Arr(_)
-            | Json::Obj(_) => to_json(arg).to_string(),
+            Json::Null | Json::Bool(_) | Json::Num(_) | Json::Arr(_) | Json::Obj(_) => {
+                to_json(arg).to_string()
+            }
         },
         data_value_any!() => {
             let jv = to_json(arg);
@@ -279,4 +255,3 @@ pub(crate) fn val2str(arg: &DataValue) -> String {
         }
     }
 }
-

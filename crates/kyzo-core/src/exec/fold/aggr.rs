@@ -32,8 +32,7 @@ use kyzo_model::program::aggregate::{AggrKind, Aggregation};
 use kyzo_model::value::{DataValue, Num, NumRepr};
 
 use crate::exec::fold::sketch::aggr::{
-    AggrCountMin, AggrHll, AggrHllSketch, AggrHllUnion, AggrQuantile, AggrTDigest,
-    MeetAggrHllUnion,
+    AggrCountMin, AggrHll, AggrHllSketch, AggrHllUnion, AggrQuantile, AggrTDigest, MeetAggrHllUnion,
 };
 
 /// Private supertrait seal for aggregation op traits — crate visibility
@@ -1269,9 +1268,7 @@ impl NormalAggrObj for AggrMinCost {
     fn get(&self) -> Result<DataValue> {
         Ok(DataValue::List(vec![
             self.found.clone().unwrap_or(DataValue::Null),
-            self.cost
-                .map(DataValue::from)
-                .unwrap_or(DataValue::Null),
+            self.cost.map(DataValue::from).unwrap_or(DataValue::Null),
         ]))
     }
 }

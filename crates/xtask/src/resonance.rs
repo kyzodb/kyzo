@@ -274,8 +274,7 @@ fn run_unchecked_arith(
     root: &std::path::Path,
 ) -> Result<bool, anyhow::Error> {
     println!("== check: unchecked-arith named-invariant ratchet ==");
-    let baseline = checks::unchecked_arith::load_baseline(root)
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let baseline = checks::unchecked_arith::load_baseline(root).map_err(|e| anyhow::anyhow!(e))?;
     let examples = checks::unchecked_arith::walk_examples(root)?;
     let mut violations = checks::unchecked_arith::check(files);
     violations.extend(checks::unchecked_arith::check(&examples));
@@ -293,9 +292,7 @@ fn run_unchecked_arith(
             "FAIL unchecked-arith: {n} uncommented site(s) exceeds baseline {baseline} \
              (crates/xtask/unchecked-arith-baseline.json)"
         );
-        println!(
-            "check: unchecked-arith FAIL ({n} uncommented, baseline {baseline})"
-        );
+        println!("check: unchecked-arith FAIL ({n} uncommented, baseline {baseline})");
         return Ok(false);
     }
     if n < baseline {
@@ -303,14 +300,10 @@ fn run_unchecked_arith(
             "RATCHET IMPROVED unchecked-arith: {n} < baseline {baseline} — tighten \
              crates/xtask/unchecked-arith-baseline.json to {n}"
         );
-        println!(
-            "check: unchecked-arith FAIL (baseline stale: {n} < {baseline})"
-        );
+        println!("check: unchecked-arith FAIL (baseline stale: {n} < {baseline})");
         return Ok(false);
     }
-    println!(
-        "check: unchecked-arith PASS ({n} uncommented; baseline {baseline})"
-    );
+    println!("check: unchecked-arith PASS ({n} uncommented; baseline {baseline})");
     Ok(true)
 }
 

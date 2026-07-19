@@ -1,6 +1,6 @@
 //! StdlibRefuse::NanAnswer at BoundOp::apply — sole NaN success refuse.
+use crate::exec::stdlib::{StdlibRefuse, resolve_op};
 use kyzo_model::value::DataValue;
-use crate::exec::stdlib::{resolve_op, StdlibRefuse};
 
 #[test]
 fn to_float_nan_string_refused_as_nan_answer() {

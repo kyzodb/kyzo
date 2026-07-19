@@ -143,16 +143,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use fjall::Slice;
 use miette::{Result, bail, miette};
 
-use crate::store::time::{
-    ClaimPolarity, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
-};
+use crate::exec::op::batch_ops::{Batch, BatchIter};
+use crate::session::catalog::RelationHandle;
+use crate::store::ReadTx;
+use crate::store::time::{ClaimPolarity, claim_polarity_of_value, extend_tuple_from_bitemporal_v};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
 use kyzo_model::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
-use crate::exec::op::batch_ops::{Batch, BatchIter};
-use crate::session::catalog::RelationHandle;
-use crate::store::ReadTx;
 
 /// A signed fact: present in the later snapshot only (`Plus`) or the
 /// earlier only (`Minus`) — the production twin of `query/laws.rs`'s
@@ -796,14 +794,14 @@ impl Iterator for RowChunks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use kyzo_model::SourceSpan;
-    use kyzo_model::program::symbol::Symbol;
-    use kyzo_model::value::{MAX_VALIDITY_TS, ValidityTs};
     use crate::session::catalog::{KeyspaceKind, create_relation};
     use crate::store::fjall::new_fjall_storage;
     use crate::store::{Storage, WriteTx};
     use itertools::Itertools;
+    use kyzo_model::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
+    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use kyzo_model::value::{MAX_VALIDITY_TS, ValidityTs};
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)
@@ -1175,8 +1173,8 @@ mod tests {
     // this cross-module reuse.
     // ─────────────────────────────────────────────────────────────────
 
-    use crate::session::db::{ScriptOptions, SessionTx};
     use crate::session::catalog::get_relation;
+    use crate::session::db::{ScriptOptions, SessionTx};
 
     /// A one-key relation with a temporal posting index attached,
     /// returning `(base handle, posting handle)` — both already resolved,

@@ -308,7 +308,9 @@ impl GenesisSealedView {
 /// Typed refuse from genesis construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum GenesisRefuse {
-    #[error("MissingStoreOpenCapability: Store open requires a StoreOpen capability (path-only open is Unconstructible)")]
+    #[error(
+        "MissingStoreOpenCapability: Store open requires a StoreOpen capability (path-only open is Unconstructible)"
+    )]
     #[diagnostic(code(store::open::missing_store_open))]
     MissingStoreOpenCapability,
 }

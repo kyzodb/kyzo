@@ -115,17 +115,17 @@ use quadrature::integrate;
 use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
-use kyzo_model::program::expr::{BindingPos, Expr};
-use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::SourceSpan;
-use kyzo_model::value::{DataValue, Tuple, append_canonical};
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::project::text::TokenizerConfig;
 use crate::project::text::tokenizer::TextAnalyzer;
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
+use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::{DataValue, Tuple, append_canonical};
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -160,12 +160,15 @@ impl ProjectionKind for Lsh {}
 /// arbitrary byte vector is not type-equal to a permutation payload; the
 /// length law is re-proven by [`HashPermutations::from_bytes`] on read.
 /// Field is private — mint only via [`Self::from_perms`].
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Default, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 #[repr(transparent)]
 pub(crate) struct LshPermutationBytes(Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<LshPermutationBytes>() == std::mem::size_of::<Vec<u8>>());
-const _: () = assert!(std::mem::align_of::<LshPermutationBytes>() == std::mem::align_of::<Vec<u8>>());
+const _: () =
+    assert!(std::mem::align_of::<LshPermutationBytes>() == std::mem::align_of::<Vec<u8>>());
 
 impl LshPermutationBytes {
     /// Encode live permutation seeds for the catalog payload (always
@@ -198,7 +201,6 @@ impl AsRef<[u8]> for LshPermutationBytes {
         &self.0
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct MinHashLshIndexManifest {
@@ -399,11 +401,11 @@ impl HashPermutations {
     /// The inverse of [`to_bytes`](Self::to_bytes). Safe and fallible: a
     /// length that is not a multiple of 4 is corrupt, not silently
     /// truncated (and the original's unaligned `*const u32` read was UB).
-    pub(crate) fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, LshPermutationDecodeRefused> {
+    pub(crate) fn from_bytes(
+        bytes: &[u8],
+    ) -> std::result::Result<Self, LshPermutationDecodeRefused> {
         if !bytes.len().is_multiple_of(4) {
-            return Err(LshPermutationDecodeRefused::LengthNotMultipleOfFour {
-                len: bytes.len(),
-            });
+            return Err(LshPermutationDecodeRefused::LengthNotMultipleOfFour { len: bytes.len() });
         }
         Ok(Self(
             bytes
@@ -946,12 +948,12 @@ mod tests {
     use super::*;
     use crate::session::catalog::KeyspaceKind;
 
-    use kyzo_model::program::InputRelationHandle;
-    use kyzo_model::program::symbol::Symbol;
     use crate::rules::contract::CancelFlag;
     use crate::session::catalog::create_relation;
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::InputRelationHandle;
+    use kyzo_model::program::symbol::Symbol;
 
     macro_rules! lsh_rows {
         ($($arg:expr),* $(,)?) => {

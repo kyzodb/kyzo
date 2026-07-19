@@ -422,9 +422,7 @@ fn read_u32(bytes: &[u8], i: &mut usize) -> Result<u32, TranscriptRefuse> {
     let end = i.checked_add(4).ok_or(TranscriptRefuse::Corrupt)?;
     let slice = bytes.get(*i..end).ok_or(TranscriptRefuse::Corrupt)?;
     *i = end;
-    Ok(u32::from_be_bytes([
-        slice[0], slice[1], slice[2], slice[3],
-    ]))
+    Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
 fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefuse> {
@@ -442,7 +440,10 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
             return Err(TranscriptRefuse::LengthBoundExceeded);
         }
         let end = i.checked_add(key_len).ok_or(TranscriptRefuse::Corrupt)?;
-        let key = bytes.get(*i..end).ok_or(TranscriptRefuse::Corrupt)?.to_vec();
+        let key = bytes
+            .get(*i..end)
+            .ok_or(TranscriptRefuse::Corrupt)?
+            .to_vec();
         *i = end;
         if let Some(ref p) = prev {
             match key.as_slice().cmp(p.as_slice()) {
@@ -487,7 +488,9 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
 /// Golden vectors under `store/golden/` are the authority; this encoder must
 /// match them. Changing fixture bytes requires a FormatVersion decision in the
 /// vector file header (§81) — never a silent test-fix commit.
-pub fn encode_golden_fixture(kind: SealedArtifactKind) -> Result<CanonicalTranscript, TranscriptRefuse> {
+pub fn encode_golden_fixture(
+    kind: SealedArtifactKind,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
     b.append_u64(FieldId::ARTIFACT_KIND, kind.tag())?;
     b.append_bytes(FieldId::FORMAT_VERSION, &FormatVersion::CURRENT.as_bytes())?;
@@ -603,7 +606,10 @@ mod pins {
             SealedArtifactKind::AuditKeyLeaf,
             include_str!("golden/audit_key_leaf.vec"),
         );
-        assert_matches_golden(SealedArtifactKind::WalHeader, include_str!("golden/wal_header.vec"));
+        assert_matches_golden(
+            SealedArtifactKind::WalHeader,
+            include_str!("golden/wal_header.vec"),
+        );
     }
 
     #[test]

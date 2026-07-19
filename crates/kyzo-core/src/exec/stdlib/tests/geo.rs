@@ -1,9 +1,4 @@
 //! Re-homed domain tables from data/tests/functions.rs.
-use std::f64::consts::{E, PI};
-use serde_json::json;
-use kyzo_model::data_value_any;
-use kyzo_model::schema::{ColType, NullableColType};
-use kyzo_model::value::{DataValue, ValidityTs, Vector};
 use crate::exec::stdlib::collection::*;
 use crate::exec::stdlib::compare::*;
 use crate::exec::stdlib::convert::*;
@@ -14,6 +9,11 @@ use crate::exec::stdlib::nondet::*;
 use crate::exec::stdlib::numeric::*;
 use crate::exec::stdlib::temporal_format::*;
 use crate::exec::stdlib::text::*;
+use kyzo_model::data_value_any;
+use kyzo_model::schema::{ColType, NullableColType};
+use kyzo_model::value::{DataValue, ValidityTs, Vector};
+use serde_json::json;
+use std::f64::consts::{E, PI};
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-5
@@ -66,4 +66,3 @@ fn test_deg_rad() {
         DataValue::from(180.0)
     );
 }
-

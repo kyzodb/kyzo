@@ -322,27 +322,28 @@ pub use store::fjall::{
 };
 pub use store::retry::retry_on_conflict;
 pub use store::verify_walk::{CorruptEntry, VerifyReport, verify_storage};
-pub use store::{Aborted, Applied, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+pub use store::{
+    Aborted, Applied, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage,
+    WriteTx,
+};
 // 07 identity + authority seats — host genesis injection (kyzo-bin engine.rs).
 pub use store::{
     CryptoDomain, EntropyArm, FenceEpoch, GenesisParams, GenesisSealed, GenesisSealedView,
-    SizeClass, StagingTtl, StableCommitCapArm, StoreId, StoreOpen, WriteAuthority, genesis,
+    SizeClass, StableCommitCapArm, StagingTtl, StoreId, StoreOpen, WriteAuthority, genesis,
 };
 
 /// Build→seal→query projection machine (story #305). Public so compile-fail
 /// proofs and later kind parameterizations share one crate-root door.
-pub use project::projection::{
-    Generation, ProjectionBuilder, ProjectionKind, Sealed, Stale,
-};
+pub use project::projection::{Generation, ProjectionBuilder, ProjectionKind, Sealed, Stale};
 
 pub use data::json::NamedRows;
 pub use rules::contract::{
     CancelAuthority, CancelFlag, Cancelled, EmptyNamedRowsBody, FixedRule, FixedRuleInputRelation,
     FixedRulePayload, SimpleFixedRule, SimpleRuleBody,
 };
-pub use session::observe::{CallbackEvent, CallbackOp};
 pub use session::catalog::Catalog;
 pub use session::db::{Engine, ScriptOptions};
+pub use session::observe::{CallbackEvent, CallbackOp};
 
 pub use exec::op::temporal::SignedFact;
 pub use react::standing::StandingQuery;

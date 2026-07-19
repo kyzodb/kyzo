@@ -41,6 +41,7 @@ use crate::project::text::tokenizer::{
     TextAnalyzer, Tokenizer, WhitespaceTokenizer,
 };
 use jieba_rs::Jieba;
+use kyzo_model::data_value_any;
 use miette::{Diagnostic, Result, ensure};
 use serde::Deserialize;
 use sha2::digest::FixedOutput;
@@ -49,7 +50,6 @@ use smartstring::{LazyCompact, SmartString};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
-use kyzo_model::data_value_any;
 
 pub(crate) mod ast;
 pub(crate) mod cangjie;
@@ -299,7 +299,10 @@ impl TokenizerConfig {
                     .get_bool()
                     .ok_or(TokenizerBuildRefusal::NgramPrefixNotBool)?;
                 ensure!(min_gram >= 1, TokenizerBuildRefusal::NgramMinTooSmall);
-                ensure!(max_gram >= min_gram, TokenizerBuildRefusal::NgramMaxBelowMin);
+                ensure!(
+                    max_gram >= min_gram,
+                    TokenizerBuildRefusal::NgramMaxBelowMin
+                );
                 Box::new(NgramTokenizer::new(
                     min_gram as usize,
                     max_gram as usize,
@@ -325,7 +328,9 @@ impl TokenizerConfig {
                             "search" => cangjie::options::TokenizerOption::ForSearch { hmm },
                             "unicode" => cangjie::options::TokenizerOption::Unicode,
                             _ => {
-                                return Err(TokenizerBuildRefusal::CangjieUnknownKind(s.into()).into());
+                                return Err(
+                                    TokenizerBuildRefusal::CangjieUnknownKind(s.into()).into()
+                                );
                             }
                         }
                     }
@@ -406,7 +411,7 @@ impl TokenizerConfig {
                     "turkish" => Language::Turkish,
                     lang => {
                         return Err(
-                            TokenizerBuildRefusal::StemmerUnsupportedLang(lang.into()).into(),
+                            TokenizerBuildRefusal::StemmerUnsupportedLang(lang.into()).into()
                         );
                     }
                 };
@@ -436,9 +441,7 @@ impl TokenizerConfig {
                 }
             }
             _ => {
-                return Err(
-                    TokenizerBuildRefusal::UnknownTokenFilter(self.name.clone()).into(),
-                );
+                return Err(TokenizerBuildRefusal::UnknownTokenFilter(self.name.clone()).into());
             }
         })
     }

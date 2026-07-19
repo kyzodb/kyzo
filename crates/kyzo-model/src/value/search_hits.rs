@@ -18,7 +18,7 @@ use std::fmt;
 use super::admission::Denial;
 use super::arena::Arena;
 use super::arity::Arity;
-use super::canonical::{self, encode_owned, DecodeError};
+use super::canonical::{self, DecodeError, encode_owned};
 use super::column::Domain;
 use super::row::Rows;
 use super::{DataValue, Tuple};
@@ -58,9 +58,7 @@ impl SearchHits {
     /// Consumes logical rows at the engine→query boundary; callers above
     /// the seam receive codes under a proven [`Domain`], never a
     /// `Vec<Tuple>`.
-    pub fn admit_decoded(
-        hits: impl IntoIterator<Item = Tuple>,
-    ) -> Result<Self, Denial> {
+    pub fn admit_decoded(hits: impl IntoIterator<Item = Tuple>) -> Result<Self, Denial> {
         let hits: Vec<Tuple> = hits.into_iter().collect();
         if hits.is_empty() {
             return Ok(Self::empty());
@@ -120,9 +118,7 @@ impl SearchHits {
 
     /// Output boundary: every admitted hit as a logical row.
     pub fn materialize_all(&self) -> Result<Vec<Vec<DataValue>>, MaterializeError> {
-        (0..self.len())
-            .map(|i| self.materialize_hit(i))
-            .collect()
+        (0..self.len()).map(|i| self.materialize_hit(i)).collect()
     }
 
     /// Output boundary: every admitted hit as row authority.

@@ -29,8 +29,8 @@
 //! After the admit door, dimension is a proven newtype and the store is
 //! [`Vec<VectorComponent>`] — bare `Vec<f64>` is not a post-door store.
 
-use super::json::fnv1a64;
 use super::super::number::Num;
+use super::json::fnv1a64;
 
 /// One vector component after Num's float law: `-0.0 → +0.0`, one
 /// canonical NaN. Private field; the only public mint is [`Self::admit`].
@@ -270,7 +270,12 @@ mod tests {
         let v = Vector::try_new(vec![f64::NAN, -1.5, 0.0]).unwrap();
         let id = v.content_id();
         assert_eq!(id, v.content_id());
-        assert_eq!(id, Vector::try_new(vec![f64::NAN, -1.5, -0.0]).unwrap().content_id());
+        assert_eq!(
+            id,
+            Vector::try_new(vec![f64::NAN, -1.5, -0.0])
+                .unwrap()
+                .content_id()
+        );
         // Independent recomputation from the same exact bits matches.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&v.dimension().get().to_be_bytes());

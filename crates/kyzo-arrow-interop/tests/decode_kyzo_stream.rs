@@ -53,7 +53,8 @@ fn real_arrow_reader_decodes_a_uniformly_typed_batch() {
                 DataValue::Str("cde".into()),
             ]),
         ],
-    ).expect("named rows");
+    )
+    .expect("named rows");
     let bytes = named.to_arrow_ipc().expect("encodes");
 
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None).expect("valid Arrow stream");
@@ -113,7 +114,8 @@ fn real_arrow_reader_decodes_nulls_via_the_validity_bitmap() {
             Tuple::from_vec(vec![v_int(30)]),
             Tuple::from_vec(vec![DataValue::Null]),
         ],
-    ).expect("named rows");
+    )
+    .expect("named rows");
     let bytes = named.to_arrow_ipc().expect("encodes");
 
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None).expect("valid Arrow stream");
@@ -155,7 +157,8 @@ fn real_arrow_reader_decodes_a_binary_column() {
             Tuple::from_vec(vec![DataValue::Bytes(vec![])]),
             Tuple::from_vec(vec![DataValue::Bytes(vec![255, 254])]),
         ],
-    ).expect("named rows");
+    )
+    .expect("named rows");
     let bytes = named.to_arrow_ipc().expect("encodes");
 
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None).expect("valid Arrow stream");

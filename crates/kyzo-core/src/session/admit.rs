@@ -38,34 +38,32 @@ use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::store::time::ClaimPolarity;
 use crate::data::json::NamedRows;
-use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
+use crate::session::access::{AccessLevel, InsufficientAccessLevel};
+use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency};
+use crate::session::db::{Engine, SessionTx};
+use crate::session::observe::{CallbackCollector, CallbackOp};
+use crate::store::time::ClaimPolarity;
+use crate::store::{Storage, WriteTx};
+use kyzo_model::SourceSpan;
+use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::{
     FixedRuleApply, InputInlineRulesOrFixed, InputProgram, InputRelationHandle, RelationOp, Trivia,
     WriteValidity,
 };
-use crate::session::access::{AccessLevel, InsufficientAccessLevel};
-use crate::session::catalog::{
-    IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency,
-};
-use crate::session::db::{Engine, SessionTx};
-use crate::session::observe::{CallbackCollector, CallbackOp};
-use crate::store::{Storage, WriteTx};
-use kyzo_model::SourceSpan;
-use kyzo_model::data_value_any;
-use kyzo_model::program::symbol::Symbol;
+use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, ValidityTs};
 use kyzo_model::value::{Tuple, TupleT};
 
 use crate::store::keys::Secret;
 use crate::store::open::StoreId;
 use crate::store::replica::{
-    mint_admission_certificate, AdmissionCertificate, AdmissionCertificateParts, ReplicaRefuse,
+    AdmissionCertificate, AdmissionCertificateParts, ReplicaRefuse, mint_admission_certificate,
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1542,19 +1540,18 @@ pub(crate) fn make_const_rule(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod bulk_write_tests {
     use std::collections::BTreeMap;
 
     use fjall::Slice;
 
-    use kyzo_model::value::DataValue;
-    use kyzo_model::value::Tuple;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::store::sim::SimStorage;
     use crate::store::{ReadTx, Storage};
+    use kyzo_model::value::DataValue;
+    use kyzo_model::value::Tuple;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
@@ -1818,17 +1815,15 @@ mod bulk_write_tests {
     }
 }
 
-
-
 #[cfg(test)]
 mod trigger_cache_battery {
     use std::collections::BTreeMap;
 
-    use kyzo_model::value::DataValue;
     use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::store::sim::SimStorage;
+    use kyzo_model::value::DataValue;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
@@ -1867,10 +1862,10 @@ mod trigger_cache_battery {
             no_params(),
         )
         .expect("set triggers");
-    
+
         db.run_script("?[a, b] <- [[1, 10], [2, 20]] :put src {a, b}", no_params())
             .expect("put fires triggers");
-    
+
         let mirror = db
             .run_script("?[a, b] := *mirror[a, b]", no_params())
             .expect("mirror scan");

@@ -58,16 +58,16 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
+    FixedRulePayload, NodeNotFoundError, ek_bfs_parent, tuple_into_first_column,
+};
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::graph_view::DirectedCsrGraph;
-use crate::rules::contract::{
-    ek_bfs_parent, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
-    FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
-};
 
 /// Residual-capacity threshold: values at or below this count as saturated.
 /// It guards against floating-point residual "dust" (`cap - flow` landing at
@@ -347,8 +347,8 @@ struct SourceIsSinkError(#[label] SourceSpan);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

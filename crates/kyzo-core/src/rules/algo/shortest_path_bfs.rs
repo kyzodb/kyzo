@@ -33,15 +33,15 @@ use itertools::Itertools;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    backtrace_predecessor, tuple_into_first_column,
+};
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::contract::{
-    backtrace_predecessor, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
-    FixedRuleOutput, FixedRulePayload,
-};
 
 // A test-only observable: how many nodes the inner BFS loop has dequeued.
 // It lets `honors_cancel_pins_inner_poll` assert a *deterministic* effect of
@@ -174,8 +174,8 @@ impl FixedRule for ShortestPathBFS {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

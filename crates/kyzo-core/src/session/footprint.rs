@@ -107,8 +107,7 @@ pub fn ranges_cover(superset: &[ByteRange], declared: &[ByteRange]) -> bool {
 }
 
 fn range_covers(outer: &ByteRange, inner: &ByteRange) -> bool {
-    outer.start.as_slice() <= inner.start.as_slice()
-        && outer.end.as_slice() >= inner.end.as_slice()
+    outer.start.as_slice() <= inner.start.as_slice() && outer.end.as_slice() >= inner.end.as_slice()
 }
 
 /// Inclusive byte-range overlap.
@@ -127,7 +126,10 @@ pub fn ranges_overlap(a: &[ByteRange], b: &[ByteRange]) -> bool {
 pub fn footprints_overlap(a: &Footprint, b: &Footprint) -> bool {
     match (a, b) {
         (Footprint::Exact(ra), Footprint::Exact(rb))
-        | (Footprint::Envelope(SoundEnvelope { ranges: ra }), Footprint::Envelope(SoundEnvelope { ranges: rb }))
+        | (
+            Footprint::Envelope(SoundEnvelope { ranges: ra }),
+            Footprint::Envelope(SoundEnvelope { ranges: rb }),
+        )
         | (Footprint::Exact(ra), Footprint::Envelope(SoundEnvelope { ranges: rb }))
         | (Footprint::Envelope(SoundEnvelope { ranges: ra }), Footprint::Exact(rb)) => {
             ranges_overlap(ra, rb)
@@ -346,10 +348,7 @@ impl LiveFootprintTable {
         if let AskShape::Fenced(ref fenced) = shape {
             adjudicate_fenced_overlap(
                 fenced,
-                self.live
-                    .iter()
-                    .filter(|(k, _)| **k != key)
-                    .map(|(_, s)| s),
+                self.live.iter().filter(|(k, _)| **k != key).map(|(_, s)| s),
             )?;
         }
         match self.live.insert(key, shape) {
@@ -378,9 +377,9 @@ impl LiveFootprintTable {
 
     /// Whether any current-epoch Fenced footprint is live (blocks ordinary advance).
     pub fn has_live_fenced_in_epoch(&self, epoch: FenceEpoch) -> bool {
-        self.live.iter().any(|(k, s)| {
-            k.fence_epoch == epoch && matches!(s, AskShape::Fenced(_))
-        })
+        self.live
+            .iter()
+            .any(|(k, s)| k.fence_epoch == epoch && matches!(s, AskShape::Fenced(_)))
     }
 }
 

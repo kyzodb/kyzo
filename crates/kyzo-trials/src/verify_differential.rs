@@ -174,11 +174,7 @@ fn rule_text(program: &Program, rule: &Rule) -> String {
             }
         })
         .collect();
-    let body: Vec<String> = rule
-        .body
-        .iter()
-        .map(|l| literal_text(program, l))
-        .collect();
+    let body: Vec<String> = rule.body.iter().map(|l| literal_text(program, l)).collect();
     format!(
         "{}[{}] := {}",
         rule.head_rel,
@@ -241,8 +237,7 @@ fn edb_relations(program: &Program) -> BTreeMap<Rel, usize> {
     for rule in &program.rules {
         for lit in &rule.body {
             if !heads.contains(&lit.rel) {
-                edb.entry(lit.rel.clone())
-                    .or_insert_with(|| lit.args.len());
+                edb.entry(lit.rel.clone()).or_insert_with(|| lit.args.len());
             }
         }
     }
@@ -361,10 +356,14 @@ const DENSE_SELF_JOIN_PATH: &str = "path[x, y] := *edge[x, y]
 #[test]
 fn verify_matches_on_a_real_recursive_query() {
     let db = seeded_db();
-    let rows = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
-        .expect("::verify runs");
+    let rows =
+        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default()).expect("::verify runs");
     assert_eq!(rows.headers(), &["status", "summary", "detail"]);
-    assert_eq!(match_row_count(&rows), 6, "unexpected row count for the seeded chain");
+    assert_eq!(
+        match_row_count(&rows),
+        6,
+        "unexpected row count for the seeded chain"
+    );
 }
 
 /// Store-side sabotage (oracle half is gone): retract an edge, then
@@ -443,10 +442,7 @@ fn verify_directive_runs_through_run_script() {
 fn verify_directive_names_unsupported_constructs() {
     let db = seeded_db();
     let rows = db
-        .run_script(
-            "::verify { ?[x, y] := *edge[x, y] :order x }",
-            no_params(),
-        )
+        .run_script("::verify { ?[x, y] := *edge[x, y] :order x }", no_params())
         .expect("::verify returns NamedRows for unsupported");
     assert_eq!(status_of(&rows), "unsupported");
     assert!(
@@ -731,8 +727,8 @@ fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
         "default ScriptOptions leaves derived_tuple_ceiling unset so production \
          applies its finite default at the door"
     );
-    let defaulted = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
-        .expect("default ::verify");
+    let defaulted =
+        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default()).expect("default ::verify");
     assert_eq!(status_of(&defaulted), "match");
 
     let dense = dense_path_db();

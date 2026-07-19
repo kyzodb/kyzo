@@ -38,9 +38,7 @@
 
 use std::cmp::Ordering;
 
-use super::admission::{
-    Admission, BulkPass, BulkSpendAuthority, Denial, SpendAdmission,
-};
+use super::admission::{Admission, BulkPass, BulkSpendAuthority, Denial, SpendAdmission};
 use super::arena::{ArenaId, BulkObserver, Epoch, EpochRemap};
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -116,10 +114,7 @@ impl Domain {
     /// Admit this domain to `o` (arena + epoch + visibility), minting the
     /// spend authority for a code resolve at a proven boundary. Used by
     /// the execution-row boundary door.
-    pub(super) fn admit<O: BulkObserver>(
-        &self,
-        o: &O,
-    ) -> Result<SpendAdmission, Denial> {
+    pub(super) fn admit<O: BulkObserver>(&self, o: &O) -> Result<SpendAdmission, Denial> {
         self.admit_to(o)
     }
 
@@ -201,10 +196,7 @@ impl CodeColumn {
     /// The admission: one container-domain check (arena + epoch +
     /// visibility extent), then every read is check-free. Arena/epoch
     /// mismatch and cut overflow are typed [`Denial`].
-    pub fn admit<'a, O: BulkObserver>(
-        &'a self,
-        o: &'a O,
-    ) -> Result<AdmittedCodes<'a, O>, Denial> {
+    pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> Result<AdmittedCodes<'a, O>, Denial> {
         // One admission authority, spent by value into the bulk pass —
         // not discarded and reminted per resolve.
         let proof = self.domain.admit_to(o)?;
@@ -232,9 +224,7 @@ impl CodeColumn {
         let mut extent = 0u32;
         let mut codes = Vec::with_capacity(self.codes.len());
         for c in self.codes {
-            let n = remap
-                .apply_raw(super::code::Code(c))?
-                .raw();
+            let n = remap.apply_raw(super::code::Code(c))?.raw();
             extent = extent.max(n.saturating_add(1));
             codes.push(n);
         }
@@ -338,10 +328,8 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         let mut idx: Vec<u32> = (0..self.codes.len() as u32).collect();
         if self.all_sealed {
             idx.sort_by(|&i, &j| {
-                self.ctx.cmp_identity(
-                    Code(self.codes[i as usize]),
-                    Code(self.codes[j as usize]),
-                )
+                self.ctx
+                    .cmp_identity(Code(self.codes[i as usize]), Code(self.codes[j as usize]))
             });
         } else {
             let mut denied = None;
@@ -419,10 +407,7 @@ impl WordColumn {
         self.domain
     }
 
-    pub fn admit<'a, O: BulkObserver>(
-        &'a self,
-        o: &'a O,
-    ) -> Result<AdmittedWords<'a, O>, Denial> {
+    pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> Result<AdmittedWords<'a, O>, Denial> {
         let proof = self.domain.admit_to(o)?;
         Ok(AdmittedWords {
             words: &self.words,
@@ -579,7 +564,9 @@ mod tests {
     }
 
     fn str_datum_stamp(arena: &mut Arena, s: &str) -> StampedCode {
-        arena.intern(encode(Datum::Str(s)).as_bytes()).expect("intern")
+        arena
+            .intern(encode(Datum::Str(s)).as_bytes())
+            .expect("intern")
     }
 
     // ------------------------------------------------------------------
@@ -594,10 +581,7 @@ mod tests {
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         assert!(
-            matches!(
-                col.push(sc),
-                Err(Denial::EpochMismatch { .. })
-            ),
+            matches!(col.push(sc), Err(Denial::EpochMismatch { .. })),
             "epoch 0 stamp into an epoch 1 column must refuse typed"
         );
     }
@@ -634,10 +618,7 @@ mod tests {
         arena.seal().expect("lawful seal");
         let f = arena.frame();
         assert!(
-            matches!(
-                col.admit(&f),
-                Err(Denial::EpochMismatch { .. })
-            ),
+            matches!(col.admit(&f), Err(Denial::EpochMismatch { .. })),
             "stale container must refuse typed — gather first"
         );
     }
@@ -652,10 +633,7 @@ mod tests {
         let mut col = CodeColumn::new_in(&arena.frame());
         col.push(late).expect("lawful push");
         assert!(
-            matches!(
-                col.admit(&early),
-                Err(Denial::VisibilityOverflow { .. })
-            ),
+            matches!(col.admit(&early), Err(Denial::VisibilityOverflow { .. })),
             "contents beyond the observer cut must refuse typed"
         );
     }
@@ -784,7 +762,11 @@ mod tests {
         let f = arena.frame();
         let adm = col.admit(&f).expect("lawful admit"); // readmits in the new epoch
         for (i, b) in before.iter().enumerate() {
-            assert_eq!(adm.resolve(i).expect("lawful"), b.as_slice(), "gather moved a value");
+            assert_eq!(
+                adm.resolve(i).expect("lawful"),
+                b.as_slice(),
+                "gather moved a value"
+            );
         }
         // Monotone remap: a sorted sealed container stays sorted.
         let mut arena2 = Arena::new();
@@ -821,10 +803,7 @@ mod tests {
         let r3 = arena.seal().expect("lawful seal");
         // col is at epoch 1; r3 reads epoch 2.
         assert!(
-            matches!(
-                col.gather(&r3),
-                Err(Denial::EpochMismatch { .. })
-            ),
+            matches!(col.gather(&r3), Err(Denial::EpochMismatch { .. })),
             "wrong-epoch remap must refuse typed"
         );
     }
@@ -874,10 +853,7 @@ mod tests {
         arena.seal().expect("lawful seal");
         let mut col = WordColumn::new_in(&arena.frame());
         assert!(
-            matches!(
-                col.push(minted),
-                Err(Denial::EpochMismatch { .. })
-            ),
+            matches!(col.push(minted), Err(Denial::EpochMismatch { .. })),
             "stale wide word must refuse typed"
         );
     }

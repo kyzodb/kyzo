@@ -218,11 +218,11 @@ mod exactly_once_battery {
 
     use std::collections::BTreeMap;
 
-    use kyzo_model::value::DataValue;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::{FaultConfig, SimStorage};
+    use kyzo_model::value::DataValue;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()

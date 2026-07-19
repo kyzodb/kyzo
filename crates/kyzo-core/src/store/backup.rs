@@ -30,13 +30,13 @@ use std::path::Path;
 use miette::{Diagnostic, IntoDiagnostic, Result, bail, miette};
 use thiserror::Error;
 
+use crate::session::catalog::{KeyspaceKind, list_relations};
 use crate::store::authority::IncarnationId;
 use crate::store::crypto::{ShredLedger, WrappedShredSalt};
 use crate::store::time::system_stamp_of_key;
-use kyzo_model::value::ValidityTs;
-use kyzo_model::value::{StorageKey, RelationId};
-use crate::session::catalog::{KeyspaceKind, list_relations};
 use crate::store::{FormatVersion, ReadTx, Storage};
+use kyzo_model::value::ValidityTs;
+use kyzo_model::value::{RelationId, StorageKey};
 
 const MAGIC: &[u8; 8] = b"KYZODMP2";
 
@@ -216,9 +216,9 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     let mut floor_bytes = [0u8; 8];
     r.read_exact(&mut floor_bytes)
         .map_err(|_| miette!("truncated dump: missing clock floor"))?;
-    db.raise_clock_floor(kyzo_model::value::ValidityTs::from_raw(
-        i64::from_be_bytes(floor_bytes),
-    ))?;
+    db.raise_clock_floor(kyzo_model::value::ValidityTs::from_raw(i64::from_be_bytes(
+        floor_bytes,
+    )))?;
     let iter = std::iter::from_fn(move || read_pair(&mut r).transpose());
     db.batch_put(Box::new(iter))?;
     db.sync()
@@ -429,17 +429,16 @@ pub fn import_verify(
 #[cfg(test)]
 mod pins {
     /// Backup floor law pins (re-homed from storage/tests.rs).
-
     use kyzo_model::TupleT;
     use kyzo_model::value::{DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs};
 
-    use crate::store::time::ClaimPolarity;
-    use kyzo_model::schema::StoredRelationMetadata;
     use crate::session::access::AccessLevel;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, SystemKey};
     use crate::store::backup::{DumpClockFloorViolation, dump_storage};
     use crate::store::fjall::new_fjall_storage;
+    use crate::store::time::ClaimPolarity;
     use crate::store::{Storage, WriteTx};
+    use kyzo_model::schema::StoredRelationMetadata;
 
     fn facts_handle(id: RelationId, name: &str) -> RelationHandle {
         use smartstring::{LazyCompact, SmartString};
@@ -473,7 +472,10 @@ mod pins {
             slot(ValidityTs::from_raw(valid_ts)),
             slot(sys),
         ]);
-        (tuple.encode_as_key(rel), vec![ClaimPolarity::Assert.encode()])
+        (
+            tuple.encode_as_key(rel),
+            vec![ClaimPolarity::Assert.encode()],
+        )
     }
 
     #[test]
@@ -482,9 +484,8 @@ mod pins {
         let db = new_fjall_storage(dir.path()).unwrap();
         let rel = RelationId::new(100).expect("below cap");
         let handle = facts_handle(rel, "floor_test");
-        let bad_sys = ValidityTs::from_raw(
-            crate::session::current_validity().unwrap().raw() + 1_000_000_000,
-        );
+        let bad_sys =
+            ValidityTs::from_raw(crate::session::current_validity().unwrap().raw() + 1_000_000_000);
         let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
         let mut tx = db.write_tx().unwrap();
         tx.put(
@@ -504,17 +505,17 @@ mod pins {
 
     #[test]
     fn leave_is_free_pack_requires_wrapped_shred_salt() {
+        use crate::store::FormatVersion;
         use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
         use crate::store::backup::{
-            LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse, import_verify,
-            ImportCapability,
+            ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse,
+            import_verify,
         };
         use crate::store::crypto::{
             Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
         };
         use crate::store::epoch::{CryptoDomain, FenceEpoch};
         use crate::store::open::StoreId;
-        use crate::store::FormatVersion;
 
         let store = StoreId::from_digest([0xCD; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));

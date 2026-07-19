@@ -123,9 +123,7 @@ impl Rows {
         // key is lawful (no partial tuples on refusal).
         let splits = split_key(bytes, self.arity.get()).map_err(PushError::Decode)?;
         for (lo, hi) in splits {
-            let sc = arena
-                .intern(&bytes[lo..hi])
-                .map_err(PushError::Denial)?;
+            let sc = arena.intern(&bytes[lo..hi]).map_err(PushError::Denial)?;
             self.codes.push(sc).map_err(PushError::Denial)?;
         }
         Ok(())
@@ -137,10 +135,7 @@ impl Rows {
     /// **Coexisting-arena boundary:** delegates to [`CodeColumn::admit`] —
     /// mint-checked [`super::admission::Admission`], not a nest brand (rows
     /// outlive observer nests; see [`super::code`] measurement).
-    pub fn admit<'a, O: BulkObserver>(
-        &'a self,
-        o: &'a O,
-    ) -> Result<AdmittedRows<'a, O>, Denial> {
+    pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> Result<AdmittedRows<'a, O>, Denial> {
         Ok(AdmittedRows {
             arity: self.arity,
             codes: self.codes.admit(o)?,
@@ -218,7 +213,6 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
         }
         Ok(TupleKey(out))
     }
-
 }
 
 /// Typed refusals of the bytes→execution door.
@@ -275,7 +269,6 @@ fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
         out.push(0xFF);
     }
 }
-
 
 /// Bare written tuple: concatenated canonical encodings with NO relation
 /// prefix. Proof that bytes are arity-split lawful encodings — never a
@@ -416,7 +409,6 @@ pub fn encode_key_with_suffix(
     }
     StorageKey(out)
 }
-
 
 impl std::ops::Deref for TupleKey {
     type Target = [u8];
@@ -655,7 +647,10 @@ mod tests {
         rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
+            rows.admit(&f)
+                .expect("lawful admit")
+                .encode_row(0)
+                .expect("lawful")
         };
         // Re-enter through the bytes door.
         let mut rows2 = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
@@ -663,7 +658,11 @@ mod tests {
         {
             let f = arena.frame();
             let adm2 = rows2.admit(&f).expect("lawful admit");
-            assert_eq!(adm2.encode_row(0).expect("lawful"), key, "bytes door changed the tuple");
+            assert_eq!(
+                adm2.encode_row(0).expect("lawful"),
+                key,
+                "bytes door changed the tuple"
+            );
             // Same epoch + arena dedup ⟹ same codes: tuple identity holds.
             let adm = rows.admit(&f).expect("lawful admit");
             assert_eq!(adm.row(0), adm2.row(0));
@@ -762,7 +761,10 @@ mod tests {
         rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
+            rows.admit(&f)
+                .expect("lawful admit")
+                .encode_row(0)
+                .expect("lawful")
         };
         // Lawful bytes round-trip through the storage door.
         let reclaimed = TupleKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
@@ -783,7 +785,10 @@ mod tests {
         rows.push_row(&[a]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
+            rows.admit(&f)
+                .expect("lawful admit")
+                .encode_row(0)
+                .expect("lawful")
         };
         // Stale: the container predates the seal.
         arena.seal().expect("lawful seal");
@@ -823,10 +828,12 @@ mod tests {
         assert!(RelationId::new(RelationId::CAP).is_none());
         assert!(RelationId::new(u64::MAX).is_none());
         // Allocator step cannot skip the ceiling either.
-        assert!(RelationId::new(RelationId::CAP - 1)
-            .expect("last assignable")
-            .next()
-            .is_none());
+        assert!(
+            RelationId::new(RelationId::CAP - 1)
+                .expect("last assignable")
+                .next()
+                .is_none()
+        );
     }
 
     /// The scan-key sentinel law: lower <= every key of matching rows

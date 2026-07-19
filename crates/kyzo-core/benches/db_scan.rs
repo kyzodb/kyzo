@@ -23,7 +23,8 @@ fn no_params() -> BTreeMap<String, DataValue> {
 }
 
 fn seeded_db(n: i64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage> {
-    let db = Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
+    let db =
+        Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
     let mut script = String::from("?[k, v] <- [");
     for i in 0..n {
         script.push_str(&format!("[{i}, {}],", i * 3));

@@ -221,7 +221,9 @@ impl MaterializedGrant {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum MaterializeRefuse {
     /// Second discovery incompatible with an existing materialization.
-    #[error("GrantAlreadyMaterialized: grant {grant_id:?} already yielded successor {existing_successor:?}")]
+    #[error(
+        "GrantAlreadyMaterialized: grant {grant_id:?} already yielded successor {existing_successor:?}"
+    )]
     #[diagnostic(code(store::grants::already_materialized))]
     GrantAlreadyMaterialized {
         grant_id: GrantId,
@@ -308,9 +310,7 @@ fn materialize_fork(fork: &ForkGrant) -> MaterializedGrant {
     }
 }
 
-fn materialize_recovery(
-    recovery: &RecoveryGrant,
-) -> Result<MaterializedGrant, MaterializeRefuse> {
+fn materialize_recovery(recovery: &RecoveryGrant) -> Result<MaterializedGrant, MaterializeRefuse> {
     // Same StoreId; new CryptoDomain at successor epoch; new WriteAuthority.
     let store_id = recovery.store_id();
     let next_epoch = recovery

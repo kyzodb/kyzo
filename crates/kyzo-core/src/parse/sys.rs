@@ -585,15 +585,17 @@ fn lift_fts(spec: FtsConfigSpec) -> Result<FtsIndexConfig> {
 fn lift_lsh(spec: LshConfigSpec) -> Result<MinHashLshConfig> {
     let tokenizer = admit_tokenizer(spec.tokenizer)?;
     let filters = admit_tokenizers(spec.filters)?;
-    Ok(MinHashLshConfigBuilder::new(spec.base_relation, spec.index_name)
-        .tokenizer(tokenizer)
-        .filters(filters)
-        .n_gram(spec.n_gram)
-        .n_perm(spec.n_perm)
-        .weights(spec.false_positive_weight, spec.false_negative_weight)
-        .target_threshold(spec.target_threshold)
-        .extractor(spec.extractor)
-        .build())
+    Ok(
+        MinHashLshConfigBuilder::new(spec.base_relation, spec.index_name)
+            .tokenizer(tokenizer)
+            .filters(filters)
+            .n_gram(spec.n_gram)
+            .n_perm(spec.n_perm)
+            .weights(spec.false_positive_weight, spec.false_negative_weight)
+            .target_threshold(spec.target_threshold)
+            .extractor(spec.extractor)
+            .build(),
+    )
 }
 
 /// Lift a pure-data [`SysScript`] into an engine-shaped [`SysOp`]: seal the

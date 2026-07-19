@@ -138,9 +138,9 @@ use miette::Result;
 use crate::store::time::{
     check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
 };
+use kyzo_model::data_value_any;
 use kyzo_model::value::AsOf;
 use kyzo_model::value::Tuple;
-use kyzo_model::data_value_any;
 
 /// A single positioned cursor, repositioned forward by [`Self::seek`]
 /// rather than rebuilt. `target` is always non-decreasing across calls on

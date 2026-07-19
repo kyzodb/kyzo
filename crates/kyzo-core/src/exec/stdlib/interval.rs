@@ -24,23 +24,21 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_interval_before(args: &[DataValue]) -> Result<DataValue> {
     let (a, b) = two_intervals("interval_before", args)?;
     Ok(DataValue::from(a.before(b)))
 }
 
-
 pub(crate) fn op_interval_during(args: &[DataValue]) -> Result<DataValue> {
     let (a, b) = two_intervals("interval_during", args)?;
     Ok(DataValue::from(a.during(b)))
 }
-
 
 pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
@@ -52,12 +50,10 @@ pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_interval_finishes(args: &[DataValue]) -> Result<DataValue> {
     let (a, b) = two_intervals("interval_finishes", args)?;
     Ok(DataValue::from(a.finishes(b)))
 }
-
 
 pub(crate) fn op_interval_has_end(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
@@ -65,7 +61,6 @@ pub(crate) fn op_interval_has_end(args: &[DataValue]) -> Result<DataValue> {
         .ok_or_else(|| miette!("'interval_has_end' expects an interval, got {:?}", args[0]))?;
     Ok(DataValue::from(iv.has_end()))
 }
-
 
 pub(crate) fn op_interval_has_start(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0].get_interval().ok_or_else(|| {
@@ -77,12 +72,10 @@ pub(crate) fn op_interval_has_start(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(iv.has_start()))
 }
 
-
 pub(crate) fn op_interval_intersects(args: &[DataValue]) -> Result<DataValue> {
     let (a, b) = two_intervals("interval_intersects", args)?;
     Ok(DataValue::from(a.intersects(b)))
 }
-
 
 pub(crate) fn op_interval_is_end_unbounded(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0].get_interval().ok_or_else(|| {
@@ -94,7 +87,6 @@ pub(crate) fn op_interval_is_end_unbounded(args: &[DataValue]) -> Result<DataVal
     Ok(DataValue::from(iv.is_end_unbounded()))
 }
 
-
 pub(crate) fn op_interval_is_start_unbounded(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0].get_interval().ok_or_else(|| {
         miette!(
@@ -105,18 +97,15 @@ pub(crate) fn op_interval_is_start_unbounded(args: &[DataValue]) -> Result<DataV
     Ok(DataValue::from(iv.is_start_unbounded()))
 }
 
-
 pub(crate) fn op_interval_meets(args: &[DataValue]) -> Result<DataValue> {
     let (a, b) = two_intervals("interval_meets", args)?;
     Ok(DataValue::from(a.meets(b)))
 }
 
-
 pub(crate) fn op_interval_overlaps(args: &[DataValue]) -> Result<DataValue> {
     let (a, b) = two_intervals("interval_overlaps", args)?;
     Ok(DataValue::from(a.overlaps(b)))
 }
-
 
 pub(crate) fn op_interval_start(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
@@ -128,12 +117,10 @@ pub(crate) fn op_interval_start(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_interval_starts(args: &[DataValue]) -> Result<DataValue> {
     let (a, b) = two_intervals("interval_starts", args)?;
     Ok(DataValue::from(a.starts(b)))
 }
-
 
 pub(crate) fn op_make_interval(args: &[DataValue]) -> Result<DataValue> {
     let start = args[0].get_int().ok_or_else(|| {
@@ -153,8 +140,6 @@ pub(crate) fn op_make_interval(args: &[DataValue]) -> Result<DataValue> {
     )))
 }
 
-
-
 /// Extracts both arguments as `Interval`s for a two-interval predicate op, or
 /// a typed error naming which argument was wrong — never a panic.
 fn two_intervals(op: &str, args: &[DataValue]) -> Result<(Interval, Interval)> {
@@ -172,4 +157,3 @@ fn two_intervals(op: &str, args: &[DataValue]) -> Result<(Interval, Interval)> {
     })?;
     Ok((a, b))
 }
-

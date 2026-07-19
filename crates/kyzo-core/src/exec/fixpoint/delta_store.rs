@@ -103,8 +103,8 @@ use itertools::{Either, Itertools};
 use miette::{Diagnostic, Result, bail, ensure, miette};
 use thiserror::Error;
 
-use kyzo_model::program::aggregate::Aggregation;
 use crate::exec::fold::aggr::{MeetAccum, MeetAggr};
+use kyzo_model::program::aggregate::Aggregation;
 use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::{
@@ -125,7 +125,6 @@ struct LevelArenaOverflow {
 #[error("level invariant violated: {0}")]
 #[diagnostic(code(query::level_invariant), help("This is a bug. Please report it."))]
 struct LevelInvariantError(&'static str);
-
 
 // ─────────────────────────────────────────────────────────────────────────
 // The level tier: a rule's total as sealed sorted runs
@@ -251,7 +250,6 @@ impl LevelBoundKey {
         &self.0
     }
 }
-
 
 /// Whether a sealed normal-level row is an epoch admission or a
 /// flag-refresh shadow (P027). Bare `bool` refresh is unrepresentable.
@@ -490,7 +488,12 @@ impl NormalLevel {
         (start, lo.max(start))
     }
 
-    fn bounds(&self, lower: &LevelBoundKey, upper: &LevelBoundKey, upper_inclusive: bool) -> (usize, usize) {
+    fn bounds(
+        &self,
+        lower: &LevelBoundKey,
+        upper: &LevelBoundKey,
+        upper_inclusive: bool,
+    ) -> (usize, usize) {
         let lower = lower.as_bytes();
         let upper = upper.as_bytes();
         let mut lo = 0usize;
@@ -936,7 +939,12 @@ impl EpochStore {
                 };
                 let newer: Vec<&'s MeetLevel> = if delta_only { vec![] } else { all };
                 Ok(Either::Right(meet_ranged(
-                    spec, picked, newer, lower, upper, upper_inclusive,
+                    spec,
+                    picked,
+                    newer,
+                    lower,
+                    upper,
+                    upper_inclusive,
                 )?))
             }
         }
@@ -984,7 +992,10 @@ fn normal_merge_next<'s>(
         if delta_only && flags.refresh.hides_from_delta() {
             continue;
         }
-        return Some(TupleInIter::new_bytes(l.row_at(win_row).as_bytes(), flags.skip));
+        return Some(TupleInIter::new_bytes(
+            l.row_at(win_row).as_bytes(),
+            flags.skip,
+        ));
     }
 }
 
@@ -1056,24 +1067,18 @@ fn compact_meet(_spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) -> Result<
             loop {
                 match (a.peek(), b.peek()) {
                     (Some((ka, _)), Some((kb, _))) => match ka.cmp(kb) {
-                        Ordering::Less => merged.groups.push(
-                            a.next().ok_or_else(peeked)?.clone(),
-                        ),
-                        Ordering::Greater => merged.groups.push(
-                            b.next().ok_or_else(peeked)?.clone(),
-                        ),
+                        Ordering::Less => merged.groups.push(a.next().ok_or_else(peeked)?.clone()),
+                        Ordering::Greater => {
+                            merged.groups.push(b.next().ok_or_else(peeked)?.clone())
+                        }
                         Ordering::Equal => {
                             let g = b.next().ok_or_else(peeked)?.clone();
                             a.next();
                             merged.groups.push(g);
                         }
                     },
-                    (Some(_), None) => merged.groups.push(
-                        a.next().ok_or_else(peeked)?.clone(),
-                    ),
-                    (None, Some(_)) => merged.groups.push(
-                        b.next().ok_or_else(peeked)?.clone(),
-                    ),
+                    (Some(_), None) => merged.groups.push(a.next().ok_or_else(peeked)?.clone()),
+                    (None, Some(_)) => merged.groups.push(b.next().ok_or_else(peeked)?.clone()),
                     (None, None) => break,
                 }
             }
@@ -1242,7 +1247,10 @@ pub struct TempStoreCorruptRefuse(#[source] DecodeError);
 /// `meet_put` must leave the folded group resident — typed refuse if not.
 #[derive(Debug, Error, Diagnostic)]
 #[error("meet_put did not leave the group resident")]
-#[diagnostic(code(query::meet_put_resident), help("This is a bug. Please report it."))]
+#[diagnostic(
+    code(query::meet_put_resident),
+    help("This is a bug. Please report it.")
+)]
 struct MeetPutResidentInvariant;
 
 #[derive(Debug, Error, Diagnostic)]
@@ -1407,10 +1415,8 @@ impl RegularTempStore {
             .insert(OwnBareKey::encode(tuple.as_slice()), LimiterSkip::Include);
     }
     pub(crate) fn put_with_skip(&mut self, tuple: Tuple) {
-        self.inner.insert(
-            OwnBareKey::encode(tuple.as_slice()),
-            LimiterSkip::PastLimit,
-        );
+        self.inner
+            .insert(OwnBareKey::encode(tuple.as_slice()), LimiterSkip::PastLimit);
     }
 }
 
@@ -1726,9 +1732,8 @@ impl MeetAggrStore {
             Some(vals) => {
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
-                    let incoming = MeetAccum::from_derived(
-                        tuple[self.layout.val_positions[i].get()].clone(),
-                    );
+                    let incoming =
+                        MeetAccum::from_derived(tuple[self.layout.val_positions[i].get()].clone());
                     changed |= op.update(&mut vals[i], &incoming)?;
                 }
                 Ok(changed)
@@ -1741,9 +1746,8 @@ impl MeetAggrStore {
                 let mut vals: Vec<MeetAccum> =
                     self.meets.iter().map(|(_, op)| op.init_val()).collect();
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
-                    let incoming = MeetAccum::from_derived(
-                        tuple[self.layout.val_positions[i].get()].clone(),
-                    );
+                    let incoming =
+                        MeetAccum::from_derived(tuple[self.layout.val_positions[i].get()].clone());
                     op.update(&mut vals[i], &incoming)?;
                 }
                 self.by_group.insert(key, vals);
@@ -1808,10 +1812,7 @@ impl TempStore {}
 pub enum TupleInIter<'a> {
     /// A regular store's row: memcmp bytes (chunk 1's bare codec), whole
     /// row in `key` — a regular row has no separate value region.
-    Bytes {
-        key: &'a [u8],
-        skip: LimiterSkip,
-    },
+    Bytes { key: &'a [u8], skip: LimiterSkip },
     /// A meet store's SUFFIX-layout row: group-key bytes (the row's own
     /// head prefix — no interleave needed) + folded meet accumulators.
     MeetSuffix {
@@ -1830,21 +1831,14 @@ pub enum TupleInIter<'a> {
     },
     /// Owned head tuple — interleaved meet scans derive this from `groups`
     /// / `by_group` so no stored `by_row` twin is required (P036).
-    Owned {
-        row: Tuple,
-        skip: LimiterSkip,
-    },
+    Owned { row: Tuple, skip: LimiterSkip },
 }
 
 impl<'a> TupleInIter<'a> {
     /// Construct a view over an already-interleaved (key-part, value-part,
     /// skip) triple — the non-suffix meet path, where `key`/`val` are
     /// `DataValue` projections of a fully rebuilt logical row.
-    pub(crate) fn new(
-        key: &'a [DataValue],
-        val: &'a [DataValue],
-        skip: LimiterSkip,
-    ) -> Self {
+    pub(crate) fn new(key: &'a [DataValue], val: &'a [DataValue], skip: LimiterSkip) -> Self {
         TupleInIter::Values { key, val, skip }
     }
     /// Owned head-tuple view (interleaved meet derive-at-scan).
@@ -1857,11 +1851,7 @@ impl<'a> TupleInIter<'a> {
     }
     /// Construct a view over a suffix-layout meet store's group-key bytes
     /// plus its typed folded accumulators.
-    pub(crate) fn new_meet_suffix(
-        key: &'a [u8],
-        val: &'a [MeetAccum],
-        skip: LimiterSkip,
-    ) -> Self {
+    pub(crate) fn new_meet_suffix(key: &'a [u8], val: &'a [MeetAccum], skip: LimiterSkip) -> Self {
         TupleInIter::MeetSuffix { key, val, skip }
     }
 }
@@ -1869,8 +1859,9 @@ impl<'a> TupleInIter<'a> {
 impl TupleInIter<'_> {
     pub(crate) fn try_get(&self, idx: usize) -> Result<DataValue, TempStoreAccessRefuse> {
         match self {
-            TupleInIter::Bytes { key, .. } => bare_nth(key, idx)?
-                .ok_or(TempStoreAccessRefuse::Position { idx }),
+            TupleInIter::Bytes { key, .. } => {
+                bare_nth(key, idx)?.ok_or(TempStoreAccessRefuse::Position { idx })
+            }
             TupleInIter::MeetSuffix { key, val, .. } => {
                 let key = decode_row_bare(key)?;
                 key.get(idx)
@@ -2690,7 +2681,6 @@ mod tests {
     // P036: no by_row twin. The scan surface of a sealed meet store must
     // equal `{ interleave(k, v) : (k, v) ∈ groups }` in head-tuple order
     // for every regime; the out-store's by_group is the sole authority.
-
 
     /// P036: `by_group` is the sole MeetAggrStore authority — every group
     /// interleaves to a head tuple that `exists` recognizes.

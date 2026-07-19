@@ -70,16 +70,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::{Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
-use kyzo_model::program::rule::FixedRuleArg;
+use crate::exec::plan::graph::{
+    Graph, StratifiedGraph, generalized_kahn, reachable_components, strongly_connected_components,
+};
 use crate::exec::plan::program::{
     MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormProgram, NormalFormRulesOrFixed,
     NormalFormStratum, StoreLifetimes, StratifiedNormalFormProgram,
 };
 use kyzo_model::SourceSpan;
+use kyzo_model::program::rule::FixedRuleArg;
 use kyzo_model::program::symbol::Symbol;
-use crate::exec::plan::graph::{
-    Graph, StratifiedGraph, generalized_kahn, reachable_components, strongly_connected_components,
-};
 
 /// The refusal at the heart of this module: a negation, non-meet
 /// aggregation, or fixed-rule application sits inside a recursive cycle, so
@@ -517,14 +517,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use kyzo_model::program::aggregate::parse_aggr;
-    use kyzo_model::program::query::QueryOutOptions;
-    use kyzo_model::program::rule::{FixedRuleOptions, 
-        FixedRuleApply, FixedRuleArg, FixedRuleHandle, HeadAggrSlot, InputAtom, InputInlineRule,
-        InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom, Trivia,
-    };
     use crate::exec::plan::program::{
         BodyNormalizer, NormalFormInlineRule, NormalFormRuleApplyAtom, into_normalized_program,
+    };
+    use kyzo_model::program::aggregate::parse_aggr;
+    use kyzo_model::program::query::QueryOutOptions;
+    use kyzo_model::program::rule::{
+        FixedRuleApply, FixedRuleArg, FixedRuleHandle, FixedRuleOptions, HeadAggrSlot, InputAtom,
+        InputInlineRule, InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom, Trivia,
     };
     use kyzo_model::program::symbol::SymbolKind;
     use kyzo_model::value::DataValue;
@@ -583,9 +583,21 @@ mod tests {
                                 span: inner.span,
                             }));
                         }
-                        InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Conjunction { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => panic!("test bodies negate rule reads only"),
+                        InputAtom::NamedFieldRelation { .. }
+                        | InputAtom::Relation { .. }
+                        | InputAtom::Predicate { .. }
+                        | InputAtom::Negation { .. }
+                        | InputAtom::Conjunction { .. }
+                        | InputAtom::Disjunction { .. }
+                        | InputAtom::Unification { .. }
+                        | InputAtom::Search { .. } => panic!("test bodies negate rule reads only"),
                     },
-                    InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => panic!("test bodies contain rule reads only"),
+                    InputAtom::NamedFieldRelation { .. }
+                    | InputAtom::Relation { .. }
+                    | InputAtom::Predicate { .. }
+                    | InputAtom::Disjunction { .. }
+                    | InputAtom::Unification { .. }
+                    | InputAtom::Search { .. } => panic!("test bodies contain rule reads only"),
                 }
             }
             let mut out = vec![];
@@ -593,10 +605,7 @@ mod tests {
             Ok(vec![out])
         }
 
-        fn well_order(
-            &mut self,
-            rule: NormalFormInlineRule,
-        ) -> Result<NormalFormInlineRule> {
+        fn well_order(&mut self, rule: NormalFormInlineRule) -> Result<NormalFormInlineRule> {
             Ok(rule)
         }
     }
@@ -627,12 +636,7 @@ mod tests {
             self.rule_raw(head, aggr, body)
         }
 
-        fn rule_raw(
-            mut self,
-            head: &str,
-            aggr: Vec<HeadAggrSlot>,
-            body: Vec<InputAtom>,
-        ) -> Self {
+        fn rule_raw(mut self, head: &str, aggr: Vec<HeadAggrSlot>, body: Vec<InputAtom>) -> Self {
             let head_syms: Vec<Symbol> = (0..aggr.len()).map(|i| sym(&format!("v{i}"))).collect();
             let rule = InputInlineRule {
                 head: head_syms,
@@ -766,39 +770,33 @@ mod tests {
     #[test]
     fn the_oracle_refusal_corpus_is_refused() {
         let cases: [(&str, fn() -> Prog); 3] = [
-            (
-                "direct negation cycle",
-                || {
-                    Prog::default()
-                        .rule("p", &[None], vec![neg_dep("p")])
-                        .rule("?", &[None], vec![dep("p")])
-                },
-            ),
-            (
-                "mutual negation",
-                || {
-                    Prog::default()
-                        .rule("p", &[None], vec![neg_dep("q")])
-                        .rule("q", &[None], vec![neg_dep("p")])
-                        .rule("?", &[None], vec![dep("p")])
-                },
-            ),
-            (
-                "negation through positive edge to negated",
-                || {
-                    Prog::default()
-                        .rule("a", &[None], vec![dep("b")])
-                        .rule("b", &[None], vec![neg_dep("a")])
-                        .rule("?", &[None], vec![dep("a")])
-                },
-            ),
+            ("direct negation cycle", || {
+                Prog::default().rule("p", &[None], vec![neg_dep("p")]).rule(
+                    "?",
+                    &[None],
+                    vec![dep("p")],
+                )
+            }),
+            ("mutual negation", || {
+                Prog::default()
+                    .rule("p", &[None], vec![neg_dep("q")])
+                    .rule("q", &[None], vec![neg_dep("p")])
+                    .rule("?", &[None], vec![dep("p")])
+            }),
+            ("negation through positive edge to negated", || {
+                Prog::default()
+                    .rule("a", &[None], vec![dep("b")])
+                    .rule("b", &[None], vec![neg_dep("a")])
+                    .rule("?", &[None], vec![dep("a")])
+            }),
         ];
         for (name, build) in cases {
-            let err = build().stratify().expect_err(&format!("must refuse: {name}"));
+            let err = build()
+                .stratify()
+                .expect_err(&format!("must refuse: {name}"));
             assert_unstratifiable(&err, name);
         }
     }
-
 
     /// Recursion through a *normal* aggregation is refused: the fold is
     /// only correct over the finished set, and the set is never finished

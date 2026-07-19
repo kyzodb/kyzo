@@ -350,10 +350,7 @@ pub(crate) fn parse_sys(
         }
         Rule::verify_op => {
             let prog = parse_query(
-                inner
-                    .children()
-                    .expect("the query to verify")?
-                    .into_inner(),
+                inner.children().expect("the query to verify")?.into_inner(),
                 param_pool,
                 cur_vld,
             )?;
@@ -511,14 +508,23 @@ pub(crate) fn parse_sys(
                                 expr.partial_eval()?;
                                 let v = expr.eval_to_const()?;
                                 let v = v.get_int().ok_or_else(|| {
-                                    IndexOptionError("n_gram must be an integer".to_string(), val_span)
+                                    IndexOptionError(
+                                        "n_gram must be an integer".to_string(),
+                                        val_span,
+                                    )
                                 })?;
                                 ensure!(
                                     v > 0,
-                                    IndexOptionError("n_gram must be positive".to_string(), val_span)
+                                    IndexOptionError(
+                                        "n_gram must be positive".to_string(),
+                                        val_span
+                                    )
                                 );
                                 n_gram = usize::try_from(v).map_err(|_| {
-                                    IndexOptionError("n_gram must be positive".to_string(), val_span)
+                                    IndexOptionError(
+                                        "n_gram must be positive".to_string(),
+                                        val_span,
+                                    )
                                 })?;
                             }
                             "n_perm" => {
@@ -527,14 +533,23 @@ pub(crate) fn parse_sys(
                                 expr.partial_eval()?;
                                 let v = expr.eval_to_const()?;
                                 let v = v.get_int().ok_or_else(|| {
-                                    IndexOptionError("n_perm must be an integer".to_string(), val_span)
+                                    IndexOptionError(
+                                        "n_perm must be an integer".to_string(),
+                                        val_span,
+                                    )
                                 })?;
                                 ensure!(
                                     v > 0,
-                                    IndexOptionError("n_perm must be positive".to_string(), val_span)
+                                    IndexOptionError(
+                                        "n_perm must be positive".to_string(),
+                                        val_span
+                                    )
                                 );
                                 n_perm = usize::try_from(v).map_err(|_| {
-                                    IndexOptionError("n_perm must be positive".to_string(), val_span)
+                                    IndexOptionError(
+                                        "n_perm must be positive".to_string(),
+                                        val_span,
+                                    )
                                 })?;
                             }
                             "target_threshold" => {
@@ -609,8 +624,12 @@ pub(crate) fn parse_sys(
                     false_positive_weight /= total_weights;
                     false_negative_weight /= total_weights;
 
-                    let extractor =
-                        combine_extractor(extractor, extract_filter, "MinHash-LSH", name.extract_span())?;
+                    let extractor = combine_extractor(
+                        extractor,
+                        extract_filter,
+                        "MinHash-LSH",
+                        name.extract_span(),
+                    )?;
                     SysScript::CreateMinHashLshIndex(LshConfigSpec {
                         base_relation: SmartString::from(rel.as_str()),
                         index_name: SmartString::from(name.as_str()),
@@ -746,10 +765,16 @@ pub(crate) fn parse_sys(
                                     })?;
                                 ensure!(
                                     v > 0,
-                                    IndexOptionError(format!("Invalid ef_construction: {v}"), val_span)
+                                    IndexOptionError(
+                                        format!("Invalid ef_construction: {v}"),
+                                        val_span
+                                    )
                                 );
                                 ef_construction = Some(usize::try_from(v).map_err(|_| {
-                                    IndexOptionError(format!("Invalid ef_construction: {v}"), val_span)
+                                    IndexOptionError(
+                                        format!("Invalid ef_construction: {v}"),
+                                        val_span,
+                                    )
                                 })?);
                             }
                             "m_neighbours" | "m" => {
@@ -946,9 +971,11 @@ fn parse_filters_expr(mut expr: Expr) -> Result<Vec<TokenizerSpec>> {
     match expr {
         Expr::Apply { op, args, .. } => {
             if op.name != OP_LIST.name {
-                return Err(
-                    IndexOptionError("Filters must be a list of filters".to_string(), span).into(),
-                );
+                return Err(IndexOptionError(
+                    "Filters must be a list of filters".to_string(),
+                    span,
+                )
+                .into());
             }
             let mut filters = vec![];
             for arg in args.iter() {

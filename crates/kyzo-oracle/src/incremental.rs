@@ -17,9 +17,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use kyzo_model::value::{DataValue, Tuple};
 
 use crate::eval::{
-    body_bindings_from, check_safety, check_stratifiable, check_wellformed, dependency_edges,
-    ground, head_classes, literal_rows, naive_eval, unify, Bindings, Program, Rejection, Rel, Rule,
-    Term,
+    Bindings, Program, Rejection, Rel, Rule, Term, body_bindings_from, check_safety,
+    check_stratifiable, check_wellformed, dependency_edges, ground, head_classes, literal_rows,
+    naive_eval, unify,
 };
 use crate::temporal::{AsOf, SignedFact};
 use crate::{AggrFold, NormalAccum};
@@ -40,9 +40,12 @@ pub fn edb_relations(program: &Program) -> BTreeSet<Rel> {
         .chain(program.rules.iter().flat_map(|r| {
             std::iter::once(r.head_rel.clone()).chain(r.body.iter().map(|l| l.rel.clone()))
         }))
-        .chain(program.fixed.iter().flat_map(|f| {
-            std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())
-        }))
+        .chain(
+            program
+                .fixed
+                .iter()
+                .flat_map(|f| std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())),
+        )
         .collect();
     mentioned.difference(&idb).cloned().collect()
 }
@@ -549,9 +552,7 @@ mod tests {
     fn y() -> Term {
         Term::var("Y")
     }
-    fn patch_of(
-        entries: Vec<(&'static str, SignedFact)>,
-    ) -> BTreeMap<Rel, BTreeSet<SignedFact>> {
+    fn patch_of(entries: Vec<(&'static str, SignedFact)>) -> BTreeMap<Rel, BTreeSet<SignedFact>> {
         let mut out: BTreeMap<Rel, BTreeSet<SignedFact>> = BTreeMap::new();
         for (rel, fact) in entries {
             out.entry(rel.into()).or_default().insert(fact);
@@ -719,24 +720,21 @@ mod tests {
         );
         facts.insert(
             "q".into(),
-            [vec![v(1), v(10)]].into_iter().map(Tuple::from_vec).collect(),
+            [vec![v(1), v(10)]]
+                .into_iter()
+                .map(Tuple::from_vec)
+                .collect(),
         );
         let program = Program::untimed(
             vec![Rule::plain(
                 "r",
                 vec![x(), y()],
-                vec![
-                    lit("p", vec![x()], false),
-                    lit("q", vec![x(), y()], false),
-                ],
+                vec![lit("p", vec![x()], false), lit("q", vec![x(), y()], false)],
             )],
             vec![],
             facts,
         );
-        let patch = patch_of(vec![(
-            "p",
-            SignedFact::Plus(Tuple::from_vec(vec![v(2)])),
-        )]);
+        let patch = patch_of(vec![("p", SignedFact::Plus(Tuple::from_vec(vec![v(2)])))]);
         // q has no (2, _), so r unchanged — but still matches recompute
         assert_incremental_matches_recompute(&program, &patch, "plain join");
     }
@@ -757,17 +755,18 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![(
-            "p",
-            SignedFact::Plus(Tuple::from_vec(vec![v(1)])),
-        )]);
+        let patch = patch_of(vec![("p", SignedFact::Plus(Tuple::from_vec(vec![v(1)])))]);
         let got = incremental_eval(&program, &patch).unwrap();
         assert!(
-            got.get(&Rel::from("p")).map(|d| d.is_empty()).unwrap_or(true),
+            got.get(&Rel::from("p"))
+                .map(|d| d.is_empty())
+                .unwrap_or(true),
             "redundant Plus must filter out"
         );
         assert!(
-            got.get(&Rel::from("q")).map(|d| d.is_empty()).unwrap_or(true),
+            got.get(&Rel::from("q"))
+                .map(|d| d.is_empty())
+                .unwrap_or(true),
             "no IDB change from redundant patch"
         );
     }
@@ -784,10 +783,7 @@ mod tests {
             BTreeMap::new(),
         );
         assert!(edb_relations(&program).contains(&Rel::from("p")));
-        let patch = patch_of(vec![(
-            "p",
-            SignedFact::Plus(Tuple::from_vec(vec![v(1)])),
-        )]);
+        let patch = patch_of(vec![("p", SignedFact::Plus(Tuple::from_vec(vec![v(1)])))]);
         assert_incremental_matches_recompute(&program, &patch, "zero-rows-still-EDB");
     }
 }

@@ -37,17 +37,17 @@
 
 use miette::{Result, bail, miette};
 
-use kyzo_model::data_value_any;
-use kyzo_model::data_value_to_vld_spec;
-use kyzo_model::program::expr::{
-    BindingPos, Decision, EvalRaisedError, Expr, LazyOp, NoImplementationError,
-    PredicateTypeError, TupleTooShortError, UnboundVariableError,
-};
-use kyzo_model::program::op::OpDecl;
-use kyzo_model::program::WriteValidity;
-use kyzo_model::value::{DataValue, ValidityTs};
 use crate::exec::expr::batch::{ColumnBatch, ErrorMin, Selection};
 use crate::exec::stdlib::resolve_op;
+use kyzo_model::data_value_any;
+use kyzo_model::data_value_to_vld_spec;
+use kyzo_model::program::WriteValidity;
+use kyzo_model::program::expr::{
+    BindingPos, Decision, EvalRaisedError, Expr, LazyOp, NoImplementationError, PredicateTypeError,
+    TupleTooShortError, UnboundVariableError,
+};
+use kyzo_model::program::op::OpDecl;
+use kyzo_model::value::{DataValue, ValidityTs};
 
 /// Selection indexes are `u32`; [`Selection::iter`] widens stored ids to
 /// `usize`. Narrowing is total — overflow is refused at [`Selection::all`].
@@ -107,12 +107,7 @@ pub(crate) fn eval_expr(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Resul
             BindingPos::Resolved(i) => Ok(bindings
                 .get(*i)
                 .ok_or_else(|| {
-                    TupleTooShortError(
-                        var.name.to_string(),
-                        *i,
-                        bindings.len(),
-                        var.span,
-                    )
+                    TupleTooShortError(var.name.to_string(), *i, bindings.len(), var.span)
                 })?
                 .clone()),
         },
@@ -177,7 +172,6 @@ pub(crate) fn eval_to_const(mut expr: Expr) -> Result<DataValue> {
     struct NotConstError(#[label("not a constant")] kyzo_model::SourceSpan);
     bail!(NotConstError(expr.span()))
 }
-
 
 /// A column of values ALIGNED TO A SELECTION: `values[i]` is the result
 /// for the `i`-th live row of the selection it was computed under. The

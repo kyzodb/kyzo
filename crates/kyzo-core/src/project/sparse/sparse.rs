@@ -111,14 +111,14 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
-use kyzo_model::program::expr::{BindingPos, Expr};
-use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::SourceSpan;
-use kyzo_model::value::{DataValue, Tuple};
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::{DataValue, Tuple};
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -577,11 +577,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use kyzo_model::program::InputRelationHandle;
-    use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::InputRelationHandle;
+    use kyzo_model::program::symbol::Symbol;
 
     macro_rules! sparse_rows {
         ($($arg:expr),* $(,)?) => {

@@ -20,14 +20,14 @@ use std::ops::ControlFlow;
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-use crate::exec::plan::program::MagicSymbol;
 use crate::exec::fixpoint::delta_store::{
     AdmissionSink, EpochStore, HeadPos, TempStoreCorruptRefuse, TupleInIter,
 };
 use crate::exec::fixpoint::eval::{
-    Budget, EvalDefinition, EvalInvariantError, EvalProgram, HeadAggrKind, PremiseSource, Premises,
-    RuleBody, FixedRuleEval, project_positions, store_of,
+    Budget, EvalDefinition, EvalInvariantError, EvalProgram, FixedRuleEval, HeadAggrKind,
+    PremiseSource, Premises, RuleBody, project_positions, store_of,
 };
+use crate::exec::plan::program::MagicSymbol;
 use crate::exec::provenance::semiring::{Derivation, DerivationGraph};
 use kyzo_model::value::Tuple;
 
@@ -197,7 +197,8 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                 EvalDefinition::Rules(_) | EvalDefinition::Fixed { .. } => {
                     if let Some(store) = stores.get(name) {
                         for t in store.all_iter()? {
-                            graph.add_fact((PremiseSource::Rule(name.clone()), t.try_into_tuple()?));
+                            graph
+                                .add_fact((PremiseSource::Rule(name.clone()), t.try_into_tuple()?));
                         }
                     }
                     continue;

@@ -69,10 +69,7 @@ impl ExecRows {
     /// raw codes into owned execution rows. The admission (arena + epoch +
     /// visibility) is the container's own `admit`; nothing here injects a
     /// code. Arena/epoch mismatch is a typed refusal.
-    pub fn admit<O: BulkObserver>(
-        rows: &Rows,
-        o: &O,
-    ) -> Result<ExecRows, Denial> {
+    pub fn admit<O: BulkObserver>(rows: &Rows, o: &O) -> Result<ExecRows, Denial> {
         let admitted: AdmittedRows<'_, O> = rows.admit(o)?;
         Ok(ExecRows {
             domain: rows.domain(),
@@ -148,9 +145,11 @@ impl ExecRows {
             let Some(matches) = index.get(&key) else {
                 continue;
             };
-            debug_assert!(matches
-                .iter()
-                .all(|&rr| ctx.same_handle(Code(key), Code(other.row(rr)[other_col]))));
+            debug_assert!(
+                matches
+                    .iter()
+                    .all(|&rr| ctx.same_handle(Code(key), Code(other.row(rr)[other_col])))
+            );
             for &rr in matches {
                 for &(side, col) in out {
                     let code = match side {
@@ -551,10 +550,7 @@ mod tests {
         let f = arena.frame();
         let e = ExecRows::admit(&rows, &f).expect("lawful admit");
         assert!(
-            matches!(
-                e.join_project(&e, 0, 0, &[]),
-                Err(Denial::EmptyProjection)
-            ),
+            matches!(e.join_project(&e, 0, 0, &[]), Err(Denial::EmptyProjection)),
             "empty out must refuse typed — never invent a width"
         );
     }

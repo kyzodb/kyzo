@@ -25,16 +25,16 @@ use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
+use crate::rules::contract::{
+    BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
+    FixedRulePayload, NodeNotFoundError, backtrace_predecessor,
+};
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::rules::contract::{
-    backtrace_predecessor, BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation,
-    FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
-};
 
 pub(crate) struct ShortestPathAStar;
 
@@ -197,7 +197,7 @@ fn astar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
+    use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -242,7 +242,10 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
                 TestInput::new(vec!["goal"], vec![Tuple::from_vec(vec![s("c")])]),
             ],
-            opts_map(BTreeMap::from([(SmartString::from("heuristic"), h_binding)])),
+            opts_map(BTreeMap::from([(
+                SmartString::from("heuristic"),
+                h_binding,
+            )])),
             CancelFlag::default(),
         )
         .unwrap();

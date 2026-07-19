@@ -34,9 +34,7 @@ use std::collections::VecDeque;
 use super::authority::{IncarnationId, WriteAuthority};
 use super::commit_cap::StableCommitCap;
 use super::epoch::FenceEpoch;
-use super::merkle::{
-    ChainLinkKind, ChainedStateRoot, MerkleChainRefuse, RootChain, StateRoot,
-};
+use super::merkle::{ChainLinkKind, ChainedStateRoot, MerkleChainRefuse, RootChain, StateRoot};
 use super::open::StoreId;
 use super::tx::{CommitFailure, WriteTx};
 

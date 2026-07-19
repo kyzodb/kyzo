@@ -106,11 +106,11 @@ use smartstring::{LazyCompact, SmartString};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
-use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::value::DataValue;
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::session::catalog::RelationHandle;
 use crate::store::ReadTx;
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::DataValue;
 
 // ---------------------------------------------------------------------------
 // Config.
@@ -366,12 +366,12 @@ impl Gazetteer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kyzo_model::program::InputRelationHandle;
-    use kyzo_model::SourceSpan;
-    use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::fjall::new_fjall_storage;
     use crate::store::{Storage, WriteTx};
+    use kyzo_model::SourceSpan;
+    use kyzo_model::program::InputRelationHandle;
+    use kyzo_model::program::symbol::Symbol;
 
     // -- fixture construction -------------------------------------------------
 
@@ -930,8 +930,7 @@ mod tests {
         }
         let mut out: Vec<(i64, usize, usize, String)> = Vec::new();
         let mut cursor = 0usize;
-        while let Some(&min_start) = cands.iter().map(|(s, _)| s).filter(|&&s| s >= cursor).min()
-        {
+        while let Some(&min_start) = cands.iter().map(|(s, _)| s).filter(|&&s| s >= cursor).min() {
             let max_end = cands
                 .iter()
                 .filter(|(s, _)| *s == min_start)
@@ -1078,7 +1077,13 @@ mod tests {
         ];
         let (_d, g) = compile(&db, rows, GazetteerConfig::default());
         let p = hostile_pairs(rows);
-        for text in ["the whole thing", "ababababab", "abababab東京abab", "東京東京", "b"] {
+        for text in [
+            "the whole thing",
+            "ababababab",
+            "abababab東京abab",
+            "東京東京",
+            "b",
+        ] {
             assert_agree(&g, &p, text, false);
         }
     }
@@ -1198,6 +1203,9 @@ mod tests {
         let tags = g.tag(surface);
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].len, ascii_fold_len);
-        assert_eq!(&surface[tags[0].start..tags[0].start + tags[0].len], surface);
+        assert_eq!(
+            &surface[tags[0].start..tags[0].start + tags[0].len],
+            surface
+        );
     }
 }

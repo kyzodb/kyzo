@@ -310,8 +310,7 @@ impl FixedRuleOptions {
     }
 
     pub fn get(&self, name: &str) -> Option<&Expr> {
-        self.entries
-            .get(&Symbol::new(name, SourceSpan::default()))
+        self.entries.get(&Symbol::new(name, SourceSpan::default()))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Expr)> {
@@ -328,7 +327,10 @@ impl FixedRuleOptions {
 }
 
 impl Serialize for FixedRuleOptions {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         self.entries.serialize(serializer)
     }
 }
@@ -684,8 +686,7 @@ impl SearchModalityOptions {
     }
 
     pub fn get(&self, name: &str) -> Option<&Expr> {
-        self.entries
-            .get(&Symbol::new(name, SourceSpan::default()))
+        self.entries.get(&Symbol::new(name, SourceSpan::default()))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Expr)> {
@@ -706,7 +707,10 @@ impl SearchModalityOptions {
 }
 
 impl Serialize for SearchModalityOptions {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         self.entries.serialize(serializer)
     }
 }
@@ -766,11 +770,9 @@ impl SearchInput {
         mut parameters: BTreeMap<Symbol, Expr>,
         span: SourceSpan,
     ) -> std::result::Result<Self, SearchAtomConstructRefuse> {
-        let query = parameters
-            .remove(&Symbol::new("query", span))
-            .ok_or(SearchAtomConstructRefuse::QueryRequired(SearchQueryRequired {
-                span,
-            }))?;
+        let query = parameters.remove(&Symbol::new("query", span)).ok_or(
+            SearchAtomConstructRefuse::QueryRequired(SearchQueryRequired { span }),
+        )?;
         let filter = match parameters.remove(&Symbol::new("filter", span)) {
             None => SearchFilter::Unfiltered,
             Some(e) => SearchFilter::Pred(e),
@@ -800,9 +802,7 @@ pub struct InputRuleApplyAtom {
 
 /// Which axis an [`ValidityClause::Delta`] varies, the other held at the
 /// record's current belief.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub enum DeltaAxis {
     /// `@delta(a, b)`: valid-time net diff at the current system snapshot.
     Valid,
@@ -972,9 +972,7 @@ impl InputProgram {
         }
         let (entry_name, entry) = prog
             .remove_entry(&Symbol::prog_entry(SourceSpan::default()))
-            .ok_or_else(|| {
-                NoEntry(Some(prog.keys().next().map(|s| s.span).unwrap_or_default()))
-            })?;
+            .ok_or_else(|| NoEntry(Some(prog.keys().next().map(|s| s.span).unwrap_or_default())))?;
         Ok(Self {
             entry_name,
             entry,

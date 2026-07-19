@@ -111,13 +111,13 @@ use rustc_hash::FxHashSet;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::SourceSpan;
-use kyzo_model::value::{DataValue, ScanBound, Tuple};
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
+use kyzo_model::SourceSpan;
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::{DataValue, ScanBound, Tuple};
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -451,10 +451,7 @@ pub(crate) fn spatial_put<T: WriteTx>(
     }
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
-    let val = vec![
-        DataValue::from(point.lat()),
-        DataValue::from(point.lon()),
-    ];
+    let val = vec![DataValue::from(point.lat()), DataValue::from(point.lon())];
     let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
     let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
     tx.put(&key_bytes, &val_bytes)
@@ -738,9 +735,10 @@ fn scan_box(
         let upper = [ScanBound::Value(DataValue::Bytes(
             hi.to_be_bytes().to_vec(),
         ))];
-        for row in
-            crate::project::contract::index_rows(&idx.name, idx.scan_bounded_prefix(tx, &[], &lower, &upper))
-        {
+        for row in crate::project::contract::index_rows(
+            &idx.name,
+            idx.scan_bounded_prefix(tx, &[], &lower, &upper),
+        ) {
             let row = row?;
             let posting = decode_posting(row.as_slice(), base_key_len, &idx.name)?;
             // The curve over-approximates; the exact predicate filters.
@@ -836,10 +834,7 @@ impl Spatial {
         idx: &RelationHandle,
         bbox: &BoundingBox,
     ) -> Result<kyzo_model::value::SearchHits> {
-        Self::search_relation(
-            tx,
-            SpatialSearchRequest::Range { base, idx, bbox },
-        )
+        Self::search_relation(tx, SpatialSearchRequest::Range { base, idx, bbox })
     }
 
     /// Relation-backed k-NN — UFCS door into
@@ -1044,12 +1039,12 @@ fn spatial_knn_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kyzo_model::program::InputRelationHandle;
-    use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::KeyspaceKind;
     use crate::session::catalog::create_relation;
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::InputRelationHandle;
+    use kyzo_model::program::symbol::Symbol;
 
     // -- a tiny deterministic PRNG (splitmix64) so tests need no rand dep -----
 
@@ -1175,31 +1170,31 @@ mod tests {
             Spatial::range_query(&rtx, &f.base, &f.idx, bbox).unwrap(),
         )
         .unwrap()
-            .iter()
-            .map(|t| t[0].get_int().unwrap())
-            .collect()
+        .iter()
+        .map(|t| t[0].get_int().unwrap())
+        .collect()
     }
 
     fn knn_ids(db: &impl Storage, f: &Fixture, q: &GeoPoint, k: usize) -> Vec<(i64, f64)> {
         let rtx = db.read_tx().unwrap();
         crate::project::contract::search_rows(
             Spatial::knn(
-            &rtx,
-            &f.base,
-            &f.idx,
-            q,
-            &KnnParams {
-                k,
-                bind_distance: SpatialBindDistance::Append,
-            },
-        )
-        .unwrap(),
+                &rtx,
+                &f.base,
+                &f.idx,
+                q,
+                &KnnParams {
+                    k,
+                    bind_distance: SpatialBindDistance::Append,
+                },
+            )
+            .unwrap(),
         )
         .unwrap()
-            .iter()
-            .map(|t| {
-                (
-                    t[0].get_int().unwrap(),
+        .iter()
+        .map(|t| {
+            (
+                t[0].get_int().unwrap(),
                 t.last().unwrap().get_float().unwrap(),
             )
         })

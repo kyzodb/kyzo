@@ -46,8 +46,8 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use kyzo_model::value::{DataValue, Num};
 use kyzo_model::data_value_any;
+use kyzo_model::value::{DataValue, Num};
 
 /// The compression parameter δ. Larger is more accurate and larger; 100 is
 /// the common default (≈ 1% rank error mid-distribution, better at tails).
@@ -100,7 +100,9 @@ impl TDigest {
         for v in values {
             match v {
                 DataValue::Num(n) => nums.push(n.to_f64()),
-                other @ (data_value_any!()) => bail!("t-digest requires numeric values, got {other:?}"),
+                other @ (data_value_any!()) => {
+                    bail!("t-digest requires numeric values, got {other:?}")
+                }
             }
         }
         Ok(Self::from_sorted_weighted(sort_floats(nums), compression))

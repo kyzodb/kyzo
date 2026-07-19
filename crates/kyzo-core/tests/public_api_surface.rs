@@ -138,7 +138,11 @@ fn public_api_full_surface_smoke() {
     let at150 = db
         .run_script("?[v] := *hist{k, v @ 150}", np())
         .expect("as-of 150");
-    assert_eq!(at150.rows()[0][0].get_int(), Some(100), "as-of 150 sees 100");
+    assert_eq!(
+        at150.rows()[0][0].get_int(),
+        Some(100),
+        "as-of 150 sees 100"
+    );
     let now = db
         .run_script("?[v] := *hist{k, v}", np())
         .expect("current read");
@@ -161,7 +165,8 @@ fn public_api_full_surface_smoke() {
 
     let restored_storage = fresh_storage();
     restore_storage(&restored_storage, &dump_path).expect("restore_storage");
-    let db2 = Engine::compose(restored_storage.clone(), Catalog::new()).expect("Engine::compose on restored");
+    let db2 = Engine::compose(restored_storage.clone(), Catalog::new())
+        .expect("Engine::compose on restored");
     let restored = db2
         .run_script("?[id, name] := *item{id, name} :order id", np())
         .expect("scan restored item");

@@ -18,20 +18,20 @@
 
 use super::{StoredRowTooShortError, TupleIter};
 use crate::Tuple;
-use kyzo_model::program::expr::{Expr, compute_bounds};
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::{AsOf, DataValue, ScanBound};
-use crate::project::current::{Segment, SegmentEngine, SegmentMiss, Segments};
 use crate::exec::op::batch_ops::refine_batch;
 use crate::exec::op::batch_ops::{
     Batch, BatchIter, BatchScanFilter, BatchTupleFilter, conjunction_pred,
 };
 use crate::exec::op::join::PrefixProbeBatchJoin;
+use crate::project::current::{Segment, SegmentEngine, SegmentMiss, Segments};
 use crate::session::catalog::KeyspaceKind;
 use crate::session::catalog::RelationHandle;
 use crate::store::ReadTx;
 use itertools::Itertools;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::{Expr, compute_bounds};
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{AsOf, DataValue, ScanBound};
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -499,13 +499,13 @@ mod segment_gate_tests {
     use smartstring::SmartString;
 
     use super::*;
-    use kyzo_model::program::query::InputRelationHandle;
-    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use kyzo_model::value::ValidityTs;
     use crate::project::current::SegmentEngine;
     use crate::session::catalog::create_relation;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::{Storage, WriteTx};
+    use kyzo_model::program::query::InputRelationHandle;
+    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use kyzo_model::value::ValidityTs;
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)

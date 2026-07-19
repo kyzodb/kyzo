@@ -213,24 +213,22 @@ use serde::{Deserialize, Deserializer};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::parse::sys::HnswDistance;
+use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::projection::{ProjectionKind, RelationIndexSearch};
+use crate::session::catalog::RelationHandle;
+use crate::store::{ReadTx, WriteTx};
+use kyzo_model::SourceSpan;
+use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::VecElementType;
 use kyzo_model::schema::column::ColLen;
-use kyzo_model::schema::{
-    ColType, ColumnDef, NullableColType, StoredRelationMetadata,
-};
-use kyzo_model::SourceSpan;
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{
     DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, append_canonical,
     decode_tuple_from_key, encode_owned,
 };
-use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
-use crate::project::projection::{ProjectionKind, RelationIndexSearch};
-use crate::parse::sys::HnswDistance;
-use crate::session::catalog::RelationHandle;
-use crate::store::{ReadTx, WriteTx};
-use kyzo_model::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -257,7 +255,9 @@ impl ProjectionKind for Hnsw {}
 /// Neighbour degree `m` for HNSW graph construction. Proven `m >= 2` so
 /// `1/ln(m)` (the level multiplier) is always finite — `m = 1` would yield
 /// `Inf` and an unusable layer geometry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 #[serde(transparent)]
 pub(crate) struct MNeighbours(usize);
 
@@ -701,18 +701,12 @@ impl VecContentHash {
 
     /// Stored node-row hash: length must be exactly 32, then mint only via
     /// [`Self::from_sha256_digest`] (length alone is not a parallel forge).
-    fn from_stored(
-        bytes: Vec<u8>,
-        index_name: &str,
-        tuple: &[DataValue],
-    ) -> Result<Self> {
+    fn from_stored(bytes: Vec<u8>, index_name: &str, tuple: &[DataValue]) -> Result<Self> {
         if bytes.len() != SHA256_DIGEST_LEN {
             bail!(IndexRowCorrupt::new(
                 index_name,
                 tuple,
-                IndexCorruptReason::HnswNodeHashWrongLength {
-                    found: bytes.len(),
-                },
+                IndexCorruptReason::HnswNodeHashWrongLength { found: bytes.len() },
             ));
         }
         Ok(Self::from_sha256_digest(bytes))
@@ -723,7 +717,6 @@ impl VecContentHash {
         &self.0
     }
 }
-
 
 /// Canary entry key bytes for an HNSW index row.
 /// Mint only via [`Self::from_storage_key`] (encode door). Stored reclaim
@@ -751,30 +744,20 @@ impl HnswEntryKey {
     /// raw-bytes constructor (by design: only `TupleT::encode_as_key` /
     /// `encode_key_with_suffix` may mint one), so the decode direction never
     /// routes through it.
-    fn from_stored(
-        bytes: Vec<u8>,
-        index_name: &str,
-        tuple: &[DataValue],
-    ) -> Result<Self> {
+    fn from_stored(bytes: Vec<u8>, index_name: &str, tuple: &[DataValue]) -> Result<Self> {
         let bytes = Self::claim_storage_key(bytes, index_name, tuple)?;
         Ok(Self(bytes))
     }
 
     /// Admit foreign bytes only when they decode as a lawful storage key.
-    fn claim_storage_key(
-        bytes: Vec<u8>,
-        index_name: &str,
-        tuple: &[DataValue],
-    ) -> Result<Vec<u8>> {
+    fn claim_storage_key(bytes: Vec<u8>, index_name: &str, tuple: &[DataValue]) -> Result<Vec<u8>> {
         match RelationId::raw_decode(&bytes) {
             Ok(_) => {}
             Err(DecodeError::Truncated) => {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    IndexCorruptReason::HnswCanaryEntryKeyTooShort {
-                        found: bytes.len(),
-                    },
+                    IndexCorruptReason::HnswCanaryEntryKeyTooShort { found: bytes.len() },
                 ));
             }
             Err(err) => {
@@ -796,7 +779,6 @@ impl HnswEntryKey {
         &self.0
     }
 }
-
 
 /// Ranked-hit key bytes during HNSW search (layer-0 node key encoding).
 /// Mint only via [`Self::from_storage_key`] (encode door).
@@ -821,7 +803,6 @@ impl HnswHitKey {
         &self.0
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HnswRow {
@@ -1639,8 +1620,8 @@ fn put_fresh_at_levels(
     // (The original encoded the key with a Null layer slot — an opaque
     // artifact of construction order; recording the real key is
     // deliberate.)
-    let entry_key = idx
-        .encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?;
+    let entry_key =
+        idx.encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?;
     HnswRow::Canary {
         bottom_layer,
         entry_key: HnswEntryKey::from_storage_key(entry_key),
@@ -2202,8 +2183,9 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
     let mut candidates: FxHashSet<VectorId> = FxHashSet::default();
     // Scan errors and corrupt rows propagate (the original's `filter_map`
     // silently dropped errors here).
-    let rows: Vec<Tuple> = crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
-        .collect::<Result<Vec<_>>>()?;
+    let rows: Vec<Tuple> =
+        crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
+            .collect::<Result<Vec<_>>>()?;
     for row in rows {
         match HnswRow::decode(row.as_slice(), key_len, &idx.name)? {
             HnswRow::Node { at, .. } => {
@@ -2591,9 +2573,10 @@ impl PartialOrd for Ranked {
 /// tie-break key. The layer-0 node key is a stable, memcmp-ordered encoding of
 /// the `VectorId`.
 fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<HnswHitKey> {
-    Ok(HnswHitKey::from_storage_key(
-        idx.encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?,
-    ))
+    Ok(HnswHitKey::from_storage_key(idx.encode_key_for_store(
+        node_key(0, id).as_slice(),
+        SourceSpan::default(),
+    )?))
 }
 
 /// Keep the `k` smallest `Ranked` in a bounded max-heap (the max is the worst
@@ -3118,11 +3101,11 @@ mod tests {
             crate::project::contract::search_rows(Hnsw::knn($($arg),*).unwrap()).unwrap()
         };
     }
-    use kyzo_model::program::symbol::Symbol;
     use crate::rules::contract::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::symbol::Symbol;
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
@@ -3772,7 +3755,8 @@ mod tests {
 
             // Independent oracle: brute-force squared L2 over every stored
             // vector, sorted, top-k ids.
-            let qa = q_vec.to_f64s(); let qa = qa.as_slice();
+            let qa = q_vec.to_f64s();
+            let qa = qa.as_slice();
             let mut truth: Vec<(f64, i64)> = stored
                 .iter()
                 .enumerate()
@@ -3793,21 +3777,21 @@ mod tests {
 
             let hits = crate::project::contract::search_rows(
                 Hnsw::knn(
-                &rtx,
-                q_vec,
-                &m,
-                &base,
-                &idx,
-                &HnswKnnParams {
-                    k,
-                    ef: 64,
-                    radius: None,
-                    bind: HnswBindPack::default(),
-                },
-                &None,
-                &CancelFlag::default(),
-            )
-            .unwrap(),
+                    &rtx,
+                    q_vec,
+                    &m,
+                    &base,
+                    &idx,
+                    &HnswKnnParams {
+                        k,
+                        ef: 64,
+                        radius: None,
+                        bind: HnswBindPack::default(),
+                    },
+                    &None,
+                    &CancelFlag::default(),
+                )
+                .unwrap(),
             )
             .unwrap();
             let engine_ids: FxHashSet<i64> =

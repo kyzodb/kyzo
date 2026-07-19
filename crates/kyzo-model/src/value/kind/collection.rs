@@ -18,10 +18,10 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::data_value_any;
     use super::super::super::DataValue;
     use super::super::super::canonical::{Datum, decode, encode};
     use super::super::super::number::Num;
+    use crate::data_value_any;
 
     #[test]
     fn nested_collection_identity_round_trips() {

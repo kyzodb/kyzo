@@ -24,18 +24,16 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
+use crate::exec::stdlib::convert::vec_element_type;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
-use crate::exec::stdlib::convert::vec_element_type;
-
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_now(_args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(unix_now()?.as_secs_f64()))
 }
-
 
 pub(crate) fn op_rand_bernoulli(args: &[DataValue]) -> Result<DataValue> {
     let prob = match &args[0] {
@@ -51,7 +49,6 @@ pub(crate) fn op_rand_bernoulli(args: &[DataValue]) -> Result<DataValue> {
     };
     Ok(DataValue::from(rand::rng().random_bool(prob)))
 }
-
 
 pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -70,11 +67,9 @@ pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_rand_float(_args: &[DataValue]) -> Result<DataValue> {
     Ok(rand::rng().random::<f64>().into())
 }
-
 
 pub(crate) fn op_rand_int(args: &[DataValue]) -> Result<DataValue> {
     let lower = &args[0]
@@ -92,7 +87,6 @@ pub(crate) fn op_rand_int(args: &[DataValue]) -> Result<DataValue> {
     Ok(rand::rng().random_range(*lower..=*upper).into())
 }
 
-
 pub(crate) fn op_rand_uuid_v1(_args: &[DataValue]) -> Result<DataValue> {
     let mut rng = rand::rng();
     let uuid_ctx = uuid::ContextV1::new(rng.random());
@@ -106,12 +100,10 @@ pub(crate) fn op_rand_uuid_v1(_args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::uuid(id))
 }
 
-
 pub(crate) fn op_rand_uuid_v4(_args: &[DataValue]) -> Result<DataValue> {
     let id = uuid::Uuid::new_v4();
     Ok(DataValue::uuid(id))
 }
-
 
 pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
     let len_i = args[0]
@@ -131,8 +123,6 @@ pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Vector(vec_value(components)?))
 }
 
-
-
 /// The host clock as a duration since the Unix epoch.
 ///
 /// Policy (documented choice): a clock reading before 1970 is an **error**,
@@ -150,4 +140,3 @@ fn unix_now() -> Result<Duration> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| ClockBeforeEpochError.into())
 }
-

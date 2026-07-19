@@ -29,14 +29,14 @@ use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
+use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use kyzo_model::SourceSpan;
+use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
-use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 pub(crate) struct Constant;
 
@@ -88,10 +88,7 @@ impl Constant {
     /// Read the sealed `data` option. Failure means `arity`/`run` ran
     /// before `init_options`, or the option was replaced after
     /// normalization — drift, not a second validation of list shape.
-    fn proven_data(
-        options: &FixedRuleOptions,
-        span: SourceSpan,
-    ) -> Result<ConstantData<'_>> {
+    fn proven_data(options: &FixedRuleOptions, span: SourceSpan) -> Result<ConstantData<'_>> {
         match options.get("data") {
             Some(Expr::Const {
                 val: DataValue::List(rows),
@@ -203,8 +200,8 @@ impl FixedRule for Constant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kyzo_model::value::Tuple;
     use crate::rules::contract::tests_support::{empty_opts, opts_map, run_fixed_rule};
+    use kyzo_model::value::Tuple;
 
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the
     /// rows (the harness drives all three in order, as parse/eval do).

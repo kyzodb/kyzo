@@ -23,7 +23,9 @@ pub fn timestamp_to_micros(ts: jiff::Timestamp) -> i64 {
 /// Parses an RFC 3339 / ISO 8601 timestamp string to a validity timestamp in
 /// microseconds since the Unix epoch, floored toward negative infinity.
 pub fn str2vld(s: &str) -> Result<ValidityTs> {
-    let ts: jiff::Timestamp = s.parse().map_err(|_| miette::miette!("bad datetime: {}", s))?;
+    let ts: jiff::Timestamp = s
+        .parse()
+        .map_err(|_| miette::miette!("bad datetime: {}", s))?;
     Ok(ValidityTs::from_raw(timestamp_to_micros(ts)))
 }
 

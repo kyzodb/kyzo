@@ -59,9 +59,7 @@ use thiserror::Error;
 use crate::program::span::SourceSpan;
 
 use super::expr::parse_string;
-use super::{
-    ExtractSpan, IntoChildren, KyzoScriptParser, Pair, ParseError, Rule, unexpected,
-};
+use super::{ExtractSpan, IntoChildren, KyzoScriptParser, Pair, ParseError, Rule, unexpected};
 
 /// Score booster for one FTS literal (`^n`). Bit-identity Eq/Hash so NaN
 /// boosters are representable without a float-order crate at the model wall.

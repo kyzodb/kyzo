@@ -26,13 +26,13 @@
 use std::collections::BTreeMap;
 
 use miette::{Diagnostic, Result, bail};
-use pest::error::InputLocation;
 use pest::Parser;
+use pest::error::InputLocation;
 use thiserror::Error;
 
 use crate::program::InputProgram;
 use crate::program::span::SourceSpan;
-use crate::value::{DataValue, ValidityTs, MAX_VALIDITY_TS};
+use crate::value::{DataValue, MAX_VALIDITY_TS, ValidityTs};
 
 pub mod expr;
 pub mod query;
@@ -101,10 +101,7 @@ pub(crate) struct UnexpectedRule(#[label] pub(crate) SourceSpan);
 /// Current validity for `@` clauses defaults to the open (latest) system
 /// coordinate — hosts that need a session clock pass through a later
 /// engine-facing wrapper; the LSP door is params-only.
-pub fn parse_script(
-    src: &str,
-    param_pool: &BTreeMap<String, DataValue>,
-) -> Result<Script> {
+pub fn parse_script(src: &str, param_pool: &BTreeMap<String, DataValue>) -> Result<Script> {
     let cur_vld = MAX_VALIDITY_TS;
     let parsed = KyzoScriptParser::parse(Rule::script, src)
         .map_err(|err| {
@@ -162,10 +159,7 @@ pub fn parse_expressions(
 /// Current validity for embedded `@` clauses defaults to the open (latest)
 /// coordinate, exactly as [`parse_script`] does; fixed-rule binding is
 /// exec-tier and never happens here.
-pub fn parse_sys(
-    src: &str,
-    param_pool: &BTreeMap<String, DataValue>,
-) -> Result<sys::SysScript> {
+pub fn parse_sys(src: &str, param_pool: &BTreeMap<String, DataValue>) -> Result<sys::SysScript> {
     let cur_vld = MAX_VALIDITY_TS;
     let parsed = KyzoScriptParser::parse(Rule::script, src)
         .map_err(|err| {

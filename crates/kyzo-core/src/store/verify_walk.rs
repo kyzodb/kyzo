@@ -50,11 +50,11 @@ use fjall::Slice;
 use miette::Result;
 use sha2::{Digest, Sha256};
 
-use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
-use kyzo_model::value::{DataValue, RelationId, decode_tuple_from_key, extend_tuple_from_v};
 use crate::session::catalog::RelationHandle;
 use crate::store::failure::{KeyspaceId, QuarantineRange};
+use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
 use crate::store::{ReadTx, Storage};
+use kyzo_model::value::{DataValue, RelationId, decode_tuple_from_key, extend_tuple_from_v};
 
 /// Table/keyspace-scoped checksum identity (§49).
 ///
@@ -376,7 +376,11 @@ mod pins {
         let storage = new_fjall_storage(&path).unwrap();
         let report = verify_storage(&storage).unwrap();
         assert!(!report.is_clean());
-        assert_eq!(report.checked, clean_checked + 1, "walk continues: {report:?}");
+        assert_eq!(
+            report.checked,
+            clean_checked + 1,
+            "walk continues: {report:?}"
+        );
         assert!(
             report.corrupt[0].error.contains("BadTag"),
             "names BadTag: {}",

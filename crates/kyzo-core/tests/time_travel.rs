@@ -127,7 +127,11 @@ fn spans_derives_maximal_runs() {
             no_params(),
         )
         .expect("spans");
-    assert_eq!(out.rows().len(), 3, "three maximal runs, one per correction");
+    assert_eq!(
+        out.rows().len(),
+        3,
+        "three maximal runs, one per correction"
+    );
     let got: Vec<(String, i64, DataValue, bool, bool)> = out
         .rows()
         .iter()
@@ -213,18 +217,18 @@ fn end_sentinel_never_leaks_through_interval_end() {
         match &r[0] {
             DataValue::Null => {} // the open run — correct
             other @ (DataValue::Bool(_)
-                | DataValue::Num(_)
-                | DataValue::Str(_)
-                | DataValue::Bytes(_)
-                | DataValue::Uuid(_)
-                | DataValue::Regex(_)
-                | DataValue::Json(_)
-                | DataValue::Vector(_)
-                | DataValue::List(_)
-                | DataValue::Set(_)
-                | DataValue::Validity(_)
-                | DataValue::Interval(_)
-                | DataValue::Geometry(_)) => {
+            | DataValue::Num(_)
+            | DataValue::Str(_)
+            | DataValue::Bytes(_)
+            | DataValue::Uuid(_)
+            | DataValue::Regex(_)
+            | DataValue::Json(_)
+            | DataValue::Vector(_)
+            | DataValue::List(_)
+            | DataValue::Set(_)
+            | DataValue::Validity(_)
+            | DataValue::Interval(_)
+            | DataValue::Geometry(_)) => {
                 assert_ne!(
                     other.get_int(),
                     Some(i64::MAX),

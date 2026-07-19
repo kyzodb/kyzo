@@ -22,17 +22,17 @@ use itertools::Itertools;
 use miette::{Result, bail};
 use smartstring::{LazyCompact, SmartString};
 
-use kyzo_model::program::expr::{BindingPos, Expr};
-use kyzo_model::program::op::OP_LIST;
-use kyzo_model::program::rule::FixedRuleOptions;
 use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::DataValue;
-use kyzo_model::value::Tuple;
 use crate::rules::contract::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
+use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::op::OP_LIST;
+use kyzo_model::program::rule::FixedRuleOptions;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
+use kyzo_model::value::Tuple;
 
 pub(crate) struct ReorderSort;
 
@@ -57,7 +57,12 @@ impl FixedRule for ReorderSort {
                 })
                 .collect_vec(),
             Expr::Apply { op, args, .. } if op == OP_LIST => args.to_vec(),
-            Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
+            Expr::Binding { .. }
+            | Expr::Const { .. }
+            | Expr::Apply { .. }
+            | Expr::UnboundApply { .. }
+            | Expr::Cond { .. }
+            | Expr::Lazy { .. } => {
                 bail!(WrongFixedRuleOptionError {
                     name: Symbol::new("out", payload.span()),
                     span: payload.span(),
@@ -88,7 +93,10 @@ impl FixedRule for ReorderSort {
         for tuple in in_rel.iter()? {
             let tuple = tuple?;
             let sorter = crate::exec::expr::eval_expr(&sort_by, &tuple)?;
-            let mut s_tuple: Vec<_> = out_list.iter().map(|ex| crate::exec::expr::eval_expr(ex, &tuple)).try_collect()?;
+            let mut s_tuple: Vec<_> = out_list
+                .iter()
+                .map(|ex| crate::exec::expr::eval_expr(ex, &tuple))
+                .try_collect()?;
             s_tuple.push(sorter);
             buffer.push(s_tuple);
             cancel.check()?;
@@ -154,7 +162,12 @@ impl FixedRule for ReorderSort {
                 ..
             } => l.len() + 1,
             Expr::Apply { op, args, .. } if *op == OP_LIST => args.len() + 1,
-            Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => bail!(CannotDetermineArity(
+            Expr::Binding { .. }
+            | Expr::Const { .. }
+            | Expr::Apply { .. }
+            | Expr::UnboundApply { .. }
+            | Expr::Cond { .. }
+            | Expr::Lazy { .. } => bail!(CannotDetermineArity(
                 "ReorderSort".to_string(),
                 "invalid option 'out' given, expect a list".to_string(),
                 span
@@ -167,7 +180,7 @@ impl FixedRule for ReorderSort {
 mod tests {
     use super::*;
     use crate::rules::contract::CancelFlag;
-    use crate::rules::contract::tests_support::{opts_map, TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

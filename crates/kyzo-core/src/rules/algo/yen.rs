@@ -35,19 +35,19 @@ use itertools::Itertools;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
+use crate::rules::algo::dijkstra::dijkstra;
+use crate::rules::contract::par_try_map;
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    GraphAlgorithmInvariantError,
+};
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::rules::algo::dijkstra::dijkstra;
-use crate::rules::graph_view::DirectedCsrGraph;
-use crate::rules::contract::par_try_map;
-use crate::rules::contract::{
-    GraphAlgorithmInvariantError, CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput,
-    FixedRulePayload,
-};
 
 pub(crate) struct KShortestPathYen;
 
@@ -213,9 +213,8 @@ fn k_shortest_path_yen(
                     }
                     // INVARIANT(yen_root_edge): (seg_from, seg_to) is a
                     // consecutive pair on a path Dijkstra just returned.
-                    total_cost += best.ok_or_else(|| {
-                        GraphAlgorithmInvariantError::refuse("yen_root_edge")
-                    })?;
+                    total_cost +=
+                        best.ok_or_else(|| GraphAlgorithmInvariantError::refuse("yen_root_edge"))?;
                 }
                 let mut total_path = root_path.to_vec();
                 total_path.pop();
@@ -244,7 +243,7 @@ fn k_shortest_path_yen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
+    use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use kyzo_model::value::{DataValue, Tuple};
 
-use crate::temporal::{resolve_relation, AsOf, Event};
-use crate::{builtin_fold, AggrFold, MeetAccum, MeetOp, NormalAccum};
+use crate::temporal::{AsOf, Event, resolve_relation};
+use crate::{AggrFold, MeetAccum, MeetOp, NormalAccum, builtin_fold};
 
 /// Oracle relation / variable name. Content-eq `Arc<str>`.
 #[derive(Clone, Debug)]
@@ -186,7 +186,12 @@ impl fmt::Debug for HeadAggr {
         match self {
             HeadAggr::Plain => write!(f, "Plain"),
             HeadAggr::Aggregated { fold, args } => {
-                write!(f, "Aggregated {{ name: {:?}, args: {:?} }}", fold.name(), args)
+                write!(
+                    f,
+                    "Aggregated {{ name: {:?}, args: {:?} }}",
+                    fold.name(),
+                    args
+                )
             }
         }
     }
@@ -415,7 +420,9 @@ pub fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
     per_head
         .into_iter()
         .map(|(rel, rules)| {
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
+            let has_aggr = rules
+                .iter()
+                .any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
             let is_meet = has_aggr
                 && rules.iter().all(|r| {
                     r.aggr.iter().all(|a| match a.as_aggregated() {
@@ -643,9 +650,12 @@ pub fn strata(program: &Program) -> HashMap<Rel, usize> {
         })
         .chain(program.facts.keys().cloned())
         .chain(program.histories.keys().cloned())
-        .chain(program.fixed.iter().flat_map(|f| {
-            std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())
-        }))
+        .chain(
+            program
+                .fixed
+                .iter()
+                .flat_map(|f| std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())),
+        )
         .collect();
     for r in &rels {
         s.insert(r.clone(), 0);
@@ -1009,9 +1019,11 @@ fn naive_eval_at_impl(
         }
 
         let mut meets: BTreeMap<Rel, MeetState> = BTreeMap::new();
-        for rule in program.rules.iter().filter(|r| {
-            strata_of[&r.head_rel] == stratum && classes[&r.head_rel].is_meet
-        }) {
+        for rule in program
+            .rules
+            .iter()
+            .filter(|r| strata_of[&r.head_rel] == stratum && classes[&r.head_rel].is_meet)
+        {
             if !meets.contains_key(&rule.head_rel) {
                 meets.insert(rule.head_rel.clone(), MeetState::new(&rule.aggr)?);
             }
@@ -1335,10 +1347,7 @@ mod tests {
             rules: vec![Rule::plain("p", vec![x()], vec![])],
             ..Program::default()
         };
-        assert!(matches!(
-            check_safety(&program),
-            Err(Rejection::Unsafe(_))
-        ));
+        assert!(matches!(check_safety(&program), Err(Rejection::Unsafe(_))));
     }
 
     #[test]
@@ -1404,7 +1413,10 @@ mod tests {
         let mut facts = edge_facts(&[(1, 2), (2, 3)]);
         facts.insert(
             "seed".into(),
-            [vec![v(1), v(10)]].into_iter().map(Tuple::from_vec).collect(),
+            [vec![v(1), v(10)]]
+                .into_iter()
+                .map(Tuple::from_vec)
+                .collect(),
         );
         let program = Program {
             rules: vec![

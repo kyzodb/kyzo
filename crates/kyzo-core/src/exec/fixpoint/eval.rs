@@ -201,17 +201,17 @@ use std::time::{Duration, Instant};
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-use kyzo_model::program::aggregate::Aggregation;
-use crate::exec::fold::aggr::NormalAggr;
-use kyzo_model::program::rule::HeadAggrSlot;
-use crate::exec::plan::program::MagicSymbol;
 use crate::exec::fixpoint::delta_store::{
     EpochStore, HeadPos, MeetAggrStore, RegularTempStore, TempStore, collect_materialized,
 };
+use crate::exec::fold::aggr::NormalAggr;
+use crate::exec::plan::program::MagicSymbol;
 use crate::exec::provenance::eval::{
     PendingWitnesses, WitnessBinder, WitnessKeyMode, WitnessTable,
 };
 use kyzo_model::SourceSpan;
+use kyzo_model::program::aggregate::Aggregation;
+use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
@@ -408,7 +408,11 @@ impl Budget {
     /// `baseline` is the globally admitted total as of this epoch's barrier
     /// (a snapshot of `spent_derived`, deterministic and fixed for the whole
     /// epoch); `rule` names the rule for a refusal's attribution.
-    pub(crate) fn ticker<'a>(&'a self, baseline: u64, rule: &'a MagicSymbol) -> InterruptTicker<'a> {
+    pub(crate) fn ticker<'a>(
+        &'a self,
+        baseline: u64,
+        rule: &'a MagicSymbol,
+    ) -> InterruptTicker<'a> {
         InterruptTicker {
             budget: self,
             countdown: InterruptCountdown::fresh(),
@@ -818,11 +822,7 @@ impl<R> EvalRuleSet<R> {
                     .collect(),
             },
         };
-        Ok(Self {
-            aggr,
-            kind,
-            bodies,
-        })
+        Ok(Self { aggr, kind, bodies })
     }
 
     fn arity(&self) -> usize {
@@ -1624,7 +1624,6 @@ fn initial_normal_aggr_eval<R: RuleBody>(
 // ═════════════════════════════════════════════════════════════════════════
 // Tests: the oracle differentials, the determinism law, budget refusals
 // ═════════════════════════════════════════════════════════════════════════
-
 
 // Oracle-differential fixpoint unit corpus: see kyzo-trials gauntlet /
 // verify_differential (crate wall forbids kyzo_oracle inside kyzo-core).

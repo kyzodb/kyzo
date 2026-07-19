@@ -39,15 +39,15 @@ use std::collections::BTreeMap;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use kyzo_model::program::expr::Expr;
-use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::graph_view::DirectedCsrGraph;
 use crate::rules::contract::{
     CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, Tuple};
 
 // A test-only observable: how many vertices the peel loop has processed.
 // Mirrors `shortest_path_bfs::BFS_NODES_EXPANDED` (see that comment for the
@@ -205,7 +205,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
+    use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

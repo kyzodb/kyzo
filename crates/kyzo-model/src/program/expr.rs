@@ -33,8 +33,8 @@ use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 
 use miette::{Diagnostic, Result, bail};
-use serde::de::Error;
 use serde::Deserializer;
+use serde::de::Error;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -52,12 +52,7 @@ pub struct UnboundVariableError(pub String, #[label] pub SourceSpan);
 #[error("The tuple bound by variable '{0}' is too short: index is {1}, length is {2}")]
 #[diagnostic(help("This is definitely a bug. Please report it."))]
 #[diagnostic(code(eval::tuple_too_short))]
-pub struct TupleTooShortError(
-    pub String,
-    pub usize,
-    pub usize,
-    #[label] pub SourceSpan,
-);
+pub struct TupleTooShortError(pub String, pub usize, pub usize, #[label] pub SourceSpan);
 
 /// Deserialized data applied an op to an argument count the op does not
 /// accept. Rejected at the serde boundary so no op body ever sees it.
@@ -442,13 +437,15 @@ impl Expr {
                 args,
                 ..
             } => args.to_vec(),
-            v @ Expr::Binding { .. } | v @ Expr::Const { .. } | v @ Expr::Apply { .. } | v @ Expr::UnboundApply { .. } | v @ Expr::Cond { .. } | v @ Expr::Lazy { .. } => vec![v.clone()],
+            v @ Expr::Binding { .. }
+            | v @ Expr::Const { .. }
+            | v @ Expr::Apply { .. }
+            | v @ Expr::UnboundApply { .. }
+            | v @ Expr::Cond { .. }
+            | v @ Expr::Lazy { .. } => vec![v.clone()],
         }
     }
-    pub fn fill_binding_indices(
-        &mut self,
-        binding_map: &BTreeMap<Symbol, usize>,
-    ) -> Result<()> {
+    pub fn fill_binding_indices(&mut self, binding_map: &BTreeMap<Symbol, usize>) -> Result<()> {
         match self {
             Expr::Binding { var, tuple_pos, .. } => {
                 #[derive(Debug, Error, Diagnostic)]
@@ -777,7 +774,11 @@ impl Expr {
                     for field in args.iter() {
                         match field {
                             Expr::Binding { var, .. } => collected.push(var.name.clone()),
-                            Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
+                            Expr::Const { .. }
+                            | Expr::Apply { .. }
+                            | Expr::UnboundApply { .. }
+                            | Expr::Cond { .. }
+                            | Expr::Lazy { .. } => {
                                 return Err(InvalidFieldsError(
                                     format!("`{field}` is not a plain variable"),
                                     field.span(),
@@ -790,7 +791,10 @@ impl Expr {
                 }
             }
             Expr::Binding { var, .. } => Ok(vec![var.name.clone()]),
-            Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => Err(InvalidFieldsError(
+            Expr::Const { .. }
+            | Expr::UnboundApply { .. }
+            | Expr::Cond { .. }
+            | Expr::Lazy { .. } => Err(InvalidFieldsError(
                 format!("`{self}` is not a variable or list"),
                 self.span(),
             )
@@ -877,8 +881,7 @@ mod canonical_codec_tests {
     use crate::program::op;
 
     /// Permanent Binding wire form — seat 59 golden vector.
-    const BINDING_GOLDEN: &str =
-        r#"{"Binding":{"var":{"name":"x"},"tuple_pos":"Unresolved"}}"#;
+    const BINDING_GOLDEN: &str = r#"{"Binding":{"var":{"name":"x"},"tuple_pos":"Unresolved"}}"#;
 
     #[test]
     fn expr_canonical_round_trip_golden() {

@@ -30,10 +30,10 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
-use kyzo_model::value::RelationId;
 use crate::project::projection::{Generation, ResidentIndexKey};
 use crate::session::generation::RelationGeneration;
 use crate::store::ReadTx;
+use kyzo_model::value::RelationId;
 
 /// Consecutive misses at one live generation before a rebuild is admitted.
 /// One miss declines (not yet proven stable); the second at the same
@@ -107,19 +107,13 @@ impl Residency {
     /// Clear the miss streak after a successful install.
     pub(crate) fn clear_miss(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses
-            .lock()
-            .expect("miss lock poisoned")
-            .remove(&key);
+        self.misses.lock().expect("miss lock poisoned").remove(&key);
     }
 
     /// Drop miss streak and write-counter slot (destructive schema ops).
     pub(crate) fn forget(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses
-            .lock()
-            .expect("miss lock poisoned")
-            .remove(&key);
+        self.misses.lock().expect("miss lock poisoned").remove(&key);
         self.marks
             .lock()
             .expect("generation lock poisoned")
@@ -130,8 +124,8 @@ impl Residency {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::sim::SimStorage;
     use crate::store::Storage;
+    use crate::store::sim::SimStorage;
 
     #[test]
     fn rebuild_gated_by_stable_miss_streak() {

@@ -52,16 +52,16 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    GraphAlgorithmInvariantError,
+};
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::graph_view::DirectedCsrGraph;
-use crate::rules::contract::{
-    GraphAlgorithmInvariantError, CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput,
-    FixedRulePayload,
-};
 
 /// The default ceiling on enumerated maximal cliques when the caller gives no
 /// `max_cliques` option. Generous, but finite: enumeration must never be
@@ -475,8 +475,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::rules::contract::tests_support::{TestInput, empty_opts, opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

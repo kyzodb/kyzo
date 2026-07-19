@@ -79,9 +79,9 @@ impl<'de> serde::Deserialize<'de> for ValidityTs {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
-        Ok(ValidityTs::from_raw(<i64 as serde::Deserialize>::deserialize(
-            deserializer,
-        )?))
+        Ok(ValidityTs::from_raw(
+            <i64 as serde::Deserialize>::deserialize(deserializer)?,
+        ))
     }
 }
 
@@ -285,7 +285,8 @@ impl From<Validity> for ValiditySlot {
 #[repr(transparent)]
 pub struct StoredValiditySlot(ValidityTs);
 
-const _: () = assert!(std::mem::size_of::<StoredValiditySlot>() == std::mem::size_of::<ValidityTs>());
+const _: () =
+    assert!(std::mem::size_of::<StoredValiditySlot>() == std::mem::size_of::<ValidityTs>());
 const _: () =
     assert!(std::mem::align_of::<StoredValiditySlot>() == std::mem::align_of::<ValidityTs>());
 
@@ -399,10 +400,7 @@ mod tests {
             std::cmp::Ordering::Less
         );
         // Open-end assert lives only on ValiditySlot/SeekBound.
-        assert!(matches!(
-            slot(i64::MAX, true),
-            ValiditySlot::Seek(_)
-        ));
+        assert!(matches!(slot(i64::MAX, true), ValiditySlot::Seek(_)));
         assert!(slot(i64::MAX, true).as_validity().is_none());
     }
 

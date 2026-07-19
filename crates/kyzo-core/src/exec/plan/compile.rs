@@ -138,26 +138,26 @@ use itertools::Itertools;
 use miette::{Context, Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
-use kyzo_model::program::aggregate::Aggregation;
-use kyzo_model::program::expr::{BindingPos, Expr};
-use kyzo_model::program::rule::{DeltaAxis, HeadAggrSlot, ValidityClause};
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::delta_store::{RegularTempStore, TupleInIter};
+use crate::exec::fixpoint::eval::{
+    AtomOccurrence, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum, FixedRuleEval,
+    PremiseSource, Premises, RuleBody,
+};
+use crate::exec::op::{PlanInvariantError, RelAlgebra, SearchRA};
 use crate::exec::plan::program::{
     MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed, MagicSymbol,
     StratifiedMagicProgram,
 };
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::{Symbol, SymbolKind};
-use kyzo_model::value::DataValue;
-use crate::exec::fixpoint::eval::{
-    AtomOccurrence, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum, FixedRuleEval, Premises,
-    PremiseSource, RuleBody,
-};
-use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::exec::op::{PlanInvariantError, RelAlgebra, SearchRA};
-use crate::exec::fixpoint::delta_store::{RegularTempStore, TupleInIter};
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, IndexRef, RelationHandle, get_relation};
 use crate::store::ReadTx;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::aggregate::Aggregation;
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::rule::{DeltaAxis, HeadAggrSlot, ValidityClause};
+use kyzo_model::program::symbol::{Symbol, SymbolKind};
+use kyzo_model::value::DataValue;
 
 /// How the compile tier uses each argument position of a stored-relation
 /// atom, for index selection. Owns [`RelationHandle::choose_index`] so the
@@ -397,7 +397,11 @@ impl MagicInlineRule {
                 MagicAtom::Rule(rule) | MagicAtom::NegatedRule(rule) => {
                     coll.insert(occurrence, rule.name.clone());
                 }
-                MagicAtom::Relation(_) | MagicAtom::Predicate(_) | MagicAtom::NegatedRelation(_) | MagicAtom::Unification(_) | MagicAtom::Search(_) => {}
+                MagicAtom::Relation(_)
+                | MagicAtom::Predicate(_)
+                | MagicAtom::NegatedRelation(_)
+                | MagicAtom::Unification(_)
+                | MagicAtom::Search(_) => {}
             }
         }
         coll
@@ -547,10 +551,7 @@ pub(crate) fn compile_magic_rule_body(
             MagicAtom::Rule(rule_app) => {
                 let occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
-                    RuleNotFound(
-                        rule_app.name.clone(),
-                        rule_app.name.as_plain_symbol().span,
-                    )
+                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span)
                 })?;
 
                 ensure!(
@@ -806,10 +807,7 @@ pub(crate) fn compile_magic_rule_body(
                 // `delta_from` to its own right side).
                 let negated_occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
-                    RuleNotFound(
-                        rule_app.name.clone(),
-                        rule_app.name.as_plain_symbol().span,
-                    )
+                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span)
                 })?;
                 ensure!(
                     *store_arity == rule_app.args.len(),
@@ -1205,7 +1203,6 @@ pub(crate) fn bind_for_eval<'a, T: ReadTx, F: FixedRuleEval>(
 // test of the original ra.rs, `test_mat_join`, is ported here where the
 // pipeline to drive it lives.)
 // ═════════════════════════════════════════════════════════════════════════
-
 
 // Oracle-differential compile unit corpus: see kyzo-trials gauntlet
 // (crate wall forbids kyzo_oracle inside kyzo-core).

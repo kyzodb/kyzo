@@ -105,19 +105,19 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use kyzo_model::program::expr::{BindingPos, Expr};
-use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::SourceSpan;
-use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
+use crate::parse::parse_fts_query;
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::project::projection::{ProjectionKind, RelationIndexSearch};
-use kyzo_model::parse::search::{FtsExpr, FtsLiteral, FtsNear};
 use crate::project::text::ast::TokenizeFtsExpr;
 use crate::project::text::tokenizer::TextAnalyzer;
-use crate::parse::parse_fts_query;
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
+use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
+use kyzo_model::parse::search::{FtsExpr, FtsLiteral, FtsNear};
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -486,7 +486,8 @@ fn eval_ast(
             let df = found.len();
             let mut res = FxHashMap::default();
             for lp in found {
-                let score = compute_score(lp.positions.len(), df, n_total, l.booster().0, score_kind);
+                let score =
+                    compute_score(lp.positions.len(), df, n_total, l.booster().0, score_kind);
                 res.insert(lp.doc_key, score);
             }
             res
@@ -779,13 +780,13 @@ fn fts_search_body(
 mod tests {
     use super::*;
 
-    use kyzo_model::program::InputRelationHandle;
-    use kyzo_model::program::symbol::Symbol;
     use crate::project::text::TokenizerConfig;
     use crate::rules::contract::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::InputRelationHandle;
+    use kyzo_model::program::symbol::Symbol;
 
     macro_rules! fts_rows {
         ($($arg:expr),* $(,)?) => {

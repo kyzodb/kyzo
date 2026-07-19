@@ -35,16 +35,16 @@ use itertools::Itertools;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    GraphAlgorithmInvariantError, graph_node_value, tuple_into_first_column,
+};
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::graph_view::DirectedCsrGraph;
-use crate::rules::contract::{
-    graph_node_value, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
-    FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
-};
 
 pub(crate) struct StronglyConnectedComponent {
     strong: bool,
@@ -217,7 +217,7 @@ impl TarjanSccG {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
+    use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

@@ -37,8 +37,7 @@ pub(super) async fn export_relations(
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect_vec();
-    let result =
-        spawn_blocking(move || bulk::export_relations(&st.db, names.into_iter())).await;
+    let result = spawn_blocking(move || bulk::export_relations(&st.db, names.into_iter())).await;
     match result {
         Ok(Ok(exported)) => {
             let data: serde_json::Map<_, _> = exported

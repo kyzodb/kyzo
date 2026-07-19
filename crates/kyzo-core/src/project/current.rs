@@ -27,10 +27,10 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-use kyzo_model::value::{DataValue, RelationId, Tuple};
 use crate::project::projection::{Generation, ProjectionBuilder, ResidentIndexKey, Sealed, Stale};
 use crate::project::residency::Residency;
 use crate::store::ReadTx;
+use kyzo_model::value::{DataValue, RelationId, Tuple};
 
 /// The execution path's segment context: `OFF` (tests, benches, callers
 /// without a session) or a borrow of the session's engine. `Copy`, so it
@@ -259,8 +259,8 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::sim::SimStorage;
     use crate::store::Storage;
+    use crate::store::sim::SimStorage;
 
     fn row(vals: &[i64]) -> Tuple {
         vals.iter().map(|&i| DataValue::from(i)).collect()

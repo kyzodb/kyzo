@@ -24,11 +24,11 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_deg_to_rad(args: &[DataValue]) -> Result<DataValue> {
     let x = args[0]
@@ -36,7 +36,6 @@ pub(crate) fn op_deg_to_rad(args: &[DataValue]) -> Result<DataValue> {
         .ok_or_else(|| miette!("'deg_to_rad' requires numbers"))?;
     Ok(DataValue::from(x * std::f64::consts::PI / 180.))
 }
-
 
 pub(crate) fn op_haversine(args: &[DataValue]) -> Result<DataValue> {
     let miette = || miette!("'haversine' requires numbers");
@@ -52,7 +51,6 @@ pub(crate) fn op_haversine(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(ret))
 }
 
-
 pub(crate) fn op_haversine_deg_input(args: &[DataValue]) -> Result<DataValue> {
     let miette = || miette!("'haversine_deg_input' requires numbers");
     let lat1 = args[0].get_float().ok_or_else(miette)? * std::f64::consts::PI / 180.;
@@ -67,11 +65,9 @@ pub(crate) fn op_haversine_deg_input(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(ret))
 }
 
-
 pub(crate) fn op_rad_to_deg(args: &[DataValue]) -> Result<DataValue> {
     let x = args[0]
         .get_float()
         .ok_or_else(|| miette!("'rad_to_deg' requires numbers"))?;
     Ok(DataValue::from(x * 180. / std::f64::consts::PI))
 }
-

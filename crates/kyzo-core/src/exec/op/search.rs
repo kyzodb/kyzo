@@ -18,16 +18,16 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::RelAlgebra;
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::plan::program::MagicSymbol;
+use crate::exec::plan::search::SearchConfig;
+use crate::project::current::Segments;
+use crate::store::ReadTx;
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, SearchHits, Tag, Tuple};
-use crate::project::current::Segments;
-use crate::exec::op::batch_ops::{Batch, BatchIter};
-use crate::exec::fixpoint::eval::AtomOccurrence;
-use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::exec::plan::search::SearchConfig;
-use crate::store::ReadTx;
 use miette::{Diagnostic, Result, bail};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -139,9 +139,7 @@ impl SearchRA {
                     };
                     c.search_relation(tx, text, &filter_expr, &cancel, fts_n_total)
                 }
-                SearchConfig::Lsh(c) => {
-                    c.search_relation(tx, &q, &filter_expr, &cancel)
-                }
+                SearchConfig::Lsh(c) => c.search_relation(tx, &q, &filter_expr, &cancel),
             }
         };
 
@@ -202,12 +200,7 @@ impl SearchBatches<'_> {
                 while self.hit_idx < self.hits.len() {
                     let hit = self.hits.materialize_hit(self.hit_idx)?;
                     let right_premise = if self.want_premises {
-                        Some(
-                            hit.iter()
-                                .take(self.base_arity)
-                                .cloned()
-                                .collect::<Tuple>(),
-                        )
+                        Some(hit.iter().take(self.base_arity).cloned().collect::<Tuple>())
                     } else {
                         None
                     };

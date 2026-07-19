@@ -24,11 +24,11 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     let millis = match &args[0] {
@@ -56,7 +56,6 @@ pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Str(format_rfc3339(ts, off)?))
 }
 
-
 /// Parses an RFC 3339 / ISO 8601 timestamp string to seconds since the Unix
 /// epoch (a float; pre-1970 inputs are negative). A `:60` leap second is
 /// clamped to `:59` of the same minute — jiff does not fold it into the
@@ -76,7 +75,6 @@ pub(crate) fn op_parse_timestamp(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(secs))
 }
 
-
 fn autosi_precision(subsec_nanos: i32) -> Option<u8> {
     let n = subsec_nanos.unsigned_abs();
     if n == 0 {
@@ -89,7 +87,6 @@ fn autosi_precision(subsec_nanos: i32) -> Option<u8> {
         Some(9)
     }
 }
-
 
 fn format_rfc3339(ts: jiff::Timestamp, off: Offset) -> Result<String> {
     let prec = autosi_precision(ts.subsec_nanosecond());
@@ -104,4 +101,3 @@ fn format_rfc3339(ts: jiff::Timestamp, off: Offset) -> Result<String> {
     }
     Ok(buf)
 }
-

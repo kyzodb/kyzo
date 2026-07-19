@@ -6,9 +6,9 @@ mod tests {
 
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
+    use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
-    use crate::store::Storage;
     use kyzo_model::value::DataValue;
 
     fn no_params() -> BTreeMap<String, DataValue> {

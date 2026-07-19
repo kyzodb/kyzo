@@ -65,14 +65,21 @@
 //! guards the present instant only. This boundary is stated, not silently
 //! assumed.
 
-use std::num::NonZeroUsize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 
 use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::json::NamedRows;
+use crate::exec::fixpoint::delta_store::TupleInIter;
+use crate::session::access::{AccessLevel, InsufficientAccessLevel};
+use crate::session::catalog::{ConstraintRef, get_relation, list_relations, write_relation_row};
+use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
+use crate::store::retry::RetryError;
+use crate::store::scratch::TempTx;
+use crate::store::{ReadTx, Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::{
@@ -80,13 +87,6 @@ use kyzo_model::program::{
 };
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, ValidityTs};
-use crate::session::access::{AccessLevel, InsufficientAccessLevel};
-use crate::session::catalog::{ConstraintRef, get_relation, list_relations, write_relation_row};
-use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
-use crate::exec::fixpoint::delta_store::TupleInIter;
-use crate::store::retry::RetryError;
-use crate::store::scratch::TempTx;
-use crate::store::{ReadTx, Storage, WriteTx};
 
 /// How many witness rows a refusal names. The rows shown are the smallest
 /// in value order (witnesses are sorted before capping), so the selection
@@ -414,7 +414,8 @@ impl<S: Storage> Engine<S> {
             // the body reads, kept name-sorted. Requires the trigger rung of
             // the access ladder on each.
             for rel in &read_set {
-                let mut handle = get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
+                let mut handle =
+                    get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
                 if handle.access_level < AccessLevel::Protected {
                     return Err(RetryError::session(InsufficientAccessLevel(
                         handle.name.to_string(),
@@ -460,7 +461,8 @@ impl<S: Storage> Engine<S> {
                 handle.constraints.retain(|c| c.name() != &name.name);
                 if handle.constraints.len() != before {
                     found = true;
-                    write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
+                    write_relation_row(&mut tx.store, &handle)
+                        .map_err(RetryError::session_report)?;
                 }
             }
             if !found {

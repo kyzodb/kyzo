@@ -203,7 +203,8 @@ fn value_str(i: u64) -> String {
 }
 
 fn seeded_string_db(n: u64, dir: &std::path::Path) -> Engine<kyzo::FjallStorage> {
-    let db = Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
+    let db =
+        Engine::compose(new_fjall_storage(dir).expect("storage"), Catalog::new()).expect("engine");
     let mut script = String::from("?[k, v] <- [");
     for i in 0..n {
         script.push_str(&format!(

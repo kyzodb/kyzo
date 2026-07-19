@@ -93,13 +93,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use fjall::Slice;
 use miette::{Result, miette};
 
-use kyzo_model::value::Tuple;
-use kyzo_model::value::{AsOf, ValidityTs};
+use crate::store::retry::StorageOpFailure;
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::store::{
     Aborted, CommitFailure, CommitIo, Committed, ConflictError, ReadTx, Storage, WriteTx,
 };
-use crate::store::retry::StorageOpFailure;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, ValidityTs};
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
 
@@ -886,10 +886,7 @@ impl SimWriteTx {
     }
 
     fn commit_inner(mut self, durable: bool) -> std::result::Result<(), CommitFailure> {
-        let mut inner = self
-            .inner
-            .take()
-            .expect("SimWriteTx commit after spend");
+        let mut inner = self.inner.take().expect("SimWriteTx commit after spend");
         inner.ctx.yield_turn();
         let start_seq = inner.start_seq;
         let writes = std::mem::take(&mut inner.writes);
@@ -1273,7 +1270,6 @@ impl Drop for SimWriteTx {
 mod battery {
     use kyzo_model::TupleT;
     /// DST instrument proof battery (re-homed from storage/tests.rs).
-
     use std::collections::BTreeMap;
     use std::num::NonZeroUsize;
 
@@ -1282,11 +1278,9 @@ mod battery {
         AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
     };
 
-    use crate::store::time::ClaimPolarity;
-    use crate::store::retry::{
-        get_attempt, put_attempt, retry_on_conflict, write_tx_attempt,
-    };
+    use crate::store::retry::{get_attempt, put_attempt, retry_on_conflict, write_tx_attempt};
     use crate::store::sim::{FaultConfig, SimStorage};
+    use crate::store::time::ClaimPolarity;
     use crate::store::{ConflictError, ReadTx, Storage, WriteTx};
 
     /// Naive as-of oracle — same reference the fjall pin uses.
@@ -1316,12 +1310,14 @@ mod battery {
     }
 
     fn pol_val(assert: bool) -> Vec<u8> {
-        vec![if assert {
-            ClaimPolarity::Assert
-        } else {
-            ClaimPolarity::Retract
-        }
-        .encode()]
+        vec![
+            if assert {
+                ClaimPolarity::Assert
+            } else {
+                ClaimPolarity::Retract
+            }
+            .encode(),
+        ]
     }
 
     fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (StorageKey, Vec<u8>) {

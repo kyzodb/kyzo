@@ -1,6 +1,6 @@
 //! Json ↔ DataValue conversion vocabulary for schema coerce + collection kernels.
-use serde_json::{Value, json};
 use serde_json::Value as JsonValue;
+use serde_json::{Value, json};
 
 use crate::envelope::{json_from_serde, serde_from_json};
 use crate::value::kind::interval::{Hi, Lo};

@@ -9,11 +9,11 @@ use serde_json::json;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::data_value_any;
 use crate::envelope::{json_from_serde, serde_from_json};
 use crate::program::expr::Expr;
 use crate::value::json_convert::to_json;
 use crate::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
-use crate::data_value_any;
 
 /// Schema vocabulary: a vector column's declared element width. Stored
 /// vector VALUES are always f64 canonical (format v1); `F32` columns
@@ -61,10 +61,7 @@ mod col_nullability_as_bool {
     use super::ColNullability;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S: Serializer>(
-        v: &ColNullability,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(v: &ColNullability, serializer: S) -> Result<S::Ok, S::Error> {
         v.is_nullable().serialize(serializer)
     }
 
@@ -157,7 +154,18 @@ impl Display for NullableColType {
 
 /// Proven list / vector length on a column schema — the only length
 /// type [`ColType`] may carry.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, serde_derive::Deserialize, serde_derive::Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    serde_derive::Deserialize,
+    serde_derive::Serialize,
+)]
 pub struct ColLen(usize);
 
 impl ColLen {
@@ -325,9 +333,7 @@ impl NullableColType {
                                 .ok_or_else(make_err)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    DataValue::Vector(
-                        Vector::try_new(collected).ok_or_else(|| make_err())?,
-                    )
+                    DataValue::Vector(Vector::try_new(collected).ok_or_else(|| make_err())?)
                 }
                 DataValue::Vector(arr) => {
                     if len.get() != arr.len() {
@@ -384,9 +390,7 @@ impl NullableColType {
                                 .collect()
                         }
                     };
-                    DataValue::Vector(
-                        Vector::try_new(collected).ok_or_else(|| make_err())?,
-                    )
+                    DataValue::Vector(Vector::try_new(collected).ok_or_else(|| make_err())?)
                 }
                 data_value_any!() => bail!(make_err()),
             },

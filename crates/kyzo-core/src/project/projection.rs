@@ -31,8 +31,8 @@ use std::fmt;
 
 use miette::Result;
 
-use kyzo_model::value::{RelationId, SearchHits, Tuple};
 use crate::store::ReadTx;
+use kyzo_model::value::{RelationId, SearchHits, Tuple};
 
 /// A projection kind's identity in the build→seal→freshness machine.
 ///
@@ -67,10 +67,7 @@ pub(crate) trait RelationIndexSearch: ProjectionKind {
     type Request<'a>;
 
     /// Run the kind's relation-backed search algorithm.
-    fn search_relation<Tx: ReadTx>(
-        tx: &Tx,
-        request: Self::Request<'_>,
-    ) -> Result<SearchHits>;
+    fn search_relation<Tx: ReadTx>(tx: &Tx, request: Self::Request<'_>) -> Result<SearchHits>;
 }
 
 /// Generation stamp carried by a sealed projection.
@@ -295,11 +292,11 @@ mod tests {
     /// real `search_relation` door, not a ProjectionKind façade (P103).
     #[test]
     fn five_engine_kinds_share_one_machine() {
-        use crate::project::text::fts::Fts;
-        use crate::project::vector::hnsw::Hnsw;
         use crate::project::dedup::lsh::Lsh;
         use crate::project::sparse::sparse::Sparse;
         use crate::project::spatial::spatial::Spatial;
+        use crate::project::text::fts::Fts;
+        use crate::project::vector::hnsw::Hnsw;
 
         fn assert_owns_relation_search<K: RelationIndexSearch>() {}
         assert_owns_relation_search::<Hnsw>();

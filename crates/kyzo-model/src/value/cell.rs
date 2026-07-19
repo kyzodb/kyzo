@@ -291,9 +291,9 @@ mod tests {
         let again = Value::mint(&strd("abcdefghijklm"), &mut arena).expect("mint");
         // Nest brand under one live frame; project durable Admission for
         // same_word (coexisting-arena API).
-        let ok = arena.frame().with_nested_ctx(|nest| {
-            outline_edge.value().same_word(&again.value(), &nest.ctx())
-        });
+        let ok = arena
+            .frame()
+            .with_nested_ctx(|nest| outline_edge.value().same_word(&again.value(), &nest.ctx()));
         assert!(ok);
     }
 
@@ -306,10 +306,9 @@ mod tests {
         use super::super::kind::json::Json;
         use super::super::kind::validity::{Validity, ValidityTs};
         let mut arena = Arena::new();
-        let inline =
-            |cb: &CanonicalBytes, arena: &mut Arena| -> bool {
-                Value::mint(cb, arena).expect("mint").is_inline()
-            };
+        let inline = |cb: &CanonicalBytes, arena: &mut Arena| -> bool {
+            Value::mint(cb, arena).expect("mint").is_inline()
+        };
         // Always inline: Null, Bool, every Num (payload <= 13), Validity
         // (payload 9), empty/half-bounded intervals (payload <= 11).
         assert!(inline(&encode(Datum::Null), &mut arena));

@@ -147,7 +147,9 @@ mod tests {
     #[test]
     fn nul_bearing_strings_unescape_through_the_grammar() {
         let mut arena = Arena::new();
-        let s = GermanStr::from_str("a\u{0}b", &mut arena).expect("mint").value();
+        let s = GermanStr::from_str("a\u{0}b", &mut arena)
+            .expect("mint")
+            .value();
         let got = s.inline_str().expect("inline");
         assert_eq!(got, "a\u{0}b");
         assert!(matches!(got, Cow::Owned(_)));

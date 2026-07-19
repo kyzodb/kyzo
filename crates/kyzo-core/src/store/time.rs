@@ -24,11 +24,11 @@
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
+use kyzo_model::data_value_any;
 use kyzo_model::value::{
     AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValiditySlot, ValidityTs,
     append_canonical, decode_tuple_from_key, decode_values_all,
 };
-use kyzo_model::data_value_any;
 
 use super::open::StoreId;
 use super::sweep::{CommitOrdinal, Committed};
@@ -87,7 +87,9 @@ pub enum BitemporalDecodeError {
 pub enum TxnTimeRefuse {
     /// Client-supplied transaction time is Unconstructible — Store assigns
     /// time at the durable event only.
-    #[error("ClientTxnTimeForbidden: transaction time is assigned at the Store commit door, never by the client")]
+    #[error(
+        "ClientTxnTimeForbidden: transaction time is assigned at the Store commit door, never by the client"
+    )]
     #[diagnostic(code(store::time::client_txn_time_forbidden))]
     ClientTxnTimeForbidden,
     /// A peer/client timestamp that would reorder another Store's commits.
@@ -135,7 +137,10 @@ impl TxnTime {
     }
 
     /// Refuse a foreign Store timestamp that would reorder local commits.
-    pub fn refuse_foreign(foreign_store: StoreId, local_store: StoreId) -> Result<(), TxnTimeRefuse> {
+    pub fn refuse_foreign(
+        foreign_store: StoreId,
+        local_store: StoreId,
+    ) -> Result<(), TxnTimeRefuse> {
         if foreign_store != local_store {
             Err(TxnTimeRefuse::ForeignTxnTime)
         } else {
@@ -264,7 +269,10 @@ pub fn check_key_for_bitemporal(
         // Right instant, but this system version postdates the system
         // coordinate: seek to the newest version at or before `sys_at`
         // within the SAME instant.
-        return Ok((None, splice_sys(ValiditySlot::from_stored(as_of.sys(), true))));
+        return Ok((
+            None,
+            splice_sys(ValiditySlot::from_stored(as_of.sys(), true)),
+        ));
     }
     // This row IS the instant's governing version at sys_at. Its polarity
     // decides. TERMINAL_VALIDITY is the maximum slot encoding, so the
@@ -280,7 +288,10 @@ pub fn check_key_for_bitemporal(
         ClaimPolarity::Retract => {
             // The fact is retracted from this instant on: absent at the
             // coordinates. Skip every older version of the fact.
-            Ok((None, splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into())))
+            Ok((
+                None,
+                splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into()),
+            ))
         }
         ClaimPolarity::Assert => {
             // A hit. Emit, then skip every older version of the fact.
@@ -382,12 +393,8 @@ mod tests {
             let Some((k, polarity)) = store.range(bound..).next() else {
                 break;
             };
-            let (ret, nxt) = check_key_for_bitemporal(
-                k,
-                *polarity,
-                AsOf::at(vts(sys_at), vts(valid_at)),
-                None,
-            )?;
+            let (ret, nxt) =
+                check_key_for_bitemporal(k, *polarity, AsOf::at(vts(sys_at), vts(valid_at)), None)?;
             bound = if nxt.as_slice() > k.as_slice() {
                 nxt
             } else {
@@ -580,7 +587,11 @@ mod tests {
         );
         let flagged = [
             DataValue::from(1i64),
-            DataValue::Validity(Validity::new(vts(10), false).expect("retract admits every tick").into()),
+            DataValue::Validity(
+                Validity::new(vts(10), false)
+                    .expect("retract admits every tick")
+                    .into(),
+            ),
             DataValue::Validity(slot(5)),
         ]
         .encode_as_key(RelationId::new(7).expect("below cap"))
@@ -670,5 +681,4 @@ mod tests {
     // Oracle-vs-kernel temporal differential moved to
     // `kyzo-trials::time_travel` (`reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps`).
     // kyzo-core must not import `kyzo_oracle`.
-
 }

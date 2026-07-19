@@ -16,19 +16,40 @@ pub struct OpDecl {
 }
 
 impl OpDecl {
-    pub const fn new(name: &'static str, min_arity: usize, vararg: bool, deterministic: bool) -> Self {
-        Self { name, min_arity, vararg, deterministic }
+    pub const fn new(
+        name: &'static str,
+        min_arity: usize,
+        vararg: bool,
+        deterministic: bool,
+    ) -> Self {
+        Self {
+            name,
+            min_arity,
+            vararg,
+            deterministic,
+        }
     }
 
-    pub const fn is_vararg(self) -> bool { self.vararg }
-    pub const fn is_deterministic(self) -> bool { self.deterministic }
+    pub const fn is_vararg(self) -> bool {
+        self.vararg
+    }
+    pub const fn is_deterministic(self) -> bool {
+        self.deterministic
+    }
 
     pub fn arity_matches(self, n: usize) -> bool {
-        if self.vararg { n >= self.min_arity } else { n == self.min_arity }
+        if self.vararg {
+            n >= self.min_arity
+        } else {
+            n == self.min_arity
+        }
     }
 
     pub fn display_name(self) -> String {
-        self.name.strip_prefix("OP_").unwrap_or(self.name).to_lowercase()
+        self.name
+            .strip_prefix("OP_")
+            .unwrap_or(self.name)
+            .to_lowercase()
     }
 
     pub fn arity_requirement(self) -> String {
@@ -90,8 +111,10 @@ pub const OP_INTERVAL_FINISHES: OpDecl = OpDecl::new("OP_INTERVAL_FINISHES", 2, 
 pub const OP_INTERVAL_HAS_END: OpDecl = OpDecl::new("OP_INTERVAL_HAS_END", 1, false, true);
 pub const OP_INTERVAL_HAS_START: OpDecl = OpDecl::new("OP_INTERVAL_HAS_START", 1, false, true);
 pub const OP_INTERVAL_INTERSECTS: OpDecl = OpDecl::new("OP_INTERVAL_INTERSECTS", 2, false, true);
-pub const OP_INTERVAL_IS_END_UNBOUNDED: OpDecl = OpDecl::new("OP_INTERVAL_IS_END_UNBOUNDED", 1, false, true);
-pub const OP_INTERVAL_IS_START_UNBOUNDED: OpDecl = OpDecl::new("OP_INTERVAL_IS_START_UNBOUNDED", 1, false, true);
+pub const OP_INTERVAL_IS_END_UNBOUNDED: OpDecl =
+    OpDecl::new("OP_INTERVAL_IS_END_UNBOUNDED", 1, false, true);
+pub const OP_INTERVAL_IS_START_UNBOUNDED: OpDecl =
+    OpDecl::new("OP_INTERVAL_IS_START_UNBOUNDED", 1, false, true);
 pub const OP_INTERVAL_MEETS: OpDecl = OpDecl::new("OP_INTERVAL_MEETS", 2, false, true);
 pub const OP_INTERVAL_OVERLAPS: OpDecl = OpDecl::new("OP_INTERVAL_OVERLAPS", 2, false, true);
 pub const OP_INTERVAL_START: OpDecl = OpDecl::new("OP_INTERVAL_START", 1, false, true);
@@ -192,7 +215,10 @@ pub const OP_WINDOWS: OpDecl = OpDecl::new("OP_WINDOWS", 2, false, true);
 
 /// Resolve a KyzoScript / serde display name to an [`OpDecl`] (no body).
 pub fn resolve_decl(name: &str) -> Option<OpDecl> {
-    let key = name.strip_prefix("OP_").unwrap_or(name).to_ascii_lowercase();
+    let key = name
+        .strip_prefix("OP_")
+        .unwrap_or(name)
+        .to_ascii_lowercase();
     Some(match key.as_str() {
         "abs" => OP_ABS,
         "acos" => OP_ACOS,
@@ -555,8 +581,7 @@ impl<'de> serde::Deserialize<'de> for SearchModalityOptionDecl {
         D: serde::Deserializer<'de>,
     {
         let v = String::deserialize(deserializer)?;
-        resolve_search_modality_option(&v).ok_or_else(|| {
-            serde::de::Error::custom(format!("unknown search modality option: {v}"))
-        })
+        resolve_search_modality_option(&v)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown search modality option: {v}")))
     }
 }

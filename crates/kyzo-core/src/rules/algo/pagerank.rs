@@ -49,16 +49,16 @@ use std::collections::BTreeMap;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use kyzo_model::program::expr::Expr;
-use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::graph_view::DirectedCsrGraph;
 use crate::rules::contract::par_try_map;
 use crate::rules::contract::{
     CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::FixedRuleOptions;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, Tuple};
 
 pub(crate) struct PageRank;
 
@@ -429,7 +429,7 @@ mod tests {
     /// oracle above.
     #[test]
     fn through_rule_matches_reference() {
-        use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts};
+        use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
 
         let s = |v: &str| DataValue::from(v);
         // Symbols a,b,c,d intern to node ids 0,1,2,3 in first-seen order.

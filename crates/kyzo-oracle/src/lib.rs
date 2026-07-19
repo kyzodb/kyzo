@@ -26,17 +26,17 @@ use std::sync::Arc;
 use kyzo_model::value::DataValue;
 
 pub use eval::{
-    body_bindings_from, check_safety, check_stratifiable, check_wellformed, dependency_edges,
-    derived_rows, ground, head_classes, literal_rows, naive_eval, naive_eval_at,
-    naive_eval_at_budgeted, strata, unstratifiable_corpus, unify, Bindings, FixedRule, HeadAggr,
-    HeadClass, Literal, Name, NameIntroduction, OracleBudget, Polarity, Program, Rejection, Rel,
-    Rule, Term,
+    Bindings, FixedRule, HeadAggr, HeadClass, Literal, Name, NameIntroduction, OracleBudget,
+    Polarity, Program, Rejection, Rel, Rule, Term, body_bindings_from, check_safety,
+    check_stratifiable, check_wellformed, dependency_edges, derived_rows, ground, head_classes,
+    literal_rows, naive_eval, naive_eval_at, naive_eval_at_budgeted, strata, unify,
+    unstratifiable_corpus,
 };
 pub use incremental::{edb_relations, head_is_derivable, incremental_eval, topological_order};
 pub use temporal::{
-    compose, derive_intervals, diff, resolve, resolve_events, resolve_relation, AsOf, Axis,
-    ClaimPolarity, ComposeNetOutOfRange, Event, Interval, ReservedValidInstant, SignedFact,
-    OPEN_END,
+    AsOf, Axis, ClaimPolarity, ComposeNetOutOfRange, Event, Interval, OPEN_END,
+    ReservedValidInstant, SignedFact, compose, derive_intervals, diff, resolve, resolve_events,
+    resolve_relation,
 };
 
 /// Running state of a meet fold. `Empty` is the lattice identity when it

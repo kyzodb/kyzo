@@ -52,9 +52,7 @@ impl CandidatesBound {
 /// Exact membership is DST bit-identical. Approximate is
 /// benchmark-qualified, not recall-guaranteed — sealed under bench law with
 /// typed provenance on the emitted relation.
-#[derive(
-    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
-)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub enum SelectionContract {
     Exact,
     Approximate,
@@ -69,27 +67,21 @@ pub enum QueryAssertion {
 }
 
 /// Whether a mutating query reports the mutated rows back (`:returning`).
-#[derive(
-    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
-)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub enum ReturnMutation {
     NotReturning,
     Returning,
 }
 
 /// Sort direction in an `:order` clause.
-#[derive(
-    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
-)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub enum SortDir {
     Asc,
     Dsc,
 }
 
 /// What a query does to its output stored relation.
-#[derive(
-    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
-)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub enum RelationOp {
     Create,
     Replace,

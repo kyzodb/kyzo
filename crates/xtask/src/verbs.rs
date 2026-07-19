@@ -216,9 +216,7 @@ pub fn test_release_checked() -> Result<(), ProcessFailure> {
 /// Former bench-internals/fuzz-internals lib tests under release-checked.
 /// Sealed doors are gone; no-op (see `test_features`).
 pub fn test_features_release_checked() -> Result<(), ProcessFailure> {
-    println!(
-        "test-features-release-checked: skipped — sealed doors deleted (bench_api/fuzz_api)"
-    );
+    println!("test-features-release-checked: skipped — sealed doors deleted (bench_api/fuzz_api)");
     Ok(())
 }
 

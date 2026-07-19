@@ -24,11 +24,11 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_assert(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -36,7 +36,6 @@ pub(crate) fn op_assert(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("assertion failed: {:?}", args),
     }
 }
-
 
 pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
     // Expression equality: NUMERIC for numbers (1 == 1.0, and — unlike
@@ -48,7 +47,6 @@ pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_ge(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
@@ -58,7 +56,6 @@ pub(crate) fn op_ge(args: &[DataValue]) -> Result<DataValue> {
         (a, b) => a.cmp(b) != std::cmp::Ordering::Less,
     }))
 }
-
 
 pub(crate) fn op_gt(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
@@ -70,11 +67,9 @@ pub(crate) fn op_gt(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_is_bytes(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(args[0], DataValue::Bytes(_))))
 }
-
 
 pub(crate) fn op_is_finite(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
@@ -86,13 +81,11 @@ pub(crate) fn op_is_finite(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_is_float(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
         matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), NumRepr::Float(_))),
     ))
 }
-
 
 pub(crate) fn op_is_in(args: &[DataValue]) -> Result<DataValue> {
     let left = &args[0];
@@ -102,13 +95,11 @@ pub(crate) fn op_is_in(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(right.contains(left)))
 }
 
-
 pub(crate) fn op_is_infinite(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
         matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), NumRepr::Float(f) if f.is_infinite())),
     ))
 }
-
 
 pub(crate) fn op_is_int(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
@@ -116,11 +107,9 @@ pub(crate) fn op_is_int(args: &[DataValue]) -> Result<DataValue> {
     ))
 }
 
-
 pub(crate) fn op_is_json(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(args[0], DataValue::Json(_))))
 }
-
 
 pub(crate) fn op_is_list(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(
@@ -129,38 +118,31 @@ pub(crate) fn op_is_list(args: &[DataValue]) -> Result<DataValue> {
     )))
 }
 
-
 pub(crate) fn op_is_nan(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
         matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), NumRepr::Float(f) if f.is_nan())),
     ))
 }
 
-
 pub(crate) fn op_is_null(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(args[0], DataValue::Null)))
 }
-
 
 pub(crate) fn op_is_num(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(args[0], DataValue::Num(_))))
 }
 
-
 pub(crate) fn op_is_string(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(args[0], DataValue::Str(_))))
 }
-
 
 pub(crate) fn op_is_uuid(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(args[0], DataValue::Uuid(_))))
 }
 
-
 pub(crate) fn op_is_vec(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(matches!(args[0], DataValue::Vector(_))))
 }
-
 
 pub(crate) fn op_le(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
@@ -172,7 +154,6 @@ pub(crate) fn op_le(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_lt(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
@@ -183,15 +164,12 @@ pub(crate) fn op_lt(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_neq(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match (&args[0], &args[1]) {
         (DataValue::Num(a), DataValue::Num(b)) => NumericOrd::of(*a) != NumericOrd::of(*b),
         (a, b) => a != b,
     }))
 }
-
-
 
 fn ensure_same_value_type(a: &DataValue, b: &DataValue) -> Result<()> {
     use DataValue::*;
@@ -213,4 +191,3 @@ fn ensure_same_value_type(a: &DataValue, b: &DataValue) -> Result<()> {
     }
     Ok(())
 }
-

@@ -37,17 +37,17 @@ use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
+use crate::rules::contract::{
+    BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    GraphAlgorithmInvariantError, NodeNotFoundError,
+};
+use crate::rules::rng::SeededRng;
+use kyzo_model::SourceSpan;
+use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::rules::rng::SeededRng;
-use crate::rules::contract::{
-    GraphAlgorithmInvariantError, BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput,
-    FixedRulePayload, NodeNotFoundError,
-};
-use kyzo_model::data_value_any;
 
 pub(crate) struct RandomWalk;
 
@@ -153,11 +153,9 @@ impl FixedRule for RandomWalk {
                         &candidate_steps[dist.sample(&mut rng)]
                     } else {
                         // INVARIANT(walk_candidates): checked non-empty above.
-                        candidate_steps
-                            .choose(&mut rng)
-                            .ok_or_else(|| {
-                                GraphAlgorithmInvariantError::refuse("walk_candidates")
-                            })?
+                        candidate_steps.choose(&mut rng).ok_or_else(|| {
+                            GraphAlgorithmInvariantError::refuse("walk_candidates")
+                        })?
                     };
                     let next_node = &next_step.as_slice()[1];
                     path.push(next_node.clone());
@@ -192,8 +190,8 @@ impl FixedRule for RandomWalk {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, opts_map};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

@@ -29,29 +29,24 @@ use miette::{Diagnostic, IntoDiagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::data::json::{JsonValue, json_to_datavalue};
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
+use kyzo_model::SourceSpan;
+use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use crate::data::json::{JsonValue, json_to_datavalue};
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::rules::contract::{
-    CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,
-    FixedRulePayload,
-};
-use kyzo_model::data_value_any;
 
 /// The filesystem seam of the reader utilities: calculation rules do not
 /// open local paths — the host loads bytes and passes them via `content`.
 #[derive(Debug, Error, Diagnostic)]
-#[error(
-    "Reading '{path}' requires filesystem access, which calculation rules do not perform"
-)]
+#[error("Reading '{path}' requires filesystem access, which calculation rules do not perform")]
 #[diagnostic(code(algo::local_file_fetch_unavailable))]
-#[diagnostic(help(
-    "Host must load the file and pass its bytes via the 'content' option."
-))]
+#[diagnostic(help("Host must load the file and pass its bytes via the 'content' option."))]
 pub(crate) struct LocalFileFetchUnavailable {
     pub(crate) path: String,
     #[label]
@@ -218,9 +213,9 @@ impl FixedRule for JsonReader {
 
 #[cfg(test)]
 mod tests {
-    use kyzo_model::program::rule::FixedRuleOptions;
     use super::*;
     use crate::rules::contract::tests_support::{empty_opts, opts_map, run_fixed_rule};
+    use kyzo_model::program::rule::FixedRuleOptions;
 
     fn options(content: &str) -> FixedRuleOptions {
         opts_map(BTreeMap::from([

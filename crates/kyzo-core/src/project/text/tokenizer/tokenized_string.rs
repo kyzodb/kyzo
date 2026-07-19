@@ -143,19 +143,23 @@ mod tests {
 
     #[test]
     fn admit_refuses_incoherent_token_text() {
-        assert!(PreTokenizedString::admit(
-            String::from("hello"),
-            vec![Token::new(0, 5, 0, String::from("world"), 1).expect("lawful"),],
-        )
-        .is_none());
+        assert!(
+            PreTokenizedString::admit(
+                String::from("hello"),
+                vec![Token::new(0, 5, 0, String::from("world"), 1).expect("lawful"),],
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn admit_refuses_offsets_past_text() {
-        assert!(PreTokenizedString::admit(
-            String::from("hi"),
-            vec![Token::new(0, 10, 0, String::from("hi"), 1).expect("lawful"),],
-        )
-        .is_none());
+        assert!(
+            PreTokenizedString::admit(
+                String::from("hi"),
+                vec![Token::new(0, 10, 0, String::from("hi"), 1).expect("lawful"),],
+            )
+            .is_none()
+        );
     }
 }

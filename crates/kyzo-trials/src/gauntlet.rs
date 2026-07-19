@@ -58,8 +58,7 @@ use miette::Result;
 use kyzo::oracle_harness::{
     AtomOccurrence, Budget, BudgetDimension, EpochStore, EvalDefinition, EvalProgram, EvalRuleSet,
     EvalStratum, FixedRuleEval, LimitExceeded, MagicSymbol, Premises, RegularTempStore, RowLimit,
-    RuleBody, Sealed, StoreLifetimes, WitnessTable, collect_materialized,
-    stratified_evaluate,
+    RuleBody, Sealed, StoreLifetimes, WitnessTable, collect_materialized, stratified_evaluate,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::aggregate::parse_aggr;
@@ -384,10 +383,9 @@ fn to_engine_aggr(slot: &HeadAggr) -> HeadAggrSlot {
     match slot {
         HeadAggr::Plain => HeadAggrSlot::Plain,
         HeadAggr::Aggregated { fold, args } => HeadAggrSlot::Aggregated {
-            aggr: parse_aggr(fold.name())
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| panic!("engine aggregation exists for oracle fold {}", fold.name())),
+            aggr: parse_aggr(fold.name()).ok().flatten().unwrap_or_else(|| {
+                panic!("engine aggregation exists for oracle fold {}", fold.name())
+            }),
             args: args.clone(),
         },
     }
@@ -430,7 +428,10 @@ pub(crate) fn compile_for(
         if !per_head.contains_key(&rule.head_rel) {
             heads_in_order.push(rule.head_rel.clone());
         }
-        per_head.entry(rule.head_rel.clone()).or_default().push(rule);
+        per_head
+            .entry(rule.head_rel.clone())
+            .or_default()
+            .push(rule);
     }
     for head in heads_in_order {
         let rules = &per_head[&head];
@@ -451,8 +452,7 @@ pub(crate) fn compile_for(
                 lifetimes.note_use(dep.clone(), stratum);
             }
         }
-        let engine_aggr: Vec<HeadAggrSlot> =
-            rules[0].aggr.iter().map(to_engine_aggr).collect();
+        let engine_aggr: Vec<HeadAggrSlot> = rules[0].aggr.iter().map(to_engine_aggr).collect();
         let rule_set = EvalRuleSet::new(engine_aggr, bodies).expect("well-shaped set");
         strata[stratum]
             .defs
@@ -948,7 +948,13 @@ fn differential(model: &Program) -> Option<String> {
     for rel in idb_of(model) {
         let oracle_rows = oracle_db.get(&rel).cloned().unwrap_or_default();
         let arity = arities[&rel];
-        let real_rows = match real_eval(model, rel.clone(), arity, &fixed_arities, &generous_budget()) {
+        let real_rows = match real_eval(
+            model,
+            rel.clone(),
+            arity,
+            &fixed_arities,
+            &generous_budget(),
+        ) {
             Ok(rows) => rows,
             Err(e) => return Some(format!("real eval failed for '{rel}': {e}")),
         };
@@ -978,15 +984,11 @@ fn eval_fingerprint(g: &Generated, threads: usize) -> (BTreeSet<Tuple>, Vec<Stri
             Some(&mut table),
         )
         .expect("evaluates");
-        let rows: BTreeSet<Tuple> = collect_materialized(
-            outcome
-                .store
-                .all_iter()
-                .expect("harness: store iter"),
-        )
-        .expect("harness: materialize")
-        .into_iter()
-        .collect();
+        let rows: BTreeSet<Tuple> =
+            collect_materialized(outcome.store.all_iter().expect("harness: store iter"))
+                .expect("harness: materialize")
+                .into_iter()
+                .collect();
         (rows, render_witnesses(&table))
     })
 }

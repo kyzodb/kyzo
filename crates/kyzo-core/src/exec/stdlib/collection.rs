@@ -24,15 +24,15 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
 use crate::exec::stdlib::text::val2str;
+use kyzo_model::schema::VecElementType;
 
-use kyzo_model::value::json_convert::{to_json, json2val, interval_to_json};
 use crate::exec::stdlib::errors::*;
+use kyzo_model::value::json_convert::{interval_to_json, json2val, to_json};
 
 pub(crate) fn op_append(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -50,7 +50,6 @@ pub(crate) fn op_append(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_chunks(args: &[DataValue]) -> Result<DataValue> {
     let arg = args[0]
         .get_slice()
@@ -66,7 +65,6 @@ pub(crate) fn op_chunks(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List(res))
 }
 
-
 pub(crate) fn op_chunks_exact(args: &[DataValue]) -> Result<DataValue> {
     let arg = args[0]
         .get_slice()
@@ -81,7 +79,6 @@ pub(crate) fn op_chunks_exact(args: &[DataValue]) -> Result<DataValue> {
         .collect_vec();
     Ok(DataValue::List(res))
 }
-
 
 pub(crate) fn op_concat(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -124,7 +121,6 @@ pub(crate) fn op_concat(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_difference(args: &[DataValue]) -> Result<DataValue> {
     let mut start: BTreeSet<_> = match &args[0] {
         DataValue::List(l) => l.iter().cloned().collect(),
@@ -149,14 +145,12 @@ pub(crate) fn op_difference(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List(start.into_iter().collect()))
 }
 
-
 pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Json(j) => Ok(DataValue::Str(serde_from_json(j).to_string())),
         data_value_any!() => bail!("dump_json requires a json argument"),
     }
 }
-
 
 pub(crate) fn op_first(args: &[DataValue]) -> Result<DataValue> {
     Ok(args[0]
@@ -166,7 +160,6 @@ pub(crate) fn op_first(args: &[DataValue]) -> Result<DataValue> {
         .cloned()
         .unwrap_or(DataValue::Null))
 }
-
 
 pub(crate) fn op_get(args: &[DataValue]) -> Result<DataValue> {
     match get_impl(args) {
@@ -180,7 +173,6 @@ pub(crate) fn op_get(args: &[DataValue]) -> Result<DataValue> {
         }
     }
 }
-
 
 pub(crate) fn op_intersection(args: &[DataValue]) -> Result<DataValue> {
     let mut start: BTreeSet<_> = match &args[0] {
@@ -200,7 +192,6 @@ pub(crate) fn op_intersection(args: &[DataValue]) -> Result<DataValue> {
     }
     Ok(DataValue::List(start.into_iter().collect()))
 }
-
 
 pub(crate) fn op_int_range(args: &[DataValue]) -> Result<DataValue> {
     let [start, end] = match args.len() {
@@ -257,11 +248,9 @@ pub(crate) fn op_int_range(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List((start..end).map(DataValue::from).collect()))
 }
 
-
 pub(crate) fn op_json(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Json(json_from_serde(&to_json(&args[0]))))
 }
-
 
 pub(crate) fn op_json_object(args: &[DataValue]) -> Result<DataValue> {
     ensure!(
@@ -277,14 +266,12 @@ pub(crate) fn op_json_object(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Json(json_from_serde(&Value::Object(obj))))
 }
 
-
 pub(crate) fn op_json_to_scalar(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Json(j) => json2val(serde_from_json(j)),
         d @ (data_value_any!()) => d.clone(),
     })
 }
-
 
 pub(crate) fn op_last(args: &[DataValue]) -> Result<DataValue> {
     Ok(args[0]
@@ -294,7 +281,6 @@ pub(crate) fn op_last(args: &[DataValue]) -> Result<DataValue> {
         .cloned()
         .unwrap_or(DataValue::Null))
 }
-
 
 pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
@@ -307,11 +293,9 @@ pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_list(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List(args.to_vec()))
 }
-
 
 pub(crate) fn op_maybe_get(args: &[DataValue]) -> Result<DataValue> {
     match get_impl(args) {
@@ -319,7 +303,6 @@ pub(crate) fn op_maybe_get(args: &[DataValue]) -> Result<DataValue> {
         Err(_) => Ok(DataValue::Null),
     }
 }
-
 
 pub(crate) fn op_parse_json(args: &[DataValue]) -> Result<DataValue> {
     match args[0].get_str() {
@@ -330,7 +313,6 @@ pub(crate) fn op_parse_json(args: &[DataValue]) -> Result<DataValue> {
         None => bail!("parse_json requires a string argument"),
     }
 }
-
 
 pub(crate) fn op_prepend(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -347,7 +329,6 @@ pub(crate) fn op_prepend(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'prepend' requires first argument to be a list"),
     }
 }
-
 
 pub(crate) fn op_remove_json_path(args: &[DataValue]) -> Result<DataValue> {
     let mut result = to_json(&args[0]);
@@ -377,7 +358,6 @@ pub(crate) fn op_remove_json_path(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Json(json_from_serde(&result)))
 }
 
-
 pub(crate) fn op_reverse(args: &[DataValue]) -> Result<DataValue> {
     let mut arg = args[0]
         .get_slice()
@@ -386,7 +366,6 @@ pub(crate) fn op_reverse(args: &[DataValue]) -> Result<DataValue> {
     arg.reverse();
     Ok(DataValue::List(arg))
 }
-
 
 pub(crate) fn op_set_json_path(args: &[DataValue]) -> Result<DataValue> {
     let mut result = to_json(&args[0]);
@@ -398,7 +377,6 @@ pub(crate) fn op_set_json_path(args: &[DataValue]) -> Result<DataValue> {
     *pointer = new_val;
     Ok(DataValue::Json(json_from_serde(&result)))
 }
-
 
 pub(crate) fn op_slice(args: &[DataValue]) -> Result<DataValue> {
     let l = args[0]
@@ -415,7 +393,6 @@ pub(crate) fn op_slice(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List(l[m..n].to_vec()))
 }
 
-
 pub(crate) fn op_sorted(args: &[DataValue]) -> Result<DataValue> {
     let mut arg = args[0]
         .get_slice()
@@ -424,7 +401,6 @@ pub(crate) fn op_sorted(args: &[DataValue]) -> Result<DataValue> {
     arg.sort();
     Ok(DataValue::List(arg))
 }
-
 
 pub(crate) fn op_union(args: &[DataValue]) -> Result<DataValue> {
     let mut ret = BTreeSet::new();
@@ -446,7 +422,6 @@ pub(crate) fn op_union(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List(ret.into_iter().collect()))
 }
 
-
 pub(crate) fn op_windows(args: &[DataValue]) -> Result<DataValue> {
     let arg = args[0]
         .get_slice()
@@ -462,8 +437,6 @@ pub(crate) fn op_windows(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::List(res))
 }
 
-
-
 /// A path step into a JSON array, proven non-negative and machine-sized.
 /// The original cast `i64 as usize`, so a hostile `-1` became a huge index —
 /// harmless on reads, but an OOM-scale `resize_with` on writes.
@@ -473,8 +446,6 @@ fn json_array_index(key: &DataValue) -> Result<usize> {
         .ok_or_else(|| miette!("json path must be a string or a number"))?;
     usize::try_from(i).map_err(|_| miette!("json array index must be non-negative, got {i}"))
 }
-
-
 
 fn get_json_path<'a>(
     mut pointer: &'a mut JsonValue,
@@ -502,8 +473,6 @@ fn get_json_path<'a>(
     }
     Ok(pointer)
 }
-
-
 
 fn get_json_path_immutable<'a>(
     mut pointer: &'a JsonValue,
@@ -533,8 +502,6 @@ fn get_json_path_immutable<'a>(
     Ok(pointer)
 }
 
-
-
 fn deep_merge_json(value1: JsonValue, value2: JsonValue) -> JsonValue {
     match (value1, value2) {
         (JsonValue::Object(mut obj1), JsonValue::Object(obj2)) => {
@@ -552,8 +519,6 @@ fn deep_merge_json(value1: JsonValue, value2: JsonValue) -> JsonValue {
     }
 }
 
-
-
 fn get_index(mut i: i64, total: usize, is_upper: bool) -> Result<usize> {
     if i < 0 {
         i += total as i64;
@@ -569,8 +534,6 @@ fn get_index(mut i: i64, total: usize, is_upper: bool) -> Result<usize> {
         bail!("index {} out of bound", i)
     })
 }
-
-
 
 fn get_impl(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -605,4 +568,3 @@ fn get_impl(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("first argument to 'get' mut be a list or json"),
     }
 }
-

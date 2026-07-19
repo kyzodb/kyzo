@@ -188,9 +188,9 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::value::DataValue;
     use crate::value::canonical::{decode, encode_owned};
     use crate::value::tag::Tag;
-    use crate::value::DataValue;
     use std::cmp::Ordering;
 
     /// Round-trip through the canonical codec: cells survive encode/decode.
@@ -286,7 +286,11 @@ mod tests {
         ];
         let mut idxs: Vec<u64> = block.iter().map(|g| g.curve_index()).collect();
         idxs.sort_unstable();
-        assert_eq!(idxs, vec![0, 1, 2, 3], "2×2 origin block must be contiguous");
+        assert_eq!(
+            idxs,
+            vec![0, 1, 2, 3],
+            "2×2 origin block must be contiguous"
+        );
 
         let origin = Geometry::from_cells(1000, 2000);
         let east = Geometry::from_cells(1000, 2001);
@@ -337,10 +341,7 @@ mod tests {
         let below = Geometry::from_cells(u32::MAX - 1, lon);
         assert_ne!(below, top);
         assert_ne!(below.curve_index(), top.curve_index());
-        assert_eq!(
-            below.cmp(&top),
-            below.curve_index().cmp(&top.curve_index())
-        );
+        assert_eq!(below.cmp(&top), below.curve_index().cmp(&top.curve_index()));
         // PartialOrd is total (no hole).
         assert_eq!(below.partial_cmp(&top), Some(below.cmp(&top)));
         assert_ne!(Ordering::Equal, below.cmp(&top));

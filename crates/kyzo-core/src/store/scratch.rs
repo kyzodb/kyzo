@@ -81,11 +81,11 @@ use std::ops::Bound;
 use fjall::Slice;
 use miette::Result;
 
-use kyzo_model::value::Tuple;
-use kyzo_model::value::{AsOf, ValidityTs};
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::store::{Aborted, CommitFailure, ReadTx, WriteTx};
 use kyzo_model::data_value_any;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, ValidityTs};
 
 /// One session's temp keyspace: an ordered map with the kernel's
 /// transaction interface. "Transaction" is honorary — the map IS the
@@ -333,7 +333,9 @@ mod tests {
                 let x = tup[0].get_int().expect("int key column");
                 let version_ts = match &tup[1] {
                     DataValue::Validity(v) => v.timestamp().raw(),
-                    other @ (data_value_any!()) => panic!("expected a valid-instant slot, got {other:?}"),
+                    other @ (data_value_any!()) => {
+                        panic!("expected a valid-instant slot, got {other:?}")
+                    }
                 };
                 (x, version_ts)
             })

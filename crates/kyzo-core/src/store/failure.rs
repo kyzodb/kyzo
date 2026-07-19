@@ -115,8 +115,18 @@ impl FailureLattice {
                 ranges.append(&mut b);
                 FailureLattice::Quarantined { ranges }
             }
-            (FailureLattice::Poisoned { quarantine_retained }, FailureLattice::Quarantined { ranges })
-            | (FailureLattice::Quarantined { ranges }, FailureLattice::Poisoned { quarantine_retained }) => {
+            (
+                FailureLattice::Poisoned {
+                    quarantine_retained,
+                },
+                FailureLattice::Quarantined { ranges },
+            )
+            | (
+                FailureLattice::Quarantined { ranges },
+                FailureLattice::Poisoned {
+                    quarantine_retained,
+                },
+            ) => {
                 let retained = match quarantine_retained {
                     Some(mut existing) => {
                         existing.extend(ranges);

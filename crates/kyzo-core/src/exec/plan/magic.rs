@@ -146,12 +146,10 @@ use crate::exec::plan::program::{
     MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum,
     StratifiedMagicProgram, StratifiedNormalFormProgram, bind_fixed_impl,
 };
-use kyzo_model::program::rule::{
-    FixedRuleApply, FixedRuleArg, HeadAggrSlot, ValidityClause,
-};
-use kyzo_model::schema::StoredRelationMetadata;
 use kyzo_model::SourceSpan;
+use kyzo_model::program::rule::{FixedRuleApply, FixedRuleArg, HeadAggrSlot, ValidityClause};
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
+use kyzo_model::schema::StoredRelationMetadata;
 
 // ─────────────────────────────────────────────────────────────────────────
 // SEAM: the catalog (runtime tier, not yet ported).
@@ -368,7 +366,13 @@ impl NormalFormStratum {
                                 {
                                     dependencies.insert(r_app.name.clone());
                                 }
-                                NormalFormAtom::Rule(_) | NormalFormAtom::Relation(_) | NormalFormAtom::NegatedRule(_) | NormalFormAtom::NegatedRelation(_) | NormalFormAtom::Predicate(_) | NormalFormAtom::Unification(_) | NormalFormAtom::Search(_) => {}
+                                NormalFormAtom::Rule(_)
+                                | NormalFormAtom::Relation(_)
+                                | NormalFormAtom::NegatedRule(_)
+                                | NormalFormAtom::NegatedRelation(_)
+                                | NormalFormAtom::Predicate(_)
+                                | NormalFormAtom::Unification(_)
+                                | NormalFormAtom::Search(_) => {}
                             }
                         }
                     }
@@ -554,11 +558,7 @@ fn adorn_fixed_rule_apply(
                 for k in bindings.keys() {
                     ensure!(
                         fields.contains(k.name.as_str()),
-                        NamedFieldNotFound(
-                            name.clone(),
-                            k.clone(),
-                            *span,
-                        )
+                        NamedFieldNotFound(name.clone(), k.clone(), *span,)
                     );
                 }
                 let new_bindings = metadata
@@ -797,9 +797,7 @@ impl AdornedProgram {
                 && adornment.iter().any(|m| m.is_bound())
                 && ff_names.contains(inner)
             {
-                adornment
-                    .iter_mut()
-                    .for_each(|m| *m = AdornmentMark::Free);
+                adornment.iter_mut().for_each(|m| *m = AdornmentMark::Free);
             }
         };
         for rules_or_fixed in self.prog.values_mut() {
@@ -810,7 +808,11 @@ impl AdornedProgram {
                             MagicAtom::Rule(r) | MagicAtom::NegatedRule(r) => {
                                 redirect_to_ff(&mut r.name);
                             }
-                            MagicAtom::Relation(_) | MagicAtom::Predicate(_) | MagicAtom::NegatedRelation(_) | MagicAtom::Unification(_) | MagicAtom::Search(_) => {}
+                            MagicAtom::Relation(_)
+                            | MagicAtom::Predicate(_)
+                            | MagicAtom::NegatedRelation(_)
+                            | MagicAtom::Unification(_)
+                            | MagicAtom::Search(_) => {}
                         }
                     }
                 }
@@ -1155,10 +1157,10 @@ mod tests {
     use smartstring::{LazyCompact, SmartString};
 
     use super::*;
+    use crate::exec::plan::program::{NormalFormRelationApplyAtom, NormalFormRuleApplyAtom};
     use kyzo_model::program::aggregate::parse_aggr;
     use kyzo_model::program::expr::{BindingPos, Expr};
-    use kyzo_model::program::rule::{FixedRuleOptions, FixedRuleHandle, Trivia, Unification};
-    use crate::exec::plan::program::{NormalFormRelationApplyAtom, NormalFormRuleApplyAtom};
+    use kyzo_model::program::rule::{FixedRuleHandle, FixedRuleOptions, Trivia, Unification};
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::AsOf;
     use kyzo_model::value::DataValue;
@@ -1737,7 +1739,10 @@ mod tests {
                 MagicSymbol::Magic { inner, adornment } if inner.name.as_str() == "r" => {
                     Some(adornment.clone())
                 }
-                MagicSymbol::Muggle { .. } | MagicSymbol::Magic { .. } | MagicSymbol::Input { .. } | MagicSymbol::Sup { .. } => None,
+                MagicSymbol::Muggle { .. }
+                | MagicSymbol::Magic { .. }
+                | MagicSymbol::Input { .. }
+                | MagicSymbol::Sup { .. } => None,
             })
             .collect();
         assert_eq!(
@@ -1770,10 +1775,7 @@ mod tests {
             },
             rule_args: vec![FixedRuleArg::NamedStored {
                 name: sym("edges"),
-                bindings: bindings
-                    .iter()
-                    .map(|(k, v)| (sym(k), sym(v)))
-                    .collect(),
+                bindings: bindings.iter().map(|(k, v)| (sym(k), sym(v))).collect(),
                 as_of: None,
                 span: SourceSpan(0, 0),
             }],

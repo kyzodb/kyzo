@@ -138,7 +138,9 @@ impl IncarnationMintCap {
 /// Typed refuse from [`IncarnationMintCap::mint`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum IncarnationMintRefuse {
-    #[error("INVARIANT(IncarnationMintCap): OpenOrdinal recycle inside one WAL lineage is Unconstructible")]
+    #[error(
+        "INVARIANT(IncarnationMintCap): OpenOrdinal recycle inside one WAL lineage is Unconstructible"
+    )]
     #[diagnostic(code(store::authority::incarnation_recycle))]
     OrdinalRecycleUnconstructible,
 }

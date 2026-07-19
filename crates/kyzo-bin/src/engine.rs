@@ -32,7 +32,8 @@ use std::path::Path;
 
 use kyzo::{
     Catalog, Engine, EntropyArm, FjallStorage, GenesisParams, GenesisSealedView, SizeClass,
-    StagingTtl, StableCommitCapArm, StorageOptions, WriteAuthority, genesis, new_fjall_storage_with,
+    StableCommitCapArm, StagingTtl, StorageOptions, WriteAuthority, genesis,
+    new_fjall_storage_with,
 };
 use miette::{IntoDiagnostic, Result, miette};
 

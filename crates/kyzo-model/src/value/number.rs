@@ -396,7 +396,10 @@ enum Magnitude {
     /// Biased exponent already in key form: `E + EXP_OFFSET` as `u16`.
     /// Constructed only via [`Magnitude::finite`], which proves the range
     /// so [`Num::encode_key`] never re-checks with expect.
-    Finite { exp_key: u16, frac72: u128 },
+    Finite {
+        exp_key: u16,
+        frac72: u128,
+    },
     Inf,
 }
 
@@ -518,11 +521,7 @@ impl Ord for NumericOrd {
                         (self.0.as_float(), other.0.as_int()),
                         (Some(f), Some(i)) if int_float_eq(i, f)
                     );
-                    if same {
-                        Ordering::Equal
-                    } else {
-                        o
-                    }
+                    if same { Ordering::Equal } else { o }
                 } else {
                     o
                 }
@@ -867,10 +866,7 @@ mod tests {
         for &a in &c {
             for &b in &c {
                 let p = a.partial_cmp(&b);
-                assert!(
-                    p.is_some(),
-                    "Num PartialOrd hole (NaN?): {a:?} vs {b:?}"
-                );
+                assert!(p.is_some(), "Num PartialOrd hole (NaN?): {a:?} vs {b:?}");
                 assert_eq!(p, Some(a.cmp(&b)));
             }
         }

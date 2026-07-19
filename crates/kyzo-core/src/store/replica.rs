@@ -322,10 +322,7 @@ pub struct LocalProjection {
 
 impl LocalProjection {
     /// Bind a verified certificate to a local Catalog generation.
-    pub(crate) fn from_certificate(
-        origin: AdmissionCertificate,
-        catalog_generation: u64,
-    ) -> Self {
+    pub(crate) fn from_certificate(origin: AdmissionCertificate, catalog_generation: u64) -> Self {
         Self {
             origin,
             catalog_generation,
@@ -515,10 +512,7 @@ pub(crate) fn mint_admission_certificate(
             b"protocol_version".to_vec(),
             MapValue::Bytes(parts.protocol_version.to_vec()),
         ),
-        (
-            b"schema_cut".to_vec(),
-            MapValue::Digest32(parts.schema_cut),
-        ),
+        (b"schema_cut".to_vec(), MapValue::Digest32(parts.schema_cut)),
         (
             b"scope_manifest_digest".to_vec(),
             MapValue::Digest32(parts.scope_manifest_digest),

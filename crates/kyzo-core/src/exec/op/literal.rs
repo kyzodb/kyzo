@@ -17,12 +17,12 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::TupleIter;
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::DataValue;
 use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::op::join::eliminate_from_tuple;
 use itertools::Itertools;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::DataValue;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;

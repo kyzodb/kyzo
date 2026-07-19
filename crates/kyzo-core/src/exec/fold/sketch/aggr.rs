@@ -27,9 +27,7 @@
 
 use miette::{Result, bail, ensure, miette};
 
-use crate::exec::fold::aggr::{
-    MeetAccum, MeetAggrObj, NormalAggr, NormalAggrObj,
-};
+use crate::exec::fold::aggr::{MeetAccum, MeetAggrObj, NormalAggr, NormalAggrObj};
 use crate::exec::fold::sketch::count_min::CountMinSketch;
 use crate::exec::fold::sketch::hll::HyperLogLog;
 use crate::exec::fold::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};

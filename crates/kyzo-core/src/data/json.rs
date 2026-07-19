@@ -7,8 +7,8 @@
 //! `DataValue` <-> JSON conversions live in `kyzo_model::envelope::json`.
 
 use miette::{
-    Diagnostic, GraphicalReportHandler, GraphicalTheme, JSONReportHandler, Report,
-    ThemeCharacters, ThemeStyles,
+    Diagnostic, GraphicalReportHandler, GraphicalTheme, JSONReportHandler, Report, ThemeCharacters,
+    ThemeStyles,
 };
 pub use serde_json::Value as JsonValue;
 use serde_json::json;

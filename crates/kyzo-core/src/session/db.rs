@@ -70,9 +70,9 @@
 
 // Carried obligation: clippy-collapsible-if-drift — record at this seat.
 
-use std::num::NonZeroUsize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -82,36 +82,36 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::json::NamedRows;
-use kyzo_model::schema::StoredRelationMetadata;
+use crate::exec::fixpoint::delta_store::{EpochStore, TupleInIter};
+use crate::exec::fixpoint::eval::{Budget, RowLimit, stratified_evaluate};
+use crate::exec::plan::compile::stratified_magic_compile;
+use crate::exec::plan::magic::StoredRelationSchemaSource;
+use crate::exec::sort::sort_and_collect;
+use crate::parse::sys::SysOp;
+use crate::parse::{Script, parse_script};
+use crate::rules::contract::SessionFixedRule;
 use crate::rules::contract::{
     CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, StoredInputSource,
 };
+use crate::session::catalog::{
+    Catalog, ConstraintRef, KeyspaceKind, RelationHandle, Residency, create_relation,
+    destroy_relation, get_relation, write_relation_row,
+};
+use crate::session::current_validity;
+pub(crate) use crate::session::normalize::SessionNormalizer;
+use crate::session::observe::{CallbackCollector, EventCallbackRegistry};
+use crate::store::retry::RetryError;
+use crate::store::scratch::TempTx;
+use crate::store::{ReadTx, Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::{
     InputProgram, QueryAssertion, QueryOutOptions, RelationOp, ReturnMutation,
 };
+use kyzo_model::schema::StoredRelationMetadata;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::row::TupleIter;
 use kyzo_model::value::{AsOf, DataValue, ValidityTs};
-use crate::exec::plan::magic::StoredRelationSchemaSource;
-use crate::parse::sys::SysOp;
-use crate::parse::{Script, parse_script};
-use crate::exec::plan::compile::stratified_magic_compile;
-use crate::exec::fixpoint::eval::{Budget, RowLimit, stratified_evaluate};
-use crate::exec::fixpoint::delta_store::{EpochStore, TupleInIter};
-use crate::rules::contract::SessionFixedRule;
-use crate::exec::sort::sort_and_collect;
-use crate::session::observe::{CallbackCollector, EventCallbackRegistry};
-use crate::session::current_validity;
-use crate::session::catalog::{
-    Catalog, ConstraintRef, KeyspaceKind, RelationHandle, Residency, create_relation,
-    destroy_relation, get_relation, write_relation_row,
-};
-pub(crate) use crate::session::normalize::SessionNormalizer;
-use crate::store::retry::RetryError;
-use crate::store::scratch::TempTx;
-use crate::store::{ReadTx, Storage, WriteTx};
 
 /// The deterministic default ceiling on evaluation epochs (semi-naive
 /// iterations). High enough for real recursion over finite data; bounds a
@@ -522,7 +522,8 @@ impl<S: Storage> Engine<S> {
         let (_auth, cancel) = CancelAuthority::arm();
 
         let mut normalizer = SessionNormalizer::new(view, cancel.clone());
-        let (nf, _) = crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?;
+        let (nf, _) =
+            crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?;
         let (strat, lifetimes) = nf.into_stratified_program()?;
         let magic = strat.magic_sets_rewrite(&view)?;
         let compiled = stratified_magic_compile(store, magic)?;
@@ -643,7 +644,13 @@ impl<S: Storage> Engine<S> {
                         meta.name.name
                     )));
                 }
-                RelationOp::Put | RelationOp::Insert | RelationOp::Update | RelationOp::Rm | RelationOp::Delete | RelationOp::Ensure | RelationOp::EnsureNot => {}
+                RelationOp::Put
+                | RelationOp::Insert
+                | RelationOp::Update
+                | RelationOp::Rm
+                | RelationOp::Delete
+                | RelationOp::Ensure
+                | RelationOp::EnsureNot => {}
             }
         }
 
@@ -1094,7 +1101,6 @@ impl<T: WriteTx> SessionTx<T> {
             Residency::Stored => self.store.del(key),
         }
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1735,9 +1741,7 @@ mod tests {
             .expect("a raised ceiling must let the larger terminating query complete");
         assert_eq!(ok.rows().len(), 499_500);
     }
-
 }
-
 
 #[cfg(test)]
 mod db_battery {
@@ -1745,16 +1749,15 @@ mod db_battery {
     //! determinism, and F2 refusal pin. Trigger-cache kill lives in admit;
     //! callback exactly-once arms live in observe.
 
-
     use std::collections::BTreeMap;
 
-    use kyzo_model::value::DataValue;
     use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::{Engine, ScriptOptions};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
+    use kyzo_model::value::DataValue;
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()

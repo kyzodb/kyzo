@@ -48,17 +48,17 @@ use crate::data::json::NamedRows;
 use crate::exec::fixpoint::delta_store::TupleInIter;
 use crate::exec::fixpoint::eval::{PremiseSource, RowLimit, stratified_evaluate_with_stores};
 use crate::exec::plan::compile::stratified_magic_compile;
-use crate::exec::provenance::eval::{provenance_graph, ProvenanceUnsupported};
+use crate::exec::provenance::eval::{ProvenanceUnsupported, provenance_graph};
 use crate::exec::provenance::semiring::{
-    as_cost_map, extract_min_cost_proof, solve, verify_proof, Cost, ProvenanceLimitExceeded,
-    SolverBudget, TropicalAnn,
+    Cost, ProvenanceLimitExceeded, SolverBudget, TropicalAnn, as_cost_map, extract_min_cost_proof,
+    solve, verify_proof,
 };
 use crate::parse::{Script, parse_script};
 use crate::rules::contract::{CancelAuthority, SessionFixedRule};
 use crate::session::current_validity;
 use crate::session::db::{
-    Engine, ScriptOptions, SessionNormalizer, SessionTx, SessionView, build_budget,
-    DEFAULT_DERIVED_TUPLE_CEILING, DEFAULT_EPOCH_CEILING,
+    DEFAULT_DERIVED_TUPLE_CEILING, DEFAULT_EPOCH_CEILING, Engine, ScriptOptions, SessionNormalizer,
+    SessionTx, SessionView, build_budget,
 };
 use crate::store::merkle::{
     ChainedStateRoot, RootChain, StateRoot, as_of_root, link_at_cut, roots_equal_at_cut, state_root,
@@ -283,7 +283,8 @@ impl<S: Storage> Engine<S> {
             temp: &tx.temp,
         };
         let mut normalizer = SessionNormalizer::new(view, cancel.clone());
-        let (nf, _) = crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?;
+        let (nf, _) =
+            crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?;
         let (strat, mut lifetimes) = nf.into_stratified_program()?;
         let magic = strat.magic_sets_rewrite(&view)?;
         let compiled = stratified_magic_compile(&tx.store, magic)?;
@@ -332,28 +333,23 @@ impl<S: Storage> Engine<S> {
         let unit = NonZeroU64::new(1).expect("1 is nonzero");
         let weights = |_: &_, _: usize| unit;
 
-        let graph = match provenance_graph(
-            &eval_prog,
-            &stores,
-            &budget,
-            derivation_ceiling,
-            &weights,
-        ) {
-            Ok(g) => g,
-            Err(e) => {
-                if let Some(lim) = e.downcast_ref::<ProvenanceLimitExceeded>() {
-                    return Ok(VerifyOutcome::BudgetRefused {
-                        reason: lim.clone(),
-                    });
+        let graph =
+            match provenance_graph(&eval_prog, &stores, &budget, derivation_ceiling, &weights) {
+                Ok(g) => g,
+                Err(e) => {
+                    if let Some(lim) = e.downcast_ref::<ProvenanceLimitExceeded>() {
+                        return Ok(VerifyOutcome::BudgetRefused {
+                            reason: lim.clone(),
+                        });
+                    }
+                    if let Some(u) = e.downcast_ref::<ProvenanceUnsupported>() {
+                        return Ok(VerifyOutcome::Unsupported {
+                            reason: VerifyUnsupported::ProvenanceUnavailable { reason: u.reason },
+                        });
+                    }
+                    return Err(e);
                 }
-                if let Some(u) = e.downcast_ref::<ProvenanceUnsupported>() {
-                    return Ok(VerifyOutcome::Unsupported {
-                        reason: VerifyUnsupported::ProvenanceUnavailable { reason: u.reason },
-                    });
-                }
-                return Err(e);
-            }
-        };
+            };
 
         let solver_ceiling = NonZeroU32::new(
             options
@@ -487,8 +483,13 @@ mod tests {
                 assert_eq!(root, as_of_root(&chain, cut).unwrap());
                 assert!(roots_equal_at_cut(root, chain.prior_root()));
             }
-            RootVerifyOutcome::Tampered { expected, recomputed } => {
-                panic!("expected Intact, got Tampered {{ expected: {expected:?}, recomputed: {recomputed:?} }}")
+            RootVerifyOutcome::Tampered {
+                expected,
+                recomputed,
+            } => {
+                panic!(
+                    "expected Intact, got Tampered {{ expected: {expected:?}, recomputed: {recomputed:?} }}"
+                )
             }
         }
     }
@@ -543,8 +544,7 @@ mod tests {
         }
 
         let tx = db.read_tx().unwrap();
-        let tampered_content =
-            StateRoot::from_merkle(state_root(&tx, merkle_budget()).unwrap());
+        let tampered_content = StateRoot::from_merkle(state_root(&tx, merkle_budget()).unwrap());
         assert_ne!(
             tampered_content, content_root,
             "tamper must change the cold content root"
@@ -607,17 +607,14 @@ mod tests {
         }
 
         let db_v1 = write_state(&state_v1);
-        let content_v1 = StateRoot::from_merkle(
-            state_root(&db_v1.read_tx().unwrap(), merkle_budget()).unwrap(),
-        );
+        let content_v1 =
+            StateRoot::from_merkle(state_root(&db_v1.read_tx().unwrap(), merkle_budget()).unwrap());
         let db_v2 = write_state(&state_v2);
-        let content_v2 = StateRoot::from_merkle(
-            state_root(&db_v2.read_tx().unwrap(), merkle_budget()).unwrap(),
-        );
+        let content_v2 =
+            StateRoot::from_merkle(state_root(&db_v2.read_tx().unwrap(), merkle_budget()).unwrap());
         let db_v3 = write_state(&state_v3);
-        let content_v3 = StateRoot::from_merkle(
-            state_root(&db_v3.read_tx().unwrap(), merkle_budget()).unwrap(),
-        );
+        let content_v3 =
+            StateRoot::from_merkle(state_root(&db_v3.read_tx().unwrap(), merkle_budget()).unwrap());
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 

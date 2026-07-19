@@ -31,12 +31,12 @@ use std::collections::BTreeMap;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use kyzo_model::program::query::SortDir;
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::Tuple;
 use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::exec::fixpoint::delta_store::TupleInIter;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::query::SortDir;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::Tuple;
 
 /// An `:order` clause names a variable that is not in the entry head.
 /// (The CozoDB original panicked on this shape.)
@@ -90,8 +90,8 @@ pub(crate) fn sort_and_collect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kyzo_model::value::DataValue;
     use crate::exec::fixpoint::delta_store::RegularTempStore;
+    use kyzo_model::value::DataValue;
 
     fn store_of(rows: &[Vec<i64>]) -> EpochStore {
         let mut fresh = RegularTempStore::default();

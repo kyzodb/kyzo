@@ -18,19 +18,21 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::epoch_store_of;
-use kyzo_model::program::expr::{Expr, compute_bounds};
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::delta_store::TupleInIter;
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::op::batch_ops::{
+    BATCH_ROWS, Batch, BatchIter, BatchTupleFilter, conjunction_pred,
+};
+use crate::exec::op::join::{push_join_premises, push_joined_row};
 use crate::exec::plan::program::MagicSymbol;
+use itertools::Either::{Left, Right};
+use itertools::Itertools;
 use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::{Expr, compute_bounds};
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::ScanBound;
-use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter, BatchTupleFilter, conjunction_pred};
-use crate::exec::fixpoint::eval::AtomOccurrence;
-use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::exec::op::join::{push_join_premises, push_joined_row};
-use crate::exec::fixpoint::delta_store::TupleInIter;
-use itertools::Either::{Left, Right};
-use itertools::Itertools;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;

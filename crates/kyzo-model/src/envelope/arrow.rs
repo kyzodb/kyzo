@@ -56,8 +56,8 @@
 use flatbuffers::{FlatBufferBuilder, UOffsetT, WIPOffset};
 use miette::{Result, bail};
 
-use crate::value::{DataValue, NumRepr, Tuple};
 use crate::data_value_any;
+use crate::value::{DataValue, NumRepr, Tuple};
 
 /// One export column, decided once from its values: a uniform typed
 /// vector when every value fits one of the four Arrow-mappable kinds,
@@ -187,9 +187,8 @@ impl ColumnBatch {
 
     /// Convenience door for call sites that already prove row width.
     pub fn from_rows(rows: Vec<Tuple>, arity: usize) -> ColumnBatch {
-        Self::try_from_rows(rows, arity).expect(
-            "INVARIANT(column_batch_width): every row width equals arity",
-        )
+        Self::try_from_rows(rows, arity)
+            .expect("INVARIANT(column_batch_width): every row width equals arity")
     }
 
     pub fn width(&self) -> usize {
@@ -360,9 +359,8 @@ fn offsets_and_values<'a>(items: impl Iterator<Item = &'a [u8]>) -> Result<(Vec<
     offsets.extend_from_slice(&cur.to_le_bytes());
     for item in items {
         values.extend_from_slice(item);
-        let len = i32::try_from(item.len()).map_err(|_| {
-            miette::miette!("Arrow offset: single value length exceeds i32::MAX")
-        })?;
+        let len = i32::try_from(item.len())
+            .map_err(|_| miette::miette!("Arrow offset: single value length exceeds i32::MAX"))?;
         cur = cur.checked_add(len).ok_or_else(|| {
             miette::miette!("Arrow offset: cumulative values length exceeds i32::MAX")
         })?;
@@ -604,9 +602,7 @@ fn write_schema_message(fields: &[(&str, &PlannedColumn)]) -> Vec<u8> {
     let mut fbb = FlatBufferBuilder::new();
     let field_offsets: Vec<WIPOffset<UOffsetT>> = fields
         .iter()
-        .map(|(name, col)| {
-            build_field(&mut fbb, name, col.nullability, col.arrow_type)
-        })
+        .map(|(name, col)| build_field(&mut fbb, name, col.nullability, col.arrow_type))
         .collect();
     fbb.start_vector::<UOffsetT>(field_offsets.len());
     for off in field_offsets.iter().rev() {

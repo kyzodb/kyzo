@@ -113,20 +113,20 @@ use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::store::time::ClaimPolarity;
 use crate::data::json::NamedRows;
-use kyzo_model::schema::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
-use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
-use kyzo_model::program::{InputProgram, InputRelationHandle};
 use crate::parse::parse_script;
 use crate::parse::sys::AccessLevel as ParseAccessLevel;
+use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
 use crate::session::access::{AccessLevel, InsufficientAccessLevel, map_access_level};
 use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
+use crate::store::time::ClaimPolarity;
 use crate::store::{ReadTx, Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
+use kyzo_model::program::{InputProgram, InputRelationHandle};
+use kyzo_model::schema::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
 use kyzo_model::value::{
-    AsOf, DataValue, StorageKey, MAX_VALIDITY_TS, RelationId, ScanBound, StoredValiditySlot, Tuple,
+    AsOf, DataValue, MAX_VALIDITY_TS, RelationId, ScanBound, StorageKey, StoredValiditySlot, Tuple,
     TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
     scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
@@ -347,8 +347,7 @@ impl ConstraintRef {
         fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
         cur_vld: ValidityTs,
     ) -> Result<ConstraintRef> {
-        let program =
-            parse_script(source, &BTreeMap::new())?.get_single_program()?;
+        let program = parse_script(source, &BTreeMap::new())?.get_single_program()?;
         Ok(ConstraintRef {
             name: name.into(),
             program,
@@ -478,8 +477,7 @@ impl Trigger {
         fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
         cur_vld: ValidityTs,
     ) -> Result<Trigger> {
-        let program =
-            parse_script(source, &BTreeMap::new())?.get_single_program()?;
+        let program = parse_script(source, &BTreeMap::new())?.get_single_program()?;
         Ok(Trigger { program })
     }
 
@@ -1600,7 +1598,10 @@ impl<S: Storage> Engine<S> {
                 DataValue::from(col.1),
             ]));
         }
-        Ok(NamedRows::try_new(vec!["column".into(), "is_key".into()], rows)?)
+        Ok(NamedRows::try_new(
+            vec!["column".into(), "is_key".into()],
+            rows,
+        )?)
     }
 
     /// `::fixed_rules` — names of registered fixed rules.
@@ -1630,7 +1631,10 @@ impl<S: Storage> Engine<S> {
                 DataValue::from(src.program().to_string()),
             ]));
         }
-        Ok(NamedRows::try_new(vec!["kind".into(), "source".into()], rows)?)
+        Ok(NamedRows::try_new(
+            vec!["kind".into(), "source".into()],
+            rows,
+        )?)
     }
 
     /// `::remove` — destroy one or more relations.
@@ -1644,10 +1648,7 @@ impl<S: Storage> Engine<S> {
     }
 
     /// `::rename` — rename relation pairs.
-    pub(crate) fn sys_rename_relation(
-        &self,
-        pairs: Vec<(Symbol, Symbol)>,
-    ) -> Result<NamedRows> {
+    pub(crate) fn sys_rename_relation(&self, pairs: Vec<(Symbol, Symbol)>) -> Result<NamedRows> {
         self.sys_write(|tx| {
             for (old, new) in &pairs {
                 rename_relation(&mut tx.store, old, new)?;
@@ -1657,11 +1658,7 @@ impl<S: Storage> Engine<S> {
     }
 
     /// `::describe` — set a relation's description.
-    pub(crate) fn sys_describe_relation(
-        &self,
-        name: &Symbol,
-        desc: &str,
-    ) -> Result<NamedRows> {
+    pub(crate) fn sys_describe_relation(&self, name: &Symbol, desc: &str) -> Result<NamedRows> {
         self.sys_write(|tx| {
             describe_relation(&mut tx.store, &name.name, desc)?;
             Ok(status_ok())
@@ -1708,11 +1705,11 @@ mod tests {
     use serde::Serialize;
 
     use super::*;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{ConflictError, Storage};
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
     use kyzo_model::value::decode_tuple_from_key;
-    use crate::store::fjall::new_fjall_storage;
-    use crate::store::{ConflictError, Storage};
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
@@ -2257,13 +2254,15 @@ mod tests {
             kind: IndexKind::Plain { mapper: vec![1, 0] },
         }];
         handle.description = SmartString::from("pinned");
-        handle.constraints = vec![ConstraintRef::parse(
-            "no_empty_v",
-            "?[k] := *pin[k, v], v == ''",
-            &DEFAULT_FIXED_RULES,
-            trigger_decode_vld(),
-        )
-        .unwrap()];
+        handle.constraints = vec![
+            ConstraintRef::parse(
+                "no_empty_v",
+                "?[k] := *pin[k, v], v == ''",
+                &DEFAULT_FIXED_RULES,
+                trigger_decode_vld(),
+            )
+            .unwrap(),
+        ];
 
         let bytes = handle.encode().unwrap();
         let decoded = RelationHandle::decode(&bytes).unwrap();
@@ -2290,9 +2289,9 @@ mod tests {
     /// record knew nothing.
     #[test]
     fn asof_clause_first_coordinate_is_system_time() {
-        use std::collections::BTreeMap;
         use crate::session::db::Engine;
         use kyzo_model::SourceSpan;
+        use std::collections::BTreeMap;
 
         fn no_params() -> BTreeMap<String, DataValue> {
             BTreeMap::new()
@@ -2350,8 +2349,8 @@ mod tests {
     /// time-travel trials; this pins the LANGUAGE surface.
     #[test]
     fn asof_clause_parses_one_and_two_coordinates() {
-        use std::collections::BTreeMap;
         use crate::session::db::Engine;
+        use std::collections::BTreeMap;
 
         fn no_params() -> BTreeMap<String, DataValue> {
             BTreeMap::new()

@@ -24,13 +24,12 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
 use crate::exec::stdlib::text::val2str;
-
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_decode_base64(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
@@ -44,7 +43,6 @@ pub(crate) fn op_decode_base64(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_encode_base64(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Bytes(b) => {
@@ -54,7 +52,6 @@ pub(crate) fn op_encode_base64(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'encode_base64' requires bytes"),
     }
 }
-
 
 pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
@@ -82,7 +79,6 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_to_float(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => n.to_f64().into(),
@@ -101,7 +97,6 @@ pub(crate) fn op_to_float(args: &[DataValue]) -> Result<DataValue> {
         v @ (data_value_any!()) => bail!("'to_float' does not recognize {:?}", v),
     })
 }
-
 
 pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
@@ -125,11 +120,9 @@ pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_to_string(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Str(val2str(&args[0])))
 }
-
 
 pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
@@ -157,7 +150,6 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-
 pub(crate) fn op_to_uuid(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         d @ DataValue::Uuid(_u) => Ok(d.clone()),
@@ -168,7 +160,6 @@ pub(crate) fn op_to_uuid(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'to_uuid' requires a string"),
     }
 }
-
 
 pub(crate) fn op_uuid_timestamp(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
@@ -184,7 +175,6 @@ pub(crate) fn op_uuid_timestamp(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
     let ts = args[0]
         .get_int()
@@ -199,15 +189,13 @@ pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
     // User-facing validity construction: mint the coordinate through
     // `for_assertion`, not `from_raw`. The reserved terminal is a typed
     // refusal at this door (P005).
-    let coord = ValidityTs::for_assertion(ts).ok_or_else(|| {
-        miette!("'validity' refuses the reserved terminal tick (i64::MAX)")
-    })?;
+    let coord = ValidityTs::for_assertion(ts)
+        .ok_or_else(|| miette!("'validity' refuses the reserved terminal tick (i64::MAX)"))?;
     let vld = Validity::new(coord, is_assert).ok_or_else(|| {
         miette!("'validity' refuses assert of the reserved terminal tick (i64::MAX)")
     })?;
     Ok(DataValue::Validity(vld.into()))
 }
-
 
 pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
     let t = vec_element_type(args.get(1), "vec")?;
@@ -276,9 +264,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                 VecElementType::F64 => bytes
                     .chunks_exact(8)
                     // In bounds: `chunks_exact(8)` yields 8-byte chunks.
-                    .map(|c| {
-                        f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
-                    })
+                    .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
                     .collect(),
             };
             Ok(DataValue::Vector(vec_value(components)?))
@@ -286,8 +272,6 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'vec' requires a list or a vector"),
     }
 }
-
-
 
 /// The optional trailing element-type argument shared by `vec` and
 /// `rand_vec`.
@@ -302,4 +286,3 @@ pub(crate) fn vec_element_type(arg: Option<&DataValue>, op: &str) -> Result<VecE
         _ => bail!("'{op}' requires a string as second argument"),
     }
 }
-

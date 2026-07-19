@@ -1,8 +1,8 @@
 //! BoundOp: OpDecl paired with a total body. Private mint via bind_op only.
-use miette::{Result, bail};
+use super::errors::{DomainError, StdlibRefuse, result_has_nan};
 use kyzo_model::program::op::OpDecl;
 use kyzo_model::value::DataValue;
-use super::errors::{DomainError, StdlibRefuse, result_has_nan};
+use miette::{Result, bail};
 
 /// Builtin op with declaration + body. Fields private — construct only via [`super::bind::bind_op`].
 #[derive(Clone)]

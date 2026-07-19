@@ -10,11 +10,13 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
-use serde_json::json;
 pub use serde_json::Value as JsonValue;
+use serde_json::json;
 
 use crate::value::kind::interval::{Hi, Lo};
-use crate::value::{DataValue, DecodeError, Json, JsonNum, JsonObj, Num, RelationId, encode_owned, decode};
+use crate::value::{
+    DataValue, DecodeError, Json, JsonNum, JsonObj, Num, RelationId, decode, encode_owned,
+};
 
 /// The serde bridge value: engine-side JSON carried as `serde_json`
 /// until it crosses into the value plane's identity-lawful [`Json`].
@@ -190,7 +192,6 @@ impl From<&JsonValue> for DataValue {
     }
 }
 
-
 impl From<&DataValue> for JsonValue {
     fn from(v: &DataValue) -> Self {
         match v {
@@ -245,7 +246,6 @@ impl From<DataValue> for JsonValue {
         JsonValue::from(&v)
     }
 }
-
 
 /// Named door for JSON → `DataValue`: same total mapping as [`From<&JsonValue>`].
 pub fn json_to_datavalue(v: &JsonValue) -> DataValue {

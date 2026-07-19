@@ -45,18 +45,18 @@ use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
+use crate::rules::contract::par_try_map;
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    GraphAlgorithmInvariantError, btree_set_only_element, path_predecessor,
+};
+use crate::rules::graph_view::DirectedCsrGraph;
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::rules::graph_view::DirectedCsrGraph;
-use crate::rules::contract::par_try_map;
-use crate::rules::contract::{
-    btree_set_only_element, path_predecessor, GraphAlgorithmInvariantError, CancelAuthority,
-    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-};
 
 pub(crate) struct ShortestPathDijkstra;
 
@@ -418,7 +418,7 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule, empty_opts, opts_map};
+    use crate::rules::contract::tests_support::{TestInput, empty_opts, opts_map, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

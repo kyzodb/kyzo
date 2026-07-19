@@ -33,14 +33,14 @@ use thiserror::Error;
 use crate::exec::plan::program::{
     NormalFormAtom, NormalFormInlineRule, NormalFormRelationApplyAtom, NormalFormRuleApplyAtom,
 };
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::program::rule::{
     InputAtom, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom, InputRuleApplyAtom,
     TempSymbGen, Unification, ValidityClause,
 };
-use kyzo_model::schema::StoredRelationMetadata;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
+use kyzo_model::schema::StoredRelationMetadata;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Errors
@@ -130,7 +130,9 @@ pub(crate) fn negation_normal_form(atom: InputAtom) -> Result<InputAtom> {
             },
             InputAtom::Unification { inner } => bail!(UnsafeNegation(inner.span)),
             InputAtom::Search { inner } => {
-                bail!(crate::exec::plan::search::NegatedSearchUnsupported(inner.span))
+                bail!(crate::exec::plan::search::NegatedSearchUnsupported(
+                    inner.span
+                ))
             }
         },
     })
@@ -209,7 +211,12 @@ pub(crate) fn do_disjunctive_normal_form(
         },
         InputAtom::Unification { inner } => vec![vec![NormalFormAtom::Unification(inner)]],
         InputAtom::Search { inner } => vec![vec![NormalFormAtom::Search(Box::new(
-            crate::exec::plan::search::resolve_search(search_handle, inner, symb_gen, cancel.clone())?,
+            crate::exec::plan::search::resolve_search(
+                search_handle,
+                inner,
+                symb_gen,
+                cancel.clone(),
+            )?,
         ))]],
     })
 }
@@ -373,7 +380,9 @@ pub(crate) fn normalize_relation_apply(
 /// negations/predicates/unifications are inserted as soon as their inputs
 /// are bound; anything still pending at the end is refused. Faithful port
 /// of upstream `reorder.rs` (its `unreachable!`s are typed invariants).
-pub(crate) fn convert_to_well_ordered_rule(rule: NormalFormInlineRule) -> Result<NormalFormInlineRule> {
+pub(crate) fn convert_to_well_ordered_rule(
+    rule: NormalFormInlineRule,
+) -> Result<NormalFormInlineRule> {
     let mut seen_variables = std::collections::BTreeSet::new();
     let mut round_1_collected = vec![];
     let mut pending = vec![];

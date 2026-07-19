@@ -30,14 +30,14 @@ use super::*;
 
 use proptest::prelude::*;
 
-use kyzo_model::program::expr::BindingPos;
-use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
-use kyzo_model::program::InputRelationHandle;
-use kyzo_model::program::symbol::Symbol;
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::store::Storage;
 use crate::store::fjall::new_fjall_storage;
 use kyzo_model::data_value_any;
+use kyzo_model::program::InputRelationHandle;
+use kyzo_model::program::expr::BindingPos;
+use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
+use kyzo_model::program::symbol::Symbol;
 
 // ---------------------------------------------------------------------------
 // Local schema helpers (the draft's live in `mod tests`; kept private there).
@@ -100,7 +100,10 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
     (0..n)
         .map(|k| {
             let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-            vec![DataValue::from(k), DataValue::Vector(Vector::try_new(comps).unwrap())]
+            vec![
+                DataValue::from(k),
+                DataValue::Vector(Vector::try_new(comps).unwrap()),
+            ]
         })
         .map(Tuple::from_vec)
         .collect()
@@ -1180,16 +1183,16 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
     let params = knn_params_p2(P2_K, P2_EF);
     let unfiltered = crate::project::contract::search_rows(
         Hnsw::knn(
-        &rtx,
-        &q,
-        &m,
-        &base,
-        &idx,
-        &params,
-        &None,
-        &crate::rules::contract::CancelFlag::default(),
-    )
-    .unwrap(),
+            &rtx,
+            &q,
+            &m,
+            &base,
+            &idx,
+            &params,
+            &None,
+            &crate::rules::contract::CancelFlag::default(),
+        )
+        .unwrap(),
     )
     .unwrap();
     let filtered = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);

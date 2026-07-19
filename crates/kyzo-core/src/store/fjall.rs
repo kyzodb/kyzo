@@ -58,13 +58,13 @@ use fjall::{
 use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
-use kyzo_model::value::Tuple;
-use kyzo_model::value::{AsOf, ValidityTs};
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::store::{
-    Aborted, BackendIoError, CommitFailure, CommitIo, ConflictError, FormatVersion,
-    ReadTx, Storage, SystemClock, WriteTx,
+    Aborted, BackendIoError, CommitFailure, CommitIo, ConflictError, FormatVersion, ReadTx,
+    Storage, SystemClock, WriteTx,
 };
+use kyzo_model::value::Tuple;
+use kyzo_model::value::{AsOf, ValidityTs};
 
 /// Typed refusal when the fjall substrate fails. Identity is the variant —
 /// not a stringly `miette!("fjall…")` message. Poisoned lock expects and
@@ -636,11 +636,15 @@ pub struct FjallWriteTx {
 
 impl FjallWriteTx {
     fn open_tx(&self) -> &OptimisticWriteTx {
-        self.tx.as_ref().expect("FjallWriteTx used after commit/abort")
+        self.tx
+            .as_ref()
+            .expect("FjallWriteTx used after commit/abort")
     }
 
     fn open_tx_mut(&mut self) -> &mut OptimisticWriteTx {
-        self.tx.as_mut().expect("FjallWriteTx used after commit/abort")
+        self.tx
+            .as_mut()
+            .expect("FjallWriteTx used after commit/abort")
     }
 
     /// Contract v2 (write-set validation): put every written key on the
@@ -702,9 +706,7 @@ fn raw_range<'a, R: Readable>(
 /// through if a caller ever filtered on the key alone. `Slice` is
 /// Arc-backed, so this is a refcount bump per field, never a heap copy.
 fn materialize_row(guard: Guard) -> Result<(Slice, Slice)> {
-    let (k, v) = guard
-        .into_inner_if(|_| true)
-        .map_err(FjallRefuse::Read)?;
+    let (k, v) = guard.into_inner_if(|_| true).map_err(FjallRefuse::Read)?;
     Ok((
         k,
         v.expect("predicate is unconditionally true: the value is always loaded"),
@@ -726,9 +728,7 @@ fn read_get<R: Readable>(
 }
 
 fn read_exists<R: Readable>(reader: &R, ks: &OptimisticTxKeyspace, key: &[u8]) -> Result<bool> {
-    Ok(reader
-        .contains_key(ks, key)
-        .map_err(FjallRefuse::Read)?)
+    Ok(reader.contains_key(ks, key).map_err(FjallRefuse::Read)?)
 }
 
 fn read_total_scan<'a, R: Readable>(
@@ -904,10 +904,10 @@ impl OpenSkipCursor for FjallWriteTx {
         if lower >= upper {
             return FjallSkipCursor::Empty;
         }
-        FjallSkipCursor::Live(self.open_tx().seek_range::<&[u8], _>(
-            &self.ks,
-            (Bound::Included(lower), Bound::Excluded(upper)),
-        ))
+        FjallSkipCursor::Live(
+            self.open_tx()
+                .seek_range::<&[u8], _>(&self.ks, (Bound::Included(lower), Bound::Excluded(upper))),
+        )
     }
 }
 
@@ -959,13 +959,11 @@ impl WriteTx for FjallWriteTx {
     }
 
     fn commit(mut self) -> std::result::Result<(), CommitFailure> {
-        let tx = self
-            .tx
-            .take()
-            .expect("FjallWriteTx commit after spend");
-        match tx.commit().map_err(|e| {
-            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e)))
-        })? {
+        let tx = self.tx.take().expect("FjallWriteTx commit after spend");
+        match tx
+            .commit()
+            .map_err(|e| CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e))))?
+        {
             Ok(()) => Ok(()),
             Err(Conflict) => Err(CommitFailure::Conflict(ConflictError)),
         }
@@ -977,9 +975,10 @@ impl WriteTx for FjallWriteTx {
             .tx
             .take()
             .expect("FjallWriteTx commit_durable after spend");
-        match tx.commit().map_err(|e| {
-            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e)))
-        })? {
+        match tx
+            .commit()
+            .map_err(|e| CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e))))?
+        {
             Ok(()) => {}
             Err(Conflict) => return Err(CommitFailure::Conflict(ConflictError)),
         }
@@ -1008,7 +1007,6 @@ impl Drop for FjallWriteTx {
 mod pins {
     use kyzo_model::TupleT;
     /// Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).
-
     use std::collections::BTreeMap;
 
     use fjall::Slice;
@@ -1016,8 +1014,8 @@ mod pins {
         AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
     };
 
+    use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
     use crate::store::time::ClaimPolarity;
-    use crate::store::fjall::{new_fjall_storage, new_fjall_storage_with, StorageOptions};
     use crate::store::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 
     /// Naive as-of reference: full-scan every version, group by payload, pick
@@ -1048,12 +1046,14 @@ mod pins {
     }
 
     fn pol_val(assert: bool) -> Vec<u8> {
-        vec![if assert {
-            ClaimPolarity::Assert
-        } else {
-            ClaimPolarity::Retract
-        }
-        .encode()]
+        vec![
+            if assert {
+                ClaimPolarity::Assert
+            } else {
+                ClaimPolarity::Retract
+            }
+            .encode(),
+        ]
     }
 
     fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (StorageKey, Vec<u8>) {
@@ -1272,9 +1272,8 @@ mod pins {
         assert!(FormatVersion::parse(b"06").is_err());
         assert!(FormatVersion::parse(b"4").is_ok()); // older stamps parse so mismatch can NAME them
         let _opts = StorageOptions::default();
-        let _ctor = |path: &std::path::Path, opts: StorageOptions| {
-            new_fjall_storage_with(path, opts)
-        };
+        let _ctor =
+            |path: &std::path::Path, opts: StorageOptions| new_fjall_storage_with(path, opts);
         let _ = (_opts, _ctor);
     }
 }

@@ -36,18 +36,18 @@ use std::sync::Arc;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use kyzo_model::program::expr::Expr;
-use kyzo_model::program::rule::{SearchFilter, SearchInput, TempSymbGen};
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::{DataValue, SearchHits, Vector};
-use crate::project::text::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
-use crate::project::vector::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
 use crate::project::dedup::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};
 use crate::project::projection::RelationIndexSearch;
+use crate::project::text::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
 use crate::project::text::tokenizer::TextAnalyzer;
+use crate::project::vector::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
 use crate::session::catalog::{IndexKind, RelationHandle};
 use crate::store::ReadTx;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::{SearchFilter, SearchInput, TempSymbGen};
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::value::{DataValue, SearchHits, Vector};
 
 /// A search atom the catalog has proven: live handles, decoded manifest,
 /// engine parameters, and the output frame. Carried by
@@ -292,8 +292,15 @@ pub(crate) struct NegatedSearchUnsupported(#[label] pub(crate) SourceSpan);
 fn expr_as_var(name: impl AsRef<str>, e: &Expr, span: SourceSpan) -> Result<Symbol> {
     match e {
         Expr::Binding { var, .. } => Ok(var.clone()),
-        Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
-            bail!(SearchBindingNotVariable(Symbol::new(name.as_ref(), span), span))
+        Expr::Const { .. }
+        | Expr::Apply { .. }
+        | Expr::UnboundApply { .. }
+        | Expr::Cond { .. }
+        | Expr::Lazy { .. } => {
+            bail!(SearchBindingNotVariable(
+                Symbol::new(name.as_ref(), span),
+                span
+            ))
         }
     }
 }
@@ -306,15 +313,13 @@ fn take_const(
     match params.remove(&Symbol::new(name, span)) {
         None => Ok(None),
         Some(e) => {
-            let v = e
-                .eval_to_const()
-                .map_err(|_| {
-                    SearchParamInvalid(
-                        Symbol::new(name, span),
-                        SearchParamInvalidReason::MustBeConstant,
-                        span,
-                    )
-                })?;
+            let v = e.eval_to_const().map_err(|_| {
+                SearchParamInvalid(
+                    Symbol::new(name, span),
+                    SearchParamInvalidReason::MustBeConstant,
+                    span,
+                )
+            })?;
             Ok(Some(v))
         }
     }

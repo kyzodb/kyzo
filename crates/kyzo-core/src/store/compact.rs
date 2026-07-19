@@ -124,7 +124,9 @@ impl MergeProof {
     /// Privately mint a MergeProof and the merged packet it authorizes.
     ///
     /// Requires at least one input content hash. Empty merge is refused.
-    pub(crate) fn mint(parts: MergeProofParts) -> Result<(MergeProof, MergedPacket), CompactRefuse> {
+    pub(crate) fn mint(
+        parts: MergeProofParts,
+    ) -> Result<(MergeProof, MergedPacket), CompactRefuse> {
         if parts.input_content_hashes.is_empty() {
             return Err(CompactRefuse::EmptyMerge);
         }

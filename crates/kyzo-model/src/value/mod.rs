@@ -56,6 +56,8 @@ pub mod code;
 pub mod column;
 #[cfg(test)]
 pub mod exec;
+pub mod json_convert;
+pub mod kind;
 pub mod number;
 pub mod prefix;
 pub mod proofs;
@@ -63,8 +65,6 @@ pub mod row;
 pub mod search_hits;
 pub mod string;
 pub mod tag;
-pub mod json_convert;
-pub mod kind;
 pub mod validity_coerce;
 
 pub use admission::{Admission, Denial};
@@ -72,7 +72,7 @@ pub use arity::Arity;
 pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
 pub use number::{Num, NumRepr, NumericOrd};
 pub use row::{
-    TupleKey, StorageKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
+    RelationId, StorageKey, TupleKey, TupleT, encode_key_with_suffix, scan_key_lower,
     scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
 pub use search_hits::SearchHits;
@@ -342,17 +342,15 @@ impl Ord for DataValue {
                 .then_with(|| a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
             (DataValue::Json(a), DataValue::Json(b)) => json_storage_cmp(a, b),
             (DataValue::Vector(a), DataValue::Vector(b)) => {
-                a.dimension()
-                    .cmp(&b.dimension())
-                    .then_with(|| {
-                        for (x, y) in a.components().zip(b.components()) {
-                            let c = Num::float(x.get()).cmp(&Num::float(y.get()));
-                            if c != Ordering::Equal {
-                                return c;
-                            }
+                a.dimension().cmp(&b.dimension()).then_with(|| {
+                    for (x, y) in a.components().zip(b.components()) {
+                        let c = Num::float(x.get()).cmp(&Num::float(y.get()));
+                        if c != Ordering::Equal {
+                            return c;
                         }
-                        Ordering::Equal
-                    })
+                    }
+                    Ordering::Equal
+                })
             }
             (DataValue::List(a), DataValue::List(b)) => {
                 for (x, y) in a.iter().zip(b.iter()) {
@@ -928,11 +926,14 @@ mod facade_tests {
                 RegexSource::validated(RegexFlags::NONE, ["a", "b+", ""][rng.below(3)].into())
                     .expect("valid"),
             ),
-            9 => DataValue::Vector(Vector::try_new(
-                (0..rng.below(3))
-                    .map(|_| f64::from_bits(rng.next()))
-                    .collect(),
-            ).unwrap()),
+            9 => DataValue::Vector(
+                Vector::try_new(
+                    (0..rng.below(3))
+                        .map(|_| f64::from_bits(rng.next()))
+                        .collect(),
+                )
+                .unwrap(),
+            ),
             10 => {
                 let ts = ValidityTs::from_raw(rng.next() as i64);
                 let is_assert = rng.next().is_multiple_of(2);
@@ -982,7 +983,9 @@ mod facade_tests {
         );
         assert_eq!(
             DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
-            DataValue::Vector(Vector::try_new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]).unwrap())
+            DataValue::Vector(
+                Vector::try_new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]).unwrap()
+            )
         );
         let a: DataValue = DataValue::Set(
             [DataValue::from(2i64), DataValue::from(1i64)]

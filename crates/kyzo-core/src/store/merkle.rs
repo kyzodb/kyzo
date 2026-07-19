@@ -72,11 +72,11 @@ use miette::{Diagnostic, Result};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use kyzo_model::value::RelationId;
 use super::ReadTx;
 use super::epoch::FenceEpoch;
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
+use kyzo_model::value::RelationId;
 
 /// The number of `(k,v)` pairs a root scan may touch before it refuses. The
 /// root is `O(n)` in the range's size; an unbounded scan over a hostile
@@ -420,11 +420,7 @@ impl RootChain {
     /// Append a mint; predecessor must match the prior terminal root
     /// (or [`GENESIS_ROOT`] when empty).
     pub fn append(&mut self, link: ChainedStateRoot) -> Result<(), MerkleChainRefuse> {
-        let expected = self
-            .links
-            .last()
-            .map(|l| l.root())
-            .unwrap_or(GENESIS_ROOT);
+        let expected = self.links.last().map(|l| l.root()).unwrap_or(GENESIS_ROOT);
         if link.predecessor_root() != expected {
             return Err(MerkleChainRefuse::PredecessorMismatch);
         }
@@ -441,10 +437,7 @@ impl RootChain {
     /// [`GENESIS_ROOT`] when empty. Stored on the SweepDoor so the prior is
     /// not cold on-demand only.
     pub fn prior_root(&self) -> StateRoot {
-        self.links
-            .last()
-            .map(|l| l.root())
-            .unwrap_or(GENESIS_ROOT)
+        self.links.last().map(|l| l.root()).unwrap_or(GENESIS_ROOT)
     }
 }
 
@@ -553,9 +546,9 @@ mod tests {
         MerkleHash, StateRoot, empty_hash, leaf_hash, node_hash, relation_root, root_over,
         state_root,
     };
-    use kyzo_model::value::RelationId;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::{Storage, WriteTx};
+    use kyzo_model::value::RelationId;
 
     fn big_budget() -> NonZeroU64 {
         NonZeroU64::new(1_000_000).unwrap()
@@ -695,12 +688,10 @@ mod tests {
         use crate::store::contract::FormatVersion;
         use crate::store::epoch::{CryptoDomain, FenceEpoch};
         use crate::store::open::StoreId;
-        use crate::store::transcript::{
-            CanonicalTranscriptBuilder, FieldId, SealedArtifactKind,
-        };
+        use crate::store::transcript::{CanonicalTranscriptBuilder, FieldId, SealedArtifactKind};
         use crate::store::{
             AeadArm, Kek, KekUnwrapCap, SegmentCounter, ShredSalt, compress_then_encrypt,
-            decrypt, decompress, derive_dek,
+            decompress, decrypt, derive_dek,
         };
 
         let store = StoreId::from_digest([0xC1; 32]);
@@ -712,7 +703,10 @@ mod tests {
 
         let mut aad_b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
         aad_b
-            .append_u64(FieldId::ARTIFACT_KIND, SealedArtifactKind::AuditKeyLeaf.tag())
+            .append_u64(
+                FieldId::ARTIFACT_KIND,
+                SealedArtifactKind::AuditKeyLeaf.tag(),
+            )
             .unwrap();
         let aad = aad_b.seal();
 
@@ -734,8 +728,8 @@ mod tests {
         for (i, (k, plaintext)) in logical.iter().enumerate() {
             let mut nonce = [0u8; 12];
             nonce[..4].copy_from_slice(&(i as u32).to_be_bytes());
-            let ct = compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)
-                .expect("encrypt");
+            let ct =
+                compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad).expect("encrypt");
             assert_ne!(
                 ct.body(),
                 plaintext.as_slice(),

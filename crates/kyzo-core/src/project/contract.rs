@@ -23,8 +23,8 @@ use std::fmt;
 use miette::Diagnostic;
 use thiserror::Error;
 
-use kyzo_model::value::{DataValue, DecodeError, SearchHits, Tuple};
 use crate::project::dedup::lsh::LshPermutationDecodeRefused;
+use kyzo_model::value::{DataValue, DecodeError, SearchHits, Tuple};
 
 /// A stored index row (or a base row an index points at) failed to decode as
 /// what the index format says it must be. Corruption is an error, never a
@@ -121,7 +121,10 @@ impl fmt::Display for IndexCorruptReason {
             Self::SpatialLonNotNumber => write!(f, "spatial posting lon is not a number"),
             Self::SparseWeightNotFloat => write!(f, "sparse posting weight is not a float"),
             Self::SparseWeightNotFiniteNonNeg => {
-                write!(f, "sparse posting weight is not a finite non-negative float")
+                write!(
+                    f,
+                    "sparse posting weight is not a finite non-negative float"
+                )
             }
             Self::LshPermutations(err) => {
                 write!(f, "stored LSH permutations: {err}")
@@ -171,10 +174,16 @@ impl fmt::Display for IndexCorruptReason {
             Self::HnswEdgeDistanceNotNumber => write!(f, "edge distance is not a number"),
             Self::HnswEdgeHashNotNull => write!(f, "edge hash slot is not Null"),
             Self::HnswFieldBeyondArity { field } => {
-                write!(f, "HNSW index references field {field} beyond the row's arity")
+                write!(
+                    f,
+                    "HNSW index references field {field} beyond the row's arity"
+                )
             }
             Self::HnswListElementBeyondList { sub } => {
-                write!(f, "HNSW index references list element {sub} beyond the list")
+                write!(
+                    f,
+                    "HNSW index references list element {sub} beyond the list"
+                )
             }
             Self::HnswExpectsListOfVectors => {
                 write!(f, "HNSW index expects a list of vectors at this field")

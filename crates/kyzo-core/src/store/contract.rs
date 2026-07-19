@@ -169,7 +169,10 @@ impl SystemClock {
     /// before it, and equal to the wall clock whenever the wall clock is
     /// ahead. Refuses with [`SystemClockRefuse::StampSpaceExhausted`] when
     /// the floor is already `i64::MAX` — never panics, never wraps.
-    pub(crate) fn stamp(&self, now_micros: i64) -> std::result::Result<ValidityTs, SystemClockRefuse> {
+    pub(crate) fn stamp(
+        &self,
+        now_micros: i64,
+    ) -> std::result::Result<ValidityTs, SystemClockRefuse> {
         use std::sync::atomic::Ordering;
         let mut last = self.0.load(Ordering::Relaxed);
         loop {

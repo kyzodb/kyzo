@@ -146,19 +146,19 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::op::batch_ops::{Batch, BatchIter};
+use crate::exec::plan::program::MagicSymbol;
+use crate::project::current::Segments;
+use crate::session::catalog::RelationHandle;
+use crate::store::ReadTx;
+use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::program::rule::{DeltaAxis, ValidityClause};
-use crate::exec::plan::program::MagicSymbol;
-use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, MAX_VALIDITY_TS};
-use crate::project::current::Segments;
-use crate::exec::op::batch_ops::{Batch, BatchIter};
-use crate::exec::fixpoint::eval::AtomOccurrence;
-use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::session::catalog::RelationHandle;
-use crate::store::ReadTx;
 
 #[cfg(test)]
 use crate::exec::op::batch_ops::{BATCH_ROWS, BatchTupleFilter};
@@ -175,13 +175,13 @@ pub(crate) mod stored;
 pub(crate) mod temporal;
 pub(crate) mod transform;
 
-pub(crate) use literal::InlineFixedRA;
+pub(crate) use delta::TempStoreRA;
 pub(crate) use join::InnerJoin;
 pub(crate) use join::{Joiner, eliminate_from_tuple};
+pub(crate) use literal::InlineFixedRA;
 pub(crate) use neg::{NegJoin, NegRight};
 pub(crate) use search::SearchRA;
 pub(crate) use stored::{StoredRA, StoredWithValidityRA};
-pub(crate) use delta::TempStoreRA;
 pub(crate) use temporal::{DeltaRA, SpansRA};
 pub(crate) use transform::{FilteredRA, ReorderRA, UnificationKind, UnificationRA};
 
@@ -763,7 +763,13 @@ impl RelAlgebra {
             RelAlgebra::StoredWithValidity(v) => NegRight::StoredWithValidity(v),
             RelAlgebra::Spans(v) => NegRight::Spans(v),
             RelAlgebra::Delta(v) => NegRight::Delta(v),
-            RelAlgebra::Fixed(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) => bail!(PlanInvariantError(
+            RelAlgebra::Fixed(_)
+            | RelAlgebra::Join(_)
+            | RelAlgebra::NegJoin(_)
+            | RelAlgebra::Reorder(_)
+            | RelAlgebra::Filter(_)
+            | RelAlgebra::Unification(_)
+            | RelAlgebra::Search(_) => bail!(PlanInvariantError(
                 "the right side of a negation must be a rule or stored-relation scan"
             )),
         };
@@ -870,13 +876,15 @@ impl RelAlgebra {
         want_premises: bool,
     ) -> Result<BatchIter<'a>> {
         match self {
-            RelAlgebra::Filter(r) => r.iter_batched(tx, delta_rule, stores, segments, want_premises),
-            RelAlgebra::Reorder(r) => r.iter_batched(tx, delta_rule, stores, segments, want_premises),
+            RelAlgebra::Filter(r) => {
+                r.iter_batched(tx, delta_rule, stores, segments, want_premises)
+            }
+            RelAlgebra::Reorder(r) => {
+                r.iter_batched(tx, delta_rule, stores, segments, want_premises)
+            }
             RelAlgebra::TempStore(r) => r.iter_batched(delta_rule, stores),
             RelAlgebra::Stored(v) => v.iter_batched(tx, segments),
-            RelAlgebra::Join(j) => {
-                j.iter_batched(tx, delta_rule, stores, segments, want_premises)
-            }
+            RelAlgebra::Join(j) => j.iter_batched(tx, delta_rule, stores, segments, want_premises),
             RelAlgebra::Unification(u) => {
                 u.iter_batched(tx, delta_rule, stores, segments, want_premises)
             }
@@ -1058,15 +1066,15 @@ mod tests {
     use smartstring::SmartString;
 
     use super::*;
+    use crate::exec::fixpoint::delta_store::RegularTempStore;
+    use crate::project::current::SegmentEngine;
+    use crate::session::catalog::create_relation;
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
     use kyzo_model::program::query::InputRelationHandle;
     use kyzo_model::schema::{ColType, NullableColType};
     use kyzo_model::schema::{ColumnDef, StoredRelationMetadata};
     use kyzo_model::value::{DataValue, ValidityTs};
-    use crate::project::current::SegmentEngine;
-    use crate::exec::fixpoint::delta_store::RegularTempStore;
-    use crate::session::catalog::create_relation;
-    use crate::store::fjall::new_fjall_storage;
-    use crate::store::{Storage, WriteTx};
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)

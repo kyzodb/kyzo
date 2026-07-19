@@ -31,8 +31,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use regex::Regex;
 use quote::ToTokens;
+use regex::Regex;
 use serde::Serialize;
 use syn::visit::{self, Visit};
 
@@ -52,7 +52,10 @@ const LAYERS: &[(&str, &[&str])] = &[
 ];
 
 const LAYER_SPINE: &[(&str, &str)] = &[
-    ("value", "Tuple · Domain · ExecRows/ExecDedup · TupleKey/StorageKey"),
+    (
+        "value",
+        "Tuple · Domain · ExecRows/ExecDedup · TupleKey/StorageKey",
+    ),
     (
         "runtime-catalog",
         "CatalogGeneration · RelationGeneration · IndexGeneration",

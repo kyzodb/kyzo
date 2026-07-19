@@ -486,7 +486,13 @@ pub fn encrypt(
     arm: AeadArm,
     aad: &CanonicalTranscript,
 ) -> Result<Ciphertext, CryptoRefuse> {
-    let body = seal_arm(arm, dek.as_bytes(), &nonce, aad.as_bytes(), compressed.as_bytes())?;
+    let body = seal_arm(
+        arm,
+        dek.as_bytes(),
+        &nonce,
+        aad.as_bytes(),
+        compressed.as_bytes(),
+    )?;
     Ok(Ciphertext { arm, nonce, body })
 }
 
@@ -627,8 +633,11 @@ mod pins {
 
     fn test_aad() -> CanonicalTranscript {
         let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
-        b.append_u64(FieldId::ARTIFACT_KIND, SealedArtifactKind::AuditKeyLeaf.tag())
-            .unwrap();
+        b.append_u64(
+            FieldId::ARTIFACT_KIND,
+            SealedArtifactKind::AuditKeyLeaf.tag(),
+        )
+        .unwrap();
         b.seal()
     }
 
@@ -646,11 +655,7 @@ mod pins {
         assert_eq!(dek.as_bytes().len(), 32);
         let (receipt, tombstone) = shred(wrapped);
         assert_eq!(receipt.segment(), seg);
-        assert!(tombstone.covers(&WrappedShredSalt::from_persisted(
-            vec![0],
-            seg,
-            domain
-        )));
+        assert!(tombstone.covers(&WrappedShredSalt::from_persisted(vec![0], seg, domain)));
     }
 
     #[test]
@@ -687,8 +692,8 @@ mod pins {
             plaintext,
             "compress must not be a silent identity no-op"
         );
-        let ct = compress_then_encrypt(plaintext, &dek, [9u8; 12], AeadArm::Siv, &aad)
-            .expect("encrypt");
+        let ct =
+            compress_then_encrypt(plaintext, &dek, [9u8; 12], AeadArm::Siv, &aad).expect("encrypt");
         assert_eq!(ct.arm(), AeadArm::Siv);
         assert!(!ct.body().is_empty());
         let opened = decrypt(&ct, &dek, &aad).expect("decrypt");

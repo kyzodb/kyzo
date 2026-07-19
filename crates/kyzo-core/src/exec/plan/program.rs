@@ -19,8 +19,8 @@
 //! (what a query *is*) lives in `kyzo_model`; this module owns the plan
 //! artifacts the oracle never sees.
 
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
@@ -34,11 +34,11 @@ use kyzo_model::program::rule::{
     FixedRuleApply, FixedRuleHandle, FixedRuleOptions, HeadAggrSlot, InputAtom,
     InputInlineRulesOrFixed, InputProgram, NoEntry, Unification, ValidityClause,
 };
-use kyzo_model::program::symbol::{Symbol, SymbolKind};
 use kyzo_model::program::span::SourceSpan;
+use kyzo_model::program::symbol::{Symbol, SymbolKind};
 use kyzo_model::value::AsOf;
 
-use crate::rules::contract::{FixedRule, DEFAULT_FIXED_RULES};
+use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
 
 /// Look up the live fixed-rule implementation by resolved name. Used when
 /// minting [`MagicFixedRuleApply`] from a model [`FixedRuleApply`] (name +

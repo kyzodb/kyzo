@@ -215,7 +215,11 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
         "the bound-second-arg query must trigger the magic-sets rewrite; symbols were {syms2:?}"
     );
     let got2 = int_rows(&db.run_script(&q2, no_params()).expect("bound-second query"));
-    assert_eq!(got2, vec![vec![1], vec![2], vec![3]], "backward-demand who reaches 4");
+    assert_eq!(
+        got2,
+        vec![vec![1], vec![2], vec![3]],
+        "backward-demand who reaches 4"
+    );
     assert_eq!(got2, vec![vec![1], vec![2], vec![3]]);
 }
 
@@ -439,7 +443,6 @@ mod magic_bypass_differential {
         );
     }
 
-
     /// Mutual recursion where only ONE of the two predicates (`p`) is
     /// demanded fully-free (from the entry); `r` is reached only through
     /// `p`'s own rule and never gains a free sibling of its own. `p`
@@ -472,10 +475,7 @@ mod magic_bypass_differential {
             ?[a, b] := p[a, b]
         ";
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
-        assert_eq!(
-            got, expected,
-            "mutual recursion answer"
-        );
+        assert_eq!(got, expected, "mutual recursion answer");
 
         let syms = sorted_syms(&db, script);
         assert!(
@@ -519,10 +519,7 @@ mod magic_bypass_differential {
             ?[y, x] := excluded[y, x]
         ";
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
-        assert_eq!(
-            got, expected,
-            "negation alongside ff-sibling answer"
-        );
+        assert_eq!(got, expected, "negation alongside ff-sibling answer");
         assert_eq!(
             sorted_syms(&db, script),
             vec![
@@ -559,10 +556,7 @@ mod magic_bypass_differential {
             ?[y] := dup[y]
         ";
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
-        assert_eq!(
-            got, expected,
-            "repeated-variable adornment answer"
-        );
+        assert_eq!(got, expected, "repeated-variable adornment answer");
     }
 
     /// The reviewer's orphan shape, reconstructed to the closest
@@ -615,10 +609,7 @@ mod magic_bypass_differential {
             ?[y, x] := pt[y, x]
         ";
         let got = int_rows(&db.run_script(script, no_params()).expect("query"));
-        assert_eq!(
-            got, expected,
-            "helper-inside-self-join answer"
-        );
+        assert_eq!(got, expected, "helper-inside-self-join answer");
 
         let syms = sorted_syms(&db, script);
         assert!(

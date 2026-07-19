@@ -69,13 +69,13 @@
 //! order. [`decode`] is total over arbitrary bytes: a typed error, never
 //! a panic, never trust.
 
-use super::number::{Num, NumDecodeError};
-use super::prefix::prefix4;
-use super::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
 use super::kind::interval::{Hi, Interval, Lo};
 use super::kind::json::{Json, JsonNum, JsonObj, fnv1a64};
 use super::kind::regex::{RegexFlags, RegexSource};
 use super::kind::validity::{Validity, ValiditySlot, ValidityTs};
+use super::number::{Num, NumDecodeError};
+use super::prefix::prefix4;
+use super::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
 use super::{DataValue, Geometry, UuidWrapper, Vector};
 
 /// A lawful canonical encoding: mintable only by [`encode`]. Derived
@@ -785,7 +785,10 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 None => return Err(DecodeError::Truncated),
             };
             Ok((
-                DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(ts), is_assert)),
+                DataValue::Validity(ValiditySlot::from_stored(
+                    ValidityTs::from_raw(ts),
+                    is_assert,
+                )),
                 10,
             ))
         }
@@ -1223,7 +1226,9 @@ mod tests {
         )));
         out.push(DataValue::Vector(Vector::try_new(vec![]).unwrap()));
         out.push(DataValue::Vector(Vector::try_new(vec![0.0]).unwrap()));
-        out.push(DataValue::Vector(Vector::try_new(vec![-1.5, f64::NAN]).unwrap()));
+        out.push(DataValue::Vector(
+            Vector::try_new(vec![-1.5, f64::NAN]).unwrap(),
+        ));
         out.push(DataValue::Validity(
             Validity::new(ValidityTs::from_raw(0), true)
                 .expect("non-reserved")
@@ -1254,7 +1259,10 @@ mod tests {
         out.push(DataValue::Geometry(Geometry::from_cells(0, 0)));
         out.push(DataValue::Geometry(Geometry::from_cells(1, 0)));
         out.push(DataValue::Geometry(Geometry::from_cells(0, 1)));
-        out.push(DataValue::Geometry(Geometry::from_cells(u32::MAX, u32::MAX)));
+        out.push(DataValue::Geometry(Geometry::from_cells(
+            u32::MAX,
+            u32::MAX,
+        )));
         out
     }
 
@@ -1438,9 +1446,7 @@ mod tests {
             DataValue::Str(String::new()),
             DataValue::Bytes(vec![]),
             DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(U1))),
-            DataValue::Regex(
-                RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid"),
-            ),
+            DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid")),
             DataValue::Json(Json::Null),
             DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
             DataValue::List(vec![]),
@@ -1458,16 +1464,10 @@ mod tests {
         for a in &kinds {
             for b in &kinds {
                 let partial = a.partial_cmp(b);
-                assert!(
-                    partial.is_some(),
-                    "PartialOrd hole: {:?} vs {:?}",
-                    a, b
-                );
+                assert!(partial.is_some(), "PartialOrd hole: {:?} vs {:?}", a, b);
                 let structural = a.cmp(b);
                 assert_eq!(partial, Some(structural));
-                let byte = encode_owned(a)
-                    .as_bytes()
-                    .cmp(encode_owned(b).as_bytes());
+                let byte = encode_owned(a).as_bytes().cmp(encode_owned(b).as_bytes());
                 let semantic = semantic_cmp(a, b);
                 assert_eq!(byte, structural, "cross-kind byte != Ord: {a:?} vs {b:?}");
                 assert_eq!(
@@ -1494,7 +1494,9 @@ mod tests {
             assert_eq!(n.cmp(n), Ordering::Equal);
             assert_eq!(n.cmp(&pos_inf), Ordering::Greater);
             assert_eq!(
-                encode_owned(n).as_bytes().cmp(encode_owned(&pos_inf).as_bytes()),
+                encode_owned(n)
+                    .as_bytes()
+                    .cmp(encode_owned(&pos_inf).as_bytes()),
                 Ordering::Greater
             );
             for m in &nans {
@@ -1558,9 +1560,10 @@ mod tests {
             }
             9 => {
                 let len = rng.below(3);
-                DataValue::Vector(Vector::try_new(
-                    (0..len).map(|_| f64::from_bits(rng.next())).collect(),
-                ).unwrap())
+                DataValue::Vector(
+                    Vector::try_new((0..len).map(|_| f64::from_bits(rng.next())).collect())
+                        .unwrap(),
+                )
             }
             10 => {
                 let ts = ValidityTs::from_raw(rng.next() as i64);
@@ -1718,9 +1721,7 @@ mod tests {
         // with structural order, whatever the direction. (JsonObj sorts
         // keys, so a "\0" key leads.)
         let mk = |kvs: Vec<(String, Json)>| {
-            DataValue::Json(crate::value::Json::Obj(
-                JsonObj::new(kvs).expect("lawful"),
-            ))
+            DataValue::Json(crate::value::Json::Obj(JsonObj::new(kvs).expect("lawful")))
         };
         let objs = [
             mk(vec![]),

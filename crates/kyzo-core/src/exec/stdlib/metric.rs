@@ -24,11 +24,11 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
@@ -53,7 +53,6 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_ip_dist(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
     let b = &args[1];
@@ -63,17 +62,12 @@ pub(crate) fn op_ip_dist(args: &[DataValue]) -> Result<DataValue> {
                 bail!("'ip_dist' requires two vectors of the same length");
             }
             let (sa, sb) = (a.to_f64s(), b.to_f64s());
-            let dot: f64 = sa
-                .iter()
-                .zip(sb.iter())
-                .map(|(x, y)| *x * *y)
-                .sum();
+            let dot: f64 = sa.iter().zip(sb.iter()).map(|(x, y)| *x * *y).sum();
             Ok(DataValue::from(1. - dot))
         }
         _ => bail!("'ip_dist' requires two vectors"),
     }
 }
-
 
 pub(crate) fn op_l2_dist(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
@@ -95,7 +89,6 @@ pub(crate) fn op_l2_dist(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
     match a {
@@ -112,4 +105,3 @@ pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'l2_normalize' requires a vector"),
     }
 }
-

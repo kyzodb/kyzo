@@ -72,13 +72,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Error, Result};
 
-use kyzo_model::program::aggregate::Aggregation;
 use crate::exec::fold::aggr::NormalAggr;
+use crate::exec::op::temporal::SignedFact;
+use kyzo_model::program::aggregate::Aggregation;
 use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::exec::op::temporal::SignedFact;
 
 /// One rule-body argument: a bound value, or a variable to unify.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -894,7 +894,9 @@ pub(crate) fn incremental_eval(
             (filtered, new_rows)
         } else {
             let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
+            let has_aggr = rules
+                .iter()
+                .any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
             let delta = if has_aggr {
                 eval_aggregating_head_incremental(
                     &rules,
@@ -973,9 +975,7 @@ mod tests {
         }
     }
     fn rule(head_rel: &str, head_args: Vec<Term>, body: Vec<Literal>) -> Rule {
-        let aggr = (0..head_args.len())
-            .map(|_| HeadAggrSlot::Plain)
-            .collect();
+        let aggr = (0..head_args.len()).map(|_| HeadAggrSlot::Plain).collect();
         Rule {
             head_rel: sym(head_rel),
             head_args,
@@ -1129,8 +1129,6 @@ mod tests {
         assert!(err.to_string().contains("recursive"));
     }
 
-
     // Oracle-differential incremental property corpus moved to
     // `kyzo-trials` (crate wall: kyzo-core must not import kyzo_oracle).
-
 }

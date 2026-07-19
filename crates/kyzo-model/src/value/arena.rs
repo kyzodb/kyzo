@@ -524,14 +524,26 @@ pub struct Admission {
 /// Thin call-site alias: [`DomainCtxRefusal`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Denial {
-    ArenaMismatch { left: ArenaId, right: ArenaId },
-    EpochMismatch { left: Epoch, right: Epoch },
+    ArenaMismatch {
+        left: ArenaId,
+        right: ArenaId,
+    },
+    EpochMismatch {
+        left: Epoch,
+        right: Epoch,
+    },
     /// Code or domain extent exceeds the observer's live cut / length.
-    VisibilityOverflow { required: usize, visible: usize },
+    VisibilityOverflow {
+        required: usize,
+        visible: usize,
+    },
     /// Empty projection cannot invent a tuple width.
     EmptyProjection,
     /// Tuple width does not match the container / sink arity.
-    ArityMismatch { expected: usize, got: usize },
+    ArityMismatch {
+        expected: usize,
+        got: usize,
+    },
     /// A `u32`/`u64` extent would wrap: domain absorb growth, arena
     /// distinct-value capacity (`len == u32::MAX`), a value's byte length /
     /// heap offset / chunk id exceeding span encoding space, `off + len`
@@ -555,7 +567,10 @@ impl std::fmt::Display for Denial {
                 write!(f, "epoch mismatch ({left:?} vs {right:?})")
             }
             Denial::VisibilityOverflow { required, visible } => {
-                write!(f, "visibility overflow (required {required}, visible {visible})")
+                write!(
+                    f,
+                    "visibility overflow (required {required}, visible {visible})"
+                )
             }
             Denial::EmptyProjection => write!(f, "empty projection"),
             Denial::ArityMismatch { expected, got } => {
@@ -962,11 +977,7 @@ impl<'a, S: Store> View<'a, S> {
             }
             Err(pos) => rank += pos,
         }
-        if found {
-            Ok(Ok(rank))
-        } else {
-            Ok(Err(rank))
-        }
+        if found { Ok(Ok(rank)) } else { Ok(Err(rank)) }
     }
 
     /// The `k`-th smallest interned value across sealed and delta.
@@ -1202,11 +1213,7 @@ impl<'a> Frame<'a> {
     /// otherwise.
     ///
     /// Typed refusal on foreign-arena or stale stamps.
-    pub fn cmp_codes(
-        &self,
-        a: StampedCode,
-        b: StampedCode,
-    ) -> Result<Ordering, Denial> {
+    pub fn cmp_codes(&self, a: StampedCode, b: StampedCode) -> Result<Ordering, Denial> {
         let (ca, cb) = (self.check(a)?, self.check(b)?);
         self.view().cmp(ca, cb)
     }
@@ -1324,11 +1331,7 @@ impl Snapshot {
     /// [`Frame::cmp_codes`]).
     ///
     /// Typed refusal on wrong-epoch or foreign-arena stamps.
-    pub fn cmp_codes(
-        &self,
-        a: StampedCode,
-        b: StampedCode,
-    ) -> Result<Ordering, Denial> {
+    pub fn cmp_codes(&self, a: StampedCode, b: StampedCode) -> Result<Ordering, Denial> {
         let (ca, cb) = (self.check(a)?, self.check(b)?);
         self.view().cmp(ca, cb)
     }
@@ -1735,12 +1738,7 @@ impl Arena {
             self.sealed_len += delta_n;
         }
 
-        self.epoch = Epoch(
-            self.epoch
-                .0
-                .checked_add(1)
-                .ok_or(Denial::ExtentOverflow)?,
-        );
+        self.epoch = Epoch(self.epoch.0.checked_add(1).ok_or(Denial::ExtentOverflow)?);
         Ok(EpochRemap {
             arena: self.id,
             from,
@@ -1937,7 +1935,11 @@ mod tests {
         // Global rank/select agree with the sorted union.
         let union = naive.union_sorted();
         for (k, v) in union.iter().enumerate() {
-            assert_eq!(f.select(k).expect("in-range"), v.as_slice(), "select({k}) wrong");
+            assert_eq!(
+                f.select(k).expect("in-range"),
+                v.as_slice(),
+                "select({k}) wrong"
+            );
             assert_eq!(f.rank(v), Ok(Ok(k)), "rank of {v:?} wrong");
         }
         // cmp_codes is the byte order, over every live pair.
@@ -2237,10 +2239,7 @@ mod tests {
         let r1 = arena.seal().expect("lawful seal");
         let sc_new = must_intern(&mut arena, b"y"); // epoch 1
         assert!(
-            matches!(
-                r1.apply(sc_new),
-                Err(Denial::EpochMismatch { .. })
-            ),
+            matches!(r1.apply(sc_new), Err(Denial::EpochMismatch { .. })),
             "r1 reads epoch-0 codes only — typed refusal"
         );
     }
@@ -2267,10 +2266,7 @@ mod tests {
         let sa = must_intern(&mut a, b"alpha");
         must_intern(&mut b, b"beta");
         assert!(
-            matches!(
-                b.frame().resolve(sa),
-                Err(Denial::ArenaMismatch { .. })
-            ),
+            matches!(b.frame().resolve(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp must refuse typed"
         );
     }
@@ -2287,8 +2283,14 @@ mod tests {
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         let pass = auth.open_pass(&f);
-        assert_eq!(pass.resolve(sc.code().raw() as usize).expect("lawful"), b"x");
-        assert_eq!(pass.resolve(sc.code().raw() as usize).expect("lawful"), b"x");
+        assert_eq!(
+            pass.resolve(sc.code().raw() as usize).expect("lawful"),
+            b"x"
+        );
+        assert_eq!(
+            pass.resolve(sc.code().raw() as usize).expect("lawful"),
+            b"x"
+        );
         // `auth` was moved into `open_pass` — a second use would be E0382.
         // Absence of Clone/Copy is locked in `super::proofs`.
     }
@@ -2301,7 +2303,8 @@ mod tests {
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         assert_eq!(
-            f.resolve_raw(sc.code().raw() as usize, auth).expect("lawful"),
+            f.resolve_raw(sc.code().raw() as usize, auth)
+                .expect("lawful"),
             b"y"
         );
         // `auth` spent — reuse would be E0382 (see `super::proofs`).
@@ -2341,10 +2344,7 @@ mod tests {
         let sc = must_intern(&mut arena, b"x");
         arena.seal().expect("lawful seal");
         assert!(
-            matches!(
-                arena.frame().resolve(sc),
-                Err(Denial::EpochMismatch { .. })
-            ),
+            matches!(arena.frame().resolve(sc), Err(Denial::EpochMismatch { .. })),
             "stale stamp must refuse typed — cross through the remap door"
         );
     }
@@ -2356,10 +2356,7 @@ mod tests {
         let _remap = arena.seal().expect("lawful seal");
         let snap = arena.snapshot();
         assert!(
-            matches!(
-                snap.resolve(sc),
-                Err(Denial::EpochMismatch { .. })
-            ),
+            matches!(snap.resolve(sc), Err(Denial::EpochMismatch { .. })),
             "stamped epoch 0 into epoch-1 snapshot must refuse typed"
         );
     }
@@ -2371,10 +2368,7 @@ mod tests {
         let snap = arena.snapshot();
         let later = must_intern(&mut arena, b"y"); // same epoch, after the cut
         assert!(
-            matches!(
-                snap.resolve(later),
-                Err(Denial::VisibilityOverflow { .. })
-            ),
+            matches!(snap.resolve(later), Err(Denial::VisibilityOverflow { .. })),
             "same-epoch code past the snapshot cut must refuse typed"
         );
     }
@@ -2410,10 +2404,7 @@ mod tests {
         let sa = must_intern(&mut a, b"alpha");
         must_intern(&mut b, b"beta");
         assert!(
-            matches!(
-                b.snapshot().resolve(sa),
-                Err(Denial::ArenaMismatch { .. })
-            ),
+            matches!(b.snapshot().resolve(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp in snapshot must refuse typed"
         );
     }
@@ -2426,10 +2417,7 @@ mod tests {
         let sb = must_intern(&mut b, b"beta");
         let remap = a.seal().expect("lawful seal");
         assert!(
-            matches!(
-                remap.apply(sb),
-                Err(Denial::ArenaMismatch { .. })
-            ),
+            matches!(remap.apply(sb), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp in remap must refuse typed"
         );
     }
@@ -2590,10 +2578,7 @@ mod tests {
         let f = arena.frame();
 
         let base = arena.compare_derefs();
-        assert_eq!(
-            f.cmp_codes(a, b).expect("lawful"),
-            std::cmp::Ordering::Less
-        );
+        assert_eq!(f.cmp_codes(a, b).expect("lawful"), std::cmp::Ordering::Less);
         assert_eq!(
             arena.compare_derefs() - base,
             0,
@@ -2601,10 +2586,7 @@ mod tests {
         );
 
         let base = arena.compare_derefs();
-        assert_eq!(
-            f.cmp_codes(c, d).expect("lawful"),
-            std::cmp::Ordering::Less
-        );
+        assert_eq!(f.cmp_codes(c, d).expect("lawful"), std::cmp::Ordering::Less);
         assert!(
             arena.compare_derefs() > base,
             "shared-prefix tie must deref to break the tie"
@@ -2640,7 +2622,11 @@ mod tests {
             col.push(*c).expect("lawful push");
         }
         let base = arena.compare_derefs();
-        let perm = col.admit(&f).expect("lawful admit").sort_permutation().expect("lawful sort");
+        let perm = col
+            .admit(&f)
+            .expect("lawful admit")
+            .sort_permutation()
+            .expect("lawful sort");
         assert_eq!(perm.len(), 1000);
         assert_eq!(
             arena.compare_derefs() - base,
@@ -2939,7 +2925,10 @@ mod tests {
         assert!(
             matches!(
                 arena.frame().select(0),
-                Err(Denial::VisibilityOverflow { required: 1, visible: 0 })
+                Err(Denial::VisibilityOverflow {
+                    required: 1,
+                    visible: 0
+                })
             ),
             "OOB select must refuse typed — never abort the process"
         );

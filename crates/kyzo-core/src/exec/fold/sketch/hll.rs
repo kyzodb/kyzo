@@ -72,12 +72,10 @@ const FORMAT_TAG: u8 = 0x01;
 #[repr(transparent)]
 pub(crate) struct HllRegisters<const M: usize>(Box<[u8; M]>);
 
-const _: () = assert!(
-    std::mem::size_of::<HllRegisters<16>>() == std::mem::size_of::<Box<[u8; 16]>>()
-);
-const _: () = assert!(
-    std::mem::align_of::<HllRegisters<16>>() == std::mem::align_of::<Box<[u8; 16]>>()
-);
+const _: () =
+    assert!(std::mem::size_of::<HllRegisters<16>>() == std::mem::size_of::<Box<[u8; 16]>>());
+const _: () =
+    assert!(std::mem::align_of::<HllRegisters<16>>() == std::mem::align_of::<Box<[u8; 16]>>());
 
 impl<const M: usize> HllRegisters<M> {
     fn zeros() -> Self {
@@ -169,10 +167,7 @@ impl<const M: usize> HyperLogLog<M> {
             "HyperLogLog register count M must be a power of two"
         );
         let p = M.trailing_zeros();
-        assert!(
-            p >= 4 && p <= 18,
-            "HyperLogLog precision must be in 4..=18"
-        );
+        assert!(p >= 4 && p <= 18, "HyperLogLog precision must be in 4..=18");
         p as u8
     };
 

@@ -876,10 +876,7 @@ impl<B: SimpleRuleBody> SimpleFixedRule<B> {
     /// * `return_arity`: The return arity of this rule.
     /// * `body`: A named [`SimpleRuleBody`] (not a closure).
     pub fn new(return_arity: usize, body: B) -> Self {
-        Self {
-            return_arity,
-            body,
-        }
+        Self { return_arity, body }
     }
 }
 
@@ -1205,8 +1202,7 @@ pub(crate) fn path_predecessor(
     current: u32,
     invariant: &'static str,
 ) -> Result<u32> {
-    back_pointers[current as usize]
-        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+    back_pointers[current as usize].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
 }
 
 /// Edmonds–Karp BFS parent on the augmenting path.
@@ -1278,11 +1274,7 @@ pub(crate) struct SessionFixedRule<'a, S> {
 }
 
 impl<'a, S> SessionFixedRule<'a, S> {
-    pub(crate) fn new(
-        apply: &'a MagicFixedRuleApply,
-        view: S,
-        cancel: CancelFlag,
-    ) -> Self {
+    pub(crate) fn new(apply: &'a MagicFixedRuleApply, view: S, cancel: CancelFlag) -> Self {
         Self {
             apply,
             view,
@@ -1354,16 +1346,14 @@ pub(crate) mod tests_support {
         }
     }
 
-
     /// Empty options bag for harness call sites.
 
     /// Lift a legacy SmartString-keyed options map into [`FixedRuleOptions`].
-    pub(crate) fn opts_map(
-        map: BTreeMap<SmartString<LazyCompact>, Expr>,
-    ) -> FixedRuleOptions {
-        FixedRuleOptions::from_entries(map.into_iter().map(|(k, v)| {
-            (Symbol::new(k, SourceSpan::default()), v)
-        }))
+    pub(crate) fn opts_map(map: BTreeMap<SmartString<LazyCompact>, Expr>) -> FixedRuleOptions {
+        FixedRuleOptions::from_entries(
+            map.into_iter()
+                .map(|(k, v)| (Symbol::new(k, SourceSpan::default()), v)),
+        )
         .expect("test options use known fixed-rule option names")
     }
 
@@ -1373,12 +1363,11 @@ pub(crate) mod tests_support {
 
     /// Build options from string keys (known fixed-rule option names only).
     pub(crate) fn opts(pairs: &[(&str, Expr)]) -> FixedRuleOptions {
-        FixedRuleOptions::from_entries(pairs.iter().map(|(k, v)| {
-            (
-                Symbol::new(*k, SourceSpan::default()),
-                v.clone(),
-            )
-        }))
+        FixedRuleOptions::from_entries(
+            pairs
+                .iter()
+                .map(|(k, v)| (Symbol::new(*k, SourceSpan::default()), v.clone())),
+        )
         .expect("test options use known fixed-rule option names")
     }
 
@@ -1580,7 +1569,7 @@ mod par_try_map_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::tests_support::{TestInput, run_fixed_rule, empty_opts, opts_map};
+    use super::tests_support::{TestInput, empty_opts, opts_map, run_fixed_rule};
     use super::*;
 
     fn s(v: &str) -> DataValue {
@@ -1603,12 +1592,7 @@ mod tests {
     fn lying_rule_is_refused() {
         struct Liar;
         impl FixedRule for Liar {
-            fn arity(
-                &self,
-                _o: &FixedRuleOptions,
-                _h: &[Symbol],
-                _s: SourceSpan,
-            ) -> Result<usize> {
+            fn arity(&self, _o: &FixedRuleOptions, _h: &[Symbol], _s: SourceSpan) -> Result<usize> {
                 Ok(3)
             }
             fn run(
@@ -1706,8 +1690,7 @@ mod tests {
         }
         let pr = DEFAULT_FIXED_RULES.get("PageRank").unwrap().clone();
         assert_eq!(
-            pr.arity(&empty_opts(), &[], SourceSpan::default())
-                .unwrap(),
+            pr.arity(&empty_opts(), &[], SourceSpan::default()).unwrap(),
             2
         );
     }
@@ -1741,12 +1724,7 @@ mod tests {
     fn graph_builders() {
         struct Probe;
         impl FixedRule for Probe {
-            fn arity(
-                &self,
-                _o: &FixedRuleOptions,
-                _h: &[Symbol],
-                _s: SourceSpan,
-            ) -> Result<usize> {
+            fn arity(&self, _o: &FixedRuleOptions, _h: &[Symbol], _s: SourceSpan) -> Result<usize> {
                 Ok(1)
             }
             fn run(
@@ -1790,12 +1768,7 @@ mod tests {
 
         struct BadEdge;
         impl FixedRule for BadEdge {
-            fn arity(
-                &self,
-                _o: &FixedRuleOptions,
-                _h: &[Symbol],
-                _s: SourceSpan,
-            ) -> Result<usize> {
+            fn arity(&self, _o: &FixedRuleOptions, _h: &[Symbol], _s: SourceSpan) -> Result<usize> {
                 Ok(1)
             }
             fn run(
@@ -1822,12 +1795,7 @@ mod tests {
 
         struct BadWeight;
         impl FixedRule for BadWeight {
-            fn arity(
-                &self,
-                _o: &FixedRuleOptions,
-                _h: &[Symbol],
-                _s: SourceSpan,
-            ) -> Result<usize> {
+            fn arity(&self, _o: &FixedRuleOptions, _h: &[Symbol], _s: SourceSpan) -> Result<usize> {
                 Ok(1)
             }
             fn run(
@@ -1906,7 +1874,10 @@ mod tests {
                         nullary(),
                         TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")])]),
                     ],
-                    opts_map(BTreeMap::from([(SmartString::from("k"), const_expr(DataValue::from(1i64)))])),
+                    opts_map(BTreeMap::from([(
+                        SmartString::from("k"),
+                        const_expr(DataValue::from(1i64)),
+                    )])),
                     CancelFlag::default(),
                 ),
             ),

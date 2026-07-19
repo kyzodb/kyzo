@@ -17,12 +17,6 @@
 
 use std::collections::BTreeMap;
 
-use kyzo_model::program::expr::Expr;
-use kyzo_model::program::InputRelationHandle;
-use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::SourceSpan;
-use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::DataValue;
 use crate::project::contract::search_rows;
 use crate::project::sparse::sparse::{
     Sparse, SparseSearchParams, sparse_index_metadata, sparse_put, sparse_total_docs,
@@ -30,6 +24,12 @@ use crate::project::sparse::sparse::{
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::store::fjall::new_fjall_storage;
 use crate::store::{Storage, WriteTx};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::InputRelationHandle;
+use kyzo_model::program::expr::Expr;
+use kyzo_model::program::symbol::Symbol;
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::DataValue;
 use smartstring::SmartString;
 
 fn col(name: &str, coltype: ColType) -> ColumnDef {
@@ -114,10 +114,9 @@ fn params(k: usize) -> SparseSearchParams {
 /// Run and project (key, score-bits) so we can compare EXACT f32 bit patterns.
 fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, u32)> {
     let rtx = db.read_tx().unwrap();
-    let hits = search_rows(
-        Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap(),
-    )
-    .unwrap();
+    let hits =
+        search_rows(Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap())
+            .unwrap();
     hits.iter()
         .map(|t| {
             (

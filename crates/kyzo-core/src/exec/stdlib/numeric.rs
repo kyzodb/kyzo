@@ -24,11 +24,11 @@ use kyzo_model::value::{
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
 
-use kyzo_model::schema::VecElementType;
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
     VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
 };
+use kyzo_model::schema::VecElementType;
 
 pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
@@ -45,7 +45,6 @@ pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'abs' requires numbers"),
     })
 }
-
 
 pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -66,7 +65,6 @@ pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
     no_nan("acos", a.acos())
 }
 
-
 pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -85,8 +83,6 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     }
     no_nan("acosh", a.acosh())
 }
-
-
 
 pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
     let mut i_accum = 0i64;
@@ -112,7 +108,6 @@ pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -132,7 +127,6 @@ pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
     no_nan("asin", a.asin())
 }
 
-
 pub(crate) fn op_asinh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -145,7 +139,6 @@ pub(crate) fn op_asinh(args: &[DataValue]) -> Result<DataValue> {
     };
     Ok(DataValue::Num(Num::float(a.asinh())))
 }
-
 
 pub(crate) fn op_atan(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -160,7 +153,6 @@ pub(crate) fn op_atan(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Num(Num::float(a.atan())))
 }
 
-
 pub(crate) fn op_atan2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -173,7 +165,6 @@ pub(crate) fn op_atan2(args: &[DataValue]) -> Result<DataValue> {
 
     Ok(DataValue::Num(Num::float(a.atan2(b))))
 }
-
 
 pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -195,7 +186,6 @@ pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
     no_nan("atanh", a.atanh())
 }
 
-
 pub(crate) fn op_bit_and(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Bytes(left), DataValue::Bytes(right)) => {
@@ -213,7 +203,6 @@ pub(crate) fn op_bit_and(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_bit_not(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Bytes(arg) => {
@@ -226,7 +215,6 @@ pub(crate) fn op_bit_not(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'bit_not' requires bytes"),
     }
 }
-
 
 pub(crate) fn op_bit_or(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
@@ -245,7 +233,6 @@ pub(crate) fn op_bit_or(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_bit_xor(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Bytes(left), DataValue::Bytes(right)) => {
@@ -263,7 +250,6 @@ pub(crate) fn op_bit_xor(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => match n.repr() {
@@ -273,7 +259,6 @@ pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'ceil' requires numbers"),
     })
 }
-
 
 pub(crate) fn op_cos(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -288,7 +273,6 @@ pub(crate) fn op_cos(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Num(Num::float(a.cos())))
 }
 
-
 pub(crate) fn op_cosh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -301,7 +285,6 @@ pub(crate) fn op_cosh(args: &[DataValue]) -> Result<DataValue> {
     };
     Ok(DataValue::Num(Num::float(a.cosh())))
 }
-
 
 pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
@@ -343,7 +326,6 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_exp(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -356,7 +338,6 @@ pub(crate) fn op_exp(args: &[DataValue]) -> Result<DataValue> {
     };
     Ok(DataValue::Num(Num::float(a.exp())))
 }
-
 
 pub(crate) fn op_exp2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -371,7 +352,6 @@ pub(crate) fn op_exp2(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Num(Num::float(a.exp2())))
 }
 
-
 pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => match n.repr() {
@@ -381,7 +361,6 @@ pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'floor' requires numbers"),
     })
 }
-
 
 pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -403,7 +382,6 @@ pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
     no_nan("ln", a.ln())
 }
 
-
 pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -421,7 +399,6 @@ pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
     }
     no_nan("log10", a.log10())
 }
-
 
 pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -441,7 +418,6 @@ pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
     no_nan("log2", a.log2())
 }
 
-
 pub(crate) fn op_max(args: &[DataValue]) -> Result<DataValue> {
     let res = args
         .iter()
@@ -449,7 +425,11 @@ pub(crate) fn op_max(args: &[DataValue]) -> Result<DataValue> {
             (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
             (Some(DataValue::Num(a)), DataValue::Num(b)) => {
                 // Ties keep `a` — deterministic and accumulation-friendly.
-                let chosen = if NumericOrd::of(a) < NumericOrd::of(*b) { *b } else { a };
+                let chosen = if NumericOrd::of(a) < NumericOrd::of(*b) {
+                    *b
+                } else {
+                    a
+                };
                 Ok(Some(DataValue::Num(chosen)))
             }
             _ => bail!("'max can only be applied to numbers'"),
@@ -460,7 +440,6 @@ pub(crate) fn op_max(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_min(args: &[DataValue]) -> Result<DataValue> {
     let res = args
         .iter()
@@ -468,7 +447,11 @@ pub(crate) fn op_min(args: &[DataValue]) -> Result<DataValue> {
             (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
             (Some(DataValue::Num(a)), DataValue::Num(b)) => {
                 // Ties keep `a`.
-                let chosen = if NumericOrd::of(a) > NumericOrd::of(*b) { *b } else { a };
+                let chosen = if NumericOrd::of(a) > NumericOrd::of(*b) {
+                    *b
+                } else {
+                    a
+                };
                 Ok(Some(DataValue::Num(chosen)))
             }
             _ => bail!("'min' can only be applied to numbers"),
@@ -478,7 +461,6 @@ pub(crate) fn op_min(args: &[DataValue]) -> Result<DataValue> {
         Some(v) => Ok(v),
     }
 }
-
 
 pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
@@ -495,7 +477,6 @@ pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("minus can only be applied to numbers"),
     })
 }
-
 
 pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
@@ -528,7 +509,6 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
     let mut i_accum = 1i64;
     let mut f_accum = 1.0f64;
@@ -553,7 +533,6 @@ pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_negate(args: &[DataValue]) -> Result<DataValue> {
     if let DataValue::Bool(b) = &args[0] {
         Ok(DataValue::from(!*b))
@@ -561,7 +540,6 @@ pub(crate) fn op_negate(args: &[DataValue]) -> Result<DataValue> {
         bail!("'negate' requires booleans");
     }
 }
-
 
 pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
     if let DataValue::List(v) = &args[0] {
@@ -600,7 +578,6 @@ pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
 pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -625,7 +602,6 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
     no_nan("pow", a.powf(b))
 }
 
-
 pub(crate) fn op_round(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => match n.repr() {
@@ -635,7 +611,6 @@ pub(crate) fn op_round(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'round' requires numbers"),
     })
 }
-
 
 pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
@@ -657,7 +632,6 @@ pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_sin(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -671,7 +645,6 @@ pub(crate) fn op_sin(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Num(Num::float(a.sin())))
 }
 
-
 pub(crate) fn op_sinh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -684,7 +657,6 @@ pub(crate) fn op_sinh(args: &[DataValue]) -> Result<DataValue> {
     };
     Ok(DataValue::Num(Num::float(a.sinh())))
 }
-
 
 pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
@@ -704,7 +676,6 @@ pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
     }
     no_nan("sqrt", a.sqrt())
 }
-
 
 pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
@@ -745,7 +716,6 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
-
 pub(crate) fn op_tan(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -759,7 +729,6 @@ pub(crate) fn op_tan(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::Num(Num::float(a.tan())))
 }
 
-
 pub(crate) fn op_tanh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
@@ -772,7 +741,6 @@ pub(crate) fn op_tanh(args: &[DataValue]) -> Result<DataValue> {
     };
     Ok(DataValue::Num(Num::float(a.tanh())))
 }
-
 
 pub(crate) fn op_unpack_bits(args: &[DataValue]) -> Result<DataValue> {
     if let DataValue::Bytes(bs) = &args[0] {
@@ -794,8 +762,6 @@ pub(crate) fn op_unpack_bits(args: &[DataValue]) -> Result<DataValue> {
         bail!("'unpack_bits' requires bytes")
     }
 }
-
-
 
 fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
     if args.len() == 1 {
@@ -839,8 +805,6 @@ fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
         _ => bail!("addition requires numbers"),
     }
 }
-
-
 
 fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
     if args.len() == 1 {
@@ -888,8 +852,6 @@ fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-
-
 /// `a.powf(b)` is partial in two ways: a negative base raised to a
 /// fractional exponent has no real result (`NaN` — e.g. `(-1)^0.5`), and a
 /// zero base raised to a negative exponent diverges to an infinity (e.g.
@@ -897,7 +859,3 @@ fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
 fn pow_out_of_domain(a: f64, b: f64) -> bool {
     (a < 0.0 && b.fract() != 0.0) || (a == 0.0 && b < 0.0)
 }
-
-
-
-

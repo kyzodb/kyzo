@@ -93,15 +93,8 @@ fn no_params() -> std::collections::BTreeMap<String, DataValue> {
 /// `is_assert` beside an optional `val` is unrepresentable.
 #[derive(Clone, Debug)]
 enum Event {
-    Assert {
-        entity: i64,
-        ts: i64,
-        val: String,
-    },
-    Retract {
-        entity: i64,
-        ts: i64,
-    },
+    Assert { entity: i64, ts: i64, val: String },
+    Retract { entity: i64, ts: i64 },
 }
 
 impl Event {
@@ -191,9 +184,9 @@ fn write_transaction(
     }
     for ev in events {
         let script = match ev {
-            Event::Assert { entity, ts, val } => format!(
-                "?[k0, val] <- [[{entity}, '{val}']] :put {rel_name} {{k0 => val}} @ {ts}"
-            ),
+            Event::Assert { entity, ts, val } => {
+                format!("?[k0, val] <- [[{entity}, '{val}']] :put {rel_name} {{k0 => val}} @ {ts}")
+            }
             Event::Retract { entity, ts } => {
                 format!("?[k0] <- [[{entity}]] :rm {rel_name} {{k0}} @ {ts}")
             }
@@ -240,14 +233,12 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
                     i as i64,
                 )
                 .expect("event timestamps in this file are never the reserved terminal tick"),
-                Event::Retract { entity, ts } => {
-                    TemporalEvent::retract(
-                        Tuple::from_vec(vec![DataValue::from(*entity)]),
-                        *ts,
-                        i as i64,
-                    )
-                    .expect("event timestamps in this file are never the reserved terminal tick")
-                }
+                Event::Retract { entity, ts } => TemporalEvent::retract(
+                    Tuple::from_vec(vec![DataValue::from(*entity)]),
+                    *ts,
+                    i as i64,
+                )
+                .expect("event timestamps in this file are never the reserved terminal tick"),
             }
         })
         .collect();
@@ -575,20 +566,14 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
         no_params(),
     )
     .expect("first write");
-    let s1 = store
-        .clock_floor()
-        .expect("floor after first write")
-        .raw();
+    let s1 = store.clock_floor().expect("floor after first write").raw();
 
     db.run_script(
         "?[k0, val] <- [[1, 'corrected']] :put corr {k0 => val} @ 100",
         no_params(),
     )
     .expect("second write");
-    let s2 = store
-        .clock_floor()
-        .expect("floor after second write")
-        .raw();
+    let s2 = store.clock_floor().expect("floor after second write").raw();
 
     // `ValidityTs` wraps `Reverse`; the raw counter (`.raw()`) increases with
     // wall/logical time, so a later mint reads numerically LARGER here.
@@ -739,7 +724,8 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
         .run_script("?[k0, val] := *ereg:byval{val, k0 @ 300}", no_params())
         .expect("index as-of read");
     assert_eq!(
-        idx.rows(), base.rows(),
+        idx.rows(),
+        base.rows(),
         "the index must agree with the base exactly at the same as-of coordinate"
     );
 

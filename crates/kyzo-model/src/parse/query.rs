@@ -37,8 +37,8 @@ use crate::program::span::SourceSpan;
 use crate::program::symbol::{Symbol, SymbolKind};
 use crate::schema::column::{ColType, ColumnDef, NullableColType};
 use crate::schema::relation::StoredRelationMetadata;
-use crate::value::{AsOf, DataValue, ValidityTs};
 use crate::value::validity_coerce::data_value_to_vld_spec;
+use crate::value::{AsOf, DataValue, ValidityTs};
 
 use super::expr::build_expr;
 use super::schema::parse_schema;
@@ -91,9 +91,7 @@ impl Diagnostic for MultipleRuleDefinitionError {
 
     fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
         Some(Box::new(
-            self.1
-                .iter()
-                .map(|s| LabeledSpan::new_with_span(None, *s)),
+            self.1.iter().map(|s| LabeledSpan::new_with_span(None, *s)),
         ))
     }
 }
@@ -238,10 +236,8 @@ pub(crate) fn parse_query(
                 let data_part = src.next().unwrap();
                 let entry_param_head = extract_entry_param_head(data_part.clone());
                 let data = build_expr(data_part, param_pool)?;
-                let options = FixedRuleOptions::from_entries([(
-                    Symbol::new("data", span),
-                    data.clone(),
-                )])?;
+                let options =
+                    FixedRuleOptions::from_entries([(Symbol::new("data", span), data.clone())])?;
                 let handle = FixedRuleHandle {
                     name: Symbol::new("Constant", span),
                 };
@@ -521,8 +517,7 @@ pub(crate) fn parse_query(
                 dep_bindings: vec![],
                 span,
             };
-            prog.out_opts_mut().store_relation =
-                Some((handle, op, returning_mutation, write_vld));
+            prog.out_opts_mut().store_relation = Some((handle, op, returning_mutation, write_vld));
             return finalize_program(prog);
         }
         Some(StoredRelationBuild::WithSchema {
@@ -807,14 +802,8 @@ fn parse_atom(
             }
 
             InputAtom::Search {
-                inner: SearchInput::from_named_parts(
-                    relation,
-                    index,
-                    bindings,
-                    parameters,
-                    span,
-                )
-                .map_err(miette::Report::new)?,
+                inner: SearchInput::from_named_parts(relation, index, bindings, parameters, span)
+                    .map_err(miette::Report::new)?,
             }
         }
         Rule::relation_named_apply => {
@@ -893,7 +882,10 @@ fn parse_rule_head_arg(
 ) -> Result<(Symbol, HeadAggrSlot)> {
     let src = src.into_inner().next().unwrap();
     Ok(match src.as_rule() {
-        Rule::var => (Symbol::new(src.as_str(), src.extract_span()), HeadAggrSlot::Plain),
+        Rule::var => (
+            Symbol::new(src.as_str(), src.extract_span()),
+            HeadAggrSlot::Plain,
+        ),
         Rule::aggr_arg => {
             let mut inner = src.into_inner();
             let aggr_p = inner.next().unwrap();

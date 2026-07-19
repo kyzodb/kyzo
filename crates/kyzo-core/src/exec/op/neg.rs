@@ -20,17 +20,17 @@ use super::{
     DeltaRA, Joiner, RelAlgebra, SpansRA, StoredRA, StoredRowTooShortError, StoredWithValidityRA,
     TempStoreRA, epoch_store_of,
 };
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::op::batch_ops::{Batch, BatchIter};
+use crate::exec::op::join::{get_eliminate_indices, join_is_prefix};
 use crate::exec::plan::program::MagicSymbol;
+use crate::project::current::Segments;
+use crate::store::ReadTx;
+use itertools::Itertools;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
-use crate::project::current::Segments;
-use crate::exec::op::batch_ops::{Batch, BatchIter};
-use crate::exec::fixpoint::eval::AtomOccurrence;
-use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::exec::op::join::{get_eliminate_indices, join_is_prefix};
-use crate::store::ReadTx;
-use itertools::Itertools;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;

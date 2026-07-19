@@ -18,18 +18,18 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
-use kyzo_model::program::expr::Expr;
+use crate::exec::fixpoint::delta_store::EpochStore;
+use crate::exec::fixpoint::eval::AtomOccurrence;
+use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter};
 use crate::exec::plan::program::MagicSymbol;
+use crate::project::current::Segments;
+use crate::store::ReadTx;
+use itertools::Itertools;
 use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::project::current::Segments;
-use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter};
-use crate::exec::fixpoint::eval::AtomOccurrence;
-use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::store::ReadTx;
-use itertools::Itertools;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
@@ -285,12 +285,12 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                             }
                         }
                         if keep {
-                            let right_premise = if self.want_premises && self.capture_right_as_premise
-                            {
-                                Some(found.clone())
-                            } else {
-                                None
-                            };
+                            let right_premise =
+                                if self.want_premises && self.capture_right_as_premise {
+                                    Some(found.clone())
+                                } else {
+                                    None
+                                };
                             if let Err(e) = push_joined_row(
                                 &mut out,
                                 &left_owned,
@@ -432,7 +432,17 @@ impl InnerJoin {
         left.extend(self.joiner.left_keys.clone());
         if let Some(filters) = match &self.right {
             RelAlgebra::TempStore(r) => Some(&r.filters),
-            RelAlgebra::Fixed(_) | RelAlgebra::Stored(_) | RelAlgebra::StoredWithValidity(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => None,
+            RelAlgebra::Fixed(_)
+            | RelAlgebra::Stored(_)
+            | RelAlgebra::StoredWithValidity(_)
+            | RelAlgebra::Join(_)
+            | RelAlgebra::NegJoin(_)
+            | RelAlgebra::Reorder(_)
+            | RelAlgebra::Filter(_)
+            | RelAlgebra::Unification(_)
+            | RelAlgebra::Search(_)
+            | RelAlgebra::Spans(_)
+            | RelAlgebra::Delta(_) => None,
         } {
             for filter in filters {
                 left.extend(filter.bindings()?);

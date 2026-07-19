@@ -1,7 +1,4 @@
 //! Sole BoundOp mint + sole public `resolve_op` registry.
-use miette::Result;
-use kyzo_model::program::op::{self as opdecl, OpDecl};
-use kyzo_model::value::DataValue;
 use super::bound_op::{self, BoundOp};
 use super::collection;
 use super::compare;
@@ -13,6 +10,9 @@ use super::nondet;
 use super::numeric;
 use super::temporal_format;
 use super::text;
+use kyzo_model::program::op::{self as opdecl, OpDecl};
+use kyzo_model::value::DataValue;
+use miette::Result;
 
 /// Sole public door that pairs an [`OpDecl`] with a body.
 pub const fn bind_op(decl: OpDecl, body: fn(&[DataValue]) -> Result<DataValue>) -> BoundOp {
@@ -54,27 +54,52 @@ pub static OP_EXP: BoundOp = bind_op(opdecl::OP_EXP, numeric::op_exp);
 pub static OP_EXP2: BoundOp = bind_op(opdecl::OP_EXP2, numeric::op_exp2);
 pub static OP_FIRST: BoundOp = bind_op(opdecl::OP_FIRST, collection::op_first);
 pub static OP_FLOOR: BoundOp = bind_op(opdecl::OP_FLOOR, numeric::op_floor);
-pub static OP_FORMAT_TIMESTAMP: BoundOp = bind_op(opdecl::OP_FORMAT_TIMESTAMP, temporal_format::op_format_timestamp);
-pub static OP_FROM_SUBSTRINGS: BoundOp = bind_op(opdecl::OP_FROM_SUBSTRINGS, text::op_from_substrings);
+pub static OP_FORMAT_TIMESTAMP: BoundOp = bind_op(
+    opdecl::OP_FORMAT_TIMESTAMP,
+    temporal_format::op_format_timestamp,
+);
+pub static OP_FROM_SUBSTRINGS: BoundOp =
+    bind_op(opdecl::OP_FROM_SUBSTRINGS, text::op_from_substrings);
 pub static OP_GE: BoundOp = bind_op(opdecl::OP_GE, compare::op_ge);
 pub static OP_GET: BoundOp = bind_op(opdecl::OP_GET, collection::op_get);
 pub static OP_GT: BoundOp = bind_op(opdecl::OP_GT, compare::op_gt);
 pub static OP_HAVERSINE: BoundOp = bind_op(opdecl::OP_HAVERSINE, geo::op_haversine);
-pub static OP_HAVERSINE_DEG_INPUT: BoundOp = bind_op(opdecl::OP_HAVERSINE_DEG_INPUT, geo::op_haversine_deg_input);
+pub static OP_HAVERSINE_DEG_INPUT: BoundOp =
+    bind_op(opdecl::OP_HAVERSINE_DEG_INPUT, geo::op_haversine_deg_input);
 pub static OP_INTERSECTION: BoundOp = bind_op(opdecl::OP_INTERSECTION, collection::op_intersection);
-pub static OP_INTERVAL_BEFORE: BoundOp = bind_op(opdecl::OP_INTERVAL_BEFORE, interval::op_interval_before);
-pub static OP_INTERVAL_DURING: BoundOp = bind_op(opdecl::OP_INTERVAL_DURING, interval::op_interval_during);
+pub static OP_INTERVAL_BEFORE: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_BEFORE, interval::op_interval_before);
+pub static OP_INTERVAL_DURING: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_DURING, interval::op_interval_during);
 pub static OP_INTERVAL_END: BoundOp = bind_op(opdecl::OP_INTERVAL_END, interval::op_interval_end);
-pub static OP_INTERVAL_FINISHES: BoundOp = bind_op(opdecl::OP_INTERVAL_FINISHES, interval::op_interval_finishes);
-pub static OP_INTERVAL_HAS_END: BoundOp = bind_op(opdecl::OP_INTERVAL_HAS_END, interval::op_interval_has_end);
-pub static OP_INTERVAL_HAS_START: BoundOp = bind_op(opdecl::OP_INTERVAL_HAS_START, interval::op_interval_has_start);
-pub static OP_INTERVAL_INTERSECTS: BoundOp = bind_op(opdecl::OP_INTERVAL_INTERSECTS, interval::op_interval_intersects);
-pub static OP_INTERVAL_IS_END_UNBOUNDED: BoundOp = bind_op(opdecl::OP_INTERVAL_IS_END_UNBOUNDED, interval::op_interval_is_end_unbounded);
-pub static OP_INTERVAL_IS_START_UNBOUNDED: BoundOp = bind_op(opdecl::OP_INTERVAL_IS_START_UNBOUNDED, interval::op_interval_is_start_unbounded);
-pub static OP_INTERVAL_MEETS: BoundOp = bind_op(opdecl::OP_INTERVAL_MEETS, interval::op_interval_meets);
-pub static OP_INTERVAL_OVERLAPS: BoundOp = bind_op(opdecl::OP_INTERVAL_OVERLAPS, interval::op_interval_overlaps);
-pub static OP_INTERVAL_START: BoundOp = bind_op(opdecl::OP_INTERVAL_START, interval::op_interval_start);
-pub static OP_INTERVAL_STARTS: BoundOp = bind_op(opdecl::OP_INTERVAL_STARTS, interval::op_interval_starts);
+pub static OP_INTERVAL_FINISHES: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_FINISHES, interval::op_interval_finishes);
+pub static OP_INTERVAL_HAS_END: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_HAS_END, interval::op_interval_has_end);
+pub static OP_INTERVAL_HAS_START: BoundOp = bind_op(
+    opdecl::OP_INTERVAL_HAS_START,
+    interval::op_interval_has_start,
+);
+pub static OP_INTERVAL_INTERSECTS: BoundOp = bind_op(
+    opdecl::OP_INTERVAL_INTERSECTS,
+    interval::op_interval_intersects,
+);
+pub static OP_INTERVAL_IS_END_UNBOUNDED: BoundOp = bind_op(
+    opdecl::OP_INTERVAL_IS_END_UNBOUNDED,
+    interval::op_interval_is_end_unbounded,
+);
+pub static OP_INTERVAL_IS_START_UNBOUNDED: BoundOp = bind_op(
+    opdecl::OP_INTERVAL_IS_START_UNBOUNDED,
+    interval::op_interval_is_start_unbounded,
+);
+pub static OP_INTERVAL_MEETS: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_MEETS, interval::op_interval_meets);
+pub static OP_INTERVAL_OVERLAPS: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_OVERLAPS, interval::op_interval_overlaps);
+pub static OP_INTERVAL_START: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_START, interval::op_interval_start);
+pub static OP_INTERVAL_STARTS: BoundOp =
+    bind_op(opdecl::OP_INTERVAL_STARTS, interval::op_interval_starts);
 pub static OP_INT_RANGE: BoundOp = bind_op(opdecl::OP_INT_RANGE, collection::op_int_range);
 pub static OP_IP_DIST: BoundOp = bind_op(opdecl::OP_IP_DIST, metric::op_ip_dist);
 pub static OP_IS_BYTES: BoundOp = bind_op(opdecl::OP_IS_BYTES, compare::op_is_bytes);
@@ -93,7 +118,8 @@ pub static OP_IS_UUID: BoundOp = bind_op(opdecl::OP_IS_UUID, compare::op_is_uuid
 pub static OP_IS_VEC: BoundOp = bind_op(opdecl::OP_IS_VEC, compare::op_is_vec);
 pub static OP_JSON: BoundOp = bind_op(opdecl::OP_JSON, collection::op_json);
 pub static OP_JSON_OBJECT: BoundOp = bind_op(opdecl::OP_JSON_OBJECT, collection::op_json_object);
-pub static OP_JSON_TO_SCALAR: BoundOp = bind_op(opdecl::OP_JSON_TO_SCALAR, collection::op_json_to_scalar);
+pub static OP_JSON_TO_SCALAR: BoundOp =
+    bind_op(opdecl::OP_JSON_TO_SCALAR, collection::op_json_to_scalar);
 pub static OP_L2_DIST: BoundOp = bind_op(opdecl::OP_L2_DIST, metric::op_l2_dist);
 pub static OP_L2_NORMALIZE: BoundOp = bind_op(opdecl::OP_L2_NORMALIZE, metric::op_l2_normalize);
 pub static OP_LAST: BoundOp = bind_op(opdecl::OP_LAST, collection::op_last);
@@ -105,7 +131,8 @@ pub static OP_LOG10: BoundOp = bind_op(opdecl::OP_LOG10, numeric::op_log10);
 pub static OP_LOG2: BoundOp = bind_op(opdecl::OP_LOG2, numeric::op_log2);
 pub static OP_LOWERCASE: BoundOp = bind_op(opdecl::OP_LOWERCASE, text::op_lowercase);
 pub static OP_LT: BoundOp = bind_op(opdecl::OP_LT, compare::op_lt);
-pub static OP_MAKE_INTERVAL: BoundOp = bind_op(opdecl::OP_MAKE_INTERVAL, interval::op_make_interval);
+pub static OP_MAKE_INTERVAL: BoundOp =
+    bind_op(opdecl::OP_MAKE_INTERVAL, interval::op_make_interval);
 pub static OP_MAX: BoundOp = bind_op(opdecl::OP_MAX, numeric::op_max);
 pub static OP_MAYBE_GET: BoundOp = bind_op(opdecl::OP_MAYBE_GET, collection::op_maybe_get);
 pub static OP_MIN: BoundOp = bind_op(opdecl::OP_MIN, numeric::op_min);
@@ -117,11 +144,15 @@ pub static OP_NEQ: BoundOp = bind_op(opdecl::OP_NEQ, compare::op_neq);
 pub static OP_NOW: BoundOp = bind_op(opdecl::OP_NOW, nondet::op_now);
 pub static OP_PACK_BITS: BoundOp = bind_op(opdecl::OP_PACK_BITS, numeric::op_pack_bits);
 pub static OP_PARSE_JSON: BoundOp = bind_op(opdecl::OP_PARSE_JSON, collection::op_parse_json);
-pub static OP_PARSE_TIMESTAMP: BoundOp = bind_op(opdecl::OP_PARSE_TIMESTAMP, temporal_format::op_parse_timestamp);
+pub static OP_PARSE_TIMESTAMP: BoundOp = bind_op(
+    opdecl::OP_PARSE_TIMESTAMP,
+    temporal_format::op_parse_timestamp,
+);
 pub static OP_POW: BoundOp = bind_op(opdecl::OP_POW, numeric::op_pow);
 pub static OP_PREPEND: BoundOp = bind_op(opdecl::OP_PREPEND, collection::op_prepend);
 pub static OP_RAD_TO_DEG: BoundOp = bind_op(opdecl::OP_RAD_TO_DEG, geo::op_rad_to_deg);
-pub static OP_RAND_BERNOULLI: BoundOp = bind_op(opdecl::OP_RAND_BERNOULLI, nondet::op_rand_bernoulli);
+pub static OP_RAND_BERNOULLI: BoundOp =
+    bind_op(opdecl::OP_RAND_BERNOULLI, nondet::op_rand_bernoulli);
 pub static OP_RAND_CHOOSE: BoundOp = bind_op(opdecl::OP_RAND_CHOOSE, nondet::op_rand_choose);
 pub static OP_RAND_FLOAT: BoundOp = bind_op(opdecl::OP_RAND_FLOAT, nondet::op_rand_float);
 pub static OP_RAND_INT: BoundOp = bind_op(opdecl::OP_RAND_INT, nondet::op_rand_int);
@@ -130,14 +161,18 @@ pub static OP_RAND_UUID_V4: BoundOp = bind_op(opdecl::OP_RAND_UUID_V4, nondet::o
 pub static OP_RAND_VEC: BoundOp = bind_op(opdecl::OP_RAND_VEC, nondet::op_rand_vec);
 pub static OP_REGEX: BoundOp = bind_op(opdecl::OP_REGEX, text::op_regex);
 pub static OP_REGEX_EXTRACT: BoundOp = bind_op(opdecl::OP_REGEX_EXTRACT, text::op_regex_extract);
-pub static OP_REGEX_EXTRACT_FIRST: BoundOp = bind_op(opdecl::OP_REGEX_EXTRACT_FIRST, text::op_regex_extract_first);
+pub static OP_REGEX_EXTRACT_FIRST: BoundOp =
+    bind_op(opdecl::OP_REGEX_EXTRACT_FIRST, text::op_regex_extract_first);
 pub static OP_REGEX_MATCHES: BoundOp = bind_op(opdecl::OP_REGEX_MATCHES, text::op_regex_matches);
 pub static OP_REGEX_REPLACE: BoundOp = bind_op(opdecl::OP_REGEX_REPLACE, text::op_regex_replace);
-pub static OP_REGEX_REPLACE_ALL: BoundOp = bind_op(opdecl::OP_REGEX_REPLACE_ALL, text::op_regex_replace_all);
-pub static OP_REMOVE_JSON_PATH: BoundOp = bind_op(opdecl::OP_REMOVE_JSON_PATH, collection::op_remove_json_path);
+pub static OP_REGEX_REPLACE_ALL: BoundOp =
+    bind_op(opdecl::OP_REGEX_REPLACE_ALL, text::op_regex_replace_all);
+pub static OP_REMOVE_JSON_PATH: BoundOp =
+    bind_op(opdecl::OP_REMOVE_JSON_PATH, collection::op_remove_json_path);
 pub static OP_REVERSE: BoundOp = bind_op(opdecl::OP_REVERSE, collection::op_reverse);
 pub static OP_ROUND: BoundOp = bind_op(opdecl::OP_ROUND, numeric::op_round);
-pub static OP_SET_JSON_PATH: BoundOp = bind_op(opdecl::OP_SET_JSON_PATH, collection::op_set_json_path);
+pub static OP_SET_JSON_PATH: BoundOp =
+    bind_op(opdecl::OP_SET_JSON_PATH, collection::op_set_json_path);
 pub static OP_SIGNUM: BoundOp = bind_op(opdecl::OP_SIGNUM, numeric::op_signum);
 pub static OP_SIN: BoundOp = bind_op(opdecl::OP_SIN, numeric::op_sin);
 pub static OP_SINH: BoundOp = bind_op(opdecl::OP_SINH, numeric::op_sinh);
@@ -160,18 +195,23 @@ pub static OP_TO_UUID: BoundOp = bind_op(opdecl::OP_TO_UUID, convert::op_to_uuid
 pub static OP_TRIM: BoundOp = bind_op(opdecl::OP_TRIM, text::op_trim);
 pub static OP_TRIM_END: BoundOp = bind_op(opdecl::OP_TRIM_END, text::op_trim_end);
 pub static OP_TRIM_START: BoundOp = bind_op(opdecl::OP_TRIM_START, text::op_trim_start);
-pub static OP_UNICODE_NORMALIZE: BoundOp = bind_op(opdecl::OP_UNICODE_NORMALIZE, text::op_unicode_normalize);
+pub static OP_UNICODE_NORMALIZE: BoundOp =
+    bind_op(opdecl::OP_UNICODE_NORMALIZE, text::op_unicode_normalize);
 pub static OP_UNION: BoundOp = bind_op(opdecl::OP_UNION, collection::op_union);
 pub static OP_UNPACK_BITS: BoundOp = bind_op(opdecl::OP_UNPACK_BITS, numeric::op_unpack_bits);
 pub static OP_UPPERCASE: BoundOp = bind_op(opdecl::OP_UPPERCASE, text::op_uppercase);
-pub static OP_UUID_TIMESTAMP: BoundOp = bind_op(opdecl::OP_UUID_TIMESTAMP, convert::op_uuid_timestamp);
+pub static OP_UUID_TIMESTAMP: BoundOp =
+    bind_op(opdecl::OP_UUID_TIMESTAMP, convert::op_uuid_timestamp);
 pub static OP_VALIDITY: BoundOp = bind_op(opdecl::OP_VALIDITY, convert::op_validity);
 pub static OP_VEC: BoundOp = bind_op(opdecl::OP_VEC, convert::op_vec);
 pub static OP_WINDOWS: BoundOp = bind_op(opdecl::OP_WINDOWS, collection::op_windows);
 
 /// SEALED NAME — sole public name→BoundOp resolve API.
 pub fn resolve_op(name: &str) -> Option<&'static BoundOp> {
-    let key = name.strip_prefix("OP_").unwrap_or(name).to_ascii_lowercase();
+    let key = name
+        .strip_prefix("OP_")
+        .unwrap_or(name)
+        .to_ascii_lowercase();
     Some(match key.as_str() {
         "abs" => &OP_ABS,
         "acos" => &OP_ACOS,
@@ -325,4 +365,3 @@ pub fn resolve_op(name: &str) -> Option<&'static BoundOp> {
         _ => return None,
     })
 }
-

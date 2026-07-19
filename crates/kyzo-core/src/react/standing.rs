@@ -67,21 +67,21 @@ use std::sync::mpsc::Receiver;
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
+use crate::exec::op::temporal::SignedFact;
+use crate::parse::{Script, parse_script};
+use crate::react::incremental::{self, IncrementalProgram, MaintainedState};
+use crate::rules::contract::CancelFlag;
+use crate::session::catalog::Catalog;
+use crate::session::catalog::get_relation;
+use crate::session::current_validity;
+use crate::session::db::{Engine, ScriptOptions, SessionTx};
+use crate::session::db::{SessionNormalizer, SessionView};
+use crate::session::observe::{CallbackEvent, CallbackOp};
+use crate::store::Storage;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::rules::contract::CancelFlag;
-use crate::parse::{Script, parse_script};
-use crate::react::incremental::{self, IncrementalProgram, MaintainedState};
-use crate::session::db::{SessionNormalizer, SessionView};
-use crate::exec::op::temporal::SignedFact;
-use crate::session::observe::{CallbackEvent, CallbackOp};
-use crate::session::current_validity;
-use crate::session::catalog::Catalog;
-use crate::session::db::{Engine, ScriptOptions, SessionTx};
-use crate::session::catalog::get_relation;
-use crate::store::Storage;
 
 /// Named refusal when [`Db::register_standing`] is given a non-standing script.
 #[derive(Debug, Error, Diagnostic)]
@@ -457,13 +457,13 @@ impl<S: Storage> Engine<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kyzo_model::program::rule::HeadAggrSlot;
     use crate::exec::plan::program::{
         MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRulesOrFixed,
         MagicSymbol, StratifiedMagicProgram,
     };
-    use kyzo_model::value::{DataValue, Num};
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::rule::HeadAggrSlot;
+    use kyzo_model::value::{DataValue, Num};
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan::default())
@@ -980,7 +980,8 @@ mod tests {
         for shape in shapes() {
             for _iteration in 0..8 {
                 let dir = tempfile::tempdir().unwrap();
-                let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+                let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+                    .unwrap();
                 // `live: what every EDB relation ACTUALLY holds right now,
                 // mirrored in-process so a `Minus` picks a real victim.
                 let mut live: BTreeMap<&str, BTreeSet<Vec<i64>>> = BTreeMap::new();
@@ -1076,7 +1077,8 @@ mod tests {
         for query in queries {
             for _iteration in 0..20 {
                 let dir = tempfile::tempdir().unwrap();
-                let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+                let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+                    .unwrap();
                 db.run_script(":create q {k: Int => val: Int}", no_params())
                     .unwrap();
 

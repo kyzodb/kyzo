@@ -38,12 +38,12 @@ use std::sync::Arc;
 
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::{
-    AsOf, Axis, ClaimPolarity, Event, HeadAggr, Interval, Literal, MeetAccum, Program, Rel, Rule,
-    Term, OPEN_END, builtin_fold, compose, derive_intervals, diff, naive_eval, naive_eval_at,
-    resolve, resolve_relation, AggrFold,
+    AggrFold, AsOf, Axis, ClaimPolarity, Event, HeadAggr, Interval, Literal, MeetAccum, OPEN_END,
+    Program, Rel, Rule, Term, builtin_fold, compose, derive_intervals, diff, naive_eval,
+    naive_eval_at, resolve, resolve_relation,
 };
 
-use crate::gauntlet::{Rng, MEET_OPS, lit, named, v, x, y, z};
+use crate::gauntlet::{MEET_OPS, Rng, lit, named, v, x, y, z};
 
 // ════════════════════════════════════════════════════════════════════════
 // CAPABILITY 3 — sys-axis generative coverage: the unified temporal
@@ -145,7 +145,13 @@ fn temporal_program(rng: &mut Rng, hist: &TemporalHistories) -> Program {
     }
     let mut rules: Vec<Rule> = histories
         .keys()
-        .map(|rel| Rule::plain("out", vec![x(), y()], vec![lit(rel.clone(), vec![x(), y()], false)]))
+        .map(|rel| {
+            Rule::plain(
+                "out",
+                vec![x(), y()],
+                vec![lit(rel.clone(), vec![x(), y()], false)],
+            )
+        })
         .collect();
     if histories.contains_key("ha") && histories.contains_key("hb") {
         rules.push(Rule::plain(
@@ -389,11 +395,7 @@ fn near_coordinate(rng: &mut Rng, history: &[Event]) -> AsOf {
 
 fn nudge(rng: &mut Rng, coordinate: i64) -> i64 {
     let out = coordinate.saturating_add(rng.range(-2, 3));
-    if out == i64::MAX {
-        out - 1
-    } else {
-        out
-    }
+    if out == i64::MAX { out - 1 } else { out }
 }
 
 #[test]
