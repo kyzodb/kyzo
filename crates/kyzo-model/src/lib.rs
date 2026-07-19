@@ -1,8 +1,8 @@
-//! Shared vocabulary crate: values, program IR atoms, wire envelopes.
+//! Shared vocabulary crate: values, program IR atoms, wire envelopes, parse.
 //!
 //! Ideal map seat for constructs under `crates/kyzo-model/src/*`.
-//! Parse/format bodies land here only with their IR dependencies — never as
-//! parked copies that still import `kyzo` internals.
+//! The parse zone (`parse::parse_script`) is the public KyzoScript language
+//! door — text → typed IR with spans and refusals; no engine imports.
 
 #![forbid(unsafe_code)]
 

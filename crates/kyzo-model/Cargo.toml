@@ -22,6 +22,8 @@ base64 = "0.22.0"
 jiff = { version = "0.2.31", default-features = false, features = ["std", "perf-inline", "tzdb-bundle-always"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
 flatbuffers = { version = "25.12.19", default-features = false, features = ["std"] }
+pest = "2"
+pest_derive = "2"
 
 [lints]
 workspace = true
