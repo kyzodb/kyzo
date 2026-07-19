@@ -31,7 +31,7 @@ use miette::{Diagnostic, IntoDiagnostic, Result, bail, miette};
 use thiserror::Error;
 
 use crate::store::authority::IncarnationId;
-use crate::store::crypto::WrappedShredSalt;
+use crate::store::crypto::{ShredLedger, WrappedShredSalt};
 use crate::store::time::system_stamp_of_key;
 use kyzo_model::value::ValidityTs;
 use kyzo_model::value::{StorageKey, RelationId};
@@ -396,10 +396,15 @@ impl ImportCapability {
 }
 
 /// Run the import verify ceremony over a leave-is-free pack.
+///
+/// [`ShredLedger`] is consulted so post-shred restore of a pack that still
+/// carries a shredded segment's `WrappedShredSalt` converges to
+/// [`PackRefuse::Shredded`] (§64 / §80) — not silent unreadability.
 pub fn import_verify(
     pack: &LeaveIsFreePack,
     cap: ImportCapability,
     objects_complete: bool,
+    shred_ledger: &ShredLedger,
 ) -> Result<(), PackRefuse> {
     if !cap.verified {
         return Err(PackRefuse::ForeignHistoryUnverified);
@@ -412,6 +417,11 @@ pub fn import_verify(
     }
     if !objects_complete {
         return Err(PackRefuse::IncompleteRestore);
+    }
+    for wrapped in &pack.wrapped_shred_salts {
+        if shred_ledger.is_shredded(wrapped) {
+            return Err(PackRefuse::Shredded);
+        }
     }
     pack_hygiene_scrub(pack)
 }
@@ -499,7 +509,7 @@ mod pins {
             ImportCapability,
         };
         use crate::store::crypto::{
-            Kek, KekUnwrapCap, SegmentCounter, ShredSalt, wrap_shred_salt,
+            Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
         };
         use crate::store::epoch::{CryptoDomain, FenceEpoch};
         use crate::store::open::StoreId;
@@ -513,7 +523,8 @@ mod pins {
             &ShredSalt::from_bytes([0x66; 32]),
             SegmentCounter::ZERO,
             domain,
-        );
+        )
+        .expect("wrap");
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
         let incarnation = mint.mint(Entropy::from_bytes([0x77; 32])).unwrap();
 
@@ -532,16 +543,39 @@ mod pins {
         let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::FullWal,
             format_version: FormatVersion::CURRENT,
-            wrapped_shred_salts: vec![wrapped],
+            wrapped_shred_salts: vec![wrapped.clone()],
             incarnation_history: vec![incarnation],
             payload: vec![1, 2, 3],
         })
         .expect("pack with WrappedShredSalt + IncarnationId");
         assert!(!pack.wrapped_shred_salts().is_empty());
-        assert!(import_verify(&pack, ImportCapability::after_chain_verify(), true).is_ok());
+        let empty_ledger = ShredLedger::new();
+        assert!(
+            import_verify(
+                &pack,
+                ImportCapability::after_chain_verify(),
+                true,
+                &empty_ledger
+            )
+            .is_ok()
+        );
         assert!(matches!(
-            import_verify(&pack, ImportCapability::unverified(), true),
+            import_verify(&pack, ImportCapability::unverified(), true, &empty_ledger),
             Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+
+        // Post-shred restore of a pack that still carries the wrap → Shredded.
+        let (_receipt, tombstone) = shred(wrapped);
+        let mut shredded = ShredLedger::new();
+        shredded.record(tombstone);
+        assert!(matches!(
+            import_verify(
+                &pack,
+                ImportCapability::after_chain_verify(),
+                true,
+                &shredded
+            ),
+            Err(PackRefuse::Shredded)
         ));
     }
 }

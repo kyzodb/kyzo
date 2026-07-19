@@ -19,6 +19,12 @@
 //! `DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt)` after unwrap of
 //! [`WrappedShredSalt`]. Plaintext salt exists only inside the derivation moment
 //! in memory. Shred destroys the wrapped salt + authorized replicas.
+//!
+//! Cipher binding (T11): [`AeadArm::Siv`] → RustCrypto `aes-gcm-siv` (AES-256-GCM-SIV,
+//! misuse-resistant; required when SnapshotFork=yes). [`AeadArm::Gcm`] →
+//! RustCrypto `chacha20poly1305`. Shred-salt wrap uses the SIV arm under the KEK.
+
+use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
 
@@ -47,9 +53,9 @@ impl SegmentCounter {
 /// Closed AEAD arm selection. SnapshotFork=yes arms require misuse-resistant SIV.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AeadArm {
-    /// Standard AEAD (GCM-class). Forbidden on SnapshotFork=yes arms.
+    /// Standard AEAD (ChaCha20-Poly1305). Forbidden on SnapshotFork=yes arms.
     Gcm,
-    /// Misuse-resistant SIV — nonce repeat degrades to message-equality leak only.
+    /// Misuse-resistant AES-256-GCM-SIV — nonce repeat degrades to message-equality leak only.
     Siv,
 }
 
@@ -128,7 +134,7 @@ impl ShredSalt {
 /// Required in every leave-is-free pack. Useless without the KEK.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WrappedShredSalt {
-    /// Opaque ciphertext under the Store KEK.
+    /// Opaque ciphertext under the Store KEK (AES-256-GCM-SIV).
     ciphertext: Vec<u8>,
     /// Segment this wrapped salt derives DEKs for.
     segment: SegmentCounter,
@@ -204,74 +210,196 @@ pub enum CryptoRefuse {
     #[error("crypto: segment already shredded — typed tombstone")]
     #[diagnostic(code(store::crypto::shredded))]
     Shredded,
+    #[error("crypto: AEAD seal or open failed")]
+    #[diagnostic(code(store::crypto::aead_failed))]
+    AeadFailed,
+    #[error("crypto: lz4 decompress failed")]
+    #[diagnostic(code(store::crypto::decompress_failed))]
+    DecompressFailed,
+}
+
+/// Domain + segment binding bytes used as wrap AAD.
+fn wrap_aad(crypto_domain: CryptoDomain, segment: SegmentCounter) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(4 + 32 + 8 + 8);
+    aad.extend_from_slice(b"WSS1");
+    aad.extend_from_slice(crypto_domain.store_id().as_bytes());
+    aad.extend_from_slice(&u64::to_be_bytes(crypto_domain.fence_epoch().get()));
+    aad.extend_from_slice(&u64::to_be_bytes(segment.get()));
+    aad
+}
+
+/// Deterministic 96-bit nonce for KEK wrap (SIV makes repeat safe).
+fn wrap_nonce(crypto_domain: CryptoDomain, segment: SegmentCounter) -> [u8; 12] {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.wrap.shred_salt.nonce.v1");
+    h.update(crypto_domain.store_id().as_bytes());
+    h.update(u64::to_be_bytes(crypto_domain.fence_epoch().get()));
+    h.update(u64::to_be_bytes(segment.get()));
+    let dig = h.finalize();
+    let mut nonce = [0u8; 12];
+    nonce.copy_from_slice(&dig[..12]);
+    nonce
+}
+
+/// Seal bytes under AES-256-GCM-SIV (misuse-resistant).
+fn aes_gcm_siv_seal(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
+    use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+
+    let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = Nonce::from_slice(nonce);
+    cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| CryptoRefuse::AeadFailed)
+}
+
+/// Open bytes under AES-256-GCM-SIV.
+fn aes_gcm_siv_open(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
+    use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+
+    let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = Nonce::from_slice(nonce);
+    cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
+        .map_err(|_| CryptoRefuse::AeadFailed)
+}
+
+/// Seal bytes under ChaCha20-Poly1305 (Gcm arm).
+fn chacha20poly1305_seal(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+
+    let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = Nonce::from_slice(nonce);
+    cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| CryptoRefuse::AeadFailed)
+}
+
+/// Open bytes under ChaCha20-Poly1305 (Gcm arm).
+fn chacha20poly1305_open(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+
+    let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
+    let nonce = Nonce::from_slice(nonce);
+    cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
+        .map_err(|_| CryptoRefuse::AeadFailed)
+}
+
+fn seal_arm(
+    arm: AeadArm,
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    match arm {
+        AeadArm::Siv => aes_gcm_siv_seal(key, nonce, aad, plaintext),
+        AeadArm::Gcm => chacha20poly1305_seal(key, nonce, aad, plaintext),
+    }
+}
+
+fn open_arm(
+    arm: AeadArm,
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    match arm {
+        AeadArm::Siv => aes_gcm_siv_open(key, nonce, aad, ciphertext),
+        AeadArm::Gcm => chacha20poly1305_open(key, nonce, aad, ciphertext),
+    }
 }
 
 /// Wrap a plaintext [`ShredSalt`] under the KEK for persistence.
 ///
 /// Plaintext salt must not escape this call except into [`derive_dek`].
+/// Uses AES-256-GCM-SIV under the KEK (misuse-resistant; deterministic nonce).
 pub fn wrap_shred_salt(
     cap: &KekUnwrapCap,
     salt: &ShredSalt,
     segment: SegmentCounter,
     crypto_domain: CryptoDomain,
-) -> WrappedShredSalt {
-    let mut h = Sha256::new();
-    h.update(b"kyzo.wrap.shred_salt.v1");
-    h.update(cap.kek().as_bytes());
-    h.update(crypto_domain.store_id().as_bytes());
-    h.update(u64::to_be_bytes(crypto_domain.fence_epoch().get()));
-    h.update(u64::to_be_bytes(segment.get()));
-    h.update(salt.as_bytes());
-    let dig = h.finalize();
-    // Provisional wrap: KEK-bound commitment ‖ salt XOR keystream (sha2 until AEAD crate lands).
-    let mut keystream = Sha256::new();
-    keystream.update(b"kyzo.wrap.shred_salt.stream.v1");
-    keystream.update(cap.kek().as_bytes());
-    keystream.update(&dig);
-    let stream = keystream.finalize();
-    let mut ct = Vec::with_capacity(32 + 32);
-    ct.extend_from_slice(&dig);
-    for i in 0..32 {
-        ct.push(salt.as_bytes()[i] ^ stream[i]);
-    }
-    WrappedShredSalt {
-        ciphertext: ct,
+) -> Result<WrappedShredSalt, CryptoRefuse> {
+    let nonce = wrap_nonce(crypto_domain, segment);
+    let aad = wrap_aad(crypto_domain, segment);
+    let body = aes_gcm_siv_seal(cap.kek().as_bytes(), &nonce, &aad, salt.as_bytes())?;
+    Ok(WrappedShredSalt {
+        ciphertext: body,
         segment,
         crypto_domain,
-    }
+    })
 }
 
 /// Unwrap a persisted [`WrappedShredSalt`] to a memory-only [`ShredSalt`].
+///
+/// Consults [`ShredLedger`] first: a recorded tombstone → [`CryptoRefuse::Shredded`]
+/// even when an old pack still carries the wrapped ciphertext bytes.
 pub fn unwrap_shred_salt(
     cap: &KekUnwrapCap,
     wrapped: &WrappedShredSalt,
+    ledger: &ShredLedger,
 ) -> Result<ShredSalt, CryptoRefuse> {
-    if wrapped.ciphertext.len() != 64 {
+    if ledger.is_shredded(wrapped) {
+        return Err(CryptoRefuse::Shredded);
+    }
+    let nonce = wrap_nonce(wrapped.crypto_domain, wrapped.segment);
+    let aad = wrap_aad(wrapped.crypto_domain, wrapped.segment);
+    let pt = aes_gcm_siv_open(cap.kek().as_bytes(), &nonce, &aad, &wrapped.ciphertext)
+        .map_err(|_| CryptoRefuse::UnwrapFailed)?;
+    if pt.len() != 32 {
         return Err(CryptoRefuse::UnwrapFailed);
     }
-    let dig = &wrapped.ciphertext[..32];
-    let ct = &wrapped.ciphertext[32..];
-    let mut keystream = Sha256::new();
-    keystream.update(b"kyzo.wrap.shred_salt.stream.v1");
-    keystream.update(cap.kek().as_bytes());
-    keystream.update(dig);
-    let stream = keystream.finalize();
     let mut salt = [0u8; 32];
-    for i in 0..32 {
-        salt[i] = ct[i] ^ stream[i];
-    }
-    // Re-derive commitment and check.
-    let mut h = Sha256::new();
-    h.update(b"kyzo.wrap.shred_salt.v1");
-    h.update(cap.kek().as_bytes());
-    h.update(wrapped.crypto_domain.store_id().as_bytes());
-    h.update(u64::to_be_bytes(wrapped.crypto_domain.fence_epoch().get()));
-    h.update(u64::to_be_bytes(wrapped.segment.get()));
-    h.update(salt);
-    let expect = h.finalize();
-    if expect.as_slice() != dig {
-        return Err(CryptoRefuse::UnwrapFailed);
-    }
+    salt.copy_from_slice(&pt);
     Ok(ShredSalt::from_bytes(salt))
 }
 
@@ -330,55 +458,52 @@ impl Ciphertext {
         &self.nonce
     }
 
-    /// Ciphertext body.
+    /// Ciphertext body (AEAD ciphertext ‖ tag).
     pub fn body(&self) -> &[u8] {
         &self.body
     }
 }
 
-/// Compress plaintext. Must precede AEAD (§67).
+/// Compress plaintext with pure-Rust LZ4 (`lz4_flex`). Must precede AEAD (§67).
 pub fn compress(plaintext: &[u8]) -> CompressedBytes {
-    // Provisional: identity compression until a pure-Rust codec seat lands.
-    // The type split — not the codec — makes encrypt-then-compress unrepresentable.
-    CompressedBytes(plaintext.to_vec())
+    CompressedBytes(lz4_flex::compress_prepend_size(plaintext))
+}
+
+/// Decompress LZ4 size-prepended bytes from [`compress`].
+pub fn decompress(compressed: &CompressedBytes) -> Result<Vec<u8>, CryptoRefuse> {
+    lz4_flex::decompress_size_prepended(compressed.as_bytes())
+        .map_err(|_| CryptoRefuse::DecompressFailed)
 }
 
 /// Encrypt compressed bytes under a DEK + nonce + arm.
 ///
 /// Only accepts [`CompressedBytes`] — compression precedes AEAD by construction.
+/// [`AeadArm::Siv`] → AES-256-GCM-SIV; [`AeadArm::Gcm`] → ChaCha20-Poly1305.
 pub fn encrypt(
     compressed: CompressedBytes,
     dek: &Dek,
     nonce: [u8; 12],
     arm: AeadArm,
     aad: &CanonicalTranscript,
-) -> Ciphertext {
-    let mut h = Sha256::new();
-    h.update(b"kyzo.aead.seal.v1");
-    h.update([arm_tag(arm)]);
-    h.update(dek.as_bytes());
-    h.update(nonce);
-    h.update(aad.as_bytes());
-    h.update(compressed.as_bytes());
-    let dig = h.finalize();
-    let mut body = Vec::with_capacity(32 + compressed.as_bytes().len());
-    body.extend_from_slice(&dig);
-    // Provisional keystream XOR (AEAD/SIV crate binding is a later story).
-    let mut stream = Sha256::new();
-    stream.update(b"kyzo.aead.stream.v1");
-    stream.update(dek.as_bytes());
-    stream.update(nonce);
-    let mut block = stream.finalize().to_vec();
-    for (i, b) in compressed.as_bytes().iter().enumerate() {
-        if i % 32 == 0 && i > 0 {
-            let mut n = Sha256::new();
-            n.update(b"kyzo.aead.stream.v1");
-            n.update(&block);
-            block = n.finalize().to_vec();
-        }
-        body.push(b ^ block[i % 32]);
-    }
-    Ciphertext { arm, nonce, body }
+) -> Result<Ciphertext, CryptoRefuse> {
+    let body = seal_arm(arm, dek.as_bytes(), &nonce, aad.as_bytes(), compressed.as_bytes())?;
+    Ok(Ciphertext { arm, nonce, body })
+}
+
+/// Open AEAD ciphertext back to [`CompressedBytes`].
+pub fn decrypt(
+    ciphertext: &Ciphertext,
+    dek: &Dek,
+    aad: &CanonicalTranscript,
+) -> Result<CompressedBytes, CryptoRefuse> {
+    let pt = open_arm(
+        ciphertext.arm,
+        dek.as_bytes(),
+        &ciphertext.nonce,
+        aad.as_bytes(),
+        &ciphertext.body,
+    )?;
+    Ok(CompressedBytes(pt))
 }
 
 /// Compression-then-encryption pipeline — the only Store path (§67).
@@ -388,15 +513,8 @@ pub fn compress_then_encrypt(
     nonce: [u8; 12],
     arm: AeadArm,
     aad: &CanonicalTranscript,
-) -> Ciphertext {
+) -> Result<Ciphertext, CryptoRefuse> {
     encrypt(compress(plaintext), dek, nonce, arm, aad)
-}
-
-fn arm_tag(arm: AeadArm) -> u8 {
-    match arm {
-        AeadArm::Gcm => 1,
-        AeadArm::Siv => 2,
-    }
 }
 
 /// Shred receipt — wrapped salt destroyed inside the sovereignty boundary.
@@ -418,13 +536,80 @@ impl ShredReceipt {
     }
 }
 
+/// Durable shred tombstone naming one shredded (CryptoDomain, SegmentCounter).
+///
+/// Survives so post-shred restore of an old pack that still carries the wrapped
+/// ciphertext converges to [`CryptoRefuse::Shredded`], not silent unreadability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShredTombstone {
+    segment: SegmentCounter,
+    crypto_domain: CryptoDomain,
+}
+
+impl ShredTombstone {
+    /// Segment this tombstone revokes.
+    pub fn segment(self) -> SegmentCounter {
+        self.segment
+    }
+
+    /// Crypto domain this tombstone revokes under.
+    pub fn crypto_domain(self) -> CryptoDomain {
+        self.crypto_domain
+    }
+
+    /// Whether this tombstone covers a wrapped salt handle.
+    pub fn covers(self, wrapped: &WrappedShredSalt) -> bool {
+        self.segment == wrapped.segment && self.crypto_domain == wrapped.crypto_domain
+    }
+}
+
+/// Ledger of shredded segments consulted on unwrap / leave-is-free restore.
+#[derive(Debug, Default, Clone)]
+pub struct ShredLedger {
+    /// (store_id, fence_epoch, segment) keys revoked by shred.
+    keys: HashSet<([u8; 32], u64, u64)>,
+}
+
+impl ShredLedger {
+    /// Empty ledger — no segments shredded.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a tombstone from [`shred`].
+    pub fn record(&mut self, tombstone: ShredTombstone) {
+        self.keys.insert((
+            *tombstone.crypto_domain.store_id().as_bytes(),
+            tombstone.crypto_domain.fence_epoch().get(),
+            tombstone.segment.get(),
+        ));
+    }
+
+    /// True when unwrap / restore of this wrap must refuse Shredded.
+    pub fn is_shredded(&self, wrapped: &WrappedShredSalt) -> bool {
+        self.keys.contains(&(
+            *wrapped.crypto_domain.store_id().as_bytes(),
+            wrapped.crypto_domain.fence_epoch().get(),
+            wrapped.segment.get(),
+        ))
+    }
+}
+
 /// Destroy a [`WrappedShredSalt`] (and, by Spec, all authorized replicas via
-/// retention). Consumes the wrap — post-shred restore → [`CryptoRefuse::Shredded`].
-pub fn shred(wrapped: WrappedShredSalt) -> ShredReceipt {
-    ShredReceipt {
+/// retention). Consumes the wrap — post-shred restore → [`CryptoRefuse::Shredded`]
+/// once the returned [`ShredTombstone`] is recorded in a [`ShredLedger`].
+pub fn shred(wrapped: WrappedShredSalt) -> (ShredReceipt, ShredTombstone) {
+    let receipt = ShredReceipt {
         segment: wrapped.segment,
         crypto_domain: wrapped.crypto_domain,
-    }
+    };
+    let tombstone = ShredTombstone {
+        segment: wrapped.segment,
+        crypto_domain: wrapped.crypto_domain,
+    };
+    // `wrapped` drops here — this handle's ciphertext is gone.
+    drop(wrapped);
+    (receipt, tombstone)
 }
 
 #[cfg(test)]
@@ -440,6 +625,13 @@ mod pins {
         CryptoDomain::new(store, FenceEpoch::genesis(store))
     }
 
+    fn test_aad() -> CanonicalTranscript {
+        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
+        b.append_u64(FieldId::ARTIFACT_KIND, SealedArtifactKind::AuditKeyLeaf.tag())
+            .unwrap();
+        b.seal()
+    }
+
     #[test]
     fn wrap_unwrap_round_trip_and_derive() {
         let kek = Kek::from_bytes([0x11; 32]);
@@ -447,26 +639,75 @@ mod pins {
         let salt = ShredSalt::from_bytes([0x22; 32]);
         let seg = SegmentCounter::from_raw(7);
         let domain = test_domain();
-        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain);
-        let opened = unwrap_shred_salt(&cap, &wrapped).expect("unwrap");
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain).expect("wrap");
+        let ledger = ShredLedger::new();
+        let opened = unwrap_shred_salt(&cap, &wrapped, &ledger).expect("unwrap");
         let dek = derive_dek(&cap, domain, seg, &opened);
         assert_eq!(dek.as_bytes().len(), 32);
-        let _ = shred(wrapped);
+        let (receipt, tombstone) = shred(wrapped);
+        assert_eq!(receipt.segment(), seg);
+        assert!(tombstone.covers(&WrappedShredSalt::from_persisted(
+            vec![0],
+            seg,
+            domain
+        )));
     }
 
     #[test]
-    fn compress_then_encrypt_is_the_only_pipeline() {
+    fn post_shred_unwrap_refuses_shredded() {
+        let kek = Kek::from_bytes([0x11; 32]);
+        let cap = KekUnwrapCap::from_kek(kek);
+        let salt = ShredSalt::from_bytes([0x22; 32]);
+        let seg = SegmentCounter::from_raw(3);
+        let domain = test_domain();
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain).expect("wrap");
+        // Old pack still holds a copy of the wrapped ciphertext.
+        let stale_copy = wrapped.clone();
+        let (_receipt, tombstone) = shred(wrapped);
+        let mut ledger = ShredLedger::new();
+        ledger.record(tombstone);
+        assert!(matches!(
+            unwrap_shred_salt(&cap, &stale_copy, &ledger),
+            Err(CryptoRefuse::Shredded)
+        ));
+    }
+
+    #[test]
+    fn compress_then_encrypt_round_trips_siv_and_is_not_identity() {
         let kek = Kek::from_bytes([0x33; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
         let salt = ShredSalt::from_bytes([0x44; 32]);
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
-        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
-        b.append_u64(FieldId::ARTIFACT_KIND, SealedArtifactKind::AuditKeyLeaf.tag())
-            .unwrap();
-        let aad = b.seal();
-        let ct = compress_then_encrypt(b"hello", &dek, [9u8; 12], AeadArm::Siv, &aad);
+        let aad = test_aad();
+        let plaintext = b"hello compress-then-encrypt pipeline";
+        let compressed = compress(plaintext);
+        assert_ne!(
+            compressed.as_bytes(),
+            plaintext,
+            "compress must not be a silent identity no-op"
+        );
+        let ct = compress_then_encrypt(plaintext, &dek, [9u8; 12], AeadArm::Siv, &aad)
+            .expect("encrypt");
         assert_eq!(ct.arm(), AeadArm::Siv);
         assert!(!ct.body().is_empty());
+        let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
+        let round = decompress(&opened).expect("decompress");
+        assert_eq!(round, plaintext);
+    }
+
+    #[test]
+    fn gcm_arm_uses_chacha20poly1305() {
+        let kek = Kek::from_bytes([0x55; 32]);
+        let cap = KekUnwrapCap::from_kek(kek);
+        let salt = ShredSalt::from_bytes([0x66; 32]);
+        let domain = test_domain();
+        let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
+        let aad = test_aad();
+        let ct = compress_then_encrypt(b"gcm-arm", &dek, [1u8; 12], AeadArm::Gcm, &aad)
+            .expect("encrypt");
+        assert_eq!(ct.arm(), AeadArm::Gcm);
+        let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
+        assert_eq!(decompress(&opened).expect("decompress"), b"gcm-arm");
     }
 }

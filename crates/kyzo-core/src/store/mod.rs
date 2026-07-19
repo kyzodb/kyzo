@@ -119,8 +119,9 @@ pub use transcript::{
 };
 pub use crypto::{
     AeadArm, AuditKey, Ciphertext, CompressedBytes, CryptoRefuse, Dek, Kek, KekUnwrapCap,
-    SegmentCounter, ShredReceipt, ShredSalt, WrappedShredSalt, compress, compress_then_encrypt,
-    derive_dek, encrypt, shred, unwrap_shred_salt, wrap_shred_salt,
+    SegmentCounter, ShredLedger, ShredReceipt, ShredSalt, ShredTombstone, WrappedShredSalt,
+    compress, compress_then_encrypt, decrypt, decompress, derive_dek, encrypt, shred,
+    unwrap_shred_salt, wrap_shred_salt,
 };
 pub use failure::{
     DebtLedger, FailureLattice, KeyspaceId, OperatorHealthSurface, QuarantineRange, StoreRefuse,

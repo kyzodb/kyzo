@@ -50,6 +50,13 @@ regex-syntax = "0.8"   # KyzoRegexV1 construction-time pattern validation (alrea
 uuid = { version = "1.8.0", features = ["v1", "v4", "serde"] }
 ndarray = { version = "0.17", features = ["serde"] }
 sha2 = "0.11.0"
+# Store AEAD pipeline (story #350 T11): RustCrypto pure-Rust misuse-resistant
+# AES-GCM-SIV for AeadArm::Siv (SnapshotFork=yes), ChaCha20-Poly1305 for
+# AeadArm::Gcm. No *-sys / C in either tree. lz4_flex is the same pure-Rust
+# codec fjall/lsm-tree already carry (no lz4-sys).
+aes-gcm-siv = "0.11.1"
+chacha20poly1305 = "0.11"
+lz4_flex = "0.13"
 fjall = "3.1.5"
 # Fixed-rule tier (both pure Rust end-to-end):
 # csv → csv-core/itoa/ryu/serde; priority-queue → indexmap/equivalent/hashbrown.
