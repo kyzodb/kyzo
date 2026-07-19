@@ -7,22 +7,29 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! `Vector`: identity is **dimensionality + the canonical element
-//! sequence**, with every component passing through Num's float law
-//! (`-0.0 → +0.0`, one canonical NaN) — a vector containing `-0.0` and
-//! one containing `+0.0` are one value, or dedup would split equal
-//! things. Similarity metrics are operator/query context, never part of
-//! identity. Storage order (dimension first, then elementwise float
-//! order) is deterministic, NOT a semantic "less than" for vectors —
-//! expression comparability is a separate refusable authority.
+//! `Vector`: **content-addressed identity** from exact float components —
+//! dimensionality + the canonical element sequence, hashed deterministically
+//! — so the same content yields the same identity regardless of row or
+//! storage position. Every component passes through Num's float law
+//! (`-0.0 → +0.0`, one canonical NaN); exact float is the authority.
+//! Quantized codes are a rebuildable projection of those floats
+//! (engine-side, [OPEN] to #207/#308) — never a second identity.
+//!
+//! Similarity metrics are operator/query context, never part of identity.
+//! Storage order (dimension first, then elementwise float order) is
+//! deterministic, NOT a semantic "less than" for vectors — expression
+//! comparability is a separate refusable authority.
 //!
 //! The canonical payload is a u32 dimension count followed by each
 //! component as Num's order-preserving float key (see
-//! [`super::super::canonical`]).
+//! [`super::super::canonical`]). Content identity is FNV-1a 64 over
+//! dimension bytes + exact float bits of that payload's semantic content
+//! — derived, not row-positional.
 //!
 //! After the admit door, dimension is a proven newtype and the store is
 //! [`Vec<VectorComponent>`] — bare `Vec<f64>` is not a post-door store.
 
+use super::json::fnv1a64;
 use super::super::number::Num;
 
 /// One vector component after Num's float law: `-0.0 → +0.0`, one
@@ -96,23 +103,55 @@ impl VectorDimension {
     }
 }
 
+/// Content-addressed identity of a [`Vector`]: FNV-1a 64 over the
+/// dimension and exact float bits after Num's law. Same content → same
+/// id regardless of row position. Exact floats remain the equality and
+/// storage authority; this id is the address derived from them.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
+pub struct VectorContentId(u64);
+
+const _: () = assert!(std::mem::size_of::<VectorContentId>() == std::mem::size_of::<u64>());
+const _: () = assert!(std::mem::align_of::<VectorContentId>() == std::mem::align_of::<u64>());
+
+impl VectorContentId {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// A vector value: proven [`VectorComponent`]s held after [`Vector::try_new`]
-/// admits every raw `f64`. Identity is dimensionality + exact component bits.
+/// admits every raw `f64`. Identity is content-addressed
+/// ([`VectorContentId`]) from those exact components — not row-positional.
 #[derive(Clone, Debug)]
 pub struct Vector {
     dim: VectorDimension,
     /// Proven components only — never a bare `Vec<f64>` after the door.
     components: Vec<VectorComponent>,
+    /// Derived at admit from exact float bits; same content → same id.
+    content_id: VectorContentId,
 }
 
 impl Vector {
-    /// Admit door: brand every raw float, prove the dimension fits `u32`.
+    /// Admit door: brand every raw float, prove the dimension fits `u32`,
+    /// mint the content-addressed identity from the proven floats.
     /// `None` when the component count exceeds the wire dimension.
     pub fn try_new(components: Vec<f64>) -> Option<Vector> {
         let components: Vec<VectorComponent> =
             components.into_iter().map(VectorComponent::admit).collect();
         let dim = VectorDimension::try_from_len(components.len())?;
-        Some(Vector { dim, components })
+        let content_id = content_id_from_parts(dim, &components);
+        Some(Vector {
+            dim,
+            components,
+            content_id,
+        })
+    }
+
+    /// Content-addressed identity: deterministic hash of exact float
+    /// content. Independent of row or storage position.
+    pub fn content_id(&self) -> VectorContentId {
+        self.content_id
     }
 
     /// Proven components.
@@ -144,8 +183,21 @@ impl Vector {
     }
 }
 
+/// FNV-1a 64 over dimension (big-endian) then each component's exact
+/// float bits — the one content-hash door. Exact floats are the input;
+/// the id is the address.
+fn content_id_from_parts(dim: VectorDimension, components: &[VectorComponent]) -> VectorContentId {
+    let mut bytes = Vec::with_capacity(4 + components.len() * 8);
+    bytes.extend_from_slice(&dim.get().to_be_bytes());
+    for c in components {
+        bytes.extend_from_slice(&c.get().to_bits().to_be_bytes());
+    }
+    VectorContentId(fnv1a64(&bytes))
+}
+
 impl PartialEq for Vector {
     fn eq(&self, other: &Self) -> bool {
+        // Exact float is authority — never equality-by-hash alone.
         self.dim == other.dim && self.components == other.components
     }
 }
@@ -154,18 +206,18 @@ impl Eq for Vector {}
 
 impl std::hash::Hash for Vector {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.dim.hash(state);
-        for c in &self.components {
-            c.hash(state);
-        }
+        // Content-addressed: hash the content id (Eq-consistent: equal
+        // floats → equal content_id → equal Hash).
+        self.content_id.hash(state);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::canonical::{Datum, encode};
+    use super::super::super::canonical::{Datum, decode, encode};
     use super::super::super::number::Num;
     use super::{Vector, VectorComponent, VectorDimension};
+    use crate::value::DataValue;
 
     #[test]
     fn component_identity_follows_num_law() {
@@ -182,5 +234,76 @@ mod tests {
             VectorComponent::admit(f64::NAN).get().to_bits(),
             Num::float(f64::NAN).as_float().unwrap().to_bits()
         );
+    }
+
+    #[test]
+    fn same_content_same_identity() {
+        let a = Vector::try_new(vec![1.0, 2.0, 3.0]).unwrap();
+        let b = Vector::try_new(vec![1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(a.content_id(), b.content_id());
+        assert_eq!(a, b);
+        // Num law: −0 and +0 are one content → one identity.
+        let pos = Vector::try_new(vec![0.0, 1.0]).unwrap();
+        let neg = Vector::try_new(vec![-0.0, 1.0]).unwrap();
+        assert_eq!(pos.content_id(), neg.content_id());
+        assert_eq!(pos, neg);
+        // Same content constructed twice is not row-positional.
+        let again = Vector::try_new(vec![0.0, 1.0]).unwrap();
+        assert_eq!(pos.content_id(), again.content_id());
+    }
+
+    #[test]
+    fn one_bit_change_different_identity() {
+        let a = Vector::try_new(vec![1.0, 2.0]).unwrap();
+        let mut bits = 2.0f64.to_bits();
+        bits ^= 1;
+        let b = Vector::try_new(vec![1.0, f64::from_bits(bits)]).unwrap();
+        assert_ne!(a.content_id(), b.content_id());
+        assert_ne!(a, b);
+        // Dimension change is also different content.
+        let c = Vector::try_new(vec![1.0, 2.0, 0.0]).unwrap();
+        assert_ne!(a.content_id(), c.content_id());
+    }
+
+    #[test]
+    fn content_hash_determinism() {
+        let v = Vector::try_new(vec![f64::NAN, -1.5, 0.0]).unwrap();
+        let id = v.content_id();
+        assert_eq!(id, v.content_id());
+        assert_eq!(id, Vector::try_new(vec![f64::NAN, -1.5, -0.0]).unwrap().content_id());
+        // Independent recomputation from the same exact bits matches.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&v.dimension().get().to_be_bytes());
+        for c in v.components() {
+            bytes.extend_from_slice(&c.get().to_bits().to_be_bytes());
+        }
+        assert_eq!(id.get(), super::super::json::fnv1a64(&bytes));
+    }
+
+    #[test]
+    fn exact_float_round_trip() {
+        let original = Vector::try_new(vec![-0.0, 1.5, f64::NAN, f64::INFINITY]).unwrap();
+        let enc = encode(Datum::Vector(&original));
+        let back = match decode(enc.as_bytes()).expect("decode own encoding") {
+            DataValue::Vector(v) => v,
+            other => panic!("expected Vector, got {other:?}"),
+        };
+        // Exact float is authority through the codec — bit-exact meter
+        // (NaN has bits; bare f64 PartialEq treats NaN ≠ NaN).
+        assert_eq!(
+            back.as_slice()
+                .iter()
+                .map(|c| c.get().to_bits())
+                .collect::<Vec<_>>(),
+            original
+                .as_slice()
+                .iter()
+                .map(|c| c.get().to_bits())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(back, original);
+        assert_eq!(back.content_id(), original.content_id());
+        // −0 admitted to +0 before encode; round-trip keeps that form.
+        assert_eq!(back.to_f64s()[0].to_bits(), 0.0f64.to_bits());
     }
 }

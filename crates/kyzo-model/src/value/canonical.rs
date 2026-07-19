@@ -42,7 +42,10 @@
 //!   those bytes — after the self-terminating value, so it can never
 //!   influence order; verified on decode.
 //! - `Vector`: u32 big-endian dimension count, then each component as
-//!   Num's float key (components normalized through Num's law).
+//!   Num's float key (components normalized through Num's law). Identity
+//!   is content-addressed ([`Vector::content_id`](crate::value::kind::vector::Vector::content_id)
+//!   — FNV-1a of dimension + exact float bits), not row-positional;
+//!   exact float remains the stored authority (T4 total order unchanged).
 //! - `Validity`: the 8-byte DESCENDING timestamp key (the imported
 //!   time-axis law: latest first), then the polarity byte (assert `0x00`
 //!   before retract `0x01`).
@@ -126,7 +129,8 @@ pub enum Datum<'a> {
     Regex(&'a RegexSource),
     Json(&'a Json),
     /// Proven vector (dimension already admitted); components pass through
-    /// Num's float law at encode. Bare `&[f64]` is not a mint surface.
+    /// Num's float law at encode. Identity is content-addressed from those
+    /// exact floats (`Vector::content_id`); bare `&[f64]` is not a mint.
     Vector(&'a Vector),
     Validity(Validity),
     Interval(Interval),
