@@ -39,6 +39,12 @@ pub(crate) mod commit_cap;
 pub(crate) mod wal;
 /// NonceLease + MintDomain + DomainCounter + pure nonce fn (07 seat).
 pub(crate) mod nonce;
+/// CheckpointSeal + truncate consume + seal verification (07 seat).
+pub(crate) mod seal;
+/// Object seam: staging, permanence, durability classes, GC (07 seat).
+pub(crate) mod objects;
+/// Deterministic compaction: pace, range class, MergeProof (07 seat).
+pub(crate) mod compact;
 
 // Sim instrument lives at kyzo-crashfs (seat); path-included here so the
 // sealed Storage trait can admit it as the contract's own test double.
@@ -77,3 +83,23 @@ pub use sweep::{
 pub use commit_cap::{ForkGenerationWitness, SnapshotFork, StableCommitCap};
 pub use nonce::{DomainCounter, MintDomain, NonceLease, nonce};
 pub use wal::{WalFloors, WalPayload, WalRecord, WalReplayState, WalSegment, replay};
+pub use seal::{
+    CheckpointSeal, CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest,
+    SealRefuse, TruncationReceipt, truncate,
+};
+pub use objects::{
+    BackendContract, ConfirmedCopies, ConsistencyClass, ContentHash, Downgrade, FailureDomains,
+    IntegrityVerification, ObjectDurabilityClass, ObjectId, ObjectRef, ObjectRefuse, ObjectSlot,
+    ObjectStore, PermanenceCandidate, PermanenceWitness, ReclaimCertificate, Regions, Repair,
+    ResolvedObject, RetentionCertificate, StagingToken, VolatilePending, gc_durable,
+    reclaim_candidate, resolve,
+};
+pub use compact::{
+    CompactRefuse, CompactionDebt, CompactionPace, CompactStateRoot, KvSeparationThreshold,
+    LineageHash, MergeProof, MergeProofParts, MergedPacket, PacketContentHash, RangeClass,
+    classify_range_at_commit, pace,
+};
+pub use merkle::{
+    ChainLinkKind, ChainedStateRoot, ForkPoint, GENESIS_ROOT, MerkleChainRefuse, RootChain,
+    StateRoot, as_of_root, fork_equivalence, roots_equal_at_cut,
+};

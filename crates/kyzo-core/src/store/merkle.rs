@@ -7,9 +7,19 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! A **cold, deterministic Merkle state root** over the ordered keyspace.
+//! Chained state roots + cold Merkle accountability (decisions.md §56–§58).
 //!
-//! ## What this is, and what it deliberately is not
+//! Owns (07 Spec spine): per-commit chained state root, [`as_of_root`],
+//! typed recovery/fork chain links, fork-equivalence via [`fork_point`].
+//!
+//! Bans: current-only roots as the sole digest; roots over ciphertext;
+//! path/URL equivalence claims.
+//!
+//! Also: a **cold, deterministic Merkle state root** over the ordered
+//! keyspace — plaintext-canonical, cipher-invariant leaf commitment the
+//! Spec chain binds.
+//!
+//! ## Cold root — what it is, and what it deliberately is not
 //!
 //! One root hash that is a *pure function of the committed `(key, value)`
 //! set* — a content address the whole store can be compared by. It is
@@ -21,13 +31,11 @@
 //! write history that built them, and any single-byte difference in any key
 //! or value produces a different root.
 //!
-//! The **incremental** root (maintained per-mutation at the commit choke
-//! point) is out of scope, by design: fjall's commit order is internal and
-//! its serialize point is not a hook we own (`storage/fjall.rs`), and
-//! in-keyspace tree nodes would make every writer conflict on shared tree
-//! keys under SSI (reads are the whole conflict surface — a write-validation
-//! change is widening it, not narrowing it). The cold root needs none of
-//! that machinery: it only reads the ordered keyspace that already exists.
+//! The **incremental** cold-path alternative (in-keyspace tree nodes) remains
+//! out of scope for the scan helper: fjall's commit order is internal and
+//! its serialize point is not a hook we own. The Spec per-commit chain
+//! ([`ChainedStateRoot`]) is minted at the SweepDoor durable event from
+//! plaintext-canonical content — never over ciphertext.
 //!
 //! ## The tree
 //!
@@ -65,7 +73,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use kyzo_model::value::RelationId;
-use crate::store::ReadTx;
+use super::ReadTx;
+use super::epoch::FenceEpoch;
+use super::open::StoreId;
+use super::sweep::CommitOrdinal;
 
 /// The number of `(k,v)` pairs a root scan may touch before it refuses. The
 /// root is `O(n)` in the range's size; an unbounded scan over a hostile
@@ -235,6 +246,261 @@ pub(crate) fn relation_root(
     // successor `+ 1` cannot overflow the encoded prefix.
     let upper = (rel.raw() + 1).to_be_bytes();
     range_root(tx, &lower, &upper, budget)
+}
+
+// ── Spec accountability spine (§56 / §57 / §58) ───────────────────────────
+
+/// Plaintext-canonical state root digest (32 bytes). Cipher-invariant —
+/// never computed over ciphertext (§59 / crypto ban).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StateRoot(pub [u8; 32]);
+
+impl StateRoot {
+    /// Wrap an already-proven root digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Lift a cold [`MerkleHash`] into Spec [`StateRoot`].
+    pub(crate) fn from_merkle(hash: MerkleHash) -> Self {
+        Self(hash.0)
+    }
+}
+
+/// Typed link distinguishing ordinary commit, recovery advance, and fork.
+///
+/// Recovery advances seal a typed recovery link auditors can distinguish
+/// from ordinary advance. Fork links bind the shared fork-point root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChainLinkKind {
+    /// Ordinary Committed root mint.
+    Ordinary,
+    /// Same-principal recovery advance (auditor-distinguishable).
+    Recovery,
+    /// Different-principal fork discovery link.
+    Fork,
+}
+
+/// One per-commit chained state root — predecessor hash seals the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChainedStateRoot {
+    store_id: StoreId,
+    fence_epoch: FenceEpoch,
+    commit_ordinal: CommitOrdinal,
+    root: StateRoot,
+    predecessor_root: StateRoot,
+    link: ChainLinkKind,
+}
+
+impl ChainedStateRoot {
+    /// Mint a chained root at the durable event (SweepDoor / epoch advance).
+    ///
+    /// `predecessor_root` is the prior commit’s root (or genesis digest for
+    /// the first mint in a CryptoDomain). Roots are plaintext-canonical.
+    pub(crate) fn mint(
+        store_id: StoreId,
+        fence_epoch: FenceEpoch,
+        commit_ordinal: CommitOrdinal,
+        content_root: StateRoot,
+        predecessor_root: StateRoot,
+        link: ChainLinkKind,
+    ) -> Self {
+        let root = chain_bind(content_root, predecessor_root, link, commit_ordinal);
+        Self {
+            store_id,
+            fence_epoch,
+            commit_ordinal,
+            root,
+            predecessor_root,
+            link,
+        }
+    }
+
+    /// Store identity.
+    pub fn store_id(self) -> StoreId {
+        self.store_id
+    }
+
+    /// Fence epoch of this mint.
+    pub fn fence_epoch(self) -> FenceEpoch {
+        self.fence_epoch
+    }
+
+    /// Dense commit ordinal of this mint.
+    pub fn commit_ordinal(self) -> CommitOrdinal {
+        self.commit_ordinal
+    }
+
+    /// Chained root digest at this commit.
+    pub fn root(self) -> StateRoot {
+        self.root
+    }
+
+    /// Predecessor root this mint covers.
+    pub fn predecessor_root(self) -> StateRoot {
+        self.predecessor_root
+    }
+
+    /// Typed chain link kind.
+    pub fn link(self) -> ChainLinkKind {
+        self.link
+    }
+}
+
+/// Genesis predecessor root for the first mint in a CryptoDomain.
+pub const GENESIS_ROOT: StateRoot = StateRoot([0u8; 32]);
+
+/// Fork-point root sealed in a ForkGrant — shared ancestry without revealing
+/// post-fork content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ForkPoint {
+    /// Shared root at the fork cut.
+    fork_point: StateRoot,
+    /// Predecessor Store identity.
+    predecessor_store: StoreId,
+    /// Fence epoch / cut at the fork.
+    fence_epoch: FenceEpoch,
+    commit_ordinal: CommitOrdinal,
+}
+
+impl ForkPoint {
+    /// Seal a fork-point from grant materialization inputs.
+    pub(crate) fn seal(
+        fork_point: StateRoot,
+        predecessor_store: StoreId,
+        fence_epoch: FenceEpoch,
+        commit_ordinal: CommitOrdinal,
+    ) -> Self {
+        Self {
+            fork_point,
+            predecessor_store,
+            fence_epoch,
+            commit_ordinal,
+        }
+    }
+
+    /// Shared fork-point root.
+    pub fn fork_point(self) -> StateRoot {
+        self.fork_point
+    }
+
+    /// Predecessor Store identity.
+    pub fn predecessor_store(self) -> StoreId {
+        self.predecessor_store
+    }
+
+    /// Fence epoch at the fork.
+    pub fn fence_epoch(self) -> FenceEpoch {
+        self.fence_epoch
+    }
+
+    /// Commit ordinal at the fork cut.
+    pub fn commit_ordinal(self) -> CommitOrdinal {
+        self.commit_ordinal
+    }
+}
+
+/// An ordered chain of chained roots — supports as-of lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootChain {
+    links: Vec<ChainedStateRoot>,
+}
+
+impl RootChain {
+    /// Empty chain (pre-first-commit).
+    pub fn empty() -> Self {
+        Self { links: Vec::new() }
+    }
+
+    /// Append a mint; predecessor must match the prior terminal root
+    /// (or [`GENESIS_ROOT`] when empty).
+    pub fn append(&mut self, link: ChainedStateRoot) -> Result<(), MerkleChainRefuse> {
+        let expected = self
+            .links
+            .last()
+            .map(|l| l.root())
+            .unwrap_or(GENESIS_ROOT);
+        if link.predecessor_root() != expected {
+            return Err(MerkleChainRefuse::PredecessorMismatch);
+        }
+        self.links.push(link);
+        Ok(())
+    }
+
+    /// All links in commit order.
+    pub fn links(&self) -> &[ChainedStateRoot] {
+        &self.links
+    }
+}
+
+/// State root at any committed transaction time (as-of root).
+///
+/// Current-only root as the sole accountability digest is deleted —
+/// as-of is a first-class surface (§57).
+pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, MerkleChainRefuse> {
+    let mut best: Option<&ChainedStateRoot> = None;
+    for link in chain.links() {
+        if link.commit_ordinal().get() <= cut.get() {
+            best = Some(link);
+        } else {
+            break;
+        }
+    }
+    best.map(|l| l.root())
+        .ok_or(MerkleChainRefuse::CutBeforeGenesis)
+}
+
+/// Fork-equivalence: shared fork-point root without revealing post-fork content.
+///
+/// Equality at a cut = recomputed roots. Path/URL equivalence claims are
+/// refused — only root comparison / shared [`fork_point`] prove sameness.
+pub fn fork_equivalence(a: &ForkPoint, b: &ForkPoint) -> bool {
+    a.fork_point() == b.fork_point()
+        && a.predecessor_store() == b.predecessor_store()
+        && a.fence_epoch() == b.fence_epoch()
+        && a.commit_ordinal() == b.commit_ordinal()
+}
+
+/// Store equality at a cut: identical recomputed roots.
+pub fn roots_equal_at_cut(left: StateRoot, right: StateRoot) -> bool {
+    left == right
+}
+
+/// Typed refusals on the chain / as-of path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum MerkleChainRefuse {
+    /// Append whose predecessor does not cover the chain terminal.
+    #[error("merkle chain: predecessor root mismatch")]
+    #[diagnostic(code(store::merkle::predecessor_mismatch))]
+    PredecessorMismatch,
+    /// as-of cut before any chained mint.
+    #[error("merkle chain: as-of cut before genesis mint")]
+    #[diagnostic(code(store::merkle::cut_before_genesis))]
+    CutBeforeGenesis,
+}
+
+fn chain_bind(
+    content_root: StateRoot,
+    predecessor_root: StateRoot,
+    link: ChainLinkKind,
+    commit_ordinal: CommitOrdinal,
+) -> StateRoot {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.chained_state_root.v1");
+    h.update(content_root.as_bytes());
+    h.update(predecessor_root.as_bytes());
+    h.update([match link {
+        ChainLinkKind::Ordinary => 1,
+        ChainLinkKind::Recovery => 2,
+        ChainLinkKind::Fork => 3,
+    }]);
+    h.update(u64::to_be_bytes(commit_ordinal.get()));
+    StateRoot(h.finalize().into())
 }
 
 #[cfg(test)]
