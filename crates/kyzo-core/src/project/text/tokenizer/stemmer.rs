@@ -14,7 +14,7 @@ use std::mem;
 use rust_stemmers::{self, Algorithm};
 
 use super::{Token, TokenFilter, TokenStream};
-use crate::engines::text::tokenizer::BoxTokenStream;
+use crate::project::text::tokenizer::BoxTokenStream;
 
 /// Available stemmer languages.
 #[derive(Debug, serde_derive::Serialize, serde_derive::Deserialize, Eq, PartialEq, Copy, Clone)]

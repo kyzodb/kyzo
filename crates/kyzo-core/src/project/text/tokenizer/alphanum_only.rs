@@ -74,8 +74,8 @@ impl<'a> TokenStream for AlphaNumOnlyFilterStream<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engines::text::tokenizer::tests::assert_token;
-    use crate::engines::text::tokenizer::{
+    use crate::project::text::tokenizer::tests::assert_token;
+    use crate::project::text::tokenizer::{
         AlphaNumOnlyFilter, SimpleTokenizer, TextAnalyzer, Token,
     };
 

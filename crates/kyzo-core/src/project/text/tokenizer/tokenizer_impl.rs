@@ -16,7 +16,7 @@ use std::borrow::{Borrow, BorrowMut};
 use std::iter;
 use std::ops::{Deref, DerefMut};
 
-use crate::engines::text::tokenizer::empty_tokenizer::EmptyTokenizer;
+use crate::project::text::tokenizer::empty_tokenizer::EmptyTokenizer;
 
 /// Token
 #[derive(Debug, Clone, serde_derive::Serialize, Eq, PartialEq)]

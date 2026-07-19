@@ -264,7 +264,7 @@ Format: `path` — description
 `crates/kyzo-model/src/parse/query.rs` — lifts query/rule syntax into program IR
 `crates/kyzo-model/src/parse/schema.rs` — lifts schema declaration syntax into schema types
 `crates/kyzo-model/src/parse/script.rs` — lifts multi-statement scripts into program IR
-`crates/kyzo-model/src/parse/search.rs` — lifts search-atom syntax (vector/FTS/…) into program IR
+`crates/kyzo-model/src/parse/search.rs` — FTS AST pure-data types (FtsExpr/FtsLiteral/FtsNear) plus search-atom syntax lift into program IR
 `crates/kyzo-model/src/parse/sys.rs` — lifts system-op syntax into typed system requests
 `crates/kyzo-model/src/program/aggregate.rs` — aggregate declaration shapes in program IR
 `crates/kyzo-model/src/program/expr.rs` — expression AST used after parse and before exec

@@ -626,7 +626,7 @@ impl<S: Storage> Db<S> {
             program.clone(),
             cur_vld,
             options,
-            crate::engines::segments::Segments(Some(&self.segments)),
+            crate::project::current::Segments(Some(&self.segments)),
         )?;
         let _ = limited;
         let _ = &head;

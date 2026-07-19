@@ -22,7 +22,7 @@ use crate::data::program::MagicSymbol;
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, SearchHits, Tag};
-use crate::engines::segments::Segments;
+use crate::project::current::Segments;
 use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::fixpoint::delta_store::EpochStore;
@@ -95,9 +95,9 @@ impl SearchRA {
         let span = self.atom.span;
         let fts_n_total = match &self.atom.cfg {
             SearchConfig::Fts(c)
-                if c.params.score_kind == crate::engines::fts::FtsScoreKind::TfIdf =>
+                if c.params.score_kind == crate::project::text::fts::FtsScoreKind::TfIdf =>
             {
-                crate::engines::fts::fts_total_docs(tx, &c.base)?
+                crate::project::text::fts::fts_total_docs(tx, &c.base)?
             }
             SearchConfig::Hnsw(_) | SearchConfig::Fts(_) | SearchConfig::Lsh(_) => 0,
         };

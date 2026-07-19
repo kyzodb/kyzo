@@ -22,7 +22,7 @@ use crate::data::expr::{Expr, compute_bounds};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{AsOf, DataValue, ScanBound};
-use crate::engines::segments::{Segment, SegmentEngine, SegmentMiss, Segments};
+use crate::project::current::{Segment, SegmentEngine, SegmentMiss, Segments};
 use crate::exec::op::batch_ops::refine_batch;
 use crate::exec::op::batch_ops::{
     Batch, BatchIter, BatchScanFilter, BatchTupleFilter, conjunction_pred,
@@ -126,7 +126,7 @@ impl StoredRA {
     /// availability — not staleness (`get` answers staleness as
     /// [`SegmentMiss::Stale`]).
     fn segment_at(&self, tx: &impl ReadTx, engine: &SegmentEngine) -> Result<Option<Arc<Segment>>> {
-        let live = engine.generation_after_snapshot(tx, self.storage.id);
+        let live = engine.witness_after_snapshot(tx, self.storage.id);
         match engine.get(self.storage.id, live) {
             Ok(handle) => return Ok(Some(handle.arc())),
             Err(SegmentMiss::Absent) | Err(SegmentMiss::Stale(_)) => {}
@@ -494,7 +494,7 @@ mod segment_gate_tests {
     use crate::data::program::InputRelationHandle;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
-    use crate::engines::segments::SegmentEngine;
+    use crate::project::current::SegmentEngine;
     use crate::session::catalog::create_relation;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::{Storage, WriteTx};
@@ -610,7 +610,7 @@ mod segment_gate_tests {
             put(&db, &handle, &engine, 0, i);
 
             let rtx = db.read_tx().unwrap();
-            let live = engine.generation_after_snapshot(&rtx, handle.id);
+            let live = engine.witness_after_snapshot(&rtx, handle.id);
             assert_eq!(
                 rows(&ra, &rtx, Segments(Some(&engine))),
                 vec![vec![v(0), v(i)]],
@@ -648,7 +648,7 @@ mod segment_gate_tests {
         let expected: Vec<Vec<DataValue>> = (0..5i64).map(|k| vec![v(k), v(k * 10)]).collect();
 
         let rtx = db.read_tx().unwrap();
-        let live = engine.generation_after_snapshot(&rtx, handle.id);
+        let live = engine.witness_after_snapshot(&rtx, handle.id);
 
         assert_eq!(rows(&ra, &rtx, Segments(Some(&engine))), expected);
         assert!(
@@ -691,7 +691,7 @@ mod segment_gate_tests {
         put(&db, &handle, &engine, 2, 20);
 
         let rtx2 = db.read_tx().unwrap();
-        let live2 = engine.generation_after_snapshot(&rtx2, handle.id);
+        let live2 = engine.witness_after_snapshot(&rtx2, handle.id);
         let expected2 = vec![vec![v(1), v(10)], vec![v(2), v(20)]];
         assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine))), expected2);
         assert!(

@@ -181,7 +181,7 @@ impl<'a> TokenStream for SplitCompoundWordsTokenStream<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::text::tokenizer::{SimpleTokenizer, TextAnalyzer};
+    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer};
 
     #[test]
     fn splitting_compound_words_works() {

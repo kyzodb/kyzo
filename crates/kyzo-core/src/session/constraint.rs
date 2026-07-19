@@ -292,7 +292,7 @@ impl<S: Storage> Db<S> {
             options,
             // Constraint bodies read the WRITE tx's post-write view;
             // committed-state segments must never serve them.
-            crate::engines::segments::Segments::OFF,
+            crate::project::current::Segments::OFF,
         )?;
         let mut rows: Vec<Tuple> = result
             .all_iter()?

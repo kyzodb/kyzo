@@ -263,14 +263,14 @@ pub(crate) enum IndexKind {
     Temporal,
     /// Vector proximity (HNSW): the persisted manifest that rebuilds the
     /// index's parameters and extractor.
-    Hnsw(crate::engines::hnsw::HnswIndexManifest),
+    Hnsw(crate::project::vector::hnsw::HnswIndexManifest),
     /// Full-text search: the persisted manifest (fields, tokenizer,
     /// filters), re-`build()`-able at any later time.
-    Fts(crate::engines::text::FtsIndexManifest),
+    Fts(crate::project::text::FtsIndexManifest),
     /// MinHash-LSH: the persisted manifest plus the name of the second,
     /// inverse relation (`{base}:{index}:inv`) the engine maintains.
     Lsh {
-        manifest: crate::engines::lsh::MinHashLshIndexManifest,
+        manifest: crate::project::dedup::lsh::MinHashLshIndexManifest,
         inverse: SmartString<LazyCompact>,
     },
 }

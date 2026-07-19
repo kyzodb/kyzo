@@ -15,14 +15,14 @@
 //! it is the distinct type [`Stale<K>`], which has no query method.
 //!
 //! Kind-specific engines re-land as `K` parameterizations of this machine
-//! (story #305 T3): [`crate::engines::hnsw::Hnsw`], [`crate::engines::fts::Fts`],
-//! [`crate::engines::lsh::Lsh`], [`crate::engines::sparse::Sparse`], and
-//! [`crate::engines::spatial::Spatial`]. Relation-backed search is owned by
+//! (story #305 T3): [`crate::project::vector::hnsw::Hnsw`], [`crate::project::text::fts::Fts`],
+//! [`crate::project::dedup::lsh::Lsh`], [`crate::project::sparse::sparse::Sparse`], and
+//! [`crate::project::spatial::spatial::Spatial`]. Relation-backed search is owned by
 //! [`RelationIndexSearch::search_relation`] on those kinds — inherent
 //! `knn` / `search_index` / `range_query` doors are thin UFCS aliases into
 //! that trait, not a second authority (P103). This module owns the shared
 //! protocol types. Segment freshness (T5) consumes [`Generation::classify`]
-//! at [`crate::engines::segments`] — staleness is [`Stale`], never an
+//! at [`crate::project::current`] — staleness is [`Stale`], never an
 //! `Option` from a get-shaped call. The segment cache is rebuildable
 //! acceleration only: meaning clocks come from [`crate::session::generation`];
 //! the cache cannot own truth (P106).
@@ -295,11 +295,11 @@ mod tests {
     /// real `search_relation` door, not a ProjectionKind façade (P103).
     #[test]
     fn five_engine_kinds_share_one_machine() {
-        use crate::engines::fts::Fts;
-        use crate::engines::hnsw::Hnsw;
-        use crate::engines::lsh::Lsh;
-        use crate::engines::sparse::Sparse;
-        use crate::engines::spatial::Spatial;
+        use crate::project::text::fts::Fts;
+        use crate::project::vector::hnsw::Hnsw;
+        use crate::project::dedup::lsh::Lsh;
+        use crate::project::sparse::sparse::Sparse;
+        use crate::project::spatial::spatial::Spatial;
 
         fn assert_owns_relation_search<K: RelationIndexSearch>() {}
         assert_owns_relation_search::<Hnsw>();

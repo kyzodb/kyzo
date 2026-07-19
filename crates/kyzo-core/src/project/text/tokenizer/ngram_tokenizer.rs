@@ -9,7 +9,7 @@
  */
 
 use super::{Token, TokenStream, Tokenizer};
-use crate::engines::text::tokenizer::BoxTokenStream;
+use crate::project::text::tokenizer::BoxTokenStream;
 
 /// Tokenize the text by splitting words into n-grams of the given size(s)
 ///
@@ -329,9 +329,9 @@ fn utf8_codepoint_width(b: u8) -> usize {
 mod tests {
 
     use super::{CodepointFrontiers, StutteringIterator, utf8_codepoint_width};
-    // use crate::engines::text::tokenizer::tests::assert_token;
-    // use crate::engines::text::tokenizer::tokenizer_impl::Tokenizer;
-    // use crate::engines::text::tokenizer::{BoxTokenStream, Token};
+    // use crate::project::text::tokenizer::tests::assert_token;
+    // use crate::project::text::tokenizer::tokenizer_impl::Tokenizer;
+    // use crate::project::text::tokenizer::{BoxTokenStream, Token};
 
     // fn test_helper(mut tokenizer: BoxTokenStream<'_>) -> Vec<Token> {
     //     let mut tokens: Vec<Token> = vec![];

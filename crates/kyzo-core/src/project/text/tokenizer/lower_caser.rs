@@ -11,7 +11,7 @@
 use std::mem;
 
 use super::{Token, TokenFilter, TokenStream};
-use crate::engines::text::tokenizer::BoxTokenStream;
+use crate::project::text::tokenizer::BoxTokenStream;
 
 impl TokenFilter for LowerCaser {
     fn transform<'a>(&self, token_stream: BoxTokenStream<'a>) -> BoxTokenStream<'a> {
@@ -67,8 +67,8 @@ impl<'a> TokenStream for LowerCaserTokenStream<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engines::text::tokenizer::tests::assert_token;
-    use crate::engines::text::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer, Token};
+    use crate::project::text::tokenizer::tests::assert_token;
+    use crate::project::text::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer, Token};
 
     #[test]
     fn test_to_lower_case() {

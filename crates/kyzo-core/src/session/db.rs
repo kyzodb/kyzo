@@ -274,7 +274,7 @@ pub struct ScriptOptions {
 /// visible on the others — the handle is a shared view of one universe.
 pub struct Db<S> {
     pub(crate) storage: S,
-    pub(crate) segments: Arc<crate::engines::segments::SegmentEngine>,
+    pub(crate) segments: Arc<crate::project::current::SegmentEngine>,
     pub(crate) fixed_rules: Arc<RwLock<BTreeMap<String, Arc<dyn FixedRule>>>>,
     pub(crate) event_callbacks: Arc<RwLock<EventCallbackRegistry>>,
     pub(crate) callback_count: Arc<AtomicU32>,
@@ -299,7 +299,7 @@ impl<S: Storage> Db<S> {
         let fixed_rules = DEFAULT_FIXED_RULES.clone();
         Ok(Self {
             storage,
-            segments: Arc::new(crate::engines::segments::SegmentEngine::default()),
+            segments: Arc::new(crate::project::current::SegmentEngine::default()),
             fixed_rules: Arc::new(RwLock::new(fixed_rules)),
             event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::default())),
             callback_count: Arc::new(AtomicU32::new(0)),
@@ -486,7 +486,7 @@ impl<S: Storage> Db<S> {
         program: InputProgram,
         cur_vld: ValidityTs,
         options: &ScriptOptions,
-        segments: crate::engines::segments::Segments<'_>,
+        segments: crate::project::current::Segments<'_>,
     ) -> Result<(EpochStore, bool, Vec<Symbol>, QueryOutOptions)> {
         let view = SessionView { store, temp };
         let out_opts = program.out_opts().clone();
@@ -635,7 +635,7 @@ impl<S: Storage> Db<S> {
             program,
             cur_vld,
             &options,
-            crate::engines::segments::Segments::OFF,
+            crate::project::current::Segments::OFF,
         )?;
         let rows = Self::finalize_rows(&result, limited, &head, &out_opts)?;
 
@@ -688,7 +688,7 @@ impl<S: Storage> Db<S> {
             program,
             cur_vld,
             &options,
-            crate::engines::segments::Segments(Some(&self.segments)),
+            crate::project::current::Segments(Some(&self.segments)),
         )?;
         let rows = Self::finalize_rows(&result, limited, &head, &out_opts)?;
         materialize(rows, &head)

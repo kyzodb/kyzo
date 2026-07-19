@@ -143,13 +143,13 @@
 //! `NamedRows` <-> JSON, error reports -> JSON) rather than reimplementing
 //! it — a binding adds transport, not JSON shaping.
 //!
-//! ## Engines — the derived-index organs (`engines`)
+//! ## Project — the derived-index organs (`project`)
 //!
 //! HNSW vector search, full-text search, MinHash-LSH, spatial, sparse
-//! vectors, and the gazetteer — each an index engine whose search surface
+//! vectors, and the gazetteer — each an index projection whose search surface
 //! joins into query plans as a relation (`exec::op::search`), with the
-//! text-analysis pipeline (`engines::text`) feeding the ones that read
-//! prose. Each engine's laws are pinned by its own harness in-tree.
+//! text-analysis pipeline (`project::text`) feeding the ones that read
+//! prose. Each projection's laws are pinned by its own harness in-tree.
 //!
 //! ## Fixed rules (`fixed_rule`)
 //!
@@ -162,7 +162,7 @@
 //! session arms one authority shared with the budget interrupt path —
 //! and draw any randomness from a seeded PRNG, so the same facts and
 //! query answer identically run to run. (Full-text analysis lives with
-//! the engines: a `TokenizerConfig` is pure data in an index manifest,
+//! the projections: a `TokenizerConfig` is pure data in an index manifest,
 //! validated at definition time and re-checked fallibly at use time,
 //! because stored data is never trusted to be well-formed just because
 //! it was once written.)
@@ -217,13 +217,13 @@
 //! The **kernel is complete and load-bearing**: `data` and `storage` are the
 //! substrate everything else stands on. The **engine is live end to end**:
 //! the public surface is the kernel re-exports plus the [`Db`] session
-//! entrypoint below; the tiers between (parse, exec, react, engines, session,
+//! entrypoint below; the tiers between (parse, exec, react, project, session,
 //! fixed_rule, rules) stay `pub(crate)` — internal organs, not API. `format`,
 //! `parse`, and `fixed_rule` carry no module-level `allow(dead_code)` —
 //! their host doors are real (`format_program` / `parse_script` /
 //! `FixedRule::run`); any unused residual is a rustc warning, not a
 //! blanket lie about a consumer that "lands later". The same P112 posture
-//! now applies to `exec`, `react`, `session`, `engines`, and the value plane's
+//! now applies to `exec`, `react`, `session`, `project`, and the value plane's
 //! production modules (`SearchHits::admit_decoded`, canonical encode/decode):
 //! module-level `allow(dead_code)` is gone; unlanded surfaces are
 //! `#[cfg(test)]`, wired, or left to warn honestly. What refuses
@@ -269,12 +269,12 @@ pub(crate) mod rules {
     pub(crate) mod algo;
     pub(crate) mod contract;
 }
-// Engines production host doors: `session/ops.rs` (fts/hnsw/lsh create/drop),
-// `exec/plan/search.rs` (`RelationIndexSearch::search_relation`),
-// `engines::admit_relation_search_hits` → `SearchHits::admit_decoded`.
-// Unlanded kind engines (gazetteer/sparse/spatial) are `#[cfg(test)]` until
-// their `db.rs` surface lands. No module-level `allow(dead_code)` (P112).
-pub(crate) mod engines;
+// Projection zone: rebuildable indexes (FTS/HNSW/LSH/sparse/spatial/gazetteer)
+// plus shared contract, residency, and current-segment seats. Host doors:
+// `session/ops.rs` (create/drop), `exec/plan/search.rs`
+// (`RelationIndexSearch::search_relation`),
+// `project::contract::admit_relation_search_hits` → `SearchHits::admit_decoded`.
+pub(crate) mod project;
 // Formatter host doors: `format::format_program` /
 // `format_program_with_comments` (P112). Exercised by the in-module
 // property suite and by parse's comment-meaning guardrail; kyzo-lsp
@@ -358,7 +358,7 @@ pub use store::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion,
 
 /// Build→seal→query projection machine (story #305). Public so compile-fail
 /// proofs and later kind parameterizations share one crate-root door.
-pub use engines::projection::{
+pub use project::projection::{
     Generation, ProjectionBuilder, ProjectionKind, Sealed, Stale,
 };
 

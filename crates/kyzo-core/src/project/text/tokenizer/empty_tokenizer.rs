@@ -8,7 +8,7 @@
  * header; nothing was removed. Deviations are marked `KYZO DEVIATION`.
  */
 
-use crate::engines::text::tokenizer::{BoxTokenStream, Token, TokenStream, Tokenizer};
+use crate::project::text::tokenizer::{BoxTokenStream, Token, TokenStream, Tokenizer};
 
 #[derive(Clone)]
 pub(crate) struct EmptyTokenizer;
@@ -40,7 +40,7 @@ impl TokenStream for EmptyTokenStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::engines::text::tokenizer::Tokenizer;
+    use crate::project::text::tokenizer::Tokenizer;
 
     #[test]
     fn test_empty_tokenizer() {

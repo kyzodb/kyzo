@@ -107,9 +107,9 @@
 //! ## Projection kind (story #305)
 //!
 //! [`Hnsw`] is this engine's `K` parameterization of the shared
-//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
-//! goes through [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
-//! [`Sealed`](crate::engines::projection::Sealed); there is no bespoke
+//! [`crate::project::projection`] build→seal→query machine. Build→seal→query
+//! goes through [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
+//! [`Sealed`](crate::project::projection::Sealed); there is no bespoke
 //! per-engine seal or freshness protocol. Relation-backed [`hnsw_put`] /
 //! [`hnsw_knn`] remain the kernel graph algorithms.
 //!
@@ -224,8 +224,8 @@ use kyzo_model::value::{
     DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, append_canonical,
     decode_tuple_from_key, encode_owned,
 };
-use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
+use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
@@ -236,8 +236,8 @@ use kyzo_model::data_value_any;
 // ---------------------------------------------------------------------------
 
 /// HNSW as a projection kind: one `K` of
-/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
-/// [`Sealed`](crate::engines::projection::Sealed).
+/// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::project::projection::Sealed).
 ///
 /// Relation-backed graph maintenance and knn ([`hnsw_put`], [`Hnsw::knn`])
 /// are the kernel algorithms — not a second build/seal/freshness protocol.
@@ -1363,7 +1363,7 @@ fn entry_point(
     let _t0 = std::time::Instant::now();
     #[cfg(test)]
     probe::ENTRY_POINT_CALLS.with(|c| c.set(c.get() + 1));
-    let first = crate::engines::index_rows(
+    let first = crate::project::contract::index_rows(
         &idx.name,
         idx.scan_bounded_prefix(
             tx,
@@ -1413,7 +1413,7 @@ fn neighbours(
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
-    for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
+    for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         #[cfg(test)]
         probe::NEIGHBOURS_ROWS_SCANNED.with(|c| c.set(c.get() + 1));
         let row = row?;
@@ -1687,7 +1687,7 @@ fn neighbours_tagged(
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
-    for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
+    for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         let row = row?;
         match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             // The vector's own presence row under the same prefix.
@@ -2192,7 +2192,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
     let mut candidates: FxHashSet<VectorId> = FxHashSet::default();
     // Scan errors and corrupt rows propagate (the original's `filter_map`
     // silently dropped errors here).
-    let rows: Vec<Tuple> = crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
+    let rows: Vec<Tuple> = crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
         .collect::<Result<Vec<_>>>()?;
     for row in rows {
         match HnswRow::decode(row.as_slice(), key_len, &idx.name)? {
@@ -2276,7 +2276,7 @@ impl RelationIndexSearch for Hnsw {
         tx: &Tx,
         request: Self::Request<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        crate::engines::admit_relation_search_hits(hnsw_knn_body(
+        crate::project::contract::admit_relation_search_hits(hnsw_knn_body(
             tx,
             request.q,
             request.manifest,
@@ -2722,7 +2722,7 @@ fn layer0_nodes<'a>(
     base: &'a RelationHandle,
     idx: &'a RelationHandle,
 ) -> impl Iterator<Item = Result<VectorId>> + 'a {
-    crate::engines::index_rows(
+    crate::project::contract::index_rows(
         &idx.name,
         idx.scan_bounded_prefix(
             tx,
@@ -3105,7 +3105,7 @@ mod tests {
 
     macro_rules! knn_rows {
         ($($arg:expr),* $(,)?) => {
-            crate::engines::search_rows(Hnsw::knn($($arg),*).unwrap()).unwrap()
+            crate::project::contract::search_rows(Hnsw::knn($($arg),*).unwrap()).unwrap()
         };
     }
     use kyzo_model::program::symbol::Symbol;
@@ -3438,7 +3438,7 @@ mod tests {
     /// theory predicts, or has it collapsed toward layer 0?), and live
     /// out-degree at layer 0 (min/mean/max — is `m_max0` actually being
     /// respected, or is some hub node's degree escaping its cap?).
-    /// `cargo test -p kyzo --release engines::hnsw::tests::build_graph_shape_probe -- --ignored --nocapture`
+    /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_graph_shape_probe -- --ignored --nocapture`
     #[test]
     #[ignore = "HNSW graph-shape measurement rig; run explicitly with --ignored"]
     fn build_graph_shape_probe() {
@@ -3550,7 +3550,7 @@ mod tests {
     /// 9.85s / 50.4s) in-repo, and attributes the growth to distance
     /// evaluations vs. graph-read (`neighbours`/`entry_point`) time. Run
     /// explicitly and read the exponents:
-    /// `cargo test -p kyzo --release engines::hnsw::tests::build_time_complexity_probe -- --ignored --nocapture`
+    /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_time_complexity_probe -- --ignored --nocapture`
     #[test]
     #[ignore = "HNSW build-time complexity probe; run explicitly with --ignored"]
     fn build_time_complexity_probe() {
@@ -3657,7 +3657,7 @@ mod tests {
     /// lives in the HNSW graph (this file's problem); if per-insert commits
     /// show a flatter profile, growing transaction state was inflating the
     /// single-transaction number instead.
-    /// `cargo test -p kyzo --release engines::hnsw::tests::build_time_transaction_lifetime_probe -- --ignored --nocapture`
+    /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_time_transaction_lifetime_probe -- --ignored --nocapture`
     #[test]
     #[ignore = "HNSW build-time transaction-lifetime probe; run explicitly with --ignored"]
     fn build_time_transaction_lifetime_probe() {
@@ -3781,7 +3781,7 @@ mod tests {
             truth.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
-            let hits = crate::engines::search_rows(
+            let hits = crate::project::contract::search_rows(
                 Hnsw::knn(
                 &rtx,
                 q_vec,

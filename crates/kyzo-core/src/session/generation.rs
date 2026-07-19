@@ -10,12 +10,12 @@
 //! projections and rebuildable indices.
 //!
 //! [`CatalogGeneration`] is the sole door that mints a projection
-//! [`Generation`](crate::engines::projection::Generation). Per-relation and
+//! [`Generation`](crate::project::projection::Generation). Per-relation and
 //! per-index counters witness through [`RelationGeneration`] and
 //! [`IndexGeneration`], then lift into the catalog clock — never a bare
 //! `u64` and never a public `Generation::new(raw)`.
 
-use crate::engines::projection::Generation;
+use crate::project::projection::Generation;
 
 /// The one catalog-meaning freshness clock.
 ///

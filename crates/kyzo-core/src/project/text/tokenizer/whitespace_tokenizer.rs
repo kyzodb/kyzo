@@ -70,8 +70,8 @@ impl<'a> TokenStream for WhitespaceTokenStream<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engines::text::tokenizer::tests::assert_token;
-    use crate::engines::text::tokenizer::{TextAnalyzer, Token, WhitespaceTokenizer};
+    use crate::project::text::tokenizer::tests::assert_token;
+    use crate::project::text::tokenizer::{TextAnalyzer, Token, WhitespaceTokenizer};
 
     #[test]
     fn test_whitespace_tokenizer() {

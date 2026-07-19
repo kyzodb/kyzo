@@ -34,8 +34,8 @@
 //!   once stored.
 
 use crate::DataValue;
-use crate::engines::text::cangjie::tokenizer::CangJieTokenizer;
-use crate::engines::text::tokenizer::{
+use crate::project::text::cangjie::tokenizer::CangJieTokenizer;
+use crate::project::text::tokenizer::{
     AlphaNumOnlyFilter, AsciiFoldingFilter, BoxTokenFilter, Language, LowerCaser, NgramTokenizer,
     RawTokenizer, RemoveLongFilter, SimpleTokenizer, SplitCompoundWords, Stemmer, StopWordFilter,
     TextAnalyzer, Tokenizer, WhitespaceTokenizer,
@@ -53,13 +53,7 @@ use kyzo_model::data_value_any;
 
 pub(crate) mod ast;
 pub(crate) mod cangjie;
-// ─────────────────────────────────────────────────────────────────────────
-// SEAM: operator tier (not yet ported).
-//
-// The CozoDB original declares `pub(crate) mod indexing;` here. That module
-// (FTS index build + search) needs the catalog's `RelationHandle` and lands
-// with the operator tier.
-// ─────────────────────────────────────────────────────────────────────────
+pub(crate) mod fts;
 pub(crate) mod tokenizer;
 
 /// The stored description of one FTS index: where it hangs, how documents

@@ -89,7 +89,7 @@
 //! ## Projection kind (story #305)
 //!
 //! [`Lsh`] is this engine's `K` parameterization of the shared
-//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! [`crate::project::projection`] build→seal→query machine. Build→seal→query
 //! goes through that machine; there is no bespoke per-engine seal or
 //! freshness protocol. Relation-backed [`lsh_put`] / [`lsh_search`] remain
 //! the kernel MinHash algorithms.
@@ -119,10 +119,10 @@ use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, Tuple, append_canonical};
-use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
-use crate::engines::text::TokenizerConfig;
-use crate::engines::text::tokenizer::TextAnalyzer;
+use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::projection::{ProjectionKind, RelationIndexSearch};
+use crate::project::text::TokenizerConfig;
+use crate::project::text::tokenizer::TextAnalyzer;
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
 use kyzo_model::data_value_any;
@@ -132,8 +132,8 @@ use kyzo_model::data_value_any;
 // ---------------------------------------------------------------------------
 
 /// MinHash-LSH as a projection kind: one `K` of
-/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
-/// [`Sealed`](crate::engines::projection::Sealed).
+/// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::project::projection::Sealed).
 ///
 /// Relation-backed signature maintenance and candidate search ([`lsh_put`],
 /// [`Lsh::search_index`]) are the kernel algorithms — not a second
@@ -805,7 +805,7 @@ impl RelationIndexSearch for Lsh {
         tx: &Tx,
         request: Self::Request<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        crate::engines::admit_relation_search_hits(lsh_search_body(
+        crate::project::contract::admit_relation_search_hits(lsh_search_body(
             request.cancel,
             tx,
             request.q,
@@ -955,7 +955,7 @@ mod tests {
 
     macro_rules! lsh_rows {
         ($($arg:expr),* $(,)?) => {
-            crate::engines::search_rows(
+            crate::project::contract::search_rows(
                 Lsh::search_index($($arg),*).unwrap()
             ).unwrap()
         };

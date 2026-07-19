@@ -55,7 +55,7 @@
 
 #![cfg(test)]
 
-use crate::engines::segments::Segments;
+use kyzo_core::project::current::Segments;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 

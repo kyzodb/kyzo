@@ -8,7 +8,7 @@
  * header; nothing was removed. Deviations are marked `KYZO DEVIATION`.
  */
 
-use crate::engines::text::tokenizer::Token;
+use crate::project::text::tokenizer::Token;
 
 #[derive(Debug)]
 pub(crate) struct CangjieTokenStream<'a> {
@@ -30,7 +30,7 @@ impl<'a> CangjieTokenStream<'a> {
     }
 }
 
-impl<'a> crate::engines::text::tokenizer::TokenStream for CangjieTokenStream<'a> {
+impl<'a> crate::project::text::tokenizer::TokenStream for CangjieTokenStream<'a> {
     fn advance(&mut self) -> bool {
         if self.index < self.result.len() {
             let current_word = self.result[self.index];
@@ -53,11 +53,11 @@ impl<'a> crate::engines::text::tokenizer::TokenStream for CangjieTokenStream<'a>
         }
     }
 
-    fn token(&self) -> &crate::engines::text::tokenizer::Token {
+    fn token(&self) -> &crate::project::text::tokenizer::Token {
         &self.token
     }
 
-    fn token_mut(&mut self) -> &mut crate::engines::text::tokenizer::Token {
+    fn token_mut(&mut self) -> &mut crate::project::text::tokenizer::Token {
         &mut self.token
     }
 }

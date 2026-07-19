@@ -381,11 +381,11 @@ fn knn_params_p2(k: usize, ef: usize) -> HnswKnnParams {
         k,
         ef,
         radius: None,
-        bind: crate::engines::hnsw::HnswBindPack {
-            field: crate::engines::hnsw::HnswBindSlot::Omit,
-            field_idx: crate::engines::hnsw::HnswBindSlot::Omit,
-            distance: crate::engines::hnsw::HnswBindSlot::Append,
-            vector: crate::engines::hnsw::HnswBindSlot::Omit,
+        bind: crate::project::vector::hnsw::HnswBindPack {
+            field: crate::project::vector::hnsw::HnswBindSlot::Omit,
+            field_idx: crate::project::vector::hnsw::HnswBindSlot::Omit,
+            distance: crate::project::vector::hnsw::HnswBindSlot::Append,
+            vector: crate::project::vector::hnsw::HnswBindSlot::Omit,
         },
     }
 }
@@ -1178,7 +1178,7 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
     assert_eq!(f.true_match_count(&rows), rows.len());
 
     let params = knn_params_p2(P2_K, P2_EF);
-    let unfiltered = crate::engines::search_rows(
+    let unfiltered = crate::project::contract::search_rows(
         Hnsw::knn(
         &rtx,
         &q,

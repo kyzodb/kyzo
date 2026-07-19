@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod envelope;
+pub mod parse;
 pub mod program;
 pub mod schema;
 pub mod typestate;

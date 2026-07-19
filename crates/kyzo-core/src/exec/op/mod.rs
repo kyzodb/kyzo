@@ -152,7 +152,7 @@ use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, MAX_VALIDITY_TS};
-use crate::engines::segments::Segments;
+use crate::project::current::Segments;
 use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::fixpoint::delta_store::EpochStore;
@@ -1008,7 +1008,7 @@ mod tests {
     use kyzo_model::schema::{ColType, NullableColType};
     use kyzo_model::schema::{ColumnDef, StoredRelationMetadata};
     use kyzo_model::value::{DataValue, ValidityTs};
-    use crate::engines::segments::SegmentEngine;
+    use crate::project::current::SegmentEngine;
     use crate::exec::fixpoint::delta_store::RegularTempStore;
     use crate::session::catalog::create_relation;
     use crate::store::fjall::new_fjall_storage;

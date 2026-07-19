@@ -10,7 +10,7 @@
 
 use std::cmp::Ordering;
 
-use crate::engines::text::tokenizer::{Token, TokenStream};
+use crate::project::text::tokenizer::{Token, TokenStream};
 
 /// Pre-tokenized text: original string plus token list proven to cohere.
 ///
@@ -119,7 +119,7 @@ impl TokenStream for PreTokenizedStream {
 mod tests {
 
     use super::*;
-    use crate::engines::text::tokenizer::Token;
+    use crate::project::text::tokenizer::Token;
 
     #[test]
     fn test_tokenized_stream() {

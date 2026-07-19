@@ -22,7 +22,7 @@
 //!
 //! A search atom evaluates as "a search is a join": for each parent row the
 //! query expression is evaluated against that row, the engine's
-//! [`RelationIndexSearch`](crate::engines::projection::RelationIndexSearch)
+//! [`RelationIndexSearch`](crate::project::projection::RelationIndexSearch)
 //! door runs once, and each result row (the full base row plus the
 //! engine's appended columns, in the engine's fixed order) extends the
 //! parent row. The atom *binds* `own_bindings` and *requires* the variables
@@ -42,11 +42,11 @@ use crate::data::program::{SearchInput, TempSymbGen};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, SearchHits, Vector};
-use crate::engines::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
-use crate::engines::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
-use crate::engines::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};
-use crate::engines::projection::RelationIndexSearch;
-use crate::engines::text::tokenizer::TextAnalyzer;
+use crate::project::text::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
+use crate::project::vector::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
+use crate::project::dedup::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};
+use crate::project::projection::RelationIndexSearch;
+use crate::project::text::tokenizer::TextAnalyzer;
 use crate::session::catalog::{IndexKind, RelationHandle};
 use crate::store::ReadTx;
 
@@ -186,7 +186,7 @@ impl std::fmt::Debug for SearchConfig {
 pub(crate) struct HnswSearch {
     pub(crate) base: RelationHandle,
     pub(crate) idx: RelationHandle,
-    pub(crate) manifest: crate::engines::hnsw::HnswIndexManifest,
+    pub(crate) manifest: crate::project::vector::hnsw::HnswIndexManifest,
     pub(crate) params: HnswKnnParams,
 }
 
@@ -206,7 +206,7 @@ pub(crate) struct FtsSearch {
 pub(crate) struct LshSearch {
     pub(crate) base: RelationHandle,
     pub(crate) idx: RelationHandle,
-    pub(crate) manifest: crate::engines::lsh::MinHashLshIndexManifest,
+    pub(crate) manifest: crate::project::dedup::lsh::MinHashLshIndexManifest,
     pub(crate) params: LshSearchParams,
     pub(crate) analyzer: Arc<TextAnalyzer>,
     pub(crate) perms: Arc<HashPermutations>,
@@ -446,7 +446,7 @@ pub(crate) fn resolve_search(
             let bind_vector = take_var(&mut params, "bind_vector", span)?;
             // One bind encoding (P038): HnswBindSlot sum pack for the engine;
             // symbols for the RA frame — both from the same Option set.
-            use crate::engines::hnsw::HnswBindSlot;
+            use crate::project::vector::hnsw::HnswBindSlot;
             let slot = |o: &Option<_>| {
                 if o.is_some() {
                     HnswBindSlot::Append
@@ -454,7 +454,7 @@ pub(crate) fn resolve_search(
                     HnswBindSlot::Omit
                 }
             };
-            let bind = crate::engines::hnsw::HnswBindPack {
+            let bind = crate::project::vector::hnsw::HnswBindPack {
                 field: slot(&bind_field),
                 field_idx: slot(&bind_field_idx),
                 distance: slot(&bind_distance),
@@ -498,9 +498,9 @@ pub(crate) fn resolve_search(
                 k,
                 score_kind,
                 bind_score: if bind_score.is_some() {
-                    crate::engines::fts::FtsBindScore::Append
+                    crate::project::text::fts::FtsBindScore::Append
                 } else {
-                    crate::engines::fts::FtsBindScore::Omit
+                    crate::project::text::fts::FtsBindScore::Omit
                 },
             };
             own_bindings.extend(bind_score);

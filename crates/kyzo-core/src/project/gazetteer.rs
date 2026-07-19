@@ -108,7 +108,7 @@ use thiserror::Error;
 
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
-use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::session::catalog::RelationHandle;
 use crate::store::ReadTx;
 
@@ -870,5 +870,334 @@ mod tests {
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption error, got: {err:?}"
         );
+    }
+
+    // --- hostile-review ---
+
+    use std::collections::BTreeSet;
+
+    fn hostile_view(tags: &[Tag]) -> Vec<(i64, usize, usize, String)> {
+        tags.iter()
+            .map(|t| {
+                (
+                    t.entity.get_int().unwrap(),
+                    t.start,
+                    t.len,
+                    t.surface.to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn hostile_pairs<'a>(rows: &'a [(i64, &'a [&'a str])]) -> Vec<(i64, &'a str)> {
+        rows.iter()
+            .flat_map(|(e, ss)| ss.iter().map(move |s| (*e, *s)))
+            .collect()
+    }
+
+    /// INDEPENDENT reference: enumerate every candidate (start,end) where a surface
+    /// matches on char boundaries, then resolve leftmost-longest by greedy
+    /// resumption (smallest start >= cursor, then longest end at that start).
+    fn ref_tag(
+        pairs: &[(i64, &str)],
+        text: &str,
+        case_insensitive: bool,
+    ) -> Vec<(i64, usize, usize, String)> {
+        let eq = |a: &[u8], b: &[u8]| {
+            if case_insensitive {
+                a.eq_ignore_ascii_case(b)
+            } else {
+                a == b
+            }
+        };
+        let bytes = text.as_bytes();
+        let mut cands: Vec<(usize, usize)> = Vec::new();
+        for start in 0..=text.len() {
+            if !text.is_char_boundary(start) {
+                continue;
+            }
+            for (_, surf) in pairs {
+                let sb = surf.as_bytes();
+                let end = start + sb.len();
+                if !sb.is_empty()
+                    && end <= text.len()
+                    && text.is_char_boundary(end)
+                    && eq(&bytes[start..end], sb)
+                {
+                    cands.push((start, end));
+                }
+            }
+        }
+        let mut out: Vec<(i64, usize, usize, String)> = Vec::new();
+        let mut cursor = 0usize;
+        while let Some(&min_start) = cands.iter().map(|(s, _)| s).filter(|&&s| s >= cursor).min()
+        {
+            let max_end = cands
+                .iter()
+                .filter(|(s, _)| *s == min_start)
+                .map(|(_, e)| *e)
+                .max()
+                .unwrap();
+            let mut ents: BTreeSet<i64> = BTreeSet::new();
+            for (e, surf) in pairs {
+                let sb = surf.as_bytes();
+                if sb.len() == max_end - min_start && eq(&bytes[min_start..max_end], sb) {
+                    ents.insert(*e);
+                }
+            }
+            for e in ents {
+                out.push((
+                    e,
+                    min_start,
+                    max_end - min_start,
+                    text[min_start..max_end].to_string(),
+                ));
+            }
+            cursor = max_end;
+        }
+        out.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        out
+    }
+
+    fn assert_agree(g: &Gazetteer, pairs: &[(i64, &str)], text: &str, ci: bool) {
+        let tags = g.tag(text);
+        for t in &tags {
+            assert!(
+                text.is_char_boundary(t.start),
+                "start not boundary in {text:?}"
+            );
+            assert!(
+                text.is_char_boundary(t.start + t.len),
+                "end not boundary in {text:?}"
+            );
+            assert_eq!(
+                &text[t.start..t.start + t.len],
+                t.surface.as_str(),
+                "surface not the document slice in {text:?}"
+            );
+        }
+        assert_eq!(
+            hostile_view(&tags),
+            ref_tag(pairs, text, ci),
+            "mismatch on {text:?}"
+        );
+        assert_eq!(g.tag(text), tags, "non-deterministic tag on {text:?}");
+    }
+
+    #[test]
+    fn turkish_dotted_dotless_i_no_false_multibyte_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[
+            (1, &["i"]),
+            (2, &["I"]),
+            (3, &["\u{0130}"]),
+            (4, &["\u{0131}"]),
+            (5, &["is"]),
+        ];
+        let cfg = GazetteerConfig {
+            case_insensitive: true,
+        };
+        let (_d, g) = compile(&db, rows, cfg);
+        let p = hostile_pairs(rows);
+        for text in [
+            "\u{0130}stanbul",
+            "the \u{0131} dotless",
+            "It is I and \u{0130} and \u{0131}",
+            "i\u{0130}i\u{0131}i",
+            "\u{0130}\u{0130}\u{0130}",
+        ] {
+            assert_agree(&g, &p, text, true);
+        }
+    }
+
+    #[test]
+    fn ligature_and_combining_marks_adjacent_to_ascii() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[
+            (1, &["cafe"]),
+            (2, &["ff"]),
+            (3, &["\u{FB00}"]),
+            (4, &["a\u{0301}"]),
+            (5, &["a"]),
+        ];
+        let (_d, g) = compile(&db, rows, GazetteerConfig::default());
+        let p = hostile_pairs(rows);
+        for text in [
+            "cafe\u{0301}",
+            "office \u{FB00}ur",
+            "a\u{0301}bc a plain",
+            "\u{FB00}\u{FB00}ff",
+            "cafe cafe\u{0301}",
+        ] {
+            assert_agree(&g, &p, text, false);
+        }
+    }
+
+    #[test]
+    fn three_way_nesting_and_prefix_suffix_overlaps() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[
+            (1, &["a"]),
+            (2, &["ab"]),
+            (3, &["abc"]),
+            (4, &["aba"]),
+            (5, &["ba"]),
+            (6, &["abab"]),
+        ];
+        let (_d, g) = compile(&db, rows, GazetteerConfig::default());
+        let p = hostile_pairs(rows);
+        for text in [
+            "abc",
+            "ab",
+            "a",
+            "abab",
+            "ababa",
+            "aba",
+            "baba",
+            "abababc",
+            "xabcx",
+            "aabbaa",
+            "abcabcabc",
+        ] {
+            assert_agree(&g, &p, text, false);
+        }
+    }
+
+    #[test]
+    fn whole_document_surface_and_single_char_carpet() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[
+            (1, &["a"]),
+            (2, &["b"]),
+            (3, &["the whole thing"]),
+            (4, &["東京"]),
+        ];
+        let (_d, g) = compile(&db, rows, GazetteerConfig::default());
+        let p = hostile_pairs(rows);
+        for text in ["the whole thing", "ababababab", "abababab東京abab", "東京東京", "b"] {
+            assert_agree(&g, &p, text, false);
+        }
+    }
+
+    #[test]
+    fn seeded_fuzz_against_independent_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[
+            (1, &["ab"]),
+            (2, &["abc"]),
+            (3, &["b"]),
+            (4, &["café"]),
+            (5, &["é"]),
+            (6, &["東"]),
+            (7, &["東京"]),
+            (8, &["a\u{0301}"]),
+        ];
+        let (_dl, g_lower) = {
+            let cfg = GazetteerConfig {
+                case_insensitive: true,
+            };
+            compile(&db, rows, cfg)
+        };
+        let dir2 = tempfile::tempdir().unwrap();
+        let db2 = new_fjall_storage(dir2.path()).unwrap();
+        let (_de, g_exact) = compile(&db2, rows, GazetteerConfig::default());
+        let p = hostile_pairs(rows);
+
+        let alphabet = [
+            "a", "b", "c", "A", "B", "é", "東", "京", " ", "\u{0301}", "C",
+        ];
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        for _ in 0..4000 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            let mut r = state.wrapping_mul(0x2545F4914F6CDD1D);
+            let n = 1 + (r % 9) as usize;
+            r /= 9;
+            let mut s = String::new();
+            for _ in 0..n {
+                let idx = (r % alphabet.len() as u64) as usize;
+                r /= alphabet.len() as u64;
+                s.push_str(alphabet[idx]);
+            }
+            assert_agree(&g_exact, &p, &s, false);
+            assert_agree(&g_lower, &p, &s, true);
+        }
+    }
+
+    #[test]
+    fn case_insensitive_multibyte_surface_matches_original_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[(1, &["\u{0130}NDEX"])];
+        let cfg = GazetteerConfig {
+            case_insensitive: true,
+        };
+        let (_d, g) = compile(&db, rows, cfg);
+        let p = hostile_pairs(rows);
+        for text in ["the \u{0130}NDEX here", "\u{0130}ndex lower tail"] {
+            assert_agree(&g, &p, text, true);
+        }
+        let tags = hostile_view(&g.tag("go \u{0130}NDEX go"));
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].0, 1);
+        assert_eq!(
+            &"go \u{0130}NDEX go"[tags[0].1..tags[0].1 + tags[0].2],
+            "\u{0130}NDEX"
+        );
+    }
+
+    #[test]
+    fn two_compiles_agree_on_adversarial_docs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[
+            (3, &["東京", "b"]),
+            (1, &["ab", "a"]),
+            (2, &["abc", "東", "ab"]),
+        ];
+        let (dict, g1) = compile(&db, rows, GazetteerConfig::default());
+        let rtx = db.read_tx().unwrap();
+        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::default()).unwrap();
+        for text in ["ab東京abc東ab", "東京", "abcabab"] {
+            assert_eq!(
+                g1.tag(text),
+                g2.tag(text),
+                "two compiles disagree on {text:?}"
+            );
+        }
+    }
+
+    /// Mutation differential: ASCII case-fold vs full `to_lowercase` on
+    /// Turkish dotted capital I (`İ` / U+0130). The gazetteer must use
+    /// length-preserving ASCII folding; a mutant that switches the fold to
+    /// `str::to_lowercase` changes the byte length of `İNDEX` and breaks
+    /// span truthfulness — this pin kills that mutant.
+    #[test]
+    fn index_mutant_to_lowercase_diverges_on_turkish_i() {
+        let surface = "\u{0130}NDEX"; // İNDEX
+        let ascii_fold_len = surface.len(); // length-preserving fold
+        let unicode_lower = surface.to_lowercase();
+        assert_ne!(
+            ascii_fold_len,
+            unicode_lower.len(),
+            "to_lowercase must change İNDEX length — the mutant this test kills"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let rows: &[(i64, &[&str])] = &[(1, &[surface])];
+        let cfg = GazetteerConfig {
+            case_insensitive: true,
+        };
+        let (_d, g) = compile(&db, rows, cfg);
+        let tags = g.tag(surface);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].len, ascii_fold_len);
+        assert_eq!(&surface[tags[0].start..tags[0].start + tags[0].len], surface);
     }
 }

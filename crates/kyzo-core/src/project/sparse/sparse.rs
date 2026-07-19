@@ -12,7 +12,7 @@
 //! dimensions absent), against the kernel's transaction species.
 //!
 //! This module is NEW to KyzoDB — CozoDB had no sparse-vector index — but it is
-//! cut from the same cloth as the FTS engine ([`crate::engines::fts`]):
+//! cut from the same cloth as the FTS engine ([`crate::project::text::fts`]):
 //! PURE FUNCTIONS over the kernel's [`ReadTx`]/[`WriteTx`] species, one stored
 //! relation as the inverted structure, the typed [`IndexRowCorrupt`] on every
 //! decode path, and the total-document count hoisted to the caller.
@@ -74,7 +74,7 @@
 //! ## Projection kind (story #305)
 //!
 //! [`Sparse`] is this engine's `K` parameterization of the shared
-//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! [`crate::project::projection`] build→seal→query machine. Build→seal→query
 //! goes through that machine; there is no bespoke per-engine seal or
 //! freshness protocol. Relation-backed [`sparse_put`] / [`sparse_search`]
 //! remain the kernel inverted-list algorithms.
@@ -115,8 +115,8 @@ use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
+use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
 
@@ -125,8 +125,8 @@ use crate::store::{ReadTx, WriteTx};
 // ---------------------------------------------------------------------------
 
 /// Sparse-vector index as a projection kind: one `K` of
-/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
-/// [`Sealed`](crate::engines::projection::Sealed).
+/// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::project::projection::Sealed).
 ///
 /// Relation-backed posting maintenance and search ([`sparse_put`],
 /// [`Sparse::search_index`]) are the kernel algorithms — not a second
@@ -433,7 +433,7 @@ impl RelationIndexSearch for Sparse {
         tx: &Tx,
         request: Self::Request<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        crate::engines::admit_relation_search_hits(sparse_search_body(
+        crate::project::contract::admit_relation_search_hits(sparse_search_body(
             tx,
             request.query,
             request.base,
@@ -509,7 +509,7 @@ fn sparse_search_body(
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
         let prefix = Tuple::from_vec(vec![DataValue::from(dim as i64)]);
-        for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
+        for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
             let row = row?;
             let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, row.as_slice())?;
             *scores.entry(doc_key).or_insert(0.0f32) += q_weight * d_weight;
@@ -542,7 +542,7 @@ fn sparse_search_body(
         // yield zero more rows, not "one past the limit" — pushing first
         // and checking `>= k` after made `k == 0` push exactly one row
         // whenever a filter predicate was present (mirrors the identical
-        // fix in `engines/fts.rs::fts_search`; `filter_code.is_none()`
+        // fix in `project/text/fts.rs::fts_search`; `filter_code.is_none()`
         // truncates `result` to `k` up front and so never hit this loop
         // body at all, which is why the no-filter path never showed it).
         if ret.len() >= params.k {
@@ -585,7 +585,7 @@ mod tests {
 
     macro_rules! sparse_rows {
         ($($arg:expr),* $(,)?) => {
-            crate::engines::search_rows(
+            crate::project::contract::search_rows(
                 Sparse::search_index($($arg),*).unwrap()
             ).unwrap()
         };
@@ -888,7 +888,7 @@ mod tests {
         }
         assert!(
             search_err()
-                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "garbage value must surface as the typed IndexRowCorrupt"
         );
@@ -911,7 +911,7 @@ mod tests {
         }
         assert!(
             search_err()
-                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "wrong-typed weight must surface as the typed IndexRowCorrupt"
         );
@@ -931,7 +931,7 @@ mod tests {
         }
         assert!(
             search_err()
-                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "negative stored weight must surface as the typed IndexRowCorrupt"
         );

@@ -98,7 +98,7 @@
 //! ## Projection kind (story #305)
 //!
 //! [`Spatial`] is this engine's `K` parameterization of the shared
-//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! [`crate::project::projection`] build→seal→query machine. Build→seal→query
 //! goes through that machine; there is no bespoke per-engine seal or
 //! freshness protocol. Relation-backed [`spatial_put`] /
 //! [`spatial_range_query`] / [`spatial_knn`] remain the kernel curve algorithms.
@@ -114,8 +114,8 @@ use thiserror::Error;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, ScanBound, Tuple};
-use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
+use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
 
@@ -124,8 +124,8 @@ use crate::store::{ReadTx, WriteTx};
 // ---------------------------------------------------------------------------
 
 /// Geospatial index as a projection kind: one `K` of
-/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
-/// [`Sealed`](crate::engines::projection::Sealed).
+/// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::project::projection::Sealed).
 ///
 /// Relation-backed curve maintenance and search ([`spatial_put`],
 /// [`Spatial::range_query`], [`Spatial::knn`]) are the kernel algorithms —
@@ -739,7 +739,7 @@ fn scan_box(
             hi.to_be_bytes().to_vec(),
         ))];
         for row in
-            crate::engines::index_rows(&idx.name, idx.scan_bounded_prefix(tx, &[], &lower, &upper))
+            crate::project::contract::index_rows(&idx.name, idx.scan_bounded_prefix(tx, &[], &lower, &upper))
         {
             let row = row?;
             let posting = decode_posting(row.as_slice(), base_key_len, &idx.name)?;
@@ -811,7 +811,7 @@ impl RelationIndexSearch for Spatial {
     ) -> Result<kyzo_model::value::SearchHits> {
         match request {
             SpatialSearchRequest::Range { base, idx, bbox } => {
-                crate::engines::admit_relation_search_hits(spatial_range_query_body(
+                crate::project::contract::admit_relation_search_hits(spatial_range_query_body(
                     tx, base, idx, bbox,
                 )?)
             }
@@ -820,7 +820,7 @@ impl RelationIndexSearch for Spatial {
                 idx,
                 query,
                 params,
-            } => crate::engines::admit_relation_search_hits(spatial_knn_body(
+            } => crate::project::contract::admit_relation_search_hits(spatial_knn_body(
                 tx, base, idx, query, params,
             )?),
         }
@@ -1171,7 +1171,7 @@ mod tests {
 
     fn range_ids(db: &impl Storage, f: &Fixture, bbox: &BoundingBox) -> Vec<i64> {
         let rtx = db.read_tx().unwrap();
-        crate::engines::search_rows(
+        crate::project::contract::search_rows(
             Spatial::range_query(&rtx, &f.base, &f.idx, bbox).unwrap(),
         )
         .unwrap()
@@ -1182,7 +1182,7 @@ mod tests {
 
     fn knn_ids(db: &impl Storage, f: &Fixture, q: &GeoPoint, k: usize) -> Vec<(i64, f64)> {
         let rtx = db.read_tx().unwrap();
-        crate::engines::search_rows(
+        crate::project::contract::search_rows(
             Spatial::knn(
             &rtx,
             &f.base,
@@ -1634,7 +1634,7 @@ mod tests {
         let err = Spatial::range_query(&rtx, &f.base, &f.idx, &bbox)
             .expect_err("corrupt posting must error, not panic");
         assert!(
-            err.downcast_ref::<crate::engines::IndexRowCorrupt>()
+            err.downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );

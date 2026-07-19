@@ -79,7 +79,7 @@
 //! ## Projection kind (story #305)
 //!
 //! [`Fts`] is this engine's `K` parameterization of the shared
-//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! [`crate::project::projection`] build→seal→query machine. Build→seal→query
 //! goes through that machine; there is no bespoke per-engine seal or
 //! freshness protocol. Relation-backed [`fts_put`] / [`fts_search`] remain
 //! the kernel inverted-index algorithms.
@@ -92,9 +92,9 @@
 //!   [`fts_del`] before every delete, in the same transaction.
 //! - **Lifecycle tier**: `::fts create/drop` — creates the index relation
 //!   from [`fts_index_metadata`], validates + builds the analyzer, keys the
-//!   [`crate::engines::text::TokenizerCache`] by the FULL index handle name, compiles
+//!   [`crate::project::text::TokenizerCache`] by the FULL index handle name, compiles
 //!   the extractor, backfills via [`fts_put`], and attaches the
-//!   [`crate::engines::text::FtsIndexManifest`] to the base handle keeping `indices`
+//!   [`crate::project::text::FtsIndexManifest`] to the base handle keeping `indices`
 //!   sorted by name.
 
 use std::cmp::Reverse;
@@ -109,10 +109,11 @@ use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
-use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
-use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
-use crate::engines::text::tokenizer::TextAnalyzer;
+use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::projection::{ProjectionKind, RelationIndexSearch};
+use kyzo_model::parse::search::{FtsExpr, FtsLiteral, FtsNear};
+use crate::project::text::ast::TokenizeFtsExpr;
+use crate::project::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
@@ -123,8 +124,8 @@ use kyzo_model::data_value_any;
 // ---------------------------------------------------------------------------
 
 /// FTS as a projection kind: one `K` of
-/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
-/// [`Sealed`](crate::engines::projection::Sealed).
+/// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::project::projection::Sealed).
 ///
 /// Relation-backed posting maintenance and search ([`fts_put`],
 /// [`Fts::search_index`]) are the kernel algorithms — not a second
@@ -403,7 +404,7 @@ fn literal_postings(
             &Tuple::from_vec(vec![DataValue::Str(value.to_string())]),
         )
     };
-    let scan = crate::engines::index_rows(&idx.name, scan);
+    let scan = crate::project::contract::index_rows(&idx.name, scan);
 
     // Value column indices in the decoded tuple: word(0), src keys
     // (1..=base_key_len), then offset_from, offset_to, position, total_length.
@@ -639,7 +640,7 @@ impl RelationIndexSearch for Fts {
         tx: &Tx,
         request: Self::Request<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        crate::engines::admit_relation_search_hits(fts_search_body(
+        crate::project::contract::admit_relation_search_hits(fts_search_body(
             request.cancel,
             tx,
             request.query,
@@ -780,7 +781,7 @@ mod tests {
 
     use crate::data::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
-    use crate::engines::text::TokenizerConfig;
+    use crate::project::text::TokenizerConfig;
     use crate::fixed_rule::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
@@ -788,7 +789,7 @@ mod tests {
 
     macro_rules! fts_rows {
         ($($arg:expr),* $(,)?) => {
-            crate::engines::search_rows(
+            crate::project::contract::search_rows(
                 Fts::search_index($($arg),*).unwrap()
             ).unwrap()
         };
@@ -1162,7 +1163,7 @@ mod tests {
         )
         .expect_err("corrupt postings must error, not panic");
         assert!(
-            err.downcast_ref::<crate::engines::IndexRowCorrupt>()
+            err.downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );
@@ -1255,7 +1256,7 @@ mod tests {
     /// one row instead of zero (the unfiltered path never showed it: it
     /// truncates `result` to `k` up front and skips the loop body
     /// entirely at k=0). Fixed by checking before pushing, in both this
-    /// engine and the identical shape in `engines/sparse.rs::sparse_search`.
+    /// engine and the identical shape in `project/sparse/sparse.rs::sparse_search`.
     #[test]
     fn k_zero_filter_path_returns_zero_rows() {
         let dir = tempfile::tempdir().unwrap();

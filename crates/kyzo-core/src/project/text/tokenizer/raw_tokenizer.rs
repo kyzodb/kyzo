@@ -9,7 +9,7 @@
  */
 
 use super::{Token, TokenStream, Tokenizer};
-use crate::engines::text::tokenizer::BoxTokenStream;
+use crate::project::text::tokenizer::BoxTokenStream;
 
 /// For each value of the field, emit a single unprocessed token.
 #[derive(Clone)]
@@ -49,8 +49,8 @@ impl TokenStream for RawTokenStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::engines::text::tokenizer::tests::assert_token;
-    use crate::engines::text::tokenizer::{RawTokenizer, TextAnalyzer, Token};
+    use crate::project::text::tokenizer::tests::assert_token;
+    use crate::project::text::tokenizer::{RawTokenizer, TextAnalyzer, Token};
 
     #[test]
     fn test_raw_tokenizer() {

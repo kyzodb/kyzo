@@ -70,8 +70,8 @@ impl<'a> TokenStream for SimpleTokenStream<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engines::text::tokenizer::tests::assert_token;
-    use crate::engines::text::tokenizer::{SimpleTokenizer, TextAnalyzer, Token};
+    use crate::project::text::tokenizer::tests::assert_token;
+    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer, Token};
 
     #[test]
     fn test_simple_tokenizer() {

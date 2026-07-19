@@ -9,7 +9,7 @@
  */
 
 use super::{options::TokenizerOption, stream::CangjieTokenStream};
-use crate::engines::text::tokenizer::BoxTokenStream;
+use crate::project::text::tokenizer::BoxTokenStream;
 use jieba_rs::Jieba;
 use std::sync::Arc;
 
@@ -30,7 +30,7 @@ impl Default for CangJieTokenizer {
     }
 }
 
-impl crate::engines::text::tokenizer::Tokenizer for CangJieTokenizer {
+impl crate::project::text::tokenizer::Tokenizer for CangJieTokenizer {
     /// Cut text into tokens
     fn token_stream<'a>(&self, text: &'a str) -> BoxTokenStream<'a> {
         let result = match self.option {

@@ -166,9 +166,9 @@ pub(crate) mod tests {
     // use super::{
     //     Language, LowerCaser, RemoveLongFilter, SimpleTokenizer, Stemmer, Token,
     // };
-    // use crate::engines::text::tokenizer::TextAnalyzer;
+    // use crate::project::text::tokenizer::TextAnalyzer;
 
-    use crate::engines::text::tokenizer::Token;
+    use crate::project::text::tokenizer::Token;
 
     /// This is a function that can be used in tests and doc tests
     /// to assert a token's correctness.
@@ -203,7 +203,7 @@ pub(crate) mod tests {
     /// `StutteringIterator` underflow deviation in `ngram_tokenizer.rs`).
     mod hostile_input {
         use crate::DataValue;
-        use crate::engines::text::TokenizerConfig;
+        use crate::project::text::TokenizerConfig;
 
         fn cfg(name: &str, args: Vec<DataValue>) -> TokenizerConfig {
             TokenizerConfig::admit(name, args).expect("test stage name")
@@ -293,7 +293,7 @@ pub(crate) mod tests {
 
         /// Run one analyzer over one input to exhaustion; return how many
         /// tokens it produced. Panics (the thing under test) propagate.
-        fn exhaust(analyzer: &crate::engines::text::tokenizer::TextAnalyzer, text: &str) -> usize {
+        fn exhaust(analyzer: &crate::project::text::tokenizer::TextAnalyzer, text: &str) -> usize {
             let mut stream = analyzer.token_stream(text);
             let mut n = 0usize;
             while let Some(tok) = stream.next() {

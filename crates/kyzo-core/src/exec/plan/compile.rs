@@ -130,7 +130,7 @@
 //! [`bind_for_eval`], which binds a transaction and yields the
 //! `EvalProgram` that `query/eval.rs::stratified_evaluate` runs.
 
-use crate::engines::segments::Segments;
+use crate::project::current::Segments;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;

@@ -52,21 +52,21 @@ use kyzo_model::value::{DataValue, Tuple, ValidityTs, decode_tuple_from_kv};
 pub(crate) enum IndexCtx {
     Hnsw {
         idx: RelationHandle,
-        manifest: crate::engines::hnsw::HnswIndexManifest,
+        manifest: crate::project::vector::hnsw::HnswIndexManifest,
         filter: Option<Expr>,
     },
     Fts {
         idx: RelationHandle,
         extractor: Expr,
-        analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
+        analyzer: Arc<crate::project::text::tokenizer::TextAnalyzer>,
     },
     Lsh {
         idx: RelationHandle,
         inv: RelationHandle,
-        manifest: crate::engines::lsh::MinHashLshIndexManifest,
+        manifest: crate::project::dedup::lsh::MinHashLshIndexManifest,
         extractor: Expr,
-        analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
-        perms: Arc<crate::engines::lsh::HashPermutations>,
+        analyzer: Arc<crate::project::text::tokenizer::TextAnalyzer>,
+        perms: Arc<crate::project::dedup::lsh::HashPermutations>,
     },
 }
 
@@ -175,10 +175,10 @@ impl<T: WriteTx> SessionTx<T> {
                 filter,
             } => {
                 if let Some(old) = old_kv {
-                    crate::engines::hnsw::hnsw_remove(&mut self.store, base, idx, old)?;
+                    crate::project::vector::hnsw::hnsw_remove(&mut self.store, base, idx, old)?;
                 }
                 if let Some(new) = new_kv {
-                    crate::engines::hnsw::hnsw_put(
+                    crate::project::vector::hnsw::hnsw_put(
                         &mut self.store,
                         manifest,
                         base,
@@ -194,7 +194,7 @@ impl<T: WriteTx> SessionTx<T> {
                 analyzer,
             } => {
                 if let Some(old) = old_kv {
-                    crate::engines::fts::fts_del(
+                    crate::project::text::fts::fts_del(
                         &mut self.store,
                         old,
                         extractor,
@@ -204,7 +204,7 @@ impl<T: WriteTx> SessionTx<T> {
                     )?;
                 }
                 if let Some(new) = new_kv {
-                    crate::engines::fts::fts_put(
+                    crate::project::text::fts::fts_put(
                         &mut self.store,
                         new,
                         extractor,
@@ -223,10 +223,10 @@ impl<T: WriteTx> SessionTx<T> {
                 perms,
             } => {
                 if let Some(old) = old_kv {
-                    crate::engines::lsh::lsh_del(&mut self.store, old, None, idx, inv)?;
+                    crate::project::dedup::lsh::lsh_del(&mut self.store, old, None, idx, inv)?;
                 }
                 if let Some(new) = new_kv {
-                    crate::engines::lsh::lsh_put(
+                    crate::project::dedup::lsh::lsh_put(
                         &mut self.store,
                         new,
                         extractor,
@@ -543,7 +543,7 @@ impl<T: WriteTx> SessionTx<T> {
         }
         // Admit-only mint: private fields, MNeighbours (m >= 2), derived
         // m_max / m_max0 / level_multiplier — illegal descriptions refuse here.
-        let manifest = crate::engines::hnsw::HnswIndexManifest::admit(
+        let manifest = crate::project::vector::hnsw::HnswIndexManifest::admit(
             cfg.base_relation.clone(),
             cfg.index_name.clone(),
             cfg.vec_dim,
@@ -556,7 +556,7 @@ impl<T: WriteTx> SessionTx<T> {
             cfg.extend_candidates,
             cfg.keep_pruned_connections,
         )?;
-        let idx_meta = crate::engines::hnsw::hnsw_index_metadata(&base.metadata);
+        let idx_meta = crate::project::vector::hnsw::hnsw_index_metadata(&base.metadata);
         let idx_ref = IndexRef {
             name: cfg.index_name.clone(),
             kind: IndexKind::Hnsw(manifest),
@@ -574,14 +574,14 @@ impl<T: WriteTx> SessionTx<T> {
         // Prove the analyzer builds and the extractor compiles now.
         cfg.tokenizer.build(&cfg.filters)?;
         Self::compile_row_extractor(&base, &cfg.extractor)?;
-        let manifest = crate::engines::text::FtsIndexManifest {
+        let manifest = crate::project::text::FtsIndexManifest {
             base_relation: cfg.base_relation.clone(),
             index_name: cfg.index_name.clone(),
             extractor: cfg.extractor.clone(),
             tokenizer: cfg.tokenizer.clone(),
             filters: cfg.filters.clone(),
         };
-        let idx_meta = crate::engines::fts::fts_index_metadata(&base.metadata);
+        let idx_meta = crate::project::text::fts::fts_index_metadata(&base.metadata);
         let idx_ref = IndexRef {
             name: cfg.index_name.clone(),
             kind: IndexKind::Fts(manifest),
@@ -597,7 +597,7 @@ impl<T: WriteTx> SessionTx<T> {
         &mut self,
         cfg: &crate::parse::sys::MinHashLshConfig,
     ) -> Result<NamedRows> {
-        use crate::engines::lsh::{DEFAULT_PERM_SEED, HashPermutations, LshParams, Weights};
+        use crate::project::dedup::lsh::{DEFAULT_PERM_SEED, HashPermutations, LshParams, Weights};
         let base = self.get_relation(&cfg.base_relation)?;
         cfg.tokenizer.build(&cfg.filters)?;
         Self::compile_row_extractor(&base, &cfg.extractor)?;
@@ -620,7 +620,7 @@ impl<T: WriteTx> SessionTx<T> {
         })?;
         let perms = HashPermutations::new(n_drawn, DEFAULT_PERM_SEED);
         let inverse: SmartString<LazyCompact> = format!("{}:inv", cfg.index_name).into();
-        let manifest = crate::engines::lsh::MinHashLshIndexManifest {
+        let manifest = crate::project::dedup::lsh::MinHashLshIndexManifest {
             base_relation: cfg.base_relation.clone(),
             index_name: cfg.index_name.clone(),
             extractor: cfg.extractor.clone(),
@@ -631,10 +631,10 @@ impl<T: WriteTx> SessionTx<T> {
             n_bands: params.b,
             n_rows_in_band: params.r,
             threshold: cfg.target_threshold.0,
-            perms: crate::engines::lsh::LshPermutationBytes::from_perms(&perms),
+            perms: crate::project::dedup::lsh::LshPermutationBytes::from_perms(&perms),
         };
-        let idx_meta = crate::engines::lsh::lsh_index_metadata(&base.metadata);
-        let inv_meta = crate::engines::lsh::lsh_inv_index_metadata(&base.metadata);
+        let idx_meta = crate::project::dedup::lsh::lsh_index_metadata(&base.metadata);
+        let inv_meta = crate::project::dedup::lsh::lsh_inv_index_metadata(&base.metadata);
         let idx_ref = IndexRef {
             name: cfg.index_name.clone(),
             kind: IndexKind::Lsh { manifest, inverse },

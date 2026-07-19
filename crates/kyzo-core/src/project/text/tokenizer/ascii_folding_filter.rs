@@ -1557,7 +1557,7 @@ mod tests {
     use std::iter;
 
     use super::to_ascii;
-    use crate::engines::text::tokenizer::{
+    use crate::project::text::tokenizer::{
         AsciiFoldingFilter, RawTokenizer, SimpleTokenizer, TextAnalyzer,
     };
 

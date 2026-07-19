@@ -22,7 +22,7 @@
 //! assert!(stream.next().is_none());
 //! ```
 use super::{Token, TokenFilter, TokenStream};
-use crate::engines::text::tokenizer::BoxTokenStream;
+use crate::project::text::tokenizer::BoxTokenStream;
 
 /// `RemoveLongFilter` removes tokens that are longer
 /// than a given number of bytes (in UTF-8 representation).
@@ -82,8 +82,8 @@ impl<'a> TokenStream for RemoveLongFilterStream<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engines::text::tokenizer::tests::assert_token;
-    use crate::engines::text::tokenizer::{RemoveLongFilter, SimpleTokenizer, TextAnalyzer, Token};
+    use crate::project::text::tokenizer::tests::assert_token;
+    use crate::project::text::tokenizer::{RemoveLongFilter, SimpleTokenizer, TextAnalyzer, Token};
 
     #[test]
     fn test_remove_long() {
