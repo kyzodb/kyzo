@@ -448,11 +448,14 @@ impl RootChain {
     }
 }
 
-/// State root at any committed transaction time (as-of root).
+/// Chain link covering `cut` — the mint whose root [`as_of_root`] returns.
 ///
-/// Current-only root as the sole accountability digest is deleted —
-/// as-of is a first-class surface (§57).
-pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, MerkleChainRefuse> {
+/// Independent recomputation (session `verify`) needs the link's predecessor
+/// and mint metadata, not only the tip digest.
+pub fn link_at_cut(
+    chain: &RootChain,
+    cut: CommitOrdinal,
+) -> Result<&ChainedStateRoot, MerkleChainRefuse> {
     let mut best: Option<&ChainedStateRoot> = None;
     for link in chain.links() {
         if link.commit_ordinal().get() <= cut.get() {
@@ -461,8 +464,15 @@ pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, Me
             break;
         }
     }
-    best.map(|l| l.root())
-        .ok_or(MerkleChainRefuse::CutBeforeGenesis)
+    best.ok_or(MerkleChainRefuse::CutBeforeGenesis)
+}
+
+/// State root at any committed transaction time (as-of root).
+///
+/// Current-only root as the sole accountability digest is deleted —
+/// as-of is a first-class surface (§57).
+pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, MerkleChainRefuse> {
+    link_at_cut(chain, cut).map(|l| l.root())
 }
 
 /// Fork-equivalence: shared fork-point root without revealing post-fork content.
