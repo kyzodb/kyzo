@@ -24,9 +24,8 @@
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::{
-    AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValiditySlot, ValidityTs,
+    AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, ValiditySlot, ValidityTs,
     append_canonical, decode_tuple_from_key, decode_values_all,
 };
 
@@ -35,6 +34,8 @@ use super::sweep::{CommitOrdinal, Committed};
 
 /// Named refusals on the bitemporal decode / polarity path — never a bare
 /// `bail!(String)`.
+#[cfg(test)]
+use kyzo_model::value::Validity;
 #[derive(Debug, Error, Diagnostic)]
 pub enum BitemporalDecodeError {
     #[error("corrupt bitemporal value: shorter than its header and polarity byte")]

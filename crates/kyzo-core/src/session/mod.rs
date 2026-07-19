@@ -20,12 +20,16 @@ pub(crate) fn current_validity() -> miette::Result<kyzo_model::value::ValidityTs
 }
 
 pub(crate) mod access;
+#[allow(dead_code)] // mid-wiring seat
 pub(crate) mod admit;
 pub(crate) mod capacity;
 pub(crate) mod catalog;
+pub(crate) mod certificate_inject;
+#[allow(dead_code)] // mid-wiring seat
 pub(crate) mod composition;
 pub(crate) mod constraint;
 pub(crate) mod db;
+#[allow(dead_code)] // mid-wiring seat
 pub(crate) mod footprint;
 pub(crate) mod fts;
 pub(crate) mod generation;

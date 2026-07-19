@@ -71,9 +71,7 @@ use crate::exec::op::temporal::SignedFact;
 use crate::parse::{Script, parse_script};
 use crate::react::incremental::{self, IncrementalProgram, MaintainedState};
 use crate::rules::contract::CancelFlag;
-use crate::session::catalog::Catalog;
 use crate::session::catalog::get_relation;
-use crate::session::current_validity;
 use crate::session::db::{Engine, ScriptOptions, SessionTx};
 use crate::session::db::{SessionNormalizer, SessionView};
 use crate::session::observe::{CallbackEvent, CallbackOp};
@@ -84,6 +82,8 @@ use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
 /// Named refusal when [`Db::register_standing`] is given a non-standing script.
+#[cfg(test)]
+use crate::session::catalog::Catalog;
 #[derive(Debug, Error, Diagnostic)]
 pub(crate) enum StandingRegisterRefusal {
     #[error(

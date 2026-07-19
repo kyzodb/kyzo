@@ -15,18 +15,15 @@
 //! Prim's minimum spanning tree from an optional starting node.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
 
 use miette::{Diagnostic, Result};
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};

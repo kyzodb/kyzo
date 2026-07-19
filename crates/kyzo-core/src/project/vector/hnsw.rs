@@ -138,6 +138,8 @@ use std::collections::BinaryHeap;
 /// tell an algorithmic superlinearity in this file from a per-operation
 /// cost imposed by the transaction underneath it.
 #[cfg(test)]
+#[cfg(test)]
+use kyzo_model::schema::column::ColLen;
 pub(crate) mod probe {
     use std::cell::Cell;
     use std::time::Duration;
@@ -165,6 +167,7 @@ pub(crate) mod probe {
         pub(crate) static ENTRY_POINT_DUR: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     }
 
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn reset() {
         DIST_CALLS.with(|c| c.set(0));
         V_DIST_CALLS.with(|c| c.set(0));
@@ -178,6 +181,7 @@ pub(crate) mod probe {
     }
 
     #[derive(Debug, Clone, Copy)]
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) struct Snapshot {
         pub(crate) dist_calls: u64,
         pub(crate) v_dist_calls: u64,
@@ -190,6 +194,7 @@ pub(crate) mod probe {
         pub(crate) entry_point_dur: Duration,
     }
 
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn snapshot() -> Snapshot {
         Snapshot {
             dist_calls: DIST_CALLS.with(|c| c.get()),
@@ -222,7 +227,6 @@ use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::VecElementType;
-use kyzo_model::schema::column::ColLen;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{
@@ -387,11 +391,11 @@ struct HnswIndexManifestDe {
     distance: HnswDistance,
     ef_construction: usize,
     m_neighbours: usize,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
     m_max: usize,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
     m_max0: usize,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
     level_multiplier: f64,
     index_filter: Option<Expr>,
     extend_candidates: bool,
@@ -423,6 +427,8 @@ impl HnswIndexManifest {
     /// `base_relation` / `index_name` / `vec_fields`, non-positive
     /// `ef_construction`, and `m_neighbours < 2` (via [`MNeighbours`]).
     /// Derives `m_max`, `m_max0`, and `level_multiplier` from the proven `m`.
+    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
+    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
     pub(crate) fn admit(
         base_relation: SmartString<LazyCompact>,
         index_name: SmartString<LazyCompact>,
@@ -799,6 +805,7 @@ impl HnswHitKey {
     }
 
     /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -2318,6 +2325,7 @@ impl Hnsw {
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
     /// function `hnsw_knn`.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn knn(
         tx: &impl ReadTx,
         q: &Vector,

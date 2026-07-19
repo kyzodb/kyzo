@@ -65,7 +65,7 @@
 //! guards the present instant only. This boundary is stated, not silently
 //! assumed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
 use miette::{Diagnostic, Result, WrapErr, bail};
@@ -91,6 +91,8 @@ use kyzo_model::value::{DataValue, ValidityTs};
 /// How many witness rows a refusal names. The rows shown are the smallest
 /// in value order (witnesses are sorted before capping), so the selection
 /// is deterministic; the refusal always carries the *total* count.
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) const WITNESS_CAP: usize = 8;
 
 /// How many commit attempts a constraint catalog op replays on a typed

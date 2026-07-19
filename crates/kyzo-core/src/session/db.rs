@@ -928,6 +928,7 @@ impl<T: ReadTx> SessionTx<T> {
     }
 
     /// Read one key from the store the relation lives in.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn get_routed(
         &self,
         residency: Residency,
@@ -940,6 +941,7 @@ impl<T: ReadTx> SessionTx<T> {
     }
 
     /// Existence of one key in the store the relation lives in.
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn exists_routed(&self, residency: Residency, key: &[u8]) -> Result<bool> {
         match residency {
             Residency::Temp => self.temp.exists(key),
@@ -1095,6 +1097,7 @@ impl<T: WriteTx> SessionTx<T> {
     }
 
     /// Delete one key from the store the relation lives in.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn del_routed(&mut self, residency: Residency, key: &[u8]) -> Result<()> {
         match residency {
             Residency::Temp => self.temp.del(key),

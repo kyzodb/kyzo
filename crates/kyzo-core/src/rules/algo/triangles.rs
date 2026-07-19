@@ -20,17 +20,13 @@
 //! Clustering coefficients: per node, the triangle count over the
 //! (undirected) neighborhood and the resulting coefficient.
 
-use std::collections::BTreeMap;
-
 use itertools::Itertools;
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::par_try_map;
 use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};

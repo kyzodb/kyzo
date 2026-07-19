@@ -28,7 +28,7 @@ use miette::Result;
 use kyzo_model::value::{AsOf, ValidityTs};
 use kyzo_model::value::{Tuple, decode_tuple_from_kv};
 
-use super::contract::{Storage, sealed::Sealed};
+use super::contract::sealed::Sealed;
 
 /// fjall's Arc-backed byte currency — a clone is a refcount bump, never a
 /// heap copy. Absolute path: sibling modules declare `fjall` and would

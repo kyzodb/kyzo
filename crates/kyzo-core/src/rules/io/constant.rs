@@ -23,10 +23,7 @@
 //! list of equal-length lists, *is* the relation. It backs `<-` const
 //! rules and the synthetic entry of a body-less `:create`.
 
-use std::collections::BTreeMap;
-
 use miette::{Diagnostic, Result, bail, ensure};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
@@ -38,6 +35,10 @@ use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
+#[cfg(test)]
+use smartstring::SmartString;
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) struct Constant;
 
 /// Rows sealed by [`Constant::init_options`]: a rectangular list-of-lists.
@@ -68,9 +69,21 @@ impl ConstantData<'_> {
     fn row_cells(row: &DataValue) -> Result<&[DataValue]> {
         match row {
             DataValue::List(cells) => Ok(cells.as_slice()),
-            _ => Err(crate::rules::contract::FixedRuleInvariantError::refuse(
-                "constant_row_list",
-            )),
+            DataValue::Null
+            | DataValue::Bool(_)
+            | DataValue::Num(_)
+            | DataValue::Str(_)
+            | DataValue::Bytes(_)
+            | DataValue::Uuid(_)
+            | DataValue::Regex(_)
+            | DataValue::Json(_)
+            | DataValue::Vector(_)
+            | DataValue::Set(_)
+            | DataValue::Validity(_)
+            | DataValue::Interval(_)
+            | DataValue::Geometry(_) => Err(
+                crate::rules::contract::FixedRuleInvariantError::refuse("constant_row_list"),
+            ),
         }
     }
 }
@@ -200,7 +213,7 @@ impl FixedRule for Constant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{empty_opts, opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the

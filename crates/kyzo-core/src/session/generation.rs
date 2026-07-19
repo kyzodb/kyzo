@@ -87,6 +87,7 @@ pub(crate) struct IndexGeneration(u64);
 
 impl IndexGeneration {
     /// Witness a loaded per-index counter as index freshness.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn witness(raw: u64) -> Self {
         IndexGeneration(raw)
     }

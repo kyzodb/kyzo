@@ -249,31 +249,37 @@ impl NormalAggrObj for AggrQuantile {
 
 // ── Registry descriptors (kind-as-data; folds via meet_op/normal_op) ─────
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 const AGGR_HLL: Aggregation = Aggregation {
     name: "hll",
     kind: AggrKind::Normal,
 };
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 const AGGR_HLL_SKETCH: Aggregation = Aggregation {
     name: "hll_sketch",
     kind: AggrKind::Normal,
 };
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 const AGGR_HLL_UNION: Aggregation = Aggregation {
     name: "hll_union",
     kind: AggrKind::Meet,
 };
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 const AGGR_COUNT_MIN: Aggregation = Aggregation {
     name: "count_min",
     kind: AggrKind::Normal,
 };
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 const AGGR_TDIGEST: Aggregation = Aggregation {
     name: "tdigest",
     kind: AggrKind::Normal,
 };
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 const AGGR_QUANTILE: Aggregation = Aggregation {
     name: "quantile",
     kind: AggrKind::Normal,
@@ -281,6 +287,7 @@ const AGGR_QUANTILE: Aggregation = Aggregation {
 
 /// Sketch-name helper. Model [`kyzo_model::program::aggregate::parse_aggr`]
 /// already admits these names; this remains for internal/test dispatch.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn parse_sketch_aggr(name: &str) -> Option<Aggregation> {
     Some(match name {
         "hll" => AGGR_HLL,

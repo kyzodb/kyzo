@@ -136,6 +136,7 @@ impl Batch {
     }
 
     /// Drop the most recently pushed row (a filtered-out successful push).
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn pop(&mut self) {
         if let Some(end) = self.offsets.pop() {
             let start = self.offsets.last().copied().unwrap_or(0);
@@ -144,6 +145,7 @@ impl Batch {
             let _ = end;
         }
     }
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn with_rows(rows: Vec<Tuple>) -> Self {
         let mut b = Batch::new();
         for r in rows {
@@ -193,6 +195,7 @@ impl Batch {
     ///
     /// Premise lists are dropped — callers that need them must read
     /// [`Self::premises`] before consuming.
+    #[allow(dead_code)] // batch conversion door for hosts/tests
     pub(crate) fn into_rows(self) -> Vec<Tuple> {
         let mut out = Vec::with_capacity(self.offsets.len());
         let mut values = self.values.into_iter();

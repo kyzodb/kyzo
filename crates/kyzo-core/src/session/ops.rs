@@ -26,8 +26,7 @@ use thiserror::Error;
 
 use crate::data::json::NamedRows;
 use crate::session::catalog::{
-    IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency, TEMPORAL_POSTING_LEADING_COLUMN,
-    get_relation,
+    IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency, get_relation,
 };
 use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
 use crate::store::time::ClaimPolarity;
@@ -35,12 +34,16 @@ use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::symbol::Symbol;
-use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
-use kyzo_model::value::{DataValue, Tuple, TupleT, ValidityTs, decode_tuple_from_kv};
+use kyzo_model::schema::StoredRelationMetadata;
+use kyzo_model::value::{DataValue, Tuple, TupleT};
 
 /// The scan ceiling for `::merkle_root` when the caller sets no
 /// derived-tuple ceiling: 2^32 key-value pairs. Large enough for any store
 /// this engine has met, small enough that no scan is unbounded.
+#[cfg(test)]
+use kyzo_model::schema::ColumnDef;
+#[cfg(test)]
+use kyzo_model::schema::NullableColType;
 const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = NonZeroU64::new(1 << 32).unwrap();
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -99,6 +102,7 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Parse + resolve + compile a row expression (extractor or filter)
     /// against the base relation's columns.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     fn compile_row_expr(base: &RelationHandle, src: &str) -> Result<Expr> {
         let mut expr = crate::parse::parse_expressions(src, &BTreeMap::new())?;
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
@@ -502,6 +506,7 @@ impl<T: WriteTx> SessionTx<T> {
     /// — see [`IndexKind::Temporal`]). The stored posting rows are the
     /// write's own valid instant as a leading column, followed by the
     /// base relation's key columns.
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn create_temporal_index(&mut self, rel: &str, idx_name: &str) -> Result<NamedRows> {
         let base = self.get_relation(rel)?;
         let mut keys = Vec::with_capacity(1 + base.metadata.keys.len());

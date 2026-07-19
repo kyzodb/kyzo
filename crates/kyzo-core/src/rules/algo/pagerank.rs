@@ -44,22 +44,18 @@
 
 //! PageRank: damped power iteration over the (unweighted) edge graph.
 
-use std::collections::BTreeMap;
-
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::par_try_map;
-use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-};
+use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
 pub(crate) struct PageRank;
 
 impl FixedRule for PageRank {

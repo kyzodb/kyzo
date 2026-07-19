@@ -137,6 +137,7 @@ impl HllEstimate {
 
     /// Read the minted magnitude (relative-error arithmetic, tests).
     /// Not a construction door.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn as_f64(self) -> f64 {
         self.raw
     }
@@ -246,6 +247,7 @@ impl<const M: usize> HyperLogLog<M> {
     }
 
     /// The estimate rounded to a non-negative integer count.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn estimate_count(&self) -> i64 {
         self.estimate().round_count()
     }

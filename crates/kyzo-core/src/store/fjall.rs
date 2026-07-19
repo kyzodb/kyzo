@@ -1096,11 +1096,35 @@ mod pins {
                     let t = r.unwrap();
                     let name = match &t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
-                        other => panic!("unexpected {other:?}"),
+                        other @ DataValue::Null
+                        | other @ DataValue::Bool(_)
+                        | other @ DataValue::Num(_)
+                        | other @ DataValue::Bytes(_)
+                        | other @ DataValue::Uuid(_)
+                        | other @ DataValue::Regex(_)
+                        | other @ DataValue::Json(_)
+                        | other @ DataValue::Vector(_)
+                        | other @ DataValue::List(_)
+                        | other @ DataValue::Set(_)
+                        | other @ DataValue::Validity(_)
+                        | other @ DataValue::Interval(_)
+                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
                     };
                     let ts = match &t.as_slice()[1] {
                         DataValue::Validity(v) => v.ts_micros(),
-                        other => panic!("unexpected {other:?}"),
+                        other @ DataValue::Null
+                        | other @ DataValue::Bool(_)
+                        | other @ DataValue::Num(_)
+                        | other @ DataValue::Str(_)
+                        | other @ DataValue::Bytes(_)
+                        | other @ DataValue::Uuid(_)
+                        | other @ DataValue::Regex(_)
+                        | other @ DataValue::Json(_)
+                        | other @ DataValue::Vector(_)
+                        | other @ DataValue::List(_)
+                        | other @ DataValue::Set(_)
+                        | other @ DataValue::Interval(_)
+                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
                     };
                     (name, ts)
                 })

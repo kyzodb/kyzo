@@ -47,7 +47,10 @@ pub(crate) struct IndexRowCorrupt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IndexCorruptReason {
     RowShorterThanKey,
-    WrongColumnCount { found: usize, expected: usize },
+    WrongColumnCount {
+        found: usize,
+        expected: usize,
+    },
     BaseRowMissing,
     DecodeFailed(DecodeError),
 
@@ -66,24 +69,42 @@ pub(crate) enum IndexCorruptReason {
     FtsPositionsNotList,
     FtsPositionNotInt,
 
+    #[allow(dead_code)] // mid-wiring / test-only surface
     GazetteerSurfacesNotList,
     GazetteerSurfaceNotString,
 
-    HnswNotInteger { what: String },
+    HnswNotInteger {
+        what: String,
+    },
     HnswCanaryNonNullKeys,
     HnswCanaryEntryNotBytes,
-    HnswCanaryEntryKeyTooShort { found: usize },
-    HnswLayerOutOfRange { layer: i64 },
-    HnswNegativeField { side: &'static str },
-    HnswSubOutOfRange { side: &'static str, sub: i64 },
+    HnswCanaryEntryKeyTooShort {
+        found: usize,
+    },
+    HnswLayerOutOfRange {
+        layer: i64,
+    },
+    HnswNegativeField {
+        side: &'static str,
+    },
+    HnswSubOutOfRange {
+        side: &'static str,
+        sub: i64,
+    },
     HnswIgnoreLinkNotBool,
     HnswNodeDegreeNegative,
     HnswNodeHashNotBytes,
-    HnswNodeHashWrongLength { found: usize },
+    HnswNodeHashWrongLength {
+        found: usize,
+    },
     HnswEdgeDistanceNotNumber,
     HnswEdgeHashNotNull,
-    HnswFieldBeyondArity { field: usize },
-    HnswListElementBeyondList { sub: usize },
+    HnswFieldBeyondArity {
+        field: usize,
+    },
+    HnswListElementBeyondList {
+        sub: usize,
+    },
     HnswExpectsListOfVectors,
     HnswExpectsVector,
     HnswCanaryBelowCanaryLayer,
@@ -91,7 +112,9 @@ pub(crate) enum IndexCorruptReason {
     HnswNonNodeRow,
     HnswEdgeTargetMissingNode,
     HnswNeighbourMissingNode,
-    HnswManifestFieldBeyondArity { field: usize },
+    HnswManifestFieldBeyondArity {
+        field: usize,
+    },
     HnswCanaryInsideLayer0Prefix,
     HnswIndexedFieldBeyondRelationArity,
     HnswIndexedFieldBeyondRowArity,
@@ -251,6 +274,7 @@ pub(crate) fn admit_relation_search_hits(tuples: Vec<Tuple>) -> miette::Result<S
 }
 
 /// Materialize admitted search hits for test assertions (output boundary).
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn search_rows(hits: SearchHits) -> miette::Result<Vec<Tuple>> {
     Ok(hits.materialize_all_tuples()?)
 }

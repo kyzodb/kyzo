@@ -115,7 +115,7 @@ use crate::store::{ReadTx, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::parse::search::{FtsExpr, FtsLiteral, FtsNear};
-use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 
@@ -132,8 +132,10 @@ use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 /// build/seal/freshness protocol. Search is owned by
 /// [`RelationIndexSearch::search_relation`] (P103); [`Fts::search_index`]
 /// is the UFCS alias into that door.
+#[cfg(test)]
+use kyzo_model::program::expr::BindingPos;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
 pub(crate) struct Fts;
 
 impl ProjectionKind for Fts {}
@@ -680,6 +682,7 @@ impl Fts {
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
     /// function `fts_search`.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn search_index(
         cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,

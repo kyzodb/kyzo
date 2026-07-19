@@ -252,7 +252,7 @@ fn aes_gcm_siv_seal(
     use aes_gcm_siv::{Aes256GcmSiv, Nonce};
 
     let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = Nonce::from_slice(nonce);
+    let nonce: &Nonce = nonce.into();
     cipher
         .encrypt(
             nonce,
@@ -275,7 +275,7 @@ fn aes_gcm_siv_open(
     use aes_gcm_siv::{Aes256GcmSiv, Nonce};
 
     let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = Nonce::from_slice(nonce);
+    let nonce: &Nonce = nonce.into();
     cipher
         .decrypt(
             nonce,
@@ -298,7 +298,7 @@ fn chacha20poly1305_seal(
     use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 
     let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = Nonce::from_slice(nonce);
+    let nonce: &Nonce = nonce.into();
     cipher
         .encrypt(
             nonce,
@@ -321,7 +321,7 @@ fn chacha20poly1305_open(
     use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 
     let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = Nonce::from_slice(nonce);
+    let nonce: &Nonce = nonce.into();
     cipher
         .decrypt(
             nonce,

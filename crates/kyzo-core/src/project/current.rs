@@ -71,6 +71,7 @@ pub(crate) enum SegmentMiss {
     /// No sealed segment is installed for the relation.
     Absent,
     /// An installed segment's generation does not match the live stamp.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     Stale(Stale<SegmentHandle>),
 }
 
@@ -200,6 +201,7 @@ impl Segment {
         self.offsets.len()
     }
 
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn is_empty(&self) -> bool {
         self.offsets.is_empty()
     }

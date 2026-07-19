@@ -117,8 +117,11 @@ pub fn golden_certificate_verifies() {
 
 /// Miniature sealed graph: `path[1,3] ← path[1,2] ← edge[1,2]` plus
 /// `edge[2,3]`, unit weights, tropical costs `{1, 2}`.
-fn seal_golden_path_certificate() -> (DerivationGraph<&'static str>, ProofNode<&'static str>, Tuple)
-{
+fn seal_golden_path_certificate() -> (
+    DerivationGraph<&'static str>,
+    ProofNode<&'static str>,
+    Tuple,
+) {
     let mut graph = DerivationGraph::default();
     graph.add_fact("edge:1-2");
     graph.add_fact("edge:2-3");
@@ -150,13 +153,9 @@ fn seal_golden_path_certificate() -> (DerivationGraph<&'static str>, ProofNode<&
                 derivation: d_base,
                 label: 0,
                 cost: 1,
-                premises: vec![ProofNode::Fact {
-                    node: "edge:1-2",
-                }],
+                premises: vec![ProofNode::Fact { node: "edge:1-2" }],
             },
-            ProofNode::Fact {
-                node: "edge:2-3",
-            },
+            ProofNode::Fact { node: "edge:2-3" },
         ],
     };
     let answer = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from(3i64)]);
@@ -213,9 +212,7 @@ fn inject_fault(
             let Some(child) = premises.last_mut() else {
                 panic!("golden recursive step must carry premises to corrupt");
             };
-            *child = ProofNode::Fact {
-                node: "edge:9-9",
-            };
+            *child = ProofNode::Fact { node: "edge:9-9" };
             ProofNode::Step {
                 node,
                 derivation,
@@ -265,7 +262,19 @@ mod tests {
             );
             let detail: &str = match &rows.rows()[0][2] {
                 DataValue::Str(s) => s.as_ref(),
-                other => panic!("detail must be Str, got {other:?}"),
+                other @ DataValue::Null
+                | other @ DataValue::Bool(_)
+                | other @ DataValue::Num(_)
+                | other @ DataValue::Bytes(_)
+                | other @ DataValue::Uuid(_)
+                | other @ DataValue::Regex(_)
+                | other @ DataValue::Json(_)
+                | other @ DataValue::Vector(_)
+                | other @ DataValue::List(_)
+                | other @ DataValue::Set(_)
+                | other @ DataValue::Validity(_)
+                | other @ DataValue::Interval(_)
+                | other @ DataValue::Geometry(_) => panic!("detail must be Str, got {other:?}"),
             };
             assert!(
                 detail.contains("verify_proof")
@@ -277,7 +286,19 @@ mod tests {
             // not a reduced-match row count costume.
             let summary: &str = match &rows.rows()[0][1] {
                 DataValue::Str(s) => s.as_ref(),
-                other => panic!("summary must be Str, got {other:?}"),
+                other @ DataValue::Null
+                | other @ DataValue::Bool(_)
+                | other @ DataValue::Num(_)
+                | other @ DataValue::Bytes(_)
+                | other @ DataValue::Uuid(_)
+                | other @ DataValue::Regex(_)
+                | other @ DataValue::Json(_)
+                | other @ DataValue::Vector(_)
+                | other @ DataValue::List(_)
+                | other @ DataValue::Set(_)
+                | other @ DataValue::Validity(_)
+                | other @ DataValue::Interval(_)
+                | other @ DataValue::Geometry(_) => panic!("summary must be Str, got {other:?}"),
             };
             assert!(
                 summary.contains("evaluated") && summary.contains("provenance"),

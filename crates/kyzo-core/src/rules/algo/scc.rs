@@ -33,19 +33,19 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-    GraphAlgorithmInvariantError, graph_node_value, tuple_into_first_column,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
+    graph_node_value, tuple_into_first_column,
 };
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
 pub(crate) struct StronglyConnectedComponent {
     strong: bool,
 }

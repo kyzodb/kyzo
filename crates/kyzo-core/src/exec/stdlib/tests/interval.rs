@@ -15,7 +15,10 @@ fn make_interval_and_bounds() {
         .unwrap();
     let start = resolve_op("interval_start").unwrap();
     let end = resolve_op("interval_end").unwrap();
-    assert_eq!(start.apply(&[v.clone()]).unwrap(), DataValue::from(1i64));
+    assert_eq!(
+        start.apply(std::slice::from_ref(&v)).unwrap(),
+        DataValue::from(1i64)
+    );
     assert_eq!(end.apply(&[v]).unwrap(), DataValue::from(4i64));
 }
 
@@ -23,15 +26,15 @@ fn make_interval_and_bounds() {
 fn has_start_has_end_unbounded_flags() {
     let open = DataValue::Interval(Interval::new(Bound::Unbounded, Bound::Closed(5)));
     assert_eq!(
-        op_interval_has_start(&[open.clone()]).unwrap(),
+        op_interval_has_start(std::slice::from_ref(&open)).unwrap(),
         DataValue::from(false)
     );
     assert_eq!(
-        op_interval_has_end(&[open.clone()]).unwrap(),
+        op_interval_has_end(std::slice::from_ref(&open)).unwrap(),
         DataValue::from(true)
     );
     assert_eq!(
-        op_interval_is_start_unbounded(&[open.clone()]).unwrap(),
+        op_interval_is_start_unbounded(std::slice::from_ref(&open)).unwrap(),
         DataValue::from(true)
     );
     assert_eq!(
@@ -51,7 +54,7 @@ fn intersects_and_empty_start_gt_end_lawful() {
     // EMPTY: start > end is a lawful empty interval, not a panic.
     let empty = DataValue::Interval(Interval::EMPTY);
     assert_eq!(
-        op_interval_has_start(&[empty.clone()]).unwrap(),
+        op_interval_has_start(std::slice::from_ref(&empty)).unwrap(),
         DataValue::from(false)
     );
     assert_eq!(

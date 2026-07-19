@@ -203,6 +203,7 @@ pub(crate) fn put_attempt(
 /// (the DST campaigns): pausing there wastes wall-clock on races that
 /// virtual time already resolves. Real concurrent sessions retry through
 /// [`retry_on_conflict_with_backoff`] instead.
+#[allow(private_bounds)] // RetryError stack is crate-private; door is the public retry loop
 pub fn retry_on_conflict<T>(
     max_attempts: NonZeroUsize,
     mut attempt: impl FnMut() -> std::result::Result<T, RetryError>,
@@ -233,6 +234,7 @@ pub fn retry_on_conflict<T>(
 /// every writer eventually lands. The session tier's mutation path
 /// retries through this. Timing is the only thing affected; answers
 /// never depend on it.
+#[allow(private_bounds)] // RetryError stack is crate-private; door is the public retry loop
 pub fn retry_on_conflict_with_backoff<T>(
     max_attempts: NonZeroUsize,
     mut attempt: impl FnMut() -> std::result::Result<T, RetryError>,

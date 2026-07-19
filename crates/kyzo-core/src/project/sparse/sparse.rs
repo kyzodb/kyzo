@@ -116,7 +116,7 @@ use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, Tuple};
 
@@ -133,8 +133,10 @@ use kyzo_model::value::{DataValue, Tuple};
 /// build/seal/freshness protocol. Search is owned by
 /// [`RelationIndexSearch::search_relation`] (P103); [`Sparse::search_index`]
 /// is the UFCS alias into that door.
+#[cfg(test)]
+use kyzo_model::program::expr::BindingPos;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
 pub(crate) struct Sparse;
 
 impl ProjectionKind for Sparse {}
@@ -235,6 +237,7 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
 /// relation's key columns). Non-key: `weight` (a `Float`). The dimension is the
 /// leading key column so a query dimension's posting list is a single prefix
 /// scan.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("dim"),
@@ -262,6 +265,7 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
 
 /// The posting key under construction: `[dim, src_key…]` with the dimension
 /// slot left as `Bot` for the caller to fill per posting.
+#[allow(dead_code)] // mid-wiring / test-only surface
 fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
     // Placeholder slot: every caller overwrites key[0] before use.
     let mut key = Tuple::with_capacity(1 + base_key_len);
@@ -282,6 +286,7 @@ fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
 /// postings via [`sparse_del`] — a dimension that vanished from the new vector
 /// must be deleted, and the del-before-put discipline owns that (exactly as the
 /// FTS engine's re-put path does).
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn sparse_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
@@ -319,6 +324,7 @@ pub(crate) fn sparse_put<T: WriteTx>(
 /// relation (and before re-putting a changed row), in the same transaction. The
 /// `vector` must be the same one the row was indexed with, so the set of
 /// dimensions matches what [`sparse_put`] wrote.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn sparse_del<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
@@ -358,6 +364,7 @@ pub(crate) fn sparse_del<T: WriteTx>(
 /// hybrid-fusion / future df-idf reweighting seam (a BM25-family variant would
 /// need `N`), so the RA tier can obtain it once without a hidden per-search
 /// cache in these pure functions.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn sparse_total_docs(tx: &impl ReadTx, base: &RelationHandle) -> Result<usize> {
     let (start, end) = base.whole_relation_bounds();
     tx.range_count(&start, &end)
@@ -401,7 +408,9 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
 /// (P038).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SparseBindScore {
+    #[allow(dead_code)] // mid-wiring / test-only surface
     Omit,
+    #[allow(dead_code)] // mid-wiring surface
     Append,
 }
 
@@ -465,6 +474,7 @@ impl Sparse {
     /// Relation-backed sparse search — UFCS door into
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
     /// function `sparse_search`.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn search_index(
         tx: &impl ReadTx,
         query: &[(u32, f32)],

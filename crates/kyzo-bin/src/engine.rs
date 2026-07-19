@@ -116,8 +116,10 @@ pub struct DbHandle {
     pub db: Engine<FjallStorage>,
     pub storage: FjallStorage,
     /// Genesis-sealed identity / open capability / CryptoDomain (WriteAuthority moved out).
+    #[allow(dead_code)] // host-facing keystore surface; binary has not grown a reader yet
     pub genesis: GenesisSealedView,
     /// Affine WriteAuthority in the host keystore (HA is token move).
+    #[allow(dead_code)] // host-facing keystore surface; binary has not grown a reader yet
     pub write_authority: WriteAuthority,
     /// Holds the ephemeral directory open for the process lifetime in `mem`
     /// mode; `None` for a `fjall` engine opened at a caller-given path. Never

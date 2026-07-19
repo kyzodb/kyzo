@@ -1150,11 +1150,9 @@ fn magic_rewrite_ruleset(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
 
     use miette::miette;
-    use smartstring::{LazyCompact, SmartString};
+    use smartstring::SmartString;
 
     use super::*;
     use crate::exec::plan::program::{NormalFormRelationApplyAtom, NormalFormRuleApplyAtom};

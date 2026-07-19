@@ -65,6 +65,7 @@ pub(crate) mod count_min;
 pub(crate) mod hll;
 pub(crate) mod tdigest;
 
+#[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub(crate) use hll::HllEstimate;
 
 use kyzo_model::value::DataValue;

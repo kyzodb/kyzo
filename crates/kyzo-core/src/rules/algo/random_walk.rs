@@ -28,14 +28,11 @@
 //! `steps` steps from each starting node, optionally biased by a `weight`
 //! expression over the node and edge tuples.
 
-use std::collections::BTreeMap;
-
 use itertools::Itertools;
 use miette::{Result, bail, ensure};
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::{
     BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
@@ -44,11 +41,16 @@ use crate::rules::contract::{
 use crate::rules::rng::SeededRng;
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
+#[cfg(test)]
+use kyzo_model::program::expr::Expr;
+#[cfg(test)]
+use smartstring::SmartString;
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) struct RandomWalk;
 
 impl FixedRule for RandomWalk {

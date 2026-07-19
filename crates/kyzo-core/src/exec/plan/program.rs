@@ -25,7 +25,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 use miette::{Diagnostic, Result, bail};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use kyzo_model::program::expr::{BindingPos, Expr};
@@ -192,6 +191,7 @@ pub(crate) enum NormalFormRulesOrFixed {
 }
 
 impl NormalFormRulesOrFixed {
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn rules(&self) -> Option<&[NormalFormInlineRule]> {
         match self {
             NormalFormRulesOrFixed::Rules { rules: r } => Some(r),
@@ -252,17 +252,20 @@ impl NormalFormProgram {
     }
 
     /// What the entry is defined as.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn entry(&self) -> &NormalFormRulesOrFixed {
         &self.entry
     }
 
     /// The non-entry rules.
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn rules(&self) -> &BTreeMap<Symbol, NormalFormRulesOrFixed> {
         &self.rules
     }
 
     /// Whether `::set_options` disabled the magic-sets rewrite for this
     /// query. Travels to [`StratifiedNormalFormProgram`] at stratification.
+    #[allow(dead_code)] // program option accessor mid-wiring
     pub(crate) fn disable_magic_rewrite(&self) -> bool {
         self.disable_magic_rewrite
     }
@@ -348,6 +351,7 @@ impl StratifiedNormalFormProgram {
     }
 
     /// The strata in execution order.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn strata(&self) -> &[NormalFormStratum] {
         &self.strata
     }
@@ -422,6 +426,7 @@ pub(crate) type Adornment = Vec<AdornmentMark>;
 /// A rule name after the magic-sets rewrite. The variants carry the demand
 /// analysis in the name itself: evaluation of a magic program computes only
 /// what the entry demands, and the names prove which role each store plays.
+#[allow(private_interfaces)] // AdornmentMark stays crate-private inside MagicSymbol
 #[derive(Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum MagicSymbol {
     /// An unadorned rule, exempt from the rewrite (the entry always is).
@@ -873,10 +878,19 @@ mod tests {
                         assert_eq!(var.name.as_str(), "a");
                         assert_eq!(*tuple_pos, BindingPos::Unresolved);
                     }
-                    other => panic!("expected a binding, got {other:?}"),
+                    other @ Expr::Const { .. }
+                    | other @ Expr::Apply { .. }
+                    | other @ Expr::UnboundApply { .. }
+                    | other @ Expr::Cond { .. }
+                    | other @ Expr::Lazy { .. } => panic!("expected a binding, got {other:?}"),
                 }
             }
-            other => panic!("expected a unification, got {other:?}"),
+            other @ NormalFormAtom::Rule(_)
+            | other @ NormalFormAtom::Relation(_)
+            | other @ NormalFormAtom::NegatedRule(_)
+            | other @ NormalFormAtom::NegatedRelation(_)
+            | other @ NormalFormAtom::Predicate(_)
+            | other @ NormalFormAtom::Search(_) => panic!("expected a unification, got {other:?}"),
         }
     }
 

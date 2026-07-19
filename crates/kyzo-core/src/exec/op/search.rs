@@ -252,10 +252,7 @@ impl SearchBatches<'_> {
             let Some(batch) = &self.parent_batch else {
                 break;
             };
-            let row = match batch.row(self.parent_row) {
-                Ok(r) => r,
-                Err(e) => return Err(e.into()),
-            };
+            let row = batch.row(self.parent_row)?;
             match (self.search)(row) {
                 Ok(hits) => {
                     self.hits = hits;

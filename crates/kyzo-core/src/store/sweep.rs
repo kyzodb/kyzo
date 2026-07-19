@@ -520,10 +520,10 @@ impl SweepDoor {
     }
 
     fn check_intent_order(&self, intent_ordinal: IntentOrdinal) -> Result<(), SweepRefuse> {
-        if let Some(last) = self.last_sealed_intent {
-            if intent_ordinal <= last {
-                return Err(SweepRefuse::IntentOrderRegression);
-            }
+        if let Some(last) = self.last_sealed_intent
+            && intent_ordinal <= last
+        {
+            return Err(SweepRefuse::IntentOrderRegression);
         }
         Ok(())
     }

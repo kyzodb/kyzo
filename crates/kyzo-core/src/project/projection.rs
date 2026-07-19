@@ -32,7 +32,7 @@ use std::fmt;
 use miette::Result;
 
 use crate::store::ReadTx;
-use kyzo_model::value::{RelationId, SearchHits, Tuple};
+use kyzo_model::value::{RelationId, SearchHits};
 
 /// A projection kind's identity in the build→seal→freshness machine.
 ///
@@ -148,11 +148,13 @@ impl<K> ProjectionBuilder<K> {
     }
 
     /// Access the kind payload while still building (put/insert paths).
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn kind_mut(&mut self) -> &mut K {
         &mut self.kind
     }
 
     /// Borrow the kind payload while still building.
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn kind(&self) -> &K {
         &self.kind
     }

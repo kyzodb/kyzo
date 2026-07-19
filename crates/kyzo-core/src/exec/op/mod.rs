@@ -154,7 +154,9 @@ use crate::project::current::Segments;
 use crate::session::catalog::RelationHandle;
 use crate::store::ReadTx;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::{BindingPos, Expr};
+#[cfg(test)]
+use kyzo_model::program::expr::BindingPos;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::{DeltaAxis, ValidityClause};
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
@@ -298,6 +300,7 @@ pub(crate) fn epoch_store_of<'m>(
 /// a resolved `SearchRA` (query/search.rs): a parent plus its own
 /// bindings, mapping every parent tuple to the search results seeded by
 /// one bound column.
+#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub(crate) enum RelAlgebra {
     /// Inline rows (the unit relation, or literal data).
     Fixed(InlineFixedRA),

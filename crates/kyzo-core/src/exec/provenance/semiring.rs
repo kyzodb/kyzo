@@ -172,6 +172,7 @@ pub(crate) struct ProvenanceInvariantError(pub(crate) &'static str);
 /// decreasing `u64` chain is finite). The solver's pass ceiling turns any
 /// non-stabilizing chain into a typed refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) enum Semiring {
     /// `({⊥,⊤}, ∨, ∧, ⊥, ⊤)`: does a derivation exist. Support equals the
     /// engine's set semantics — asserted by differential against the oracle.
@@ -205,13 +206,16 @@ pub(crate) trait AnnAlgebra: Copy + Clone + PartialEq + Eq + Ord + Debug + Sized
 /// Sealed product: [`Semiring::Boolean`] × existence bit. Ops are total
 /// on this type alone — a tropical value cannot be passed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) struct BooleanAnn(bool);
 
 impl BooleanAnn {
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new(present: bool) -> Self {
         Self(present)
     }
 
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn get(self) -> bool {
         self.0
     }
@@ -245,6 +249,7 @@ impl AnnAlgebra for BooleanAnn {
 pub(crate) struct TropicalAnn(Cost);
 
 impl TropicalAnn {
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new(cost: Cost) -> Self {
         Self(cost)
     }
@@ -311,8 +316,15 @@ pub(crate) struct Derivation<K> {
 pub(crate) struct DerivationId(usize);
 
 impl DerivationId {
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn index(self) -> usize {
         self.0
+    }
+
+    /// Unchecked id for the trials certificate-mutation injector only.
+    /// Production certificates obtain ids solely from [`DerivationGraph::add_derivation`].
+    pub(crate) fn unchecked(index: usize) -> Self {
+        Self(index)
     }
 }
 
@@ -583,6 +595,7 @@ impl<K> ProofNode<K> {
             ProofNode::Fact { node } | ProofNode::Step { node, .. } => node,
         }
     }
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn cost(&self) -> u64 {
         match self {
             ProofNode::Fact { .. } => 0,

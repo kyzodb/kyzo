@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
-use kyzo_model::value::{DataValue, Tuple};
+use kyzo_model::value::DataValue;
 
 use crate::data::json::NamedRows;
 use crate::parse::{Script, parse_script};
 use crate::rules::contract::CancelFlag;
 use crate::session::catalog::Catalog;
-use crate::session::current_validity;
 use crate::session::db::{Engine, ScriptOptions, SessionTx, SessionView};
 use crate::store::Storage;
 use crate::store::fjall::new_fjall_storage;

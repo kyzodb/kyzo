@@ -34,17 +34,11 @@
 //! even in play), so an arbitrarily large stored graph peels without touching
 //! the thread stack.
 
-use std::collections::BTreeMap;
-
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
-use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-};
+use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
@@ -55,6 +49,8 @@ use kyzo_model::value::{DataValue, Tuple};
 // load-independent effect of the per-vertex poll instead of wall-clock. In a
 // non-test build the note fn is an empty inlined no-op.
 #[cfg(test)]
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
 thread_local! {
     static KCORE_VERTS_PEELED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

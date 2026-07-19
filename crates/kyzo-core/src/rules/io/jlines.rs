@@ -26,12 +26,11 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use miette::{Diagnostic, IntoDiagnostic, Result, bail};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::json::{JsonValue, json_to_datavalue};
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
+    CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
@@ -43,6 +42,10 @@ use kyzo_model::value::Tuple;
 
 /// The filesystem seam of the reader utilities: calculation rules do not
 /// open local paths — the host loads bytes and passes them via `content`.
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
+#[cfg(test)]
+use smartstring::SmartString;
 #[derive(Debug, Error, Diagnostic)]
 #[error("Reading '{path}' requires filesystem access, which calculation rules do not perform")]
 #[diagnostic(code(algo::local_file_fetch_unavailable))]
@@ -214,7 +217,7 @@ impl FixedRule for JsonReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{empty_opts, opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
     use kyzo_model::program::rule::FixedRuleOptions;
 
     fn options(content: &str) -> FixedRuleOptions {

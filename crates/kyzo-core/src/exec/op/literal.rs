@@ -78,6 +78,7 @@ impl InlineFixedRA {
         Ok(())
     }
 
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn join_type(&self) -> &'static str {
         if self.data.is_empty() {
             "null_join"
@@ -88,6 +89,7 @@ impl InlineFixedRA {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn join<'a>(
         &'a self,
         left_iter: TupleIter<'a>,

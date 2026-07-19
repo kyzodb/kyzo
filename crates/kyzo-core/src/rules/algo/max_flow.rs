@@ -55,16 +55,14 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use miette::{Diagnostic, Result, bail};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
-    FixedRulePayload, NodeNotFoundError, ek_bfs_parent, tuple_into_first_column,
+    CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload,
+    NodeNotFoundError, ek_bfs_parent, tuple_into_first_column,
 };
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
@@ -77,6 +75,8 @@ use kyzo_model::value::{DataValue, Tuple};
 /// typed error ([`SubEpsilonCapacityError`]) — inside the solver every
 /// positive capacity is therefore strictly above `EPS` and can never be
 /// mis-saturated from the start.
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
 const EPS: f64 = 1e-9;
 
 // A test-only observable: how many nodes the augmenting BFS has dequeued.

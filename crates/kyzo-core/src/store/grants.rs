@@ -281,17 +281,16 @@ pub fn materialize(
         Grant::Fork(fork) => materialize_fork(fork),
         Grant::Recovery(recovery) => materialize_recovery(recovery)?,
     };
-    if let Some(prior) = prior {
-        if prior.grant_id() == computed.grant_id() {
-            if prior.successor() != computed.store_id() {
-                return Err(MaterializeRefuse::GrantAlreadyMaterialized {
-                    grant_id: prior.grant_id(),
-                    existing_successor: prior.successor(),
-                });
-            }
-            // Idempotent converge: recompute yields the same successor.
-        }
+    if let Some(prior) = prior
+        && prior.grant_id() == computed.grant_id()
+        && prior.successor() != computed.store_id()
+    {
+        return Err(MaterializeRefuse::GrantAlreadyMaterialized {
+            grant_id: prior.grant_id(),
+            existing_successor: prior.successor(),
+        });
     }
+    // Idempotent converge: recompute yields the same successor.
     Ok(computed)
 }
 
@@ -408,6 +407,8 @@ impl AncestorReadGrant {
     }
 
     /// First covered epoch.
+    #[allow(clippy::wrong_self_convention)] // from_epoch is a field accessor on the grant, not a converting constructor
+    #[allow(clippy::wrong_self_convention)] // from_epoch is a field accessor on the grant, not a converting constructor
     pub fn from_epoch(&self) -> FenceEpoch {
         self.from_epoch
     }

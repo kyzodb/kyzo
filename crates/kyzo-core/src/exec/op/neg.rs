@@ -44,6 +44,7 @@ use std::fmt::Debug;
 /// proof that nothing outside the enum can reach the negation dispatch
 /// below (the original's `unreachable!()` arms stay unreachable).
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub(crate) enum NegRight {
     TempStore(TempStoreRA),
     Stored(StoredRA),
@@ -91,6 +92,7 @@ impl NegJoin {
     }
 
     /// The join strategy this node will use (explain output).
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn join_type(&self) -> Result<&'static str> {
         let join_indices = self
             .joiner

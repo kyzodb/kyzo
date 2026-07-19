@@ -23,19 +23,22 @@ use std::collections::BTreeMap;
 use miette::{Result, ensure};
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::{
     BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
     FixedRulePayload, NodeNotFoundError, backtrace_predecessor,
 };
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
+#[cfg(test)]
+use kyzo_model::program::expr::BindingPos;
+#[cfg(test)]
+use smartstring::SmartString;
 pub(crate) struct ShortestPathAStar;
 
 impl FixedRule for ShortestPathAStar {

@@ -277,10 +277,10 @@ impl CanonicalTranscriptBuilder {
         if self.field_count >= MAX_FIELDS {
             return Err(TranscriptRefuse::FieldBoundExceeded);
         }
-        if let Some(last) = self.last_field_id {
-            if id.get() < last.get() {
-                return Err(TranscriptRefuse::FieldOrderViolated);
-            }
+        if let Some(last) = self.last_field_id
+            && id.get() < last.get()
+        {
+            return Err(TranscriptRefuse::FieldOrderViolated);
         }
         self.buf.extend_from_slice(&id.get().to_be_bytes());
         self.field_count += 1;
@@ -358,10 +358,10 @@ impl CanonicalTranscript {
         let mut last_id: Option<u16> = None;
         for _ in 0..field_count {
             let id = read_u16(bytes, &mut i)?;
-            if let Some(prev) = last_id {
-                if id < prev {
-                    return Err(TranscriptRefuse::FieldOrderViolated);
-                }
+            if let Some(prev) = last_id
+                && id < prev
+            {
+                return Err(TranscriptRefuse::FieldOrderViolated);
             }
             last_id = Some(id);
             let tag = *bytes.get(i).ok_or(TranscriptRefuse::Corrupt)?;
@@ -540,7 +540,7 @@ pub fn parse_golden_hex(file: &str) -> Result<Vec<u8>, TranscriptRefuse> {
             }
         }
     }
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(TranscriptRefuse::Corrupt);
     }
     let mut out = Vec::with_capacity(hex.len() / 2);
@@ -645,7 +645,7 @@ mod pins {
         // Claim would require > MAX_BYTES_FIELD — refuse without allocating that.
         // We simulate by appending a small slice then checking the bound path via
         // a hand-crafted corrupt length on parse.
-        let mut bytes = encode_golden_fixture(SealedArtifactKind::WalHeader)
+        let bytes = encode_golden_fixture(SealedArtifactKind::WalHeader)
             .unwrap()
             .as_bytes()
             .to_vec();

@@ -34,6 +34,7 @@ use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn flatten_err<T, E1: Into<miette::Error>, E2: Into<miette::Error>>(
     v: std::result::Result<std::result::Result<T, E2>, E1>,
 ) -> Result<T> {
@@ -44,6 +45,7 @@ pub(crate) fn flatten_err<T, E1: Into<miette::Error>, E2: Into<miette::Error>>(
     }
 }
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn filter_iter(
     filters: Vec<Expr>,
     it: impl Iterator<Item = Result<Tuple>>,
@@ -357,6 +359,7 @@ impl Debug for Joiner {
 impl Joiner {
     /// The join columns as a left-name → right-name map (explain output;
     /// its consumer lands with db.rs — deviation D5).
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn as_map(&self) -> BTreeMap<&str, &str> {
         self.left_keys
             .iter()
@@ -463,6 +466,7 @@ impl InnerJoin {
     }
 
     /// The join strategy this node will use (explain output).
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn join_type(&self) -> Result<&'static str> {
         Ok(match &self.right {
             RelAlgebra::Fixed(f) => f.join_type(),

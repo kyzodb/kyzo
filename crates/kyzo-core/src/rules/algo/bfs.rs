@@ -19,18 +19,20 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::{
     CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
     backtrace_predecessor,
 };
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
+#[cfg(test)]
+use kyzo_model::program::expr::Expr;
+#[cfg(test)]
+use smartstring::SmartString;
 pub(crate) struct Bfs;
 
 impl FixedRule for Bfs {

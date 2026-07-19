@@ -194,7 +194,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -202,7 +201,7 @@ use miette::{Diagnostic, Result};
 use thiserror::Error;
 
 use crate::exec::fixpoint::delta_store::{
-    EpochStore, HeadPos, MeetAggrStore, RegularTempStore, TempStore, collect_materialized,
+    EpochStore, HeadPos, MeetAggrStore, RegularTempStore, TempStore,
 };
 use crate::exec::fold::aggr::NormalAggr;
 use crate::exec::plan::program::MagicSymbol;
@@ -351,6 +350,7 @@ impl Budget {
     /// ticker — that granularity is a production-only concern for bounding
     /// rayon's mid-epoch parallel materialization) and needs its ceiling to
     /// check against directly.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn epoch_ceiling(&self) -> NonZeroU32 {
         self.epoch_ceiling
     }
@@ -1193,7 +1193,7 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
         for res in crate::exec::fixpoint::parallel::collect_non_entry_batch(
             defs,
             limiter_enabled,
-            &execution,
+            execution,
         ) {
             let (name, out, pending) = res?;
             to_merge.insert(name, (out, pending));

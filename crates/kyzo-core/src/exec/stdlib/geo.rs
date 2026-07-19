@@ -1,34 +1,8 @@
 //! geo.rs — stdlib kernel (move_plan).
-use std::borrow::Cow;
-use std::collections::BTreeSet;
-use std::ops::{Div, Rem};
-use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use itertools::Itertools;
-use jiff::tz::{Offset, TimeZone};
-use miette::{Diagnostic, IntoDiagnostic, Result, bail, ensure, miette};
-use rand::prelude::*;
-use serde_json::{Value, json};
-use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
-use uuid::v1::Timestamp;
+use miette::{Result, miette};
 
-use kyzo_model::data_value_any;
-use kyzo_model::value::{
-    Bound, DataValue, Interval, Json, Num, NumRepr, NumericOrd, RegexFlags, RegexSource, Validity,
-    ValidityTs, Vector,
-};
-use kyzo_model::{json_from_serde, serde_from_json};
-use serde_json::Value as JsonValue;
-
-use crate::exec::stdlib::errors::{
-    DivisionByZero, DomainError, IntegerOverflow, StdlibRefuse, TimestampFormatRefused,
-    VecOpEmptyArgs, no_nan, no_nan_vec, result_has_nan, vec_value,
-};
-use kyzo_model::schema::VecElementType;
+use kyzo_model::value::DataValue;
 
 pub(crate) fn op_deg_to_rad(args: &[DataValue]) -> Result<DataValue> {
     let x = args[0]

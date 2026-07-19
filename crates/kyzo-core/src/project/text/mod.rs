@@ -215,10 +215,12 @@ impl TokenizerConfig {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[allow(dead_code)] // mid-wiring surface
     pub fn args(&self) -> &[DataValue] {
         &self.args
     }
@@ -259,6 +261,7 @@ impl TokenizerConfig {
     /// `::lsh create` so an unknown name or malformed argument is refused
     /// *before* the manifest is written. `build` stays fallible regardless —
     /// see the module docs.
+    #[allow(dead_code)] // FTS filter validation door mid-wiring
     pub(crate) fn validate(&self, filters: &[Self]) -> Result<()> {
         self.build(filters).map(|_| ())
     }
@@ -490,6 +493,7 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
 /// The per-database analyzer cache: index name → analyzer, and config hash →
 /// analyzer, so N indices sharing one pipeline share one live instance.
 #[derive(Default)]
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) struct TokenizerCache {
     pub(crate) named_cache: RwLock<HashMap<SmartString<LazyCompact>, Arc<TextAnalyzer>>>,
     pub(crate) hashed_cache: RwLock<HashMap<Vec<u8>, Arc<TextAnalyzer>>>,
@@ -500,14 +504,17 @@ pub(crate) struct TokenizerCache {
 // panicked writer could have half-applied (entries are inserted whole), so
 // continuing with the underlying data is sound, and a panicking thread
 // elsewhere can no longer cascade into every later FTS query.
+#[allow(dead_code)] // mid-wiring / test-only surface
 fn read_lock<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
     l.read().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+#[allow(dead_code)] // mid-wiring / test-only surface
 fn write_lock<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     l.write().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl TokenizerCache {
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn get(
         &self,
         tokenizer_name: &str,

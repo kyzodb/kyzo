@@ -1,5 +1,5 @@
 //! BoundOp: OpDecl paired with a total body. Private mint via bind_op only.
-use super::errors::{DomainError, StdlibRefuse, result_has_nan};
+use super::errors::{StdlibRefuse, result_has_nan};
 use kyzo_model::program::op::OpDecl;
 use kyzo_model::value::DataValue;
 use miette::{Result, bail};
@@ -11,6 +11,7 @@ pub struct BoundOp {
     body: fn(&[DataValue]) -> Result<DataValue>,
 }
 
+#[allow(dead_code)] // BoundOp query surface for hosts/tests mid-wiring
 impl BoundOp {
     /// Sole apply door — typed NaN Refuse (`StdlibRefuse::NanAnswer`).
     pub fn apply(&self, args: &[DataValue]) -> Result<DataValue> {
@@ -31,10 +32,12 @@ impl BoundOp {
         Ok(result)
     }
 
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub fn decl(&self) -> OpDecl {
         self.decl
     }
 
+    #[allow(dead_code)] // mid-wiring surface
     pub fn name(&self) -> &'static str {
         self.decl.name
     }

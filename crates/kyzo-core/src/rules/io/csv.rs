@@ -25,11 +25,8 @@
 //! `CsvReader`: reads a delimited file into a relation, coercing each
 //! column per the `types` option.
 
-use std::collections::BTreeMap;
-
 use csv::StringRecord;
 use miette::{IntoDiagnostic, Result, bail, ensure};
-use smartstring::{LazyCompact, SmartString};
 
 use crate::exec::plan::program::{
     FixedRuleOptionNotFoundError, WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
@@ -37,7 +34,7 @@ use crate::exec::plan::program::{
 use crate::exec::stdlib::convert::{op_to_float, op_to_uuid};
 use crate::parse::parse_type;
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
+    CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 use crate::rules::io::jlines::{LocalFileFetchUnavailable, UrlFetchUnavailable};
 use kyzo_model::SourceSpan;
@@ -48,6 +45,12 @@ use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, TERMINAL_VALIDITY};
 
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
+#[cfg(test)]
+use smartstring::SmartString;
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) struct CsvReader;
 
 impl FixedRule for CsvReader {
@@ -258,7 +261,7 @@ impl FixedRule for CsvReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::contract::tests_support::{empty_opts, opts_map, run_fixed_rule};
+    use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
     use kyzo_model::program::rule::FixedRuleOptions;
 
     fn options(content: &str) -> FixedRuleOptions {

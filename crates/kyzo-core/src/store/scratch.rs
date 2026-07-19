@@ -83,7 +83,6 @@ use miette::Result;
 
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::store::{Aborted, CommitFailure, ReadTx, WriteTx};
-use kyzo_model::data_value_any;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 
@@ -92,6 +91,8 @@ use kyzo_model::value::{AsOf, ValidityTs};
 /// session's private state, so reads are trivially consistent, writes are
 /// immediate, and `commit` is vacuous (the session's life is the
 /// transaction).
+#[cfg(test)]
+use kyzo_model::data_value_any;
 #[derive(Debug)]
 pub(crate) struct TempTx {
     /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
@@ -289,7 +290,7 @@ mod tests {
 
     use super::*;
     use crate::store::time::ClaimPolarity;
-    use kyzo_model::value::{DataValue, Validity, ValiditySlot, ValidityTs};
+    use kyzo_model::value::{DataValue, ValiditySlot, ValidityTs};
     use kyzo_model::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId::new(7).expect("below cap");

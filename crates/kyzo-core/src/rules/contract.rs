@@ -38,7 +38,6 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, ensure};
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use kyzo_model::SourceSpan;
@@ -50,7 +49,7 @@ use kyzo_model::value::row::TupleIter;
 use kyzo_model::value::{AsOf, DataValue, Tuple};
 
 use crate::data::json::NamedRows;
-use crate::exec::fixpoint::delta_store::{EpochStore, RegularTempStore, TupleInIter};
+use crate::exec::fixpoint::delta_store::{EpochStore, RegularTempStore};
 use crate::exec::fixpoint::eval::{Budget, BudgetDimension, FixedRuleEval, LimitExceeded};
 use crate::exec::plan::program::{
     FixedRuleOptionNotFoundError, MagicFixedRuleApply, MagicFixedRuleRuleArg, MagicSymbol,
@@ -63,6 +62,8 @@ use crate::rules::io::*;
 // Model owns the name wrapper; re-export so engine call sites share one type.
 pub(crate) use kyzo_model::program::rule::FixedRuleHandle;
 
+#[cfg(test)]
+use crate::exec::fixpoint::delta_store::TupleInIter;
 /// Order-preserving fallible parallel map: apply `f` to every item, collect
 /// the results into a `Vec` **in the same order as `items`**, and
 /// short-circuit on the first `Err`.
@@ -79,6 +80,10 @@ pub(crate) use kyzo_model::program::rule::FixedRuleHandle;
 /// performed by the caller as a sequential fold over the returned `Vec`,
 /// never smuggled into a parallel reduction — see the algorithm call sites.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+use smartstring::LazyCompact;
+#[cfg(test)]
+use smartstring::SmartString;
 pub(crate) fn par_try_map<T, R, F>(items: Vec<T>, f: F) -> Result<Vec<R>>
 where
     T: Send,
@@ -626,6 +631,7 @@ impl OutputStrideLeft {
 impl FixedRuleOutput {
     /// Brand a fresh output store with the rule's declared arity and
     /// the application's span for error labeling.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new(arity: usize, span: SourceSpan) -> Self {
         Self {
             store: RegularTempStore::default(),
@@ -667,19 +673,19 @@ impl FixedRuleOutput {
                 span: self.span,
             }
         );
-        if let Some(guard) = self.guard.as_mut() {
-            if guard.stride_left.tick() {
-                let spent = guard.baseline.saturating_add(self.store.len() as u64);
-                if spent > guard.ceiling {
-                    return Err(LimitExceeded {
-                        dimension: BudgetDimension::InFlightDerivations,
-                        spent,
-                        ceiling: guard.ceiling,
-                        rule: None,
-                        span: Some(self.span),
-                    }
-                    .into());
+        if let Some(guard) = self.guard.as_mut()
+            && guard.stride_left.tick()
+        {
+            let spent = guard.baseline.saturating_add(self.store.len() as u64);
+            if spent > guard.ceiling {
+                return Err(LimitExceeded {
+                    dimension: BudgetDimension::InFlightDerivations,
+                    spent,
+                    ceiling: guard.ceiling,
+                    rule: None,
+                    span: Some(self.span),
                 }
+                .into());
             }
         }
         self.store.put(tuple);
@@ -828,6 +834,7 @@ impl SimpleRuleBody for EmptyNamedRowsBody {
 }
 
 /// Named body: forward the first input relation unchanged.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub struct IdentityNamedRowsBody;
 
 impl SimpleRuleBody for IdentityNamedRowsBody {
@@ -847,6 +854,7 @@ impl SimpleRuleBody for IdentityNamedRowsBody {
 
 /// Named body: deliberately emit a one-column row under a mismatched
 /// arity declaration — used to pin the universal writer check.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub struct MismatchedArityBody;
 
 impl SimpleRuleBody for MismatchedArityBody {
@@ -1157,11 +1165,13 @@ impl GraphAlgorithmInvariantError {
 }
 
 /// Refuse with [`GraphAlgorithmInvariantError`] at a named proof site.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn refuse_graph_invariant<T>(invariant: &'static str) -> Result<T> {
     Err(GraphAlgorithmInvariantError::refuse(invariant))
 }
 
 /// First column of a tuple the input boundary already proved non-empty.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn tuple_first_column(tuple: &Tuple) -> Result<&DataValue> {
     tuple
         .as_slice()
@@ -1346,8 +1356,6 @@ pub(crate) mod tests_support {
         }
     }
 
-    /// Empty options bag for harness call sites.
-
     /// Lift a legacy SmartString-keyed options map into [`FixedRuleOptions`].
     pub(crate) fn opts_map(map: BTreeMap<SmartString<LazyCompact>, Expr>) -> FixedRuleOptions {
         FixedRuleOptions::from_entries(
@@ -1357,11 +1365,13 @@ pub(crate) mod tests_support {
         .expect("test options use known fixed-rule option names")
     }
 
+    /// Empty options bag for harness call sites.
     pub(crate) fn empty_opts() -> FixedRuleOptions {
         FixedRuleOptions::empty()
     }
 
     /// Build options from string keys (known fixed-rule option names only).
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn opts(pairs: &[(&str, Expr)]) -> FixedRuleOptions {
         FixedRuleOptions::from_entries(
             pairs

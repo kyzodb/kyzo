@@ -24,14 +24,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
-use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-};
+use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
@@ -285,7 +281,6 @@ fn louvain_step(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use super::{CommunityDetectionLouvain, louvain};
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};

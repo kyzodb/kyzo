@@ -240,6 +240,7 @@ pub(crate) struct SpansRA {
 /// How [`DeltaRA`] computes its signed patch — naive dual snapshot, or
 /// posting-index acceleration when compile resolved a temporal index.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub(crate) enum DeltaScan {
     Naive,
     Accelerated { posting: RelationHandle },

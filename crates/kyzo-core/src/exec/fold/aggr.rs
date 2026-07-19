@@ -241,7 +241,7 @@ impl MeetAggr {
 #[allow(unused_macros)]
 macro_rules! meet_aggr {
     ($aggr:ident, $name:literal, $_meet_var:ident, $_meet:expr, $_norm_var:ident, $_normal:ty) => {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
         const $aggr: Aggregation = Aggregation {
             name: $name,
             kind: AggrKind::Meet,
@@ -253,7 +253,7 @@ macro_rules! meet_aggr {
 #[allow(unused_macros)]
 macro_rules! normal_aggr {
     ($aggr:ident, $name:literal, $_norm_var:ident, $_normal:ty) => {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
         const $aggr: Aggregation = Aggregation {
             name: $name,
             kind: AggrKind::Normal,
@@ -703,7 +703,7 @@ fn collect_factory(args: &[DataValue]) -> Result<NormalAggr> {
     })
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
 const AGGR_COLLECT: Aggregation = Aggregation {
     name: "collect",
     kind: AggrKind::Normal,
@@ -966,14 +966,9 @@ meet_aggr!(AGGR_MIN, "min", Min, MeetAggrMin, Min, AggrMin);
 
 /// The numerical minimum, ignoring nulls; `Null` *result* when no row had
 /// a number. In-state absence is [`Option::None`], never a Null sentinel.
+#[derive(Default)]
 pub(crate) struct AggrMin {
     found: Option<DataValue>,
-}
-
-impl Default for AggrMin {
-    fn default() -> Self {
-        Self { found: None }
-    }
 }
 
 impl seal::Sealed for AggrMin {}
@@ -1047,14 +1042,9 @@ impl MeetAggrObj for MeetAggrMin {
 meet_aggr!(AGGR_MAX, "max", Max, MeetAggrMax, Max, AggrMax);
 
 /// The greatest numeric value, via exact [`Num`] order. Nulls are skipped.
+#[derive(Default)]
 pub(crate) struct AggrMax {
     found: Option<DataValue>,
-}
-
-impl Default for AggrMax {
-    fn default() -> Self {
-        Self { found: None }
-    }
 }
 
 impl seal::Sealed for AggrMax {}
@@ -1128,18 +1118,10 @@ impl MeetAggrObj for MeetAggrMax {
 normal_aggr!(AGGR_LATEST_BY, "latest_by", LatestBy, AggrLatestBy);
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts greatest.
+#[derive(Default)]
 pub(crate) struct AggrLatestBy {
     found: Option<DataValue>,
     cost: Option<DataValue>,
-}
-
-impl Default for AggrLatestBy {
-    fn default() -> Self {
-        Self {
-            found: None,
-            cost: None,
-        }
-    }
 }
 
 impl seal::Sealed for AggrLatestBy {}
@@ -1173,18 +1155,10 @@ impl NormalAggrObj for AggrLatestBy {
 normal_aggr!(AGGR_SMALLEST_BY, "smallest_by", SmallestBy, AggrSmallestBy);
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts least.
+#[derive(Default)]
 pub(crate) struct AggrSmallestBy {
     found: Option<DataValue>,
     cost: Option<DataValue>,
-}
-
-impl Default for AggrSmallestBy {
-    fn default() -> Self {
-        Self {
-            found: None,
-            cost: None,
-        }
-    }
 }
 
 impl seal::Sealed for AggrSmallestBy {}
@@ -1225,18 +1199,10 @@ meet_aggr!(
 );
 
 /// Of `[payload, cost]` pairs, the pair with the numerically least cost.
+#[derive(Default)]
 pub(crate) struct AggrMinCost {
     found: Option<DataValue>,
     cost: Option<f64>,
-}
-
-impl Default for AggrMinCost {
-    fn default() -> Self {
-        Self {
-            found: None,
-            cost: None,
-        }
-    }
 }
 
 impl seal::Sealed for AggrMinCost {}
@@ -1411,14 +1377,9 @@ meet_aggr!(
 );
 
 /// An arbitrary non-null row: the first one seen wins.
+#[derive(Default)]
 pub(crate) struct AggrChoice {
     found: Option<DataValue>,
-}
-
-impl Default for AggrChoice {
-    fn default() -> Self {
-        Self { found: None }
-    }
 }
 
 impl seal::Sealed for AggrChoice {}

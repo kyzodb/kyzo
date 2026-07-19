@@ -16,24 +16,27 @@
 //! `ReorderSort`: evaluate `out` expressions over each input row, sort by
 //! `sort_by`, and emit rank-prefixed rows with skip/take/tie control.
 
-use std::collections::BTreeMap;
-
 use itertools::Itertools;
 use miette::{Result, bail};
-use smartstring::{LazyCompact, SmartString};
 
 use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use crate::rules::contract::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::Expr;
 use kyzo_model::program::op::OP_LIST;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
+#[cfg(test)]
+use kyzo_model::program::expr::BindingPos;
+#[cfg(test)]
+use smartstring::SmartString;
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) struct ReorderSort;
 
 impl FixedRule for ReorderSort {

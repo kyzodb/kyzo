@@ -43,7 +43,7 @@ use kyzo_model::data_value_any;
 use kyzo_model::data_value_to_vld_spec;
 use kyzo_model::program::WriteValidity;
 use kyzo_model::program::expr::{
-    BindingPos, Decision, EvalRaisedError, Expr, LazyOp, NoImplementationError, PredicateTypeError,
+    BindingPos, Decision, EvalRaisedError, Expr, NoImplementationError, PredicateTypeError,
     TupleTooShortError, UnboundVariableError,
 };
 use kyzo_model::program::op::OpDecl;
@@ -51,6 +51,8 @@ use kyzo_model::value::{DataValue, ValidityTs};
 
 /// Selection indexes are `u32`; [`Selection::iter`] widens stored ids to
 /// `usize`. Narrowing is total — overflow is refused at [`Selection::all`].
+#[cfg(test)]
+use kyzo_model::program::expr::LazyOp;
 #[inline]
 fn row_sel(row: usize) -> u32 {
     debug_assert!(u32::try_from(row).is_ok());
@@ -158,6 +160,7 @@ pub(crate) fn eval_pred(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Resul
 }
 
 /// Fold then evaluate closed expressions (including nondeterministic ops once).
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn eval_to_const(mut expr: Expr) -> Result<DataValue> {
     expr.partial_eval()?;
     if let Expr::Const { val, .. } = expr {

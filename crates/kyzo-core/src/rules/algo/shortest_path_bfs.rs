@@ -29,16 +29,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use itertools::Itertools;
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-    backtrace_predecessor, tuple_into_first_column,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, backtrace_predecessor,
+    tuple_into_first_column,
 };
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
@@ -50,6 +47,8 @@ use kyzo_model::value::{DataValue, Tuple};
 // don't interfere. In a non-test build `note_bfs_node_expanded` is an empty
 // inlined no-op, so the production loop is unchanged.
 #[cfg(test)]
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
 thread_local! {
     static BFS_NODES_EXPANDED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

@@ -84,6 +84,7 @@
 //! [`sim_crash`]: SimStorage::sim_crash
 //! [`sim_powercut`]: SimStorage::sim_powercut
 
+#![allow(dead_code)] // sim test double; campaign doors wired from trials
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -95,9 +96,7 @@ use miette::{Result, miette};
 
 use crate::store::retry::StorageOpFailure;
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::store::{
-    Aborted, CommitFailure, CommitIo, Committed, ConflictError, ReadTx, Storage, WriteTx,
-};
+use crate::store::{Aborted, CommitFailure, CommitIo, ConflictError, ReadTx, Storage, WriteTx};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 
@@ -324,6 +323,7 @@ pub(crate) struct Scheduler {
 }
 
 impl Scheduler {
+    #[allow(dead_code)] // mid-wiring / test-only surface
     fn new(seed: u64, participants: usize) -> Self {
         Scheduler {
             st: Mutex::new(SchedState {
@@ -373,6 +373,7 @@ impl Scheduler {
     }
 }
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 struct DoneGuard<'a> {
     sched: &'a Scheduler,
     id: usize,
@@ -385,12 +386,14 @@ impl Drop for DoneGuard<'_> {
 }
 
 /// One transaction body for the interleaving driver.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) type TxBody<'a> = Box<dyn FnOnce() + Send + 'a>;
 
 /// The adversarial schedule driver: run `bodies` on real threads, with every
 /// sim-storage operation as a yield point, interleaved deterministically
 /// from `seed`. A body that panics propagates its panic out of this call
 /// (via `std::thread::scope`) after the other bodies are released.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn run_interleaved(db: &SimStorage, seed: u64, bodies: Vec<TxBody<'_>>) {
     let sched = Arc::new(Scheduler::new(seed, bodies.len()));
     db.ctx.state.lock().expect(POISONED).sched = Some(Arc::clone(&sched));
@@ -410,6 +413,7 @@ pub(crate) fn run_interleaved(db: &SimStorage, seed: u64, bodies: Vec<TxBody<'_>
 /// Campaign harness: run `f` once per seed; on failure, re-panic with the
 /// seed stamped on the report, so the exact schedule and fault plan can be
 /// replayed by rerunning with that one seed.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn for_each_seed(seeds: std::ops::Range<u64>, f: impl Fn(u64)) {
     for seed in seeds {
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(seed))) {
@@ -552,6 +556,7 @@ impl SimStorage {
     /// cut simulated on the reopened store must still see only the TRUE
     /// pre-crash fsync frontier, not everything this crash's commit_seq
     /// happens to cover.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn sim_crash(&self) -> SimStorage {
         let st = self.ctx.state.lock().expect(POISONED);
         Self::reopen(
@@ -1371,11 +1376,35 @@ mod battery {
                     let t = r.unwrap();
                     let name = match &t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
-                        other => panic!("unexpected {other:?}"),
+                        other @ DataValue::Null
+                        | other @ DataValue::Bool(_)
+                        | other @ DataValue::Num(_)
+                        | other @ DataValue::Bytes(_)
+                        | other @ DataValue::Uuid(_)
+                        | other @ DataValue::Regex(_)
+                        | other @ DataValue::Json(_)
+                        | other @ DataValue::Vector(_)
+                        | other @ DataValue::List(_)
+                        | other @ DataValue::Set(_)
+                        | other @ DataValue::Validity(_)
+                        | other @ DataValue::Interval(_)
+                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
                     };
                     let ts = match &t.as_slice()[1] {
                         DataValue::Validity(v) => v.ts_micros(),
-                        other => panic!("unexpected {other:?}"),
+                        other @ DataValue::Null
+                        | other @ DataValue::Bool(_)
+                        | other @ DataValue::Num(_)
+                        | other @ DataValue::Str(_)
+                        | other @ DataValue::Bytes(_)
+                        | other @ DataValue::Uuid(_)
+                        | other @ DataValue::Regex(_)
+                        | other @ DataValue::Json(_)
+                        | other @ DataValue::Vector(_)
+                        | other @ DataValue::List(_)
+                        | other @ DataValue::Set(_)
+                        | other @ DataValue::Interval(_)
+                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
                     };
                     (name, ts)
                 })
@@ -1405,7 +1434,7 @@ mod battery {
                     put_attempt(&mut tx, format!("r{i:02}").as_bytes(), b"v")?;
                 }
                 {
-                    let _ = tx.commit()?;
+                    tx.commit()?;
                     Ok(())
                 }
             })
@@ -1473,7 +1502,7 @@ mod battery {
         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
             let mut tx = write_tx_attempt(&db)?;
             put_attempt(&mut tx, b"k", b"v")?;
-            let _ = tx.commit()?;
+            tx.commit()?;
             Ok(())
         })
         .expect("90% storms must not pin a bounded retry forever");

@@ -36,28 +36,34 @@
 //! k-shortest-paths and the centralities.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::iter;
 
 use itertools::Itertools;
 use miette::Result;
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::par_try_map;
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-    GraphAlgorithmInvariantError, btree_set_only_element, path_predecessor,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
+    btree_set_only_element, path_predecessor,
 };
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
+#[cfg(test)]
+use kyzo_model::program::expr::Expr;
+#[cfg(test)]
+use smartstring::SmartString;
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) struct ShortestPathDijkstra;
 
 impl FixedRule for ShortestPathDijkstra {

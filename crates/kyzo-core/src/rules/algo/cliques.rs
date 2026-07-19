@@ -46,26 +46,33 @@
 //! polled once per expansion step.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use miette::{Diagnostic, Result, bail};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-    GraphAlgorithmInvariantError,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
 };
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
+#[cfg(test)]
+use kyzo_model::program::expr::Expr;
+#[cfg(test)]
+use smartstring::LazyCompact;
+#[cfg(test)]
+use smartstring::SmartString;
 /// The default ceiling on enumerated maximal cliques when the caller gives no
 /// `max_cliques` option. Generous, but finite: enumeration must never be
 /// unbounded (law).
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) const DEFAULT_MAX_CLIQUES: usize = 1 << 20;
 
 // Test-only observables mirroring `shortest_path_bfs::BFS_NODES_EXPANDED`:

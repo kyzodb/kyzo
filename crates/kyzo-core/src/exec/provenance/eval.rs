@@ -25,7 +25,7 @@ use crate::exec::fixpoint::delta_store::{
 };
 use crate::exec::fixpoint::eval::{
     Budget, EvalDefinition, EvalInvariantError, EvalProgram, FixedRuleEval, HeadAggrKind,
-    PremiseSource, Premises, RuleBody, project_positions, store_of,
+    PremiseSource, RuleBody, project_positions, store_of,
 };
 use crate::exec::plan::program::MagicSymbol;
 use crate::exec::provenance::semiring::{Derivation, DerivationGraph};

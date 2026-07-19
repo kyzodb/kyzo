@@ -10,6 +10,7 @@ use miette::{
     Diagnostic, GraphicalReportHandler, GraphicalTheme, JSONReportHandler, Report, ThemeCharacters,
     ThemeStyles,
 };
+#[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::sync::LazyLock;
@@ -17,6 +18,7 @@ use thiserror::Error;
 
 use kyzo_model::value::{DataValue, Tuple};
 
+#[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub use kyzo_model::envelope::json::{
     JsonData, json_from_serde, json_to_datavalue, serde_from_json,
 };

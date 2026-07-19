@@ -308,6 +308,7 @@ pub(crate) enum IndexKind {
 /// write-side-adjacent chunk) is the first consumer that resolves it by
 /// name — but it must be a real, stable `ColumnDef` name because the
 /// posting relation's catalog row is real schema, decoded like any other.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 
 // ---------------------------------------------------------------------------
@@ -344,8 +345,8 @@ impl ConstraintRef {
     pub(crate) fn parse(
         name: impl Into<SmartString<LazyCompact>>,
         source: &str,
-        fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
-        cur_vld: ValidityTs,
+        _fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+        _cur_vld: ValidityTs,
     ) -> Result<ConstraintRef> {
         let program = parse_script(source, &BTreeMap::new())?.get_single_program()?;
         Ok(ConstraintRef {
@@ -474,8 +475,8 @@ impl Trigger {
     /// here, so it can never be stored. Only the sealed program is retained.
     pub(crate) fn parse(
         source: &str,
-        fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
-        cur_vld: ValidityTs,
+        _fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+        _cur_vld: ValidityTs,
     ) -> Result<Trigger> {
         let program = parse_script(source, &BTreeMap::new())?.get_single_program()?;
         Ok(Trigger { program })
@@ -585,6 +586,7 @@ struct StoredRelArityMismatch {
 /// Corruption is typed ([`RelationDeserError`]); the whole store is stamped
 /// with [`FormatVersion`](crate::FormatVersion), which a mismatched decoder
 /// refuses at the door.
+#[allow(clippy::module_inception)] // zone folder + impl module share the seat name by design
 mod catalog {
     use super::{RelationDeserError, RelationHandle};
     use miette::Result;
@@ -676,6 +678,7 @@ impl RelationHandle {
 
     /// Column name → position in the full tuple (keys then non-keys), for
     /// binding resolution.
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn raw_binding_map(&self) -> BTreeMap<Symbol, usize> {
         let mut ret = BTreeMap::new();
         for (i, col) in self.metadata.keys.iter().enumerate() {
@@ -690,6 +693,7 @@ impl RelationHandle {
         ret
     }
 
+    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn has_index(&self, index_name: &str) -> bool {
         self.indices.iter().any(|idx| idx.name == index_name)
     }
@@ -797,6 +801,7 @@ impl RelationHandle {
     /// Write the fact's Assert row at the valid coordinate, stamped with
     /// the transaction's system instant — the one-stop fact write for any
     /// tier holding a row and a write transaction.
+    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn put_fact(
         &self,
         tx: &mut impl WriteTx,
@@ -811,6 +816,7 @@ impl RelationHandle {
 
     /// Write the fact's Retract row at the valid coordinate — revision,
     /// not erasure.
+    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn retract_fact(
         &self,
         tx: &mut impl WriteTx,
@@ -862,6 +868,7 @@ impl RelationHandle {
     /// value: the columns' canonical encodings concatenated. No header —
     /// the relation id is the key prefix, not repeated here, and the value
     /// decoder ([`extend_tuple_from_v`]) reads canonical bytes directly.
+    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn encode_val_for_store(
         &self,
         tuple: &[DataValue],
@@ -904,6 +911,7 @@ impl RelationHandle {
     /// whole schema for `shape`. Constructs a branded
     /// [`CompatibleInputSchema`] or refuses the whole schema — never
     /// approves columns one at a time.
+    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn prove_compatible_input(
         &self,
         inp: &InputRelationHandle,
@@ -1073,6 +1081,7 @@ impl RelationHandle {
 
     /// Whether the fact is CURRENTLY asserted (facts) or the exact key
     /// present (algorithm state).
+    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn exists(&self, tx: &impl ReadTx, key: &[DataValue]) -> Result<bool> {
         match self.keyspace_kind {
             KeyspaceKind::Facts => Ok(self
@@ -1222,6 +1231,7 @@ impl RelationHandle {
 
     /// As-of variant of
     /// [`scan_bounded_prefix_projected`](Self::scan_bounded_prefix_projected).
+    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn skip_scan_bounded_prefix_projected<'a>(
         &self,
         tx: &'a impl ReadTx,
@@ -1263,6 +1273,7 @@ impl RelationHandle {
     /// Bitemporal as-of variant of
     /// [`scan_bounded_prefix`](Self::scan_bounded_prefix), yielding
     /// LOGICAL rows.
+    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn skip_scan_bounded_prefix<'a>(
         &self,
         tx: &'a impl ReadTx,
@@ -1332,6 +1343,7 @@ pub(crate) struct RelationHasConstraints(
 );
 
 /// Whether a relation of this name exists in the persistent catalog.
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn relation_exists(tx: &impl ReadTx, name: &str) -> Result<bool> {
     tx.exists(&SystemKey::Relation(name).encode())
 }
@@ -1705,8 +1717,8 @@ mod tests {
     use serde::Serialize;
 
     use super::*;
+    use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
-    use crate::store::{ConflictError, Storage};
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
     use kyzo_model::value::decode_tuple_from_key;

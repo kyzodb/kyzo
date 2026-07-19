@@ -30,7 +30,6 @@ use std::collections::BTreeMap;
 use itertools::Itertools;
 use miette::Result;
 use rand::prelude::*;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::contract::{
     CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
@@ -38,11 +37,14 @@ use crate::rules::contract::{
 use crate::rules::graph_view::DirectedCsrGraph;
 use crate::rules::rng::SeededRng;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
+#[cfg(test)]
+use kyzo_model::program::expr::Expr;
+#[cfg(test)]
+use smartstring::SmartString;
 pub(crate) struct LabelPropagation;
 
 impl FixedRule for LabelPropagation {

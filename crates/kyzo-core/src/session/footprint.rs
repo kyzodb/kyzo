@@ -155,10 +155,10 @@ pub fn adjudicate_fenced_overlap<'a>(
     live: impl Iterator<Item = &'a AskShape>,
 ) -> Result<(), FootprintRefuse> {
     for shape in live {
-        if let AskShape::Fenced(other) = shape {
-            if footprints_overlap(candidate.footprint(), other.footprint()) {
-                return Err(FootprintRefuse::OverlappingFenced);
-            }
+        if let AskShape::Fenced(other) = shape
+            && footprints_overlap(candidate.footprint(), other.footprint())
+        {
+            return Err(FootprintRefuse::OverlappingFenced);
         }
     }
     Ok(())
@@ -204,7 +204,11 @@ impl FencedFootprint {
     pub fn seal(footprint: Footprint, catalog_generation: u64) -> Result<Self, FootprintRefuse> {
         match footprint {
             Footprint::Underivable => Err(FootprintRefuse::UnderivableInFenced),
-            other => Ok(Self {
+            other @ Footprint::Exact(_)
+            | other @ Footprint::Envelope(_)
+            | other @ Footprint::IndexDomain { .. }
+            | other @ Footprint::WholeRelation { .. }
+            | other @ Footprint::Frontier(_) => Ok(Self {
                 inner: other,
                 catalog_generation,
             }),

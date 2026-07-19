@@ -139,7 +139,7 @@ use miette::{Context, Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
 use crate::exec::fixpoint::delta_store::EpochStore;
-use crate::exec::fixpoint::delta_store::{RegularTempStore, TupleInIter};
+use crate::exec::fixpoint::delta_store::RegularTempStore;
 use crate::exec::fixpoint::eval::{
     AtomOccurrence, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum, FixedRuleEval,
     PremiseSource, Premises, RuleBody,
@@ -153,7 +153,6 @@ use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, IndexRef, RelationHandle, get_relation};
 use crate::store::ReadTx;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::aggregate::Aggregation;
 use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::program::rule::{DeltaAxis, HeadAggrSlot, ValidityClause};
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
@@ -252,6 +251,7 @@ impl CompiledRuleSet {
     /// Output arity. Total by construction: an inline set proves itself
     /// non-empty and signature-uniform at [`CompiledInlineRules::new`]
     /// (the original indexed `rules[0]` here).
+    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn arity(&self) -> usize {
         match self {
             CompiledRuleSet::Rules(rules) => rules.aggr.len(),
@@ -1142,6 +1142,7 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
 /// program proven fixed-rule-free (today: the tests; the parse tier
 /// refuses unknown fixed rules much earlier) use this as `F`.
 #[derive(Debug)]
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) enum NoFixedRules {}
 
 impl FixedRuleEval for NoFixedRules {

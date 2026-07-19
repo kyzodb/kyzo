@@ -288,6 +288,7 @@ impl ReplicaKey {
 /// chain anchors origin coordinates. Never-anchored is reclaimable under
 /// operator pressure — never exposed as queryable.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub enum ReplicaCustody {
     /// Anchored and part of the queryable semantic view.
     Queryable {
@@ -401,6 +402,7 @@ pub struct AdmissionCertificateParts {
     pub signature: [u8; 64],
 }
 
+#[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
 fn signing_body_digest(
     protocol_version: &[u8; 8],
     origin_store: StoreId,

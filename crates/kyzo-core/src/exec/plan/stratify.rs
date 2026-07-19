@@ -514,7 +514,6 @@ impl NormalFormProgram {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::exec::plan::program::{
@@ -527,7 +526,6 @@ mod tests {
         InputInlineRule, InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom, Trivia,
     };
     use kyzo_model::program::symbol::SymbolKind;
-    use kyzo_model::value::DataValue;
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan(0, 0))

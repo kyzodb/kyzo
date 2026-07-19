@@ -1,20 +1,9 @@
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::collection::*;
-use crate::exec::stdlib::compare::*;
-use crate::exec::stdlib::convert::*;
-use crate::exec::stdlib::geo::*;
-use crate::exec::stdlib::interval::*;
-use crate::exec::stdlib::metric::*;
 use crate::exec::stdlib::nondet::*;
-use crate::exec::stdlib::numeric::*;
 use crate::exec::stdlib::temporal_format::*;
-use crate::exec::stdlib::text::*;
-use kyzo_model::data_value_any;
-use kyzo_model::schema::{ColType, NullableColType};
-use kyzo_model::value::{DataValue, ValidityTs, Vector};
-use serde_json::json;
-use std::f64::consts::{E, PI};
+use kyzo_model::value::DataValue;
 
+#[allow(dead_code)] // mid-wiring / test-only surface
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-5
 }

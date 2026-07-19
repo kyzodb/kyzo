@@ -16,6 +16,9 @@ pub mod text;
 #[cfg(test)]
 mod tests;
 
+#[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub use bind::{bind_op, resolve_op};
+#[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub use bound_op::BoundOp;
+#[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub use errors::StdlibRefuse;

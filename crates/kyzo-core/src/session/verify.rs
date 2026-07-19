@@ -74,6 +74,7 @@ use kyzo_model::value::{DataValue, Tuple, ValidityTs};
 /// Outcome of root tamper-evidence [`verify`]: intact chain match, or a
 /// reproducible mismatch between the stored tip and an independent rescan.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub enum RootVerifyOutcome {
     /// Recomputed content seals to the stored [`RootChain`] tip at the cut.
     Intact { root: StateRoot },
@@ -95,6 +96,7 @@ pub enum RootVerifyOutcome {
 /// A caller-supplied [`StateRoot`] is not a parameter of this door and
 /// cannot become the expected digest. Forged / swapped store bytes surface
 /// as [`RootVerifyOutcome::Tampered`].
+#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn verify(
     tx: &impl ReadTx,
     chain: &RootChain,
@@ -134,10 +136,12 @@ pub(crate) fn verify(
 // Query-answer ::verify — provenance door
 // ─────────────────────────────────────────────────────────────────────────
 
+#[allow(private_interfaces)] // ProvenanceLimitExceeded stays crate-private in BudgetRefused
 /// Outcome of one provenance-backed `::verify` run. Never a bare bool: a
 /// MATCH, a budgeted refusal, a reproducible MISMATCH bundle, or a named
 /// unsupported construct.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub enum VerifyOutcome {
     /// Evaluated entry answers equal provenance support; every answer has
     /// a structurally verified min-cost certificate.
@@ -726,7 +730,11 @@ mod tests {
             .expect("verify_script runs");
         match outcome {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
-            other => panic!("expected Match, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. }
+            | other @ VerifyOutcome::Unsupported { .. }
+            | other @ VerifyOutcome::BudgetRefused { .. } => {
+                panic!("expected Match, got {other:?}")
+            }
         }
     }
 

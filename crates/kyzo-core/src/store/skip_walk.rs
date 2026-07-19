@@ -138,7 +138,6 @@ use miette::Result;
 use crate::store::time::{
     check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
 };
-use kyzo_model::data_value_any;
 use kyzo_model::value::AsOf;
 use kyzo_model::value::Tuple;
 
@@ -146,6 +145,8 @@ use kyzo_model::value::Tuple;
 /// rather than rebuilt. `target` is always non-decreasing across calls on
 /// the same cursor (the walk only ever moves forward); a cursor may
 /// assume this and is never asked to seek backward.
+#[cfg(test)]
+use kyzo_model::data_value_any;
 pub(crate) trait SkipCursor {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>>;
 }
@@ -255,7 +256,7 @@ mod tests {
 
     use super::*;
     use crate::store::time::ClaimPolarity;
-    use kyzo_model::value::{DataValue, Validity, ValiditySlot, ValidityTs};
+    use kyzo_model::value::{DataValue, ValiditySlot, ValidityTs};
     use kyzo_model::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId::new(9).expect("below cap");

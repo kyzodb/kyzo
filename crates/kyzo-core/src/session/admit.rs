@@ -29,10 +29,8 @@
 //! Bytes decode to ordered currency / ObjectRef material, never KyzoRecord
 //! — store/decode modules have no mint path (compile-fail).
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::BTreeSet;
 
-use fjall::Slice;
 use itertools::Itertools;
 use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
@@ -42,13 +40,12 @@ use crate::data::json::NamedRows;
 use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
-use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency};
+use crate::session::catalog::{IndexKind, KeyspaceKind, RelationHandle, Residency};
 use crate::session::db::{Engine, SessionTx};
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::time::ClaimPolarity;
 use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
-use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
@@ -57,8 +54,8 @@ use kyzo_model::program::{
     WriteValidity,
 };
 use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, ValidityTs};
-use kyzo_model::value::{Tuple, TupleT};
 
 use crate::store::keys::Secret;
 use crate::store::open::StoreId;

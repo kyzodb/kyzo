@@ -29,26 +29,29 @@
 //! Yen's algorithm for the k shortest loopless paths between node pairs,
 //! built on the Dijkstra core with forbidden edges/nodes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use itertools::Itertools;
 use miette::Result;
-use smartstring::{LazyCompact, SmartString};
 
 use crate::rules::algo::dijkstra::dijkstra;
 use crate::rules::contract::par_try_map;
 use crate::rules::contract::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
-    GraphAlgorithmInvariantError,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
 };
 use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
+#[cfg(test)]
+use kyzo_model::program::expr::Expr;
+#[cfg(test)]
+use std::collections::BTreeMap;
 pub(crate) struct KShortestPathYen;
 
 impl FixedRule for KShortestPathYen {

@@ -35,7 +35,7 @@
 //! [`Db::run_script_json`]: the single "JSON params in, JSON envelope out"
 //! entry point every binding shares, built on `data::json`'s wire format.
 
-use serde_json::{Map, Value as JsonValue, json};
+use serde_json::{Value as JsonValue, json};
 use std::collections::BTreeMap;
 
 use crate::data::json::format_error_as_json;
