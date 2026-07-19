@@ -17,7 +17,7 @@ Higher wins: (1) this file, (2) **kyzo-plan** (skills / agents / board MCP — v
 - **Testimony is never the meter.** Only judge PASS + `check_story_task`, then Final QA + `check_final_qa`, then git refs count. Whip the first tell, kill the second, never negotiate.
 - **A requirement is never satisfied by shrinking it.** Narrowing Check, Allowlist, or the task text to manufacture green is fraud — fail and escalate.
 - **Demolition cuts stay cut.** Red after demolition is success. Never restore condemned surfaces to unstick a later T#. Only the operator may authorize undoing a cut.
-- **Stash / hard-reset / worktrees are fraud.** Dirty foreign tree at `start_*` → escalate to the operator. Judge FAIL → path-restore allowlist only (`git restore --worktree --staged -- <paths>`). Never `reset --hard`, never stash to pass a gate.
+- **The branch will probably be dirty. Don't clobber other people's work; do your own.** Never stash or `reset --hard` to "clean" it. On judge FAIL, path-restore your allowlist only (`git restore --worktree --staged -- <paths>`). A dirty tree is not a work stoppage.
 
 ## Primary working system — kyzo-plan 0.2.8
 
@@ -113,7 +113,7 @@ Claude Code firehose (substitute `<NAME>`):
 
 ### After each T#
 
-1. Parent runs the board **Check** exactly. Red inside allowlist → send back or kill. Red from foreign dirt → escalate (never stash).
+1. Parent runs the board **Check** exactly. Red inside your allowlist → send back or kill. Red from someone else's dirt on the branch is not yours to fix and not a stoppage — leave it and judge your own paths.
 2. Green → spawn `kyzo-plan-task-completion-judge` with the child's `<completion_request>` only.
 3. PASS → `git add -- <allowlist paths only>` → one commit (`T# — …`). FAIL → `git restore --worktree --staged -- <allowlist paths only>`.
 
