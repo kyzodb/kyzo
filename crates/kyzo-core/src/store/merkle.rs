@@ -530,6 +530,8 @@ mod tests {
     //!   store observed encrypted vs plaintext — the leaf commits to
     //!   canonical plaintext outside AEAD; ciphertext bytes are not the
     //!   leaf input;
+    //! - **valid-but-stale rollback** (§56–§58): an older internally-consistent
+    //!   snapshot fails [`roots_equal_at_cut`] against the stored prior tip;
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
 
@@ -767,6 +769,132 @@ mod tests {
             StateRoot::from_merkle(encrypted_obs_root),
             "encrypted vs plaintext identical StateRoot via state_root"
         );
+    }
+
+    // ── valid-but-stale rollback (§56–§58): stored prior tip catches swap ──
+
+    /// An older internally-consistent backup still has a well-formed content
+    /// root (cold merkle of that snapshot verifies). Detection is root
+    /// comparison against the stored prior tip on [`RootChain`] — without a
+    /// stored prior, cold rescan of the restored bytes alone cannot notice
+    /// the rollback. Swap state-at-cut-1 under a tip advanced to cut-3 →
+    /// [`roots_equal_at_cut`] is false.
+    #[test]
+    fn valid_but_stale_rollback_detected_against_stored_prior() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, as_of_root,
+            roots_equal_at_cut,
+        };
+
+        let store_id = StoreId::from_digest([0x58; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+
+        let state_v1: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"k00".to_vec(), b"v0".to_vec()),
+            (b"k01".to_vec(), b"v1".to_vec()),
+        ];
+        let state_v2: Vec<(Vec<u8>, Vec<u8>)> = {
+            let mut s = state_v1.clone();
+            s.push((b"k02".to_vec(), b"v2".to_vec()));
+            s
+        };
+        let state_v3: Vec<(Vec<u8>, Vec<u8>)> = {
+            let mut s = state_v2.clone();
+            s.push((b"k03".to_vec(), b"v3".to_vec()));
+            s
+        };
+
+        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1));
+        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2));
+        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3));
+        assert_ne!(content_v1, content_v2);
+        assert_ne!(content_v2, content_v3);
+
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let o3 = o2.successor().unwrap();
+
+        let mut chain = RootChain::empty();
+        assert_eq!(chain.prior_root(), GENESIS_ROOT);
+
+        let link1 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            content_v1,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        chain.append(link1).unwrap();
+        let root_at_v1 = as_of_root(&chain, o1).unwrap();
+
+        let link2 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            content_v2,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        chain.append(link2).unwrap();
+
+        let link3 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            content_v3,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        chain.append(link3).unwrap();
+
+        // T1 stores the prior tip on the SweepDoor — live tip after commit 3.
+        let stored_prior = chain.prior_root();
+        let tip_as_of = as_of_root(&chain, o3).unwrap();
+        assert!(
+            roots_equal_at_cut(stored_prior, tip_as_of),
+            "live tip prior equals as-of root at tip cut"
+        );
+
+        // Attacker swaps an older internally-consistent state (v1 snapshot).
+        // Recompute: content root of the restored bytes is well-formed.
+        let restored_content = StateRoot::from_merkle(root_of_pairs(&state_v1));
+        assert_eq!(
+            restored_content, content_v1,
+            "older state remains internally consistent"
+        );
+        let stale_as_of = as_of_root(&chain, o1).unwrap();
+        assert_eq!(stale_as_of, root_at_v1);
+
+        // Detection: stored tip prior vs older cut — mismatch (§58).
+        assert!(
+            !roots_equal_at_cut(stored_prior, stale_as_of),
+            "valid-but-stale rollback: stored tip prior ≠ as-of root of older cut"
+        );
+
+        // Swap older content under the tip ordinal with the lawful predecessor:
+        // still ≠ stored tip (content changed; chain bind notices).
+        let pred_at_o2 = as_of_root(&chain, o2).unwrap();
+        let forged_at_tip = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            content_v1,
+            pred_at_o2,
+            ChainLinkKind::Ordinary,
+        );
+        assert!(
+            !roots_equal_at_cut(stored_prior, forged_at_tip.root()),
+            "valid-but-stale rollback: older content rebound at tip ≠ stored prior"
+        );
+
+        // Controls: same cut equals itself; tip equals tip.
+        assert!(roots_equal_at_cut(stale_as_of, root_at_v1));
+        assert!(roots_equal_at_cut(stored_prior, chain.prior_root()));
     }
 
     // ── content-addressing: same content ⇒ same root, 1 bit ⇒ different ──
