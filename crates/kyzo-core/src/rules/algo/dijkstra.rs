@@ -45,14 +45,14 @@ use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{
+use crate::rules::graph_view::DirectedCsrGraph;
+use crate::rules::contract::par_try_map;
+use crate::rules::contract::{
     btree_set_only_element, path_predecessor, GraphAlgorithmInvariantError, CancelAuthority,
     CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
@@ -417,7 +417,7 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

@@ -139,11 +139,12 @@ use itertools::Itertools;
 use miette::{Context, Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
-use crate::data::aggr::Aggregation;
+use kyzo_model::program::aggregate::Aggregation;
 use kyzo_model::program::expr::{BindingPos, Expr};
-use crate::data::program::{
-    DeltaAxis, HeadAggrSlot, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed,
-    MagicSymbol, StratifiedMagicProgram, ValidityClause,
+use kyzo_model::program::rule::{DeltaAxis, HeadAggrSlot, ValidityClause};
+use crate::exec::plan::program::{
+    MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed, MagicSymbol,
+    StratifiedMagicProgram,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
@@ -1150,10 +1151,11 @@ mod tests {
     use smartstring::SmartString;
 
     use super::*;
-    use crate::data::aggr::parse_aggr;
-    use crate::data::program::{
-        InputRelationHandle, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom,
-        StoreLifetimes, Unification,
+    use kyzo_model::program::aggregate::parse_aggr;
+    use kyzo_model::program::query::InputRelationHandle;
+    use kyzo_model::program::rule::Unification;
+    use crate::exec::plan::program::{
+        MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, StoreLifetimes,
     };
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::Tuple;
@@ -1772,7 +1774,7 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         stored_relation(&db, "edge", 2, &[]);
         let (x, y) = (sym("x"), sym("y"));
-        let min_aggr = parse_aggr("min").expect("min exists");
+        let min_aggr = parse_aggr("min").unwrap().expect("min exists");
         let with_aggr = MagicInlineRule {
             head: vec![x.clone(), y.clone()],
             aggr: vec![
@@ -2200,7 +2202,7 @@ mod tests {
     #[test]
     fn differential_meet_self_join_through_ra() {
         let named = |name: &str| HeadAggrSlot::Aggregated {
-            aggr: parse_aggr(name).expect("aggr exists"),
+            aggr: parse_aggr(name).unwrap().expect("aggr exists"),
             args: vec![],
         };
         let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
@@ -2243,7 +2245,7 @@ mod tests {
     #[test]
     fn differential_meet_aggregation_in_recursion() {
         let named = |name: &str| HeadAggrSlot::Aggregated {
-            aggr: parse_aggr(name).expect("aggr exists"),
+            aggr: parse_aggr(name).unwrap().expect("aggr exists"),
             args: vec![],
         };
         let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
@@ -2282,7 +2284,7 @@ mod tests {
     #[test]
     fn differential_normal_aggregation() {
         let named = |name: &str| HeadAggrSlot::Aggregated {
-            aggr: parse_aggr(name).expect("aggr exists"),
+            aggr: parse_aggr(name).unwrap().expect("aggr exists"),
             args: vec![],
         };
         assert_ra_matches_oracle(&Program {
@@ -3072,8 +3074,8 @@ mod tests {
     /// [`IndexPositionUse`] (story #350 T2).
     #[test]
     fn choose_index_prefers_longest_prefix_and_survives_edges() {
-        use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-        use crate::data::program::InputRelationHandle;
+        use kyzo_model::program::query::InputRelationHandle;
+        use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
         use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle};
         use kyzo_model::value::RelationId;
         use IndexPositionUse::*;

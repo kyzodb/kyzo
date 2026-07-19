@@ -32,7 +32,7 @@ use proptest::prelude::*;
 
 use kyzo_model::program::expr::BindingPos;
 use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
-use crate::data::program::InputRelationHandle;
+use kyzo_model::program::InputRelationHandle;
 use kyzo_model::program::symbol::Symbol;
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::store::Storage;
@@ -414,7 +414,7 @@ fn filtered_search(
         idx,
         &params,
         &fb,
-        &crate::fixed_rule::CancelFlag::default(),
+        &crate::rules::contract::CancelFlag::default(),
     )
     .unwrap()
     .materialize_all_tuples()
@@ -1187,7 +1187,7 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
         &idx,
         &params,
         &None,
-        &crate::fixed_rule::CancelFlag::default(),
+        &crate::rules::contract::CancelFlag::default(),
     )
     .unwrap(),
     )

@@ -1044,7 +1044,7 @@ fn spatial_knn_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::KeyspaceKind;
     use crate::session::catalog::create_relation;

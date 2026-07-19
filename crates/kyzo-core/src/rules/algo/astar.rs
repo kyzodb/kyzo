@@ -25,12 +25,12 @@ use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::fixed_rule::{
+use crate::rules::contract::{
     backtrace_predecessor, BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation,
     FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
@@ -196,7 +196,7 @@ fn astar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

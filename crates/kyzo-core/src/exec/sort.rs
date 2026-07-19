@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::program::SortDir;
+use kyzo_model::program::query::SortDir;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;

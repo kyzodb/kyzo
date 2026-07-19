@@ -62,11 +62,13 @@ use std::num::NonZeroU32;
 use miette::{Result, miette};
 use smartstring::SmartString;
 
-use crate::data::aggr::parse_aggr;
-use crate::data::program::{
-    HeadAggrSlot, InputRelationHandle, MagicAtom, MagicInlineRule, MagicProgram,
-    MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes,
-    StratifiedMagicProgram, ValidityClause,
+use kyzo_model::program::aggregate::parse_aggr;
+use kyzo_model::program::{
+    HeadAggrSlot, InputRelationHandle, ValidityClause,
+};
+use kyzo_core::exec::plan::program::{
+    MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom,
+    MagicRulesOrFixed, MagicSymbol, StoreLifetimes, StratifiedMagicProgram,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -380,7 +382,9 @@ fn aggr_populate(db: &SimStorage) -> Result<()> {
 }
 fn aggr_program() -> StratifiedMagicProgram {
     let (x, y, m) = (sym("x"), sym("y"), sym("m"));
-    let min = parse_aggr("min").expect("min aggregation exists");
+    let min = parse_aggr("min")
+        .expect("min aggregation parses")
+        .expect("min aggregation exists");
     program_of(vec![
         vec![(
             muggle("mincost"),

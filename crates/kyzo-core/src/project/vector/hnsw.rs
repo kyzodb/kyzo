@@ -213,7 +213,7 @@ use serde::{Deserialize, Deserializer};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use crate::data::relation::VecElementType;
 use crate::data::relation::{
     ColLen, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
@@ -2266,7 +2266,7 @@ pub(crate) struct HnswSearchRequest<'a> {
     pub(crate) idx: &'a RelationHandle,
     pub(crate) params: &'a HnswKnnParams,
     pub(crate) filter_expr: &'a Option<Expr>,
-    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+    pub(crate) cancel: &'a crate::rules::contract::CancelFlag,
 }
 
 impl RelationIndexSearch for Hnsw {
@@ -2334,7 +2334,7 @@ impl Hnsw {
         idx: &RelationHandle,
         params: &HnswKnnParams,
         filter_expr: &Option<Expr>,
-        cancel: &crate::fixed_rule::CancelFlag,
+        cancel: &crate::rules::contract::CancelFlag,
     ) -> Result<kyzo_model::value::SearchHits> {
         Self::search_relation(
             tx,
@@ -2360,7 +2360,7 @@ fn hnsw_knn_body(
     idx: &RelationHandle,
     params: &HnswKnnParams,
     filter_expr: &Option<Expr>,
-    cancel: &crate::fixed_rule::CancelFlag,
+    cancel: &crate::rules::contract::CancelFlag,
 ) -> Result<Vec<Tuple>> {
     let q = IndexVec::admit(q, manifest)?;
 
@@ -2816,7 +2816,7 @@ fn select_strategy(
 /// accumulator).
 #[allow(clippy::too_many_arguments)] // mirrors hnsw_knn's own surface
 fn scan_filtered(
-    cancel: &crate::fixed_rule::CancelFlag,
+    cancel: &crate::rules::contract::CancelFlag,
     tx: &impl ReadTx,
     q: &IndexVec,
     base: &RelationHandle,
@@ -2975,7 +2975,7 @@ fn graph_filtered(
 /// ordered rows.
 #[allow(clippy::too_many_arguments)] // mirrors hnsw_knn's own surface
 fn hnsw_knn_filtered(
-    cancel: &crate::fixed_rule::CancelFlag,
+    cancel: &crate::rules::contract::CancelFlag,
     tx: &impl ReadTx,
     q: &IndexVec,
     manifest: &HnswIndexManifest,
@@ -3058,7 +3058,7 @@ fn hnsw_knn_forced(
     plan: SearchPlan,
     fallback: bool,
 ) -> Result<Vec<Tuple>> {
-    let cancel = crate::fixed_rule::CancelFlag::default();
+    let cancel = crate::rules::contract::CancelFlag::default();
     let cancel = &cancel;
     let q = IndexVec::admit(q, manifest)?;
     let mut cache = VectorCache::new(manifest);
@@ -3100,7 +3100,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::InputRelationHandle;
     use kyzo_model::value::{TupleT, encode_key_with_suffix};
 
     macro_rules! knn_rows {
@@ -3109,7 +3109,7 @@ mod tests {
         };
     }
     use kyzo_model::program::symbol::Symbol;
-    use crate::fixed_rule::CancelFlag;
+    use crate::rules::contract::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;

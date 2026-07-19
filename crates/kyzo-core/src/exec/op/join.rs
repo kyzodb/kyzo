@@ -18,8 +18,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
-use crate::data::expr::Expr;
-use crate::data::program::MagicSymbol;
+use kyzo_model::program::expr::Expr;
+use crate::exec::plan::program::MagicSymbol;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;

@@ -26,13 +26,13 @@ use itertools::Itertools;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::rules::graph_view::DirectedCsrGraph;
+use crate::rules::contract::par_try_map;
+use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 pub(crate) struct ClusteringCoefficients;
 
@@ -117,7 +117,7 @@ fn clustering_coefficients(
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

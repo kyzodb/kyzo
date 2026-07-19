@@ -20,7 +20,7 @@ use std::ops::ControlFlow;
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-use crate::data::program::MagicSymbol;
+use crate::exec::plan::program::MagicSymbol;
 use crate::exec::fixpoint::delta_store::{
     AdmissionSink, EpochStore, HeadPos, TempStoreCorruptRefuse, TupleInIter,
 };

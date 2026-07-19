@@ -31,14 +31,15 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::store::time::ClaimPolarity;
-use crate::data::expr::Expr;
-use crate::data::program::{
+use crate::data::json::NamedRows;
+use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
+use crate::rules::contract::{FixedRule, FixedRuleHandle};
+use crate::rules::io::constant::Constant;
+use kyzo_model::program::expr::Expr;
+use kyzo_model::program::{
     FixedRuleApply, InputInlineRulesOrFixed, InputProgram, InputRelationHandle, RelationOp, Trivia,
     WriteValidity,
 };
-use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::fixed_rule::utilities::Constant;
-use crate::fixed_rule::{FixedRule, FixedRuleHandle, NamedRows};
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{
     IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency,
@@ -1296,8 +1297,7 @@ pub(crate) fn make_const_rule(
             span: SourceSpan::default(),
         },
     );
-    let fixed_impl = Arc::new(Constant);
-    let options = fixed_impl.init_options(options, SourceSpan::default())?;
+    let options = Constant.init_options(options, SourceSpan::default())?;
     let bindings_arity = bindings.len();
     program.insert_rule(
         rule_symbol,
@@ -1309,7 +1309,6 @@ pub(crate) fn make_const_rule(
                 head: bindings,
                 arity: bindings_arity,
                 span: SourceSpan::default(),
-                fixed_impl,
                 trivia: Trivia::default(),
             },
         },
@@ -1593,7 +1592,7 @@ mod trigger_cache_battery {
     use std::collections::BTreeMap;
 
     use kyzo_model::value::DataValue;
-    use crate::fixed_rule::NamedRows;
+    use crate::data::json::NamedRows;
     use crate::session::db::Db;
     use crate::store::sim::SimStorage;
 

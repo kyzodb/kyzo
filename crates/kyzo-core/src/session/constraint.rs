@@ -72,14 +72,14 @@ use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::program::{
-    FixedRuleArg, InputAtom, InputInlineRulesOrFixed, InputProgram, QueryOutOptions,
-};
+use crate::data::json::NamedRows;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
+use kyzo_model::program::{
+    FixedRuleArg, InputAtom, InputInlineRulesOrFixed, InputProgram, QueryOutOptions,
+};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, ValidityTs};
-use crate::fixed_rule::NamedRows;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{ConstraintRef, get_relation, list_relations, write_relation_row};
 use crate::session::db::{Db, ScriptOptions, SessionTx, status_ok};

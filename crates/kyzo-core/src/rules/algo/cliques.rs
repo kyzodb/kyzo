@@ -52,12 +52,12 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{
+use crate::rules::graph_view::DirectedCsrGraph;
+use crate::rules::contract::{
     GraphAlgorithmInvariantError, CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput,
     FixedRulePayload,
 };
@@ -475,7 +475,7 @@ mod tests {
 
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -794,7 +794,7 @@ mod tests {
     /// perform all ~60k removals, so the `<= 1` bound fails.
     #[test]
     fn honors_cancel_pins_degeneracy_poll() {
-        use crate::fixed_rule::tests_support::prepare_fixed_rule;
+        use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
         let edges: Vec<Tuple> = (0..n - 1)
@@ -836,7 +836,7 @@ mod tests {
     /// per-frame-push makes the step count overshoot the bound.
     #[test]
     fn honors_cancel_pins_expansion_poll() {
-        use crate::fixed_rule::tests_support::prepare_fixed_rule;
+        use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         // A 2k-node path: ~2k expansion steps, far above the trip point.
         let n: u32 = 2_000;

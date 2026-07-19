@@ -21,9 +21,9 @@
  *   which closes the original's unkillable-scan gap (poison was checked
  *   once per rule, after the whole scan) and retires the sleeper thread.
  *   Poison survives as the cancel lifecycle
- *   ([`crate::fixed_rule::CancelFlag`] shared with fixed rules; request via
- *   consuming [`crate::fixed_rule::CancelAuthority::cancel`]). Refusals are
- *   typed: [`LimitExceeded`] and [`crate::fixed_rule::Cancelled`].
+ *   ([`crate::rules::contract::CancelFlag`] shared with fixed rules; request via
+ *   consuming [`crate::rules::contract::CancelAuthority::cancel`]). Refusals are
+ *   typed: [`LimitExceeded`] and [`crate::rules::contract::Cancelled`].
  * - **No unbounded fixpoint exists.** The epoch loop is
  *   `0..budget.epoch_ceiling`; exhausting it without a fixpoint is a
  *   deterministic [`LimitExceeded`] refusal.
@@ -125,7 +125,7 @@
 //!
 //! [`stratified_evaluate`] runs an execution-ordered stratified program
 //! (the shape minted by the magic tier; see
-//! [`crate::data::program::StratifiedMagicProgram`]) over the delta stores
+//! [`crate::exec::plan::program::StratifiedMagicProgram`]) over the delta stores
 //! of [`crate::exec::fixpoint::delta_store`]. Per stratum, rules are evaluated
 //! epoch by epoch: epoch 0 computes every rule from the current totals;
 //! later epochs re-derive only rules whose dependencies changed, joining
@@ -186,8 +186,10 @@ use std::time::{Duration, Instant};
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-use crate::data::aggr::{Aggregation, NormalAggr};
-use crate::data::program::{HeadAggrSlot, MagicSymbol};
+use kyzo_model::program::aggregate::Aggregation;
+use crate::exec::fold::aggr::NormalAggr;
+use kyzo_model::program::rule::HeadAggrSlot;
+use crate::exec::plan::program::MagicSymbol;
 use crate::exec::fixpoint::delta_store::{
     EpochStore, HeadPos, MeetAggrStore, RegularTempStore, TempStore, collect_materialized,
 };
@@ -302,7 +304,7 @@ pub(crate) struct Budget {
     epoch_ceiling: NonZeroU32,
     derived_tuple_ceiling: Option<u64>,
     deadline: Option<Deadline>,
-    cancel: Option<crate::fixed_rule::CancelFlag>,
+    cancel: Option<crate::rules::contract::CancelFlag>,
 }
 
 impl Budget {
@@ -354,9 +356,9 @@ impl Budget {
     }
 
     /// Attach the cancel poll (session arms
-    /// [`crate::fixed_rule::CancelAuthority`]; eval only reads via
-    /// [`crate::fixed_rule::CancelFlag::check`]).
-    pub(crate) fn with_cancel(mut self, cancel: crate::fixed_rule::CancelFlag) -> Self {
+    /// [`crate::rules::contract::CancelAuthority`]; eval only reads via
+    /// [`crate::rules::contract::CancelFlag::check`]).
+    pub(crate) fn with_cancel(mut self, cancel: crate::rules::contract::CancelFlag) -> Self {
         self.cancel = Some(cancel);
         self
     }
@@ -708,7 +710,7 @@ pub(crate) trait RuleBody: Send + Sync + seal::Sealed {
 /// `baseline` is the globally admitted total as of this stratum's epoch-0
 /// barrier — the same quantity [`Budget::ticker`]'s `baseline` is for
 /// inline rules, so a fixed rule's own mid-run spend guard (e.g.
-/// [`crate::fixed_rule::FixedRuleOutput::new_budgeted`]) can count prior
+/// [`crate::rules::contract::FixedRuleOutput::new_budgeted`]) can count prior
 /// admissions instead of starting from zero.
 pub(crate) trait FixedRuleEval: Send + Sync {
     fn run(
@@ -834,7 +836,7 @@ impl<R, F> Default for EvalStratum<R, F> {
 
 /// The evaluable program: execution-ordered strata with the entry proven
 /// present in the final stratum. The compile tier mints this from a
-/// [`crate::data::program::StratifiedMagicProgram`] stratum by stratum,
+/// [`crate::exec::plan::program::StratifiedMagicProgram`] stratum by stratum,
 /// carrying that tier's entry proof forward.
 #[derive(Debug)]
 pub(crate) struct EvalProgram<R, F> {
@@ -852,8 +854,8 @@ impl<R, F> EvalProgram<R, F> {
             .cloned()
             // This later-tier site is structurally unreachable once
             // `InputProgram::new` has proven an entry exists, so it carries
-            // no span (see `NoEntryError::spanless` in `data/program.rs`).
-            .ok_or(crate::data::program::NoEntryError::spanless())?;
+            // no span (see `NoEntry::spanless` in `kyzo_model::program::rule`).
+            .ok_or(kyzo_model::program::rule::NoEntry::spanless())?;
         Ok(Self { strata, entry })
     }
 }
@@ -957,13 +959,13 @@ fn store_of_mut<'m>(
 /// `stratified_magic_evaluate`).
 ///
 /// - `lifetimes`: stores are dropped before a stratum runs unless still
-///   live there ([`crate::data::program::StoreLifetimes::is_live_at`]).
+///   live there ([`crate::exec::plan::program::StoreLifetimes::is_live_at`]).
 /// - `limit`: `:limit`/`:offset` early return, applied to the entry rule.
 /// - `budget`: required — see [`Budget`].
 /// - `witnesses`: `Some` opts in to first-witness provenance recording.
 pub(crate) fn stratified_evaluate<R: RuleBody, F: FixedRuleEval>(
     program: &EvalProgram<R, F>,
-    lifetimes: &crate::data::program::StoreLifetimes,
+    lifetimes: &crate::exec::plan::program::StoreLifetimes,
     limit: RowLimit,
     budget: &Budget,
     witnesses: Option<&mut WitnessTable>,
@@ -981,7 +983,7 @@ pub(crate) fn stratified_evaluate<R: RuleBody, F: FixedRuleEval>(
 /// enumeration refuses (typed) on the missing store.
 pub(crate) fn stratified_evaluate_with_stores<R: RuleBody, F: FixedRuleEval>(
     program: &EvalProgram<R, F>,
-    lifetimes: &crate::data::program::StoreLifetimes,
+    lifetimes: &crate::exec::plan::program::StoreLifetimes,
     limit: RowLimit,
     budget: &Budget,
     mut witnesses: Option<&mut WitnessTable>,
@@ -1537,7 +1539,7 @@ fn initial_normal_aggr_eval<R: RuleBody>(
     let fresh_ops = || -> Result<Vec<NormalAggr>> {
         val_specs
             .iter()
-            .map(|(_, aggregation, args)| aggregation.normal_op(args))
+            .map(|(_, aggregation, args)| crate::exec::fold::aggr::normal_op(aggregation, args))
             .collect()
     };
 
@@ -1608,8 +1610,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::data::aggr::parse_aggr;
-    use crate::data::program::StoreLifetimes;
+    use kyzo_model::program::aggregate::parse_aggr;
+    use crate::exec::plan::program::StoreLifetimes;
     use kyzo_model::SourceSpan;
     use kyzo_model::program::symbol::Symbol;
     use crate::exec::provenance::eval::Witness;
@@ -1655,6 +1657,8 @@ mod tests {
     fn named(name: &str) -> HeadAggr {
         HeadAggrSlot::Aggregated {
             aggr: parse_aggr(name)
+                .ok()
+                .flatten()
                 .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
             args: vec![],
         }
@@ -3895,7 +3899,7 @@ mod tests {
     /// A fixed rule that `put`s `rows` distinct tuples, ticking the ordinary
     /// per-rule mid-run guard ([`Budget::ticker`]) as it goes — exercising
     /// the exact `baseline` [`FixedRuleEval::run`] receives, the same way
-    /// [`crate::fixed_rule::FixedRuleOutput`]'s own guard does in
+    /// [`crate::rules::contract::FixedRuleOutput`]'s own guard does in
     /// production.
     struct BaselineCheckingFixed {
         rows: i64,
@@ -4051,7 +4055,7 @@ mod tests {
     /// scan.
     #[test]
     fn kill_flag_interrupts_inside_rule_iteration() {
-        use crate::fixed_rule::{CancelAuthority, Cancelled};
+        use crate::rules::contract::{CancelAuthority, Cancelled};
         use std::sync::Mutex;
 
         struct FloodBody {

@@ -71,7 +71,7 @@ use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::fixed_rule::CancelFlag;
+use crate::rules::contract::CancelFlag;
 use crate::parse::{Script, parse_script};
 use crate::react::incremental::{self, IncrementalProgram, MaintainedState};
 use crate::session::db::{SessionNormalizer, SessionView};
@@ -173,10 +173,10 @@ impl<S: Storage> StandingQuery<S> {
     /// order — subscribe first, read second). [`Db::register_standing`]
     /// is the public entry point most callers want; this is its
     /// internal-facing half, exposed for callers that already hold a
-    /// compiled [`StratifiedMagicProgram`](crate::data::program::StratifiedMagicProgram).
+    /// compiled [`StratifiedMagicProgram`](crate::exec::plan::program::StratifiedMagicProgram).
     pub(crate) fn register(
         db: &Db<S>,
-        magic: crate::data::program::StratifiedMagicProgram,
+        magic: crate::exec::plan::program::StratifiedMagicProgram,
     ) -> Result<Self> {
         let program = incremental::translate(magic)?;
         let edb = incremental::edb_relations_pub(&program);
@@ -446,7 +446,8 @@ impl<S: Storage> Db<S> {
         };
         let cancel = CancelFlag::inert();
         let mut normalizer = SessionNormalizer::new(view, cancel);
-        let (nf, _out_opts) = program.into_normalized_program(&mut normalizer)?;
+        let (nf, _out_opts) =
+            crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?;
         let (strat, _lifetimes) = nf.into_stratified_program()?;
         let magic = strat.magic_sets_rewrite(&view)?;
 
@@ -457,9 +458,10 @@ impl<S: Storage> Db<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::program::{
-        HeadAggrSlot, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
-        MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram,
+    use kyzo_model::program::rule::HeadAggrSlot;
+    use crate::exec::plan::program::{
+        MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRulesOrFixed,
+        MagicSymbol, StratifiedMagicProgram,
     };
     use kyzo_model::value::{DataValue, Num};
     use crate::store::fjall::new_fjall_storage;

@@ -54,7 +54,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use smartstring::{LazyCompact, SmartString};
 
-use crate::fixed_rule::NamedRows;
+use crate::data::json::NamedRows;
 use crate::session::db::Db;
 use crate::store::Storage;
 

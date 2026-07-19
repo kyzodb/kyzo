@@ -82,19 +82,21 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::program::{
-    BodyNormalizer, InputAtom, InputProgram, NormalFormInlineRule, QueryAssertion, QueryOutOptions,
-    RelationOp, ReturnMutation, TempSymbGen,
+use crate::data::json::NamedRows;
+use crate::data::relation::StoredRelationMetadata;
+use crate::exec::plan::program::{BodyNormalizer, NormalFormInlineRule};
+use crate::rules::contract::{
+    CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, StoredInputSource,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::Tuple;
-use kyzo_model::value::{AsOf, DataValue, ValidityTs};
-use crate::fixed_rule::{
-    CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows, StoredInputSource,
-    TupleIter,
+use kyzo_model::program::{
+    InputAtom, InputProgram, QueryAssertion, QueryOutOptions, RelationOp, ReturnMutation,
+    TempSymbGen,
 };
-use crate::data::relation::StoredRelationMetadata;
+use kyzo_model::value::Tuple;
+use kyzo_model::value::row::TupleIter;
+use kyzo_model::value::{AsOf, DataValue, ValidityTs};
 use crate::exec::plan::magic::StoredRelationSchemaSource;
 use crate::parse::sys::{AccessLevel as ParseAccessLevel, SysOp};
 use crate::parse::{Script, parse_script};
@@ -500,7 +502,7 @@ impl<S: Storage> Db<S> {
         let (_auth, cancel) = CancelAuthority::arm();
 
         let mut normalizer = SessionNormalizer::new(view, cancel.clone());
-        let (nf, _) = program.into_normalized_program(&mut normalizer)?;
+        let (nf, _) = crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?;
         let (strat, lifetimes) = nf.into_stratified_program()?;
         let magic = strat.magic_sets_rewrite(&view)?;
         let compiled = stratified_magic_compile(store, magic)?;
@@ -1129,7 +1131,7 @@ impl<T: WriteTx> SessionTx<T> {
     /// Create a relation, routed to the temp or persistent catalog by name.
     pub(crate) fn create_relation(
         &mut self,
-        input: crate::data::program::InputRelationHandle,
+        input: kyzo_model::program::InputRelationHandle,
         keyspace_kind: KeyspaceKind,
     ) -> Result<RelationHandle> {
         if input.name.name.starts_with('_') {
@@ -1304,7 +1306,7 @@ impl<'a, T> SessionNormalizer<'a, T> {
 }
 
 impl<T: ReadTx> BodyNormalizer for SessionNormalizer<'_, T> {
-    fn disjunctive_normal_form(&mut self, body: InputAtom) -> Result<Vec<Vec<crate::data::program::NormalFormAtom>>> {
+    fn disjunctive_normal_form(&mut self, body: InputAtom) -> Result<Vec<Vec<crate::exec::plan::program::NormalFormAtom>>> {
         use crate::exec::plan::normalize::{do_disjunctive_normal_form, negation_normal_form};
         let nnf = negation_normal_form(body)?;
         let disjunction = do_disjunctive_normal_form(
@@ -1649,7 +1651,7 @@ mod tests {
         // — in the struct's own help string, not its fixed `Display`) —
         // the same wrapping every other op error gets.
         let wrapped = err
-            .downcast_ref::<crate::data::expr::EvalRaisedError>()
+            .downcast_ref::<kyzo_model::program::expr::EvalRaisedError>()
             .unwrap_or_else(|| {
                 panic!("expected an EvalRaisedError wrapping the overflow, got: {err}")
             });
@@ -2467,7 +2469,8 @@ mod tests {
             temp: &tx.temp,
         };
         let mut normalizer = SessionNormalizer::new(view, CancelFlag::default());
-        let (nf, _) = prog.into_normalized_program(&mut normalizer).unwrap();
+        let (nf, _) =
+            crate::exec::plan::program::into_normalized_program(prog, &mut normalizer).unwrap();
         let (strat, _lifetimes) = nf.into_stratified_program().unwrap();
         let magic = strat.magic_sets_rewrite(&view).unwrap();
         magic
@@ -3272,7 +3275,7 @@ mod db_battery {
     use std::collections::BTreeMap;
 
     use kyzo_model::value::DataValue;
-    use crate::fixed_rule::NamedRows;
+    use crate::data::json::NamedRows;
     use crate::session::db::{Db, ScriptOptions};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;

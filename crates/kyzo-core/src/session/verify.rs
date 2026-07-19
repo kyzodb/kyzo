@@ -23,7 +23,7 @@
 //! The translator covers plain relational Datalog: rule/relation
 //! applications (positive and negated), recursion, per-head-position
 //! aggregation, and point-in-time historical reads (`@ <coordinate>`,
-//! [`crate::data::program::ValidityClause::At`]). It REFUSES, typed, rather
+//! [`kyzo_model::program::ValidityClause::At`]). It REFUSES, typed, rather
 //! than silently mistranslating: fixed-rule applications (no generic bridge
 //! from `Arc<dyn FixedRule>` to the oracle's
 //! `fn(&[BTreeSet<Tuple>]) -> BTreeSet<Tuple>` shape), predicate/unification
@@ -72,13 +72,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-use crate::data::program::{
-    InputProgram, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed,
-};
+use crate::exec::plan::program::{NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed};
+use crate::rules::contract::CancelFlag;
+use kyzo_model::program::InputProgram;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
-use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
 use kyzo_oracle::eval as laws;
 use crate::session::db::{SessionNormalizer, SessionView};
@@ -221,7 +220,7 @@ impl VerifyOutcome {
     /// product-surface rendering of the same outcome
     /// [`Db::verify_script`]/[`Db::verify_input_program`] return as a typed
     /// Rust value. One row, `["status", "summary", "detail"]`.
-    pub(crate) fn into_named_rows(self) -> crate::fixed_rule::NamedRows {
+    pub(crate) fn into_named_rows(self) -> crate::data::json::NamedRows {
         let (status, summary, detail) = match self {
             VerifyOutcome::Match { row_count } => {
                 ("match", format!("{row_count} row(s) agree"), String::new())
@@ -247,7 +246,7 @@ impl VerifyOutcome {
             }
         };
         // Three headers, one width-3 row — by construction.
-        crate::fixed_rule::NamedRows::verify_status_row(status, summary, detail)
+        crate::data::json::NamedRows::verify_status_row(status, summary, detail)
     }
 }
 
@@ -291,7 +290,7 @@ fn translate_atom(
     edb_names: &mut BTreeSet<laws::Rel>,
     historical_names: &mut BTreeSet<laws::Rel>,
 ) -> std::result::Result<laws::Literal, TranslateUnsupported> {
-    use crate::data::program::ValidityClause;
+    use kyzo_model::program::ValidityClause;
 
     match atom {
         NormalFormAtom::Rule(a) => Ok(laws::Literal::pos(
@@ -400,7 +399,7 @@ fn translate_def(
 /// fixpoint, and `laws.rs` infers IDB-ness from which relations are some
 /// rule's head, not from a separately declared set.
 fn translate(
-    program: &crate::data::program::NormalFormProgram,
+    program: &crate::exec::plan::program::NormalFormProgram,
 ) -> std::result::Result<Translated, TranslateUnsupported> {
     let mut rules = Vec::new();
     let mut edb_names = BTreeSet::new();
@@ -643,7 +642,7 @@ impl<S: Storage> Db<S> {
             };
             let cancel = CancelFlag::inert();
             let mut normalizer = SessionNormalizer::new(view, cancel);
-            program.into_normalized_program(&mut normalizer)?
+            crate::exec::plan::program::into_normalized_program(program, &mut normalizer)?
         };
 
         let translated = match translate(&normalized) {

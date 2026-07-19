@@ -14,8 +14,9 @@ use itertools::{Either, Itertools};
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
-use crate::data::program::HeadAggrSlot;
+use kyzo_model::program::aggregate::Aggregation;
+use crate::exec::fold::aggr::{MeetAccum, MeetAggr};
+use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
@@ -1238,8 +1239,9 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, ensure, miette};
 use thiserror::Error;
 
-use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
-use crate::data::program::HeadAggrSlot;
+use kyzo_model::program::aggregate::Aggregation;
+use crate::exec::fold::aggr::{MeetAccum, MeetAggr};
+use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::{DecodeError, Tuple, decode_tuple_bare, encode_tuple_bare};
 
@@ -1704,7 +1706,7 @@ impl MeetAggrStore {
         let mut meets = Vec::new();
         for a in aggrs {
             if let HeadAggrSlot::Aggregated { aggr, args: _ } = a {
-                let op = aggr.meet_op().ok_or_else(|| {
+                let op = crate::exec::fold::aggr::meet_op(&aggr).ok_or_else(|| {
                     miette!(
                         "internal invariant violated: normal-only aggregation '{}' \
                          routed to a meet store",
@@ -2165,7 +2167,7 @@ impl Iterator for TupleInIterIterator<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::aggr::parse_aggr;
+    use kyzo_model::program::aggregate::parse_aggr;
     use kyzo_model::value::ScanBound;
 
     fn t(vals: &[i64]) -> Tuple {
@@ -2321,7 +2323,7 @@ mod tests {
     /// answers. With the landed corrected ops the delta MUST be non-empty.
     #[test]
     fn meet_delta_regression_changed_flag_drives_delta() {
-        let or_aggr = parse_aggr("or").unwrap();
+        let or_aggr = parse_aggr("or").unwrap().unwrap();
         let spec = vec![plain(), aggr_slot(or_aggr)];
         let mut store = EpochStore::new_meet(&spec).unwrap();
 
@@ -2372,7 +2374,7 @@ mod tests {
     /// always-correct one (`min`).
     #[test]
     fn meet_put_changed_flag() {
-        let or_aggr = parse_aggr("or").unwrap();
+        let or_aggr = parse_aggr("or").unwrap().unwrap();
         let spec = vec![plain(), aggr_slot(or_aggr)];
         let mut store = MeetAggrStore::new(spec).unwrap();
         assert!(store.is_empty());
@@ -2396,7 +2398,7 @@ mod tests {
         );
         assert!(!store.is_empty());
 
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let spec = vec![plain(), aggr_slot(min_aggr)];
         let mut store = MeetAggrStore::new(spec).unwrap();
         assert!(
@@ -2421,7 +2423,7 @@ mod tests {
     /// a typed error where the original unwrapped an `Option` per row.
     #[test]
     fn meet_store_rejects_normal_aggregation() {
-        let count = parse_aggr("count").unwrap();
+        let count = parse_aggr("count").unwrap().unwrap();
         assert!(!count.is_meet());
         let res = MeetAggrStore::new(vec![plain(), aggr_slot(count)]);
         assert!(res.is_err());
@@ -2436,7 +2438,7 @@ mod tests {
     /// below prove the same surface holds when the group key is not a prefix.
     #[test]
     fn meet_iteration_spans_key_and_value() {
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let spec = vec![plain(), aggr_slot(min_aggr)];
         let mut store = EpochStore::new_meet(&spec).unwrap();
         assert_eq!(store.arity, 2);
@@ -2524,7 +2526,7 @@ mod tests {
     #[test]
     fn kind_mismatch_is_error_not_panic() {
         let mut store = EpochStore::new_normal(1);
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let meet_out = MeetAggrStore::new(vec![aggr_slot(min_aggr)]).unwrap();
         assert!(store.merge_in(meet_out.wrap(), &mut ()).is_err());
     }
@@ -2544,8 +2546,8 @@ mod tests {
     /// positional grouping rests on — the mutation target.
     #[test]
     fn meet_layout_projection_round_trips_interleaved() {
-        let min_aggr = parse_aggr("min").unwrap();
-        let max_aggr = parse_aggr("max").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
+        let max_aggr = parse_aggr("max").unwrap().unwrap();
         let spec = vec![aggr_slot(min_aggr), plain(), aggr_slot(max_aggr)];
         let layout = MeetLayout::from_signature(&spec);
         assert_eq!(layout.key_positions, vec![HeadPos::from_index(1)]);
@@ -2584,7 +2586,7 @@ mod tests {
     /// order.
     #[test]
     fn meet_put_and_scan_non_suffix() {
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let spec = vec![aggr_slot(min_aggr), plain()];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         // group "a": min(4, 2, 9) = 2 ; group "b": 5.
@@ -2633,7 +2635,7 @@ mod tests {
     /// admitted in row order would reorder every witness table.
     #[test]
     fn meet_admissions_follow_group_key_order_not_row_order_non_suffix() {
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let spec = vec![aggr_slot(min_aggr), plain()];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         // Group "a" holds value 9, group "z" holds value 1. Group-key order
@@ -2672,7 +2674,7 @@ mod tests {
     /// stays the interleave of `by_group` across the update.
     #[test]
     fn meet_merge_delta_non_suffix() {
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let spec = vec![aggr_slot(min_aggr), plain()];
         let mut store = EpochStore::new_meet(&spec).unwrap();
 
@@ -2744,7 +2746,7 @@ mod tests {
     /// asserting the scan surface stays the interleave of groups.
     #[test]
     fn rev_meet_views_lockstep_through_all_paths() {
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let spec = vec![aggr_slot(min_aggr), plain()];
 
         // meet_put: vacant, changed, unchanged.
@@ -2815,8 +2817,8 @@ mod tests {
     /// scans see the single interleaved row.
     #[test]
     fn rev_meet_all_aggregated_single_group() {
-        let min_aggr = parse_aggr("min").unwrap();
-        let max_aggr = parse_aggr("max").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
+        let max_aggr = parse_aggr("max").unwrap().unwrap();
         let spec = vec![aggr_slot(min_aggr), aggr_slot(max_aggr)];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         assert!(out.meet_put(t(&[5, 5]).as_slice()).unwrap());
@@ -2839,7 +2841,7 @@ mod tests {
     /// — insertion order must be laundered out by both views.
     #[test]
     fn rev_meet_admissions_insertion_order_independent() {
-        let min_aggr = parse_aggr("min").unwrap();
+        let min_aggr = parse_aggr("min").unwrap().unwrap();
         let spec = vec![aggr_slot(min_aggr), plain()];
         let rows: Vec<Tuple> = vec![
             vg(DataValue::from(9i64), "m"),

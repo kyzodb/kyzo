@@ -18,8 +18,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::epoch_store_of;
-use crate::data::expr::{Expr, compute_bounds};
-use crate::data::program::MagicSymbol;
+use kyzo_model::program::expr::{Expr, compute_bounds};
+use crate::exec::plan::program::MagicSymbol;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;

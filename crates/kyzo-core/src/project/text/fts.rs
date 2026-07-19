@@ -105,7 +105,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
@@ -623,7 +623,7 @@ pub(crate) struct FtsSearchParams {
 /// for [`Fts`] (P103).
 #[derive(Clone, Copy)]
 pub(crate) struct FtsSearchRequest<'a> {
-    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+    pub(crate) cancel: &'a crate::rules::contract::CancelFlag,
     pub(crate) query: &'a str,
     pub(crate) base: &'a RelationHandle,
     pub(crate) idx: &'a RelationHandle,
@@ -680,7 +680,7 @@ impl Fts {
     /// function `fts_search`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_index(
-        cancel: &crate::fixed_rule::CancelFlag,
+        cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,
         query: &str,
         base: &RelationHandle,
@@ -708,7 +708,7 @@ impl Fts {
 
 #[allow(clippy::too_many_arguments)]
 fn fts_search_body(
-    cancel: &crate::fixed_rule::CancelFlag,
+    cancel: &crate::rules::contract::CancelFlag,
     tx: &impl ReadTx,
     query: &str,
     base: &RelationHandle,
@@ -779,10 +779,10 @@ fn fts_search_body(
 mod tests {
     use super::*;
 
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
     use crate::project::text::TokenizerConfig;
-    use crate::fixed_rule::CancelFlag;
+    use crate::rules::contract::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;

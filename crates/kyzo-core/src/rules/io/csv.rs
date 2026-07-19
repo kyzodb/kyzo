@@ -33,7 +33,7 @@ use smartstring::{LazyCompact, SmartString};
 
 use kyzo_model::program::expr::Expr;
 use crate::exec::stdlib::convert::{op_to_float, op_to_uuid};
-use crate::data::program::{
+use crate::exec::plan::program::{
     FixedRuleOptionNotFoundError, WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
 };
 use kyzo_model::schema::{ColType, NullableColType};
@@ -41,8 +41,8 @@ use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, TERMINAL_VALIDITY};
-use crate::fixed_rule::utilities::jlines::{LocalFileFetchUnavailable, UrlFetchUnavailable};
-use crate::fixed_rule::{
+use crate::rules::io::jlines::{LocalFileFetchUnavailable, UrlFetchUnavailable};
+use crate::rules::contract::{
     CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,
     FixedRulePayload,
 };
@@ -80,11 +80,11 @@ impl FixedRule for CsvReader {
         let mut types = vec![];
         // `coerce` to `[String]` proved the outer list and the element strings.
         let type_slice = types_opts.get_slice().ok_or_else(|| {
-            crate::fixed_rule::FixedRuleInvariantError::refuse("csv_types_list")
+            crate::rules::contract::FixedRuleInvariantError::refuse("csv_types_list")
         })?;
         for type_str in type_slice {
             let type_str = type_str.get_str().ok_or_else(|| {
-                crate::fixed_rule::FixedRuleInvariantError::refuse("csv_types_list")
+                crate::rules::contract::FixedRuleInvariantError::refuse("csv_types_list")
             })?;
             let typ = parse_type(type_str).map_err(|_| WrongFixedRuleOptionError {
                 name: Symbol::new("types", payload.span()),
@@ -252,7 +252,7 @@ impl FixedRule for CsvReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixed_rule::tests_support::run_fixed_rule;
+    use crate::rules::contract::tests_support::run_fixed_rule;
 
     fn options(content: &str) -> BTreeMap<SmartString<LazyCompact>, Expr> {
         BTreeMap::from([

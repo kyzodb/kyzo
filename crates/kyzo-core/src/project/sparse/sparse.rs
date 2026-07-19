@@ -577,7 +577,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;

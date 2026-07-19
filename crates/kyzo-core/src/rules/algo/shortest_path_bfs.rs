@@ -33,11 +33,11 @@ use itertools::Itertools;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::{
+use crate::rules::contract::{
     backtrace_predecessor, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
     FixedRuleOutput, FixedRulePayload,
 };
@@ -174,7 +174,7 @@ impl FixedRule for ShortestPathBFS {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -248,7 +248,7 @@ mod tests {
     /// `≤ 1` bound fails; restoring the poll passes.
     #[test]
     fn honors_cancel_pins_inner_poll() {
-        use crate::fixed_rule::tests_support::prepare_fixed_rule;
+        use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 250_000;
         let edges: Vec<Tuple> = (0..n - 1)

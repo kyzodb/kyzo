@@ -30,13 +30,15 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
-use crate::data::expr::{BindingPos, Expr};
-use crate::data::program::{
-    InputAtom, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom, InputRuleApplyAtom,
+use crate::exec::plan::program::{
     NormalFormAtom, NormalFormInlineRule, NormalFormRelationApplyAtom, NormalFormRuleApplyAtom,
+};
+use kyzo_model::program::expr::{BindingPos, Expr};
+use kyzo_model::program::rule::{
+    InputAtom, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom, InputRuleApplyAtom,
     TempSymbGen, Unification, ValidityClause,
 };
-use crate::data::relation::StoredRelationMetadata;
+use kyzo_model::schema::StoredRelationMetadata;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
 
@@ -152,7 +154,7 @@ pub(crate) fn do_disjunctive_normal_form(
     symb_gen: &mut TempSymbGen,
     schema_of: &SchemaLookup<'_>,
     search_handle: &HandleLookup<'_>,
-    cancel: &crate::fixed_rule::CancelFlag,
+    cancel: &crate::rules::contract::CancelFlag,
 ) -> Result<Vec<Vec<NormalFormAtom>>> {
     Ok(match atom {
         InputAtom::Disjunction { inner, .. } => {

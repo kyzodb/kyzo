@@ -796,7 +796,7 @@ impl Iterator for RowChunks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::SourceSpan;
     use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::{MAX_VALIDITY_TS, ValidityTs};
@@ -833,7 +833,7 @@ mod tests {
     ) -> RelationHandle {
         let keys: Vec<ColumnDef> = (0..key_arity).map(|i| col(&format!("k{i}"))).collect();
         let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
-        let input = crate::data::program::InputRelationHandle {
+        let input = kyzo_model::program::query::InputRelationHandle {
             name: sym(name),
             metadata: StoredRelationMetadata {
                 keys,
@@ -1187,7 +1187,7 @@ mod tests {
     ) -> (RelationHandle, RelationHandle) {
         let mut stx =
             SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::default());
-        let input = crate::data::program::InputRelationHandle {
+        let input = kyzo_model::program::query::InputRelationHandle {
             name: sym(name),
             metadata: StoredRelationMetadata {
                 keys: vec![col("k")],

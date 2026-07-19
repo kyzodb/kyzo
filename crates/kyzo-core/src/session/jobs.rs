@@ -16,7 +16,7 @@
 
 use miette::{Result, bail};
 
-use crate::fixed_rule::NamedRows;
+use crate::data::json::NamedRows;
 use crate::session::db::IndexOpNotLanded;
 
 /// `::running` — list in-flight jobs. Stub: empty rows with the ratified

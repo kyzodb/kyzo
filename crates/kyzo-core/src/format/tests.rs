@@ -33,9 +33,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::data::program::Comment;
+use crate::rules::contract::{EmptyNamedRowsBody, FixedRule, SimpleFixedRule};
+use kyzo_model::program::Comment;
 use kyzo_model::value::DataValue;
-use crate::fixed_rule::{FixedRule, SimpleFixedRule};
 use crate::parse::{Script, parse_expressions, parse_script};
 use crate::session::current_validity;
 
@@ -434,7 +434,7 @@ fn fixed_rule_trivia_round_trips() {
         // Named body — never run; parse/format only needs name + arity (P083).
         Arc::new(SimpleFixedRule::new(
             1,
-            crate::fixed_rule::EmptyNamedRowsBody,
+            EmptyNamedRowsBody,
         )),
     );
     let src = "# leads algo\nh[a] <~ algo(); # trails algo\n?[a] := h[a];\n";
@@ -450,7 +450,7 @@ fn fixed_rule_trivia_round_trips() {
         Ok(Script::Single(p)) => *p,
         other => panic!("format produced unparseable text:\n{formatted}\n{other:?}"),
     };
-    let trivia = |p: &crate::data::program::InputProgram| match p
+    let trivia = |p: &kyzo_model::program::InputProgram| match p
         .rules()
         .get(&kyzo_model::program::symbol::Symbol::new(
             "h",
@@ -458,7 +458,7 @@ fn fixed_rule_trivia_round_trips() {
         ))
         .expect("rule `h` present")
     {
-        crate::data::program::InputInlineRulesOrFixed::Fixed { fixed } => fixed.trivia.clone(),
+        kyzo_model::program::InputInlineRulesOrFixed::Fixed { fixed } => fixed.trivia.clone(),
         other => panic!("expected `h` as a fixed rule, got {other:?}"),
     };
     let orig = trivia(&prog);

@@ -20,7 +20,7 @@ use super::{
     DeltaRA, Joiner, RelAlgebra, SpansRA, StoredRA, StoredRowTooShortError, StoredWithValidityRA,
     TempStoreRA, epoch_store_of,
 };
-use crate::data::program::MagicSymbol;
+use crate::exec::plan::program::MagicSymbol;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;

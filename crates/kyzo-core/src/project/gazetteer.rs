@@ -366,7 +366,7 @@ impl Gazetteer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::InputRelationHandle;
     use kyzo_model::SourceSpan;
     use kyzo_model::program::symbol::Symbol;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};

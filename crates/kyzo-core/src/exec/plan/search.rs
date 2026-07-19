@@ -37,8 +37,8 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
-use crate::data::program::{SearchInput, TempSymbGen};
+use kyzo_model::program::expr::Expr;
+use kyzo_model::program::rule::{SearchInput, TempSymbGen};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, SearchHits, Vector};
@@ -71,7 +71,7 @@ pub(crate) struct SearchAtom {
     /// it once per search invocation, and the engines poll it per scanned
     /// node inside a single search — both refuse with the typed
     /// cancellation error, never a silent short read.
-    pub(crate) cancel: crate::fixed_rule::CancelFlag,
+    pub(crate) cancel: crate::rules::contract::CancelFlag,
     pub(crate) span: SourceSpan,
 }
 
@@ -100,7 +100,7 @@ impl HnswSearch {
         tx: &impl ReadTx,
         q: &Vector,
         filter: &Option<Expr>,
-        cancel: &crate::fixed_rule::CancelFlag,
+        cancel: &crate::rules::contract::CancelFlag,
     ) -> Result<SearchHits> {
         Hnsw::search_relation(
             tx,
@@ -124,7 +124,7 @@ impl FtsSearch {
         tx: &impl ReadTx,
         query: &str,
         filter: &Option<Expr>,
-        cancel: &crate::fixed_rule::CancelFlag,
+        cancel: &crate::rules::contract::CancelFlag,
         n_total: usize,
     ) -> Result<SearchHits> {
         Fts::search_relation(
@@ -151,7 +151,7 @@ impl LshSearch {
         tx: &impl ReadTx,
         query: &DataValue,
         filter: &Option<Expr>,
-        cancel: &crate::fixed_rule::CancelFlag,
+        cancel: &crate::rules::contract::CancelFlag,
     ) -> Result<SearchHits> {
         Lsh::search_relation(
             tx,
@@ -400,7 +400,7 @@ pub(crate) fn resolve_search(
     handle: &dyn Fn(&str) -> Result<RelationHandle>,
     inp: SearchInput,
     symb_gen: &mut TempSymbGen,
-    cancel: crate::fixed_rule::CancelFlag,
+    cancel: crate::rules::contract::CancelFlag,
 ) -> Result<SearchAtom> {
     let span = inp.span;
     let base = handle(&inp.relation.name)?;

@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::data::program::MagicSymbol;
+use crate::exec::plan::program::MagicSymbol;
 use crate::exec::fixpoint::eval::EvalDefinition;
 
 /// Collect results for every non-entry definition in `defs` (entry rules

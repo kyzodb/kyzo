@@ -7,8 +7,8 @@
  */
 
 //! The in-memory graph the fixed-rule algorithms run on: a directed graph
-//! in compressed-sparse-row form, nodes interned to dense `u32` ids by the
-//! payload's graph builders (`fixed_rule/mod.rs`).
+//! in compressed-sparse-row form, plus the relation→graph builders that
+//! intern edge endpoints to dense `u32` ids.
 //!
 //! New in KyzoDB. The CozoDB original used the external `graph` crate
 //! (v0.3.1) for this type; that crate is effectively dormant (last release
@@ -30,8 +30,15 @@
 //! - `out_neighbors` yields `u32` by value where the original yielded
 //!   `&u32`; call sites were adjusted (mechanical only).
 
-use miette::{Diagnostic, Result, ensure};
+use std::collections::BTreeMap;
+
+use miette::{Diagnostic, Result, bail, ensure};
 use thiserror::Error;
+
+use kyzo_model::SourceSpan;
+use kyzo_model::value::DataValue;
+
+use crate::rules::contract::FixedRuleInputRelation;
 
 /// Refusal at the graph-size bound: node ids are dense `u32`s, so a
 /// fixed-rule graph holds at most 2^32 - 1 nodes (the `max_id + 1`
@@ -42,7 +49,7 @@ use thiserror::Error;
 /// Honesty note on testability: hitting this bound for real needs ~4
 /// billion distinct nodes, which no test allocates. The guard is pure
 /// arithmetic, factored into [`checked_node_count`] (here) and
-/// `checked_node_id` (the intern site in `fixed_rule/mod.rs`) precisely so
+/// [`checked_node_id`] (the intern site) precisely so
 /// unit tests can pin the boundary math without the allocation; the
 /// end-to-end path is exercised only up to the type level (the error
 /// exists, is typed, and is returned by the factored checks at the
@@ -191,6 +198,121 @@ impl<W: Copy> DirectedCsrGraph<W> {
     }
 }
 
+#[derive(Error, Diagnostic, Debug)]
+#[error("The relation cannot be interpreted as an edge")]
+#[diagnostic(code(algo::not_an_edge))]
+#[diagnostic(help("Edge relation requires tuples of length at least two"))]
+struct NotAnEdgeError(#[label] SourceSpan);
+
+#[derive(Error, Diagnostic, Debug)]
+#[error(
+    "The value {0:?} at the third position in the relation cannot be interpreted as edge weights"
+)]
+#[diagnostic(code(algo::invalid_edge_weight))]
+#[diagnostic(help(
+    "Edge weights must be finite numbers. Some algorithm also requires positivity."
+))]
+struct BadEdgeWeightError(DataValue, #[label] SourceSpan);
+
+/// Mints the next dense node id at the intern site, refusing with the
+/// typed [`GraphTooLargeError`] at the 2^32-node bound — the CozoDB
+/// original's `indices.len() as u32` silently truncated there, aliasing
+/// the 2^32-th node onto id 0. The cap is `u32::MAX` mintable ids
+/// (`0..=u32::MAX - 1`); predecessor absence uses `Option` (P078), so
+/// `u32::MAX` is no longer reserved as a sentinel.
+///
+/// The bound is untestable at scale (it would take ~4 billion interned
+/// values); it is factored into this function precisely so a unit test
+/// can pin the boundary arithmetic without the allocation. See the
+/// honesty note on [`GraphTooLargeError`].
+pub(crate) fn checked_node_id(interned_so_far: usize) -> Result<u32> {
+    ensure!(interned_so_far < u32::MAX as usize, GraphTooLargeError);
+    u32::try_from(interned_so_far).map_err(|_| GraphTooLargeError.into())
+}
+
+/// The first two columns of each tuple as an edge, interning the node
+/// values to dense `u32` ids. Shared skeleton of the two graph builders
+/// below; errors flow straight out (the original collected them into a
+/// captured `Option<Report>` inside a `filter_map` and re-raised after
+/// the build). Minting is guarded by [`checked_node_id`].
+pub(crate) fn intern_edges<'a, W: Copy>(
+    rel: &FixedRuleInputRelation<'a>,
+    mut weight: impl FnMut(Option<&DataValue>) -> Result<W>,
+    undirected: bool,
+) -> Result<(Vec<(u32, u32, W)>, Vec<DataValue>, BTreeMap<DataValue, u32>)> {
+    let mut indices: Vec<DataValue> = vec![];
+    let mut inv_indices: BTreeMap<DataValue, u32> = Default::default();
+    let mut edges: Vec<(u32, u32, W)> = vec![];
+    for tuple in rel.iter()? {
+        let mut tuple = tuple?.into_iter();
+        let from = tuple.next().ok_or_else(|| NotAnEdgeError(rel.span()))?;
+        let to = tuple.next().ok_or_else(|| NotAnEdgeError(rel.span()))?;
+        let mut intern = |val: DataValue| -> Result<u32> {
+            Ok(match inv_indices.get(&val) {
+                Some(idx) => *idx,
+                None => {
+                    let idx = checked_node_id(indices.len())?;
+                    inv_indices.insert(val.clone(), idx);
+                    indices.push(val);
+                    idx
+                }
+            })
+        };
+        let from_idx = intern(from)?;
+        let to_idx = intern(to)?;
+        let w = weight(tuple.next().as_ref())?;
+        edges.push((from_idx, to_idx, w));
+        if undirected {
+            edges.push((to_idx, from_idx, w));
+        }
+    }
+    Ok((edges, indices, inv_indices))
+}
+
+/// Convert an input relation into a directed graph.
+/// If `undirected` is true, then each edge in the input relation is treated
+/// as a pair of edges, one for each direction.
+pub(crate) fn as_directed_graph(
+    rel: &FixedRuleInputRelation<'_>,
+    undirected: bool,
+) -> Result<(DirectedCsrGraph, Vec<DataValue>, BTreeMap<DataValue, u32>)> {
+    let (edges, indices, inv_indices) = intern_edges(rel, |_| Ok(()), undirected)?;
+    Ok((DirectedCsrGraph::from_edges(edges)?, indices, inv_indices))
+}
+
+/// Convert an input relation into a directed weighted graph, the weight
+/// taken from the third column (`1.0` when absent). Weights must be finite
+/// numbers, and non-negative unless `allow_negative_weights`.
+pub(crate) fn as_directed_weighted_graph(
+    rel: &FixedRuleInputRelation<'_>,
+    undirected: bool,
+    allow_negative_weights: bool,
+    weight_span: SourceSpan,
+) -> Result<(
+    DirectedCsrGraph<f32>,
+    Vec<DataValue>,
+    BTreeMap<DataValue, u32>,
+)> {
+    let (edges, indices, inv_indices) = intern_edges(
+        rel,
+        |d| -> Result<f32> {
+            let d = match d {
+                None => return Ok(1.0),
+                Some(d) => d,
+            };
+            let f = d
+                .get_float()
+                .ok_or_else(|| BadEdgeWeightError(d.clone(), weight_span))?;
+            if !f.is_finite() || (f < 0. && !allow_negative_weights) {
+                bail!(BadEdgeWeightError(d.clone(), weight_span));
+            }
+            Ok(f as f32)
+        },
+        undirected,
+    )?;
+    Ok((DirectedCsrGraph::from_edges(edges)?, indices, inv_indices))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +368,22 @@ mod tests {
         // The same refusal surfaces through `from_edges` itself.
         let err = DirectedCsrGraph::<()>::from_edges([(0, u32::MAX, ())]).unwrap_err();
         assert!(err.downcast_ref::<GraphTooLargeError>().is_some(), "{err}");
+    }
+
+    /// F3: the intern site refuses, typed, at the 2^32-node bound instead
+    /// of truncating `indices.len() as u32`.
+    #[test]
+    fn intern_site_refuses_at_u32_bound() {
+        assert_eq!(checked_node_id(0).unwrap(), 0);
+        assert_eq!(
+            checked_node_id((u32::MAX - 1) as usize).unwrap(),
+            u32::MAX - 1
+        );
+        let err = checked_node_id(u32::MAX as usize).unwrap_err();
+        assert!(
+            err.downcast_ref::<GraphTooLargeError>().is_some(),
+            "expected the typed GraphTooLargeError, got: {err}"
+        );
+        assert!(err.to_string().contains("2^32"), "{err}");
     }
 }

@@ -115,7 +115,7 @@ use quadrature::integrate;
 use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
-use crate::data::expr::{BindingPos, Expr};
+use kyzo_model::program::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, Tuple, append_canonical};
@@ -207,7 +207,7 @@ pub(crate) struct MinHashLshIndexManifest {
     /// The row-extraction expression as a PARSED typed substance (serde
     /// round-trips it through the value plane's `Expr` codec, arity re-proven
     /// on decode); never source text re-parsed at build time.
-    pub(crate) extractor: crate::data::expr::Expr,
+    pub(crate) extractor: kyzo_model::program::expr::Expr,
     pub(crate) n_gram: usize,
     pub(crate) tokenizer: TokenizerConfig,
     pub(crate) filters: Vec<TokenizerConfig>,
@@ -787,7 +787,7 @@ pub(crate) struct LshSearchParams {
 /// for [`Lsh`] (P103).
 #[derive(Clone, Copy)]
 pub(crate) struct LshSearchRequest<'a> {
-    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+    pub(crate) cancel: &'a crate::rules::contract::CancelFlag,
     pub(crate) q: &'a DataValue,
     pub(crate) manifest: &'a MinHashLshIndexManifest,
     pub(crate) base: &'a RelationHandle,
@@ -833,7 +833,7 @@ impl Lsh {
     /// function `lsh_search`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_index(
-        cancel: &crate::fixed_rule::CancelFlag,
+        cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,
         q: &DataValue,
         manifest: &MinHashLshIndexManifest,
@@ -863,7 +863,7 @@ impl Lsh {
 
 #[allow(clippy::too_many_arguments)]
 fn lsh_search_body(
-    cancel: &crate::fixed_rule::CancelFlag,
+    cancel: &crate::rules::contract::CancelFlag,
     tx: &impl ReadTx,
     q: &DataValue,
     manifest: &MinHashLshIndexManifest,
@@ -946,9 +946,9 @@ mod tests {
     use super::*;
     use crate::session::catalog::KeyspaceKind;
 
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
-    use crate::fixed_rule::CancelFlag;
+    use crate::rules::contract::CancelFlag;
     use crate::session::catalog::create_relation;
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;

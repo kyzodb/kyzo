@@ -24,12 +24,12 @@ use smartstring::{LazyCompact, SmartString};
 
 use kyzo_model::program::expr::{BindingPos, Expr};
 use kyzo_model::program::op::OP_LIST;
-use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
+use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::fixed_rule::{
+use crate::rules::contract::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 
@@ -105,7 +105,7 @@ impl FixedRule for ReorderSort {
         for val in &buffer {
             // Every buffered tuple ends with the sort key pushed above.
             let sorter = val.last().ok_or_else(|| {
-                crate::fixed_rule::FixedRuleInvariantError::refuse("reorder_sort_key")
+                crate::rules::contract::FixedRuleInvariantError::refuse("reorder_sort_key")
             })?;
 
             if last == Some(sorter) {
@@ -165,8 +165,8 @@ impl FixedRule for ReorderSort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixed_rule::CancelFlag;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::CancelFlag;
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

@@ -49,13 +49,13 @@ use std::collections::BTreeMap;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{
+use crate::rules::graph_view::DirectedCsrGraph;
+use crate::rules::contract::par_try_map;
+use crate::rules::contract::{
     CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 
@@ -428,7 +428,7 @@ mod tests {
     /// oracle above.
     #[test]
     fn through_rule_matches_reference() {
-        use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+        use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
         let s = |v: &str| DataValue::from(v);
         // Symbols a,b,c,d intern to node ids 0,1,2,3 in first-seen order.

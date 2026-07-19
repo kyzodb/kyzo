@@ -18,7 +18,7 @@ use fjall::Slice;
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 

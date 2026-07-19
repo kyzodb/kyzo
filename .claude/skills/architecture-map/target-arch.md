@@ -161,7 +161,7 @@ Format: `path` — description
 `crates/kyzo-core/src/rules/algo/top_sort.rs` — fixed rule: topological order of a DAG view
 `crates/kyzo-core/src/rules/algo/triangles.rs` — fixed rule: triangle counting on a graph view
 `crates/kyzo-core/src/rules/algo/yen.rs` — fixed rule: Yen’s k-shortest loopless paths
-`crates/kyzo-core/src/rules/contract.rs` — FixedRule trait + SessionFixedRule: typed inputs, named outputs, deterministic run; session-backed FixedRuleEval adapter
+`crates/kyzo-core/src/rules/contract.rs` — FixedRule trait + SessionFixedRule + CancelFlag: typed inputs, named outputs, deterministic run, engine-wide cancellation; session-backed FixedRuleEval adapter
 `crates/kyzo-core/src/rules/gazetteer.rs` — fixed rule that queries the gazetteer projection
 `crates/kyzo-core/src/rules/graph_view.rs` — adapts stored edge/vertex relations into the graph algorithms’ view
 `crates/kyzo-core/src/rules/io/constant.rs` — fixed rule that emits a declared constant table
@@ -269,6 +269,8 @@ Format: `path` — description
 `crates/kyzo-model/src/program/aggregate.rs` — aggregate declaration shapes in program IR
 `crates/kyzo-model/src/program/expr.rs` — expression AST used after parse and before exec
 `crates/kyzo-model/src/program/op.rs` — builtin op declarations: name, arity, determinism-as-data (no bodies)
+`crates/kyzo-model/src/program/query.rs` — query-output options vocabulary (limit/order/write/assert)
+`crates/kyzo-model/src/program/rule.rs` — input-tier rule/atom/program vocabulary (what a query IS)
 `crates/kyzo-model/src/program/span.rs` — source spans carried on every IR node for refusals
 `crates/kyzo-model/src/program/symbol.rs` — interned/program symbols naming relations and variables
 `crates/kyzo-model/src/schema/column.rs` — column name and type in a relation schema
@@ -278,6 +280,7 @@ Format: `path` — description
 `crates/kyzo-model/src/value/arity.rs` — arity as a first-class constrained count
 `crates/kyzo-model/src/value/bytes_qty.rs` — byte-quantity newtype (sizes/limits), not a bare usize
 `crates/kyzo-core/src/data/json.rs` — NamedRows + diagnostic JSON envelopes (composes kyzo-model envelope/json)
+`crates/kyzo-core/src/data/mod.rs` — structural glue for the surviving data/json.rs seat (`pub(crate) mod json;` only)
 `crates/kyzo-model/src/value/canonical.rs` — canonicalization so equal values share one byte form
 `crates/kyzo-model/src/value/code.rs` — dense interned Code / StampedCode handles (epoch-scoped)
 `crates/kyzo-model/src/value/column.rs` — columnar admitted codes over a Domain

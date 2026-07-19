@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::RelAlgebra;
-use crate::data::program::MagicSymbol;
+use crate::exec::plan::program::MagicSymbol;
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, SearchHits, Tag};

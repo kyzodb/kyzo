@@ -52,6 +52,9 @@ use super::column::{AdmittedCodes, CodeColumn, Domain};
 use super::{DataValue, ScanBound};
 use crate::data_value_any;
 
+/// A stream of tuples, each fallibly produced (a storage read can fail mid-stream).
+pub type TupleIter<'a> = Box<dyn Iterator<Item = miette::Result<super::Tuple>> + 'a>;
+
 /// The execution form of a relation fragment: `arity`-wide tuples as
 /// row-major packed codes under one container domain.
 pub struct Rows {

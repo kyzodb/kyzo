@@ -18,7 +18,7 @@
 
 use super::{StoredRowTooShortError, TupleIter};
 use crate::Tuple;
-use crate::data::expr::{Expr, compute_bounds};
+use kyzo_model::program::expr::{Expr, compute_bounds};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{AsOf, DataValue, ScanBound};
@@ -491,8 +491,8 @@ mod segment_gate_tests {
     use smartstring::SmartString;
 
     use super::*;
-    use crate::data::program::InputRelationHandle;
-    use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use kyzo_model::program::query::InputRelationHandle;
+    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
     use crate::project::current::SegmentEngine;
     use crate::session::catalog::create_relation;

@@ -70,9 +70,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::{Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
-use crate::data::program::{
-    FixedRuleArg, MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormProgram,
-    NormalFormRulesOrFixed, NormalFormStratum, StoreLifetimes, StratifiedNormalFormProgram,
+use kyzo_model::program::rule::FixedRuleArg;
+use crate::exec::plan::program::{
+    MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormProgram, NormalFormRulesOrFixed,
+    NormalFormStratum, StoreLifetimes, StratifiedNormalFormProgram,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -516,12 +517,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::data::aggr::parse_aggr;
-    use crate::data::expr::Expr;
-    use crate::data::program::{
-        BodyNormalizer, FixedRule, FixedRuleApply, FixedRuleHandle, HeadAggrSlot, InputAtom,
-        InputInlineRule, InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom,
-        NormalFormRuleApplyAtom, QueryOutOptions, Trivia,
+    use kyzo_model::program::aggregate::parse_aggr;
+    use kyzo_model::program::query::QueryOutOptions;
+    use kyzo_model::program::rule::{
+        FixedRuleApply, FixedRuleArg, FixedRuleHandle, HeadAggrSlot, InputAtom, InputInlineRule,
+        InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom, Trivia,
+    };
+    use crate::exec::plan::program::{
+        BodyNormalizer, NormalFormInlineRule, NormalFormRuleApplyAtom, into_normalized_program,
     };
     use kyzo_model::program::symbol::SymbolKind;
     use kyzo_model::value::DataValue;
@@ -593,32 +596,9 @@ mod tests {
 
         fn well_order(
             &mut self,
-            rule: crate::data::program::NormalFormInlineRule,
-        ) -> Result<crate::data::program::NormalFormInlineRule> {
+            rule: NormalFormInlineRule,
+        ) -> Result<NormalFormInlineRule> {
             Ok(rule)
-        }
-    }
-
-    /// A fixed rule whose runtime never runs: stratification only needs the
-    /// *shape* (a fixed head plus its in-memory inputs).
-    struct StubFixedRule;
-
-    impl FixedRule for StubFixedRule {
-        fn arity(
-            &self,
-            _options: &BTreeMap<smartstring::SmartString<smartstring::LazyCompact>, Expr>,
-            _rule_head: &[Symbol],
-            _span: SourceSpan,
-        ) -> Result<usize> {
-            Ok(1)
-        }
-        fn run(
-            &self,
-            _payload: crate::fixed_rule::FixedRulePayload<'_>,
-            _out: &mut crate::fixed_rule::FixedRuleOutput,
-            _cancel: crate::fixed_rule::CancelFlag,
-        ) -> Result<()> {
-            unreachable!("test stub: never run")
         }
     }
 
@@ -638,6 +618,8 @@ mod tests {
                     None => HeadAggrSlot::Plain,
                     Some(name) => HeadAggrSlot::Aggregated {
                         aggr: parse_aggr(name)
+                            .ok()
+                            .flatten()
                             .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
                         args: vec![],
                     },
@@ -691,7 +673,6 @@ mod tests {
                 head: vec![],
                 arity: 1,
                 span: SourceSpan(0, 0),
-                fixed_impl: Arc::new(StubFixedRule),
                 trivia: Trivia::default(),
             };
             let prev = self
@@ -703,7 +684,7 @@ mod tests {
 
         fn stratify(self) -> Result<(StratifiedNormalFormProgram, StoreLifetimes)> {
             let input = InputProgram::new(self.prog, QueryOutOptions::default(), false)?;
-            let (normalized, _opts) = input.into_normalized_program(&mut PassThrough)?;
+            let (normalized, _opts) = into_normalized_program(input, &mut PassThrough)?;
             normalized.into_stratified_program()
         }
     }

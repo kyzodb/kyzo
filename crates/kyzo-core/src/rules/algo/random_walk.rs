@@ -37,12 +37,12 @@ use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::rng::SeededRng;
-use crate::fixed_rule::{
+use crate::rules::rng::SeededRng;
+use crate::rules::contract::{
     GraphAlgorithmInvariantError, BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput,
     FixedRulePayload, NodeNotFoundError,
 };
@@ -192,7 +192,7 @@ impl FixedRule for RandomWalk {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

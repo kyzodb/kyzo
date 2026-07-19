@@ -7,18 +7,4 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-// Modules are landed in dependency order, sorted bottom-up: the dead-code
-// expectations fire (forcing their removal) as consumers land. Once a
-// module's first engine consumer is in place, its dead-code expectation
-// becomes triggered and the expectation must be removed or changed to allow.
-pub(crate) mod aggr;
-pub(crate) mod arrow_ipc;
-pub(crate) mod bitemporal;
-// expr: bottom-up landing per the module-order note above; dead in the
-// lib build until its first engine consumer lands.
 pub(crate) mod json;
-// program: bottom-up landing per the module-order note above; dead in
-// the lib build until its first engine consumer lands.
-pub(crate) mod program;
-pub(crate) mod sketch;
-

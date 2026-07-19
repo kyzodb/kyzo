@@ -24,9 +24,9 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::store::time::ClaimPolarity;
-use crate::data::expr::Expr;
+use crate::data::json::NamedRows;
 use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::fixed_rule::NamedRows;
+use kyzo_model::program::expr::Expr;
 use crate::session::catalog::{
     IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency, TEMPORAL_POSTING_LEADING_COLUMN,
 };
@@ -103,7 +103,7 @@ impl<T: WriteTx> SessionTx<T> {
     /// The extractor is never re-parsed from source at build time — it arrives typed.
     fn compile_row_extractor(
         base: &RelationHandle,
-        extractor: &crate::data::expr::Expr,
+        extractor: &kyzo_model::program::expr::Expr,
     ) -> Result<Expr> {
         let mut expr = extractor.clone();
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
@@ -275,7 +275,7 @@ impl<T: WriteTx> SessionTx<T> {
         };
         for (name, metadata) in index_metas {
             self.create_relation(
-                crate::data::program::InputRelationHandle {
+                kyzo_model::program::InputRelationHandle {
                     name: Symbol::new(name, SourceSpan::default()),
                     metadata,
                     key_bindings: vec![],
@@ -689,7 +689,7 @@ mod temporal_index_tests {
     use std::cmp::Reverse;
 
     use super::*;
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::InputRelationHandle;
     use crate::data::relation::ColType;
     use crate::session::db::{Db, ScriptOptions};
     use crate::store::{ReadTx, Storage};

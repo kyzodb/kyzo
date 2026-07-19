@@ -67,7 +67,7 @@ pub(crate) struct FtsIndexManifest {
     /// round-trips it through the value plane's `Expr` codec (op arity is
     /// re-proven on decode), so the catalog never holds an un-parseable
     /// extractor and there is no build-time re-parse of source text.
-    pub(crate) extractor: crate::data::expr::Expr,
+    pub(crate) extractor: kyzo_model::program::expr::Expr,
     pub(crate) tokenizer: TokenizerConfig,
     pub(crate) filters: Vec<TokenizerConfig>,
 }

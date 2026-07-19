@@ -10,7 +10,7 @@
 //!    *Enforcement:* differential tests against the naive reference
 //!    evaluator in `kyzo_oracle::eval` (the oracle is deliberately
 //!    unoptimized and obviously correct, and folds through the real landed
-//!    [`crate::data::aggr`] ops); the oracle itself is cross-checked
+//!    [`crate::exec::fold::aggr`] ops); the oracle itself is cross-checked
 //!    against a second, semi-naive evaluation strategy on generated
 //!    meet-recursive programs.
 //! 2. **Stratification safety** — programs with negation or aggregation

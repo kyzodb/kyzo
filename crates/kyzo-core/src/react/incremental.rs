@@ -72,8 +72,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Error, Result};
 
-use crate::data::aggr::{Aggregation, NormalAggr};
-use crate::data::program::HeadAggrSlot;
+use kyzo_model::program::aggregate::Aggregation;
+use crate::exec::fold::aggr::NormalAggr;
+use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
@@ -494,7 +495,7 @@ pub(crate) enum IncrementalRejection {
 // arguments, folding `Term::Var` back into `Term::Const` wherever the
 // rewrite split them apart.
 
-use crate::data::program::{
+use crate::exec::plan::program::{
     MagicAtom, MagicInlineRule, MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram,
 };
 
@@ -669,7 +670,7 @@ fn eval_one_group(
     let fresh_ops = || -> Result<Vec<NormalAggr>> {
         val_positions
             .iter()
-            .map(|(_, aggr, args)| aggr.normal_op(args))
+            .map(|(_, aggr, args)| crate::exec::fold::aggr::normal_op(aggr, args))
             .collect()
     };
     let mut ops: Option<Vec<NormalAggr>> = None;
@@ -1270,7 +1271,9 @@ mod tests {
                 vec![
                     None,
                     Some((
-                        crate::data::aggr::parse_aggr("min").expect("real aggregation exists"),
+                        kyzo_model::program::aggregate::parse_aggr("min")
+                            .unwrap()
+                            .expect("real aggregation exists"),
                         vec![],
                     )),
                 ],
@@ -1359,9 +1362,8 @@ mod tests {
     // ── Translation: a real (hand-built, but exactly the compiler's own
     // magic-tier shape) StratifiedMagicProgram -> IncrementalProgram. ──
 
-    use crate::data::program::{
-        MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, Unification,
-    };
+    use kyzo_model::program::rule::Unification;
+    use crate::exec::plan::program::{MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom};
 
     fn muggle(name: &str) -> MagicSymbol {
         MagicSymbol::Muggle { inner: sym(name) }
@@ -1497,7 +1499,9 @@ mod tests {
     #[test]
     fn translate_carries_aggregation_through() {
         let mut inline = magic_inline(vec!["X", "Y"], vec![rel_atom("p", vec!["X", "Y"], false)]);
-        let sum = crate::data::aggr::parse_aggr("sum").expect("real aggregation exists");
+        let sum = kyzo_model::program::aggregate::parse_aggr("sum")
+            .unwrap()
+            .expect("real aggregation exists");
         inline.aggr = vec![
             HeadAggrSlot::Plain,
             HeadAggrSlot::Aggregated {
@@ -1515,10 +1519,10 @@ mod tests {
 
     #[test]
     fn translate_refuses_fixed_rules() {
-        use crate::fixed_rule::{EmptyNamedRowsBody, FixedRuleHandle, SimpleFixedRule};
-        let fixed_impl: std::sync::Arc<dyn crate::fixed_rule::FixedRule> =
+        use crate::rules::contract::{EmptyNamedRowsBody, FixedRuleHandle, SimpleFixedRule};
+        let fixed_impl: std::sync::Arc<dyn crate::rules::contract::FixedRule> =
             std::sync::Arc::new(SimpleFixedRule::new(0, EmptyNamedRowsBody));
-        let fixed = crate::data::program::MagicFixedRuleApply {
+        let fixed = crate::exec::plan::program::MagicFixedRuleApply {
             fixed_handle: FixedRuleHandle::new("?", SourceSpan::default()),
             rule_args: vec![],
             options: std::sync::Arc::new(BTreeMap::new()),

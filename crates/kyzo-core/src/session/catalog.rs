@@ -114,9 +114,9 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::store::time::ClaimPolarity;
-use crate::data::program::{InputProgram, InputRelationHandle};
 use crate::data::relation::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
-use crate::fixed_rule::{DEFAULT_FIXED_RULES, FixedRule};
+use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
+use kyzo_model::program::{InputProgram, InputRelationHandle};
 use crate::parse::parse_script;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::store::{ReadTx, WriteTx};

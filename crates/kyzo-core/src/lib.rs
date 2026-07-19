@@ -261,14 +261,7 @@ pub(crate) mod capacity;
 pub(crate) mod data;
 // Target-zone seats landing mid-cut (ideal map: kyzo-model / exec / rules).
 pub(crate) mod exec;
-// Fixed-rule zone: contract + algo. Inline so `contract` is wired without
-// editing `rules/mod.rs` (not on this task's allowlist). `mod rules;` would
-// use `rules/mod.rs` and ignore the inline block — this form loads
-// `rules/algo` and `rules/contract.rs` directly.
-pub(crate) mod rules {
-    pub(crate) mod algo;
-    pub(crate) mod contract;
-}
+pub(crate) mod rules;
 // Projection zone: rebuildable indexes (FTS/HNSW/LSH/sparse/spatial/gazetteer)
 // plus shared contract, residency, and current-segment seats. Host doors:
 // `session/ops.rs` (create/drop), `exec/plan/search.rs`
@@ -281,15 +274,12 @@ pub(crate) mod project;
 // format-document will call the same doors. No module-level
 // `allow(dead_code)` — unused helpers warn honestly until that call site.
 pub(crate) mod format;
-// Fixed-rule production consumer landed (`session/db.rs` →
-// `SessionFixedRule` → `FixedRule::run`, plus `StoredInputSource` via
-// `SessionView`). No module-level `allow(dead_code)` (P112); residual
-// unused symbols warn rather than hide behind a blanket.
-pub(crate) mod fixed_rule;
 // Parse production consumer landed (`session/db.rs` via `parse_script`)
 // for query and system genera. `Script::Imperative` is a typed refusal at
 // execution (`ImperativeNotWired`); its AST is still constructed by the
 // parser and exercised in-file — no module-level `allow(dead_code)` (P112).
+// Mid-cut: `parse/` dir is already gone; leave the decl until a later peel
+// removes remaining `crate::parse` call sites (not required by this cut).
 pub(crate) mod parse;
 // React: standing-query lifecycle + incremental maintenance (relocated
 // from the former query zone).
@@ -362,9 +352,10 @@ pub use project::projection::{
     Generation, ProjectionBuilder, ProjectionKind, Sealed, Stale,
 };
 
-pub use fixed_rule::{
+pub use data::json::NamedRows;
+pub use rules::contract::{
     CancelAuthority, CancelFlag, Cancelled, EmptyNamedRowsBody, FixedRule, FixedRuleInputRelation,
-    FixedRulePayload, NamedRows, SimpleFixedRule, SimpleRuleBody,
+    FixedRulePayload, SimpleFixedRule, SimpleRuleBody,
 };
 pub use session::observe::{CallbackEvent, CallbackOp};
 pub use session::db::{Db, ScriptOptions};

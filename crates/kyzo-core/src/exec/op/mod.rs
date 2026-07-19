@@ -147,7 +147,8 @@ use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
 use kyzo_model::program::expr::{BindingPos, Expr};
-use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
+use kyzo_model::program::rule::{DeltaAxis, ValidityClause};
+use crate::exec::plan::program::MagicSymbol;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
@@ -1004,7 +1005,7 @@ mod tests {
     use smartstring::SmartString;
 
     use super::*;
-    use crate::data::program::InputRelationHandle;
+    use kyzo_model::program::query::InputRelationHandle;
     use kyzo_model::schema::{ColType, NullableColType};
     use kyzo_model::schema::{ColumnDef, StoredRelationMetadata};
     use kyzo_model::value::{DataValue, ValidityTs};

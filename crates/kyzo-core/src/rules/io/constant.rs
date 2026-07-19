@@ -29,13 +29,13 @@ use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
-use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
+use kyzo_model::program::expr::Expr;
+use crate::exec::plan::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::rules::contract::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 pub(crate) struct Constant;
 
@@ -67,7 +67,7 @@ impl ConstantData<'_> {
     fn row_cells(row: &DataValue) -> Result<&[DataValue]> {
         match row {
             DataValue::List(cells) => Ok(cells.as_slice()),
-            _ => Err(crate::fixed_rule::FixedRuleInvariantError::refuse(
+            _ => Err(crate::rules::contract::FixedRuleInvariantError::refuse(
                 "constant_row_list",
             )),
         }
@@ -203,7 +203,7 @@ impl FixedRule for Constant {
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::fixed_rule::tests_support::run_fixed_rule;
+    use crate::rules::contract::tests_support::run_fixed_rule;
 
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the
     /// rows (the harness drives all three in order, as parse/eval do).

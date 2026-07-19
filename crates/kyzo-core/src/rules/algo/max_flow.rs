@@ -12,7 +12,7 @@
 //! (input 0, `[from, to, capacity]`; capacity defaults to `1.0`, and the
 //! existing weighted-graph builder enforces **finite, non-negative**
 //! capacities — a negative capacity is refused through the established typed
-//! [`crate::fixed_rule::BadEdgeWeightError`] path), plus a single-source
+//! [`crate::rules::graph_view::BadEdgeWeightError`] path), plus a single-source
 //! relation (input 1) and a single-sink relation (input 2), each read like
 //! the Dijkstra/Prim start relations: the first row's first column, required
 //! to be a node of the graph.
@@ -58,12 +58,12 @@ use miette::{Diagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{
+use crate::rules::graph_view::DirectedCsrGraph;
+use crate::rules::contract::{
     ek_bfs_parent, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
     FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
@@ -347,7 +347,7 @@ struct SourceIsSinkError(#[label] SourceSpan);
 mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -615,7 +615,7 @@ mod tests {
     /// bound fails. Load-independent: counts BFS pops, not wall-clock.
     #[test]
     fn honors_cancel_pins_inner_poll() {
-        use crate::fixed_rule::tests_support::prepare_fixed_rule;
+        use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
         let edges: Vec<Tuple> = (0..n - 1)

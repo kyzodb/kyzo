@@ -7,22 +7,151 @@
 //! `DataValue` <-> JSON conversions live in `kyzo_model::envelope::json`.
 
 use miette::{
-    GraphicalReportHandler, GraphicalTheme, JSONReportHandler, Report, ThemeCharacters,
-    ThemeStyles,
+    Diagnostic, GraphicalReportHandler, GraphicalTheme, JSONReportHandler, Report,
+    ThemeCharacters, ThemeStyles,
 };
 pub use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::sync::LazyLock;
 use thiserror::Error;
 
-use kyzo_model::value::DataValue;
-use crate::fixed_rule::NamedRows;
+use kyzo_model::value::{DataValue, Tuple};
 
 pub use kyzo_model::envelope::json::{
     JsonData, json_from_serde, json_to_datavalue, serde_from_json,
 };
 
+/// Private seal: any private field blocks struct-literal minting outside
+/// this module, so header/row/next cannot be forged past [`NamedRows::try_new`]
+/// (P082).
+#[derive(Debug, Clone, Default)]
+struct NamedRowsSeal;
+
+/// The rows of a relation, together with its header names.
+///
+/// Sole door: [`Self::try_new`] proves every row's width equals
+/// `headers.len()`. Payload fields are private; the private
+/// [`NamedRowsSeal`] blocks struct-literal minting outside this module
+/// (P082). Read via [`Self::headers`] / [`Self::rows`] / [`Self::next`];
+/// consume via [`Self::into_parts`] / [`Self::into_rows`] /
+/// [`Self::with_next`]. Illegal (misaligned) NamedRows are unconstructible.
+#[derive(Debug, Clone, Default)]
+pub struct NamedRows {
+    headers: Vec<String>,
+    rows: Vec<Tuple>,
+    next: Option<Box<NamedRows>>,
+    _seal: NamedRowsSeal,
+}
+
+/// Header↔row width mismatch at the [`NamedRows`] door (P082).
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "NamedRows arity mismatch: header width {header_arity}, row {row_index} has width {row_arity}"
+)]
+#[diagnostic(code(fixed_rule::named_rows_arity))]
+pub struct NamedRowsArityError {
+    pub header_arity: usize,
+    pub row_index: usize,
+    pub row_arity: usize,
+}
+
 impl NamedRows {
+    /// Sole door: every row's width equals `headers.len()`.
+    pub fn try_new(
+        headers: Vec<String>,
+        rows: Vec<Tuple>,
+    ) -> std::result::Result<Self, NamedRowsArityError> {
+        let header_arity = headers.len();
+        for (row_index, row) in rows.iter().enumerate() {
+            let row_arity = row.len();
+            if row_arity != header_arity {
+                return Err(NamedRowsArityError {
+                    header_arity,
+                    row_index,
+                    row_arity,
+                });
+            }
+        }
+        Ok(Self {
+            headers,
+            rows,
+            next: None,
+            _seal: NamedRowsSeal,
+        })
+    }
+
+    /// One-cell `status: OK` — header/row widths match by construction (P082).
+    pub(crate) fn status_ok() -> Self {
+        Self {
+            headers: vec!["status".to_string()],
+            rows: vec![Tuple::from_vec(vec![DataValue::from("OK")])],
+            next: None,
+            _seal: NamedRowsSeal,
+        }
+    }
+
+    /// `::verify` directive result — three columns by construction (P082).
+    pub(crate) fn verify_status_row(
+        status: impl Into<DataValue>,
+        summary: impl Into<DataValue>,
+        detail: impl Into<DataValue>,
+    ) -> Self {
+        Self {
+            headers: vec![
+                "status".to_string(),
+                "summary".to_string(),
+                "detail".to_string(),
+            ],
+            rows: vec![Tuple::from_vec(vec![
+                status.into(),
+                summary.into(),
+                detail.into(),
+            ])],
+            next: None,
+            _seal: NamedRowsSeal,
+        }
+    }
+
+    /// Alias of [`Self::try_new`] — typed refuse, never panic (P082).
+    pub fn new(
+        headers: Vec<String>,
+        rows: Vec<Tuple>,
+    ) -> std::result::Result<Self, NamedRowsArityError> {
+        Self::try_new(headers, rows)
+    }
+
+    /// Header names.
+    pub fn headers(&self) -> &[String] {
+        &self.headers
+    }
+
+    /// Result rows.
+    pub fn rows(&self) -> &[Tuple] {
+        &self.rows
+    }
+
+    /// Follow-on page, when present.
+    pub fn next(&self) -> Option<&NamedRows> {
+        self.next.as_deref()
+    }
+
+    /// Consume into headers, rows, and optional follow-on page.
+    pub fn into_parts(self) -> (Vec<String>, Vec<Tuple>, Option<Box<NamedRows>>) {
+        (self.headers, self.rows, self.next)
+    }
+
+    /// Consume into the row vector only.
+    pub fn into_rows(self) -> Vec<Tuple> {
+        self.rows
+    }
+
+    /// Attach a follow-on page (pagination chain). Does not re-prove arity —
+    /// the page was already admitted through [`Self::try_new`].
+    pub fn with_next(mut self, next: Option<Box<NamedRows>>) -> Self {
+        self.next = next;
+        self
+    }
+
     /// Render as the envelope every binding's success path returns:
     /// `{"headers": [...], "rows": [[...], ...], "next": null | <nested
     /// envelope>}`.
@@ -68,6 +197,15 @@ impl NamedRows {
             })
             .collect::<miette::Result<Vec<_>>>()?;
         Ok(NamedRows::try_new(headers, rows)?)
+    }
+}
+
+impl IntoIterator for NamedRows {
+    type Item = Tuple;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.into_iter()
     }
 }
 
@@ -129,3 +267,27 @@ static TEXT_ERR_HANDLER: LazyLock<GraphicalReportHandler> = LazyLock::new(|| {
     })
 });
 static JSON_ERR_HANDLER: LazyLock<JSONReportHandler> = LazyLock::new(JSONReportHandler::new);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `try_new` proves header↔row arity (P082).
+    #[test]
+    fn named_rows_try_new_proves_arity() {
+        assert!(
+            NamedRows::try_new(
+                vec!["a".into(), "b".into()],
+                vec![Tuple::from_vec(vec![DataValue::from(1)])],
+            )
+            .is_err()
+        );
+        let ok = NamedRows::try_new(
+            vec!["a".into()],
+            vec![Tuple::from_vec(vec![DataValue::from(1)])],
+        )
+        .unwrap();
+        assert_eq!(ok.headers().len(), 1);
+        assert_eq!(ok.rows().len(), 1);
+    }
+}

@@ -26,12 +26,12 @@ use itertools::Itertools;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{
+use crate::rules::graph_view::DirectedCsrGraph;
+use crate::rules::contract::{
     CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 
@@ -287,10 +287,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use kyzo_model::value::{DataValue, Tuple};
-    use crate::fixed_rule::CancelFlag;
-    use crate::fixed_rule::algos::louvain::{CommunityDetectionLouvain, louvain};
-    use crate::fixed_rule::graph::DirectedCsrGraph;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::CancelFlag;
+    use super::{CommunityDetectionLouvain, louvain};
+    use crate::rules::graph_view::DirectedCsrGraph;
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     #[test]
     fn sample() {

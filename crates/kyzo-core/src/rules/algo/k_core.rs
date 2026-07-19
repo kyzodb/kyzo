@@ -39,12 +39,12 @@ use std::collections::BTreeMap;
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
-use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{
+use crate::rules::graph_view::DirectedCsrGraph;
+use crate::rules::contract::{
     CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 
@@ -204,7 +204,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
+    use crate::rules::contract::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
@@ -219,7 +219,7 @@ mod tests {
         nodes: &BTreeSet<String>,
         adj: &BTreeMap<String, BTreeSet<String>>,
     ) -> Result<BTreeMap<String, u32>> {
-        use crate::fixed_rule::GraphAlgorithmInvariantError;
+        use crate::rules::contract::GraphAlgorithmInvariantError;
 
         let mut deg: BTreeMap<String, i64> = nodes
             .iter()
@@ -406,7 +406,7 @@ mod tests {
     /// not wall-clock.
     #[test]
     fn honors_cancel_pins_inner_poll() {
-        use crate::fixed_rule::tests_support::prepare_fixed_rule;
+        use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
         let edges: Vec<_> = (0..n - 1)

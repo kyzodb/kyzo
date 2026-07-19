@@ -29,13 +29,13 @@ use miette::{Diagnostic, IntoDiagnostic, Result, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use kyzo_model::program::expr::Expr;
 use crate::data::json::{JsonValue, json_to_datavalue};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
-use crate::fixed_rule::{
+use crate::rules::contract::{
     CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,
     FixedRulePayload,
 };
@@ -218,7 +218,7 @@ impl FixedRule for JsonReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixed_rule::tests_support::run_fixed_rule;
+    use crate::rules::contract::tests_support::run_fixed_rule;
 
     fn options(content: &str) -> BTreeMap<SmartString<LazyCompact>, Expr> {
         BTreeMap::from([

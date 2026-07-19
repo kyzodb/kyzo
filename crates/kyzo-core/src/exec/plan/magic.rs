@@ -140,14 +140,16 @@ use std::mem;
 use miette::{Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
-use crate::data::program::{
-    Adornment, AdornmentMark, FixedRuleApply, FixedRuleArg, HeadAggrSlot, MagicAtom,
-    MagicFixedRuleApply, MagicFixedRuleRuleArg, MagicInlineRule, MagicProgram,
-    MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, NormalFormAtom,
-    NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum, StratifiedMagicProgram,
-    StratifiedNormalFormProgram, ValidityClause,
+use crate::exec::plan::program::{
+    Adornment, AdornmentMark, MagicAtom, MagicFixedRuleApply, MagicFixedRuleRuleArg,
+    MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed,
+    MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum,
+    StratifiedMagicProgram, StratifiedNormalFormProgram, bind_fixed_impl,
 };
-use crate::data::relation::StoredRelationMetadata;
+use kyzo_model::program::rule::{
+    FixedRuleApply, FixedRuleArg, HeadAggrSlot, ValidityClause,
+};
+use kyzo_model::schema::StoredRelationMetadata;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::{Symbol, SymbolKind};
 
@@ -577,10 +579,16 @@ fn adorn_fixed_rule_apply(
             }
         });
     }
+    let fixed_impl = bind_fixed_impl(fixed.fixed_handle.name.as_str()).ok_or_else(|| {
+        crate::rules::contract::FixedRuleNotFoundError(
+            fixed.fixed_handle.name.to_string(),
+            fixed.span,
+        )
+    })?;
     Ok(MagicFixedRuleApply {
         span: fixed.span,
         fixed_handle: fixed.fixed_handle.clone(),
-        fixed_impl: fixed.fixed_impl.clone(),
+        fixed_impl,
         rule_args,
         options: fixed.options.clone(),
         arity: fixed.arity,
@@ -1141,14 +1149,11 @@ mod tests {
     use smartstring::{LazyCompact, SmartString};
 
     use super::*;
-    use crate::data::aggr::parse_aggr;
-    use crate::data::expr::{BindingPos, Expr};
-    use crate::data::program::{
-        FixedRule, FixedRuleHandle, NormalFormRelationApplyAtom, NormalFormRuleApplyAtom, Trivia,
-        Unification,
-    };
-    use crate::data::relation::ColumnDef;
-    use crate::data::relation::{ColType, NullableColType};
+    use kyzo_model::program::aggregate::parse_aggr;
+    use kyzo_model::program::expr::{BindingPos, Expr};
+    use kyzo_model::program::rule::{FixedRuleHandle, Trivia, Unification};
+    use crate::exec::plan::program::{NormalFormRelationApplyAtom, NormalFormRuleApplyAtom};
+    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::AsOf;
     use kyzo_model::value::DataValue;
 
@@ -1530,7 +1535,7 @@ mod tests {
     /// value, which the law forbids.
     #[test]
     fn aggregation_rules_are_exempt() {
-        let count = parse_aggr("count").expect("count exists");
+        let count = parse_aggr("count").unwrap().expect("count exists");
         let mut agg_rule = nf_rule(&["a", "n"], vec![stored_app("e", &["a", "n"])]);
         agg_rule.aggr[1] = HeadAggrSlot::Aggregated {
             aggr: count,
@@ -1749,32 +1754,13 @@ mod tests {
     /// digit-named fillers for unbound columns; unknown fields are refused.
     #[test]
     fn named_stored_fixed_rule_args_resolve_positionally() {
-        struct NoRule;
-        impl FixedRule for NoRule {
-            fn arity(
-                &self,
-                _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
-                _rule_head: &[Symbol],
-                _span: SourceSpan,
-            ) -> Result<usize> {
-                Ok(1)
-            }
-            fn run(
-                &self,
-                _payload: crate::fixed_rule::FixedRulePayload<'_>,
-                _out: &mut crate::fixed_rule::FixedRuleOutput,
-                _cancel: crate::fixed_rule::CancelFlag,
-            ) -> Result<()> {
-                unreachable!("test stub: never run")
-            }
-        }
         let schema = FixedSchema(StoredRelationMetadata {
             keys: vec![column("a", ColType::Int), column("b", ColType::Int)],
             non_keys: vec![column("c", ColType::Int)],
         });
         let apply = |bindings: &[(&str, &str)]| FixedRuleApply {
             fixed_handle: FixedRuleHandle {
-                name: sym("pagerank"),
+                name: sym("PageRank"),
             },
             rule_args: vec![FixedRuleArg::NamedStored {
                 name: sym("edges"),
@@ -1789,7 +1775,6 @@ mod tests {
             head: vec![],
             arity: 1,
             span: SourceSpan(0, 0),
-            fixed_impl: Arc::new(NoRule),
             trivia: Trivia::default(),
         };
 
@@ -1818,28 +1803,9 @@ mod tests {
     fn time_travel_requires_a_validity_keyed_relation() {
         use kyzo_model::value::ValidityTs;
 
-        struct NoRule;
-        impl FixedRule for NoRule {
-            fn arity(
-                &self,
-                _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
-                _rule_head: &[Symbol],
-                _span: SourceSpan,
-            ) -> Result<usize> {
-                Ok(1)
-            }
-            fn run(
-                &self,
-                _payload: crate::fixed_rule::FixedRulePayload<'_>,
-                _out: &mut crate::fixed_rule::FixedRuleOutput,
-                _cancel: crate::fixed_rule::CancelFlag,
-            ) -> Result<()> {
-                unreachable!("test stub: never run")
-            }
-        }
         let apply = FixedRuleApply {
             fixed_handle: FixedRuleHandle {
-                name: sym("pagerank"),
+                name: sym("PageRank"),
             },
             rule_args: vec![FixedRuleArg::Stored {
                 name: sym("edges"),
@@ -1851,7 +1817,6 @@ mod tests {
             head: vec![],
             arity: 1,
             span: SourceSpan(0, 0),
-            fixed_impl: Arc::new(NoRule),
             trivia: Trivia::default(),
         };
 
