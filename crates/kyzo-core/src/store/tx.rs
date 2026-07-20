@@ -284,6 +284,10 @@ pub trait WriteTx: ReadTx {
     /// key. The key joins the conflict surface: a concurrent committed write
     /// to it aborts this transaction's commit.
     ///
+    /// Seat 8: `key`/`val` are ordered storage currency only — this door
+    /// never constructs or embeds a [`crate::session::admit::KyzoRecord`].
+    /// Record meaning is minted solely at admission (`admit_record`).
+    ///
     /// Seat 34: committed bitemporal **facts** are not rewritten in place.
     /// A correction mints a new `(valid, sys)` key and leaves prior keys
     /// intact — see [`crate::session::admit::supersession`]. Raw `put` on

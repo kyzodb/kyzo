@@ -10,6 +10,9 @@
 //! Ordered substrate: contract, transactions, fjall adapter, backup, walks,
 //! and the 07 storage-Spec seats (identity, authority, commit door, WAL, …).
 //!
+//! Seat 8 ([`forge_wall`]): Store never mints [`crate::session::admit::KyzoRecord`]
+//! from bytes — SST/WAL/object/dump doors are currency only.
+//!
 //! No module-level `allow(dead_code)`: seats with live host/session callers
 //! stay used; unwired items warn honestly. Do not silence with a LOUD lie.
 
@@ -29,6 +32,8 @@ pub(crate) mod epoch;
 /// Failure lattice + closed StoreRefuse ledger + debt economy (07 seat).
 pub(crate) mod failure;
 pub(crate) mod fjall;
+/// Seat 8 — Store cannot mint KyzoRecord from bytes (forge wall).
+pub(crate) mod forge_wall;
 /// ForkGrant / RecoveryGrant + pure materialize (07 seat).
 pub(crate) mod grants;
 /// OperationKey + OperationOutcome + request_digest memo (07 seat).
@@ -107,6 +112,8 @@ pub use epoch::{
 pub use failure::{
     DebtLedger, FailureLattice, KeyspaceId, OperatorHealthSurface, QuarantineRange, StoreRefuse,
 };
+#[allow(unused_imports)] // seat 8 forge wall witness
+pub use forge_wall::StoreCurrencyOnly;
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use grants::{
     AncestorReadGrant, ForkGrant, ForkPointRoot, Grant, GrantId, IdentitySeed,

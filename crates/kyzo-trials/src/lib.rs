@@ -31,3 +31,7 @@ pub use conformance::{
     law_phantom_protection, law_read_your_own_writes_and_snapshot_isolation,
     law_send_sync_bounds_are_compiler_checked, run_full_battery,
 };
+
+/// Store write door — re-exported so seat-8 forge-wall trybuild can name
+/// [`WriteTx`] while [`KyzoRecord`] stays Unconstructible at this crate door.
+pub use kyzo::WriteTx;

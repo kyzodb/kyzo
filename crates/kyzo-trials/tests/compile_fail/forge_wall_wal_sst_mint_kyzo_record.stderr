@@ -1,0 +1,11 @@
+error[E0433]: cannot find `KyzoRecord` in `kyzo_trials`
+  --> tests/compile_fail/forge_wall_wal_sst_mint_kyzo_record.rs:12:26
+   |
+12 |     let _ = kyzo_trials::KyzoRecord::from_wal_bytes(b"checksum-valid");
+   |                          ^^^^^^^^^^ could not find `KyzoRecord` in `kyzo_trials`
+
+error[E0433]: cannot find `KyzoRecord` in `kyzo_trials`
+  --> tests/compile_fail/forge_wall_wal_sst_mint_kyzo_record.rs:13:26
+   |
+13 |     let _ = kyzo_trials::KyzoRecord::from_sst_row(b"relocated-sst");
+   |                          ^^^^^^^^^^ could not find `KyzoRecord` in `kyzo_trials`

@@ -1,0 +1,5 @@
+error[E0433]: cannot find `KyzoRecord` in `kyzo_trials`
+  --> tests/compile_fail/forge_wall_encode_mint_kyzo_record.rs:16:26
+   |
+16 |     let _ = kyzo_trials::KyzoRecord::from_store_bytes(val);
+   |                          ^^^^^^^^^^ could not find `KyzoRecord` in `kyzo_trials`

@@ -2267,6 +2267,7 @@ dependencies = [
  "rayon",
  "tempfile",
  "thiserror 2.0.18",
+ "trybuild",
 ]
 
 [[package]]
