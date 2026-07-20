@@ -100,7 +100,7 @@
 use std::cmp::Reverse;
 
 use miette::{Diagnostic, Result, bail, miette};
-use ordered_float::OrderedFloat;
+use crate::project::contract::RankScore;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
@@ -135,7 +135,6 @@ use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
 pub(crate) struct Fts;
 
 impl ProjectionKind for Fts {}
@@ -242,14 +241,10 @@ fn extract_text(extractor: &Expr, tuple: &[DataValue]) -> Result<Option<String>>
     }
 }
 
-/// The FTS posting key under construction: `[word, src_key…]` with the word
-/// slot seeded `Null` for the caller to overwrite per term (every caller
-/// fills it before the key is used).
-fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    let mut key = Tuple::with_capacity(1 + base_key_len);
-    key.push(DataValue::Null);
-    key.extend(tuple[..base_key_len].iter().cloned());
-    key
+/// The base-key suffix of an FTS posting: `src_key…` copied from the base
+/// row. Callers prepend the term themselves — no placeholder slot.
+fn posting_src_tail(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
+    Tuple::from_iter(tuple[..base_key_len].iter().cloned())
 }
 
 /// Index one base-relation row: evaluate the extractor, tokenize the text,
@@ -299,12 +294,11 @@ pub(crate) fn fts_put<T: WriteTx>(
         count += 1;
     }
 
-    let scaffold = posting_key_scaffold(base_key_len, tuple);
-    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
+    let tail = posting_src_tail(base_key_len, tuple);
     for (term, (from, to, position)) in collector {
         let mut key = Tuple::with_capacity(1 + base_key_len);
         key.push(DataValue::Str(term.to_string()));
-        key.extend(tail.iter().cloned());
+        key.extend(tail.as_slice().iter().cloned());
         let val = vec![
             DataValue::List(from),
             DataValue::List(to),
@@ -349,12 +343,11 @@ pub(crate) fn fts_del<T: WriteTx>(
     while let Some(token) = token_stream.next() {
         terms.insert(SmartString::<LazyCompact>::from(&token.text));
     }
-    let scaffold = posting_key_scaffold(base_key_len, tuple);
-    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
+    let tail = posting_src_tail(base_key_len, tuple);
     for term in terms {
         let mut key = Tuple::with_capacity(1 + base_key_len);
         key.push(DataValue::Str(term.to_string()));
-        key.extend(tail.iter().cloned());
+        key.extend(tail.as_slice().iter().cloned());
         let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
@@ -680,9 +673,10 @@ impl RelationIndexSearch for Fts {
 impl Fts {
     /// Relation-backed full-text search — UFCS door into
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
-    /// function `fts_search`.
+    /// function `fts_search`. Live host dispatch uses the trait method
+    /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[allow(dead_code)] // UFCS alias of live RelationIndexSearch door
     pub(crate) fn search_index(
         cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,
@@ -732,8 +726,8 @@ fn fts_search_body(
     // Deterministic order: score descending, then the memcmp order of the
     // document key breaks ties (the original left ties to hash-map order).
     result.sort_by(|(ka, sa), (kb, sb)| {
-        Reverse(OrderedFloat(*sa))
-            .cmp(&Reverse(OrderedFloat(*sb)))
+        Reverse(RankScore::of(*sa))
+            .cmp(&Reverse(RankScore::of(*sb)))
             .then_with(|| ka.cmp(kb))
     });
     if filter_code.is_none() {

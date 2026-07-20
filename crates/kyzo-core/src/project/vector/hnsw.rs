@@ -211,7 +211,7 @@ pub(crate) mod probe {
 }
 
 use miette::{Diagnostic, Result, bail, miette};
-use ordered_float::OrderedFloat;
+use crate::project::contract::RankScore;
 use priority_queue::PriorityQueue;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Deserializer};
@@ -247,7 +247,6 @@ use kyzo_model::value::{
 /// Search is owned by [`RelationIndexSearch::search_relation`] (P103);
 /// [`Hnsw::knn`] is the UFCS alias into that door.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct Hnsw;
 
 impl ProjectionKind for Hnsw {}
@@ -313,6 +312,11 @@ pub(crate) enum HnswManifestRefused {
     #[error("HNSW manifest refused: HNSW m_neighbours overflow: {m} * 2 exceeds usize")]
     #[diagnostic(code(hnsw::manifest_refused))]
     MNeighboursOverflow { m: usize },
+    #[error(
+        "HNSW manifest refused: wire m_max/m_max0/level_multiplier disagree with m_neighbours derivation"
+    )]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    DerivedFieldsMismatch,
 }
 
 /// The persisted description of one HNSW index. Serialized (msgpack, struct
@@ -379,8 +383,9 @@ fn splitmix64(state: &mut u64) -> u64 {
 }
 
 /// Wire DTO for deserialize-then-admit. Derived fields (`m_max`, `m_max0`,
-/// `level_multiplier`) are ignored; [`HnswIndexManifest::admit`] recomputes
-/// them from the proven `m_neighbours`.
+/// `level_multiplier`) are checked against [`HnswIndexManifest::admit`]'s
+/// recomputation from `m_neighbours` — mismatch is a typed refuse, never
+/// silent ignore.
 #[derive(serde_derive::Deserialize)]
 struct HnswIndexManifestDe {
     base_relation: SmartString<LazyCompact>,
@@ -391,11 +396,8 @@ struct HnswIndexManifestDe {
     distance: HnswDistance,
     ef_construction: usize,
     m_neighbours: usize,
-    #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
     m_max: usize,
-    #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
     m_max0: usize,
-    #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
     level_multiplier: f64,
     index_filter: Option<Expr>,
     extend_candidates: bool,
@@ -405,7 +407,7 @@ struct HnswIndexManifestDe {
 impl<'de> Deserialize<'de> for HnswIndexManifest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let de = HnswIndexManifestDe::deserialize(deserializer)?;
-        Self::admit(
+        let admitted = Self::admit(
             de.base_relation,
             de.index_name,
             de.vec_dim,
@@ -418,7 +420,16 @@ impl<'de> Deserialize<'de> for HnswIndexManifest {
             de.extend_candidates,
             de.keep_pruned_connections,
         )
-        .map_err(serde::de::Error::custom)
+        .map_err(serde::de::Error::custom)?;
+        if de.m_max != admitted.m_max
+            || de.m_max0 != admitted.m_max0
+            || de.level_multiplier != admitted.level_multiplier
+        {
+            return Err(serde::de::Error::custom(
+                HnswManifestRefused::DerivedFieldsMismatch,
+            ));
+        }
+        Ok(admitted)
     }
 }
 
@@ -1474,20 +1485,20 @@ fn neighbours(
 /// hasher state.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Beam {
-    dist: OrderedFloat<f64>,
+    dist: RankScore,
     id: VectorId,
 }
 
 impl Beam {
     fn of(dist: f64, id: &VectorId) -> Beam {
         Beam {
-            dist: OrderedFloat(dist),
+            dist: RankScore::of(dist),
             id: id.clone(),
         }
     }
 
     fn dist(&self) -> f64 {
-        self.dist.0
+        self.dist.get()
     }
 }
 
@@ -2323,9 +2334,10 @@ impl RelationIndexSearch for Hnsw {
 impl Hnsw {
     /// Relation-backed k-NN — UFCS door into
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
-    /// function `hnsw_knn`.
+    /// function `hnsw_knn`. Live host dispatch uses the trait method
+    /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[allow(dead_code)] // UFCS alias of live RelationIndexSearch door
     pub(crate) fn knn(
         tx: &impl ReadTx,
         q: &Vector,
@@ -2404,8 +2416,8 @@ fn hnsw_knn_body(
         ranked.push((id, prio.dist()));
     }
     ranked.sort_by(|(a, da), (b, db)| {
-        OrderedFloat(*da)
-            .cmp(&OrderedFloat(*db))
+        RankScore::of(*da)
+            .cmp(&RankScore::of(*db))
             .then_with(|| a.tuple_key.cmp(&b.tuple_key))
             .then_with(|| a.field.cmp(&b.field))
             .then_with(|| a.sub.cmp(&b.sub))
@@ -2553,7 +2565,7 @@ enum SearchPlan {
 /// (the same tie-break the operator tier imposes on the unfiltered
 /// path). `key` is the memcmp encoding of the entry's layer-0 node key.
 struct Ranked {
-    dist: OrderedFloat<f64>,
+    dist: RankScore,
     key: HnswHitKey,
     tuple: Tuple,
 }
@@ -2839,7 +2851,7 @@ fn scan_filtered(
                 &mut heap,
                 params.k,
                 Ranked {
-                    dist: OrderedFloat(d),
+                    dist: RankScore::of(d),
                     key,
                     tuple,
                 },
@@ -2883,7 +2895,7 @@ fn graph_search_layer0(
                     &mut results,
                     ef2,
                     Ranked {
-                        dist: OrderedFloat(d),
+                        dist: RankScore::of(d),
                         key,
                         tuple,
                     },
@@ -2902,7 +2914,7 @@ fn graph_search_layer0(
         // the beam is under-full so filtered search keeps exploring).
         if results.len() >= ef2
             && let Some(worst) = results.peek()
-            && cand_d > worst.dist.0
+            && cand_d > worst.dist.get()
         {
             break;
         }
@@ -2915,7 +2927,8 @@ fn graph_search_layer0(
             // Routing: expand every neighbour that could still improve the beam
             // (or unconditionally while the beam is under-full) — full-graph
             // routing, so connectivity is the unfiltered graph's.
-            let promising = results.len() < ef2 || results.peek().is_none_or(|w| nd < w.dist.0);
+            let promising =
+                results.len() < ef2 || results.peek().is_none_or(|w| nd < w.dist.get());
             if promising {
                 candidates.push(neighbour.clone(), Reverse(Beam::of(nd, &neighbour)));
             }
@@ -2926,7 +2939,7 @@ fn graph_search_layer0(
                     &mut results,
                     ef2,
                     Ranked {
-                        dist: OrderedFloat(nd),
+                        dist: RankScore::of(nd),
                         key,
                         tuple,
                     },

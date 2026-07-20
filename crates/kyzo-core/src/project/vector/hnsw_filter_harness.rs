@@ -18,7 +18,7 @@
 //! Wiring: declared as `#[cfg(test)] mod hnsw_filter_harness;` at the foot of
 //! `runtime/hnsw.rs`, a sibling of `mod tests`. `use super::*` inherits the
 //! hnsw module's own imports (the same way `mod tests` gets `ColType`,
-//! `OrderedFloat`, …); everything else is imported explicitly here so the
+//! `RankScore`, …); everything else is imported explicitly here so the
 //! module stands on its own.
 //!
 //! ADVERSARIAL INDEPENDENCE: the oracle re-implements the filter predicate in
@@ -339,7 +339,7 @@ fn brute_force_filtered_knn(
     manifest: &HnswIndexManifest,
 ) -> Vec<i64> {
     let qv = IndexVec::admit(q, manifest).expect("query admits");
-    let mut scored: Vec<(OrderedFloat<f64>, i64)> = rows
+    let mut scored: Vec<(RankScore, i64)> = rows
         .iter()
         .filter(|r| filter.passes(r.as_slice()))
         .map(|r| {
@@ -349,7 +349,7 @@ fn brute_force_filtered_knn(
                 data_value_any!() => panic!("row vector"),
             };
             let vv = IndexVec::admit(&v, manifest).expect("row admits");
-            (OrderedFloat(qv.dist(&vv, manifest.distance)), key)
+            (RankScore::of(qv.dist(&vv, manifest.distance)), key)
         })
         .collect();
     scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));

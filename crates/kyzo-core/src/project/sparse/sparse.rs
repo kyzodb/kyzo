@@ -106,7 +106,7 @@
 use std::cmp::Reverse;
 
 use miette::{Diagnostic, Result, bail, miette};
-use ordered_float::OrderedFloat;
+use crate::project::contract::RankScore;
 use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
@@ -136,7 +136,6 @@ use kyzo_model::value::{DataValue, Tuple};
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
 pub(crate) struct Sparse;
 
 impl ProjectionKind for Sparse {}
@@ -237,7 +236,7 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
 /// relation's key columns). Non-key: `weight` (a `Float`). The dimension is the
 /// leading key column so a query dimension's posting list is a single prefix
 /// scan.
-#[allow(dead_code)] // mid-wiring / test-only surface
+#[allow(dead_code)] // [OPEN] session IndexKind::Sparse host mutation door
 pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("dim"),
@@ -263,15 +262,10 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
 // Index maintenance.
 // ---------------------------------------------------------------------------
 
-/// The posting key under construction: `[dim, src_key…]` with the dimension
-/// slot left as `Bot` for the caller to fill per posting.
-#[allow(dead_code)] // mid-wiring / test-only surface
-fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    // Placeholder slot: every caller overwrites key[0] before use.
-    let mut key = Tuple::with_capacity(1 + base_key_len);
-    key.push(DataValue::Null);
-    key.extend(tuple[..base_key_len].iter().cloned());
-    key
+/// The base-key suffix of a sparse posting: `src_key…` copied from the base
+/// row. Callers prepend the dimension themselves — no placeholder slot.
+fn posting_src_tail(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
+    Tuple::from_iter(tuple[..base_key_len].iter().cloned())
 }
 
 /// Index one base-relation row's sparse vector: write one posting per
@@ -286,7 +280,10 @@ fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
 /// postings via [`sparse_del`] — a dimension that vanished from the new vector
 /// must be deleted, and the del-before-put discipline owns that (exactly as the
 /// FTS engine's re-put path does).
-#[allow(dead_code)] // mid-wiring / test-only surface
+///
+/// Host mutation door: session `IndexKind::Sparse` is [OPEN] — this algorithm
+/// is complete; the catalog/ops arm is the unbuilt seat.
+#[allow(dead_code)] // [OPEN] session IndexKind::Sparse host mutation door
 pub(crate) fn sparse_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
@@ -303,12 +300,11 @@ pub(crate) fn sparse_put<T: WriteTx>(
         ));
     }
     let vector = admit_sparse(vector)?;
-    let scaffold = posting_key_scaffold(base_key_len, tuple);
-    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
+    let tail = posting_src_tail(base_key_len, tuple);
     for (dim, weight) in vector {
         let mut key = Tuple::with_capacity(1 + base_key_len);
         key.push(DataValue::from(dim as i64));
-        key.extend(tail.iter().cloned());
+        key.extend(tail.as_slice().iter().cloned());
         let val = [DataValue::from(weight as f64)];
         let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
@@ -324,7 +320,10 @@ pub(crate) fn sparse_put<T: WriteTx>(
 /// relation (and before re-putting a changed row), in the same transaction. The
 /// `vector` must be the same one the row was indexed with, so the set of
 /// dimensions matches what [`sparse_put`] wrote.
-#[allow(dead_code)] // mid-wiring / test-only surface
+///
+/// Host mutation door: session `IndexKind::Sparse` is [OPEN] — this algorithm
+/// is complete; the catalog/ops arm is the unbuilt seat.
+#[allow(dead_code)] // [OPEN] session IndexKind::Sparse host mutation door
 pub(crate) fn sparse_del<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
@@ -341,12 +340,11 @@ pub(crate) fn sparse_del<T: WriteTx>(
         ));
     }
     let vector = admit_sparse(vector)?;
-    let scaffold = posting_key_scaffold(base_key_len, tuple);
-    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
+    let tail = posting_src_tail(base_key_len, tuple);
     for (dim, _weight) in vector {
         let mut key = Tuple::with_capacity(1 + base_key_len);
         key.push(DataValue::from(dim as i64));
-        key.extend(tail.iter().cloned());
+        key.extend(tail.as_slice().iter().cloned());
         let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
@@ -473,8 +471,9 @@ impl RelationIndexSearch for Sparse {
 impl Sparse {
     /// Relation-backed sparse search — UFCS door into
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
-    /// function `sparse_search`.
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    /// function `sparse_search`. Session `IndexKind::Sparse` is [OPEN]; the
+    /// trait door and this UFCS alias are complete.
+    #[allow(dead_code)] // UFCS alias; [OPEN] session IndexKind::Sparse
     pub(crate) fn search_index(
         tx: &impl ReadTx,
         query: &[(u32, f32)],
@@ -535,8 +534,8 @@ fn sparse_search_body(
     // Deterministic order: score descending, then the memcmp order of the
     // document key breaks ties (DataValue order equals the on-disk key order).
     result.sort_by(|(ka, sa), (kb, sb)| {
-        Reverse(OrderedFloat(*sa))
-            .cmp(&Reverse(OrderedFloat(*sb)))
+        Reverse(RankScore::of(f64::from(*sa)))
+            .cmp(&Reverse(RankScore::of(f64::from(*sb))))
             .then_with(|| ka.cmp(kb))
     });
     if filter_code.is_none() {

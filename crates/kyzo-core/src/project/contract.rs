@@ -17,14 +17,60 @@
 //! disagreement rebuild or typed refuse, never silent serve. The help text
 //! on [`IndexRowCorrupt`] — "the index can be dropped and re-created from
 //! its base relation" — IS that law's read-boundary half.
+//!
+//! Candidate ranking order authority is [`RankScore`] — Num's one-law float
+//! order — never a foreign `OrderedFloat` crate (decisions.md §14: score
+//! types select membership; they are not Tag order).
 
+use std::cmp::Ordering;
 use std::fmt;
 
 use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::project::dedup::lsh::LshPermutationDecodeRefused;
-use kyzo_model::value::{DataValue, DecodeError, SearchHits, Tuple};
+use kyzo_model::value::{DataValue, DecodeError, Num, SearchHits, Tuple};
+
+/// Score or distance used for projection candidate ranking.
+///
+/// Sort authority is [`Num`]'s one-law float order (exact real order; one
+/// canonical NaN greatest; −0.0 ≡ +0.0). Never `ordered_float::OrderedFloat`
+/// — that is a foreign order authority competing with the one law.
+/// Decisions.md §14: scores are ResultValue-plane ranking keys for
+/// Candidates membership, not TagOrdered storage keys.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RankScore(f64);
+
+impl RankScore {
+    /// Wrap a raw score/distance for total ordered ranking.
+    #[inline]
+    pub(crate) fn of(v: f64) -> Self {
+        Self(v)
+    }
+
+    /// The raw f64 for arithmetic / emission (order goes through [`Ord`]).
+    #[inline]
+    pub(crate) fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for RankScore {
+    fn eq(&self, other: &Self) -> bool {
+        Num::float(self.0) == Num::float(other.0)
+    }
+}
+impl Eq for RankScore {}
+impl PartialOrd for RankScore {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RankScore {
+    fn cmp(&self, other: &Self) -> Ordering {
+        Num::float(self.0).cmp(&Num::float(other.0))
+    }
+}
 
 /// A stored index row (or a base row an index points at) failed to decode as
 /// what the index format says it must be. Corruption is an error, never a
@@ -69,7 +115,7 @@ pub(crate) enum IndexCorruptReason {
     FtsPositionsNotList,
     FtsPositionNotInt,
 
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[allow(dead_code)] // [OPEN] rules::gazetteer query host
     GazetteerSurfacesNotList,
     GazetteerSurfaceNotString,
 

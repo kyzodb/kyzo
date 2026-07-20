@@ -106,7 +106,7 @@
 use std::collections::BinaryHeap;
 
 use miette::{Diagnostic, Result, bail, miette};
-use ordered_float::OrderedFloat;
+use crate::project::contract::RankScore;
 use rustc_hash::FxHashSet;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
@@ -133,7 +133,6 @@ use kyzo_model::value::{DataValue, ScanBound, Tuple};
 /// [`RelationIndexSearch::search_relation`] (P103); range/knn are UFCS
 /// aliases into that door.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct Spatial;
 
 impl ProjectionKind for Spatial {}
@@ -946,7 +945,7 @@ fn inner_radius(p: &GeoPoint, ring: &RingBox) -> f64 {
 /// `(distance, src_key)` when the heap overflows `k`.
 #[derive(PartialEq, Eq)]
 struct Candidate {
-    dist: OrderedFloat<f64>,
+    dist: RankScore,
     src_key: Tuple,
 }
 
@@ -994,7 +993,7 @@ fn spatial_knn_body(
             }
             let dist = angular_distance(query.lat(), query.lon(), posting.lat, posting.lon);
             best.push(Candidate {
-                dist: OrderedFloat(dist),
+                dist: RankScore::of(dist),
                 src_key: posting.src_key,
             });
             if best.len() > params.k {
@@ -1009,7 +1008,7 @@ fn spatial_knn_body(
             break;
         }
         if best.len() == params.k {
-            let kth = best.peek().map(|c| c.dist.0).unwrap_or(f64::INFINITY);
+            let kth = best.peek().map(|c| c.dist.get()).unwrap_or(f64::INFINITY);
             if kth <= inner_radius(query, &ring) {
                 break;
             }
@@ -1025,7 +1024,7 @@ fn spatial_knn_body(
         .map(|c| {
             let mut row = fetch_base(tx, base, idx, c.src_key.as_slice())?;
             if matches!(params.bind_distance, SpatialBindDistance::Append) {
-                row.push(DataValue::from(c.dist.0));
+                row.push(DataValue::from(c.dist.get()));
             }
             Ok(row)
         })

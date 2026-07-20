@@ -143,7 +143,6 @@ use kyzo_model::value::{DataValue, Tuple, append_canonical};
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
 pub(crate) struct Lsh;
 
 impl ProjectionKind for Lsh {}
@@ -835,9 +834,10 @@ impl RelationIndexSearch for Lsh {
 impl Lsh {
     /// Relation-backed LSH candidate search — UFCS door into
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
-    /// function `lsh_search`.
+    /// function `lsh_search`. Live host dispatch uses the trait method
+    /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[allow(dead_code)] // UFCS alias of live RelationIndexSearch door
     pub(crate) fn search_index(
         cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,

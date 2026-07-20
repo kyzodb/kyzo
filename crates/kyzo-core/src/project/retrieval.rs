@@ -89,6 +89,7 @@ mod tests {
     use crate::store::authority::WriteAuthority;
     use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
+    use crate::store::replica::ScopeManifestDigest;
     use crate::store::sweep::CommitOrdinal;
     use kyzo_model::value::DataValue;
 
@@ -110,7 +111,7 @@ mod tests {
             &chain,
             &authority,
             CommitOrdinal::ZERO,
-            [0x61; 32],
+            ScopeManifestDigest::from_digest([0x61; 32]),
         );
         admit_record(AdmitRecordParts::new(
             RecordCore::new(
