@@ -11,12 +11,14 @@
 //! §18, §42, §50, §52, §54, §55, §82).
 //!
 //! Owns: [`StoreRefuse`] (the Refused claim-tag ledger for Store doors),
-//! [`FailureLattice`], [`QuarantineRange`], debt ledger, operator health
-//! surface.
+//! [`FailureLattice`], [`QuarantineRange`], [`mint_quarantine`],
+//! [`ScopedMismatchCarriage`] / [`CarriageReport`] (vendor fault carriage into
+//! the lattice), debt ledger, operator health surface.
 //!
 //! Bans: bool soup instead of the closed lattice; last-known-good serve;
 //! quarantine visibility to ordinary tenant queries (§82); silent stall
-//! anywhere in the economy.
+//! anywhere in the economy; escalating a scoped checksum mismatch into
+//! whole-store [`FailureLattice::Poisoned`] (availability inversion).
 //!
 //! Engine starts-or-not refuses stay in `session/db.rs` (`EngineRefuse`) —
 //! never merged into this ledger.
@@ -61,6 +63,87 @@ impl QuarantineRange {
     /// Inclusive end key.
     pub fn end(&self) -> &[u8] {
         &self.end
+    }
+
+    /// Whether `key` falls in this inclusive keyspace range.
+    pub fn contains(&self, keyspace: KeyspaceId, key: &[u8]) -> bool {
+        self.keyspace == keyspace && key >= self.start.as_slice() && key <= self.end.as_slice()
+    }
+}
+
+/// Mint a quarantine range for carriage into [`FailureLattice`] (§50).
+///
+/// Public door for scoped checksum-mismatch reports. Never escalates to
+/// whole-store [`FailureLattice::Poisoned`].
+pub fn mint_quarantine(keyspace: KeyspaceId, start: Vec<u8>, end: Vec<u8>) -> QuarantineRange {
+    QuarantineRange::mint(keyspace, start, end)
+}
+
+/// Vendor-shaped scoped checksum mismatch carried into the lattice (§50/§52).
+///
+/// fjall must not import kyzo-core: the boundary maps a scoped fault into this
+/// carriage; [`FailureLattice`] is the authority. A scoped mismatch never
+/// becomes whole-store Poisoned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedMismatchCarriage {
+    range: QuarantineRange,
+}
+
+impl ScopedMismatchCarriage {
+    /// Build carriage from an already-minted quarantine range.
+    pub fn from_range(range: QuarantineRange) -> Self {
+        Self { range }
+    }
+
+    /// Build carriage by minting the quarantine range.
+    pub fn new(keyspace: KeyspaceId, start: Vec<u8>, end: Vec<u8>) -> Self {
+        Self {
+            range: mint_quarantine(keyspace, start, end),
+        }
+    }
+
+    /// Quarantine range this carriage reports.
+    pub fn range(&self) -> &QuarantineRange {
+        &self.range
+    }
+
+    /// Map into the lattice as Quarantined — never Poisoned.
+    pub fn into_lattice(self) -> FailureLattice {
+        FailureLattice::Quarantined {
+            ranges: vec![self.range],
+        }
+    }
+}
+
+/// Unknown-invariant carriage — the only path to whole-store Poisoned (§50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UnknownInvariantCarriage;
+
+impl UnknownInvariantCarriage {
+    /// Map into the lattice as Poisoned.
+    pub fn into_lattice(self) -> FailureLattice {
+        FailureLattice::Poisoned {
+            quarantine_retained: None,
+        }
+    }
+}
+
+/// Closed carriage report sum — scoped mismatch vs unknown-invariant (§52).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CarriageReport {
+    /// Ordinary scoped block checksum mismatch → quarantine one range.
+    ScopedMismatch(ScopedMismatchCarriage),
+    /// Unknown invariant → whole-store Poisoned fail-stop.
+    UnknownInvariant(UnknownInvariantCarriage),
+}
+
+impl CarriageReport {
+    /// Lift a carriage report into a lattice fragment.
+    pub fn into_lattice(self) -> FailureLattice {
+        match self {
+            CarriageReport::ScopedMismatch(c) => c.into_lattice(),
+            CarriageReport::UnknownInvariant(c) => c.into_lattice(),
+        }
     }
 }
 
@@ -148,6 +231,33 @@ impl FailureLattice {
             ) => FailureLattice::Poisoned {
                 quarantine_retained: merge_opt_ranges(a, b),
             },
+        }
+    }
+
+    /// Absorb a vendor carriage report into this lattice (§50/§52).
+    ///
+    /// Scoped mismatch → quarantine; unknown-invariant → Poisoned. Ordinary
+    /// scoped checksum mismatch never alone yields Poisoned.
+    pub fn report(self, carriage: CarriageReport) -> FailureLattice {
+        self.combine(carriage.into_lattice())
+    }
+
+    /// Admit a key under the lattice: quarantined ranges refuse; Poisoned
+    /// refuses all user keys; healthy ranges outside quarantine serve (§50).
+    pub fn admit_key(&self, keyspace: KeyspaceId, key: &[u8]) -> Result<(), StoreRefuse> {
+        match self {
+            FailureLattice::Healthy => Ok(()),
+            FailureLattice::Poisoned { .. } => Err(StoreRefuse::OrderedCorrupt),
+            FailureLattice::Quarantined { ranges } => {
+                for range in ranges {
+                    if range.contains(keyspace, key) {
+                        return Err(StoreRefuse::Quarantined {
+                            range: range.clone(),
+                        });
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -401,4 +511,81 @@ pub enum StoreRefuse {
     #[error("FabricUnavailable: fabric insufficient; Kyzo never peer-dials")]
     #[diagnostic(code(store::refuse::fabric_unavailable))]
     FabricUnavailable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// §50/§52: a scoped checksum-mismatch carriage quarantines one range
+    /// while another range still serves; whole-store Poisoned only for
+    /// unknown-invariant — never a scoped mismatch alone.
+    #[test]
+    fn scoped_mismatch_quarantines_one_range_while_another_serves() {
+        let ks = KeyspaceId::from_raw(1);
+        let other_ks = KeyspaceId::from_raw(2);
+
+        let lattice = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
+            ScopedMismatchCarriage::new(ks, b"a".to_vec(), b"c".to_vec()),
+        ));
+
+        // Carriage of a scoped mismatch is Quarantined, never Poisoned.
+        assert!(
+            matches!(lattice, FailureLattice::Quarantined { .. }),
+            "scoped mismatch must quarantine, not poison the store: {lattice:?}"
+        );
+
+        // Quarantined range refuses.
+        assert!(matches!(
+            lattice.admit_key(ks, b"b"),
+            Err(StoreRefuse::Quarantined { .. })
+        ));
+        assert!(matches!(
+            lattice.admit_key(ks, b"a"),
+            Err(StoreRefuse::Quarantined { .. })
+        ));
+        assert!(matches!(
+            lattice.admit_key(ks, b"c"),
+            Err(StoreRefuse::Quarantined { .. })
+        ));
+
+        // Healthy sibling range still serves.
+        assert!(
+            lattice.admit_key(ks, b"z").is_ok(),
+            "key outside quarantine must serve"
+        );
+        assert!(
+            lattice.admit_key(ks, b"0").is_ok(),
+            "key before quarantine must serve"
+        );
+
+        // Different keyspace is unaffected (same key bytes still serve).
+        assert!(lattice.admit_key(other_ks, b"b").is_ok());
+
+        // Unknown-invariant alone → whole-store Poisoned; no user key serves.
+        let poisoned = FailureLattice::Healthy.report(CarriageReport::UnknownInvariant(
+            UnknownInvariantCarriage,
+        ));
+        assert!(matches!(
+            poisoned,
+            FailureLattice::Poisoned {
+                quarantine_retained: None
+            }
+        ));
+        assert!(matches!(
+            poisoned.admit_key(ks, b"z"),
+            Err(StoreRefuse::OrderedCorrupt)
+        ));
+    }
+
+    #[test]
+    fn mint_quarantine_feeds_carriage_not_poison() {
+        let range = mint_quarantine(KeyspaceId::from_raw(7), b"x".to_vec(), b"y".to_vec());
+        let lattice =
+            FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
+                ScopedMismatchCarriage::from_range(range),
+            ));
+        assert!(!matches!(lattice, FailureLattice::Poisoned { .. }));
+        assert!(matches!(lattice, FailureLattice::Quarantined { ranges } if ranges.len() == 1));
+    }
 }

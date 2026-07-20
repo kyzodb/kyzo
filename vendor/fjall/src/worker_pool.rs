@@ -3,9 +3,15 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    compaction::worker::run as run_compaction, flush::worker::run as run_flush,
-    journal::manager::EvictionWatermark, poison_dart::PoisonDart, stats::Stats,
-    supervisor::Supervisor, Keyspace,
+    compaction::worker::run as run_compaction,
+    flush::worker::run as run_flush,
+    journal::manager::EvictionWatermark,
+    poison_dart::{
+        is_scoped_checksum_mismatch, PoisonDart, ScopedFault, ScopedFaultReason,
+    },
+    stats::Stats,
+    supervisor::Supervisor,
+    Keyspace,
 };
 use lsm_tree::{AbstractTree, MemtableId};
 use std::{
@@ -97,6 +103,17 @@ impl WorkerPool {
                                         thread_counter.fetch_sub(1, Relaxed);
                                         return Ok(());
                                     }
+                                }
+                                // Scoped block checksum mismatch: quarantine carriage only.
+                                // Do NOT flip store-global poison — rest of store keeps serving.
+                                Err(e) if is_scoped_checksum_mismatch(&e) => {
+                                    log::error!(
+                                        "Worker #{i} scoped checksum mismatch (store stays up): {e:?}"
+                                    );
+                                    poison_dart.report_scoped(ScopedFault {
+                                        keyspace: None,
+                                        reason: ScopedFaultReason::BlockChecksumMismatch,
+                                    });
                                 }
                                 Err(e) => {
                                     log::error!("Worker #{i} crashed: {e:?}");

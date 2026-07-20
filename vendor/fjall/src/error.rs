@@ -31,11 +31,17 @@ pub enum Error {
     /// Invalid tag detected during decoding
     InvalidTag((&'static str, u8)),
 
-    /// A previous flush / commit operation failed, indicating a hardware-related failure
+    /// A previous flush / commit operation failed with an unknown invariant
+    /// (typically hardware / fsync failure).
     ///
     /// Future writes will not be accepted as consistency cannot be guaranteed.
     ///
     /// **At this point, it's best to let the application crash and try to recover.**
+    ///
+    /// Ordinary scoped block checksum mismatches are **not** this variant —
+    /// they are [`Error::Storage`] with `ChecksumMismatch` and must be carried
+    /// into the host failure lattice (quarantine one range) without poisoning
+    /// the whole store.
     ///
     /// More info: <https://www.usenix.org/system/files/atc20-rebello.pdf>
     Poisoned,

@@ -73,7 +73,8 @@ pub struct KeyspaceInner {
     /// If `true`, the keyspace is marked as deleted
     pub(crate) is_deleted: AtomicBool,
 
-    /// If `true`, fsync failed during persisting, see `Error::Poisoned`
+    /// If `true`, unknown-invariant fail-stop (see `Error::Poisoned`).
+    /// Not set for scoped block checksum mismatches.
     pub(crate) is_poisoned: Arc<AtomicBool>,
 
     /// LSM-tree wrapper

@@ -51,7 +51,9 @@ pub struct DatabaseInner {
     /// Counter of background threads
     pub(crate) active_thread_counter: Arc<AtomicUsize>,
 
-    /// True if fsync failed
+    /// True if unknown-invariant fail-stop (fsync / hardware). Not set for
+    /// ordinary scoped block checksum mismatches — those report via
+    /// [`crate::poison_dart::PoisonDart::report_scoped`].
     pub(crate) is_poisoned: Arc<AtomicBool>,
 
     pub(crate) stats: Arc<Stats>,
