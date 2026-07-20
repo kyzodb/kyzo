@@ -20,6 +20,7 @@
 use sha2::{Digest, Sha256};
 
 use super::authority::{RecoveryMatrix, WriteAuthority};
+use super::commit_cap::SnapshotFork;
 use super::epoch::{CryptoDomain, FenceEpoch};
 
 /// Sealed Store identity digest — genesis / fork-minted, never path/URL.
@@ -123,20 +124,21 @@ pub enum EntropyArm {
 
 /// Host selection of which `StableCommitCap` arm genesis seals.
 ///
-/// The closed sum with per-arm `SnapshotFork` declaration is seated in
-/// `store/commit_cap.rs` (T9). Genesis seals the arm *choice* config-once;
+/// The closed sum with per-arm [`SnapshotFork`] declaration is seated in
+/// `store/commit_cap.rs`. Genesis seals the arm *choice* config-once;
 /// this type is injection only — not a second commit-door definition.
+/// Omission of SnapshotFork is Unconstructible (field is required, not bool).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StableCommitCapArm {
     /// Native fsync proof arm (`StableCommitCap::NativeFsyncProof` in T9).
     NativeFsyncProof {
         /// Whether this arm's failure model includes snapshot fork.
-        snapshot_fork: bool,
+        snapshot_fork: SnapshotFork,
     },
     /// Platform transaction proof arm (`StableCommitCap::PlatformTransactionProof` in T9).
     PlatformTransactionProof {
         /// Whether this arm's failure model includes snapshot fork.
-        snapshot_fork: bool,
+        snapshot_fork: SnapshotFork,
     },
 }
 
@@ -305,7 +307,7 @@ impl GenesisSealedView {
     }
 }
 
-/// Typed refuse from genesis construction.
+/// Typed refuse from genesis / open construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum GenesisRefuse {
     #[error(
@@ -313,6 +315,11 @@ pub enum GenesisRefuse {
     )]
     #[diagnostic(code(store::open::missing_store_open))]
     MissingStoreOpenCapability,
+    #[error(
+        "WriteVerbAtOpenDoor: StoreOpen::Write does not authorize open — present Open/Read here; WriteAuthority is a distinct affine token"
+    )]
+    #[diagnostic(code(store::open::write_verb_at_open))]
+    WriteVerbAtOpenDoor,
 }
 
 /// Genesis construction: seals FenceEpoch::genesis, CryptoDomain, optional
@@ -344,13 +351,22 @@ pub fn genesis(params: GenesisParams) -> GenesisSealed {
 
 /// Open an existing Store by presenting a [`StoreOpen`] capability.
 ///
-/// Path-only open has no constructor — attempting open without StoreOpen is
-/// represented as [`GenesisRefuse::MissingStoreOpenCapability`] at this door.
+/// Path-only open has no constructor — [`open_path_only`] is the typed refuse
+/// door for that ask. [`StoreOpenVerb::Write`] at this door →
+/// [`GenesisRefuse::WriteVerbAtOpenDoor`] (write resume needs [`WriteAuthority`]).
 /// Location (path) is supplied by the host for the adapter only; it never
 /// enters identity.
 pub fn open_with_capability(capability: &StoreOpen) -> Result<StoreId, GenesisRefuse> {
-    // Capability presence is the door; path is not an argument.
-    Ok(capability.store_id())
+    match capability.verb() {
+        StoreOpenVerb::Open | StoreOpenVerb::Read => Ok(capability.store_id()),
+        StoreOpenVerb::Write => Err(GenesisRefuse::WriteVerbAtOpenDoor),
+    }
+}
+
+/// Path-only open ask — Unconstructible as success; always
+/// [`GenesisRefuse::MissingStoreOpenCapability`].
+pub fn open_path_only(_path: &std::path::Path) -> Result<StoreId, GenesisRefuse> {
+    Err(GenesisRefuse::MissingStoreOpenCapability)
 }
 
 fn mint_store_id(params: &GenesisParams) -> StoreId {
@@ -373,12 +389,15 @@ fn mint_store_id(params: &GenesisParams) -> StoreId {
     StoreId::from_digest(h.finalize().into())
 }
 
-fn mint_write_authority_token(params: &GenesisParams, store_id: StoreId) -> [u8; 32] {
+fn mint_write_authority_token(
+    params: &GenesisParams,
+    store_id: StoreId,
+) -> super::authority::WriteTokenId {
     let mut h = Sha256::new();
     h.update(b"kyzo.write_authority.genesis.v1");
     h.update(store_id.as_bytes());
     h.update(params.identity_seed);
-    h.finalize().into()
+    super::authority::WriteTokenId::from_digest(h.finalize().into())
 }
 
 fn size_class_tag(class: SizeClass) -> u8 {
@@ -397,19 +416,13 @@ fn entropy_arm_tag(arm: EntropyArm) -> u8 {
 
 fn stable_commit_cap_tag(arm: StableCommitCapArm) -> u8 {
     match arm {
-        StableCommitCapArm::NativeFsyncProof { snapshot_fork } => {
-            if snapshot_fork {
-                1
-            } else {
-                2
-            }
-        }
-        StableCommitCapArm::PlatformTransactionProof { snapshot_fork } => {
-            if snapshot_fork {
-                3
-            } else {
-                4
-            }
-        }
+        StableCommitCapArm::NativeFsyncProof { snapshot_fork } => match snapshot_fork {
+            SnapshotFork::Yes => 1,
+            SnapshotFork::No => 2,
+        },
+        StableCommitCapArm::PlatformTransactionProof { snapshot_fork } => match snapshot_fork {
+            SnapshotFork::Yes => 3,
+            SnapshotFork::No => 4,
+        },
     }
 }

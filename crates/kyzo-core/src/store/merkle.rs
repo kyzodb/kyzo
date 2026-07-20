@@ -495,7 +495,7 @@ fn compose_durable_cut(
     let mut h = Sha256::new();
     h.update(b"kyzo.durable_commit_cut.v1");
     h.update(meaning_root.as_bytes());
-    h.update(wal_final_hash);
+    h.update(wal_final_hash.as_bytes());
     h.update(u64::to_be_bytes(commit_ordinal.get()));
     DurableCutDigest(h.finalize().into())
 }

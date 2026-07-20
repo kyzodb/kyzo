@@ -63,17 +63,14 @@ impl StableCommitCap {
     /// Lift the genesis-sealed host arm choice into the closed sum.
     ///
     /// Consumes [`StableCommitCapArm`] — does not redefine host injection.
+    /// SnapshotFork is already the closed sum on the arm (no bool lift).
     pub fn from_arm(arm: StableCommitCapArm) -> Self {
         match arm {
             StableCommitCapArm::NativeFsyncProof { snapshot_fork } => {
-                StableCommitCap::NativeFsyncProof {
-                    snapshot_fork: snapshot_fork_from_bool(snapshot_fork),
-                }
+                StableCommitCap::NativeFsyncProof { snapshot_fork }
             }
             StableCommitCapArm::PlatformTransactionProof { snapshot_fork } => {
-                StableCommitCap::PlatformTransactionProof {
-                    snapshot_fork: snapshot_fork_from_bool(snapshot_fork),
-                }
+                StableCommitCap::PlatformTransactionProof { snapshot_fork }
             }
         }
     }
@@ -89,14 +86,6 @@ impl StableCommitCap {
     /// Whether this arm requires misuse-resistant AEAD (SIV).
     pub fn requires_misuse_resistant_aead(self) -> bool {
         self.snapshot_fork().requires_misuse_resistant_aead()
-    }
-}
-
-fn snapshot_fork_from_bool(yes: bool) -> SnapshotFork {
-    if yes {
-        SnapshotFork::Yes
-    } else {
-        SnapshotFork::No
     }
 }
 

@@ -36,12 +36,90 @@ use super::transcript::{
 };
 
 /// Opaque authorizing key id bound into the certificate.
-pub type AuthorizingKeyId = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AuthorizingKeyId([u8; 32]);
+
+impl AuthorizingKeyId {
+    /// Wrap an already-proven authorizing key id.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the id bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for AuthorizingKeyId {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for AuthorizingKeyId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 /// Digest of the sealed scope manifest (plus issuer lineage / validity-as-of).
-pub type ScopeManifestDigest = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScopeManifestDigest([u8; 32]);
 
-/// Trusted authorizing key material — MAC authority for certificate signatures.
+impl ScopeManifestDigest {
+    /// Wrap an already-proven scope manifest digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for ScopeManifestDigest {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for ScopeManifestDigest {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Post-state root bound into an AdmissionCertificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PostStateRoot([u8; 32]);
+
+impl PostStateRoot {
+    /// Wrap an already-proven post-state root digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for PostStateRoot {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for PostStateRoot {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Trusted authorizing key material — HMAC-SHA256 authority for certificate signatures.
 ///
 /// Public construction is Unconstructible; only the trust-install door mints.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,8 +130,11 @@ pub struct AuthorizingKey {
 
 impl AuthorizingKey {
     /// Install trusted key material under its id (trust door only).
-    pub(crate) fn mint(id: AuthorizingKeyId, material: [u8; 32]) -> Self {
-        Self { id, material }
+    pub(crate) fn mint(id: impl Into<AuthorizingKeyId>, material: [u8; 32]) -> Self {
+        Self {
+            id: id.into(),
+            material,
+        }
     }
 
     /// Key id bound into certificates this key may authorize.
@@ -61,11 +142,12 @@ impl AuthorizingKey {
         self.id
     }
 
-    /// Provisional MAC over a signing body (sha2 until a pure-Rust sig seat lands).
+    /// HMAC-SHA256 over the signing body (RFC 2104, domain-separated).
     ///
     /// Not AEAD — signature authenticity for AdmissionCertificate only.
+    /// Truncated/expanded to 64 bytes as the sealed signature width.
     pub(crate) fn sign(&self, body: &[u8; 32]) -> [u8; 64] {
-        provisional_mac(&self.material, body)
+        hmac_sha256_64(&self.material, body)
     }
 
     /// Verify a sealed signature against this key and signing body.
@@ -78,7 +160,7 @@ impl AuthorizingKey {
 /// Table of trusted authorizing keys — verify looks up by [`AuthorizingKeyId`].
 #[derive(Debug, Default, Clone)]
 pub struct AuthorizingKeyTable {
-    keys: BTreeMap<AuthorizingKeyId, [u8; 32]>,
+    keys: BTreeMap<[u8; 32], [u8; 32]>,
 }
 
 impl AuthorizingKeyTable {
@@ -89,13 +171,13 @@ impl AuthorizingKeyTable {
 
     /// Install a trusted authorizing key.
     pub(crate) fn insert(&mut self, key: AuthorizingKey) {
-        self.keys.insert(key.id, key.material);
+        self.keys.insert(*key.id.as_bytes(), key.material);
     }
 
     /// Borrow trusted material for `id`, if installed.
     pub fn lookup(&self, id: &AuthorizingKeyId) -> Option<AuthorizingKey> {
         self.keys
-            .get(id)
+            .get(id.as_bytes())
             .copied()
             .map(|material| AuthorizingKey { id: *id, material })
     }
@@ -117,7 +199,7 @@ pub enum ScopeManifestStatus {
 /// Scope manifest registry — `resolve` derives refuse; caller-forged pass is Unconstructible.
 #[derive(Debug, Default, Clone)]
 pub struct ScopeManifestTable {
-    entries: BTreeMap<ScopeManifestDigest, ScopeManifestStatus>,
+    entries: BTreeMap<[u8; 32], ScopeManifestStatus>,
 }
 
 impl ScopeManifestTable {
@@ -132,13 +214,13 @@ impl ScopeManifestTable {
             !matches!(status, ScopeManifestStatus::Unknown),
             "Unknown is the absent-entry default, not a stored status"
         );
-        self.entries.insert(digest, status);
+        self.entries.insert(*digest.as_bytes(), status);
     }
 
     /// Derive resolution for a sealed scope digest (§69).
     pub fn resolve(&self, digest: &ScopeManifestDigest) -> ScopeManifestStatus {
         self.entries
-            .get(digest)
+            .get(digest.as_bytes())
             .copied()
             .unwrap_or(ScopeManifestStatus::Unknown)
     }
@@ -186,7 +268,7 @@ pub struct AdmissionCertificate {
     protocol_version: [u8; 8],
     schema_cut: [u8; 32],
     predecessor_history_digest: [u8; 32],
-    post_state_root: [u8; 32],
+    post_state_root: PostStateRoot,
 }
 
 impl AdmissionCertificate {
@@ -230,6 +312,11 @@ impl AdmissionCertificate {
         self.scope_manifest_digest
     }
 
+    /// Post-state root sealed into the certificate.
+    pub fn post_state_root(&self) -> PostStateRoot {
+        self.post_state_root
+    }
+
     /// Sealed signature bytes.
     pub fn signature(&self) -> &[u8; 64] {
         &self.signature
@@ -245,7 +332,7 @@ impl AdmissionCertificate {
             &self.schema_cut,
             &self.record_digest,
             &self.predecessor_history_digest,
-            &self.post_state_root,
+            self.post_state_root.as_bytes(),
             &self.authorizing_key_id,
             &self.scope_manifest_digest,
             self.operation_key.as_ref(),
@@ -391,7 +478,7 @@ pub struct AdmissionCertificateParts {
     /// Predecessor history digest.
     pub predecessor_history_digest: [u8; 32],
     /// Post-state root.
-    pub post_state_root: [u8; 32],
+    pub post_state_root: PostStateRoot,
     /// Authorizing key id.
     pub authorizing_key_id: AuthorizingKeyId,
     /// Scope manifest digest (+ issuer lineage / validity sealed elsewhere).
@@ -426,8 +513,10 @@ fn signing_body_digest(
     h.update(record_digest);
     h.update(predecessor_history_digest);
     h.update(post_state_root);
-    h.update(authorizing_key_id);
-    h.update(scope_manifest_digest);
+    h.update(authorizing_key_id.as_bytes());
+    h.update(scope_manifest_digest.as_bytes());
+    // FenceEpoch binds StoreId — include it so genesis-discard is unrepresentable.
+    h.update(origin_epoch.store_id().as_bytes());
     match operation_key {
         Some(op) => {
             h.update([1u8]);
@@ -438,20 +527,31 @@ fn signing_body_digest(
     h.finalize().into()
 }
 
-fn provisional_mac(key_material: &[u8; 32], body: &[u8; 32]) -> [u8; 64] {
+/// RFC 2104 HMAC-SHA256 expanded to 64 sealed signature bytes.
+///
+/// `out = HMAC(key, domain||body||0) || HMAC(key, domain||body||1)`.
+fn hmac_sha256_64(key_material: &[u8; 32], body: &[u8; 32]) -> [u8; 64] {
+    const BLOCK: usize = 64;
+    const DOMAIN: &[u8] = b"kyzo.admission_certificate.hmac.v1";
+    let mut k_ipad = [0x36u8; BLOCK];
+    let mut k_opad = [0x5cu8; BLOCK];
+    for i in 0..32 {
+        k_ipad[i] ^= key_material[i];
+        k_opad[i] ^= key_material[i];
+    }
     let mut out = [0u8; 64];
-    let mut h0 = Sha256::new();
-    h0.update(b"kyzo.admission_certificate.mac.v1");
-    h0.update(key_material);
-    h0.update(body);
-    h0.update([0u8]);
-    out[..32].copy_from_slice(&h0.finalize());
-    let mut h1 = Sha256::new();
-    h1.update(b"kyzo.admission_certificate.mac.v1");
-    h1.update(key_material);
-    h1.update(body);
-    h1.update([1u8]);
-    out[32..].copy_from_slice(&h1.finalize());
+    for (half, tag) in [(0usize, 0u8), (32usize, 1u8)] {
+        let mut inner = Sha256::new();
+        inner.update(k_ipad);
+        inner.update(DOMAIN);
+        inner.update(body);
+        inner.update([tag]);
+        let inner_digest = inner.finalize();
+        let mut outer = Sha256::new();
+        outer.update(k_opad);
+        outer.update(inner_digest);
+        out[half..half + 32].copy_from_slice(&outer.finalize());
+    }
     out
 }
 
@@ -496,7 +596,7 @@ pub(crate) fn mint_admission_certificate(
     let mut bindings: Vec<(Vec<u8>, MapValue)> = vec![
         (
             b"authorizing_key_id".to_vec(),
-            MapValue::Digest32(parts.authorizing_key_id),
+            MapValue::Digest32(*parts.authorizing_key_id.as_bytes()),
         ),
         (
             b"origin_commit".to_vec(),
@@ -508,7 +608,7 @@ pub(crate) fn mint_admission_certificate(
         ),
         (
             b"post_state_root".to_vec(),
-            MapValue::Digest32(parts.post_state_root),
+            MapValue::Digest32(*parts.post_state_root.as_bytes()),
         ),
         (
             b"protocol_version".to_vec(),
@@ -517,7 +617,7 @@ pub(crate) fn mint_admission_certificate(
         (b"schema_cut".to_vec(), MapValue::Digest32(parts.schema_cut)),
         (
             b"scope_manifest_digest".to_vec(),
-            MapValue::Digest32(parts.scope_manifest_digest),
+            MapValue::Digest32(*parts.scope_manifest_digest.as_bytes()),
         ),
         (
             b"signature".to_vec(),
@@ -575,7 +675,7 @@ pub(crate) fn sign_admission_parts(
         &parts.schema_cut,
         &parts.record_digest,
         &parts.predecessor_history_digest,
-        &parts.post_state_root,
+        parts.post_state_root.as_bytes(),
         &parts.authorizing_key_id,
         &parts.scope_manifest_digest,
         parts.operation_key.as_ref(),

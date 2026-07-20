@@ -20,30 +20,51 @@ use super::open::StoreId;
 
 /// Store-local fence epoch. Genesis is sealed into the genesis digest /
 /// [`CryptoDomain`] as a verification fact — fabric never mints write continuity.
+///
+/// Binds [`StoreId`]: [`FenceEpoch::genesis`] does not discard the identity —
+/// epoch counters are store-scoped verification facts, never free-floating u64s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FenceEpoch(u64);
+pub struct FenceEpoch {
+    store_id: StoreId,
+    epoch: u64,
+}
 
 impl FenceEpoch {
-    /// Epoch zero for a Store identity — sealed at genesis.
-    pub fn genesis(_store_id: StoreId) -> Self {
-        Self(0)
+    /// Epoch zero for a Store identity — sealed at genesis; binds `store_id`.
+    pub fn genesis(store_id: StoreId) -> Self {
+        Self {
+            store_id,
+            epoch: 0,
+        }
     }
 
-    /// Construct from an already-proven epoch (WAL / seal decode).
-    pub(crate) fn from_raw(raw: u64) -> Self {
-        Self(raw)
+    /// Construct from an already-proven epoch (WAL / seal decode) under `store_id`.
+    pub(crate) fn from_raw(store_id: StoreId, raw: u64) -> Self {
+        Self {
+            store_id,
+            epoch: raw,
+        }
+    }
+
+    /// Store identity this epoch counter belongs to.
+    pub fn store_id(self) -> StoreId {
+        self.store_id
     }
 
     /// Raw epoch counter.
     pub fn get(self) -> u64 {
-        self.0
+        self.epoch
     }
 
     /// Successor epoch counter (not the advance ceremony — see [`advance`]).
+    /// Preserves the bound [`StoreId`].
     pub fn successor(self) -> Result<FenceEpoch, EpochAdvanceRefuse> {
-        self.0
+        self.epoch
             .checked_add(1)
-            .map(FenceEpoch)
+            .map(|epoch| FenceEpoch {
+                store_id: self.store_id,
+                epoch,
+            })
             .ok_or(EpochAdvanceRefuse::EpochSpaceExhausted)
     }
 }
@@ -51,7 +72,8 @@ impl FenceEpoch {
 /// Sealed crypto domain: `(StoreId, FenceEpoch)`.
 ///
 /// Separates DEK/nonce space per store×epoch. Dual-use lineage under one
-/// CryptoDomain → poison at chain-meet.
+/// CryptoDomain → poison at chain-meet. Construction requires the fence epoch
+/// to already bind the same [`StoreId`] (mismatched bind is Unconstructible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CryptoDomain {
     store_id: StoreId,
@@ -60,7 +82,15 @@ pub struct CryptoDomain {
 
 impl CryptoDomain {
     /// Bind a Store identity to its current fence epoch.
+    ///
+    /// Requires `fence_epoch.store_id() == store_id`. Mismatched binds are
+    /// Unconstructible (panic = invariant; all lawful mints pair genesis/advance).
     pub fn new(store_id: StoreId, fence_epoch: FenceEpoch) -> Self {
+        assert_eq!(
+            fence_epoch.store_id(),
+            store_id,
+            "INVARIANT(CryptoDomain): FenceEpoch must bind the same StoreId"
+        );
         Self {
             store_id,
             fence_epoch,

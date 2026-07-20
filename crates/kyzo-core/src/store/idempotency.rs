@@ -68,6 +68,28 @@ impl OperationKey {
     }
 }
 
+/// Sealed request digest covering canonical envelope + schema + authority coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RequestDigest([u8; 32]);
+
+impl RequestDigest {
+    /// Wrap an already-proven request digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for RequestDigest {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
 /// Memoized terminal outcome for an [`OperationKey`] (§38).
 ///
 /// Transient refuses (capacity, availability, transport) are **never**
@@ -77,12 +99,12 @@ pub enum OperationOutcome {
     /// Prior admission committed under this key + digest.
     Committed {
         /// Sealed request digest that produced the commit.
-        request_digest: [u8; 32],
+        request_digest: RequestDigest,
     },
     /// Deterministic terminal refuse under this key + digest.
     DeterministicTerminalRefuse {
         /// Sealed request digest that produced the refuse.
-        request_digest: [u8; 32],
+        request_digest: RequestDigest,
         /// Store ledger refuse that terminated.
         refuse: StoreRefuse,
     },
@@ -94,7 +116,7 @@ pub enum OperationOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdempotencyEntry {
     key: OperationKey,
-    request_digest: [u8; 32],
+    request_digest: RequestDigest,
     outcome: OperationOutcome,
 }
 
@@ -105,8 +127,8 @@ impl IdempotencyEntry {
     }
 
     /// Request digest covering canonical envelope + schema + authority coordinates.
-    pub fn request_digest(&self) -> &[u8; 32] {
-        &self.request_digest
+    pub fn request_digest(&self) -> RequestDigest {
+        self.request_digest
     }
 
     /// Terminal outcome.
@@ -128,11 +150,11 @@ impl IdempotencyMemo {
     }
 
     /// Digest of a request envelope (canonical bytes the caller already sealed).
-    pub fn digest_request(envelope: &[u8]) -> [u8; 32] {
+    pub fn digest_request(envelope: &[u8]) -> RequestDigest {
         let mut h = Sha256::new();
         h.update(b"kyzo.request_digest.v1");
         h.update(envelope);
-        h.finalize().into()
+        RequestDigest::from_digest(h.finalize().into())
     }
 
     /// Look up a key. Missing → [`OperationOutcome::Absent`].
@@ -150,9 +172,10 @@ impl IdempotencyMemo {
     pub fn remember(
         &mut self,
         key: OperationKey,
-        request_digest: [u8; 32],
+        request_digest: impl Into<RequestDigest>,
         outcome: OperationOutcome,
     ) -> Result<OperationOutcome, StoreRefuse> {
+        let request_digest = request_digest.into();
         match outcome {
             OperationOutcome::Absent => {
                 // Absent is not a terminal memo — never store it.

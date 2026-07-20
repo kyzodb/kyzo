@@ -42,14 +42,13 @@ pub struct CompactionPace {
 /// `pace = f(debt)` — pure function of committed-byte / reclaimable-debt
 /// quantities only. Wall-clock, CPU, and IO-util inputs are Unconstructible
 /// (absent from this signature).
-pub fn pace(debt: CompactionDebt) -> CompactionPace {
-    // Deterministic fold: reclaimable pressure weighted with committed growth.
-    // Coefficients are Spec placeholders until WA/space-amp benches seal them;
-    // purity (debt-only) is the law this seat enforces.
-    let work_units = debt
-        .committed_bytes
-        .saturating_add(debt.reclaimable_bytes.saturating_mul(2));
-    CompactionPace { work_units }
+///
+/// Coefficients are sealed from WA/space-amp benches (same law as
+/// [`KvSeparationThreshold`]). Until that campaign greens, pace refuses —
+/// inventing placeholder coefficients is forbidden.
+pub fn pace(debt: CompactionDebt) -> Result<CompactionPace, CompactRefuse> {
+    let _ = debt;
+    Err(CompactRefuse::PaceCoefficientsUnmeasured)
 }
 
 /// Range class fixed at write from the bitemporal coordinate (§46).
@@ -80,13 +79,65 @@ pub fn classify_range_at_commit(
 }
 
 /// Plaintext content hash of a sealed packet.
-pub type PacketContentHash = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PacketContentHash([u8; 32]);
+
+impl PacketContentHash {
+    /// Wrap an already-proven packet content hash.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the hash bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for PacketContentHash {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for PacketContentHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 /// Lineage hash covering predecessor packet identities.
-pub type LineageHash = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LineageHash([u8; 32]);
+
+impl LineageHash {
+    /// Wrap an already-proven lineage hash.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the hash bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for LineageHash {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for LineageHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 /// Plaintext-canonical state root bound into a merged packet header.
-pub type CompactStateRoot = [u8; 32];
+///
+/// Same meaning as [`super::merkle::StateRoot`] — not a second digest identity.
+pub type CompactStateRoot = super::merkle::StateRoot;
 
 /// Inputs required to privately mint a [`MergeProof`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +307,10 @@ pub enum CompactRefuse {
     #[error("compact: empty MergeProof input set")]
     #[diagnostic(code(store::compact::empty_merge))]
     EmptyMerge,
+    /// Pace coefficients not yet sealed from WA/space-amp benches.
+    #[error("compact: pace coefficients unmeasured — refuse until bench campaign seals them")]
+    #[diagnostic(code(store::compact::pace_unmeasured))]
+    PaceCoefficientsUnmeasured,
 }
 
 fn sealed_identity_digest(parts: &MergeProofParts) -> [u8; 32] {
@@ -263,11 +318,11 @@ fn sealed_identity_digest(parts: &MergeProofParts) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"kyzo.merge_proof.v1");
     for content in &parts.input_content_hashes {
-        h.update(content);
+        h.update(content.as_bytes());
     }
-    h.update(parts.lineage_hash);
-    h.update(parts.state_root);
+    h.update(parts.lineage_hash.as_bytes());
+    h.update(parts.state_root.as_bytes());
     h.update(u64::to_be_bytes(parts.compact_counter.get()));
-    h.update(parts.output_content_hash);
+    h.update(parts.output_content_hash.as_bytes());
     h.finalize().into()
 }

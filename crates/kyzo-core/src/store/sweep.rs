@@ -955,7 +955,7 @@ mod composition_tests {
             size_class: SizeClass::Compact,
             entropy_arm: EntropyArm::OsRandom,
             stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-                snapshot_fork: false,
+                snapshot_fork: SnapshotFork::No,
             },
         });
         let store_id = sealed.store_id();

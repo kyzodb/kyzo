@@ -11,70 +11,75 @@
 //! and the 07 storage-Spec seats (identity, authority, commit door, WAL, …).
 
 /// WriteAuthority + incarnation + RecoveryMatrix + address fence (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+/// LOUD: unwired until host doors bind — `expect` fires when a live caller appears.
+// LOUD: each 07 seat below is built but not yet called from host doors.
+// Silent `allow(dead_code)` without a reason is forbidden — the reason string
+// is the meter that the seat is unwired, not green-complete.
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod authority;
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+/// Leave-is-free pack / import ceremony (07 seat).
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod backup;
 /// StableCommitCap closed sum + SnapshotFork + ForkGenerationWitness (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod commit_cap;
 /// Deterministic compaction: pace, range class, MergeProof (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod compact;
 pub(crate) mod contract;
 /// DEK/KEK/ShredSalt/WrappedShredSalt/AuditKey/AEAD pipeline (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod crypto;
 /// FenceEpoch + CryptoDomain + EpochGrant advance (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod epoch;
 /// Failure lattice + closed StoreRefuse ledger + debt economy (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod failure;
 pub(crate) mod fjall;
 /// ForkGrant / RecoveryGrant + pure materialize (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod grants;
 /// OperationKey + OperationOutcome + request_digest memo (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod idempotency;
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod keys;
-#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod merkle;
 /// NonceLease + MintDomain + DomainCounter + pure nonce fn (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod nonce;
 /// Object seam: staging, permanence, durability classes, GC (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod objects;
 /// Identity + open capability + genesis (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod open;
 /// AdmissionCertificate + verify_replica + ReplicaCustody (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod replica;
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod retry;
-#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod scratch;
 /// CheckpointSeal + truncate consume + seal verification (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod seal;
 pub(crate) mod skip_walk;
 /// SweepDoor + IntentOrdinal/CommitOrdinal + Applied/Committed mint (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod sweep;
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod time;
 /// CanonicalTranscript + golden vectors + unknown-version refuse (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod transcript;
 pub(crate) mod tx;
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod verify_walk;
 /// WAL segment format + cross-segment hash chain + replay (07 seat).
-#[allow(dead_code)] // 07 seat mid-wiring; surface lands with host doors
+#[allow(dead_code, reason = "LOUD: store 07 seat unwired — host doors not yet bound")]
 pub(crate) mod wal;
 
 // Sim instrument lives at kyzo-crashfs (seat); path-included here so the
@@ -92,11 +97,12 @@ pub(crate) mod sim;
 pub use authority::{
     AddressFence, AddressFenceRefuse, AddressFenceTable, Entropy, IncarnationId,
     IncarnationMintCap, OpenOrdinal, RecoveryMatrix, RecoveryPublicKey, WriteAuthority,
+    WriteTokenId,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use backup::{
-    ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse, dump_storage,
-    import_verify, restore_storage,
+    ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
+    PackRefuse, dump_storage, import_verify, restore_storage,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use commit_cap::{ForkGenerationWitness, SnapshotFork, StableCommitCap};
@@ -128,11 +134,14 @@ pub use failure::{
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use grants::{
-    AncestorReadGrant, ForkGrant, Grant, GrantId, MaterializedGrant, PriorMaterialization,
-    RecoveryGrant, materialize,
+    AncestorReadGrant, ForkGrant, ForkPointRoot, Grant, GrantId, IdentitySeed,
+    KeyMaterialCommitment, MaterializedGrant, PriorMaterialization, RecoveryGrant,
+    SuccessorPrincipal, materialize,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use idempotency::{IdempotencyEntry, IdempotencyMemo, OperationKey, OperationOutcome};
+pub use idempotency::{
+    IdempotencyEntry, IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest,
+};
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use keys::{Secret, SecretKeyRefuse, refuse_if_secret};
 #[allow(unused_imports)] // seat reexport; production may not bind yet
@@ -152,20 +161,21 @@ pub use objects::{
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use open::{
-    EntropyArm, GenesisParams, GenesisSealed, GenesisSealedView, SizeClass, StableCommitCapArm,
-    StagingTtl, StoreId, StoreOpen, StoreOpenVerb, genesis, open_with_capability,
+    EntropyArm, GenesisParams, GenesisRefuse, GenesisSealed, GenesisSealedView, SizeClass,
+    StableCommitCapArm, StagingTtl, StoreId, StoreOpen, StoreOpenVerb, genesis, open_path_only,
+    open_with_capability,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
-    AuthorizingKeyTable, LocalProjection, OriginContinuity, ReplicaCustody, ReplicaKey,
-    ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, anchor_pending,
-    verify_replica,
+    AuthorizingKeyTable, LocalProjection, OriginContinuity, PostStateRoot, ReplicaCustody,
+    ReplicaKey, ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable,
+    anchor_pending, verify_replica,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use seal::{
     CheckpointSeal, CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest,
-    SealRefuse, TruncationReceipt, truncate,
+    SealRefuse, TruncateLedger, TruncationReceipt, truncate,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use sweep::{
@@ -183,4 +193,4 @@ pub use tx::{
     ConflictError, ReadTx, Slice, WriteTx,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use wal::{WalFloors, WalPayload, WalRecord, WalReplayState, WalSegment, replay};
+pub use wal::{WalFloors, WalHash, WalPayload, WalRecord, WalReplayState, WalSegment, replay};

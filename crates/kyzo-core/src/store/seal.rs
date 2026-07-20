@@ -28,10 +28,35 @@ use super::sweep::CommitOrdinal;
 use super::wal::WalHash;
 
 /// Fixed-width seal / manifest digest (SHA-256).
-pub type SealDigest = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SealDigest([u8; 32]);
+
+impl SealDigest {
+    /// Wrap an already-proven seal digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for SealDigest {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for SealDigest {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 /// Genesis prior-seal digest — first seal in a lineage covers this.
-pub const GENESIS_PRIOR_SEAL: SealDigest = [0u8; 32];
+pub const GENESIS_PRIOR_SEAL: SealDigest = SealDigest([0u8; 32]);
 
 /// Bound NonceLease floors for the sealed prefix (per MintDomain).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -283,19 +308,50 @@ impl CheckpointSeal {
     }
 }
 
-/// Consume a covering [`CheckpointSeal`] to authorize WAL prefix truncation.
+/// Consume a covering [`CheckpointSeal`] against a [`TruncateLedger`].
 ///
 /// Truncation without consuming a seal is Unconstructible — there is no
-/// seal-free overload. Crash-mid-truncate converges: consuming the seal is
-/// the authority transfer; retry with the same seal is idempotent under
-/// recovery (seal already spent → [`SealRefuse::SealAlreadyConsumed`] once
-/// the truncate ledger records it — modeled by consuming `self` by value).
-pub fn truncate(seal: CheckpointSeal) -> TruncationReceipt {
-    TruncationReceipt {
+/// seal-free overload. Crash-mid-truncate converges: the ledger records the
+/// spent seal digest; retry with the same seal → [`SealRefuse::SealAlreadyConsumed`]
+/// (idempotent crash path). First consume transfers authority and yields a
+/// [`TruncationReceipt`].
+pub fn truncate(
+    seal: CheckpointSeal,
+    ledger: &mut TruncateLedger,
+) -> Result<TruncationReceipt, SealRefuse> {
+    let digest = seal.seal_digest;
+    if !ledger.record_consume(digest) {
+        return Err(SealRefuse::SealAlreadyConsumed);
+    }
+    Ok(TruncationReceipt {
         store_id: seal.store_id,
         cut: seal.cut,
-        seal_digest: seal.seal_digest,
+        seal_digest: digest,
         final_wal_hash: seal.final_wal_hash,
+    })
+}
+
+/// Durable truncate-authority ledger — records spent seal digests so crash
+/// retry converges without double-truncation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TruncateLedger {
+    spent: std::collections::BTreeSet<SealDigest>,
+}
+
+impl TruncateLedger {
+    /// Empty ledger (no seals consumed yet).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether `digest` was already consumed.
+    pub fn is_consumed(&self, digest: SealDigest) -> bool {
+        self.spent.contains(&digest)
+    }
+
+    /// Record a consume. Returns `false` if already spent (idempotent refuse).
+    fn record_consume(&mut self, digest: SealDigest) -> bool {
+        self.spent.insert(digest)
     }
 }
 
@@ -358,16 +414,18 @@ fn digest_parts(parts: &CheckpointSealParts) -> SealDigest {
     h.update(parts.store_id.as_bytes());
     h.update(parts.crypto_domain.store_id().as_bytes());
     h.update(u64::to_be_bytes(parts.crypto_domain.fence_epoch().get()));
+    h.update(parts.crypto_domain.fence_epoch().store_id().as_bytes());
     h.update(u64::to_be_bytes(parts.fence_epoch.get()));
+    h.update(parts.fence_epoch.store_id().as_bytes());
     h.update(u64::to_be_bytes(parts.cut.get()));
-    h.update(parts.state_root);
-    h.update(parts.final_wal_hash);
-    h.update(parts.checkpoint_manifest);
+    h.update(parts.state_root.as_bytes());
+    h.update(parts.final_wal_hash.as_bytes());
+    h.update(parts.checkpoint_manifest.as_bytes());
     h.update(parts.format_version.as_bytes());
     h.update(u64::to_be_bytes(parts.catalog_generation.get()));
-    h.update(parts.retained_object_manifest);
-    h.update(parts.permanence_candidate_manifest);
-    h.update(parts.replica_custody_manifest);
+    h.update(parts.retained_object_manifest.as_bytes());
+    h.update(parts.permanence_candidate_manifest.as_bytes());
+    h.update(parts.replica_custody_manifest.as_bytes());
     h.update(u64::to_be_bytes(parts.nonce_floors.commit.get()));
     h.update(u64::to_be_bytes(parts.nonce_floors.compact.get()));
     h.update(u64::to_be_bytes(parts.nonce_floors.rotate.get()));
@@ -375,7 +433,7 @@ fn digest_parts(parts: &CheckpointSealParts) -> SealDigest {
         parts.incarnation_boundary.open_ordinal().get(),
     ));
     h.update(parts.incarnation_boundary.entropy().as_bytes());
-    h.update(parts.prior_seal_digest);
-    h.update(parts.retention_certificate_digest);
-    h.finalize().into()
+    h.update(parts.prior_seal_digest.as_bytes());
+    h.update(parts.retention_certificate_digest.as_bytes());
+    SealDigest::from_digest(h.finalize().into())
 }

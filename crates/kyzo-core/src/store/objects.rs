@@ -26,10 +26,48 @@ use super::open::{StagingTtl, StoreId};
 use super::sweep::CommitOrdinal;
 
 /// Opaque object identity bytes within a Store scope.
-pub type ObjectId = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ObjectId([u8; 32]);
+
+impl ObjectId {
+    /// Wrap an already-proven object identity digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the identity bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for ObjectId {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
 
 /// Content hash of object bytes (plaintext-canonical).
-pub type ContentHash = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ContentHash([u8; 32]);
+
+impl ContentHash {
+    /// Wrap an already-proven content hash.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the hash bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for ContentHash {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
 
 /// Store-identity-prefixed durable object reference.
 ///
@@ -43,10 +81,10 @@ pub struct ObjectRef {
 
 impl ObjectRef {
     /// Mint a ref scoped to `store_id` (admission / permanence confirm only).
-    pub(crate) fn mint(store_id: StoreId, object_id: ObjectId) -> Self {
+    pub(crate) fn mint(store_id: StoreId, object_id: impl Into<ObjectId>) -> Self {
         Self {
             store_id,
-            object_id,
+            object_id: object_id.into(),
         }
     }
 
@@ -70,10 +108,10 @@ pub struct StagingToken {
 
 impl StagingToken {
     /// Mint a staging token scoped to `store_id`.
-    pub(crate) fn mint(store_id: StoreId, object_id: ObjectId) -> Self {
+    pub(crate) fn mint(store_id: StoreId, object_id: impl Into<ObjectId>) -> Self {
         Self {
             store_id,
-            object_id,
+            object_id: object_id.into(),
         }
     }
 

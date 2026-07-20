@@ -29,10 +29,35 @@ use super::open::StoreId;
 use super::sweep::CommitOrdinal;
 
 /// Fixed-width predecessor / record hash (SHA-256).
-pub type WalHash = [u8; 32];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WalHash([u8; 32]);
+
+impl WalHash {
+    /// Wrap an already-proven WAL hash digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for WalHash {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for WalHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 /// Genesis predecessor hash — first record of the first segment covers this.
-pub const GENESIS_PREDECESSOR: WalHash = [0u8; 32];
+pub const GENESIS_PREDECESSOR: WalHash = WalHash([0u8; 32]);
 
 /// One hash-chained WAL record. Covers its predecessor hash; the first
 /// record of segment N covers the last hash of segment N−1 — splice of two
@@ -304,7 +329,7 @@ fn apply_payload(
 fn hash_record(predecessor_hash: WalHash, payload: &WalPayload) -> WalHash {
     let mut h = Sha256::new();
     h.update(b"kyzo.wal.record.v1");
-    h.update(predecessor_hash);
+    h.update(predecessor_hash.as_bytes());
     match payload {
         WalPayload::Commit {
             commit_ordinal,
@@ -329,7 +354,7 @@ fn hash_record(predecessor_hash: WalHash, payload: &WalPayload) -> WalHash {
             h.update(incarnation_id.entropy().as_bytes());
         }
     }
-    h.finalize().into()
+    WalHash::from_digest(h.finalize().into())
 }
 
 /// Bind a [`NonceLease`]'s exclusive ceiling into a floor payload for append.

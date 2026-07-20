@@ -38,6 +38,94 @@ impl GrantId {
     }
 }
 
+/// Fork-point state root sealed in a ForkGrant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ForkPointRoot([u8; 32]);
+
+impl ForkPointRoot {
+    /// Wrap an already-proven fork-point root.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for ForkPointRoot {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+/// Successor principal binding in a ForkGrant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SuccessorPrincipal([u8; 32]);
+
+impl SuccessorPrincipal {
+    /// Wrap an already-proven successor principal digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for SuccessorPrincipal {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+/// Successor identity seed (sole entropy for materialize).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IdentitySeed([u8; 32]);
+
+impl IdentitySeed {
+    /// Wrap an already-proven identity seed.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the seed bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for IdentitySeed {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+/// Key-material commitment bound into a grant seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KeyMaterialCommitment([u8; 32]);
+
+impl KeyMaterialCommitment {
+    /// Wrap an already-proven key-material commitment.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the commitment bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for KeyMaterialCommitment {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
 /// Different-principal fork seed — not an event.
 ///
 /// Binds GrantId, predecessor StoreId, fork-point root, successor principal,
@@ -47,10 +135,10 @@ impl GrantId {
 pub struct ForkGrant {
     grant_id: GrantId,
     predecessor_store: StoreId,
-    fork_point_root: [u8; 32],
-    successor_principal: [u8; 32],
-    identity_seed: [u8; 32],
-    key_material_commitment: [u8; 32],
+    fork_point_root: ForkPointRoot,
+    successor_principal: SuccessorPrincipal,
+    identity_seed: IdentitySeed,
+    key_material_commitment: KeyMaterialCommitment,
 }
 
 impl ForkGrant {
@@ -58,18 +146,18 @@ impl ForkGrant {
     pub fn new(
         grant_id: GrantId,
         predecessor_store: StoreId,
-        fork_point_root: [u8; 32],
-        successor_principal: [u8; 32],
-        identity_seed: [u8; 32],
-        key_material_commitment: [u8; 32],
+        fork_point_root: impl Into<ForkPointRoot>,
+        successor_principal: impl Into<SuccessorPrincipal>,
+        identity_seed: impl Into<IdentitySeed>,
+        key_material_commitment: impl Into<KeyMaterialCommitment>,
     ) -> Self {
         Self {
             grant_id,
             predecessor_store,
-            fork_point_root,
-            successor_principal,
-            identity_seed,
-            key_material_commitment,
+            fork_point_root: fork_point_root.into(),
+            successor_principal: successor_principal.into(),
+            identity_seed: identity_seed.into(),
+            key_material_commitment: key_material_commitment.into(),
         }
     }
 
@@ -84,22 +172,22 @@ impl ForkGrant {
     }
 
     /// Fork-point state root.
-    pub fn fork_point_root(&self) -> &[u8; 32] {
+    pub fn fork_point_root(&self) -> &ForkPointRoot {
         &self.fork_point_root
     }
 
     /// Successor principal binding.
-    pub fn successor_principal(&self) -> &[u8; 32] {
+    pub fn successor_principal(&self) -> &SuccessorPrincipal {
         &self.successor_principal
     }
 
     /// Successor identity seed (sole entropy for materialize — no discovery-time draw).
-    pub fn identity_seed(&self) -> &[u8; 32] {
+    pub fn identity_seed(&self) -> &IdentitySeed {
         &self.identity_seed
     }
 
     /// Key-material commitment.
-    pub fn key_material_commitment(&self) -> &[u8; 32] {
+    pub fn key_material_commitment(&self) -> &KeyMaterialCommitment {
         &self.key_material_commitment
     }
 }
@@ -115,8 +203,8 @@ pub struct RecoveryGrant {
     grant_id: GrantId,
     store_id: StoreId,
     predecessor_epoch: FenceEpoch,
-    successor_identity_seed: [u8; 32],
-    key_material_commitment: [u8; 32],
+    successor_identity_seed: IdentitySeed,
+    key_material_commitment: KeyMaterialCommitment,
 }
 
 impl RecoveryGrant {
@@ -125,15 +213,20 @@ impl RecoveryGrant {
         grant_id: GrantId,
         store_id: StoreId,
         predecessor_epoch: FenceEpoch,
-        successor_identity_seed: [u8; 32],
-        key_material_commitment: [u8; 32],
+        successor_identity_seed: impl Into<IdentitySeed>,
+        key_material_commitment: impl Into<KeyMaterialCommitment>,
     ) -> Self {
+        assert_eq!(
+            predecessor_epoch.store_id(),
+            store_id,
+            "INVARIANT(RecoveryGrant): predecessor FenceEpoch must bind StoreId"
+        );
         Self {
             grant_id,
             store_id,
             predecessor_epoch,
-            successor_identity_seed,
-            key_material_commitment,
+            successor_identity_seed: successor_identity_seed.into(),
+            key_material_commitment: key_material_commitment.into(),
         }
     }
 
@@ -153,12 +246,12 @@ impl RecoveryGrant {
     }
 
     /// Successor identity seed for WriteAuthority mint (same StoreId).
-    pub fn successor_identity_seed(&self) -> &[u8; 32] {
+    pub fn successor_identity_seed(&self) -> &IdentitySeed {
         &self.successor_identity_seed
     }
 
     /// Key-material commitment.
-    pub fn key_material_commitment(&self) -> &[u8; 32] {
+    pub fn key_material_commitment(&self) -> &KeyMaterialCommitment {
         &self.key_material_commitment
     }
 }
@@ -187,7 +280,7 @@ pub struct MaterializedGrant {
     /// Fresh WriteAuthority for the successor (never in-place reissue of the old token).
     write_authority: WriteAuthority,
     /// Derivation inputs sealed by the grant (key-material commitment echo).
-    key_material_commitment: [u8; 32],
+    key_material_commitment: KeyMaterialCommitment,
 }
 
 impl MaterializedGrant {
@@ -212,7 +305,7 @@ impl MaterializedGrant {
     }
 
     /// Key-material commitment from the grant.
-    pub fn key_material_commitment(&self) -> &[u8; 32] {
+    pub fn key_material_commitment(&self) -> &KeyMaterialCommitment {
         &self.key_material_commitment
     }
 }
@@ -333,32 +426,33 @@ fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
     h.update(b"kyzo.store_id.fork.v1");
     h.update(fork.grant_id().as_bytes());
     h.update(fork.predecessor_store().as_bytes());
-    h.update(fork.fork_point_root());
-    h.update(fork.successor_principal());
-    h.update(fork.identity_seed());
-    h.update(fork.key_material_commitment());
+    h.update(fork.fork_point_root().as_bytes());
+    h.update(fork.successor_principal().as_bytes());
+    h.update(fork.identity_seed().as_bytes());
+    h.update(fork.key_material_commitment().as_bytes());
     StoreId::from_digest(h.finalize().into())
 }
 
-fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> [u8; 32] {
+fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> super::authority::WriteTokenId {
     let mut h = Sha256::new();
     h.update(b"kyzo.write_authority.fork.v1");
     h.update(store_id.as_bytes());
     h.update(fork.grant_id().as_bytes());
-    h.update(fork.identity_seed());
-    h.update(fork.key_material_commitment());
-    h.finalize().into()
+    h.update(fork.identity_seed().as_bytes());
+    h.update(fork.key_material_commitment().as_bytes());
+    super::authority::WriteTokenId::from_digest(h.finalize().into())
 }
 
-fn derive_recovery_write_token(recovery: &RecoveryGrant) -> [u8; 32] {
+fn derive_recovery_write_token(recovery: &RecoveryGrant) -> super::authority::WriteTokenId {
     let mut h = Sha256::new();
     h.update(b"kyzo.write_authority.recovery.v1");
     h.update(recovery.store_id().as_bytes());
     h.update(recovery.grant_id().as_bytes());
     h.update(u64::to_be_bytes(recovery.predecessor_epoch().get()));
-    h.update(recovery.successor_identity_seed());
-    h.update(recovery.key_material_commitment());
-    h.finalize().into()
+    h.update(recovery.predecessor_epoch().store_id().as_bytes());
+    h.update(recovery.successor_identity_seed().as_bytes());
+    h.update(recovery.key_material_commitment().as_bytes());
+    super::authority::WriteTokenId::from_digest(h.finalize().into())
 }
 
 /// Ancestor-epoch plaintext read grant — O(epochs) rewrap.

@@ -362,37 +362,71 @@ impl LeaveIsFreePack {
     }
 }
 
+/// Forbidden secret markers scrubbed from leave-is-free payload bytes (§65).
+const HYGIENE_FORBIDDEN_MARKERS: &[&[u8]] = &[
+    b"kyzo.write_authority.",
+    b"kyzo.kek.",
+    b"kyzo.shred_salt.plaintext.",
+    b"kyzo.audit_key.",
+    b"kyzo.incarnation_mint_cap.",
+];
+
 /// Pack hygiene scrub point (§65): Store/Engine bundle emit and leave-is-free
 /// boundaries. WA / KEK / plaintext salt / AuditKey / MintCap presence after
-/// this point is a Spec violation — those types have no field on the pack.
+/// this point is a Spec violation — those types have no field on the pack, and
+/// payload bytes are scanned for their domain markers.
 fn pack_hygiene_scrub(pack: &LeaveIsFreePack) -> Result<(), PackRefuse> {
-    // Structural scrub: required handles present; forbidden secrets have no
-    // constructor into LeaveIsFreePack. Empty payload alone is still a pack
-    // (objects may be backend-retained under the cut certificate).
     if pack.wrapped_shred_salts.is_empty() || pack.incarnation_history.is_empty() {
         return Err(PackRefuse::HygieneSecretMaterial);
+    }
+    for marker in HYGIENE_FORBIDDEN_MARKERS {
+        if contains_slice(pack.payload.as_slice(), marker) {
+            return Err(PackRefuse::HygieneSecretMaterial);
+        }
     }
     Ok(())
 }
 
+fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
 /// Import verify ceremony (§80): foreign dumps only under capability + chain /
 /// root verify. Blind import is a second write door for forged belief.
+///
+/// Closed sum — never a bool standing in for verify authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ImportCapability {
+pub enum ImportCapability {
     /// Caller presented chain/root verify authority.
-    verified: bool,
+    Verified,
+    /// Foreign import without verify — ceremony refuses.
+    Unverified,
 }
 
 impl ImportCapability {
     /// Mint after chain/root verification succeeded.
     pub fn after_chain_verify() -> Self {
-        Self { verified: true }
+        Self::Verified
     }
 
     /// Unverified foreign import — ceremony will refuse.
     pub fn unverified() -> Self {
-        Self { verified: false }
+        Self::Unverified
     }
+}
+
+/// Whether retained objects named by the cut are present for restore (§79/§80).
+///
+/// Closed sum — green-incomplete restore is Unconstructible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectsCompleteness {
+    /// Every retained object named by the cut is present.
+    Complete,
+    /// Objects missing — import refuses IncompleteRestore.
+    Incomplete,
 }
 
 /// Run the import verify ceremony over a leave-is-free pack.
@@ -403,10 +437,10 @@ impl ImportCapability {
 pub fn import_verify(
     pack: &LeaveIsFreePack,
     cap: ImportCapability,
-    objects_complete: bool,
+    objects: ObjectsCompleteness,
     shred_ledger: &ShredLedger,
 ) -> Result<(), PackRefuse> {
-    if !cap.verified {
+    if matches!(cap, ImportCapability::Unverified) {
         return Err(PackRefuse::ForeignHistoryUnverified);
     }
     if pack.wrapped_shred_salts.is_empty() {
@@ -415,7 +449,7 @@ pub fn import_verify(
     if pack.incarnation_history.is_empty() {
         return Err(PackRefuse::MissingIncarnationHistory);
     }
-    if !objects_complete {
+    if matches!(objects, ObjectsCompleteness::Incomplete) {
         return Err(PackRefuse::IncompleteRestore);
     }
     for wrapped in &pack.wrapped_shred_salts {
@@ -508,8 +542,8 @@ mod pins {
         use crate::store::FormatVersion;
         use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
         use crate::store::backup::{
-            ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse,
-            import_verify,
+            ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts,
+            ObjectsCompleteness, PackRefuse, import_verify,
         };
         use crate::store::crypto::{
             Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
@@ -556,13 +590,18 @@ mod pins {
             import_verify(
                 &pack,
                 ImportCapability::after_chain_verify(),
-                true,
+                ObjectsCompleteness::Complete,
                 &empty_ledger
             )
             .is_ok()
         );
         assert!(matches!(
-            import_verify(&pack, ImportCapability::unverified(), true, &empty_ledger),
+            import_verify(
+                &pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &empty_ledger
+            ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
 
@@ -574,7 +613,7 @@ mod pins {
             import_verify(
                 &pack,
                 ImportCapability::after_chain_verify(),
-                true,
+                ObjectsCompleteness::Complete,
                 &shredded
             ),
             Err(PackRefuse::Shredded)

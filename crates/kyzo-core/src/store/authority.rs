@@ -145,6 +145,28 @@ pub enum IncarnationMintRefuse {
     OrdinalRecycleUnconstructible,
 }
 
+/// Opaque WriteAuthority token identity (not a KEK derivation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WriteTokenId([u8; 32]);
+
+impl WriteTokenId {
+    /// Wrap an already-proven token identity digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the token identity bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for WriteTokenId {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
 /// Immutable affine signing capability that alone authorizes the SweepDoor.
 ///
 /// Minted at genesis / recovery / fork. Lives in the client keystore or HSM
@@ -154,14 +176,17 @@ pub enum IncarnationMintRefuse {
 #[derive(Debug, PartialEq, Eq)]
 pub struct WriteAuthority {
     /// Opaque token identity (not a KEK derivation).
-    token_id: [u8; 32],
+    token_id: WriteTokenId,
     store_id: StoreId,
 }
 
 impl WriteAuthority {
     /// Genesis / grant materialize door — private to the store zone.
-    pub(crate) fn mint(store_id: StoreId, token_id: [u8; 32]) -> Self {
-        Self { token_id, store_id }
+    pub(crate) fn mint(store_id: StoreId, token_id: impl Into<WriteTokenId>) -> Self {
+        Self {
+            token_id: token_id.into(),
+            store_id,
+        }
     }
 
     /// Store identity this authority signs for.
@@ -171,7 +196,12 @@ impl WriteAuthority {
 
     /// Opaque token identity bytes (keystore indexing, never a watermark).
     pub fn token_id(&self) -> &[u8; 32] {
-        &self.token_id
+        self.token_id.as_bytes()
+    }
+
+    /// Typed token identity.
+    pub fn write_token_id(&self) -> WriteTokenId {
+        self.token_id
     }
 
     /// Opening with this authority yields a session-only [`IncarnationMintCap`].
@@ -254,7 +284,7 @@ impl RecoveryMatrix {
 #[derive(Debug)]
 pub struct AddressFence {
     store_id: StoreId,
-    token_id: [u8; 32],
+    token_id: WriteTokenId,
 }
 
 /// Typed refuse from the address fence.
@@ -282,14 +312,14 @@ impl AddressFenceTable {
 
     /// Claim the local address for this WriteAuthority. Second claim → StoreFenced.
     pub fn claim(&self, authority: &WriteAuthority) -> Result<AddressFence, AddressFenceRefuse> {
-        let key = fence_key(authority.store_id(), authority.token_id());
+        let key = fence_key(authority.store_id(), &authority.write_token_id());
         let mut held = self.held.lock().expect("address fence mutex");
         if !held.insert(key) {
             return Err(AddressFenceRefuse::StoreFenced);
         }
         Ok(AddressFence {
             store_id: authority.store_id(),
-            token_id: *authority.token_id(),
+            token_id: authority.write_token_id(),
         })
     }
 
@@ -308,11 +338,11 @@ impl AddressFence {
     }
 }
 
-fn fence_key(store_id: StoreId, token_id: &[u8; 32]) -> [u8; 32] {
+fn fence_key(store_id: StoreId, token_id: &WriteTokenId) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(b"kyzo.address_fence.v1");
     h.update(store_id.as_bytes());
-    h.update(token_id);
+    h.update(token_id.as_bytes());
     h.finalize().into()
 }
