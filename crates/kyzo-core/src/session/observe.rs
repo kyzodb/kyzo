@@ -62,9 +62,9 @@
 //! Ephemeral engine state (in-flight tx, compaction-debt, index-status,
 //! storage-stats) is queryable as relations via
 //! [`Engine::operator_ephemeral_relations`]. Quarantine ranges and failure
-//! topology stay on the sealed [`OperatorHealthSurface`] door — a
-//! tenant/user ask refuses ([`TenantBlindRefuse`]); the tenant-blindness
-//! test is the gate.
+//! topology require [`OperatorCap`] on the sealed [`OperatorHealthSurface`]
+//! door — Cap-absent (tenant) asks refuse ([`TenantBlindRefuse`]); the
+//! Cap-unreachable test is the gate.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -77,7 +77,7 @@ use crate::session::db::Engine;
 use crate::session::jobs::OperatorEphemeralRelations;
 use crate::store::Storage;
 use crate::store::failure::{
-    HealthQueryAudience, OperatorHealthSurface, QuarantineRange,
+    OperatorCap, OperatorHealthSurface, QuarantineRange,
 };
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
 
@@ -405,7 +405,7 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Record a quarantine range on the sealed operator surface (never a
-    /// tenant door). Tenant asks still cannot select it — see
+    /// tenant door). Cap-absent asks still cannot select it — see
     /// [`OperatorHealthSurface::quarantine_ranges`].
     pub fn operator_record_quarantine(&self, range: QuarantineRange) {
         self.event_callbacks
@@ -415,16 +415,24 @@ impl<S: Storage> Engine<S> {
             .record_quarantine(range);
     }
 
-    /// Ephemeral engine-state relations on the sealed operator surface.
+    /// Cap-absent ephemeral engine-state relations (§82).
     ///
-    /// Audience selects the tenant-blind gate: [`HealthQueryAudience::Tenant`]
-    /// can project in-flight tx / debt / index-status / storage-stats but
-    /// **cannot** select quarantine or failure topology.
-    pub fn operator_ephemeral_relations(
+    /// Projects in-flight tx / debt / index-status / storage-stats.
+    /// Quarantine and failure topology are **unreachable** without
+    /// [`OperatorCap`] — this door does not mint or accept Cap.
+    pub fn operator_ephemeral_relations(&self) -> OperatorEphemeralRelations {
+        OperatorEphemeralRelations::for_tenant(self.operator_health_surface())
+    }
+
+    /// Cap-present operator ephemeral relations (§82).
+    ///
+    /// Requires unforgeable [`OperatorCap`] (composition-root / host mint
+    /// only — like `StoreOpen::mint`). Tenant doors have no path here.
+    pub fn operator_ephemeral_relations_for(
         &self,
-        audience: HealthQueryAudience,
+        cap: OperatorCap,
     ) -> OperatorEphemeralRelations {
-        OperatorEphemeralRelations::new(self.operator_health_surface(), audience)
+        OperatorEphemeralRelations::for_operator(self.operator_health_surface(), cap)
     }
 }
 
@@ -607,15 +615,15 @@ mod deep_verify_schedule {
 
 #[cfg(test)]
 mod tenant_blind_operator_surface {
-    //! §82: tenant/user queries cannot select quarantine or failure topology.
-    //! The refuse is the gate — not documentation.
+    //! §82: quarantine / failure topology unreachable without OperatorCap.
+    //! Cap-absent refuses; Cap (pub(crate) mint) sees data. Not a costume gate.
 
     use std::collections::BTreeMap;
 
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::store::failure::{
-        FailureLattice, HealthQueryAudience, KeyspaceId, TenantBlindRefuse, mint_quarantine,
+        FailureLattice, KeyspaceId, OperatorCap, TenantBlindRefuse, mint_quarantine,
     };
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::value::DataValue;
@@ -624,10 +632,9 @@ mod tenant_blind_operator_surface {
         BTreeMap::new()
     }
 
-    /// Adversarial tenant-blindness test: attempt to select quarantine ranges
-    /// and failure topology from a tenant ask — must refuse.
+    /// Adversarial: quarantine unreachable without Cap — not "pass Tenant → refuse".
     #[test]
-    fn tenant_blindness_cannot_select_quarantine_or_failure_topology() {
+    fn quarantine_unreachable_without_operator_cap() {
         let dir = tempfile::tempdir().unwrap();
         let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
             .expect("compose");
@@ -640,8 +647,9 @@ mod tenant_blind_operator_surface {
             b"hi".to_vec(),
         ));
 
-        let tenant = db.operator_ephemeral_relations(HealthQueryAudience::Tenant);
-        // Ephemeral metrics remain queryable (not the leak surface).
+        // Cap-absent ordinary door: ephemeral metrics OK, topology unreachable.
+        let tenant = db.operator_ephemeral_relations();
+        assert!(!tenant.has_operator_cap());
         assert_eq!(
             tenant
                 .in_flight_tx_relation()
@@ -651,17 +659,17 @@ mod tenant_blind_operator_surface {
                 .unwrap(),
             0
         );
-        // Quarantine select refuses.
         assert!(matches!(
             tenant.quarantine_relation(),
             Err(TenantBlindRefuse::QuarantineTopologyForbidden)
         ));
 
+        // With Cap (composition-root mint only — like StoreOpen::mint).
+        let cap = OperatorCap::mint();
         let lattice = FailureLattice::Quarantined {
             ranges: db
                 .operator_health_surface()
-                .quarantine_ranges(HealthQueryAudience::Operator)
-                .unwrap()
+                .quarantine_ranges(&cap)
                 .to_vec(),
         };
         assert!(matches!(
@@ -669,8 +677,8 @@ mod tenant_blind_operator_surface {
             Err(TenantBlindRefuse::FailureTopologyForbidden)
         ));
 
-        // Operator audience sees quarantine on the sealed OperatorHealthSurface.
-        let op = db.operator_ephemeral_relations(HealthQueryAudience::Operator);
+        let op = db.operator_ephemeral_relations_for(cap);
+        assert!(op.has_operator_cap());
         assert_eq!(op.quarantine_relation().unwrap().rows().len(), 1);
         assert!(op.failure_topology(&lattice).is_ok());
     }

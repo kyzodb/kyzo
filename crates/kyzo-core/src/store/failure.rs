@@ -13,7 +13,7 @@
 //! Owns: [`StoreRefuse`] (the Refused claim-tag ledger for Store doors),
 //! [`FailureLattice`], [`QuarantineRange`], [`mint_quarantine`],
 //! [`ScopedMismatchCarriage`] / [`CarriageReport`] (vendor fault carriage into
-//! the lattice), debt ledger, operator health surface.
+//! the lattice), debt ledger, [`OperatorCap`], operator health surface.
 //!
 //! Bans: bool soup instead of the closed lattice; last-known-good serve;
 //! quarantine visibility to ordinary tenant queries (§82); silent stall
@@ -323,17 +323,23 @@ impl DebtLedger {
     }
 }
 
-/// Who is asking the health / ephemeral surface (§82).
+/// Unforgeable capability for operator health / quarantine / failure topology (§82).
 ///
-/// The audience **is** the tenant-blind gate: [`HealthQueryAudience::Tenant`]
-/// cannot select quarantine ranges or failure topology — that ask refuses.
-/// [`HealthQueryAudience::Operator`] is the only door that sees them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealthQueryAudience {
-    /// Sealed operator door — may inspect quarantine and failure topology.
-    Operator,
-    /// Ordinary user/tenant ask — quarantine and failure topology refuse.
-    Tenant,
+/// Same pattern as [`crate::store::open::StoreOpen`]: private field, mint only
+/// via [`OperatorCap::mint`] (`pub(crate)`). Composition-root / host only —
+/// ordinary tenant doors have **no path** to mint or pass this token. A free
+/// enum audience is not the door: Cap-absent → quarantine unreachable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorCap {
+    _private: (),
+}
+
+impl OperatorCap {
+    /// Mint an operator capability (composition root / host only — like
+    /// [`crate::store::open::StoreOpen::mint`]). Not a public constructor.
+    pub(crate) fn mint() -> Self {
+        Self { _private: () }
+    }
 }
 
 /// Tenant-blind refuse (§82): quarantine / failure topology are operator-only.
@@ -423,16 +429,15 @@ impl EphemeralEngineState {
 /// Operator-sealed health surface (§82) — tenant-blind.
 ///
 /// Ephemeral engine state is queryable as relations on this sealed operator
-/// door. Quarantine ranges and failure topology are **private** on this
-/// surface: only [`HealthQueryAudience::Operator`] may select them;
-/// [`HealthQueryAudience::Tenant`] refuses ([`TenantBlindRefuse`]).
+/// door. Quarantine ranges are **private**: only callers presenting
+/// [`OperatorCap`] may select them. Cap-absent doors never reach this field.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OperatorHealthSurface {
     /// Current debt ledger snapshot.
     pub debt: DebtLedger,
     /// Bytes / objects reclaimable under operator pressure.
     pub reclaimable: u64,
-    /// Active quarantine ranges — **private**; operator-gated accessor only.
+    /// Active quarantine ranges — **private**; Cap-gated accessor only.
     quarantine: Vec<QuarantineRange>,
     /// Last verification walk outcome digest (or zero if never run).
     pub last_verify: [u8; 32],
@@ -460,31 +465,23 @@ impl OperatorHealthSurface {
         self.quarantine.push(range);
     }
 
-    /// Select quarantine ranges — **operator only**. Tenant ask refuses (§82).
+    /// Select quarantine ranges — requires [`OperatorCap`] (§82).
     ///
-    /// This is the tenant-blindness gate: ordinary user/tenant queries cannot
-    /// select quarantine metadata; the refuse is structural, not documentary.
-    pub fn quarantine_ranges(
-        &self,
-        audience: HealthQueryAudience,
-    ) -> Result<&[QuarantineRange], TenantBlindRefuse> {
-        match audience {
-            HealthQueryAudience::Operator => Ok(self.quarantine.as_slice()),
-            HealthQueryAudience::Tenant => Err(TenantBlindRefuse::QuarantineTopologyForbidden),
-        }
+    /// Without Cap this method is unreachable: Cap-absent doors never obtain
+    /// an [`OperatorCap`] to pass. The private `quarantine` field is not a
+    /// public leak.
+    pub fn quarantine_ranges(&self, _cap: &OperatorCap) -> &[QuarantineRange] {
+        self.quarantine.as_slice()
     }
 }
 
 impl FailureLattice {
-    /// Inspect failure topology — **operator only**. Tenant ask refuses (§82).
-    pub fn topology_for(
-        &self,
-        audience: HealthQueryAudience,
-    ) -> Result<&FailureLattice, TenantBlindRefuse> {
-        match audience {
-            HealthQueryAudience::Operator => Ok(self),
-            HealthQueryAudience::Tenant => Err(TenantBlindRefuse::FailureTopologyForbidden),
-        }
+    /// Inspect failure topology — requires [`OperatorCap`] (§82).
+    ///
+    /// Cap-absent callers cannot invoke this; tenant projectors refuse before
+    /// reaching here ([`TenantBlindRefuse::FailureTopologyForbidden`]).
+    pub fn topology_for(&self, _cap: &OperatorCap) -> &FailureLattice {
+        self
     }
 }
 
@@ -734,10 +731,12 @@ mod tests {
         assert!(matches!(lattice, FailureLattice::Quarantined { ranges } if ranges.len() == 1));
     }
 
-    /// §82 tenant-blindness gate: a tenant/user ask cannot select quarantine
-    /// ranges or failure topology — must refuse, not merely omit from docs.
+    /// §82: quarantine / failure topology require [`OperatorCap`] — Cap mint is
+    /// composition-root / host only (`OperatorCap::mint`, like `StoreOpen::mint`).
+    /// Without Cap there is no door: accessors take `&OperatorCap`, not a free
+    /// enum a caller invents. Cap-absent projectors refuse in session/jobs.
     #[test]
-    fn tenant_blindness_quarantine_and_failure_topology_refuse() {
+    fn quarantine_unreachable_without_operator_cap() {
         let mut surface = OperatorHealthSurface::default();
         surface.record_quarantine(mint_quarantine(
             KeyspaceId::from_raw(1),
@@ -745,31 +744,19 @@ mod tests {
             b"b".to_vec(),
         ));
 
-        // Operator sees the quarantine.
-        let op_ranges = surface
-            .quarantine_ranges(HealthQueryAudience::Operator)
-            .expect("operator may select quarantine");
+        // With Cap (crate-local mint — host/composition-root only): operator sees data.
+        let cap = OperatorCap::mint();
+        let op_ranges = surface.quarantine_ranges(&cap);
         assert_eq!(op_ranges.len(), 1);
-
-        // Tenant ask refuses — the gate, not a soft omit.
-        assert!(matches!(
-            surface.quarantine_ranges(HealthQueryAudience::Tenant),
-            Err(TenantBlindRefuse::QuarantineTopologyForbidden)
-        ));
 
         let lattice = FailureLattice::Quarantined {
             ranges: op_ranges.to_vec(),
         };
         assert!(
             lattice
-                .topology_for(HealthQueryAudience::Operator)
-                .expect("operator may inspect failure topology")
+                .topology_for(&cap)
                 .admit_key(KeyspaceId::from_raw(1), b"a")
                 .is_err()
         );
-        assert!(matches!(
-            lattice.topology_for(HealthQueryAudience::Tenant),
-            Err(TenantBlindRefuse::FailureTopologyForbidden)
-        ));
     }
 }
