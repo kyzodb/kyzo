@@ -1,0 +1,56 @@
+name: Public issue triage & comment moderation
+
+# Two behaviours, both keyed off GitHub's `author_association`:
+#
+#  1. When a non-contributor opens an issue, label it `public` so it is
+#     visibly "opened by the public" and stays off the work board (the board
+#     never auto-adds; kyzo-plan tooling adds cards deliberately).
+#
+#  2. On a `public`-labelled issue, only the issue author and repo
+#     contributors/members may leave standing comments. A comment from anyone
+#     else is minimized (hidden as off-topic). GitHub has no native
+#     "only the author may comment" per-issue permission, so this is the
+#     supported workaround — after-the-fact hiding, reversible by a maintainer.
+#
+# `author_association` values treated as "insider": OWNER, MEMBER,
+# COLLABORATOR, CONTRIBUTOR. Everyone else (NONE, FIRST_TIMER,
+# FIRST_TIME_CONTRIBUTOR, MANNEQUIN) is "public".
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  label-public-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label issues opened by a non-contributor
+        if: ${{ !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.issue.author_association) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --add-label "public"
+
+  moderate-public-comment:
+    # Only issues (not PRs) carry the `public` label, so PR comments are
+    # naturally excluded by the label gate.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      contains(github.event.issue.labels.*.name, 'public') &&
+      github.event.comment.user.login != github.event.issue.user.login &&
+      !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hide comments from non-author non-contributors
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_NODE_ID: ${{ github.event.comment.node_id }}
+        run: |
+          gh api graphql \
+            -f query='mutation($id: ID!) { minimizeComment(input: { classifier: OFF_TOPIC, subjectId: $id }) { minimizedComment { isMinimized } } }' \
+            -f id="$COMMENT_NODE_ID"
