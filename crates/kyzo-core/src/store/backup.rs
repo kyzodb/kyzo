@@ -736,6 +736,27 @@ mod import_verify {
         );
     }
 
+    /// NASTY (guardian, seat 80): a verified `ImportCapability` minted by
+    /// self-comparing an arbitrary attacker-chosen root — with no relation to
+    /// the pack — must NOT import that pack. The capability is contentless
+    /// (binds no root) and `import_verify` never recomputes the pack's own root:
+    /// confused deputy. RED until the cap binds the independently-recomputed root
+    /// of the pack it verified and `import_verify` gates on it.
+    #[test]
+    fn verified_capability_unbound_to_pack_must_not_import_it() {
+        let (pack, _) = sample_pack();
+        let ledger = ShredLedger::new();
+        // Attacker picks any root and compares it to itself → "verified" for
+        // free, with zero connection to this pack's actual history.
+        let attacker_root = StateRoot::from_digest([0x00; 32]);
+        let free_cap = ImportCapability::after_chain_root_verify(attacker_root, attacker_root)
+            .expect("self-equal roots mint verified");
+        assert!(
+            import_verify(&pack, free_cap, ObjectsCompleteness::Complete, &ledger).is_err(),
+            "CONFUSED DEPUTY: a capability verified against an arbitrary root unrelated to this pack imported it — the cap binds no root and import_verify never recomputes the pack's own (seat 80)"
+        );
+    }
+
     #[test]
     fn forged_root_never_reaches_import_verify_as_verified() {
         let (pack, _) = sample_pack();

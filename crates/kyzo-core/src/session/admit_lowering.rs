@@ -834,6 +834,89 @@ mod tests {
         );
     }
 
+    /// NASTY (guardian, seat 69): a `CrossingValidated` minted for record A must
+    /// NOT authorize lowering an unrelated same-kind record B. The token binds
+    /// kind only — confused deputy. RED until `CrossingValidated` binds the
+    /// validated record identity and `lower_after_crossing` gates on it.
+    #[test]
+    fn crossing_validation_for_a_must_not_authorize_lowering_b() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::replica::{
+            AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
+            CrossingStatus, OriginContinuity, PostStateRoot, ScopeManifestDigest,
+            ScopeManifestStatus, ScopeManifestTable, mint_admission_certificate,
+            sign_admission_parts, validate_crossing_before_lower,
+        };
+        use crate::store::sweep::CommitOrdinal;
+
+        // Validate record A, exactly as the legitimate path does.
+        let record = admit_claim_record();
+        let key = AuthorizingKey::mint_with_verifying_id([0x27; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x51; 32]);
+        let mut parts = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store: record.store_id(),
+            origin_epoch: FenceEpoch::genesis(record.store_id()),
+            origin_commit: CommitOrdinal::ZERO,
+            schema_cut: [0x51; 32],
+            record_digest: *record.digest().as_digest(),
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts.signature = sign_admission_parts(&parts, &key).expect("sign");
+        let cert = mint_admission_certificate(parts).expect("mint");
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key);
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+        let envelope = super::crossing_envelope_from_record(
+            &record,
+            &cert,
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        );
+        let validated = validate_crossing_before_lower(
+            &cert,
+            &envelope,
+            record.store_id(),
+            CommitOrdinal::ZERO,
+            &keys,
+            &scopes,
+            Some(&OriginContinuity::mint()),
+            &CrossingCapabilitySet::new(),
+        )
+        .expect("validate A");
+
+        // B: a DIFFERENT Claim record that never passed crossing validation.
+        let b = admit_kind(construct::claim(
+            StatementSubject::new(DataValue::from("intruder")),
+            crate::data::statement::StatementPredicate::new("part_of").expect("pred"),
+            StatementValue::new(DataValue::from("forged_assembly")),
+            ValidityTime::instant(1_700_000_000_000_001),
+            StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
+            StatementSource::unbound(),
+        ));
+        assert_ne!(
+            record.record_id(),
+            b.record_id(),
+            "A and B must be distinct records"
+        );
+        assert_eq!(
+            record.kind(),
+            b.kind(),
+            "same kind — only an identity binding can refuse B"
+        );
+
+        assert!(
+            super::lower_after_crossing(&b, &validated).is_err(),
+            "CONFUSED DEPUTY: CrossingValidated minted for record A authorized lowering unrelated record B — token binds kind, not identity (seat 69)"
+        );
+    }
+
     /// Kind mismatch refuses in release — not debug_assert-only (#270 T3).
     #[test]
     fn lower_after_crossing_kind_mismatch_refuses() {
