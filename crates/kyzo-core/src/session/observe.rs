@@ -66,7 +66,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::json::NamedRows;
 use crate::session::db::Engine;
 use crate::store::Storage;
-use crate::store::verify_walk::{DeepVerifyReport, deep_verify_storage};
+use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
 
 /// Persisted outcome of one operator-scheduled deep-verify run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +78,7 @@ pub struct DeepVerifyLastResult {
     /// Count of index mismatches (re-derived ≠ stored).
     pub mismatch_count: u64,
     /// Stable digest of the full [`DeepVerifyReport`].
-    pub digest: [u8; 32],
+    pub digest: DeepVerifyDigest,
     /// Schedule ordinal at which this result was produced.
     pub schedule_ordinal: u64,
 }

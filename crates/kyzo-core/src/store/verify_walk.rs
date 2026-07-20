@@ -70,6 +70,29 @@ use kyzo_model::value::{
     extend_tuple_from_v,
 };
 
+/// Domain-separated checksum over (keyspace, block, payload).
+///
+/// Owned identity for [`KeyspaceScopedChecksum::digest`] — never a bare
+/// `[u8; 32]`. Bytes are produced only by [`KeyspaceScopedChecksum::compute`]
+/// under the `kyzo.keyspace_scoped_checksum.v1` domain tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct KeyspaceScopedChecksumDigest([u8; 32]);
+
+const _: () = assert!(
+    std::mem::size_of::<KeyspaceScopedChecksumDigest>() == std::mem::size_of::<[u8; 32]>()
+);
+const _: () = assert!(
+    std::mem::align_of::<KeyspaceScopedChecksumDigest>() == std::mem::align_of::<[u8; 32]>()
+);
+
+impl KeyspaceScopedChecksumDigest {
+    /// Borrow the checksum bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// Table/keyspace-scoped checksum identity (§49).
 ///
 /// Binds keyspace identity + logical block so misplaced-but-intact data is
@@ -81,7 +104,7 @@ pub struct KeyspaceScopedChecksum {
     /// Logical block ordinal within the keyspace.
     block: u64,
     /// Checksum over (keyspace, block, payload).
-    digest: [u8; 32],
+    digest: KeyspaceScopedChecksumDigest,
 }
 
 impl KeyspaceScopedChecksum {
@@ -95,7 +118,7 @@ impl KeyspaceScopedChecksum {
         Self {
             keyspace,
             block,
-            digest: h.finalize().into(),
+            digest: KeyspaceScopedChecksumDigest(h.finalize().into()),
         }
     }
 
@@ -110,7 +133,7 @@ impl KeyspaceScopedChecksum {
     }
 
     /// Checksum digest.
-    pub fn digest(self) -> [u8; 32] {
+    pub fn digest(self) -> KeyspaceScopedChecksumDigest {
         self.digest
     }
 
@@ -312,6 +335,27 @@ pub struct IndexMismatch {
     pub detail: String,
 }
 
+/// Domain-separated digest of a [`DeepVerifyReport`].
+///
+/// Owned identity for operator last-result persistence — never a bare
+/// `[u8; 32]`. Bytes are produced only by [`DeepVerifyReport::digest`] under
+/// the `kyzo.deep_verify_report.v1` domain tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct DeepVerifyDigest([u8; 32]);
+
+const _: () =
+    assert!(std::mem::size_of::<DeepVerifyDigest>() == std::mem::size_of::<[u8; 32]>());
+const _: () =
+    assert!(std::mem::align_of::<DeepVerifyDigest>() == std::mem::align_of::<[u8; 32]>());
+
+impl DeepVerifyDigest {
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// Outcome of a deep-verify: decode/order walk plus per-kind re-derivation diffs.
 #[derive(Debug, Default)]
 pub struct DeepVerifyReport {
@@ -330,7 +374,7 @@ impl DeepVerifyReport {
     }
 
     /// Stable digest of this report for operator last-result persistence.
-    pub fn digest(&self) -> [u8; 32] {
+    pub fn digest(&self) -> DeepVerifyDigest {
         let mut h = Sha256::new();
         h.update(b"kyzo.deep_verify_report.v1");
         h.update(u64::to_be_bytes(self.walk.checked));
@@ -348,7 +392,7 @@ impl DeepVerifyReport {
             h.update(m.kind.as_bytes());
             h.update(m.detail.as_bytes());
         }
-        h.finalize().into()
+        DeepVerifyDigest(h.finalize().into())
     }
 }
 
