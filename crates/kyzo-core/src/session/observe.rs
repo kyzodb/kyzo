@@ -56,6 +56,15 @@
 //! [`crate::store::verify_walk::deep_verify_storage`] and persists the
 //! [`DeepVerifyLastResult`] on this registry; [`Engine::deep_verify_last_result`]
 //! and [`Engine::deep_verify_staleness`] are the queryable doors.
+//!
+//! ## Sealed operator health / ephemeral surface (§82)
+//!
+//! Ephemeral engine state (in-flight tx, compaction-debt, index-status,
+//! storage-stats) is queryable as relations via
+//! [`Engine::operator_ephemeral_relations`]. Quarantine ranges and failure
+//! topology stay on the sealed [`OperatorHealthSurface`] door — a
+//! tenant/user ask refuses ([`TenantBlindRefuse`]); the tenant-blindness
+//! test is the gate.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -65,7 +74,11 @@ use smartstring::{LazyCompact, SmartString};
 
 use crate::data::json::NamedRows;
 use crate::session::db::Engine;
+use crate::session::jobs::OperatorEphemeralRelations;
 use crate::store::Storage;
+use crate::store::failure::{
+    HealthQueryAudience, OperatorHealthSurface, QuarantineRange,
+};
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
 
 /// Persisted outcome of one operator-scheduled deep-verify run.
@@ -210,12 +223,15 @@ pub(crate) type CallbackCollector = BTreeMap<SmartString<LazyCompact>, Vec<Callb
 /// [`Db::send_callbacks`] are the only mutators, and each maintains both.
 ///
 /// Also carries the deep-verify operator schedule + persisted last-result
-/// (§51) — same lock door so observe stays one session observation surface.
+/// (§51) and the sealed [`OperatorHealthSurface`] (§82) — same lock door so
+/// observe stays one session observation surface.
 #[derive(Default)]
 pub(crate) struct EventCallbackRegistry {
     pub(crate) by_id: BTreeMap<u32, CallbackDeclaration>,
     pub(crate) by_relation: BTreeMap<SmartString<LazyCompact>, BTreeSet<u32>>,
     deep_verify: DeepVerifyOperatorState,
+    /// Sealed operator health + ephemeral engine-state surface (§82).
+    operator_health: OperatorHealthSurface,
 }
 
 impl EventCallbackRegistry {
@@ -369,6 +385,46 @@ impl<S: Storage> Engine<S> {
             .expect("registry lock poisoned")
             .deep_verify
             .staleness()
+    }
+
+    /// Snapshot the sealed [`OperatorHealthSurface`] (§82).
+    pub fn operator_health_surface(&self) -> OperatorHealthSurface {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .operator_health
+            .clone()
+    }
+
+    /// Replace the sealed operator health surface (operator wiring door).
+    pub fn set_operator_health_surface(&self, surface: OperatorHealthSurface) {
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .operator_health = surface;
+    }
+
+    /// Record a quarantine range on the sealed operator surface (never a
+    /// tenant door). Tenant asks still cannot select it — see
+    /// [`OperatorHealthSurface::quarantine_ranges`].
+    pub fn operator_record_quarantine(&self, range: QuarantineRange) {
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .operator_health
+            .record_quarantine(range);
+    }
+
+    /// Ephemeral engine-state relations on the sealed operator surface.
+    ///
+    /// Audience selects the tenant-blind gate: [`HealthQueryAudience::Tenant`]
+    /// can project in-flight tx / debt / index-status / storage-stats but
+    /// **cannot** select quarantine or failure topology.
+    pub fn operator_ephemeral_relations(
+        &self,
+        audience: HealthQueryAudience,
+    ) -> OperatorEphemeralRelations {
+        OperatorEphemeralRelations::new(self.operator_health_surface(), audience)
     }
 }
 
@@ -546,5 +602,76 @@ mod deep_verify_schedule {
         }
         assert!(db.run_scheduled_deep_verify().unwrap().is_some());
         assert!(db.run_scheduled_deep_verify().unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod tenant_blind_operator_surface {
+    //! §82: tenant/user queries cannot select quarantine or failure topology.
+    //! The refuse is the gate — not documentation.
+
+    use std::collections::BTreeMap;
+
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use crate::store::failure::{
+        FailureLattice, HealthQueryAudience, KeyspaceId, TenantBlindRefuse, mint_quarantine,
+    };
+    use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::value::DataValue;
+
+    fn no_params() -> BTreeMap<String, DataValue> {
+        BTreeMap::new()
+    }
+
+    /// Adversarial tenant-blindness test: attempt to select quarantine ranges
+    /// and failure topology from a tenant ask — must refuse.
+    #[test]
+    fn tenant_blindness_cannot_select_quarantine_or_failure_topology() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+            .expect("compose");
+        db.run_script("?[k, v] <- [[1, 7]] :create t {k => v}", no_params())
+            .unwrap();
+
+        db.operator_record_quarantine(mint_quarantine(
+            KeyspaceId::from_raw(3),
+            b"lo".to_vec(),
+            b"hi".to_vec(),
+        ));
+
+        let tenant = db.operator_ephemeral_relations(HealthQueryAudience::Tenant);
+        // Ephemeral metrics remain queryable (not the leak surface).
+        assert_eq!(
+            tenant
+                .in_flight_tx_relation()
+                .unwrap()
+                .rows()[0][0]
+                .get_int()
+                .unwrap(),
+            0
+        );
+        // Quarantine select refuses.
+        assert!(matches!(
+            tenant.quarantine_relation(),
+            Err(TenantBlindRefuse::QuarantineTopologyForbidden)
+        ));
+
+        let lattice = FailureLattice::Quarantined {
+            ranges: db
+                .operator_health_surface()
+                .quarantine_ranges(HealthQueryAudience::Operator)
+                .unwrap()
+                .to_vec(),
+        };
+        assert!(matches!(
+            tenant.failure_topology(&lattice),
+            Err(TenantBlindRefuse::FailureTopologyForbidden)
+        ));
+
+        // Operator audience sees quarantine on the sealed OperatorHealthSurface.
+        let op = db.operator_ephemeral_relations(HealthQueryAudience::Operator);
+        assert_eq!(op.quarantine_relation().unwrap().rows().len(), 1);
+        assert!(op.failure_topology(&lattice).is_ok());
     }
 }

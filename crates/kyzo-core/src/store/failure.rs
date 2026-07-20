@@ -323,24 +323,169 @@ impl DebtLedger {
     }
 }
 
+/// Who is asking the health / ephemeral surface (§82).
+///
+/// The audience **is** the tenant-blind gate: [`HealthQueryAudience::Tenant`]
+/// cannot select quarantine ranges or failure topology — that ask refuses.
+/// [`HealthQueryAudience::Operator`] is the only door that sees them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthQueryAudience {
+    /// Sealed operator door — may inspect quarantine and failure topology.
+    Operator,
+    /// Ordinary user/tenant ask — quarantine and failure topology refuse.
+    Tenant,
+}
+
+/// Tenant-blind refuse (§82): quarantine / failure topology are operator-only.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum TenantBlindRefuse {
+    /// Tenant tried to select quarantine ranges.
+    #[error("tenant-blind: quarantine ranges are operator-only (§82)")]
+    #[diagnostic(code(store::refuse::tenant_blind_quarantine))]
+    QuarantineTopologyForbidden,
+    /// Tenant tried to select failure-lattice topology.
+    #[error("tenant-blind: failure topology is operator-only (§82)")]
+    #[diagnostic(code(store::refuse::tenant_blind_failure_topology))]
+    FailureTopologyForbidden,
+}
+
+/// Point-in-time storage counters carried on the operator ephemeral surface.
+///
+/// Distinct from the fjall `StorageStats` type so the failure seat never
+/// imports the backend — operators project these as relation rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StorageStatsSnapshot {
+    /// Bytes resident in the block cache.
+    pub cache_size_bytes: u64,
+    /// Block-cache capacity.
+    pub cache_capacity_bytes: u64,
+    /// Write-buffer / memtable bytes.
+    pub write_buffer_size_bytes: u64,
+    /// Compactions currently running.
+    pub active_compactions: u64,
+    /// Journal / WAL segment count.
+    pub journal_count: u64,
+}
+
+/// Ephemeral engine counters queryable as relations on the sealed operator
+/// surface (§82): in-flight tx, compaction-debt, index-status, storage-stats.
+///
+/// T2 seals one-counter-per-metric; T1 seats the relation surface and the
+/// tenant-blind gate around it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EphemeralEngineState {
+    /// Open / in-flight transactions.
+    in_flight_tx: u64,
+    /// Compaction debt outstanding (DebtLedger-aligned; T2 owns uniqueness).
+    compaction_debt: u64,
+    /// Catalog index generation / staleness witness (§20).
+    index_status_generation: u64,
+    /// Storage stats snapshot.
+    storage_stats: StorageStatsSnapshot,
+}
+
+impl EphemeralEngineState {
+    /// In-flight transaction count.
+    pub fn in_flight_tx(&self) -> u64 {
+        self.in_flight_tx
+    }
+
+    /// Compaction-debt outstanding.
+    pub fn compaction_debt(&self) -> u64 {
+        self.compaction_debt
+    }
+
+    /// Index-status generation counter.
+    pub fn index_status_generation(&self) -> u64 {
+        self.index_status_generation
+    }
+
+    /// Storage-stats snapshot.
+    pub fn storage_stats(&self) -> StorageStatsSnapshot {
+        self.storage_stats
+    }
+
+    /// Operator/wiring door: replace the ephemeral snapshot.
+    pub fn replace(
+        &mut self,
+        in_flight_tx: u64,
+        compaction_debt: u64,
+        index_status_generation: u64,
+        storage_stats: StorageStatsSnapshot,
+    ) {
+        self.in_flight_tx = in_flight_tx;
+        self.compaction_debt = compaction_debt;
+        self.index_status_generation = index_status_generation;
+        self.storage_stats = storage_stats;
+    }
+}
+
 /// Operator-sealed health surface (§82) — tenant-blind.
 ///
-/// Queryable only on a sealed operator door; never exposed to ordinary
-/// tenant asks.
+/// Ephemeral engine state is queryable as relations on this sealed operator
+/// door. Quarantine ranges and failure topology are **private** on this
+/// surface: only [`HealthQueryAudience::Operator`] may select them;
+/// [`HealthQueryAudience::Tenant`] refuses ([`TenantBlindRefuse`]).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OperatorHealthSurface {
     /// Current debt ledger snapshot.
     pub debt: DebtLedger,
     /// Bytes / objects reclaimable under operator pressure.
     pub reclaimable: u64,
-    /// Active quarantine ranges (operator-visible only).
-    pub quarantine: Vec<QuarantineRange>,
+    /// Active quarantine ranges — **private**; operator-gated accessor only.
+    quarantine: Vec<QuarantineRange>,
     /// Last verification walk outcome digest (or zero if never run).
     pub last_verify: [u8; 32],
     /// Staged-object pressure (Pending / PermanenceCandidate count proxy).
     pub staged_object_pressure: u64,
     /// Fence-pressure feed from live Fenced footprints.
     pub fence_pressure: u64,
+    /// Ephemeral counters projected as relations.
+    ephemeral: EphemeralEngineState,
+}
+
+impl OperatorHealthSurface {
+    /// Borrow the ephemeral engine-state counters.
+    pub fn ephemeral(&self) -> &EphemeralEngineState {
+        &self.ephemeral
+    }
+
+    /// Mutable ephemeral counters (operator / session wiring).
+    pub fn ephemeral_mut(&mut self) -> &mut EphemeralEngineState {
+        &mut self.ephemeral
+    }
+
+    /// Record a quarantine range on the operator surface (never a tenant door).
+    pub fn record_quarantine(&mut self, range: QuarantineRange) {
+        self.quarantine.push(range);
+    }
+
+    /// Select quarantine ranges — **operator only**. Tenant ask refuses (§82).
+    ///
+    /// This is the tenant-blindness gate: ordinary user/tenant queries cannot
+    /// select quarantine metadata; the refuse is structural, not documentary.
+    pub fn quarantine_ranges(
+        &self,
+        audience: HealthQueryAudience,
+    ) -> Result<&[QuarantineRange], TenantBlindRefuse> {
+        match audience {
+            HealthQueryAudience::Operator => Ok(self.quarantine.as_slice()),
+            HealthQueryAudience::Tenant => Err(TenantBlindRefuse::QuarantineTopologyForbidden),
+        }
+    }
+}
+
+impl FailureLattice {
+    /// Inspect failure topology — **operator only**. Tenant ask refuses (§82).
+    pub fn topology_for(
+        &self,
+        audience: HealthQueryAudience,
+    ) -> Result<&FailureLattice, TenantBlindRefuse> {
+        match audience {
+            HealthQueryAudience::Operator => Ok(self),
+            HealthQueryAudience::Tenant => Err(TenantBlindRefuse::FailureTopologyForbidden),
+        }
+    }
 }
 
 /// Closed StoreRefuse ledger — the Refused claim-tag ledger in types (§42+).
@@ -587,5 +732,44 @@ mod tests {
             ));
         assert!(!matches!(lattice, FailureLattice::Poisoned { .. }));
         assert!(matches!(lattice, FailureLattice::Quarantined { ranges } if ranges.len() == 1));
+    }
+
+    /// §82 tenant-blindness gate: a tenant/user ask cannot select quarantine
+    /// ranges or failure topology — must refuse, not merely omit from docs.
+    #[test]
+    fn tenant_blindness_quarantine_and_failure_topology_refuse() {
+        let mut surface = OperatorHealthSurface::default();
+        surface.record_quarantine(mint_quarantine(
+            KeyspaceId::from_raw(1),
+            b"a".to_vec(),
+            b"b".to_vec(),
+        ));
+
+        // Operator sees the quarantine.
+        let op_ranges = surface
+            .quarantine_ranges(HealthQueryAudience::Operator)
+            .expect("operator may select quarantine");
+        assert_eq!(op_ranges.len(), 1);
+
+        // Tenant ask refuses — the gate, not a soft omit.
+        assert!(matches!(
+            surface.quarantine_ranges(HealthQueryAudience::Tenant),
+            Err(TenantBlindRefuse::QuarantineTopologyForbidden)
+        ));
+
+        let lattice = FailureLattice::Quarantined {
+            ranges: op_ranges.to_vec(),
+        };
+        assert!(
+            lattice
+                .topology_for(HealthQueryAudience::Operator)
+                .expect("operator may inspect failure topology")
+                .admit_key(KeyspaceId::from_raw(1), b"a")
+                .is_err()
+        );
+        assert!(matches!(
+            lattice.topology_for(HealthQueryAudience::Tenant),
+            Err(TenantBlindRefuse::FailureTopologyForbidden)
+        ));
     }
 }
