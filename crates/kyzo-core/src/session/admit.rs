@@ -197,7 +197,18 @@ impl KyzoRecord {
     pub fn source(&self) -> &StatementSource {
         &self.source
     }
+
+    /// Type-entailed deterministic lowering to the closed six-dimension set.
+    ///
+    /// Recomputes from typed fields every call — never memoized (#268 T2).
+    pub fn lower(&self) -> crate::project::dimension::RecordLowering {
+        lowering::lower_record(self)
+    }
 }
+
+/// Type-entailed deterministic lowering (#268 T2).
+#[path = "admit_lowering.rs"]
+pub(crate) mod lowering;
 
 /// Inputs for the admission door (private mint path).
 #[derive(Debug, Clone)]

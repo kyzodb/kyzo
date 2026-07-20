@@ -2,6 +2,7 @@
 
 pub(crate) mod contract;
 pub(crate) mod current;
+pub(crate) mod dimension;
 pub(crate) mod projection;
 pub(crate) mod residency;
 
