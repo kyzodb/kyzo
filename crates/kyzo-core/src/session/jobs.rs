@@ -242,7 +242,7 @@ mod tests {
     use super::*;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
-    use crate::store::Storage;
+    use crate::store::{Storage, WriteTx};
     use crate::store::failure::{KeyspaceId, mint_quarantine};
     use crate::store::fjall::new_fjall_storage;
 
@@ -338,7 +338,7 @@ mod tests {
 
         // Open a real write transaction (live Store tx) and register it on the
         // in-flight registry — the registry is the ::running authority.
-        let _tx = db.store.write_tx().expect("open write tx");
+        let tx = db.store.write_tx().expect("open write tx");
         db.in_flight_tx_begin();
 
         let rows = db.list_running_jobs().expect("list_running from live registry");
@@ -352,6 +352,7 @@ mod tests {
         db.in_flight_tx_end();
         let after = db.list_running_jobs().expect("list after end");
         assert_eq!(after.rows()[0][0].get_int().unwrap(), 0);
+        let _ = tx.abort();
     }
 
     #[test]

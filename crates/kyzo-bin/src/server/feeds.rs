@@ -33,7 +33,10 @@ use log::{error, info};
 use serde_json::{Value as JsonValue, json};
 use tokio::task::spawn_blocking;
 
-use kyzo::{DataValue, Engine, FjallStorage, NamedRows, SignedFact, StandingQuery, Storage, Tuple};
+use kyzo::{
+    CallbackId, DataValue, Engine, FjallStorage, NamedRows, SignedFact, StandingQuery, Storage,
+    Tuple,
+};
 
 use super::DbState;
 
@@ -44,14 +47,18 @@ pub(super) async fn observe_changes(
     let (id, recv) = st.db.register_callback(&relation);
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     struct Guard {
-        id: u32,
+        id: CallbackId,
         db: Engine<FjallStorage>,
         relation: String,
     }
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            info!("dropping changes SSE {}: {}", self.relation, self.id);
+            info!(
+                "dropping changes SSE {}: {}",
+                self.relation,
+                self.id.get()
+            );
             self.db.unregister_callback(self.id);
         }
     }
@@ -64,13 +71,13 @@ pub(super) async fn observe_changes(
         }
     });
     let stream = async_stream::stream! {
-        info!("starting changes SSE {}: {}", relation, id);
+        info!("starting changes SSE {}: {}", relation, id.get());
         let _guard = Guard {id, db: st.db, relation};
-        while let Some((op, new, old)) = receiver.recv().await {
+        while let Some(event) = receiver.recv().await {
             let item = json!({
-                "op": op.to_string(),
-                "new_rows": NamedRows::into_json(new),
-                "old_rows": NamedRows::into_json(old),
+                "op": event.op.to_string(),
+                "new_rows": NamedRows::into_json(event.new_rows),
+                "old_rows": NamedRows::into_json(event.old_rows),
             });
             match Event::default().json_data(item) {
                 Ok(event) => yield Ok(event),

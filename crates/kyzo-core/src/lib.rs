@@ -343,7 +343,7 @@ pub use rules::contract::{
 };
 pub use session::catalog::Catalog;
 pub use session::db::{Engine, ScriptOptions};
-pub use session::observe::{CallbackEvent, CallbackOp};
+pub use session::observe::{CallbackEvent, CallbackId, CallbackOp};
 
 pub use exec::op::temporal::SignedFact;
 pub use react::standing::StandingQuery;
