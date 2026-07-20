@@ -6,11 +6,12 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Type-entailed deterministic lowering of [`KyzoRecord`] (#268 T2).
+//! Type-entailed deterministic lowering of [`KyzoRecord`] (#268 T2/T3).
 //!
 //! Kind fixes which members of the closed six-dimension set are produced.
 //! There is no per-write projection menu. Each call recomputes from the
 //! record's typed fields — never a memoized cache on the record.
+//! Every lowered row carries the source [`RecordId`].
 
 use crate::data::statement::{OntokKind, StatementContext};
 use crate::project::dimension::{LoweredRow, RecordLowering, StatementDimension};
@@ -45,11 +46,13 @@ pub(crate) fn dimensions_entailed(kind: OntokKind) -> &'static [StatementDimensi
 /// Lower a record into the closed six-dimension projection set.
 ///
 /// Recomputes from typed fields on every call. Same record → same rows/bytes.
+/// Every row carries [`RecordId`] so projections resolve home (#268 T3).
 pub(crate) fn lower_record(record: &KyzoRecord) -> RecordLowering {
+    let source = record.record_id();
     let mut rows = Vec::with_capacity(4);
     for &dimension in dimensions_entailed(record.kind()) {
         let payload = encode_dimension_row(record, dimension);
-        rows.push(LoweredRow::new(dimension, payload));
+        rows.push(LoweredRow::new(dimension, source, payload));
     }
     RecordLowering::from_ordered_rows(rows)
 }
@@ -60,30 +63,30 @@ fn encode_dimension_row(record: &KyzoRecord, dimension: StatementDimension) -> V
 }
 
 fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataValue {
-    // Digest anchors every projection row so rebuilds resolve home (T3 seed).
-    let digest = DataValue::Bytes(record.digest().to_vec());
+    // RecordId anchors every projection row so rebuilds / retrieval resolve home.
+    let record_id = DataValue::Bytes(record.record_id().as_bytes().to_vec());
     let subject = record.subject().as_value().clone();
     match dimension {
-        StatementDimension::Identity => DataValue::List(vec![digest, subject]),
+        StatementDimension::Identity => DataValue::List(vec![record_id, subject]),
         StatementDimension::Relationship => DataValue::List(vec![
-            digest,
+            record_id,
             subject,
             DataValue::Str(record.predicate().as_str().to_owned()),
             record.value().as_value().clone(),
         ]),
         StatementDimension::Similarity => DataValue::List(vec![
-            digest,
+            record_id,
             subject,
             record.value().as_value().clone(),
             DataValue::from(surface_tag(record.surface())),
         ]),
         StatementDimension::QuantityAndLocation => DataValue::List(vec![
-            digest,
+            record_id,
             subject,
             record.value().as_value().clone(),
         ]),
         StatementDimension::Time => DataValue::List(vec![
-            digest,
+            record_id,
             subject,
             DataValue::Interval(record.validity_time().as_interval()),
         ]),
@@ -93,7 +96,7 @@ fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataVa
                 StatementContext::Unscoped => DataValue::Null,
                 StatementContext::Scoped(id) => DataValue::Bytes(id.as_digest().to_vec()),
             };
-            DataValue::List(vec![digest, subject, source, context])
+            DataValue::List(vec![record_id, subject, source, context])
         }
     }
 }
@@ -338,5 +341,40 @@ mod tests {
     fn record_lower_door_matches_free_function() {
         let record = admit_claim_record();
         assert_eq!(record.lower(), lower_record(&record));
+    }
+
+    /// Every projection row resolves to the source RecordId (#268 T3).
+    #[test]
+    fn every_lowered_row_resolves_to_source_record_id() {
+        let record = admit_claim_record();
+        let id = record.record_id();
+        let lowering = lower_record(&record);
+        assert_eq!(lowering.source_record_id(), Some(id));
+        for row in lowering.rows() {
+            assert_eq!(
+                row.source_record_id(),
+                id,
+                "projection row for {:?} must resolve to source RecordId",
+                row.dimension()
+            );
+        }
+    }
+
+    /// Sugar relation put mints through admit_record — same RecordId door.
+    #[test]
+    fn sugar_relation_row_mints_through_admit_record() {
+        use kyzo_model::value::ValidityTs;
+        let (record, _cert) = super::super::admit_sugar_relation_row(
+            "parts",
+            &[DataValue::from(1), DataValue::from("widget")],
+            1,
+            ValidityTs::from_raw(100),
+        )
+        .expect("sugar admit");
+        assert_eq!(record.kind(), OntokKind::Relation);
+        let permit = record.durable_write_permit();
+        assert_eq!(permit.record_id(), record.record_id());
+        let lowering = record.lower();
+        assert_eq!(lowering.source_record_id(), Some(record.record_id()));
     }
 }

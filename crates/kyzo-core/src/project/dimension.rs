@@ -6,14 +6,19 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Closed six-dimension projection set for KyzoRecord lowering (#268 T2).
+//! Closed six-dimension projection set for KyzoRecord lowering (#268 T2/T3).
 //!
 //! A statement inherently has these dimensions — they are not a per-write
 //! menu. Kind type-entails which subset is produced; this module owns the
 //! closed universe and the lowered-row currency. Derivation lives at the
 //! admission seat ([`crate::session::admit::lowering`]).
+//!
+//! Every lowered row carries its source [`RecordId`] — projections are
+//! rebuildable accelerators, never a second truth (#268 T3).
 
 use std::fmt;
+
+use crate::session::record_id::RecordId;
 
 /// The closed set of dimensions a typed statement can project into.
 ///
@@ -75,22 +80,36 @@ impl fmt::Display for StatementDimension {
 }
 
 /// One dimension's lowered projection row — canonical bytes, not a second truth.
+///
+/// `source` is the admitted [`RecordId`] this row derives from. A projection
+/// row without a source RecordId is unrepresentable (#268 T3).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LoweredRow {
     dimension: StatementDimension,
+    /// Source record this projection row resolves to.
+    source: RecordId,
     /// Canonical encoding of the dimension's row tuple (value-plane law).
     bytes: Vec<u8>,
 }
 
 impl LoweredRow {
-    /// Assemble a lowered row from an already-encoded payload.
-    pub(crate) fn new(dimension: StatementDimension, bytes: Vec<u8>) -> Self {
-        Self { dimension, bytes }
+    /// Assemble a lowered row from an already-encoded payload + source RecordId.
+    pub(crate) fn new(dimension: StatementDimension, source: RecordId, bytes: Vec<u8>) -> Self {
+        Self {
+            dimension,
+            source,
+            bytes,
+        }
     }
 
     /// Which closed dimension this row serves.
     pub fn dimension(&self) -> StatementDimension {
         self.dimension
+    }
+
+    /// Source [`RecordId`] this projection row resolves to.
+    pub fn source_record_id(&self) -> RecordId {
+        self.source
     }
 
     /// Canonical row bytes for equality / rebuild proofs.
@@ -129,12 +148,21 @@ impl RecordLowering {
         self.rows.iter().map(LoweredRow::dimension)
     }
 
+    /// Source [`RecordId`] shared by every row in this lowering.
+    ///
+    /// Empty lowering has no source — callers must not treat absence as a
+    /// free-floating projection (#268 T3).
+    pub fn source_record_id(&self) -> Option<RecordId> {
+        self.rows.first().map(LoweredRow::source_record_id)
+    }
+
     /// Concatenated row bytes (dimension tag + payload per row) for
     /// byte-identical equality proofs across independent lowerings.
     pub fn concatenated_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for row in &self.rows {
             out.push(row.dimension.tag());
+            out.extend_from_slice(row.source.as_bytes());
             let len = row.bytes.len() as u64;
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(&row.bytes);

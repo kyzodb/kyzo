@@ -5,6 +5,7 @@ pub(crate) mod current;
 pub(crate) mod dimension;
 pub(crate) mod projection;
 pub(crate) mod residency;
+pub(crate) mod retrieval;
 
 pub(crate) mod gazetteer;
 

@@ -13,21 +13,19 @@
  * Carried obligation: phase-c-parsed-substances — record at this seat.
  */
 
-//! The mutation pipeline: how a query's result set changes a stored
-//! relation.
+//! Record admission monopoly under the Spec: private [`KyzoRecord`]
+//! constructors, [`SemanticSurface`], evidence-stack admission law,
+//! placement check, [`AdmissionCertificate`] mint call, KV-ingest refuse.
+//! Sugar and every durable user-visible write mint through [`admit_record`]
+//! (#268 T3) — no second door. Every projection / retrieval span resolves
+//! to a source [`RecordId`] or refuses. Bytes decode to ordered currency /
+//! ObjectRef material, never KyzoRecord — store/decode modules have no mint
+//! path (compile-fail; T5).
 //!
 //! `execute_relation` receives the evaluated rows and the `:put`/`:rm`/…
 //! operation, coerces each row through the relation's declared column
 //! types, writes through the session, maintains plain/temporal indices,
 //! and collects old/new rows for triggers and callbacks.
-//!
-//! ## Spec extend (§8/§10/§11/§12/§13/§61/§77/§90)
-//!
-//! Record admission monopoly under the Spec: private [`KyzoRecord`]
-//! constructors, [`SemanticSurface`], evidence-stack admission law,
-//! placement check, [`AdmissionCertificate`] mint call, KV-ingest refuse.
-//! Bytes decode to ordered currency / ObjectRef material, never KyzoRecord
-//! — store/decode modules have no mint path (compile-fail).
 
 use std::collections::BTreeSet;
 
@@ -38,8 +36,8 @@ use thiserror::Error;
 
 use crate::data::json::NamedRows;
 use crate::data::statement::{
-    OntokKind, StatementBody, StatementContext, StatementPredicate, StatementSource,
-    StatementSubject, StatementValue, ValidityTime,
+    OntokKind, SourceArtifactId, StatementBody, StatementContext, StatementPredicate,
+    StatementSource, StatementSubject, StatementValue, ValidityTime,
 };
 use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
@@ -66,11 +64,39 @@ use crate::store::open::StoreId;
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, ReplicaRefuse, mint_admission_certificate,
 };
+use crate::store::sweep::CommitOrdinal;
+use crate::store::FenceEpoch;
+use kyzo_model::value::canonical::encode_owned;
+use sha2::{Digest, Sha256};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Spec admission monopoly (§8/§10–§13/§61/§77/§90) — seats beside the
 // carried mutation pipeline below. Store modules cannot mint KyzoRecord.
+// Sugar and every durable user-visible write mint through admit_record —
+// there is no second door (#268 T3; absorbed #269).
 // ─────────────────────────────────────────────────────────────────────────
+
+/// Admitted record identity — minted only by [`admit_record`] (#268 T3).
+///
+/// Defined in [`crate::session::record_id`]; re-exported here so the
+/// admission seat remains the discoverable authority surface.
+pub use crate::session::record_id::RecordId;
+
+/// Proof that a durable fact write passed [`admit_record`].
+///
+/// Opaque capability: only [`admit_record`] (via [`KyzoRecord::durable_write_permit`])
+/// mints it. Call sites that require this token cannot anonymously put.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AdmittedDurableWrite {
+    record_id: RecordId,
+}
+
+impl AdmittedDurableWrite {
+    /// Source [`RecordId`] this permit authorizes a durable write for.
+    pub fn record_id(self) -> RecordId {
+        self.record_id
+    }
+}
 
 /// Semantic surface for indexed interpretation (§12).
 ///
@@ -120,6 +146,8 @@ pub struct PlacementConstraint {
 pub struct KyzoRecord {
     /// Store that admitted this record.
     store_id: StoreId,
+    /// Admitted identity — minted only at [`admit_record`].
+    record_id: RecordId,
     /// Record content digest.
     digest: [u8; 32],
     /// Optional semantic surface.
@@ -143,6 +171,18 @@ pub struct KyzoRecord {
 }
 
 impl KyzoRecord {
+    /// Admitted identity.
+    pub fn record_id(&self) -> RecordId {
+        self.record_id
+    }
+
+    /// Durable-write permit — proof this record passed [`admit_record`].
+    pub(crate) fn durable_write_permit(&self) -> AdmittedDurableWrite {
+        AdmittedDurableWrite {
+            record_id: self.record_id,
+        }
+    }
+
     /// Digest.
     pub fn digest(&self) -> &[u8; 32] {
         &self.digest
@@ -273,10 +313,17 @@ pub enum AdmitRefuse {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Replica(#[from] ReplicaRefuse),
+    /// Sugar statement construction failed (empty predicate / relation name).
+    #[error("SugarStatementRefuse: relational sugar could not form a typed statement")]
+    #[diagnostic(code(session::admit::sugar_statement_refuse))]
+    SugarStatementRefuse,
 }
 
 /// Admit a Record through the monopoly door: placement, evidence, surface,
 /// secret-key, KV-ingest checks, then mint [`AdmissionCertificate`] + [`KyzoRecord`].
+///
+/// **This is the only KyzoRecord mint.** Sugar and every durable user-visible
+/// write must call here — there is no second door (#268 T3).
 pub(crate) fn admit_record(
     parts: AdmitRecordParts,
 ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
@@ -303,10 +350,12 @@ pub(crate) fn admit_record(
         return Err(AdmitRefuse::MissingEvidenceCoordinates);
     }
     let certificate = mint_admission_certificate(parts.certificate)?;
+    let record_id = RecordId::mint_at_admit(parts.digest);
     let (subject, predicate, value, validity_time, context, source) =
         parts.statement.into_fields();
     let record = KyzoRecord {
         store_id: parts.store_id,
+        record_id,
         digest: parts.digest,
         surface: parts.surface,
         evidence: parts.evidence,
@@ -319,6 +368,146 @@ pub(crate) fn admit_record(
         source,
     };
     Ok((record, certificate))
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sugar → admit_record (#268 T3). Relational :put/:insert/:update/:rm hide
+// the envelope but mint through the one seam. Temps / index postings are
+// not records (source: kr-is-mandatory-durable-write-authority).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// [OPEN] Local StoreId until Engine carries a sealed Store identity.
+const LOCAL_SUGAR_STORE_DIGEST: [u8; 32] = {
+    let mut d = [0u8; 32];
+    d[0] = b'S';
+    d[1] = b'U';
+    d[2] = b'G';
+    d[3] = b'A';
+    d[4] = b'R';
+    d
+};
+
+/// Digest a sugar relation row into a content-addressed record digest.
+fn digest_sugar_row(relation: &str, row: &[DataValue]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.sugar.row.v1");
+    h.update(relation.as_bytes());
+    for v in row {
+        h.update(encode_owned(v).as_bytes());
+    }
+    h.finalize().into()
+}
+
+/// [OPEN] Sugar source-artifact binding until user-visible writes carry
+/// explicit source evidence at the script surface.
+fn sugar_source_artifact(relation: &str) -> SourceArtifactId {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.sugar.source.v1");
+    h.update(relation.as_bytes());
+    SourceArtifactId::from_digest(h.finalize().into())
+}
+
+/// Provisional local certificate parts for sugar admission.
+///
+/// [OPEN] Engine-held authorizing key / commit ordinal / schema cut land
+/// with Store identity wiring; mint still goes through
+/// [`mint_admission_certificate`] so the door is one.
+fn sugar_certificate_parts(
+    store_id: StoreId,
+    record_digest: [u8; 32],
+) -> AdmissionCertificateParts {
+    AdmissionCertificateParts {
+        protocol_version: *b"kyzo.v01",
+        origin_store: store_id,
+        origin_epoch: FenceEpoch::genesis(store_id),
+        origin_commit: CommitOrdinal::ZERO,
+        schema_cut: [0x11; 32],
+        record_digest,
+        predecessor_history_digest: [0x22; 32],
+        post_state_root: [0x33; 32],
+        authorizing_key_id: [0x44; 32],
+        scope_manifest_digest: [0x55; 32],
+        operation_key: None,
+        signature: [0x66; 64],
+    }
+}
+
+/// Relational sugar assert (:put / :insert / :update / put_fact) — mints
+/// through [`admit_record`]. No anonymous durable row mint.
+pub(crate) fn admit_sugar_relation_row(
+    relation_name: &str,
+    row: &[DataValue],
+    keys_len: usize,
+    valid: ValidityTs,
+) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+    let keys_len = keys_len.min(row.len());
+    let subject = StatementSubject::new(DataValue::List(row[..keys_len].to_vec()));
+    let predicate = StatementPredicate::new(relation_name)
+        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+    let value = StatementValue::new(DataValue::List(row[keys_len..].to_vec()));
+    let (kind, statement) = crate::data::statement::construct::relation(
+        subject,
+        predicate,
+        value,
+        ValidityTime::instant(valid.raw()),
+        StatementContext::Unscoped,
+        StatementSource::new(sugar_source_artifact(relation_name)),
+    );
+    let digest = digest_sugar_row(relation_name, row);
+    let store_id = StoreId::from_digest(LOCAL_SUGAR_STORE_DIGEST);
+    admit_record(AdmitRecordParts {
+        store_id,
+        digest,
+        surface: SemanticSurface::None,
+        evidence: None,
+        kind,
+        statement,
+        placement: PlacementConstraint {
+            allowed_regions: vec![],
+        },
+        write_region: [0; 16],
+        secret_in_indexed_key: None,
+        kv_as_truth: false,
+        chunk_shaped: false,
+        certificate: sugar_certificate_parts(store_id, digest),
+    })
+}
+
+/// Relational sugar retract (:rm / retract_fact) — mints an Invalidation
+/// through [`admit_record`]. No anonymous durable retract mint.
+pub(crate) fn admit_sugar_retract(
+    relation_name: &str,
+    key_cols: &[DataValue],
+    valid: ValidityTs,
+) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+    let subject = StatementSubject::new(DataValue::List(key_cols.to_vec()));
+    let value = StatementValue::new(DataValue::Null);
+    let (kind, statement) = crate::data::statement::construct::invalidation(
+        subject,
+        value,
+        ValidityTime::instant(valid.raw()),
+        StatementContext::Unscoped,
+        StatementSource::new(sugar_source_artifact(relation_name)),
+    )
+    .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+    let digest = digest_sugar_row(relation_name, key_cols);
+    let store_id = StoreId::from_digest(LOCAL_SUGAR_STORE_DIGEST);
+    admit_record(AdmitRecordParts {
+        store_id,
+        digest,
+        surface: SemanticSurface::None,
+        evidence: None,
+        kind,
+        statement,
+        placement: PlacementConstraint {
+            allowed_regions: vec![],
+        },
+        write_region: [0; 16],
+        secret_in_indexed_key: None,
+        kv_as_truth: false,
+        chunk_shaped: false,
+        certificate: sugar_certificate_parts(store_id, digest),
+    })
 }
 
 /// Index-build law: refuse against [`SemanticSurface::None`] (§12).
@@ -706,6 +895,18 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
+            // #268 T3: Stored sugar mints through admit_record — no second door.
+            // Temps are not durable records; index postings use index_write_row.
+            if matches!(relation_store.residency(), Residency::Stored) {
+                let (record, _cert) = admit_sugar_relation_row(
+                    &relation_store.name,
+                    extracted.as_slice(),
+                    relation_store.metadata.keys.len(),
+                    valid,
+                )?;
+                let _permit = record.durable_write_permit();
+            }
+
             self.put_routed(relation_store.residency(), &key, &val)?;
         }
 
@@ -851,6 +1052,17 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
+            // #268 T3: Stored sugar update mints through admit_record.
+            if matches!(relation_store.residency(), Residency::Stored) {
+                let (record, _cert) = admit_sugar_relation_row(
+                    &relation_store.name,
+                    new_kv.as_slice(),
+                    relation_store.metadata.keys.len(),
+                    valid,
+                )?;
+                let _permit = record.durable_write_permit();
+            }
+
             self.put_routed(relation_store.residency(), &key, &new_val)?;
         }
 
@@ -967,6 +1179,15 @@ impl<T: WriteTx> SessionTx<T> {
                 ClaimPolarity::Retract,
                 span,
             )?;
+            // #268 T3: Stored retract mints Invalidation through admit_record.
+            if matches!(relation_store.residency(), Residency::Stored) {
+                let (record, _cert) = admit_sugar_retract(
+                    &relation_store.name,
+                    extracted.as_slice(),
+                    valid,
+                )?;
+                let _permit = record.durable_write_permit();
+            }
             self.put_routed(relation_store.residency(), &key, &val)?;
         }
 
@@ -1380,6 +1601,10 @@ impl<T: WriteTx> SessionTx<T> {
     /// index kinds (a mapper projection for `Plain`, the
     /// leading-Validity posting shape for `Temporal`) — never the write
     /// path itself.
+    ///
+    /// Index postings are not KyzoRecords (#268 T3 / kr-is-mandatory-
+    /// durable-write-authority): temps, index postings, and planner state
+    /// do not mint through [`admit_record`]. Application sugar does.
     fn index_write_row(
         &mut self,
         idx_handle: &RelationHandle,

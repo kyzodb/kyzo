@@ -801,6 +801,9 @@ impl RelationHandle {
     /// Write the fact's Assert row at the valid coordinate, stamped with
     /// the transaction's system instant — the one-stop fact write for any
     /// tier holding a row and a write transaction.
+    ///
+    /// #268 T3: mints through [`admit_sugar_relation_row`] / [`admit_record`]
+    /// before the store put — no anonymous durable door.
     #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn put_fact(
         &self,
@@ -809,6 +812,13 @@ impl RelationHandle {
         valid: ValidityTs,
         span: SourceSpan,
     ) -> Result<()> {
+        let (record, _cert) = crate::session::admit::admit_sugar_relation_row(
+            &self.name,
+            row,
+            self.metadata.keys.len(),
+            valid,
+        )?;
+        let _permit = record.durable_write_permit();
         let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
         let val = self.encode_bitemporal_val_for_store(row, ClaimPolarity::Assert, span)?;
         tx.put(&key, &val)
@@ -816,6 +826,9 @@ impl RelationHandle {
 
     /// Write the fact's Retract row at the valid coordinate — revision,
     /// not erasure.
+    ///
+    /// #268 T3: mints Invalidation through [`admit_sugar_retract`] /
+    /// [`admit_record`] before the store put.
     #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn retract_fact(
         &self,
@@ -824,6 +837,9 @@ impl RelationHandle {
         valid: ValidityTs,
         span: SourceSpan,
     ) -> Result<()> {
+        let (record, _cert) =
+            crate::session::admit::admit_sugar_retract(&self.name, key_cols, valid)?;
+        let _permit = record.durable_write_permit();
         let key = self.encode_bitemporal_key_for_store(key_cols, valid, tx.system_stamp(), span)?;
         let val = self.encode_bitemporal_val_for_store(key_cols, ClaimPolarity::Retract, span)?;
         tx.put(&key, &val)
