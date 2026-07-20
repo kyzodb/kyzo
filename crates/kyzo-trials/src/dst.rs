@@ -2849,4 +2849,90 @@ pub mod storage_campaign_lanes {
     fn dual_corruption_dst() {
         unimplemented!("dual-corruption DST: ObjectCorrupt typed partial vs OrderedCorrupt quarantine/poison; no mixed success type");
     }
+
+    /// §58 — recompute-and-compare replica equivalence (single transport).
+    ///
+    /// Two instances replay the same ordered facts; each independently
+    /// recomputes; compare via `roots_equal_at_cut`. A delivered root is not
+    /// the comparison basis. Path/URL "same store" refuses. Federation fabric
+    /// carriage stays `[OPEN]` — engine protocol only.
+    #[test]
+    fn replica_equivalence_two_instance_recompute_compare_dst() {
+        use crate::store::merkle::{
+            ChainLinkKind, GENESIS_ROOT, MerkleChainRefuse, PathUrlSamenessClaim,
+            ReplicaCutRecompute, StateRoot, refuse_path_url_sameness,
+            replica_equivalence_at_cut, roots_equal_at_cut,
+        };
+        use crate::store::{CommitOrdinal, FenceEpoch, StoreId};
+        use sha2::{Digest, Sha256};
+
+        fn content_root(pairs: &[(&[u8], &[u8])]) -> StateRoot {
+            // Domain-separated leaf fold matching merkle leaf law — independent
+            // of a peer-delivered digest. Two instances fold the same facts.
+            let mut acc = Sha256::new();
+            acc.update(b"kyzo.dst.replica_fact_fold.v1");
+            for (k, v) in pairs {
+                acc.update((k.len() as u64).to_be_bytes());
+                acc.update(k);
+                acc.update((v.len() as u64).to_be_bytes());
+                acc.update(v);
+            }
+            StateRoot::from_digest(acc.finalize().into())
+        }
+
+        let store_id = StoreId::from_digest([0x58; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let cut = CommitOrdinal::ZERO.successor().expect("ordinal");
+
+        let facts: &[(&[u8], &[u8])] = &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")];
+        let left = ReplicaCutRecompute::from_local(
+            store_id,
+            fence,
+            cut,
+            content_root(facts),
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        let right = ReplicaCutRecompute::from_local(
+            store_id,
+            fence,
+            cut,
+            content_root(facts),
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        assert!(
+            replica_equivalence_at_cut(left, right),
+            "two-instance recompute-and-compare: same ordered facts match"
+        );
+        assert!(roots_equal_at_cut(left.recompute(), right.recompute()));
+
+        let divergent: &[(&[u8], &[u8])] = &[(b"a", b"1"), (b"b", b"X"), (b"c", b"3")];
+        let right_divergent = ReplicaCutRecompute::from_local(
+            store_id,
+            fence,
+            cut,
+            content_root(divergent),
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        let delivered = left.recompute();
+        assert!(
+            roots_equal_at_cut(delivered, delivered),
+            "control: trusting a received root against itself would pass"
+        );
+        assert!(
+            !replica_equivalence_at_cut(left, right_divergent),
+            "recompute-and-compare: delivered root is not the comparison basis"
+        );
+
+        assert_eq!(
+            refuse_path_url_sameness(PathUrlSamenessClaim::claim(
+                "file:///data/store",
+                "file:///data/store",
+            )),
+            MerkleChainRefuse::PathUrlSameness,
+            "path/URL same-store claim must refuse"
+        );
+    }
 }

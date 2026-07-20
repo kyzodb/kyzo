@@ -10,10 +10,11 @@
 //! Chained state roots + cold Merkle accountability (decisions.md §56–§58).
 //!
 //! Owns (07 Spec spine): per-commit chained state root, [`as_of_root`],
-//! typed recovery/fork chain links, fork-equivalence via [`fork_point`].
+//! typed recovery/fork chain links, fork-equivalence via [`fork_point`],
+//! recompute-and-compare replica equivalence via [`replica_equivalence_at_cut`].
 //!
 //! Bans: current-only roots as the sole digest; roots over ciphertext;
-//! path/URL equivalence claims.
+//! path/URL equivalence claims; trusting a peer-delivered root as equivalence.
 //!
 //! Also: a **cold, deterministic Merkle state root** over the ordered
 //! keyspace — plaintext-canonical, cipher-invariant leaf commitment the
@@ -543,8 +544,9 @@ pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, Me
 
 /// Fork-equivalence: shared fork-point root without revealing post-fork content.
 ///
-/// Equality at a cut = recomputed roots. Path/URL equivalence claims are
-/// refused — only root comparison / shared [`fork_point`] prove sameness.
+/// Equality at a cut = recomputed roots ([`replica_equivalence_at_cut`]).
+/// Path/URL equivalence claims are refused ([`refuse_path_url_sameness`]) —
+/// only independent root comparison / shared [`ForkPoint`] prove sameness.
 pub fn fork_equivalence(a: &ForkPoint, b: &ForkPoint) -> bool {
     a.fork_point() == b.fork_point()
         && a.predecessor_store() == b.predecessor_store()
@@ -557,7 +559,105 @@ pub fn roots_equal_at_cut(left: StateRoot, right: StateRoot) -> bool {
     left == right
 }
 
-/// Typed refusals on the chain / as-of path.
+/// One replica's local mint material for independent recomputation at a cut.
+///
+/// Carries only what *this* instance observed (content from its ordered facts,
+/// predecessor from its local chain). A peer-delivered root is never a field —
+/// federation fabric carriage of facts stays `[OPEN]`; this is the
+/// single-transport engine protocol (seat 58).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReplicaCutRecompute {
+    store_id: StoreId,
+    fence_epoch: FenceEpoch,
+    commit_ordinal: CommitOrdinal,
+    /// Plaintext-canonical content root from this instance's ordered facts.
+    content_root: StateRoot,
+    /// Predecessor this instance's local chain covers.
+    predecessor_root: StateRoot,
+    link: ChainLinkKind,
+}
+
+impl ReplicaCutRecompute {
+    /// Build from local observation only — never from a received root.
+    pub(crate) fn from_local(
+        store_id: StoreId,
+        fence_epoch: FenceEpoch,
+        commit_ordinal: CommitOrdinal,
+        content_root: StateRoot,
+        predecessor_root: StateRoot,
+        link: ChainLinkKind,
+    ) -> Self {
+        Self {
+            store_id,
+            fence_epoch,
+            commit_ordinal,
+            content_root,
+            predecessor_root,
+            link,
+        }
+    }
+
+    /// Independently recompute the chained root this side contributes.
+    pub fn recompute(self) -> StateRoot {
+        ChainedStateRoot::mint(
+            self.store_id,
+            self.fence_epoch,
+            self.commit_ordinal,
+            self.content_root,
+            self.predecessor_root,
+            self.link,
+        )
+        .root()
+    }
+}
+
+/// Recompute-and-compare replica equivalence at a cut (seat 58).
+///
+/// Each side independently recomputes via [`ReplicaCutRecompute::recompute`];
+/// comparison is [`roots_equal_at_cut`] over those digests. Neither argument
+/// is a received/delivered root — a trust-the-peer costume cannot enter.
+pub fn replica_equivalence_at_cut(
+    left: ReplicaCutRecompute,
+    right: ReplicaCutRecompute,
+) -> bool {
+    roots_equal_at_cut(left.recompute(), right.recompute())
+}
+
+/// Path/URL "same store" claim — location is not identity (seat 4) and not
+/// equivalence (seat 58). Construction is allowed; using it as equivalence
+/// is refused by [`refuse_path_url_sameness`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathUrlSamenessClaim {
+    left_location: String,
+    right_location: String,
+}
+
+impl PathUrlSamenessClaim {
+    /// Record a path/URL pair that would costume location as sameness.
+    pub fn claim(left_location: impl Into<String>, right_location: impl Into<String>) -> Self {
+        Self {
+            left_location: left_location.into(),
+            right_location: right_location.into(),
+        }
+    }
+
+    /// Left path/URL location.
+    pub fn left_location(&self) -> &str {
+        &self.left_location
+    }
+
+    /// Right path/URL location.
+    pub fn right_location(&self) -> &str {
+        &self.right_location
+    }
+}
+
+/// Refuse a path/URL "same store" claim — never an equivalence proof.
+pub fn refuse_path_url_sameness(_claim: PathUrlSamenessClaim) -> MerkleChainRefuse {
+    MerkleChainRefuse::PathUrlSameness
+}
+
+/// Typed refusals on the chain / as-of / replica-equivalence path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum MerkleChainRefuse {
     /// Append whose predecessor does not cover the chain terminal.
@@ -568,6 +668,10 @@ pub enum MerkleChainRefuse {
     #[error("merkle chain: as-of cut before genesis mint")]
     #[diagnostic(code(store::merkle::cut_before_genesis))]
     CutBeforeGenesis,
+    /// Path/URL "same store" is not store equivalence (seat 58).
+    #[error("merkle chain: path/URL sameness is not store equivalence")]
+    #[diagnostic(code(store::merkle::path_url_sameness))]
+    PathUrlSameness,
 }
 
 fn chain_bind(
@@ -612,6 +716,9 @@ mod tests {
     //!   chained root breaks — [`chain_bind`] covers the predecessor (proven);
     //! - **point-in-time** [`as_of_root`] (§57): at a real past cut the returned
     //!   root equals that cut's [`StateRoot`] and differs from tip / later cuts;
+    //! - **replica-equivalence** (§58): two instances replaying the same ordered
+    //!   facts match by independent recompute-and-compare; a delivered root is
+    //!   not the comparison basis; path/URL "same store" is refused;
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
 
@@ -1440,6 +1547,119 @@ mod tests {
         assert!(err.to_string().contains("ceiling"), "{err}");
         // Ceiling at the exact count succeeds.
         assert!(state_root(&tx, NonZeroU64::new(10).unwrap()).is_ok());
+    }
+
+    // ── replica-equivalence: recompute-and-compare (§58) ─────────────────
+
+    /// Two-instance check (single transport): each side independently
+    /// recomputes its chained root from ordered facts; compare via
+    /// [`replica_equivalence_at_cut`] / [`roots_equal_at_cut`]. Load-bearing:
+    /// a peer-delivered root that matches instance A must *not* make divergent
+    /// instance B look equivalent — trusting the received digest would pass
+    /// the trap control; the protocol forces both sides to recompute.
+    #[test]
+    fn replica_equivalence_two_instance_recompute_and_compare() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, GENESIS_ROOT, MerkleChainRefuse, PathUrlSamenessClaim,
+            ReplicaCutRecompute, refuse_path_url_sameness, replica_equivalence_at_cut,
+            roots_equal_at_cut,
+        };
+
+        let store_id = StoreId::from_digest([0x58; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let ordinal = CommitOrdinal::ZERO.successor().unwrap();
+
+        // Same ordered facts on both instances (single-transport replay).
+        let facts: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"k00".to_vec(), b"v0".to_vec()),
+            (b"k01".to_vec(), b"v1".to_vec()),
+            (b"k02".to_vec(), b"v2".to_vec()),
+        ];
+        let content_a = StateRoot::from_merkle(root_of_pairs(&facts));
+        let content_b = StateRoot::from_merkle(root_of_pairs(&facts));
+        assert_eq!(
+            content_a, content_b,
+            "independent cold folds of the same ordered facts must agree"
+        );
+
+        let instance_a = ReplicaCutRecompute::from_local(
+            store_id,
+            fence,
+            ordinal,
+            content_a,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        let instance_b = ReplicaCutRecompute::from_local(
+            store_id,
+            fence,
+            ordinal,
+            content_b,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+
+        assert!(
+            replica_equivalence_at_cut(instance_a, instance_b),
+            "two-instance: same ordered facts → matching roots by independent recompute"
+        );
+        assert!(
+            roots_equal_at_cut(instance_a.recompute(), instance_b.recompute()),
+            "comparison basis is roots_equal_at_cut over recomputed digests"
+        );
+
+        // Divergent facts on B — independent recompute must disagree.
+        let mut facts_divergent = facts.clone();
+        facts_divergent[1].1 = b"vX".to_vec();
+        let content_divergent = StateRoot::from_merkle(root_of_pairs(&facts_divergent));
+        assert_ne!(content_a, content_divergent);
+        let instance_b_divergent = ReplicaCutRecompute::from_local(
+            store_id,
+            fence,
+            ordinal,
+            content_divergent,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        assert!(
+            !replica_equivalence_at_cut(instance_a, instance_b_divergent),
+            "two-instance: divergent ordered facts must not be replica-equivalent"
+        );
+
+        // Trust trap: A delivers its recomputed root; B's content diverges.
+        // Comparing the delivered digest to itself (or skipping B's recompute)
+        // would falsely claim equivalence. The protocol never takes a received
+        // root — both sides recompute from local material.
+        let delivered_from_a = instance_a.recompute();
+        assert!(
+            roots_equal_at_cut(delivered_from_a, delivered_from_a),
+            "control: trusting a received root against itself would pass"
+        );
+        assert!(
+            !replica_equivalence_at_cut(instance_a, instance_b_divergent),
+            "recompute-and-compare: delivered root is not the comparison basis"
+        );
+        assert_ne!(
+            delivered_from_a,
+            instance_b_divergent.recompute(),
+            "B's independent recompute differs from A's delivered root"
+        );
+
+        // Path/URL "same store" must refuse — location is not equivalence.
+        let path_claim = PathUrlSamenessClaim::claim(
+            "/var/lib/kyzo/replica-a",
+            "/var/lib/kyzo/replica-a",
+        );
+        assert_eq!(path_claim.left_location(), path_claim.right_location());
+        assert_eq!(
+            refuse_path_url_sameness(path_claim),
+            MerkleChainRefuse::PathUrlSameness,
+            "path/URL sameness claim must refuse — not store equivalence"
+        );
     }
 
     // ── meaning × WAL byte-chain composition (§24 + §56) ─────────────────
