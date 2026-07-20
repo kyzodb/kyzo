@@ -21,8 +21,9 @@
 //! ## Storage-Spec campaign lanes (07 `campaigns_proposed`)
 //!
 //! Named lanes below are merge witnesses per §95 — outside Plan DoD. Bodies
-//! stay red until their guarded seats are green; **naming** is the seat
-//! obligation of story #350 T12. See [`storage_campaign_lanes`].
+//! drive seats that already exist under the path-wired crate wall; surviving
+//! reds must be `#[ignore = "<exact unbuilt seat>"]`. See
+//! [`storage_campaign_lanes`].
 //!
 //! The storage-seam DST (`kyzo-crashfs/src/sim.rs`) proves the KV contract is
 //! seed-reproducible under faults, crashes, and contention. This module carries
@@ -1403,7 +1404,7 @@ fn open_live_door(
         size_class: SizeClass::Compact,
         entropy_arm: EntropyArm::OsRandom,
         stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-            snapshot_fork: false,
+            snapshot_fork: SnapshotFork::No,
         },
     });
     let store_id = sealed.store_id();
@@ -1553,7 +1554,7 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
         size_class: SizeClass::Compact,
         entropy_arm: EntropyArm::OsRandom,
         stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-            snapshot_fork: false,
+            snapshot_fork: SnapshotFork::No,
         },
     });
     let _ = open_with_capability(sealed.store_open()).expect("open must succeed when recoverable");
@@ -1654,15 +1655,36 @@ fn power_cut_at_commit_door_dst() {
 
 /// Named storage campaign lanes from `07-storage-seats.json` `campaigns_proposed`.
 ///
-/// Each `fn` is the lane name the architecture map and board cite. Bodies
-/// remain `ignore`d (red-until-seats-green) until their guarded construct's
-/// campaign can run green — campaign green never substitutes for a story
-/// board Check (CLAUDE.md). `unimplemented!()` stub bodies are banned;
-/// red-until-green is `#[ignore]` over a real typed drive of public seats.
+/// Each `fn` is the lane name the architecture map and board cite. Bodies drive
+/// seats that already exist under the path-wired crate wall. Surviving reds
+/// must be `#[ignore = "<exact unbuilt seat>"]` — never `unimplemented!()`,
+/// never a silent tautology. Campaign green never substitutes for a story
+/// board Check (CLAUDE.md).
 #[allow(dead_code)]
 pub mod storage_campaign_lanes {
     use std::collections::BTreeSet;
 
+    use crate::session::footprint::{
+        AcceleratorVerdict, AskShape, ByteRange, FencedFootprint, Footprint, FootprintIndexKey,
+        FootprintRefuse, LiveFootprintTable, admit_accelerator,
+    };
+    use crate::store::authority::IncarnationMintCap;
+    use crate::store::backup::{
+        ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
+        PackRefuse, import_verify,
+    };
+    use crate::store::compact::{
+        CompactRefuse, LineageHash, MergeProof, MergeProofParts, PacketContentHash,
+    };
+    use crate::store::crypto::{
+        CryptoRefuse, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, derive_dek, shred,
+        unwrap_shred_salt, wrap_shred_salt,
+    };
+    use crate::store::failure::{
+        CarriageReport, KeyspaceId, ScopedMismatchCarriage, UnknownInvariantCarriage,
+    };
+    use crate::store::objects::{ObjectId, ObjectRef};
+    use crate::store::seal::CheckpointSeal;
     use crate::store::{
         BackendContract, CanonicalTranscript, CheckpointSealParts, CommitOrdinal, ConfirmedCopies,
         ConsistencyClass, CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm,
@@ -1670,13 +1692,13 @@ pub mod storage_campaign_lanes {
         GenesisParams, Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification,
         IntentOrdinal, LocalProjection, MintDomain, NonceLeaseFloors, ObjectDurabilityClass,
         ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PriorMaterialization,
-        RecoveryGrant, Regions, ReplicaCustody, ReplicaKey, ReplicaRefuse, SealRefuse,
-        SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingTtl, StoreRefuse,
-        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, encode_golden_fixture, genesis,
-        materialize, nonce, parse_golden_hex,
+        RecoveryGrant, Regions, ReplicaCustody, ReplicaKey, ReplicaRefuse, SealDigest, SealRefuse,
+        SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingTtl, StateRoot,
+        StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, WalHash,
+        encode_golden_fixture, genesis, materialize, nonce, parse_golden_hex,
     };
 
-    fn genesis_params(identity_seed: [u8; 32], snapshot_fork: bool) -> GenesisParams {
+    fn genesis_params(identity_seed: [u8; 32], snapshot_fork: SnapshotFork) -> GenesisParams {
         GenesisParams {
             identity_seed,
             recovery_matrix: None,
@@ -1695,7 +1717,7 @@ pub mod storage_campaign_lanes {
         entropy: [u8; 32],
         cap: StableCommitCap,
     ) -> (SweepDoor, IncarnationId, SweepSession) {
-        let sealed = genesis(genesis_params(identity_seed, false));
+        let sealed = genesis(genesis_params(identity_seed, SnapshotFork::No));
         let store_id = sealed.store_id();
         let fence_epoch = sealed.fence_epoch();
         let (_view, auth) = sealed.take_write_authority();
@@ -1711,9 +1733,8 @@ pub mod storage_campaign_lanes {
 
     /// §62/§2 — IncarnationId at-rest; gates nonce/authority signature freeze.
     #[test]
-    #[ignore = "red until seats green: two-clone at-rest DST"]
     fn two_clone_at_rest() {
-        let sealed = genesis(genesis_params([0xA1; 32], false));
+        let sealed = genesis(genesis_params([0xA1; 32], SnapshotFork::No));
         assert_eq!(
             sealed.entropy_arm(),
             EntropyArm::OsRandom,
@@ -1768,7 +1789,6 @@ pub mod storage_campaign_lanes {
     /// §27/§62 — live-fork; gates SIV arm and signature freeze.
     /// SnapshotFork arm degrades to equality leak, never keystream.
     #[test]
-    #[ignore = "red until seats green: live_fork_siv"]
     fn live_fork_siv() {
         assert!(
             SnapshotFork::Yes.requires_misuse_resistant_aead(),
@@ -1792,7 +1812,7 @@ pub mod storage_campaign_lanes {
 
         // Nonce repeat under Yes: pure derivation → identical nonce (equality leak
         // only). Never a second independent keystream draw for the same inputs.
-        let sealed = genesis(genesis_params([0x51; 32], true));
+        let sealed = genesis(genesis_params([0x51; 32], SnapshotFork::Yes));
         let store_id = sealed.store_id();
         let domain = sealed.crypto_domain();
         let (_view, auth) = sealed.take_write_authority();
@@ -1823,7 +1843,6 @@ pub mod storage_campaign_lanes {
     /// §25 — SweepDoor ordinals.
     /// IntentOrdinal gaps free; CommitOrdinal dense in intent order among successes.
     #[test]
-    #[ignore = "red until seats green: mixed_load_ordinals"]
     fn mixed_load_ordinals() {
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
@@ -1845,7 +1864,7 @@ pub mod storage_campaign_lanes {
         );
 
         // Refuse advance no cut: dead-session admit leaves CommitOrdinal unmoved.
-        let sealed = genesis(genesis_params([0xB2; 32], false));
+        let sealed = genesis(genesis_params([0xB2; 32], SnapshotFork::No));
         let (_view, auth) = sealed.take_write_authority();
         let foreign = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
@@ -1869,9 +1888,8 @@ pub mod storage_campaign_lanes {
     /// §25 — pipelined NonceLease / commit-door survival.
     /// Every minted Committed survives a power cut at every pipeline barrier.
     #[test]
-    #[ignore = "red until seats green: pipeline_power_cut"]
     fn pipeline_power_cut() {
-        let sealed = genesis(genesis_params([0xC3; 32], false));
+        let sealed = genesis(genesis_params([0xC3; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         let domain = sealed.crypto_domain();
         let (_view, auth) = sealed.take_write_authority();
@@ -1924,9 +1942,8 @@ pub mod storage_campaign_lanes {
     /// §25/§36 — WriteSessionDead.
     /// WriteSessionDead at every pipeline boundary; zero sealed bytes.
     #[test]
-    #[ignore = "red until seats green: old_session_resurrection"]
     fn old_session_resurrection() {
-        let sealed = genesis(genesis_params([0xD4; 32], false));
+        let sealed = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         let fence_epoch = sealed.fence_epoch();
         let (_view, auth) = sealed.take_write_authority();
@@ -1939,7 +1956,7 @@ pub mod storage_campaign_lanes {
             .mint(Entropy::from_bytes([0xDE; 32]))
             .expect("dead incarnation");
 
-        let sealed2 = genesis(genesis_params([0xD4; 32], false));
+        let sealed2 = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
         let (_view2, auth2) = sealed2.take_write_authority();
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
@@ -1960,7 +1977,7 @@ pub mod storage_campaign_lanes {
         );
 
         // Pipeline boundary: door open with mismatched session epoch.
-        let sealed3 = genesis(genesis_params([0xD4; 32], false));
+        let sealed3 = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
         let (_view3, auth3) = sealed3.take_write_authority();
         let next_epoch = fence_epoch.successor().expect("epoch space");
         let stale_session = SweepSession::new(store_id, next_epoch, live);
@@ -1968,19 +1985,12 @@ pub mod storage_campaign_lanes {
             SweepDoor::open(store_id, fence_epoch, stale_session, auth3, cap),
             Err(SweepRefuse::WriteSessionDead)
         ));
-
-        // Ledger echo: StoreRefuse names the same death.
-        assert!(matches!(
-            StoreRefuse::WriteSessionDead,
-            StoreRefuse::WriteSessionDead
-        ));
     }
 
     /// §2 — RecoveryGrant physics.
     #[test]
-    #[ignore = "red until seats green: partitioned-writer-through-recovery DST"]
     fn partitioned_writer_through_recovery() {
-        let sealed = genesis(genesis_params([0xE5; 32], false));
+        let sealed = genesis(genesis_params([0xE5; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         let pred_epoch = sealed.fence_epoch();
         let domain = sealed.crypto_domain();
@@ -2025,19 +2035,15 @@ pub mod storage_campaign_lanes {
             pred_epoch,
             "recovery materialize must open a successor CryptoDomain"
         );
-        assert!(matches!(
-            StoreRefuse::AuthorityRecovered,
-            StoreRefuse::AuthorityRecovered
-        ));
         // Gap: live dual-chain detection at WAL chain-meet is not yet a public
-        // door from trials — lattice + AuthorityRecovered are the enforceable slice.
+        // door from trials — lattice + RecoveryGrant materialize are the
+        // enforceable slice here.
     }
 
     /// §68 — grants are seeds (ForkGrant).
     #[test]
-    #[ignore = "red until seats green: ForkGrant double-discovery DST"]
     fn fork_grant_double_discovery() {
-        let sealed = genesis(genesis_params([0xF6; 32], false));
+        let sealed = genesis(genesis_params([0xF6; 32], SnapshotFork::No));
         let predecessor = sealed.store_id();
 
         let fork = ForkGrant::new(
@@ -2091,9 +2097,8 @@ pub mod storage_campaign_lanes {
 
     /// §68 — grants are seeds (RecoveryGrant equivocation).
     #[test]
-    #[ignore = "red until seats green: RecoveryGrant equivocation DST"]
     fn recovery_grant_equivocation() {
-        let sealed = genesis(genesis_params([0x17; 32], false));
+        let sealed = genesis(genesis_params([0x17; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         let pred_epoch = sealed.fence_epoch();
 
@@ -2143,9 +2148,8 @@ pub mod storage_campaign_lanes {
     /// §22/§23 — staging + idle law.
     /// No cut advance → unresolved Pending is not Decayed; reclaim always lawful.
     #[test]
-    #[ignore = "red until seats green: idle_staging_ttl"]
     fn idle_staging_ttl() {
-        let sealed = genesis(genesis_params([0x22; 32], false));
+        let sealed = genesis(genesis_params([0x22; 32], SnapshotFork::No));
         let ttl = sealed.staging_ttl();
         assert!(ttl.ordinals() > 0, "genesis seals a positive StagingTTL ordinal count");
 
@@ -2171,13 +2175,6 @@ pub mod storage_campaign_lanes {
             !matches!(ObjectRefuse::ObjectMissing, ObjectRefuse::Decayed),
             "Decayed is a distinct typed refuse from ObjectMissing"
         );
-        // Reclaim is always lawful idle or busy — the only reclaim refuse is
-        // certificate mismatch, never "too early" / wall-clock.
-        assert!(matches!(
-            ObjectRefuse::ReclaimMismatch,
-            ObjectRefuse::ReclaimMismatch
-        ));
-        assert!(matches!(ObjectRefuse::Decayed, ObjectRefuse::Decayed));
         // Gap: VolatilePending::stage / reclaim_candidate need crate-private
         // StagingToken + ReclaimCertificate mint — red until a public stage door.
         let _ = sealed.store_id();
@@ -2186,7 +2183,6 @@ pub mod storage_campaign_lanes {
     /// §22 — durability dominance product (never a total-order ladder).
     /// Dominating / dominated / incomparable Repair; Downgrade auditable.
     #[test]
-    #[ignore = "red until seats green: durability_dominance"]
     fn durability_dominance() {
         let backend = BackendContract::from_digest([0xBC; 32]);
         let base = ObjectDurabilityClass::new(
@@ -2240,14 +2236,16 @@ pub mod storage_campaign_lanes {
             incomp,
             ObjectRefuse::IncomparableClasses { .. }
         ));
-        assert!(matches!(
-            ObjectRefuse::NonDominatingRepair,
-            ObjectRefuse::NonDominatingRepair
-        ));
-        assert!(matches!(
-            ObjectRefuse::DowngradeMismatch,
-            ObjectRefuse::DowngradeMismatch
-        ));
+        // NonDominatingRepair / DowngradeMismatch are distinct closed-sum arms
+        // from IncomparableClasses (no costume collapse into a ladder).
+        assert_ne!(
+            format!("{incomp:?}"),
+            format!("{:?}", ObjectRefuse::NonDominatingRepair)
+        );
+        assert_ne!(
+            format!("{incomp:?}"),
+            format!("{:?}", ObjectRefuse::DowngradeMismatch)
+        );
         // Gap: PermanenceWitness::repair is pub(crate) — dominance + refuse tags
         // are the enforceable public slice until Repair is driven from a door.
     }
@@ -2255,9 +2253,8 @@ pub mod storage_campaign_lanes {
     /// §22/§23 — PermanenceCandidate stall / strip-before-confirm ban.
     /// Past cut → reclaim only (confirm refuses Decayed).
     #[test]
-    #[ignore = "red until seats green: permanence_candidate_stall"]
     fn permanence_candidate_stall() {
-        let sealed = genesis(genesis_params([0x23; 32], false));
+        let sealed = genesis(genesis_params([0x23; 32], SnapshotFork::No));
         // Short TTL so the cut walk is the meter (same may_confirm inequality).
         let ttl = StagingTtl::new(2);
         let expires_at = ttl.ordinals();
@@ -2282,15 +2279,14 @@ pub mod storage_campaign_lanes {
 
         // Past cut: confirm refuses Decayed; reclaim is the only lawful exit
         // (ReclaimMismatch is certificate mismatch — never "too early").
-        assert!(matches!(ObjectRefuse::Decayed, ObjectRefuse::Decayed));
-        assert!(matches!(
-            ObjectRefuse::ReclaimMismatch,
-            ObjectRefuse::ReclaimMismatch
-        ));
         assert!(!matches!(
             ObjectRefuse::Decayed,
             ObjectRefuse::ReclaimMismatch
         ));
+        assert_ne!(
+            format!("{:?}", ObjectRefuse::Decayed),
+            format!("{:?}", ObjectRefuse::ReclaimMismatch)
+        );
         // Gap: PermanenceCandidate::may_confirm / reclaim_candidate need
         // crate-private token+certificate mint — red until a public stage door.
         let _ = (sealed.store_id(), sealed.staging_ttl());
@@ -2299,9 +2295,8 @@ pub mod storage_campaign_lanes {
     /// §26 — CheckpointSeal restore/open.
     /// Missing or corrupting any bound digest (incl. ReplicaCustody) → SealMismatch.
     #[test]
-    #[ignore = "red until seats green: checkpoint_seal_mismatch"]
     fn checkpoint_seal_mismatch() {
-        let sealed = genesis(genesis_params([0x26; 32], false));
+        let sealed = genesis(genesis_params([0x26; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         let crypto_domain = sealed.crypto_domain();
         let fence_epoch = sealed.fence_epoch();
@@ -2316,53 +2311,67 @@ pub mod storage_campaign_lanes {
             crypto_domain,
             fence_epoch,
             cut: CommitOrdinal::ZERO,
-            state_root: [0x01; 32],
-            final_wal_hash: [0x02; 32],
-            checkpoint_manifest: [0x03; 32],
+            state_root: SealDigest::from_digest([0x01; 32]),
+            final_wal_hash: WalHash::from_digest([0x02; 32]),
+            checkpoint_manifest: SealDigest::from_digest([0x03; 32]),
             format_version: FormatVersion::CURRENT,
             catalog_generation: CommitOrdinal::ZERO,
-            retained_object_manifest: [0x04; 32],
-            permanence_candidate_manifest: [0x05; 32],
-            replica_custody_manifest: [0x06; 32],
+            retained_object_manifest: SealDigest::from_digest([0x04; 32]),
+            permanence_candidate_manifest: SealDigest::from_digest([0x05; 32]),
+            replica_custody_manifest: SealDigest::from_digest([0x06; 32]),
             nonce_floors: NonceLeaseFloors::genesis(),
             incarnation_boundary: incarnation,
             prior_seal_digest: GENESIS_PRIOR_SEAL,
-            retention_certificate_digest: [0x07; 32],
+            retention_certificate_digest: SealDigest::from_digest([0x07; 32]),
         };
 
         // Each bound digest independently corrupted → observed ≠ intact.
         // ReplicaCustody manifest is a first-class binding (never silent prefer-dump).
         let mut corrupt_custody = intact.clone();
-        corrupt_custody.replica_custody_manifest = [0xFF; 32];
+        corrupt_custody.replica_custody_manifest = SealDigest::from_digest([0xFF; 32]);
         assert_ne!(
             intact.replica_custody_manifest, corrupt_custody.replica_custody_manifest,
             "ReplicaCustody digest must be an independent seal binding"
         );
         let mut corrupt_state = intact.clone();
-        corrupt_state.state_root = [0xEE; 32];
+        corrupt_state.state_root = SealDigest::from_digest([0xEE; 32]);
         assert_ne!(intact.state_root, corrupt_state.state_root);
         let mut corrupt_retained = intact.clone();
-        corrupt_retained.retained_object_manifest = [0xDD; 32];
+        corrupt_retained.retained_object_manifest = SealDigest::from_digest([0xDD; 32]);
         assert_ne!(
             intact.retained_object_manifest,
             corrupt_retained.retained_object_manifest
         );
         let mut corrupt_candidate = intact.clone();
-        corrupt_candidate.permanence_candidate_manifest = [0xCC; 32];
+        corrupt_candidate.permanence_candidate_manifest = SealDigest::from_digest([0xCC; 32]);
         assert_ne!(
             intact.permanence_candidate_manifest,
             corrupt_candidate.permanence_candidate_manifest
         );
 
-        // Restore/open refuse ledger: any mismatch → SealMismatch (never prefer-dump).
-        assert!(matches!(SealRefuse::SealMismatch, SealRefuse::SealMismatch));
+        // Restore/open: any binding mismatch → SealMismatch (never prefer-dump).
+        let seal = CheckpointSeal::mint(intact.clone()).expect("mint intact seal");
+        assert!(seal.verify(&intact).is_ok(), "intact parts must verify");
+        assert!(matches!(
+            seal.verify(&corrupt_custody),
+            Err(SealRefuse::SealMismatch)
+        ));
+        assert!(matches!(
+            seal.verify(&corrupt_state),
+            Err(SealRefuse::SealMismatch)
+        ));
+        assert!(matches!(
+            seal.verify(&corrupt_retained),
+            Err(SealRefuse::SealMismatch)
+        ));
+        assert!(matches!(
+            seal.verify(&corrupt_candidate),
+            Err(SealRefuse::SealMismatch)
+        ));
         assert!(!matches!(
             SealRefuse::SealMismatch,
             SealRefuse::EpochSpanForbidden
         ));
-        // Gap: CheckpointSeal::mint is pub(crate) — verify() against corrupted
-        // parts needs a minted seal; truncate-crash convergence follows mint.
-        let _ = (corrupt_custody, corrupt_state, corrupt_retained, corrupt_candidate);
     }
 
     /// §59 — CanonicalTranscript.
@@ -2370,7 +2379,6 @@ pub mod storage_campaign_lanes {
     /// Vectors under `kyzo-core/src/store/golden/` are the authority — the
     /// implementation must match them, never the reverse.
     #[test]
-    #[ignore = "red until seats green: transcript mutation campaign"]
     fn transcript_mutation() {
         const GOLDENS: &[(SealedArtifactKind, &str)] = &[
             (
@@ -2480,10 +2488,9 @@ pub mod storage_campaign_lanes {
     /// §69/§70 — five-delivery custody.
     /// ReplicaKey idempotent across re-delivery; one custody Committed.
     #[test]
-    #[ignore = "red until seats green: five_delivery_custody"]
     fn five_delivery_custody() {
-        let origin = genesis(genesis_params([0x69; 32], false));
-        let local = genesis(genesis_params([0x70; 32], false));
+        let origin = genesis(genesis_params([0x69; 32], SnapshotFork::No));
+        let local = genesis(genesis_params([0x70; 32], SnapshotFork::No));
         let origin_store = origin.store_id();
         let origin_epoch = origin.fence_epoch();
         let origin_commit = CommitOrdinal::ZERO;
@@ -2549,19 +2556,16 @@ pub mod storage_campaign_lanes {
         );
         assert_ne!(keys[0], other);
 
-        // Closed ReplicaRefuse sum — no reshape arm.
-        assert!(matches!(
-            ReplicaRefuse::RetentionDeclined,
-            ReplicaRefuse::RetentionDeclined
-        ));
-        assert!(matches!(
-            ReplicaRefuse::AuthenticityFailed,
-            ReplicaRefuse::AuthenticityFailed
-        ));
-        assert!(matches!(
-            ReplicaRefuse::ChainInconsistent,
-            ReplicaRefuse::ChainInconsistent
-        ));
+        // Closed ReplicaRefuse sum — RetentionDeclined never absorbs authority
+        // failures (forged_manifest lane owns the reshape ban; pin distinctness).
+        assert_ne!(
+            format!("{:?}", ReplicaRefuse::RetentionDeclined),
+            format!("{:?}", ReplicaRefuse::AuthenticityFailed)
+        );
+        assert_ne!(
+            format!("{:?}", ReplicaRefuse::AuthenticityFailed),
+            format!("{:?}", ReplicaRefuse::ChainInconsistent)
+        );
         // Gap: verify_replica / PendingAnchor / anchor_pending need
         // AdmissionCertificate mint + AuthorizingKeyTable signature check +
         // ScopeManifestTable resolve + OriginContinuity evidence — red until
@@ -2571,7 +2575,6 @@ pub mod storage_campaign_lanes {
     /// §69 — forged / reversed / gapped / accept-then-revoke manifests.
     /// Typed Scope* / authenticity refuses; never reshape into RetentionDeclined.
     #[test]
-    #[ignore = "red until seats green: forged_manifest"]
     fn forged_manifest() {
         // Manifest resolution map (decisions.md §69): unknown / revoked /
         // incompatible → ScopeUnknown | ScopeRevoked | ScopeDenied. Forged
@@ -2615,19 +2618,8 @@ pub mod storage_campaign_lanes {
         );
 
         // verify_replica derives scope from ScopeManifestTable::resolve — never
-        // a caller-asserted scope_ok Result. Pin the closed refuse lattice.
-        assert!(matches!(
-            ReplicaRefuse::ScopeRevoked,
-            ReplicaRefuse::ScopeRevoked
-        ));
-        assert!(matches!(
-            ReplicaRefuse::ScopeDenied,
-            ReplicaRefuse::ScopeDenied
-        ));
-        assert!(matches!(
-            ReplicaRefuse::ScopeUnknown,
-            ReplicaRefuse::ScopeUnknown
-        ));
+        // a caller-asserted scope_ok Result. Closed refuse lattice is pinned by
+        // the reshape ban above (no tautology echo of each arm against itself).
         // Gap: live verify_replica(certificate, keys, scopes, continuity)
         // needs AdmissionCertificate mint + AuthorizingKeyTable /
         // ScopeManifestTable / OriginContinuity — lane pins the refuse lattice.
@@ -2636,9 +2628,8 @@ pub mod storage_campaign_lanes {
     /// §38/§39 — CompositionId crash-before-return + replay.
     /// Same client intent re-derives CompositionId; zero duplicate effects.
     #[test]
-    #[ignore = "red until seats green: composition_crash_replay"]
     fn composition_crash_replay() {
-        let sealed = genesis(genesis_params([0x38; 32], false));
+        let sealed = genesis(genesis_params([0x38; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         // Caller-durable CompositionId digest (session owns the type; Store
         // sees sealed bytes). Crash-before-return: client re-derives from the
@@ -2719,9 +2710,8 @@ pub mod storage_campaign_lanes {
     /// §38/§39 — OperationKeyReuse.
     /// Same key + different request digest → refuse.
     #[test]
-    #[ignore = "red until seats green: operation_key_reuse"]
     fn operation_key_reuse() {
-        let sealed = genesis(genesis_params([0x39; 32], false));
+        let sealed = genesis(genesis_params([0x39; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         let key = OperationKey::single_store(b"domain", b"client-op-reuse", store_id, b"s0");
         let dig_a = IdempotencyMemo::digest_request(b"envelope-A");
@@ -2779,9 +2769,8 @@ pub mod storage_campaign_lanes {
     /// §69 — Catalog-advance origin interpretation.
     /// AcceptedReplica origin-cut unchanged; LocalProjection rebuilds.
     #[test]
-    #[ignore = "red until seats green: catalog_advance_origin"]
     fn catalog_advance_origin() {
-        let sealed = genesis(genesis_params([0xCA; 32], false));
+        let sealed = genesis(genesis_params([0xCA; 32], SnapshotFork::No));
         let origin_store = sealed.store_id();
         let origin_epoch = sealed.fence_epoch();
         let origin_commit = CommitOrdinal::ZERO;
@@ -2821,33 +2810,211 @@ pub mod storage_campaign_lanes {
         // those doors; lane pins origin-key invariance under catalog advance.
     }
 
-    /// §36 — footprints.
+    /// §36 — footprints: crash-holder locks die at next open; FrontierUnprovable never admits.
     #[test]
-    #[ignore = "red until seats green: Footprint crash-holder DST"]
     fn footprint_crash_holder_dst() {
-        unimplemented!("Footprint crash-holder DST: locks dead at next open; FrontierUnprovable never admits");
+        let sealed = genesis(genesis_params([0x36; 32], SnapshotFork::No));
+        let store_id = sealed.store_id();
+        let fence_epoch = sealed.fence_epoch();
+        let (_view, auth) = sealed.take_write_authority();
+        let holder = auth
+            .incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes([0xF1; 32]))
+            .expect("crash-holder incarnation");
+        let next_open = auth
+            .incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes([0xF2; 32]))
+            .expect("next-open incarnation");
+
+        let fenced = FencedFootprint::seal(
+            Footprint::Exact(vec![ByteRange {
+                start: b"a".to_vec(),
+                end: b"z".to_vec(),
+            }]),
+            0,
+        )
+        .expect("FencedFootprint seal");
+
+        let mut table = LiveFootprintTable::new();
+        let key = FootprintIndexKey {
+            fence_epoch,
+            incarnation_id: holder,
+        };
+        table
+            .insert(key, AskShape::Fenced(fenced))
+            .expect("live Fenced insert");
+        assert!(table.has_live_fenced_in_epoch(fence_epoch));
+        assert_eq!(table.fence_pressure(), 1);
+
+        // Crash-holder: session-memory locks die with the dead incarnation at next open.
+        table.drop_incarnation(holder);
+        assert!(
+            !table.has_live_fenced_in_epoch(fence_epoch),
+            "dead incarnation footprints must not survive as live locks"
+        );
+        assert_eq!(table.fence_pressure(), 0);
+
+        let key_next = FootprintIndexKey {
+            fence_epoch,
+            incarnation_id: next_open,
+        };
+        table
+            .insert(key_next, AskShape::Optimistic)
+            .expect("next open starts without inherited Fenced lock");
+
+        // FrontierUnprovable never admits — Neither without ProjectionConfirmation.
+        assert!(matches!(
+            admit_accelerator(AcceleratorVerdict::Neither, None),
+            Err(FootprintRefuse::FrontierUnprovable)
+        ));
+        assert!(admit_accelerator(AcceleratorVerdict::PositiveConclusive, None).is_ok());
+        let _ = store_id;
     }
 
-
-    /// §66/§84 — MergeProof determinism.
+    /// §66/§84 — MergeProof determinism: sealed identity over plaintext; empty merge refuses.
     #[test]
-    #[ignore = "red until seats green: MergeProof DST"]
     fn merge_proof_dst() {
-        unimplemented!("MergeProof DST: sealed identity equality over plaintext; ciphertext differs; no MergeProof fails to compile");
+        let parts = MergeProofParts {
+            input_content_hashes: vec![
+                PacketContentHash::from_digest([0x01; 32]),
+                PacketContentHash::from_digest([0x02; 32]),
+            ],
+            lineage_hash: LineageHash::from_digest([0x11; 32]),
+            state_root: StateRoot::from_digest([0x22; 32]),
+            compact_counter: DomainCounter::ZERO,
+            output_content_hash: PacketContentHash::from_digest([0x33; 32]),
+        };
+        let (proof_a, packet_a) = MergeProof::mint(parts.clone()).expect("mint a");
+        let (proof_b, packet_b) = MergeProof::mint(parts.clone()).expect("mint b replay");
+        assert_eq!(
+            proof_a.sealed_identity(),
+            proof_b.sealed_identity(),
+            "identical plaintext inputs must seal identical MergeProof identity"
+        );
+        assert_eq!(packet_a.sealed_identity(), packet_b.sealed_identity());
+        assert_eq!(
+            proof_a.sealed_identity(),
+            packet_a.sealed_identity(),
+            "MergedPacket identity tracks MergeProof sealed identity"
+        );
+
+        // Distinct plaintext → distinct sealed identity (cipher-invariant: no ciphertext in identity).
+        let mut other = parts;
+        other.output_content_hash = PacketContentHash::from_digest([0x44; 32]);
+        let (proof_c, _) = MergeProof::mint(other).expect("mint c");
+        assert_ne!(proof_a.sealed_identity(), proof_c.sealed_identity());
+
+        assert!(matches!(
+            MergeProof::mint(MergeProofParts {
+                input_content_hashes: vec![],
+                lineage_hash: LineageHash::from_digest([0; 32]),
+                state_root: StateRoot::from_digest([0; 32]),
+                compact_counter: DomainCounter::ZERO,
+                output_content_hash: PacketContentHash::from_digest([0; 32]),
+            }),
+            Err(CompactRefuse::EmptyMerge)
+        ));
     }
 
-    /// §64/§79 — shred × leave-is-free.
+    /// §64/§79 — shred × leave-is-free: shred → Shredded tombstone; neighbors decrypt; pack refuses.
     #[test]
-    #[ignore = "red until seats green: ShredSalt leave-is-free DST"]
     fn shred_salt_leave_is_free_dst() {
-        unimplemented!("ShredSalt leave-is-free DST: shred → typed Shredded tombstone; neighbors decrypt; root chain verifies");
+        let store = StoreId::from_digest([0x64; 32]);
+        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x55; 32]));
+        let seg_a = SegmentCounter::ZERO;
+        let seg_b = SegmentCounter::from_raw(1);
+        let wrap_a = wrap_shred_salt(
+            &cap,
+            &ShredSalt::from_bytes([0xAA; 32]),
+            seg_a,
+            domain,
+        )
+        .expect("wrap A");
+        let wrap_b = wrap_shred_salt(
+            &cap,
+            &ShredSalt::from_bytes([0xBB; 32]),
+            seg_b,
+            domain,
+        )
+        .expect("wrap B");
+
+        let mut ledger = ShredLedger::new();
+        let opened_b = unwrap_shred_salt(&cap, &wrap_b, &ledger).expect("neighbor decrypt");
+        let _dek = derive_dek(&cap, domain, seg_b, &opened_b);
+
+        let stale_a = wrap_a.clone();
+        let (_receipt, tombstone) = shred(wrap_a);
+        ledger.record(tombstone);
+        assert!(matches!(
+            unwrap_shred_salt(&cap, &stale_a, &ledger),
+            Err(CryptoRefuse::Shredded)
+        ));
+        unwrap_shred_salt(&cap, &wrap_b, &ledger).expect("neighbor still decrypts after shred");
+
+        let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes([0x77; 32]))
+            .expect("incarnation history");
+        let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
+            kind: LeaveIsFreeKind::FullWal,
+            format_version: FormatVersion::CURRENT,
+            wrapped_shred_salts: vec![stale_a],
+            incarnation_history: vec![incarnation],
+            payload: vec![1, 2, 3],
+        })
+        .expect("leave-is-free pack with wrapped salt");
+        assert!(matches!(
+            import_verify(
+                &pack,
+                ImportCapability::after_chain_verify(),
+                ObjectsCompleteness::Complete,
+                &ledger,
+            ),
+            Err(PackRefuse::Shredded)
+        ));
     }
 
-    /// §55 — dual fault.
+    /// §55 — dual fault: ObjectCorrupt typed partial vs OrderedCorrupt quarantine/poison; no mixed success.
     #[test]
-    #[ignore = "red until seats green: dual-corruption DST"]
     fn dual_corruption_dst() {
-        unimplemented!("dual-corruption DST: ObjectCorrupt typed partial vs OrderedCorrupt quarantine/poison; no mixed success type");
+        let store = StoreId::from_digest([0x55; 32]);
+        let broken = ObjectRef::mint(store, ObjectId::from_digest([0x0B; 32]));
+        let object_half = StoreRefuse::ObjectCorrupt {
+            broken: vec![broken],
+        };
+        assert!(matches!(
+            &object_half,
+            StoreRefuse::ObjectCorrupt { broken } if broken.len() == 1
+        ));
+
+        let ks = KeyspaceId::from_raw(1);
+        let ordered = FailureLattice::Healthy.report(CarriageReport::UnknownInvariant(
+            UnknownInvariantCarriage,
+        ));
+        assert!(matches!(ordered, FailureLattice::Poisoned { .. }));
+        assert!(matches!(
+            ordered.admit_key(ks, b"any"),
+            Err(StoreRefuse::OrderedCorrupt)
+        ));
+
+        let quarantined = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
+            ScopedMismatchCarriage::new(ks, b"a".to_vec(), b"c".to_vec()),
+        ));
+        assert!(matches!(
+            quarantined.admit_key(ks, b"b"),
+            Err(StoreRefuse::Quarantined { .. })
+        ));
+        assert!(
+            quarantined.admit_key(ks, b"z").is_ok(),
+            "intact ordered facts outside quarantine still serve"
+        );
+
+        // No mixed success type: ObjectCorrupt and OrderedCorrupt are distinct refuse arms.
+        assert!(!matches!(object_half, StoreRefuse::OrderedCorrupt));
+        assert_ne!(
+            format!("{object_half:?}").chars().take(13).collect::<String>(),
+            "OrderedCorrupt"
+        );
     }
 
     /// §58 — recompute-and-compare replica equivalence (single transport).

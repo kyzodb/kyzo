@@ -36,7 +36,7 @@ fn open_live_door(identity_seed: [u8; 32], entropy: [u8; 32]) -> (SweepDoor, cra
         size_class: SizeClass::Compact,
         entropy_arm: EntropyArm::OsRandom,
         stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-            snapshot_fork: false,
+            snapshot_fork: SnapshotFork::No,
         },
     });
     let store_id = sealed.store_id();
@@ -183,21 +183,20 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy FUSE crash-matrix campaign (story #31) — preserved text, not compiled
-// from the sweep #[path] seat. Re-home under kyzo-trials + kyzo-crashfs when
-// that campaign is wired as a module again.
+// Real power-cut / FUSE crash-matrix campaign (story #31) — path-wired under
+// `kyzo::store::sweep::crash`. Requires kyzo-crashfs (kyzo-core test dep) and
+// `crate::store::sim::SimStorage` (crate-private DST double). Skips cleanly
+// when FUSE mount is unavailable (`can_mount` == false).
 // ---------------------------------------------------------------------------
-#[cfg(any())]
-mod fuse_crash_matrix_legacy {
+mod fuse_crash_matrix {
     use std::collections::BTreeSet;
 
-    use fjall::Slice;
     use kyzo_crashfs::harness::{can_mount, mount, wait_for_mount};
     use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
-    use crate::storage::fjall::new_fjall_storage;
-    use crate::storage::sim::SimStorage;
-    use crate::storage::{ReadTx, Storage, WriteTx};
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::sim::SimStorage;
+    use crate::store::{ReadTx, Slice, Storage, WriteTx};
 
     /// The main data keyspace's journal file at a fresh store's very first
     /// segment — verified empirically (see the story's own session record):
@@ -545,8 +544,8 @@ mod fuse_crash_matrix_legacy {
     /// licensed in Spec claims from this test alone.
     #[test]
     fn crash_consistency_process_abort() {
-        use fjall::Slice;
-        use kyzo::{ReadTx, Storage, WriteTx, new_fjall_storage};
+        use crate::store::fjall::new_fjall_storage;
+        use crate::store::{ReadTx, Slice, Storage, WriteTx};
 
         if let Ok(dir) = std::env::var("KYZO_CRASH_CHILD_DIR") {
             let db = new_fjall_storage(&dir).unwrap();
@@ -569,7 +568,7 @@ mod fuse_crash_matrix_legacy {
         let exe = std::env::current_exe().unwrap();
         let status = std::process::Command::new(exe)
             .args([
-                "crash::crash_consistency_process_abort",
+                "store::sweep::crash::fuse_crash_matrix::crash_consistency_process_abort",
                 "--exact",
                 "--nocapture",
             ])
