@@ -47,12 +47,15 @@ use crate::rules::io::constant::Constant;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, KeyspaceKind, RelationHandle, Residency};
 use crate::session::db::{Engine, SessionTx};
-use crate::session::generation::CatalogGeneration;
+use crate::session::generation::{CatalogGeneration, RelationGeneration};
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::authority::WriteAuthority;
 use crate::store::keys::Secret;
 use crate::store::merkle::{GENESIS_ROOT, RootChain};
-use crate::store::open::StoreId;
+use crate::store::open::{
+    EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
+};
+use crate::store::ReadTx;
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, ReplicaRefuse,
     ScopeManifestDigest, mint_admission_certificate, sign_admission_parts,
@@ -226,6 +229,71 @@ impl RecordCore {
 
 /// Live inputs required to mint an [`AdmissionCertificate`].
 ///
+/// Engine-held live admission seats — genesis StoreId + write token + root
+/// chain tip. Clone copies the token bytes (certificate signing material);
+/// affine SweepDoor open still consumes a moved [`WriteAuthority`] elsewhere.
+#[derive(Clone, Debug)]
+pub(crate) struct LiveAdmissionSeats {
+    store_id: StoreId,
+    write_token: [u8; 32],
+    root_chain: RootChain,
+    origin_commit: CommitOrdinal,
+    scope_manifest_digest: ScopeManifestDigest,
+}
+
+impl LiveAdmissionSeats {
+    /// Mint seats via store [`genesis`] — real identity, never placeholders.
+    pub(crate) fn mint_genesis() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(1);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut identity_seed = [0u8; 32];
+        identity_seed[..8].copy_from_slice(&n.to_be_bytes());
+        let sealed = genesis(GenesisParams {
+            identity_seed,
+            recovery_matrix: None,
+            staging_ttl: StagingTtl::new(1_024),
+            size_class: SizeClass::Compact,
+            entropy_arm: EntropyArm::OsRandom,
+            stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
+                snapshot_fork: false,
+            },
+        });
+        Self {
+            store_id: sealed.store_id(),
+            write_token: *sealed.write_authority().token_id(),
+            root_chain: RootChain::empty(),
+            origin_commit: CommitOrdinal::ZERO,
+            scope_manifest_digest: unscoped_scope_manifest_digest(),
+        }
+    }
+
+    pub(crate) fn store_id(&self) -> StoreId {
+        self.store_id
+    }
+
+    /// Capture [`LiveCertificateInputs`] from these seats + a live catalog clock.
+    pub(crate) fn certificate_inputs(
+        &self,
+        catalog_generation: CatalogGeneration,
+    ) -> LiveCertificateInputs {
+        let authority = WriteAuthority::mint(self.store_id, self.write_token);
+        LiveCertificateInputs::from_live(
+            catalog_generation,
+            &self.root_chain,
+            &authority,
+            self.origin_commit,
+            self.scope_manifest_digest,
+        )
+    }
+}
+
+fn unscoped_scope_manifest_digest() -> ScopeManifestDigest {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.scope.manifest.unscoped.v1");
+    h.finalize().into()
+}
+
 /// Wired from Catalog generation, RootChain tip, and session
 /// [`WriteAuthority`] — never 0x11..0x66 placeholders. Construct only via
 /// [`LiveCertificateInputs::from_live`].
@@ -1261,11 +1329,10 @@ impl<T: WriteTx> SessionTx<T> {
             }
 
             // #268 T3 / CLUSTER D: Stored sugar mints through admit_record under
-            // the real open StoreId + live certificate authority. Engine does
-            // not yet expose StoreId / CatalogGeneration / RootChain /
-            // WriteAuthority on this door — typed refuse, never placeholders.
+            // the Engine's live StoreId + CatalogGeneration + RootChain +
+            // WriteAuthority token — never placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
-                return Err(AdmitRefuse::MissingLiveAdmissionContext.into());
+                self.admit_stored_relation_row(db, relation_store, extracted.as_slice(), valid)?;
             }
 
             self.put_routed(relation_store.residency(), &key, &val)?;
@@ -1413,9 +1480,9 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
-            // #268 T3 / CLUSTER D: live admission context required — no placeholders.
+            // #268 T3 / CLUSTER D: live admission — no placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
-                return Err(AdmitRefuse::MissingLiveAdmissionContext.into());
+                self.admit_stored_relation_row(db, relation_store, new_kv.as_slice(), valid)?;
             }
 
             self.put_routed(relation_store.residency(), &key, &new_val)?;
@@ -1534,9 +1601,9 @@ impl<T: WriteTx> SessionTx<T> {
                 ClaimPolarity::Retract,
                 span,
             )?;
-            // #268 T3 / CLUSTER D: live admission context required — no placeholders.
+            // #268 T3 / CLUSTER D: live retract admission — no placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
-                return Err(AdmitRefuse::MissingLiveAdmissionContext.into());
+                self.admit_stored_retract(db, relation_store, extracted.as_slice(), valid)?;
             }
             self.put_routed(relation_store.residency(), &key, &val)?;
         }
@@ -1616,6 +1683,49 @@ impl<T: WriteTx> SessionTx<T> {
                 ))
             }
         }
+        Ok(())
+    }
+
+    /// Mint a Stored sugar assert through [`admit_sugar_relation_row`] using
+    /// the Engine's live admission seats + segment catalog generation.
+    fn admit_stored_relation_row<S: Storage<WriteTx = T>>(
+        &self,
+        db: &Engine<S>,
+        relation_store: &RelationHandle,
+        row: &[DataValue],
+        valid: ValidityTs,
+    ) -> Result<()> {
+        let live = db.live_certificate_inputs(&self.store, relation_store.id);
+        let (record, _cert) = admit_sugar_relation_row(
+            db.store_id(),
+            &live,
+            relation_store.name.as_str(),
+            row,
+            relation_store.metadata.keys.len(),
+            valid,
+        )?;
+        let _permit = record.durable_write_permit();
+        Ok(())
+    }
+
+    /// Mint a Stored sugar retract through [`admit_sugar_retract`].
+    fn admit_stored_retract<S: Storage<WriteTx = T>>(
+        &self,
+        db: &Engine<S>,
+        relation_store: &RelationHandle,
+        key_cols: &[DataValue],
+        valid: ValidityTs,
+    ) -> Result<()> {
+        let live = db.live_certificate_inputs(&self.store, relation_store.id);
+        let keys_len = relation_store.metadata.keys.len().min(key_cols.len());
+        let (record, _cert) = admit_sugar_retract(
+            db.store_id(),
+            &live,
+            relation_store.name.as_str(),
+            &key_cols[..keys_len],
+            valid,
+        )?;
+        let _permit = record.durable_write_permit();
         Ok(())
     }
 

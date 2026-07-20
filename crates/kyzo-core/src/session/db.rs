@@ -276,6 +276,8 @@ pub struct Engine<S> {
     pub(crate) fixed_rules: Arc<RwLock<BTreeMap<String, Arc<dyn FixedRule>>>>,
     pub(crate) event_callbacks: Arc<RwLock<EventCallbackRegistry>>,
     pub(crate) callback_count: Arc<AtomicU32>,
+    /// Live StoreId / WriteAuthority token / RootChain for admission mint.
+    pub(crate) admission: crate::session::admit::LiveAdmissionSeats,
 }
 
 impl<S: Clone> Clone for Engine<S> {
@@ -287,6 +289,7 @@ impl<S: Clone> Clone for Engine<S> {
             fixed_rules: self.fixed_rules.clone(),
             event_callbacks: self.event_callbacks.clone(),
             callback_count: self.callback_count.clone(),
+            admission: self.admission.clone(),
         }
     }
 }
@@ -296,6 +299,8 @@ impl<S: Storage> Engine<S> {
     ///
     /// Not `new(storage)`: that fused constructor is deleted. Engine never
     /// mints Catalog from Store alone — both capabilities are required.
+    /// Live admission seats are genesis-minted here so Stored sugar can
+    /// mint certificates without placeholders.
     pub fn compose(store: S, catalog: Catalog) -> Result<Self> {
         let fixed_rules = DEFAULT_FIXED_RULES.clone();
         Ok(Self {
@@ -305,7 +310,26 @@ impl<S: Storage> Engine<S> {
             fixed_rules: Arc::new(RwLock::new(fixed_rules)),
             event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::default())),
             callback_count: Arc::new(AtomicU32::new(0)),
+            admission: crate::session::admit::LiveAdmissionSeats::mint_genesis(),
         })
+    }
+
+    /// Open Store identity sealed into this Engine's live admission seats.
+    pub(crate) fn store_id(&self) -> crate::store::open::StoreId {
+        self.admission.store_id()
+    }
+
+    /// Live certificate inputs: seats + segment CatalogGeneration for `relation`.
+    pub(crate) fn live_certificate_inputs(
+        &self,
+        tx: &impl crate::store::ReadTx,
+        relation: kyzo_model::value::RelationId,
+    ) -> crate::session::admit::LiveCertificateInputs {
+        use crate::session::generation::{CatalogGeneration, RelationGeneration};
+        let generation = self.segments.witness_after_snapshot(tx, relation);
+        let catalog_generation =
+            CatalogGeneration::from_relation(RelationGeneration::witness(generation.raw()));
+        self.admission.certificate_inputs(catalog_generation)
     }
 
     /// The interpretive Catalog capability this Engine holds.

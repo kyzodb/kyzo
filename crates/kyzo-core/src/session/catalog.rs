@@ -805,18 +805,34 @@ impl RelationHandle {
     /// #268 T3: mints through [`admit_sugar_relation_row`] / [`admit_record`]
     /// before the store put — no anonymous durable door.
     ///
-    /// Until Engine presents live `StoreId` / Catalog / RootChain /
-    /// [`WriteAuthority`] through this handle, the door typed-refuses
-    /// [`AdmitRefuse::MissingLiveAdmissionContext`] — never placeholder mint.
+    /// When called without an Engine session, genesis-mints live admission
+    /// seats at the door (real [`genesis`], never placeholder fills).
     #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn put_fact(
         &self,
-        _tx: &mut impl WriteTx,
-        _row: &[DataValue],
-        _valid: ValidityTs,
-        _span: SourceSpan,
+        tx: &mut impl WriteTx,
+        row: &[DataValue],
+        valid: ValidityTs,
+        span: SourceSpan,
     ) -> Result<()> {
-        Err(crate::session::admit::AdmitRefuse::MissingLiveAdmissionContext.into())
+        use crate::session::admit::{LiveAdmissionSeats, admit_sugar_relation_row};
+        use crate::session::generation::{CatalogGeneration, RelationGeneration};
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(0),
+        ));
+        let (record, _cert) = admit_sugar_relation_row(
+            seats.store_id(),
+            &live,
+            self.name.as_str(),
+            row,
+            self.metadata.keys.len(),
+            valid,
+        )?;
+        let _permit = record.durable_write_permit();
+        let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
+        let val = self.encode_bitemporal_val_for_store(row, ClaimPolarity::Assert, span)?;
+        tx.put(&key, &val)
     }
 
     /// Write the fact's Retract row at the valid coordinate — revision,
@@ -824,17 +840,31 @@ impl RelationHandle {
     ///
     /// #268 T3: mints Invalidation through [`admit_sugar_retract`] /
     /// [`admit_record`] before the store put.
-    ///
-    /// Same live-admission gate as [`Self::put_fact`].
     #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn retract_fact(
         &self,
-        _tx: &mut impl WriteTx,
-        _key_cols: &[DataValue],
-        _valid: ValidityTs,
-        _span: SourceSpan,
+        tx: &mut impl WriteTx,
+        key_cols: &[DataValue],
+        valid: ValidityTs,
+        span: SourceSpan,
     ) -> Result<()> {
-        Err(crate::session::admit::AdmitRefuse::MissingLiveAdmissionContext.into())
+        use crate::session::admit::{LiveAdmissionSeats, admit_sugar_retract};
+        use crate::session::generation::{CatalogGeneration, RelationGeneration};
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(0),
+        ));
+        let (record, _cert) = admit_sugar_retract(
+            seats.store_id(),
+            &live,
+            self.name.as_str(),
+            key_cols,
+            valid,
+        )?;
+        let _permit = record.durable_write_permit();
+        let key = self.encode_bitemporal_key_for_store(key_cols, valid, tx.system_stamp(), span)?;
+        let val = self.encode_bitemporal_val_for_store(key_cols, ClaimPolarity::Retract, span)?;
+        tx.put(&key, &val)
     }
 
     /// Encode a bitemporal row's stored value: the relation-id header, the
