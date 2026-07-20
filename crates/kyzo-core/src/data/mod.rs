@@ -9,8 +9,9 @@
 
 pub(crate) mod json;
 /// Typed digest / region identities for the private record model (#268 purity).
-#[allow(dead_code)] // mid-wiring seat; callers land with admit surfaces
 pub(crate) mod digest;
 /// Statement-body types + ONTOK constructions for the one private KyzoRecord.
-#[allow(dead_code)] // mid-wiring seat (#268 T1); callers land in later T#s
+///
+/// `construct::{event,state,role,concept,rule,derivation,context_record}` are
+/// wired through [`crate::session::admit::admit_construct`] — no blanket allow.
 pub(crate) mod statement;

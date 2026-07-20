@@ -804,24 +804,19 @@ impl RelationHandle {
     ///
     /// #268 T3: mints through [`admit_sugar_relation_row`] / [`admit_record`]
     /// before the store put — no anonymous durable door.
+    ///
+    /// Until Engine presents live `StoreId` / Catalog / RootChain /
+    /// [`WriteAuthority`] through this handle, the door typed-refuses
+    /// [`AdmitRefuse::MissingLiveAdmissionContext`] — never placeholder mint.
     #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn put_fact(
         &self,
-        tx: &mut impl WriteTx,
-        row: &[DataValue],
-        valid: ValidityTs,
-        span: SourceSpan,
+        _tx: &mut impl WriteTx,
+        _row: &[DataValue],
+        _valid: ValidityTs,
+        _span: SourceSpan,
     ) -> Result<()> {
-        let (record, _cert) = crate::session::admit::admit_sugar_relation_row(
-            &self.name,
-            row,
-            self.metadata.keys.len(),
-            valid,
-        )?;
-        let _permit = record.durable_write_permit();
-        let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
-        let val = self.encode_bitemporal_val_for_store(row, ClaimPolarity::Assert, span)?;
-        tx.put(&key, &val)
+        Err(crate::session::admit::AdmitRefuse::MissingLiveAdmissionContext.into())
     }
 
     /// Write the fact's Retract row at the valid coordinate — revision,
@@ -829,20 +824,17 @@ impl RelationHandle {
     ///
     /// #268 T3: mints Invalidation through [`admit_sugar_retract`] /
     /// [`admit_record`] before the store put.
+    ///
+    /// Same live-admission gate as [`Self::put_fact`].
     #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn retract_fact(
         &self,
-        tx: &mut impl WriteTx,
-        key_cols: &[DataValue],
-        valid: ValidityTs,
-        span: SourceSpan,
+        _tx: &mut impl WriteTx,
+        _key_cols: &[DataValue],
+        _valid: ValidityTs,
+        _span: SourceSpan,
     ) -> Result<()> {
-        let (record, _cert) =
-            crate::session::admit::admit_sugar_retract(&self.name, key_cols, valid)?;
-        let _permit = record.durable_write_permit();
-        let key = self.encode_bitemporal_key_for_store(key_cols, valid, tx.system_stamp(), span)?;
-        let val = self.encode_bitemporal_val_for_store(key_cols, ClaimPolarity::Retract, span)?;
-        tx.put(&key, &val)
+        Err(crate::session::admit::AdmitRefuse::MissingLiveAdmissionContext.into())
     }
 
     /// Encode a bitemporal row's stored value: the relation-id header, the

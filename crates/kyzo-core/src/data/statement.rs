@@ -176,19 +176,37 @@ impl SourceArtifactId {
     }
 }
 
-/// Source binding on the statement body — every statement names its basis.
+/// Source binding on the statement body (seats 10/11).
+///
+/// [`StatementSource::Unbound`] is the only legal binding for
+/// [`crate::session::admit::SemanticSurface::None`]. Interpreted surfaces
+/// carry [`StatementSource::Artifact`] (from evidence), never a forged
+/// relation-name hash.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StatementSource(SourceArtifactId);
+pub enum StatementSource {
+    /// None-surface: no source artifact — field is unbound by type.
+    Unbound,
+    /// Interpreted knowledge: artifact identity from evidence coordinates.
+    Artifact(SourceArtifactId),
+}
 
 impl StatementSource {
-    /// Bind to a source artifact.
-    pub fn new(artifact: SourceArtifactId) -> Self {
-        Self(artifact)
+    /// None-surface source gate — no artifact binding.
+    pub fn unbound() -> Self {
+        Self::Unbound
     }
 
-    /// Borrow the source artifact id.
-    pub fn artifact_id(&self) -> &SourceArtifactId {
-        &self.0
+    /// Bind to a source artifact (interpreted surfaces only).
+    pub fn new(artifact: SourceArtifactId) -> Self {
+        Self::Artifact(artifact)
+    }
+
+    /// Borrow the source artifact id when bound.
+    pub fn artifact_id(&self) -> Option<&SourceArtifactId> {
+        match self {
+            Self::Unbound => None,
+            Self::Artifact(id) => Some(id),
+        }
     }
 }
 

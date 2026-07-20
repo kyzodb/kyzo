@@ -76,18 +76,20 @@ pub enum RetrievalRefuse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::digest::{RecordContentDigest, RegionId};
+    use crate::data::digest::RecordContentDigest;
     use crate::data::statement::{
-        construct, ContextId, SourceArtifactId, StatementContext, StatementSource, StatementSubject,
-        StatementValue, ValidityTime,
+        construct, ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
+        ValidityTime,
     };
     use crate::session::admit::{
-        admit_record, AdmitRecordParts, PlacementConstraint, SemanticSurface,
+        admit_record, AdmitRecordParts, IngestShape, LiveCertificateInputs, Placement, RecordCore,
+        SemanticSurface,
     };
+    use crate::session::generation::{CatalogGeneration, RelationGeneration};
+    use crate::store::authority::WriteAuthority;
+    use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
-    use crate::store::replica::AdmissionCertificateParts;
     use crate::store::sweep::CommitOrdinal;
-    use crate::store::FenceEpoch;
     use kyzo_model::value::DataValue;
 
     fn admit_one_record_id() -> RecordId {
@@ -99,37 +101,31 @@ mod tests {
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
             StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
-            StatementSource::new(SourceArtifactId::from_digest([0x51; 32])),
+            StatementSource::unbound(),
         );
-        admit_record(AdmitRecordParts {
-            store_id: store,
-            digest,
-            surface: SemanticSurface::None,
-            evidence: None,
-            kind,
-            statement,
-            placement: PlacementConstraint {
-                allowed_regions: vec![],
-            },
-            write_region: RegionId::from_bytes([0; 16]),
-            secret_in_indexed_key: None,
-            kv_as_truth: false,
-            chunk_shaped: false,
-            certificate: AdmissionCertificateParts {
-                protocol_version: *b"kyzo.v01",
-                origin_store: store,
-                origin_epoch: FenceEpoch::genesis(store),
-                origin_commit: CommitOrdinal::ZERO,
-                schema_cut: [0x11; 32],
-                record_digest: *digest.as_digest(),
-                predecessor_history_digest: [0x22; 32],
-                post_state_root: [0x33; 32],
-                authorizing_key_id: [0x44; 32],
-                scope_manifest_digest: [0x55; 32],
-                operation_key: None,
-                signature: [0x66; 64],
-            },
-        })
+        let authority = WriteAuthority::mint(store, [0xB2; 32]);
+        let chain = RootChain::empty();
+        let live = LiveCertificateInputs::from_live(
+            CatalogGeneration::from_relation(RelationGeneration::witness(3)),
+            &chain,
+            &authority,
+            CommitOrdinal::ZERO,
+            [0x61; 32],
+        );
+        admit_record(AdmitRecordParts::new(
+            RecordCore::new(
+                store,
+                digest,
+                SemanticSurface::None,
+                None,
+                kind,
+                statement,
+            ),
+            Placement::Unrestricted,
+            None,
+            IngestShape::Record,
+            live,
+        ))
         .expect("admit")
         .0
         .record_id()

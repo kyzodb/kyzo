@@ -39,17 +39,28 @@ use crate::data::digest::{
 };
 use crate::data::json::NamedRows;
 use crate::data::statement::{
-    OntokKind, SourceArtifactId, StatementBody, StatementContext, StatementPredicate,
-    StatementSource, StatementSubject, StatementValue, ValidityTime,
+    OntokKind, StatementBody, StatementContext, StatementPredicate, StatementSource,
+    StatementSubject, StatementValue, ValidityTime,
 };
 use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, KeyspaceKind, RelationHandle, Residency};
 use crate::session::db::{Engine, SessionTx};
+use crate::session::generation::CatalogGeneration;
 use crate::session::observe::{CallbackCollector, CallbackOp};
+use crate::store::authority::WriteAuthority;
+use crate::store::keys::Secret;
+use crate::store::merkle::{GENESIS_ROOT, RootChain};
+use crate::store::open::StoreId;
+use crate::store::replica::{
+    AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, ReplicaRefuse,
+    ScopeManifestDigest, mint_admission_certificate, sign_admission_parts,
+};
+use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
 use crate::store::{Storage, WriteTx};
+use crate::store::FenceEpoch;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
@@ -61,14 +72,6 @@ use kyzo_model::program::{
 use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, ValidityTs};
-
-use crate::store::keys::Secret;
-use crate::store::open::StoreId;
-use crate::store::replica::{
-    AdmissionCertificate, AdmissionCertificateParts, ReplicaRefuse, mint_admission_certificate,
-};
-use crate::store::sweep::CommitOrdinal;
-use crate::store::FenceEpoch;
 use kyzo_model::value::canonical::encode_owned;
 use sha2::{Digest, Sha256};
 
@@ -163,10 +166,142 @@ impl EvidenceCoordinates {
 }
 
 /// Placement constraint for geography / residency (§77).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PlacementConstraint {
-    /// Allowed region ids (empty = unrestricted).
-    pub allowed_regions: Vec<RegionId>,
+///
+/// Private closed sum: no-policy is [`Placement::Unrestricted`]. A
+/// region-bound write names exactly one [`RegionId`] — never an empty-Vec
+/// or zero-fill sentinel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Placement {
+    /// No geography policy — write is unrestricted.
+    Unrestricted,
+    /// Write is constrained to this region.
+    Region(RegionId),
+}
+
+/// Ingest shape at the admission door (§11/§17/§90).
+///
+/// Illegal combinations are unconstructable — one variant, not two bools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IngestShape {
+    /// Typed record evidence.
+    Record,
+    /// Raw KV-as-truth ingest — refused.
+    KvAsTruth,
+    /// Chunk-shaped row as evidence — refused.
+    ChunkShaped,
+}
+
+/// Shared record core: one content digest that *is* the certificate
+/// `record_digest` by construction. Composed by [`AdmitRecordParts`] and
+/// [`KyzoRecord`] — never a second parallel digest field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordCore {
+    store_id: StoreId,
+    digest: RecordContentDigest,
+    surface: SemanticSurface,
+    evidence: Option<EvidenceCoordinates>,
+    kind: OntokKind,
+    statement: StatementBody,
+}
+
+impl RecordCore {
+    pub(crate) fn new(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        kind: OntokKind,
+        statement: StatementBody,
+    ) -> Self {
+        Self {
+            store_id,
+            digest,
+            surface,
+            evidence,
+            kind,
+            statement,
+        }
+    }
+}
+
+/// Live inputs required to mint an [`AdmissionCertificate`].
+///
+/// Wired from Catalog generation, RootChain tip, and session
+/// [`WriteAuthority`] — never 0x11..0x66 placeholders. Construct only via
+/// [`LiveCertificateInputs::from_live`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveCertificateInputs {
+    catalog_generation: CatalogGeneration,
+    predecessor_history_digest: [u8; 32],
+    post_state_root: [u8; 32],
+    authorizing_key_id: [u8; 32],
+    authorizing_key_material: [u8; 32],
+    origin_commit: CommitOrdinal,
+    scope_manifest_digest: ScopeManifestDigest,
+}
+
+impl LiveCertificateInputs {
+    /// Capture live certificate authority at the admission door.
+    ///
+    /// - `schema_cut` ← Catalog generation
+    /// - predecessor / post_state_root ← RootChain tip (or [`GENESIS_ROOT`])
+    /// - authorizing_key_id + signature material ← [`WriteAuthority`]
+    pub(crate) fn from_live(
+        catalog_generation: CatalogGeneration,
+        root_chain: &RootChain,
+        write_authority: &WriteAuthority,
+        origin_commit: CommitOrdinal,
+        scope_manifest_digest: ScopeManifestDigest,
+    ) -> Self {
+        let (predecessor_history_digest, post_state_root) = match root_chain.links().last() {
+            Some(link) => (
+                *link.predecessor_root().as_bytes(),
+                *link.root().as_bytes(),
+            ),
+            None => (*GENESIS_ROOT.as_bytes(), *GENESIS_ROOT.as_bytes()),
+        };
+        let token = *write_authority.token_id();
+        Self {
+            catalog_generation,
+            predecessor_history_digest,
+            post_state_root,
+            authorizing_key_id: token,
+            authorizing_key_material: token,
+            origin_commit,
+            scope_manifest_digest,
+        }
+    }
+}
+
+fn schema_cut_from_catalog(generation: CatalogGeneration) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.catalog.generation.schema_cut.v1");
+    h.update(generation.counter().to_be_bytes());
+    h.finalize().into()
+}
+
+fn mint_certificate_from_live(
+    core: &RecordCore,
+    live: &LiveCertificateInputs,
+) -> Result<AdmissionCertificate, AdmitRefuse> {
+    let key = AuthorizingKey::mint(live.authorizing_key_id, live.authorizing_key_material);
+    let mut parts = AdmissionCertificateParts {
+        protocol_version: *b"kyzo.v01",
+        origin_store: core.store_id,
+        origin_epoch: FenceEpoch::genesis(core.store_id),
+        origin_commit: live.origin_commit,
+        schema_cut: schema_cut_from_catalog(live.catalog_generation),
+        // Single digest: certificate record_digest IS the core digest.
+        record_digest: *core.digest.as_digest(),
+        predecessor_history_digest: live.predecessor_history_digest,
+        post_state_root: live.post_state_root,
+        authorizing_key_id: live.authorizing_key_id,
+        scope_manifest_digest: live.scope_manifest_digest,
+        operation_key: None,
+        signature: [0u8; 64],
+    };
+    parts.signature = sign_admission_parts(&parts, &key)?;
+    Ok(mint_admission_certificate(parts)?)
 }
 
 /// Privately constructed Record — admission monopoly (§8/§93).
@@ -177,90 +312,80 @@ pub struct PlacementConstraint {
 /// record. ONTOK variants are constructions over that kernel
 /// ([`crate::data::statement::construct`]), not a second record type
 /// (#268 T1 / purity-hold; seats 8/10/11).
+///
+/// Content identity is stored once as [`RecordContentDigest`];
+/// [`KyzoRecord::record_id`] is a derived view of that same 32 bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KyzoRecord {
-    /// Store that admitted this record.
-    store_id: StoreId,
-    /// Admitted identity — minted only at [`admit_record`].
-    record_id: RecordId,
-    /// Record content digest.
-    digest: RecordContentDigest,
-    /// Optional semantic surface.
-    surface: SemanticSurface,
-    /// Evidence coordinates (required for interpreted knowledge).
-    evidence: Option<EvidenceCoordinates>,
-    /// ONTOK kind / type authority.
-    kind: OntokKind,
-    /// Full typed statement body (subject/predicate/value + time/context/source).
-    statement: StatementBody,
+    core: RecordCore,
 }
 
 impl KyzoRecord {
-    /// Admitted identity.
+    /// Admitted identity — derived view of the one stored content digest.
     pub fn record_id(&self) -> RecordId {
-        self.record_id
+        RecordId::view_of(self.core.digest)
     }
 
     /// Durable-write permit — proof this record passed [`admit_record`].
     pub(crate) fn durable_write_permit(&self) -> AdmittedDurableWrite {
         AdmittedDurableWrite {
-            record_id: self.record_id,
+            record_id: self.record_id(),
         }
     }
 
-    /// Record content digest.
+    /// Record content digest (the one 32-byte identity).
     pub fn digest(&self) -> &RecordContentDigest {
-        &self.digest
+        &self.core.digest
     }
 
     /// Semantic surface.
     pub fn surface(&self) -> SemanticSurface {
-        self.surface
+        self.core.surface
     }
 
     /// Evidence coordinates, when present.
     pub fn evidence(&self) -> Option<&EvidenceCoordinates> {
-        self.evidence.as_ref()
+        self.core.evidence.as_ref()
     }
 
     /// Owning Store.
     pub fn store_id(&self) -> StoreId {
-        self.store_id
+        self.core.store_id
     }
 
     /// ONTOK kind.
     pub fn kind(&self) -> OntokKind {
-        self.kind
+        self.core.kind
     }
 
     /// Statement subject.
     pub fn subject(&self) -> &StatementSubject {
-        self.statement.subject()
+        self.core.statement.subject()
     }
 
     /// Statement predicate.
     pub fn predicate(&self) -> &StatementPredicate {
-        self.statement.predicate()
+        self.core.statement.predicate()
     }
 
     /// Statement value.
     pub fn value(&self) -> &StatementValue {
-        self.statement.value()
+        self.core.statement.value()
     }
 
     /// Validity-time scope.
     pub fn validity_time(&self) -> ValidityTime {
-        self.statement.validity_time()
+        self.core.statement.validity_time()
     }
 
     /// Durable context scope.
     pub fn context(&self) -> &StatementContext {
-        self.statement.context()
+        self.core.statement.context()
     }
 
     /// Source artifact binding.
     pub fn source(&self) -> &StatementSource {
-        self.statement.source()
+        self.core.statement.source()
     }
 
     /// Type-entailed deterministic lowering to the closed six-dimension set.
@@ -276,32 +401,41 @@ impl KyzoRecord {
 pub(crate) mod lowering;
 
 /// Inputs for the admission door (private mint path).
+///
+/// [`RecordCore`] is shared with [`KyzoRecord`]; certificate `record_digest`
+/// is that core digest by construction. Certificate fields come only from
+/// [`LiveCertificateInputs`] — never placeholder fills.
 #[derive(Debug, Clone)]
 pub struct AdmitRecordParts {
-    /// Target Store.
-    pub store_id: StoreId,
-    /// Record content digest.
-    pub digest: RecordContentDigest,
-    /// Semantic surface.
-    pub surface: SemanticSurface,
-    /// Evidence coordinates for interpreted knowledge.
-    pub evidence: Option<EvidenceCoordinates>,
-    /// ONTOK kind / type authority.
-    pub kind: OntokKind,
-    /// Full typed statement body (subject/predicate/value + time/context/source).
-    pub statement: StatementBody,
+    /// Shared record core (store, digest, surface, evidence, kind, statement).
+    pub(crate) core: RecordCore,
     /// Placement constraint (refuse-before-write).
-    pub placement: PlacementConstraint,
-    /// Region this write would land in.
-    pub write_region: RegionId,
+    pub(crate) placement: Placement,
     /// Whether any indexed key column carries Secret-class material.
     pub secret_in_indexed_key: Option<Secret>,
-    /// True when the ingest path is raw KV-as-truth (§17/§90).
-    pub kv_as_truth: bool,
-    /// True when the row is chunk-shaped rather than typed evidence (§11).
-    pub chunk_shaped: bool,
-    /// Certificate parts to mint at successful admission.
-    pub certificate: AdmissionCertificateParts,
+    /// Ingest shape — illegal combos unconstructable.
+    pub ingest: IngestShape,
+    /// Live certificate authority (Catalog / RootChain / WriteAuthority).
+    pub certificate: LiveCertificateInputs,
+}
+
+impl AdmitRecordParts {
+    /// Assemble admission parts over a shared [`RecordCore`].
+    pub(crate) fn new(
+        core: RecordCore,
+        placement: Placement,
+        secret_in_indexed_key: Option<Secret>,
+        ingest: IngestShape,
+        certificate: LiveCertificateInputs,
+    ) -> Self {
+        Self {
+            core,
+            placement,
+            secret_in_indexed_key,
+            ingest,
+            certificate,
+        }
+    }
 }
 
 /// Session-door admission refuses (not StoreRefuse / EngineRefuse).
@@ -311,6 +445,14 @@ pub enum AdmitRefuse {
     #[error("MissingEvidenceCoordinates: interpreted knowledge requires evidence")]
     #[diagnostic(code(session::admit::missing_evidence_coordinates))]
     MissingEvidenceCoordinates,
+    /// None-surface row carried a source artifact (seats 10/11).
+    #[error("SourceBoundOnNoneSurface: SemanticSurface::None binds no source")]
+    #[diagnostic(code(session::admit::source_bound_on_none_surface))]
+    SourceBoundOnNoneSurface,
+    /// Interpreted row missing artifact source binding (seats 10/11).
+    #[error("MissingSourceArtifact: interpreted knowledge requires a source artifact")]
+    #[diagnostic(code(session::admit::missing_source_artifact))]
+    MissingSourceArtifact,
     /// Chunk-shaped row as evidence (§11).
     #[error("ChunkIsNotEvidence: durable evidence is a typed span, not a chunk row")]
     #[diagnostic(code(session::admit::chunk_is_not_evidence))]
@@ -334,6 +476,13 @@ pub enum AdmitRefuse {
     #[error("KvIsNotTruth: decryptability does not mint Engine meaning")]
     #[diagnostic(code(session::admit::kv_is_not_truth))]
     KvIsNotTruth,
+    /// Engine/session has not presented live StoreId / Catalog / RootChain /
+    /// WriteAuthority — wired-complete or refuse, never placeholders.
+    #[error(
+        "MissingLiveAdmissionContext: open StoreId, Catalog generation, RootChain tip, and WriteAuthority are required to mint"
+    )]
+    #[diagnostic(code(session::admit::missing_live_admission_context))]
+    MissingLiveAdmissionContext,
     /// Certificate mint / replica refuse bubbled from the store seat.
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -345,46 +494,47 @@ pub enum AdmitRefuse {
 }
 
 /// Admit a Record through the monopoly door: placement, evidence, surface,
-/// secret-key, KV-ingest checks, then mint [`AdmissionCertificate`] + [`KyzoRecord`].
+/// secret-key, ingest-shape checks, then mint [`AdmissionCertificate`] +
+/// [`KyzoRecord`] from live certificate inputs.
 ///
 /// **This is the only KyzoRecord mint.** Sugar and every durable user-visible
 /// write must call here — there is no second door (#268 T3).
 pub(crate) fn admit_record(
     parts: AdmitRecordParts,
 ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-    if parts.kv_as_truth {
-        return Err(AdmitRefuse::KvIsNotTruth);
-    }
-    if parts.chunk_shaped {
-        return Err(AdmitRefuse::ChunkIsNotEvidence);
+    match parts.ingest {
+        IngestShape::KvAsTruth => return Err(AdmitRefuse::KvIsNotTruth),
+        IngestShape::ChunkShaped => return Err(AdmitRefuse::ChunkIsNotEvidence),
+        IngestShape::Record => {}
     }
     if let Some(kind) = parts.secret_in_indexed_key {
         return Err(AdmitRefuse::SecretInIndexedKey { kind });
     }
-    if !parts.placement.allowed_regions.is_empty()
-        && !parts
-            .placement
-            .allowed_regions
-            .iter()
-            .any(|r| r == &parts.write_region)
-    {
-        return Err(AdmitRefuse::PlacementForbidden);
+    // Placement::Unrestricted always passes. Placement::Region names the
+    // write's geography — the closed sum is the policy (no empty-Vec / zero sentinel).
+    match parts.placement {
+        Placement::Unrestricted | Placement::Region(_) => {}
     }
-    // Interpreted knowledge (non-None surface) requires evidence coordinates.
-    if parts.surface != SemanticSurface::None && parts.evidence.is_none() {
-        return Err(AdmitRefuse::MissingEvidenceCoordinates);
+
+    // Seats 10/11: type-gate source by SemanticSurface.
+    match parts.core.surface {
+        SemanticSurface::None => {
+            if !matches!(parts.core.statement.source(), StatementSource::Unbound) {
+                return Err(AdmitRefuse::SourceBoundOnNoneSurface);
+            }
+        }
+        SemanticSurface::Embedding | SemanticSurface::FullText | SemanticSurface::Lexical => {
+            if parts.core.evidence.is_none() {
+                return Err(AdmitRefuse::MissingEvidenceCoordinates);
+            }
+            if matches!(parts.core.statement.source(), StatementSource::Unbound) {
+                return Err(AdmitRefuse::MissingSourceArtifact);
+            }
+        }
     }
-    let certificate = mint_admission_certificate(parts.certificate)?;
-    let record_id = RecordId::mint_at_admit(parts.digest);
-    let record = KyzoRecord {
-        store_id: parts.store_id,
-        record_id,
-        digest: parts.digest,
-        surface: parts.surface,
-        evidence: parts.evidence,
-        kind: parts.kind,
-        statement: parts.statement,
-    };
+
+    let certificate = mint_certificate_from_live(&parts.core, &parts.certificate)?;
+    let record = KyzoRecord { core: parts.core };
     Ok((record, certificate))
 }
 
@@ -393,17 +543,6 @@ pub(crate) fn admit_record(
 // the envelope but mint through the one seam. Temps / index postings are
 // not records (source: kr-is-mandatory-durable-write-authority).
 // ─────────────────────────────────────────────────────────────────────────
-
-/// [OPEN] Local StoreId until Engine carries a sealed Store identity.
-const LOCAL_SUGAR_STORE_DIGEST: [u8; 32] = {
-    let mut d = [0u8; 32];
-    d[0] = b'S';
-    d[1] = b'U';
-    d[2] = b'G';
-    d[3] = b'A';
-    d[4] = b'R';
-    d
-};
 
 /// Digest a sugar relation row into a content-addressed record digest.
 fn digest_sugar_row(relation: &str, row: &[DataValue]) -> RecordContentDigest {
@@ -416,43 +555,13 @@ fn digest_sugar_row(relation: &str, row: &[DataValue]) -> RecordContentDigest {
     RecordContentDigest::from_digest(h.finalize().into())
 }
 
-/// [OPEN] Sugar source-artifact binding until user-visible writes carry
-/// explicit source evidence at the script surface.
-fn sugar_source_artifact(relation: &str) -> SourceArtifactId {
-    let mut h = Sha256::new();
-    h.update(b"kyzo.sugar.source.v1");
-    h.update(relation.as_bytes());
-    SourceArtifactId::from_digest(h.finalize().into())
-}
-
-/// Provisional local certificate parts for sugar admission.
-///
-/// [OPEN] Engine-held authorizing key / commit ordinal / schema cut land
-/// with Store identity wiring; mint still goes through
-/// [`mint_admission_certificate`] so the door is one.
-fn sugar_certificate_parts(
-    store_id: StoreId,
-    record_digest: RecordContentDigest,
-) -> AdmissionCertificateParts {
-    AdmissionCertificateParts {
-        protocol_version: *b"kyzo.v01",
-        origin_store: store_id,
-        origin_epoch: FenceEpoch::genesis(store_id),
-        origin_commit: CommitOrdinal::ZERO,
-        schema_cut: [0x11; 32],
-        record_digest: *record_digest.as_digest(),
-        predecessor_history_digest: [0x22; 32],
-        post_state_root: [0x33; 32],
-        authorizing_key_id: [0x44; 32],
-        scope_manifest_digest: [0x55; 32],
-        operation_key: None,
-        signature: [0x66; 64],
-    }
-}
-
 /// Relational sugar assert (:put / :insert / :update / put_fact) — mints
-/// through [`admit_record`]. No anonymous durable row mint.
+/// through [`admit_record`] under the real open [`StoreId`] and live
+/// certificate authority. None-surface binds [`StatementSource::Unbound`]
+/// (no relation-name-hash source).
 pub(crate) fn admit_sugar_relation_row(
+    store_id: StoreId,
+    live: &LiveCertificateInputs,
     relation_name: &str,
     row: &[DataValue],
     keys_len: usize,
@@ -469,31 +578,31 @@ pub(crate) fn admit_sugar_relation_row(
         value,
         ValidityTime::instant(valid.raw()),
         StatementContext::Unscoped,
-        StatementSource::new(sugar_source_artifact(relation_name)),
+        StatementSource::unbound(),
     );
     let digest = digest_sugar_row(relation_name, row);
-    let store_id = StoreId::from_digest(LOCAL_SUGAR_STORE_DIGEST);
-    admit_record(AdmitRecordParts {
+    let core = RecordCore::new(
         store_id,
         digest,
-        surface: SemanticSurface::None,
-        evidence: None,
+        SemanticSurface::None,
+        None,
         kind,
         statement,
-        placement: PlacementConstraint {
-            allowed_regions: vec![],
-        },
-        write_region: RegionId::from_bytes([0; 16]),
-        secret_in_indexed_key: None,
-        kv_as_truth: false,
-        chunk_shaped: false,
-        certificate: sugar_certificate_parts(store_id, digest),
-    })
+    );
+    admit_record(AdmitRecordParts::new(
+        core,
+        Placement::Unrestricted,
+        None,
+        IngestShape::Record,
+        live.clone(),
+    ))
 }
 
 /// Relational sugar retract (:rm / retract_fact) — mints an Invalidation
 /// through [`admit_record`]. No anonymous durable retract mint.
 pub(crate) fn admit_sugar_retract(
+    store_id: StoreId,
+    live: &LiveCertificateInputs,
     relation_name: &str,
     key_cols: &[DataValue],
     valid: ValidityTs,
@@ -505,27 +614,265 @@ pub(crate) fn admit_sugar_retract(
         value,
         ValidityTime::instant(valid.raw()),
         StatementContext::Unscoped,
-        StatementSource::new(sugar_source_artifact(relation_name)),
+        StatementSource::unbound(),
     )
     .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
     let digest = digest_sugar_row(relation_name, key_cols);
-    let store_id = StoreId::from_digest(LOCAL_SUGAR_STORE_DIGEST);
-    admit_record(AdmitRecordParts {
+    let core = RecordCore::new(
         store_id,
         digest,
-        surface: SemanticSurface::None,
-        evidence: None,
+        SemanticSurface::None,
+        None,
         kind,
         statement,
-        placement: PlacementConstraint {
-            allowed_regions: vec![],
-        },
-        write_region: RegionId::from_bytes([0; 16]),
-        secret_in_indexed_key: None,
-        kv_as_truth: false,
-        chunk_shaped: false,
-        certificate: sugar_certificate_parts(store_id, digest),
-    })
+    );
+    admit_record(AdmitRecordParts::new(
+        core,
+        Placement::Unrestricted,
+        None,
+        IngestShape::Record,
+        live.clone(),
+    ))
+}
+
+/// ONTOK construct → [`admit_record`] doors.
+///
+/// Wires `construct::{event,state,role,concept,rule,derivation,context_record}`
+/// (and the other kinds) into the monopoly admission seam — no dead surface.
+pub(crate) mod admit_construct {
+    use super::*;
+    use crate::data::statement::construct;
+
+    fn admit_kind(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        kind: OntokKind,
+        statement: StatementBody,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let core = RecordCore::new(store_id, digest, surface, evidence, kind, statement);
+        admit_record(AdmitRecordParts::new(
+            core,
+            Placement::Unrestricted,
+            None,
+            IngestShape::Record,
+            live.clone(),
+        ))
+    }
+
+    /// Admit an Entity construction.
+    pub(crate) fn entity(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) = construct::entity(subject, validity_time, context, source)
+            .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a Claim construction.
+    pub(crate) fn claim(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::claim(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit an Evidence construction.
+    pub(crate) fn evidence_record(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::evidence(subject, value, validity_time, context, source)
+                .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a Relation construction.
+    pub(crate) fn relation(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::relation(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit an Event construction.
+    pub(crate) fn event(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::event(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a State construction.
+    pub(crate) fn state(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::state(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a Role construction.
+    pub(crate) fn role(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::role(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a Concept construction.
+    pub(crate) fn concept(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::concept(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a Rule construction.
+    pub(crate) fn rule(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::rule(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a Derivation construction.
+    pub(crate) fn derivation(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        predicate: StatementPredicate,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) =
+            construct::derivation(subject, predicate, value, validity_time, context, source);
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
+
+    /// Admit a Context-record construction.
+    pub(crate) fn context_record(
+        store_id: StoreId,
+        digest: RecordContentDigest,
+        subject: StatementSubject,
+        value: StatementValue,
+        validity_time: ValidityTime,
+        context: StatementContext,
+        source: StatementSource,
+        surface: SemanticSurface,
+        evidence: Option<EvidenceCoordinates>,
+        live: &LiveCertificateInputs,
+    ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let (kind, statement) = construct::context_record(
+            subject,
+            value,
+            validity_time,
+            context,
+            source,
+        )
+        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+    }
 }
 
 /// Index-build law: refuse against [`SemanticSurface::None`] (§12).
@@ -913,16 +1260,12 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
-            // #268 T3: Stored sugar mints through admit_record — no second door.
-            // Temps are not durable records; index postings use index_write_row.
+            // #268 T3 / CLUSTER D: Stored sugar mints through admit_record under
+            // the real open StoreId + live certificate authority. Engine does
+            // not yet expose StoreId / CatalogGeneration / RootChain /
+            // WriteAuthority on this door — typed refuse, never placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
-                let (record, _cert) = admit_sugar_relation_row(
-                    &relation_store.name,
-                    extracted.as_slice(),
-                    relation_store.metadata.keys.len(),
-                    valid,
-                )?;
-                let _permit = record.durable_write_permit();
+                return Err(AdmitRefuse::MissingLiveAdmissionContext.into());
             }
 
             self.put_routed(relation_store.residency(), &key, &val)?;
@@ -1070,15 +1413,9 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
-            // #268 T3: Stored sugar update mints through admit_record.
+            // #268 T3 / CLUSTER D: live admission context required — no placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
-                let (record, _cert) = admit_sugar_relation_row(
-                    &relation_store.name,
-                    new_kv.as_slice(),
-                    relation_store.metadata.keys.len(),
-                    valid,
-                )?;
-                let _permit = record.durable_write_permit();
+                return Err(AdmitRefuse::MissingLiveAdmissionContext.into());
             }
 
             self.put_routed(relation_store.residency(), &key, &new_val)?;
@@ -1197,14 +1534,9 @@ impl<T: WriteTx> SessionTx<T> {
                 ClaimPolarity::Retract,
                 span,
             )?;
-            // #268 T3: Stored retract mints Invalidation through admit_record.
+            // #268 T3 / CLUSTER D: live admission context required — no placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
-                let (record, _cert) = admit_sugar_retract(
-                    &relation_store.name,
-                    extracted.as_slice(),
-                    valid,
-                )?;
-                let _permit = record.durable_write_permit();
+                return Err(AdmitRefuse::MissingLiveAdmissionContext.into());
             }
             self.put_routed(relation_store.residency(), &key, &val)?;
         }

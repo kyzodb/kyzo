@@ -8,23 +8,27 @@
 
 //! Admitted record identity (#268 T3).
 //!
-//! [`RecordId`] is minted only at the admission seam
+//! [`RecordId`] is a derived view of the one stored
+//! [`RecordContentDigest`](crate::data::digest::RecordContentDigest) —
+//! minted only at the admission seam
 //! ([`crate::session::admit::admit_record`]). Projections and retrieval
 //! spans resolve to this id or refuse — never a free-floating truth.
 
 use crate::data::digest::RecordContentDigest;
 
-/// Admitted record identity — minted only by [`crate::session::admit::admit_record`].
+/// Admitted record identity — derived view of the record content digest.
 ///
-/// Private field: no public / anonymous constructor.
+/// Private field: no public / anonymous constructor. One 32-byte value with
+/// the digest; [`RecordId`] does not store a second copy on the record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RecordId([u8; 32]);
 
 impl RecordId {
-    /// Admission-only mint from the record content digest.
+    /// Admission-only derived view of the record content digest.
     ///
-    /// Call site law: only [`crate::session::admit::admit_record`].
-    pub(crate) fn mint_at_admit(digest: RecordContentDigest) -> Self {
+    /// Call site law: only [`crate::session::admit::admit_record`] (and
+    /// readers of an already-admitted digest).
+    pub(crate) fn view_of(digest: RecordContentDigest) -> Self {
         Self(*digest.as_digest())
     }
 

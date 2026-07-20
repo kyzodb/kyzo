@@ -13,12 +13,70 @@
 //! record's typed fields — never a memoized cache on the record.
 //! Every lowered row carries the source [`RecordId`].
 
-use crate::data::statement::{OntokKind, StatementContext};
+use crate::data::statement::{OntokKind, StatementContext, StatementSource};
 use crate::project::dimension::{LoweredRow, RecordLowering, StatementDimension};
 use kyzo_model::value::canonical::encode_owned;
 use kyzo_model::value::DataValue;
 
 use super::{KyzoRecord, SemanticSurface};
+
+/// Named semantic-surface tag for projection encoding — not a bare i64.
+///
+/// Symmetric [`SurfaceTag::encode`] / [`SurfaceTag::decode`] round-trip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SurfaceTag {
+    /// [`SemanticSurface::None`].
+    None,
+    /// [`SemanticSurface::Embedding`].
+    Embedding,
+    /// [`SemanticSurface::FullText`].
+    FullText,
+    /// [`SemanticSurface::Lexical`].
+    Lexical,
+}
+
+impl SurfaceTag {
+    /// Map a live surface to its projection tag.
+    pub(crate) fn from_surface(surface: SemanticSurface) -> Self {
+        match surface {
+            SemanticSurface::None => Self::None,
+            SemanticSurface::Embedding => Self::Embedding,
+            SemanticSurface::FullText => Self::FullText,
+            SemanticSurface::Lexical => Self::Lexical,
+        }
+    }
+
+    /// Encode to the wire / projection integer.
+    pub(crate) fn encode(self) -> i64 {
+        match self {
+            Self::None => 0,
+            Self::Embedding => 1,
+            Self::FullText => 2,
+            Self::Lexical => 3,
+        }
+    }
+
+    /// Decode a projection integer; unknown tags refuse.
+    pub(crate) fn decode(tag: i64) -> Option<Self> {
+        match tag {
+            0 => Some(Self::None),
+            1 => Some(Self::Embedding),
+            2 => Some(Self::FullText),
+            3 => Some(Self::Lexical),
+            _ => None,
+        }
+    }
+
+    /// Recover the semantic surface from this tag.
+    pub(crate) fn to_surface(self) -> SemanticSurface {
+        match self {
+            Self::None => SemanticSurface::None,
+            Self::Embedding => SemanticSurface::Embedding,
+            Self::FullText => SemanticSurface::FullText,
+            Self::Lexical => SemanticSurface::Lexical,
+        }
+    }
+}
 
 /// Dimensions entailed by an ONTOK kind — pure function of type, not write config.
 ///
@@ -78,7 +136,7 @@ fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataVa
             record_id,
             subject,
             record.value().as_value().clone(),
-            DataValue::from(surface_tag(record.surface())),
+            DataValue::from(SurfaceTag::from_surface(record.surface()).encode()),
         ]),
         StatementDimension::QuantityAndLocation => DataValue::List(vec![
             record_id,
@@ -91,7 +149,10 @@ fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataVa
             DataValue::Interval(record.validity_time().as_interval()),
         ]),
         StatementDimension::Source => {
-            let source = DataValue::Bytes(record.source().artifact_id().as_digest().to_vec());
+            let source = match record.source() {
+                StatementSource::Unbound => DataValue::Null,
+                StatementSource::Artifact(id) => DataValue::Bytes(id.as_digest().to_vec()),
+            };
             let context = match record.context() {
                 StatementContext::Unscoped => DataValue::Null,
                 StatementContext::Scoped(id) => DataValue::Bytes(id.as_digest().to_vec()),
@@ -101,32 +162,36 @@ fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataVa
     }
 }
 
-fn surface_tag(surface: SemanticSurface) -> i64 {
-    match surface {
-        SemanticSurface::None => 0,
-        SemanticSurface::Embedding => 1,
-        SemanticSurface::FullText => 2,
-        SemanticSurface::Lexical => 3,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::digest::{RecordContentDigest, RegionId};
+    use crate::data::digest::RecordContentDigest;
     use crate::data::statement::{
         construct, ContextId, SourceArtifactId, StatementBody, StatementContext, StatementSource,
         StatementSubject, StatementValue, ValidityTime,
     };
+    use crate::session::admit::{
+        admit_record, AdmitRecordParts, IngestShape, LiveCertificateInputs, Placement, RecordCore,
+        SemanticSurface,
+    };
+    use crate::session::generation::{CatalogGeneration, RelationGeneration};
+    use crate::store::authority::WriteAuthority;
+    use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
-    use crate::store::replica::AdmissionCertificateParts;
     use crate::store::sweep::CommitOrdinal;
-    use crate::store::FenceEpoch;
     use kyzo_model::value::DataValue;
 
-    use super::super::{
-        admit_record, AdmitRecordParts, PlacementConstraint, SemanticSurface,
-    };
+    fn live_cert(store: StoreId) -> LiveCertificateInputs {
+        let authority = WriteAuthority::mint(store, [0xA1; 32]);
+        let chain = RootChain::empty();
+        LiveCertificateInputs::from_live(
+            CatalogGeneration::from_relation(RelationGeneration::witness(1)),
+            &chain,
+            &authority,
+            CommitOrdinal::ZERO,
+            [0x51; 32],
+        )
+    }
 
     fn admit_claim_record() -> KyzoRecord {
         let store = StoreId::from_digest([0x26; 32]);
@@ -137,37 +202,22 @@ mod tests {
             StatementValue::new(DataValue::from("assembly")),
             ValidityTime::instant(1_700_000_000_000_000),
             StatementContext::Scoped(ContextId::from_digest([0xC0; 32])),
-            StatementSource::new(SourceArtifactId::from_digest([0x50; 32])),
+            StatementSource::unbound(),
         );
-        admit_record(AdmitRecordParts {
-            store_id: store,
-            digest,
-            surface: SemanticSurface::None,
-            evidence: None,
-            kind,
-            statement,
-            placement: PlacementConstraint {
-                allowed_regions: vec![],
-            },
-            write_region: RegionId::from_bytes([0; 16]),
-            secret_in_indexed_key: None,
-            kv_as_truth: false,
-            chunk_shaped: false,
-            certificate: AdmissionCertificateParts {
-                protocol_version: *b"kyzo.v01",
-                origin_store: store,
-                origin_epoch: FenceEpoch::genesis(store),
-                origin_commit: CommitOrdinal::ZERO,
-                schema_cut: [0x11; 32],
-                record_digest: *digest.as_digest(),
-                predecessor_history_digest: [0x22; 32],
-                post_state_root: [0x33; 32],
-                authorizing_key_id: [0x44; 32],
-                scope_manifest_digest: [0x55; 32],
-                operation_key: None,
-                signature: [0x66; 64],
-            },
-        })
+        admit_record(AdmitRecordParts::new(
+            RecordCore::new(
+                store,
+                digest,
+                SemanticSurface::None,
+                None,
+                kind,
+                statement,
+            ),
+            Placement::Unrestricted,
+            None,
+            IngestShape::Record,
+            live_cert(store),
+        ))
         .expect("admit")
         .0
     }
@@ -176,37 +226,39 @@ mod tests {
         let store = StoreId::from_digest([0x27; 32]);
         let digest = RecordContentDigest::from_digest([0xB2; 32]);
         let (kind, statement) = kind_body;
-        admit_record(AdmitRecordParts {
-            store_id: store,
-            digest,
-            surface: SemanticSurface::None,
-            evidence: None,
-            kind,
-            statement,
-            placement: PlacementConstraint {
-                allowed_regions: vec![],
-            },
-            write_region: RegionId::from_bytes([0; 16]),
-            secret_in_indexed_key: None,
-            kv_as_truth: false,
-            chunk_shaped: false,
-            certificate: AdmissionCertificateParts {
-                protocol_version: *b"kyzo.v01",
-                origin_store: store,
-                origin_epoch: FenceEpoch::genesis(store),
-                origin_commit: CommitOrdinal::ZERO,
-                schema_cut: [0x11; 32],
-                record_digest: *digest.as_digest(),
-                predecessor_history_digest: [0x22; 32],
-                post_state_root: [0x33; 32],
-                authorizing_key_id: [0x44; 32],
-                scope_manifest_digest: [0x55; 32],
-                operation_key: None,
-                signature: [0x66; 64],
-            },
-        })
+        admit_record(AdmitRecordParts::new(
+            RecordCore::new(
+                store,
+                digest,
+                SemanticSurface::None,
+                None,
+                kind,
+                statement,
+            ),
+            Placement::Unrestricted,
+            None,
+            IngestShape::Record,
+            live_cert(store),
+        ))
         .expect("admit")
         .0
+    }
+
+    #[test]
+    fn surface_tag_encode_decode_round_trip() {
+        for surface in [
+            SemanticSurface::None,
+            SemanticSurface::Embedding,
+            SemanticSurface::FullText,
+            SemanticSurface::Lexical,
+        ] {
+            let tag = SurfaceTag::from_surface(surface);
+            let encoded = tag.encode();
+            let decoded = SurfaceTag::decode(encoded).expect("known tag");
+            assert_eq!(decoded, tag);
+            assert_eq!(decoded.to_surface(), surface);
+        }
+        assert_eq!(SurfaceTag::decode(99), None);
     }
 
     /// Real determinism: lower twice into independent allocations; assert
@@ -261,7 +313,7 @@ mod tests {
                 StatementSubject::new(DataValue::from("e1")),
                 ValidityTime::instant(1),
                 StatementContext::Unscoped,
-                StatementSource::new(SourceArtifactId::from_digest([1; 32])),
+                StatementSource::unbound(),
             )
             .expect("entity"),
         );
@@ -271,7 +323,7 @@ mod tests {
             StatementValue::new(DataValue::from("e2")),
             ValidityTime::instant(1),
             StatementContext::Unscoped,
-            StatementSource::new(SourceArtifactId::from_digest([1; 32])),
+            StatementSource::unbound(),
         ));
         let claim = admit_claim_record();
 
@@ -365,7 +417,11 @@ mod tests {
     #[test]
     fn sugar_relation_row_mints_through_admit_record() {
         use kyzo_model::value::ValidityTs;
-        let (record, _cert) = super::super::admit_sugar_relation_row(
+        let store = StoreId::from_digest([0x28; 32]);
+        let live = live_cert(store);
+        let (record, cert) = super::super::admit_sugar_relation_row(
+            store,
+            &live,
             "parts",
             &[DataValue::from(1), DataValue::from("widget")],
             1,
@@ -373,9 +429,97 @@ mod tests {
         )
         .expect("sugar admit");
         assert_eq!(record.kind(), OntokKind::Relation);
+        assert_eq!(record.store_id(), store);
+        assert_eq!(cert.record_digest(), record.digest().as_digest());
         let permit = record.durable_write_permit();
         assert_eq!(permit.record_id(), record.record_id());
         let lowering = record.lower();
         assert_eq!(lowering.source_record_id(), Some(record.record_id()));
+    }
+
+    /// construct::{event,state,role,concept,rule,derivation,context_record}
+    /// wire through the admit_construct door.
+    #[test]
+    fn construct_kinds_wire_through_admit_construct() {
+        let store = StoreId::from_digest([0x29; 32]);
+        let live = live_cert(store);
+        let subject = StatementSubject::new(DataValue::from("s"));
+        let pred = crate::data::statement::StatementPredicate::new("p").expect("pred");
+        let value = StatementValue::new(DataValue::from("v"));
+        let vt = ValidityTime::instant(1);
+        let ctx = StatementContext::Unscoped;
+        let src = StatementSource::unbound();
+        let digest = RecordContentDigest::from_digest([0xD1; 32]);
+
+        let kinds = [
+            super::super::admit_construct::event(
+                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
+                src.clone(), SemanticSurface::None, None, &live,
+            )
+            .expect("event")
+            .0
+            .kind(),
+            super::super::admit_construct::state(
+                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
+                src.clone(), SemanticSurface::None, None, &live,
+            )
+            .expect("state")
+            .0
+            .kind(),
+            super::super::admit_construct::role(
+                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
+                src.clone(), SemanticSurface::None, None, &live,
+            )
+            .expect("role")
+            .0
+            .kind(),
+            super::super::admit_construct::concept(
+                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
+                src.clone(), SemanticSurface::None, None, &live,
+            )
+            .expect("concept")
+            .0
+            .kind(),
+            super::super::admit_construct::rule(
+                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
+                src.clone(), SemanticSurface::None, None, &live,
+            )
+            .expect("rule")
+            .0
+            .kind(),
+            super::super::admit_construct::derivation(
+                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
+                src.clone(), SemanticSurface::None, None, &live,
+            )
+            .expect("derivation")
+            .0
+            .kind(),
+            super::super::admit_construct::context_record(
+                store, digest, subject.clone(), value.clone(), vt, ctx.clone(), src.clone(),
+                SemanticSurface::None, None, &live,
+            )
+            .expect("context")
+            .0
+            .kind(),
+        ];
+        assert_eq!(
+            kinds,
+            [
+                OntokKind::Event,
+                OntokKind::State,
+                OntokKind::Role,
+                OntokKind::Concept,
+                OntokKind::Rule,
+                OntokKind::Derivation,
+                OntokKind::Context,
+            ]
+        );
+    }
+
+    /// RecordId is a derived view of the one stored digest.
+    #[test]
+    fn record_id_is_derived_view_of_digest() {
+        let record = admit_claim_record();
+        assert_eq!(record.record_id().as_bytes(), record.digest().as_digest());
     }
 }
