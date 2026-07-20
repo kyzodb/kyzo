@@ -204,3 +204,59 @@ impl IdempotencyMemo {
         key.ok_or(StoreRefuse::MissingIdempotencyToken)
     }
 }
+
+#[cfg(test)]
+mod composition_crash_replay_tests {
+    use super::*;
+    use crate::store::commit_cap::SnapshotFork;
+    use crate::store::open::{
+        EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, genesis,
+    };
+
+    #[test]
+    fn same_intent_converges_and_replay_is_not_duplicate_effect() {
+        let store_id = genesis(GenesisParams {
+            identity_seed: [0x38; 32],
+            recovery_matrix: None,
+            staging_ttl: StagingTtl::new(1_024),
+            size_class: SizeClass::Compact,
+            entropy_arm: EntropyArm::OsRandom,
+            stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::No,
+            },
+        })
+        .store_id();
+
+        let mut composition_id = [0u8; 32];
+        composition_id[..16].copy_from_slice(b"client-op-crash1");
+        composition_id[16..].copy_from_slice(b"comp-digest-fixe");
+        let domain = b"kyzo.composition";
+        let step = b"step-0";
+
+        let key_pre = OperationKey::derive(domain, &composition_id, store_id, step);
+        let key_post = OperationKey::derive(domain, &composition_id, store_id, step);
+        assert_eq!(key_pre, key_post);
+
+        let mut memo = IdempotencyMemo::new();
+        let request_digest = IdempotencyMemo::digest_request(b"envelope+schema+authority");
+        let first = memo
+            .remember(
+                key_pre,
+                request_digest,
+                OperationOutcome::Committed { request_digest },
+            )
+            .expect("first terminal");
+        let replay = memo
+            .remember(
+                key_post,
+                request_digest,
+                OperationOutcome::Committed { request_digest },
+            )
+            .expect("crash replay");
+        assert_eq!(first, replay);
+        assert_eq!(
+            memo.lookup(&key_pre),
+            OperationOutcome::Committed { request_digest }
+        );
+    }
+}

@@ -2129,6 +2129,7 @@ dependencies = [
  "chacha20poly1305",
  "criterion",
  "csv",
+ "ed25519-dalek",
  "fast2s",
  "fjall",
  "flatbuffers",

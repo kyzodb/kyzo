@@ -50,6 +50,10 @@ regex-syntax = "0.8"   # KyzoRegexV1 construction-time pattern validation (alrea
 uuid = { version = "1.8.0", features = ["v1", "v4", "serde"] }
 ndarray = { version = "0.17", features = ["serde"] }
 sha2 = "0.11.0"
+# AdmissionCertificate authenticity (story #359 T1): ed25519 asymmetric
+# signatures — already in-tree via Cargo.lock (3.0.0-rc.1). Pure Rust;
+# no *-sys / C. Receivers verify with the origin public key only.
+ed25519-dalek = "3.0.0-rc.1"
 # Store AEAD pipeline (story #350 T11): RustCrypto pure-Rust misuse-resistant
 # AES-GCM-SIV for AeadArm::Siv (SnapshotFork=yes), ChaCha20-Poly1305 for
 # AeadArm::Gcm. No *-sys / C in either tree. lz4_flex is the same pure-Rust

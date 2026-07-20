@@ -81,7 +81,7 @@ pub struct ObjectRef {
 
 impl ObjectRef {
     /// Mint a ref scoped to `store_id` (admission / permanence confirm only).
-    pub(crate) fn mint(store_id: StoreId, object_id: impl Into<ObjectId>) -> Self {
+    pub fn mint(store_id: StoreId, object_id: impl Into<ObjectId>) -> Self {
         Self {
             store_id,
             object_id: object_id.into(),
@@ -366,9 +366,29 @@ impl PermanenceWitness {
         })
     }
 
+    /// Seal a permanence witness from already-proven parts (campaign / trust door).
+    ///
+    /// Does not re-check StagingTTL — that law lives on [`PermanenceWitness::mint`].
+    pub fn from_sealed(
+        object_ref: ObjectRef,
+        content_hash: ContentHash,
+        class: ObjectDurabilityClass,
+        confirmed_at: CommitOrdinal,
+    ) -> Self {
+        Self {
+            object_ref,
+            content_hash,
+            class,
+            confirmed_at,
+        }
+    }
+
     /// Repair path: re-stage content-hash-verified identical bytes under a
     /// dominating class (or after explicit Downgrade).
-    pub(crate) fn repair(
+    ///
+    /// Incomparable proposal → [`ObjectRefuse::IncomparableClasses`] carrying
+    /// both classes (seat 22) — never a panic.
+    pub fn repair(
         original: &PermanenceWitness,
         bytes_hash: ContentHash,
         proposed: ObjectDurabilityClass,
@@ -696,4 +716,89 @@ fn add_ttl(stage: CommitOrdinal, ttl: StagingTtl) -> Result<CommitOrdinal, Objec
         .checked_add(ttl.ordinals())
         .map(CommitOrdinal::from_raw)
         .ok_or(ObjectRefuse::StagingTtlOverflow)
+}
+
+#[cfg(test)]
+mod durability_dominance_tests {
+    use super::*;
+    use crate::store::commit_cap::SnapshotFork;
+    use crate::store::open::{EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, genesis};
+
+    fn sample_store() -> StoreId {
+        genesis(GenesisParams {
+            identity_seed: [0x22; 32],
+            recovery_matrix: None,
+            staging_ttl: StagingTtl::new(1_024),
+            size_class: SizeClass::Compact,
+            entropy_arm: EntropyArm::OsRandom,
+            stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::No,
+            },
+        })
+        .store_id()
+    }
+
+    #[test]
+    fn incomparable_repair_is_typed_refuse_carrying_both_classes() {
+        let backend = BackendContract::from_digest([0xBC; 32]);
+        // True seat-22 incomparable pair: more copies vs more failure domains.
+        let more_copies = ObjectDurabilityClass::new(
+            ConfirmedCopies::MultiSite,
+            FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            backend,
+        );
+        let more_domains = ObjectDurabilityClass::new(
+            ConfirmedCopies::One,
+            FailureDomains::Distinct,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            backend,
+        );
+        assert!(more_copies.incomparable(more_domains));
+
+        let hash = ContentHash::from_digest([0xCC; 32]);
+        let witness = PermanenceWitness::from_sealed(
+            ObjectRef::mint(sample_store(), ObjectId::from_digest([0x0B; 32])),
+            hash,
+            more_copies,
+            CommitOrdinal::ZERO,
+        );
+        match PermanenceWitness::repair(&witness, hash, more_domains, None) {
+            Err(ObjectRefuse::IncomparableClasses {
+                original,
+                proposed,
+            }) => {
+                assert_eq!(original, more_copies);
+                assert_eq!(proposed, more_domains);
+            }
+            other => panic!("expected IncomparableClasses, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn copies_only_lift_is_dominance_not_incomparable() {
+        let backend = BackendContract::from_digest([0xBC; 32]);
+        let base = ObjectDurabilityClass::new(
+            ConfirmedCopies::One,
+            FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            backend,
+        );
+        let copies_lift = ObjectDurabilityClass::new(
+            ConfirmedCopies::MultiSite,
+            FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            backend,
+        );
+        assert!(copies_lift.dominates(base));
+        assert!(!base.incomparable(copies_lift));
+    }
 }
