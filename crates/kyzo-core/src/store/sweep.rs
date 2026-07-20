@@ -10,18 +10,26 @@
 //! The ruled commit door (decisions.md §25).
 //!
 //! Owns: [`SweepDoor`], [`IntentionQueue`], [`AdmittedIntent`],
-//! [`IntentOrdinal`], [`CommitOrdinal`], [`Applied`], [`Committed`].
+//! [`IntentOrdinal`], [`CommitOrdinal`], [`Applied`], [`Committed`],
+//! [`OverlapBatch`].
 //!
 //! Also owns the live [`RootChain`](super::merkle::RootChain) on the door:
 //! each [`Committed`] mint extends it via [`RootChain::append`](super::merkle::RootChain::append);
 //! [`Applied`] never extends history-authoritative roots (§25 / §56).
+//!
+//! **Overlap-only group commit.** A durable barrier batches only writers
+//! whose arrival overlaps an in-flight fsync ([`SweepDoor::begin_fsync_window`]
+//! … [`SweepDoor::seal_durable_overlap_batch`]). A non-overlapping arrival
+//! after that window closes waits for a later barrier and must not appear in
+//! the prior [`OverlapBatch`]. Wake ≠ timer: park only on queue non-empty or
+//! shutdown — never a coalescing sleep.
 //!
 //! Bans: timers (wake ≠ timer — park only on queue non-empty or shutdown);
 //! early ack before the batch barrier; refuse-as-durable-event to fill
 //! ordinal holes; cut advancement on ghosts; seal without session recheck
 //! against the Store's **current** live session; soft dual-mint of one
 //! proof type across fsync and non-fsync paths; out-of-order IntentOrdinal
-//! seal.
+//! seal; timer-coalesced batch membership.
 //!
 //! One-door transition: [`SweepDoor`] wraps existing [`WriteTx`]
 //! `commit` / `commit_durable` as the first [`StableCommitCap`] arm's
@@ -208,6 +216,55 @@ impl AdmittedIntent {
     }
 }
 
+/// Observable membership of one StableCommitCap barrier under overlap-only
+/// group commit (decisions.md §25).
+///
+/// IntentOrdinals listed here shared exactly one in-flight fsync window.
+/// A non-overlapping arrival after that window closed is Unconstructible as
+/// a member of this batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlapBatch {
+    /// IntentOrdinals that shared the barrier, in intent order.
+    members: Vec<IntentOrdinal>,
+    /// Dense CommitOrdinals minted at the durable event (parallel to members).
+    commit_ordinals: Vec<CommitOrdinal>,
+}
+
+impl OverlapBatch {
+    /// IntentOrdinals that shared this barrier.
+    pub fn members(&self) -> &[IntentOrdinal] {
+        &self.members
+    }
+
+    /// CommitOrdinals assigned at the durable event (same order as members).
+    pub fn commit_ordinals(&self) -> &[CommitOrdinal] {
+        &self.commit_ordinals
+    }
+
+    /// Whether this barrier's overlap cohort includes `intent`.
+    pub fn contains_overlap_member(&self, intent: IntentOrdinal) -> bool {
+        self.members.contains(&intent)
+    }
+
+    fn from_sealed(members: Vec<IntentOrdinal>, commit_ordinals: Vec<CommitOrdinal>) -> Self {
+        debug_assert_eq!(members.len(), commit_ordinals.len());
+        Self {
+            members,
+            commit_ordinals,
+        }
+    }
+}
+
+/// In-flight fsync window: arrivals during `Open` overlap the barrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FsyncWindow {
+    /// No barrier in flight — admits land on the IntentionQueue.
+    #[default]
+    Closed,
+    /// Barrier in flight — admits join the overlap cohort for this window.
+    Open,
+}
+
 /// LMAX-shaped intention queue. Wake ≠ timer: park only on non-empty or shutdown.
 #[derive(Debug, Default)]
 pub struct IntentionQueue {
@@ -307,6 +364,12 @@ pub struct SweepDoor {
     /// (`Committed` mint). Prior tip is stored here so accountability is not
     /// cold on-demand only. Never extended by [`Self::seal`] / [`Applied`].
     root_chain: RootChain,
+    /// Overlap-only fsync window: `Open` means a barrier is in flight.
+    fsync_window: FsyncWindow,
+    /// Intents whose arrival overlaps the in-flight fsync (carriage for one barrier).
+    overlap_cohort: Vec<AdmittedIntent>,
+    /// Last completed overlap-only barrier membership (proof observation).
+    last_overlap_batch: Option<OverlapBatch>,
 }
 
 impl SweepDoor {
@@ -339,6 +402,9 @@ impl SweepDoor {
             highest_commit: CommitOrdinal::ZERO,
             predecessor_hash: [0u8; 32],
             root_chain: RootChain::empty(),
+            fsync_window: FsyncWindow::Closed,
+            overlap_cohort: Vec::new(),
+            last_overlap_batch: None,
         })
     }
 
@@ -372,10 +438,29 @@ impl SweepDoor {
         self.root_chain.prior_root()
     }
 
+    /// Whether an overlap-only fsync window is currently in flight.
+    pub fn fsync_window_open(&self) -> bool {
+        matches!(self.fsync_window, FsyncWindow::Open)
+    }
+
+    /// IntentOrdinals in the current in-flight overlap cohort (empty when closed).
+    pub fn overlap_cohort_ordinals(&self) -> impl Iterator<Item = IntentOrdinal> + '_ {
+        self.overlap_cohort.iter().map(AdmittedIntent::intent_ordinal)
+    }
+
+    /// Last completed overlap-only barrier membership, if any.
+    pub fn last_overlap_batch(&self) -> Option<&OverlapBatch> {
+        self.last_overlap_batch.as_ref()
+    }
+
     /// Admit an intent: mint Store-monotonic IntentOrdinal (may gap later).
     ///
     /// `current` is the Store's live session authority — not the open-time
     /// snapshot alone. A superseded live session → [`SweepRefuse::WriteSessionDead`].
+    ///
+    /// While a fsync window is open, the arrival **overlaps** the in-flight
+    /// barrier and joins that cohort. After the window closes, admits land on
+    /// the IntentionQueue for a later barrier — never the prior overlap batch.
     pub fn admit(
         &mut self,
         incarnation_id: IncarnationId,
@@ -390,8 +475,99 @@ impl SweepDoor {
             fence_epoch: current.fence_epoch(),
             incarnation_id,
         };
-        self.queue.push(intent.clone());
+        match self.fsync_window {
+            FsyncWindow::Open => self.overlap_cohort.push(intent.clone()),
+            FsyncWindow::Closed => self.queue.push(intent.clone()),
+        }
         Ok(intent)
+    }
+
+    /// Open the overlap-only fsync window: queue waiters become the initial
+    /// overlap cohort, and further admits join until
+    /// [`Self::seal_durable_overlap_batch`] closes the window.
+    ///
+    /// Wake ≠ timer — this is an explicit barrier compose, never a sleep.
+    pub fn begin_fsync_window(
+        &mut self,
+        incarnation_id: IncarnationId,
+        current: &SweepSession,
+    ) -> Result<(), SweepRefuse> {
+        self.recheck_session(incarnation_id, current)?;
+        if matches!(self.fsync_window, FsyncWindow::Open) {
+            return Err(SweepRefuse::FsyncWindowAlreadyOpen);
+        }
+        while let Some(intent) = self.queue.pop() {
+            self.overlap_cohort.push(intent);
+        }
+        self.fsync_window = FsyncWindow::Open;
+        Ok(())
+    }
+
+    /// Seal the in-flight overlap cohort through **one** StableCommitCap barrier.
+    ///
+    /// `work` must supply one `(WriteTx, StateRoot)` per overlap cohort member,
+    /// in IntentOrdinal order. Assigns dense [`CommitOrdinal`]s in that order,
+    /// records [`OverlapBatch`] membership, then **closes** the fsync window so
+    /// a non-overlapping arrival cannot join this batch.
+    ///
+    /// [`Committed`] mints only after the barrier returns (§25).
+    pub fn seal_durable_overlap_batch<W: WriteTx>(
+        &mut self,
+        work: Vec<(W, StateRoot)>,
+        current: &SweepSession,
+    ) -> Result<(OverlapBatch, Vec<Committed>), SweepSealFailure> {
+        if !matches!(self.fsync_window, FsyncWindow::Open) {
+            return Err(SweepSealFailure::Sweep(SweepRefuse::FsyncWindowNotOpen));
+        }
+        if work.len() != self.overlap_cohort.len() {
+            return Err(SweepSealFailure::Sweep(SweepRefuse::OverlapCohortMismatch));
+        }
+        if self.overlap_cohort.is_empty() {
+            return Err(SweepSealFailure::Sweep(SweepRefuse::EmptyOverlapCohort));
+        }
+
+        for intent in &self.overlap_cohort {
+            self.prepare_seal(intent, current)?;
+        }
+        let cohort = std::mem::take(&mut self.overlap_cohort);
+
+        let mut txs = Vec::with_capacity(work.len());
+        let mut content_roots = Vec::with_capacity(work.len());
+        for (tx, root) in work {
+            txs.push(tx);
+            content_roots.push(root);
+        }
+
+        // One logical barrier for the whole overlap cohort — first arm applies
+        // each physical tx under the same in-flight window, then the window closes.
+        // Close the window before returning apply failure so a non-overlapping
+        // retry cannot join a half-applied cohort.
+        match self.stable_commit_cap {
+            StableCommitCap::NativeFsyncProof { .. }
+            | StableCommitCap::PlatformTransactionProof { .. } => {
+                for tx in txs {
+                    if let Err(e) = tx.commit_durable() {
+                        self.fsync_window = FsyncWindow::Closed;
+                        return Err(SweepSealFailure::Apply(e));
+                    }
+                }
+            }
+        }
+
+        let mut members = Vec::with_capacity(cohort.len());
+        let mut commit_ordinals = Vec::with_capacity(cohort.len());
+        let mut committed = Vec::with_capacity(cohort.len());
+        for (intent, content_root) in cohort.into_iter().zip(content_roots) {
+            let proof = self.mint_committed_after_barrier(intent.intent_ordinal(), content_root)?;
+            members.push(intent.intent_ordinal());
+            commit_ordinals.push(proof.commit_ordinal());
+            committed.push(proof);
+        }
+
+        let batch = OverlapBatch::from_sealed(members, commit_ordinals);
+        self.last_overlap_batch = Some(batch.clone());
+        self.fsync_window = FsyncWindow::Closed;
+        Ok((batch, committed))
     }
 
     /// Sweep one intent through the StableCommitCap barrier (backing fsync).
@@ -401,6 +577,10 @@ impl SweepDoor {
     /// on failure. Session recheck against live `current` before any seal —
     /// mismatch seals zero bytes. Intents must seal in strictly increasing
     /// [`IntentOrdinal`] order.
+    ///
+    /// Singleton path: refuses while an overlap fsync window is already open
+    /// (use [`Self::seal_durable_overlap_batch`]). Records a one-member
+    /// [`OverlapBatch`] on success.
     ///
     /// On success, mints a Spec [`ChainedStateRoot`] over `content_root`
     /// (plaintext-canonical digest at this cut) and extends [`RootChain`] via
@@ -413,6 +593,9 @@ impl SweepDoor {
         content_root: StateRoot,
         current: &SweepSession,
     ) -> Result<Committed, SweepSealFailure> {
+        if matches!(self.fsync_window, FsyncWindow::Open) {
+            return Err(SweepSealFailure::Sweep(SweepRefuse::FsyncWindowAlreadyOpen));
+        }
         self.prepare_seal(&intent, current)?;
 
         // Barrier IS the arm's commit proof — first arm: native fsync apply.
@@ -423,34 +606,12 @@ impl SweepDoor {
             }
         }
 
-        self.note_sealed_intent(intent.intent_ordinal());
-        let commit_ordinal = self
-            .highest_commit
-            .successor()
-            .map_err(SweepSealFailure::Sweep)?;
-        self.predecessor_hash =
-            seal_predecessor_hash(self.predecessor_hash, self.store_id, commit_ordinal);
-        self.highest_commit = commit_ordinal;
-
-        // Sole Committed mint site for the Spec chain (§56): bind content to
-        // the stored prior tip, then append so the next seal sees it.
-        let chained = ChainedStateRoot::mint(
-            self.store_id,
-            self.fence_epoch,
-            commit_ordinal,
-            content_root,
-            self.root_chain.prior_root(),
-            ChainLinkKind::Ordinary,
-        );
-        self.root_chain
-            .append(chained)
-            .map_err(SweepSealFailure::MerkleChain)?;
-
-        Ok(Committed::mint(
-            self.store_id,
-            self.fence_epoch,
-            commit_ordinal,
-        ))
+        let committed = self.mint_committed_after_barrier(intent.intent_ordinal(), content_root)?;
+        self.last_overlap_batch = Some(OverlapBatch::from_sealed(
+            vec![intent.intent_ordinal()],
+            vec![committed.commit_ordinal()],
+        ));
+        Ok(committed)
     }
 
     /// Sweep one intent through a process-crash-durable (non-fsync) barrier.
@@ -531,6 +692,40 @@ impl SweepDoor {
     fn note_sealed_intent(&mut self, intent_ordinal: IntentOrdinal) {
         self.last_sealed_intent = Some(intent_ordinal);
     }
+
+    /// Post-barrier sole [`Committed`] mint + root-chain append (§25 / §56).
+    fn mint_committed_after_barrier(
+        &mut self,
+        intent_ordinal: IntentOrdinal,
+        content_root: StateRoot,
+    ) -> Result<Committed, SweepSealFailure> {
+        self.note_sealed_intent(intent_ordinal);
+        let commit_ordinal = self
+            .highest_commit
+            .successor()
+            .map_err(SweepSealFailure::Sweep)?;
+        self.predecessor_hash =
+            seal_predecessor_hash(self.predecessor_hash, self.store_id, commit_ordinal);
+        self.highest_commit = commit_ordinal;
+
+        let chained = ChainedStateRoot::mint(
+            self.store_id,
+            self.fence_epoch,
+            commit_ordinal,
+            content_root,
+            self.root_chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        self.root_chain
+            .append(chained)
+            .map_err(SweepSealFailure::MerkleChain)?;
+
+        Ok(Committed::mint(
+            self.store_id,
+            self.fence_epoch,
+            commit_ordinal,
+        ))
+    }
 }
 
 fn seal_predecessor_hash(
@@ -570,6 +765,18 @@ pub enum SweepRefuse {
     )]
     #[diagnostic(code(store::sweep::intent_order_regression))]
     IntentOrderRegression,
+    #[error("FsyncWindowAlreadyOpen: overlap fsync window is already in flight")]
+    #[diagnostic(code(store::sweep::fsync_window_already_open))]
+    FsyncWindowAlreadyOpen,
+    #[error("FsyncWindowNotOpen: overlap seal requires an in-flight fsync window")]
+    #[diagnostic(code(store::sweep::fsync_window_not_open))]
+    FsyncWindowNotOpen,
+    #[error("OverlapCohortMismatch: work items must match the in-flight overlap cohort")]
+    #[diagnostic(code(store::sweep::overlap_cohort_mismatch))]
+    OverlapCohortMismatch,
+    #[error("EmptyOverlapCohort: cannot seal an empty overlap batch")]
+    #[diagnostic(code(store::sweep::empty_overlap_cohort))]
+    EmptyOverlapCohort,
 }
 
 /// Seal path refusal: SweepDoor law or physical apply failure.
@@ -588,3 +795,10 @@ pub enum SweepSealFailure {
     #[diagnostic(transparent)]
     MerkleChain(MerkleChainRefuse),
 }
+
+/// Overlap-only group-commit proof (story #221 T2) — lives in kyzo-trials
+/// `crash.rs` and is path-wired here so the test observes SweepDoor batch
+/// membership under the same crate wall as the door (no second commit door).
+#[cfg(test)]
+#[path = "../../../kyzo-trials/src/crash.rs"]
+mod crash;
