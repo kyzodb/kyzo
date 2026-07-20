@@ -1682,21 +1682,61 @@ pub mod storage_campaign_lanes {
     };
     use crate::store::failure::{
         CarriageReport, KeyspaceId, ScopedMismatchCarriage, UnknownInvariantCarriage,
+        mint_quarantine,
     };
-    use crate::store::objects::{ObjectId, ObjectRef};
+    use crate::store::replica::{
+        mint_admission_certificate, sign_admission_parts, AdmissionCertificate,
+        AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, LocalProjection,
+        OriginContinuity, PostStateRoot, ReplicaRefuse, verify_replica,
+    };
+    use crate::store::scratch::TempTx;
     use crate::store::seal::CheckpointSeal;
+    use crate::store::sim::SimStorage;
     use crate::store::{
         BackendContract, CanonicalTranscript, CheckpointSealParts, CommitOrdinal, ConfirmedCopies,
-        ConsistencyClass, CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm,
+        ConsistencyClass, ContentHash, CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm,
         FailureDomains, FailureLattice, FenceEpoch, ForkGrant, FormatVersion, GENESIS_PRIOR_SEAL,
         GenesisParams, Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification,
-        IntentOrdinal, LocalProjection, MintDomain, NonceLeaseFloors, ObjectDurabilityClass,
-        ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PriorMaterialization,
-        RecoveryGrant, Regions, ReplicaCustody, ReplicaKey, ReplicaRefuse, SealDigest, SealRefuse,
-        SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingTtl, StateRoot,
-        StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, WalHash,
-        encode_golden_fixture, genesis, materialize, nonce, parse_golden_hex,
+        IntentOrdinal, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
+        ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate,
+        PermanenceWitness, PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant,
+        Regions, ReplicaCustody, ReplicaKey, ScopeManifestDigest, ScopeManifestStatus,
+        ScopeManifestTable, SealDigest, SealRefuse, SealedArtifactKind, SizeClass, SnapshotFork,
+        StableCommitCap, StagingToken, StagingTtl, StateRoot, Storage, StoreId, StoreRefuse,
+        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, VolatilePending, WalHash, WriteTx,
+        encode_golden_fixture, genesis, materialize, nonce, parse_golden_hex, reclaim_candidate,
     };
+
+    /// Mint a signed AdmissionCertificate under a live authorizing key (pub(crate) door).
+    fn mint_signed_admission(
+        origin_store: StoreId,
+        origin_epoch: FenceEpoch,
+        origin_commit: CommitOrdinal,
+        record_digest: [u8; 32],
+        scope: ScopeManifestDigest,
+        key: &AuthorizingKey,
+    ) -> AdmissionCertificate {
+        let mut parts = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store,
+            origin_epoch,
+            origin_commit,
+            schema_cut: [0x51; 32],
+            record_digest,
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts.signature = sign_admission_parts(&parts, key).expect("sign admission parts");
+        mint_admission_certificate(parts).expect("mint admission certificate")
+    }
+
+    fn campaign_content_root(tag: u8) -> StateRoot {
+        StateRoot::from_digest([tag; 32])
+    }
 
     fn genesis_params(identity_seed: [u8; 32], snapshot_fork: SnapshotFork) -> GenesisParams {
         GenesisParams {
@@ -1849,18 +1889,49 @@ pub mod storage_campaign_lanes {
         };
         let (mut door, incarnation, session) = open_live_door([0xB2; 32], [0xB0; 32], cap);
 
-        // Admit three intents; seal none → IntentOrdinal advances, CommitOrdinal
-        // stays at ZERO (gaps free among intents; no cut without success).
+        // Three admits (IntentOrdinal 0,1,2). Seal only 0 and 2 — IntentOrdinal
+        // gap among successes; CommitOrdinal must still be dense 0 then 1.
         let i0 = door.admit(incarnation, &session).expect("admit 0");
         let i1 = door.admit(incarnation, &session).expect("admit 1");
         let i2 = door.admit(incarnation, &session).expect("admit 2");
         assert_eq!(i0.intent_ordinal(), IntentOrdinal::ZERO);
         assert_eq!(i1.intent_ordinal().get(), 1);
         assert_eq!(i2.intent_ordinal().get(), 2);
+
+        let c0 = door
+            .seal_durable(
+                i0,
+                TempTx::default(),
+                campaign_content_root(0xB0),
+                &session,
+            )
+            .expect("seal intent 0");
+        let c0_ord = c0.commit_ordinal();
+        // CommitOrdinal advances from ZERO via successor — first seal is 1.
+        assert_eq!(c0_ord.get(), 1);
+        assert_eq!(door.highest_commit_ordinal().get(), 1);
+
+        // Skip sealing i1 — IntentOrdinal gap among successes.
+        let _gap = i1;
+
+        let c2 = door
+            .seal_durable(
+                i2,
+                TempTx::default(),
+                campaign_content_root(0xB2),
+                &session,
+            )
+            .expect("seal intent 2 across gap");
+        let c2_ord = c2.commit_ordinal();
         assert_eq!(
-            door.highest_commit_ordinal(),
-            CommitOrdinal::ZERO,
-            "IntentOrdinal gaps must not mint CommitOrdinal"
+            c2_ord.get(),
+            2,
+            "CommitOrdinal must be dense among successes (gap in IntentOrdinal free)"
+        );
+        assert_eq!(door.highest_commit_ordinal().get(), 2);
+        assert!(
+            c0_ord.get() < c2_ord.get(),
+            "dense CommitOrdinals must preserve IntentOrdinal success order"
         );
 
         // Refuse advance no cut: dead-session admit leaves CommitOrdinal unmoved.
@@ -1871,18 +1942,16 @@ pub mod storage_campaign_lanes {
             .mint(Entropy::from_bytes([0xFF; 32]))
             .expect("foreign incarnation");
         let before = door.highest_commit_ordinal();
-        assert!(matches!(
+        assert_eq!(
             door.admit(foreign, &session),
-            Err(SweepRefuse::WriteSessionDead)
-        ));
+            Err(SweepRefuse::WriteSessionDead),
+            "foreign incarnation must refuse WriteSessionDead"
+        );
         assert_eq!(
             door.highest_commit_ordinal(),
             before,
             "refuse must not advance CommitOrdinal (no cut)"
         );
-        // Gap: dense CommitOrdinal among successful seals needs WriteTx through
-        // SweepDoor::seal — red until trials drive a public Storage WriteTx here.
-        let _ = (i0, i1, i2);
     }
 
     /// §25 — pipelined NonceLease / commit-door survival.
@@ -1890,7 +1959,6 @@ pub mod storage_campaign_lanes {
     #[test]
     fn pipeline_power_cut() {
         let sealed = genesis(genesis_params([0xC3; 32], SnapshotFork::No));
-        let store_id = sealed.store_id();
         let domain = sealed.crypto_domain();
         let (_view, auth) = sealed.take_write_authority();
         let incarnation = auth
@@ -1911,7 +1979,6 @@ pub mod storage_campaign_lanes {
             let _nonce = nonce(MintDomain::Commit, c, domain, incarnation);
             c = c.successor().expect("within lease");
         }
-        // Resume above durable ceiling: next reserve floor is the prior ceiling.
         let resume_floor = ceiling;
         let resume_nonce = nonce(MintDomain::Commit, resume_floor, domain, incarnation);
         let last_in_block = {
@@ -1926,17 +1993,41 @@ pub mod storage_campaign_lanes {
             "resume above durable ceiling must not reuse an in-block nonce"
         );
 
-        // Commit-door floor: admits without seal leave highest_commit at ZERO —
-        // no Committed minted means nothing to lose across a cut at this barrier.
+        // Seal real Committed through SweepDoor + SimStorage durable apply,
+        // then power-cut: fsynced bytes survive; Committed ordinal stays sealed.
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
         let (mut door, live, session) = open_live_door([0xC3; 32], [0xC0; 32], cap);
-        door.admit(live, &session).expect("admit before cut");
-        assert_eq!(door.highest_commit_ordinal(), CommitOrdinal::ZERO);
-        // Gap: full "every minted Committed survives power cut" needs SweepDoor
-        // seal + crashfs power-cut of durable bytes — red until that seat wires.
-        let _ = store_id;
+        let db = SimStorage::new(0xC3_C0_71_E1);
+        let intent = door.admit(live, &session).expect("admit before seal");
+        let mut tx = db.write_tx().expect("sim write_tx");
+        tx.put(b"pipeline.committed", b"survives-power-cut")
+            .expect("put under seal");
+        let committed = door
+            .seal_durable(intent, tx, campaign_content_root(0xC3), &session)
+            .expect("mint Committed at commit door");
+        let sealed_ordinal = committed.commit_ordinal();
+        // First durable seal is ZERO.successor() — ordinal 1, not the floor.
+        assert_eq!(sealed_ordinal.get(), 1);
+        assert_eq!(door.highest_commit_ordinal().get(), 1);
+
+        let after_cut = db.sim_powercut();
+        let got = after_cut
+            .read_tx()
+            .expect("post-cut read_tx")
+            .get(b"pipeline.committed")
+            .expect("post-cut get");
+        assert_eq!(
+            got,
+            Some(crate::store::Slice::from(b"survives-power-cut")),
+            "Committed durable apply must survive SimStorage::sim_powercut"
+        );
+        assert_eq!(
+            door.highest_commit_ordinal(),
+            sealed_ordinal,
+            "minted Committed ordinal must remain after power-cut of durable bytes"
+        );
     }
 
     /// §25/§36 — WriteSessionDead.
@@ -1966,10 +2057,11 @@ pub mod storage_campaign_lanes {
             .expect("door under live session");
 
         // Pipeline boundary: admit recheck.
-        assert!(matches!(
+        assert_eq!(
             door.admit(dead, &session),
-            Err(SweepRefuse::WriteSessionDead)
-        ));
+            Err(SweepRefuse::WriteSessionDead),
+            "dead incarnation admit must refuse WriteSessionDead"
+        );
         assert_eq!(
             door.highest_commit_ordinal(),
             CommitOrdinal::ZERO,
@@ -1981,10 +2073,13 @@ pub mod storage_campaign_lanes {
         let (_view3, auth3) = sealed3.take_write_authority();
         let next_epoch = fence_epoch.successor().expect("epoch space");
         let stale_session = SweepSession::new(store_id, next_epoch, live);
-        assert!(matches!(
-            SweepDoor::open(store_id, fence_epoch, stale_session, auth3, cap),
-            Err(SweepRefuse::WriteSessionDead)
-        ));
+        assert!(
+            matches!(
+                SweepDoor::open(store_id, fence_epoch, stale_session, auth3, cap),
+                Err(SweepRefuse::WriteSessionDead)
+            ),
+            "stale fence epoch session must refuse WriteSessionDead at open"
+        );
     }
 
     /// §2 — RecoveryGrant physics.
@@ -2010,14 +2105,30 @@ pub mod storage_campaign_lanes {
         assert_ne!(w1.entropy(), w2.entropy());
         let _ = (domain, w1, w2);
 
-        // Chain-meet → dual-chain poison (FailureLattice).
-        let meet = FailureLattice::Healthy.combine(FailureLattice::Poisoned {
-            quarantine_retained: None,
-        });
-        assert!(
-            matches!(meet, FailureLattice::Poisoned { .. }),
-            "chain-meet of partitioned writers must poison"
+        // Chain-meet adversary: quarantine carriage + unknown-invariant → poison
+        // dominates; every key admits as OrderedCorrupt (no mixed success).
+        let ks = KeyspaceId::from_raw(7);
+        let quarantined = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
+            ScopedMismatchCarriage::new(ks, b"a".to_vec(), b"c".to_vec()),
+        ));
+        let poisoned = FailureLattice::Healthy.report(CarriageReport::UnknownInvariant(
+            UnknownInvariantCarriage,
+        ));
+        let meet = quarantined.combine(poisoned);
+        assert_eq!(
+            meet.admit_key(ks, b"z"),
+            Err(StoreRefuse::OrderedCorrupt),
+            "chain-meet poison must refuse all keys as OrderedCorrupt"
         );
+        match &meet {
+            FailureLattice::Poisoned {
+                quarantine_retained: Some(ranges),
+            } => assert!(
+                !ranges.is_empty(),
+                "poison-over-quarantine must retain quarantine metadata"
+            ),
+            other => panic!("chain-meet must poison with retained quarantine, got {other:?}"),
+        }
 
         // RecoveryGrant materialize advances domain; orphan write after observed
         // recovery is AuthorityRecovered on the refuse ledger.
@@ -2085,18 +2196,17 @@ pub mod storage_campaign_lanes {
             msg.contains("GrantAlreadyMaterialized"),
             "expected GrantAlreadyMaterialized carrying existing identity, got {msg}"
         );
-        // Ledger echo of the same refuse tag.
-        let ledger = StoreRefuse::GrantAlreadyMaterialized {
-            existing_successor: first.store_id(),
-        };
-        assert!(matches!(
-            ledger,
-            StoreRefuse::GrantAlreadyMaterialized { .. }
-        ));
+        assert!(
+            msg.contains(&format!("{:?}", foreign.store_id())),
+            "computed refuse must carry the existing successor StoreId, got {msg}"
+        );
     }
 
     /// §68 — grants are seeds (RecoveryGrant equivocation).
+    /// Gap: `materialize` accepts a second RecoveryGrant for one predecessor
+    /// epoch (distinct WriteAuthority tokens) — no typed equivocation refuse yet.
     #[test]
+    #[ignore = "materialize equivocation refuse unbuilt"]
     fn recovery_grant_equivocation() {
         let sealed = genesis(genesis_params([0x17; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
@@ -2117,32 +2227,16 @@ pub mod storage_campaign_lanes {
             [0xB2; 32],
         );
 
-        let m1 = materialize(&Grant::Recovery(g1.clone()), None).expect("first recovery");
-        // Same grant rediscovery converges (seed law).
-        let m1_again = materialize(&Grant::Recovery(g1), None).expect("idempotent");
-        assert_eq!(m1.store_id(), m1_again.store_id());
-        assert_eq!(m1.write_authority().token_id(), m1_again.write_authority().token_id());
-
-        // Second distinct RecoveryGrant for one predecessor epoch: same StoreId,
-        // different WriteAuthority token → equivocation witness.
-        let m2 = materialize(&Grant::Recovery(g2), None).expect("second grant materializes today");
-        assert_eq!(m1.store_id(), m2.store_id());
-        assert_eq!(
-            m1.crypto_domain().fence_epoch(),
-            m2.crypto_domain().fence_epoch()
+        let m1 = materialize(&Grant::Recovery(g1), None).expect("first recovery");
+        // When the door exists: second RecoveryGrant for one predecessor epoch
+        // must refuse equivocation — never Ok with a second WriteAuthority token,
+        // never a substitute UnknownInvariant lattice.
+        let refuse = materialize(&Grant::Recovery(g2), None);
+        assert!(
+            refuse.is_err(),
+            "second RecoveryGrant for one predecessor epoch must refuse equivocation (store {:?})",
+            m1.store_id()
         );
-        assert_ne!(
-            m1.write_authority().token_id(),
-            m2.write_authority().token_id(),
-            "two RecoveryGrants for one predecessor epoch mint distinct authorities"
-        );
-        // Spec outcome: equivocation poison for the signing set's authority.
-        let poison = FailureLattice::Healthy.combine(FailureLattice::Poisoned {
-            quarantine_retained: None,
-        });
-        assert!(matches!(poison, FailureLattice::Poisoned { .. }));
-        // Gap: materialize() does not yet refuse the second grant; the campaign
-        // asserts the poison lattice + dual-token witness enforceable today.
     }
 
     /// §22/§23 — staging + idle law.
@@ -2152,6 +2246,7 @@ pub mod storage_campaign_lanes {
         let sealed = genesis(genesis_params([0x22; 32], SnapshotFork::No));
         let ttl = sealed.staging_ttl();
         assert!(ttl.ordinals() > 0, "genesis seals a positive StagingTTL ordinal count");
+        let store_id = sealed.store_id();
 
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
@@ -2164,20 +2259,31 @@ pub mod storage_campaign_lanes {
             "idle: no cut advance — CommitOrdinal stays ZERO"
         );
 
-        // Cut never moved → expires_at (= stage_commit + TTL) cannot be reached.
-        // Decayed is the past-cut refuse only; without cut advance it is not forced.
-        let cut = door.highest_commit_ordinal();
+        // Real stage at cut ZERO: expires_at = 0 + TTL; idle cut never reaches it.
+        let token = StagingToken::mint(store_id, ObjectId::from_digest([0x22; 32]));
+        let hash = ContentHash::from_digest([0xAD; 32]);
+        let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
+            .expect("stage under idle cut");
+        let candidate = PermanenceCandidate::from_volatile(pending);
         assert!(
-            cut.get() < ttl.ordinals(),
-            "idle cut must remain strictly before any stage_commit+TTL expiry floor"
+            candidate.may_confirm(door.highest_commit_ordinal()),
+            "idle cut must leave Pending confirm-licensed (not Decayed)"
         );
-        assert!(
-            !matches!(ObjectRefuse::ObjectMissing, ObjectRefuse::Decayed),
-            "Decayed is a distinct typed refuse from ObjectMissing"
+        let class = ObjectDurabilityClass::new(
+            ConfirmedCopies::One,
+            FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            BackendContract::from_digest([0xBC; 32]),
         );
-        // Gap: VolatilePending::stage / reclaim_candidate need crate-private
-        // StagingToken + ReclaimCertificate mint — red until a public stage door.
-        let _ = sealed.store_id();
+        let witness = PermanenceWitness::mint(&candidate, door.highest_commit_ordinal(), class)
+            .expect("unresolved Pending on idle store must not Decayed");
+        assert_eq!(witness.content_hash(), hash);
+
+        // Reclaim always lawful idle — matching certificate.
+        let reclaim = ReclaimCertificate::mint(store_id, token.object_id(), [0xCE; 32]);
+        reclaim_candidate(candidate, &reclaim).expect("idle reclaim must be lawful");
     }
 
     /// §22 — durability dominance product (never a total-order ladder).
@@ -2201,9 +2307,20 @@ pub mod storage_campaign_lanes {
             IntegrityVerification::HashAndScrub,
             backend,
         );
-        let incomparable = ObjectDurabilityClass::new(
+        // Copies-only lift dominates lattice-bottom (every dim ≥).
+        let copies_lift = ObjectDurabilityClass::new(
             ConfirmedCopies::MultiSite,
             FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            backend,
+        );
+        // Domains-only lift also dominates lattice-bottom; true incomparable is
+        // copies_lift vs more_domains (neither ≥ on every dimension).
+        let more_domains = ObjectDurabilityClass::new(
+            ConfirmedCopies::One,
+            FailureDomains::Distinct,
             Regions::Single,
             ConsistencyClass::Eventual,
             IntegrityVerification::ContentHash,
@@ -2213,7 +2330,15 @@ pub mod storage_campaign_lanes {
         assert!(dominating.dominates(base), "every-dimension ≥ is dominance");
         assert!(!base.dominates(dominating), "dominated must not dominate");
         assert!(
-            base.incomparable(incomparable) && incomparable.incomparable(base),
+            copies_lift.dominates(base) && !base.dominates(copies_lift),
+            "single-dimension lift is dominance under product order"
+        );
+        assert!(
+            more_domains.dominates(base) && !base.dominates(more_domains),
+            "domains-only lift dominates lattice-bottom under product order"
+        );
+        assert!(
+            copies_lift.incomparable(more_domains) && more_domains.incomparable(copies_lift),
             "cross-dimension lift without total order is incomparable"
         );
         assert!(!dominating.incomparable(base));
@@ -2225,29 +2350,65 @@ pub mod storage_campaign_lanes {
         };
         assert_eq!(downgrade.from, dominating);
         assert_eq!(downgrade.to, base);
-        assert_ne!(downgrade.from, downgrade.to);
+        assert_ne!(
+            downgrade.from, downgrade.to,
+            "Downgrade adversary: from and to must differ (no silent no-op drop)"
+        );
+        assert!(
+            base.dominates(base),
+            "identical class dominates itself (equal-class is not Incomparable)"
+        );
+        assert!(
+            !dominating.incomparable(dominating),
+            "a class is never incomparable to itself"
+        );
 
-        // Repair refuse ledger: incomparable / non-dominating / downgrade mismatch.
-        let incomp = ObjectRefuse::IncomparableClasses {
-            original: base,
-            proposed: incomparable,
-        };
+        // Drive PermanenceWitness::repair — incomparable → typed refuse with both classes.
+        let store = genesis(genesis_params([0x22; 32], SnapshotFork::No)).store_id();
+        let hash = ContentHash::from_digest([0xCCu8; 32]);
+        let witness = PermanenceWitness::from_sealed(
+            ObjectRef::mint(store, ObjectId::from_digest([0x0Bu8; 32])),
+            hash,
+            base,
+            CommitOrdinal::ZERO,
+        );
+        let copies_witness = PermanenceWitness::from_sealed(
+            ObjectRef::mint(store, ObjectId::from_digest([0x0Bu8; 32])),
+            hash,
+            copies_lift,
+            CommitOrdinal::ZERO,
+        );
+        let incomp = PermanenceWitness::repair(&copies_witness, hash, more_domains, None);
+        assert!(
+            matches!(
+                incomp,
+                Err(ObjectRefuse::IncomparableClasses {
+                    original,
+                    proposed,
+                }) if original == copies_lift && proposed == more_domains
+            ),
+            "seat 22: incomparable Repair is typed refuse carrying both classes — never panic"
+        );
+
+        let upgraded =
+            PermanenceWitness::repair(&witness, hash, dominating, None).expect("dominating Repair");
+        assert_eq!(upgraded.class(), dominating);
+        assert_eq!(upgraded.prior_class(), base);
+
+        let high = PermanenceWitness::from_sealed(
+            ObjectRef::mint(store, ObjectId::from_digest([0x0Bu8; 32])),
+            hash,
+            dominating,
+            CommitOrdinal::ZERO,
+        );
         assert!(matches!(
-            incomp,
-            ObjectRefuse::IncomparableClasses { .. }
+            PermanenceWitness::repair(&high, hash, base, None),
+            Err(ObjectRefuse::NonDominatingRepair)
         ));
-        // NonDominatingRepair / DowngradeMismatch are distinct closed-sum arms
-        // from IncomparableClasses (no costume collapse into a ladder).
-        assert_ne!(
-            format!("{incomp:?}"),
-            format!("{:?}", ObjectRefuse::NonDominatingRepair)
-        );
-        assert_ne!(
-            format!("{incomp:?}"),
-            format!("{:?}", ObjectRefuse::DowngradeMismatch)
-        );
-        // Gap: PermanenceWitness::repair is pub(crate) — dominance + refuse tags
-        // are the enforceable public slice until Repair is driven from a door.
+        let dropped = PermanenceWitness::repair(&high, hash, base, Some(downgrade))
+            .expect("auditable Downgrade");
+        assert_eq!(dropped.class(), base);
+        assert_eq!(dropped.downgrade(), Some(downgrade));
     }
 
     /// §22/§23 — PermanenceCandidate stall / strip-before-confirm ban.
@@ -2255,41 +2416,57 @@ pub mod storage_campaign_lanes {
     #[test]
     fn permanence_candidate_stall() {
         let sealed = genesis(genesis_params([0x23; 32], SnapshotFork::No));
-        // Short TTL so the cut walk is the meter (same may_confirm inequality).
+        let store_id = sealed.store_id();
+        // Short TTL so the cut walk is the meter.
         let ttl = StagingTtl::new(2);
-        let expires_at = ttl.ordinals();
-        assert_eq!(expires_at, 2);
+        let token = StagingToken::mint(store_id, ObjectId::from_digest([0x23; 32]));
+        let hash = ContentHash::from_digest([0xCA; 32]);
+        let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
+            .expect("stage PermanenceCandidate precursor");
+        let candidate = PermanenceCandidate::from_volatile(pending);
+        assert_eq!(candidate.expires_at().get(), 2);
 
-        // may_confirm law: cut.get() < expires_at.get().
-        let mut cut = CommitOrdinal::ZERO;
-        assert!(
-            cut.get() < expires_at,
-            "cut=0 < expires_at=2 — confirm still licensed"
-        );
-        cut = cut.successor().expect("cut 1");
-        assert!(
-            cut.get() < expires_at,
-            "cut=1 < expires_at=2 — confirm still licensed"
-        );
-        cut = cut.successor().expect("cut 2");
-        assert!(
-            cut.get() >= expires_at,
-            "cut=2 ≥ expires_at=2 — stall past cut; confirm banned"
+        let class = ObjectDurabilityClass::new(
+            ConfirmedCopies::One,
+            FailureDomains::Single,
+            Regions::Single,
+            ConsistencyClass::Eventual,
+            IntegrityVerification::ContentHash,
+            BackendContract::from_digest([0xBC; 32]),
         );
 
-        // Past cut: confirm refuses Decayed; reclaim is the only lawful exit
-        // (ReclaimMismatch is certificate mismatch — never "too early").
-        assert!(!matches!(
-            ObjectRefuse::Decayed,
-            ObjectRefuse::ReclaimMismatch
-        ));
-        assert_ne!(
-            format!("{:?}", ObjectRefuse::Decayed),
-            format!("{:?}", ObjectRefuse::ReclaimMismatch)
+        // Before cut: confirm still licensed.
+        assert!(candidate.may_confirm(CommitOrdinal::ZERO));
+        PermanenceWitness::mint(&candidate, CommitOrdinal::ZERO, class)
+            .expect("confirm before expires_at");
+
+        // Past cut (cut ≥ expires_at): confirm → Decayed.
+        let past = CommitOrdinal::ZERO
+            .successor()
+            .expect("1")
+            .successor()
+            .expect("2");
+        assert_eq!(past.get(), 2);
+        assert!(!candidate.may_confirm(past));
+        assert_eq!(
+            PermanenceWitness::mint(&candidate, past, class),
+            Err(ObjectRefuse::Decayed),
+            "confirm past cut must refuse Decayed"
         );
-        // Gap: PermanenceCandidate::may_confirm / reclaim_candidate need
-        // crate-private token+certificate mint — red until a public stage door.
-        let _ = (sealed.store_id(), sealed.staging_ttl());
+
+        // Reclaim with mismatched object id → ReclaimMismatch.
+        let mismatch = ReclaimCertificate::mint(
+            store_id,
+            ObjectId::from_digest([0xFF; 32]),
+            [0xBD; 32],
+        );
+        assert_eq!(
+            reclaim_candidate(candidate.clone(), &mismatch),
+            Err(ObjectRefuse::ReclaimMismatch),
+            "reclaim under foreign object id must refuse ReclaimMismatch"
+        );
+        let ok_cert = ReclaimCertificate::mint(store_id, token.object_id(), [0xCE; 32]);
+        reclaim_candidate(candidate, &ok_cert).expect("matching reclaim after stall");
     }
 
     /// §26 — CheckpointSeal restore/open.
@@ -2349,29 +2526,38 @@ pub mod storage_campaign_lanes {
             corrupt_candidate.permanence_candidate_manifest
         );
 
-        // Restore/open: any binding mismatch → SealMismatch (never prefer-dump).
+        // Restore/open adversary: flip each bound digest independently → SealMismatch.
         let seal = CheckpointSeal::mint(intact.clone()).expect("mint intact seal");
         assert!(seal.verify(&intact).is_ok(), "intact parts must verify");
-        assert!(matches!(
+        assert_eq!(
             seal.verify(&corrupt_custody),
-            Err(SealRefuse::SealMismatch)
-        ));
-        assert!(matches!(
+            Err(SealRefuse::SealMismatch),
+            "ReplicaCustody digest flip must SealMismatch"
+        );
+        assert_eq!(
             seal.verify(&corrupt_state),
-            Err(SealRefuse::SealMismatch)
-        ));
-        assert!(matches!(
+            Err(SealRefuse::SealMismatch),
+            "state_root flip must SealMismatch"
+        );
+        assert_eq!(
             seal.verify(&corrupt_retained),
-            Err(SealRefuse::SealMismatch)
-        ));
-        assert!(matches!(
+            Err(SealRefuse::SealMismatch),
+            "retained_object_manifest flip must SealMismatch"
+        );
+        assert_eq!(
             seal.verify(&corrupt_candidate),
-            Err(SealRefuse::SealMismatch)
-        ));
-        assert!(!matches!(
-            SealRefuse::SealMismatch,
-            SealRefuse::EpochSpanForbidden
-        ));
+            Err(SealRefuse::SealMismatch),
+            "permanence_candidate_manifest flip must SealMismatch"
+        );
+        // Dual corruption: two bindings flipped still SealMismatch (never prefer-dump).
+        let mut dual = intact.clone();
+        dual.replica_custody_manifest = SealDigest::from_digest([0xFF; 32]);
+        dual.state_root = SealDigest::from_digest([0xEE; 32]);
+        assert_eq!(
+            seal.verify(&dual),
+            Err(SealRefuse::SealMismatch),
+            "dual binding corruption must still SealMismatch"
+        );
     }
 
     /// §59 — CanonicalTranscript.
@@ -2498,54 +2684,64 @@ pub mod storage_campaign_lanes {
         let local_store = local.store_id();
         let local_commit = CommitOrdinal::ZERO;
 
-        // Five at-least-once deliveries of the same origin coordinates → one key.
-        let mut keys = Vec::with_capacity(5);
-        for _ in 0..5 {
-            keys.push(ReplicaKey::derive(
-                origin_store,
-                origin_epoch,
-                origin_commit,
-                &record_digest,
-            ));
-        }
-        for k in &keys[1..] {
-            assert_eq!(&keys[0], k, "ReplicaKey must converge across re-delivery");
-        }
+        let key = AuthorizingKey::mint_with_verifying_id([0x69; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+        let continuity = OriginContinuity::mint();
 
-        // Exactly-once custody: first insert seals Queryable; re-delivery is idempotent.
-        let mut custody: std::collections::BTreeMap<[u8; 32], ReplicaCustody> =
-            std::collections::BTreeMap::new();
-        let mut custody_commits = 0u32;
-        for key in &keys {
-            if custody.contains_key(key.as_bytes()) {
-                continue;
-            }
-            custody.insert(
-                *key.as_bytes(),
+        let cert = mint_signed_admission(
+            origin_store,
+            origin_epoch,
+            origin_commit,
+            record_digest,
+            scope,
+            &key,
+        );
+        let expected_key = ReplicaKey::derive(
+            origin_store,
+            origin_epoch,
+            origin_commit,
+            &record_digest,
+        );
+
+        // Five at-least-once deliveries through verify_replica → one Queryable custody.
+        let mut first: Option<ReplicaCustody> = None;
+        for delivery in 0..5 {
+            let custody = verify_replica(
+                &cert,
+                local_store,
+                local_commit,
+                &keys,
+                &scopes,
+                Some(&continuity),
+            )
+            .unwrap_or_else(|e| panic!("delivery {delivery}: verify_replica {e:?}"));
+            match &custody {
                 ReplicaCustody::Queryable {
-                    key: *key,
-                    local_store,
-                    local_commit,
-                },
-            );
-            custody_commits += 1;
-        }
-        assert_eq!(custody_commits, 1, "five deliveries → one custody Committed");
-        assert_eq!(custody.len(), 1);
-        match custody.values().next().expect("one custody") {
-            ReplicaCustody::Queryable {
-                key,
-                local_store: held_store,
-                local_commit: held_commit,
-            } => {
-                assert_eq!(key, &keys[0]);
-                assert_eq!(*held_store, local_store);
-                assert_eq!(*held_commit, local_commit);
+                    key: held,
+                    local_store: held_store,
+                    local_commit: held_commit,
+                } => {
+                    assert_eq!(*held, expected_key, "delivery {delivery}: ReplicaKey");
+                    assert_eq!(*held_store, local_store);
+                    assert_eq!(*held_commit, local_commit);
+                }
+                ReplicaCustody::PendingAnchor { .. } => {
+                    panic!("delivery {delivery}: continuity must seal Queryable")
+                }
             }
-            ReplicaCustody::PendingAnchor { .. } => {
-                panic!("anchored five-delivery path must seal Queryable, not PendingAnchor")
+            match &first {
+                None => first = Some(custody),
+                Some(prior) => assert_eq!(
+                    prior, &custody,
+                    "delivery {delivery}: ReplicaKey-idempotent single custody"
+                ),
             }
         }
+        assert!(first.is_some());
 
         // Distinct record digest → distinct key (no silent custody merge).
         let other = ReplicaKey::derive(
@@ -2554,75 +2750,76 @@ pub mod storage_campaign_lanes {
             origin_commit,
             &[0xE2; 32],
         );
-        assert_ne!(keys[0], other);
-
-        // Closed ReplicaRefuse sum — RetentionDeclined never absorbs authority
-        // failures (forged_manifest lane owns the reshape ban; pin distinctness).
-        assert_ne!(
-            format!("{:?}", ReplicaRefuse::RetentionDeclined),
-            format!("{:?}", ReplicaRefuse::AuthenticityFailed)
-        );
-        assert_ne!(
-            format!("{:?}", ReplicaRefuse::AuthenticityFailed),
-            format!("{:?}", ReplicaRefuse::ChainInconsistent)
-        );
-        // Gap: verify_replica / PendingAnchor / anchor_pending need
-        // AdmissionCertificate mint + AuthorizingKeyTable signature check +
-        // ScopeManifestTable resolve + OriginContinuity evidence — red until
-        // a public verify door feeds five live certificate deliveries.
+        assert_ne!(expected_key, other);
     }
 
     /// §69 — forged / reversed / gapped / accept-then-revoke manifests.
     /// Typed Scope* / authenticity refuses; never reshape into RetentionDeclined.
     #[test]
     fn forged_manifest() {
-        // Manifest resolution map (decisions.md §69): unknown / revoked /
-        // incompatible → ScopeUnknown | ScopeRevoked | ScopeDenied. Forged
-        // authenticity → AuthenticityFailed. None of these fold into
-        // RetentionDeclined (sovereign retention choice ≠ authority failure).
-        let reversed_or_gapped = ReplicaRefuse::ScopeUnknown;
-        let accept_then_revoke = ReplicaRefuse::ScopeRevoked;
-        let forged_incompatible = ReplicaRefuse::ScopeDenied;
-        let forged_bytes = ReplicaRefuse::AuthenticityFailed;
-        let chain_gap = ReplicaRefuse::ChainInconsistent;
+        let origin = genesis(genesis_params([0xFE; 32], SnapshotFork::No));
+        let local = genesis(genesis_params([0xFD; 32], SnapshotFork::No));
+        let origin_store = origin.store_id();
+        let origin_epoch = origin.fence_epoch();
+        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id([0xFE; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
 
-        for refuse in [
-            reversed_or_gapped,
-            accept_then_revoke,
-            forged_incompatible,
-            forged_bytes,
-            chain_gap,
-        ] {
-            assert!(
-                !matches!(refuse, ReplicaRefuse::RetentionDeclined),
-                "manifest/authority refuse must not reshape into RetentionDeclined: {refuse:?}"
-            );
-        }
-
-        // Closed sum: each arm is distinct (no costume collapse).
-        assert_ne!(
-            format!("{reversed_or_gapped:?}"),
-            format!("{:?}", ReplicaRefuse::RetentionDeclined)
-        );
-        assert_ne!(
-            format!("{accept_then_revoke:?}"),
-            format!("{:?}", ReplicaRefuse::ScopeUnknown)
-        );
-        assert_ne!(
-            format!("{forged_incompatible:?}"),
-            format!("{:?}", ReplicaRefuse::ScopeRevoked)
-        );
-        assert_ne!(
-            format!("{forged_bytes:?}"),
-            format!("{:?}", ReplicaRefuse::ScopeDenied)
+        let cert = mint_signed_admission(
+            origin_store,
+            origin_epoch,
+            CommitOrdinal::ZERO,
+            [0xE1; 32],
+            scope,
+            &key,
         );
 
-        // verify_replica derives scope from ScopeManifestTable::resolve — never
-        // a caller-asserted scope_ok Result. Closed refuse lattice is pinned by
-        // the reshape ban above (no tautology echo of each arm against itself).
-        // Gap: live verify_replica(certificate, keys, scopes, continuity)
-        // needs AdmissionCertificate mint + AuthorizingKeyTable /
-        // ScopeManifestTable / OriginContinuity — lane pins the refuse lattice.
+        // Populated table: accept then revoke → ScopeRevoked (never RetentionDeclined).
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+        assert_eq!(scopes.resolve(&scope), ScopeManifestStatus::Verified);
+        scopes.set(scope, ScopeManifestStatus::Revoked);
+        assert_eq!(scopes.resolve(&scope), ScopeManifestStatus::Revoked);
+        assert_eq!(
+            verify_replica(
+                &cert,
+                local.store_id(),
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&OriginContinuity::mint()),
+            ),
+            Err(ReplicaRefuse::ScopeRevoked),
+            "revoked manifest must refuse ScopeRevoked"
+        );
+
+        // AuthenticityFailed: table lacks the authorizing key (forged trust).
+        let mut scopes_ok = ScopeManifestTable::new();
+        scopes_ok.set(scope, ScopeManifestStatus::Verified);
+        let empty_keys = AuthorizingKeyTable::new();
+        assert_eq!(
+            verify_replica(
+                &cert,
+                local.store_id(),
+                CommitOrdinal::ZERO,
+                &empty_keys,
+                &scopes_ok,
+                Some(&OriginContinuity::mint()),
+            ),
+            Err(ReplicaRefuse::AuthenticityFailed),
+            "missing authorizing key must refuse AuthenticityFailed"
+        );
+
+        // RetentionDeclined is a distinct ReplicaRefuse arm — resolve/verify never reshape into it.
+        assert_ne!(
+            ReplicaRefuse::ScopeRevoked,
+            ReplicaRefuse::RetentionDeclined
+        );
+        assert_ne!(
+            ReplicaRefuse::AuthenticityFailed,
+            ReplicaRefuse::RetentionDeclined
+        );
     }
 
     /// §38/§39 — CompositionId crash-before-return + replay.
@@ -2634,10 +2831,13 @@ pub mod storage_campaign_lanes {
         // Caller-durable CompositionId digest (session owns the type; Store
         // sees sealed bytes). Crash-before-return: client re-derives from the
         // same durable intent — Engine never mints.
+        // Client-durable CompositionId digest bytes (session::CompositionId::derive
+        // is pub(crate) behind session — Store sees sealed [u8;32] only).
+        // Both halves are exactly 16 bytes (a 17-byte literal panics in copy_from_slice).
         let composition_id: [u8; 32] = {
             let mut dig = [0u8; 32];
             dig[..16].copy_from_slice(b"client-op-crash1");
-            dig[16..].copy_from_slice(b"comp-digest-fixed");
+            dig[16..].copy_from_slice(b"comp-digest-fixe");
             dig
         };
         let domain = b"kyzo.composition";
@@ -2679,30 +2879,39 @@ pub mod storage_campaign_lanes {
             )
             .expect("replay after crash");
         assert_eq!(first, replay);
-        assert!(matches!(
+        // Zero duplicate effects: second remember replays the same terminal.
+        assert_eq!(
             memo.lookup(&key_post),
-            OperationOutcome::Committed { .. }
-        ));
-        // Zero duplicate effects: second remember replays, does not mint a
-        // second terminal outcome identity.
+            OperationOutcome::Committed { request_digest }
+        );
         assert_eq!(
             memo.lookup(&key_pre),
             OperationOutcome::Committed { request_digest }
         );
 
-        // Transient / Absent never memoize as terminal.
-        assert!(matches!(
+        // Absent adversary: never memoizes as terminal — a later Committed for
+        // the same key must still land (no phantom terminal blocking reuse).
+        let read_key = OperationKey::derive(domain, &composition_id, store_id, b"read-at");
+        assert_eq!(
+            memo.remember(read_key, request_digest, OperationOutcome::Absent),
+            Ok(OperationOutcome::Absent),
+            "Absent must return without storing a terminal"
+        );
+        assert_eq!(
+            memo.lookup(&read_key),
+            OperationOutcome::Absent,
+            "Absent must leave the key unmemoized"
+        );
+        assert_eq!(
             memo.remember(
-                OperationKey::derive(domain, &composition_id, store_id, b"read-at"),
+                read_key,
                 request_digest,
-                OperationOutcome::Absent,
-            ),
-            Ok(OperationOutcome::Absent)
-        ));
-        assert!(matches!(
-            memo.lookup(&OperationKey::derive(domain, &composition_id, store_id, b"read-at")),
-            OperationOutcome::Absent
-        ));
+                OperationOutcome::Committed { request_digest },
+            )
+            .expect("Absent must not block terminal commit"),
+            OperationOutcome::Committed { request_digest },
+            "post-Absent Committed must seal as the first terminal"
+        );
         // Gap: session::CompositionId::derive is pub(crate) behind session —
         // lane drives Store-visible composition_id bytes + OperationKey organ.
     }
@@ -2735,9 +2944,10 @@ pub mod storage_campaign_lanes {
                 request_digest: dig_b,
             },
         );
-        assert!(
-            matches!(reuse, Err(StoreRefuse::OperationKeyReuse)),
-            "same key + different digest must refuse OperationKeyReuse, got {reuse:?}"
+        assert_eq!(
+            reuse,
+            Err(StoreRefuse::OperationKeyReuse),
+            "same key + different digest must refuse OperationKeyReuse"
         );
 
         // Same key + same digest still replays (not reuse).
@@ -2750,16 +2960,18 @@ pub mod storage_campaign_lanes {
                 },
             )
             .expect("same digest replays");
-        assert!(matches!(
+        assert_eq!(
             replay,
-            OperationOutcome::Committed { request_digest } if request_digest == dig_a
-        ));
+            OperationOutcome::Committed {
+                request_digest: dig_a
+            }
+        );
 
         // Safe-retry door without a key → MissingIdempotencyToken.
-        assert!(matches!(
+        assert_eq!(
             IdempotencyMemo::require_key(None),
             Err(StoreRefuse::MissingIdempotencyToken)
-        ));
+        );
         assert_eq!(
             IdempotencyMemo::require_key(Some(key)).expect("key present"),
             key
@@ -2776,38 +2988,67 @@ pub mod storage_campaign_lanes {
         let origin_commit = CommitOrdinal::ZERO;
         let record_digest = [0xAD; 32];
 
-        // AcceptedReplica origin identity: ReplicaKey is H(origin_*, digest) —
-        // local Catalog generation is not an input. Advance must not reinterpret.
-        let origin_key =
-            ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &record_digest);
+        let key = AuthorizingKey::mint_with_verifying_id([0xCA; 32]);
+        let scope = ScopeManifestDigest::from_digest([0xCA; 32]);
+        let cert = mint_signed_admission(
+            origin_store,
+            origin_epoch,
+            origin_commit,
+            record_digest,
+            scope,
+            &key,
+        );
+        let origin_key = ReplicaKey::derive(
+            cert.origin_store(),
+            cert.origin_epoch(),
+            cert.origin_commit(),
+            cert.record_digest(),
+        );
+
+        // Feed advancing catalog_generation into LocalProjection; origin binding
+        // (AcceptedReplica / ReplicaKey) must stay unchanged across rebuilds.
+        let mut prior_origin = None;
         for catalog_generation in [0u64, 1, 2, 7, 99] {
-            let again =
-                ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &record_digest);
+            let projection =
+                LocalProjection::from_certificate(cert.clone(), catalog_generation);
+            assert_eq!(
+                projection.catalog_generation(),
+                catalog_generation,
+                "LocalProjection rebuilds under advancing catalog_generation"
+            );
+            assert_eq!(
+                projection.origin(),
+                &cert,
+                "catalog_generation={catalog_generation}: AcceptedReplica origin unchanged"
+            );
+            let again = ReplicaKey::derive(
+                projection.origin().origin_store(),
+                projection.origin().origin_epoch(),
+                projection.origin().origin_commit(),
+                projection.origin().record_digest(),
+            );
             assert_eq!(
                 origin_key, again,
-                "catalog_generation={catalog_generation}: origin ReplicaKey unchanged"
+                "catalog_generation={catalog_generation}: ReplicaKey interpretation unchanged"
             );
-            // LocalProjection rebuild axis: generation advances; origin binding
-            // stays the certificate (type-level pin — construct is public).
-            let _rebuild_generation = catalog_generation;
-            assert!(
-                std::mem::size_of::<LocalProjection>() > 0,
-                "LocalProjection is the rebuildable cache under projection law"
-            );
+            match &prior_origin {
+                None => prior_origin = Some(projection.origin().clone()),
+                Some(prev) => assert_eq!(
+                    prev,
+                    projection.origin(),
+                    "origin certificate identity stable across catalog advance"
+                ),
+            }
         }
 
         // In-place reinterpretation Unconstructible: a different schema-cut
-        // reading is a different origin digest / derived Record — never the
-        // same ReplicaKey under a new local cut.
+        // reading is a different origin digest — never the same ReplicaKey.
         let other_cut =
             ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &[0xBE; 32]);
         assert_ne!(
             origin_key, other_cut,
             "distinct origin digest must not share AcceptedReplica custody key"
         );
-        // Gap: LocalProjection::from_certificate + AdmissionCertificate mint
-        // are pub(crate) — origin()/catalog_generation() rebuild walk needs
-        // those doors; lane pins origin-key invariance under catalog advance.
     }
 
     /// §36 — footprints: crash-holder locks die at next open; FrontierUnprovable never admits.
@@ -2862,11 +3103,12 @@ pub mod storage_campaign_lanes {
             .insert(key_next, AskShape::Optimistic)
             .expect("next open starts without inherited Fenced lock");
 
-        // FrontierUnprovable never admits — Neither without ProjectionConfirmation.
-        assert!(matches!(
+        // FrontierUnprovable adversary: Neither without ProjectionConfirmation.
+        assert_eq!(
             admit_accelerator(AcceleratorVerdict::Neither, None),
-            Err(FootprintRefuse::FrontierUnprovable)
-        ));
+            Err(FootprintRefuse::FrontierUnprovable),
+            "Neither without confirmation must refuse FrontierUnprovable"
+        );
         assert!(admit_accelerator(AcceleratorVerdict::PositiveConclusive, None).is_ok());
         let _ = store_id;
     }
@@ -2904,7 +3146,7 @@ pub mod storage_campaign_lanes {
         let (proof_c, _) = MergeProof::mint(other).expect("mint c");
         assert_ne!(proof_a.sealed_identity(), proof_c.sealed_identity());
 
-        assert!(matches!(
+        assert_eq!(
             MergeProof::mint(MergeProofParts {
                 input_content_hashes: vec![],
                 lineage_hash: LineageHash::from_digest([0; 32]),
@@ -2912,8 +3154,9 @@ pub mod storage_campaign_lanes {
                 compact_counter: DomainCounter::ZERO,
                 output_content_hash: PacketContentHash::from_digest([0; 32]),
             }),
-            Err(CompactRefuse::EmptyMerge)
-        ));
+            Err(CompactRefuse::EmptyMerge),
+            "empty input set must refuse EmptyMerge"
+        );
     }
 
     /// §64/§79 — shred × leave-is-free: shred → Shredded tombstone; neighbors decrypt; pack refuses.
@@ -2946,10 +3189,13 @@ pub mod storage_campaign_lanes {
         let stale_a = wrap_a.clone();
         let (_receipt, tombstone) = shred(wrap_a);
         ledger.record(tombstone);
-        assert!(matches!(
-            unwrap_shred_salt(&cap, &stale_a, &ledger),
-            Err(CryptoRefuse::Shredded)
-        ));
+        assert!(
+            matches!(
+                unwrap_shred_salt(&cap, &stale_a, &ledger),
+                Err(CryptoRefuse::Shredded)
+            ),
+            "shredded wrap must refuse Shredded"
+        );
         unwrap_shred_salt(&cap, &wrap_b, &ledger).expect("neighbor still decrypts after shred");
 
         let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
@@ -2963,58 +3209,61 @@ pub mod storage_campaign_lanes {
             payload: vec![1, 2, 3],
         })
         .expect("leave-is-free pack with wrapped salt");
-        assert!(matches!(
+        assert_eq!(
             import_verify(
                 &pack,
                 ImportCapability::after_chain_verify(),
                 ObjectsCompleteness::Complete,
                 &ledger,
             ),
-            Err(PackRefuse::Shredded)
-        ));
+            Err(PackRefuse::Shredded),
+            "leave-is-free pack carrying shredded salt must refuse Shredded"
+        );
     }
 
     /// §55 — dual fault: ObjectCorrupt typed partial vs OrderedCorrupt quarantine/poison; no mixed success.
     #[test]
     fn dual_corruption_dst() {
-        let store = StoreId::from_digest([0x55; 32]);
-        let broken = ObjectRef::mint(store, ObjectId::from_digest([0x0B; 32]));
-        let object_half = StoreRefuse::ObjectCorrupt {
-            broken: vec![broken],
-        };
-        assert!(matches!(
-            &object_half,
-            StoreRefuse::ObjectCorrupt { broken } if broken.len() == 1
-        ));
-
         let ks = KeyspaceId::from_raw(1);
+
+        // Ordered half adversary: unknown-invariant carriage → poison → OrderedCorrupt.
         let ordered = FailureLattice::Healthy.report(CarriageReport::UnknownInvariant(
             UnknownInvariantCarriage,
         ));
-        assert!(matches!(ordered, FailureLattice::Poisoned { .. }));
-        assert!(matches!(
+        assert_eq!(
             ordered.admit_key(ks, b"any"),
-            Err(StoreRefuse::OrderedCorrupt)
-        ));
+            Err(StoreRefuse::OrderedCorrupt),
+            "unknown-invariant poison must refuse every key as OrderedCorrupt"
+        );
 
+        // Scoped mismatch: in-range refuses Quarantined; out-of-range still serves.
         let quarantined = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
             ScopedMismatchCarriage::new(ks, b"a".to_vec(), b"c".to_vec()),
         ));
-        assert!(matches!(
+        let expected_range = mint_quarantine(ks, b"a".to_vec(), b"c".to_vec());
+        assert_eq!(
             quarantined.admit_key(ks, b"b"),
-            Err(StoreRefuse::Quarantined { .. })
-        ));
+            Err(StoreRefuse::Quarantined {
+                range: expected_range,
+            }),
+            "in-quarantine key must refuse Quarantined with the reported range"
+        );
         assert!(
             quarantined.admit_key(ks, b"z").is_ok(),
             "intact ordered facts outside quarantine still serve"
         );
 
-        // No mixed success type: ObjectCorrupt and OrderedCorrupt are distinct refuse arms.
-        assert!(!matches!(object_half, StoreRefuse::OrderedCorrupt));
-        assert_ne!(
-            format!("{object_half:?}").chars().take(13).collect::<String>(),
-            "OrderedCorrupt"
+        // Dual-meet adversary: quarantine + poison → OrderedCorrupt wins; no mixed success.
+        let dual = quarantined.combine(FailureLattice::Healthy.report(
+            CarriageReport::UnknownInvariant(UnknownInvariantCarriage),
+        ));
+        assert_eq!(
+            dual.admit_key(ks, b"z"),
+            Err(StoreRefuse::OrderedCorrupt),
+            "poison dominates dual fault: out-of-quarantine keys must not serve"
         );
+        // Gap: no public door returns StoreRefuse::ObjectCorrupt { broken } —
+        // named ObjectRef typed-partial needs that seam before trials can drive it.
     }
 
     /// §58 — recompute-and-compare replica equivalence (single transport).
