@@ -445,6 +445,34 @@ pub(crate) fn parse_sys(
             }
             SysScript::SetTriggers(rel, puts, rms, replaces)
         }
+        Rule::constraint_op => {
+            let op = inner.children().expect("the constraint operation")?;
+            match op.as_rule() {
+                Rule::constraint_create => {
+                    let [name_p, script] = op
+                        .children()
+                        .expect_n(["the constraint's name", "the constraint body"])?;
+                    let name = Symbol::new(name_p.as_str(), name_p.extract_span());
+                    let script_str = script.as_str();
+                    // Validation parse only: the body is stored as source
+                    // text and re-parsed at enforcement time (inherited
+                    // convention; see `SysScript::SetTriggers`). Parameters
+                    // deliberately empty — a constraint is a standing rule
+                    // and binds no caller parameters.
+                    parse_query(script.into_inner(), &Default::default(), cur_vld)?;
+                    SysScript::CreateConstraint(name, script_str.to_string())
+                }
+                Rule::constraint_drop => {
+                    let name_p = op.children().expect("the constraint's name")?;
+                    SysScript::RemoveConstraint(Symbol::new(
+                        name_p.as_str(),
+                        name_p.extract_span(),
+                    ))
+                }
+                Rule::constraint_list => SysScript::ListConstraints,
+                _ => return Err(unexpected("a constraint operation", &op)),
+            }
+        }
         Rule::lsh_idx_op => {
             let inner = inner.children().expect("the index operation")?;
             match inner.as_rule() {

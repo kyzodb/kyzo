@@ -1128,6 +1128,7 @@ mod tests {
             err.downcast_ref::<FtsExtractorType>().is_some(),
             "typed extractor error, got: {err:?}"
         );
+        let _ = tx.abort();
     }
 
     #[test]

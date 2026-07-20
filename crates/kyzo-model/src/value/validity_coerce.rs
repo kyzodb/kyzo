@@ -43,8 +43,10 @@ pub fn data_value_to_vld_spec(
     match val {
         DataValue::Num(n) => {
             let microseconds = n.as_int().ok_or(BadValiditySpecification(span))?;
-            ValidityTs::for_assertion(microseconds)
-                .ok_or_else(|| miette::Report::new(BadValiditySpecification(span)))
+            // Coerce only: any representable instant is a valid coordinate.
+            // The write-assertion door (`ValidityTs::for_assertion`) refuses
+            // the reserved terminal tick at the mutation boundary — not here.
+            Ok(ValidityTs::from_raw(microseconds))
         }
         DataValue::Str(s) => match &s as &str {
             "NOW" => Ok(cur_vld),

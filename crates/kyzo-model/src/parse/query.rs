@@ -19,11 +19,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use miette::{Diagnostic, LabeledSpan, Report, Result, bail, ensure};
+use miette::{Diagnostic, LabeledSpan, Report, Result, bail, ensure, miette};
 use thiserror::Error;
 
 use crate::program::aggregate::parse_aggr;
 use crate::program::expr::{BindingPos, Expr};
+use crate::program::op::OP_LIST;
 use crate::program::query::{
     InputRelationHandle, QueryAssertion, QueryOutOptions, RelationOp, ReturnMutation, SortDir,
     WriteValidity,
@@ -63,6 +64,22 @@ struct OptionNotPosIntError(&'static str, #[label] SourceSpan);
 #[error("Query option {0} requires a boolean")]
 #[diagnostic(code(parser::option_not_bool))]
 struct OptionNotBoolError(&'static str, #[label] SourceSpan);
+
+/// The write side's `@` clause cannot set the system coordinate: system
+/// time is always the committing transaction's own engine-minted stamp.
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "a write's `@` clause takes exactly one coordinate (the valid instant); system time is never script-settable"
+)]
+#[diagnostic(code(parser::write_validity_sets_system))]
+struct WriteValiditySetsSystemTime(#[label] SourceSpan);
+
+/// `:ensure`/`:ensure_not` only read current state; they perform no
+/// bitemporal write, so a `@` clause on them would silently do nothing.
+#[derive(Debug, Error, Diagnostic)]
+#[error("`@` has no effect on `{0}`, which checks current state and writes nothing")]
+#[diagnostic(code(parser::write_validity_on_non_write_op))]
+struct WriteValidityOnNonWriteOp(&'static str, #[label] SourceSpan);
 
 #[derive(Debug)]
 struct MultipleRuleDefinitionError(String, Vec<SourceSpan>);
@@ -242,14 +259,11 @@ pub(crate) fn parse_query(
                     name: Symbol::new("Constant", span),
                 };
 
-                let arity = match data.clone().eval_to_const() {
-                    Ok(DataValue::List(rows)) => rows
-                        .first()
-                        .and_then(|r| r.get_slice())
-                        .map(|s| s.len())
-                        .unwrap_or(0),
-                    _ => head.len(),
-                };
+                // Model `eval_to_const` does not fold deterministic Applies
+                // (`OP_LIST` stays Apply until the engine apply door). Const
+                // rules with empty heads (`start[] <- [['FRA']]`) must still
+                // learn arity from the list-of-lists shape at parse time.
+                let arity = const_rule_data_arity(&data).unwrap_or_else(|| head.len());
 
                 ensure!(arity != 0 || !head.is_empty(), EmptyRowForConstRule(span));
                 if !head.is_empty() {
@@ -389,14 +403,32 @@ pub(crate) fn parse_query(
                             p.as_rule() == Rule::validity_clause,
                             UnexpectedRule(p.extract_span())
                         );
-                        let vld_inner = p.into_inner().next().unwrap();
-                        let vld_expr = build_expr(vld_inner, param_pool)?;
+                        let span = p.extract_span();
+                        if let RelationOp::Ensure | RelationOp::EnsureNot = op {
+                            let name = if op == RelationOp::Ensure {
+                                ":ensure"
+                            } else {
+                                ":ensure_not"
+                            };
+                            bail!(WriteValidityOnNonWriteOp(name, span));
+                        }
+                        let mut coords = p.into_inner();
+                        let vld_expr = build_expr(coords.next().unwrap(), param_pool)?;
+                        if coords.next().is_some() {
+                            bail!(WriteValiditySetsSystemTime(span));
+                        }
                         match vld_expr.clone().eval_to_const() {
-                            Ok(val) => WriteValidity::Fixed(data_value_to_vld_spec(
-                                val,
-                                vld_expr.span(),
-                                cur_vld,
-                            )?),
+                            Ok(val) => {
+                                let span = vld_expr.span();
+                                let vld = data_value_to_vld_spec(val, span, cur_vld)?;
+                                let vld = ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
+                                    miette::miette!(
+                                        labels = vec![miette::LabeledSpan::underline(span)],
+                                        "a write validity cannot be the reserved terminal tick (i64::MAX / 'END')"
+                                    )
+                                })?;
+                                WriteValidity::Fixed(vld)
+                            }
                             Err(_) => WriteValidity::PerRow(vld_expr),
                         }
                     }
@@ -594,7 +626,32 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
             .collect();
     }
 
+    resolve_per_row_write_validity(&mut prog)?;
     Ok(prog)
+}
+
+/// Bind a `WriteValidity::PerRow` expression against the mutation's entry
+/// head: `@ ts` names an output column, resolved to a tuple index so
+/// `resolve_write_validity` can read it per row.
+fn resolve_per_row_write_validity(prog: &mut InputProgram) -> Result<()> {
+    let Some((handle, op, ret, write_vld)) = prog.out_opts_mut().store_relation.take() else {
+        return Ok(());
+    };
+    let write_vld = match write_vld {
+        WriteValidity::PerRow(mut expr) => {
+            let head = prog.get_entry_out_head()?;
+            let frame: BTreeMap<Symbol, usize> = head
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.clone(), i))
+                .collect();
+            expr.fill_binding_indices(&frame)?;
+            WriteValidity::PerRow(expr)
+        }
+        other => other,
+    };
+    prog.out_opts_mut().store_relation = Some((handle, op, ret, write_vld));
+    Ok(())
 }
 
 fn parse_rule(
@@ -757,12 +814,9 @@ fn parse_atom(
             }
             let validity = match src.next() {
                 None => None,
-                Some(vld_clause) => {
-                    let vld_expr = build_expr(vld_clause.into_inner().next().unwrap(), param_pool)?;
-                    Some(ValidityClause::At(AsOf::current(expr2vld_spec(
-                        vld_expr, cur_vld,
-                    )?)))
-                }
+                Some(vld_clause) => Some(ValidityClause::At(parse_at_clause(
+                    vld_clause, param_pool, cur_vld,
+                )?)),
             };
             InputAtom::Relation {
                 inner: InputRelationApplyAtom {
@@ -818,12 +872,9 @@ fn parse_atom(
             }
             let validity = match src.next() {
                 None => None,
-                Some(vld_clause) => {
-                    let vld_expr = build_expr(vld_clause.into_inner().next().unwrap(), param_pool)?;
-                    Some(ValidityClause::At(AsOf::current(expr2vld_spec(
-                        vld_expr, cur_vld,
-                    )?)))
-                }
+                Some(vld_clause) => Some(ValidityClause::At(parse_at_clause(
+                    vld_clause, param_pool, cur_vld,
+                )?)),
             };
             InputAtom::NamedFieldRelation {
                 inner: InputNamedFieldRelationApplyAtom {
@@ -993,9 +1044,7 @@ fn parse_fixed_rule(
                                     }
                                 }
                                 Rule::validity_clause => {
-                                    let vld_inner = v.into_inner().next().unwrap();
-                                    let vld_expr = build_expr(vld_inner, param_pool)?;
-                                    as_of = Some(AsOf::current(expr2vld_spec(vld_expr, cur_vld)?))
+                                    as_of = Some(parse_at_clause(v, param_pool, cur_vld)?)
                                 }
                                 _ => bail!(UnexpectedRule(v.extract_span())),
                             }
@@ -1038,9 +1087,7 @@ fn parse_fixed_rule(
                                     bindings.insert(k, v);
                                 }
                                 Rule::validity_clause => {
-                                    let vld_inner = p.into_inner().next().unwrap();
-                                    let vld_expr = build_expr(vld_inner, param_pool)?;
-                                    as_of = Some(AsOf::current(expr2vld_spec(vld_expr, cur_vld)?))
+                                    as_of = Some(parse_at_clause(p, param_pool, cur_vld)?)
                                 }
                                 _ => bail!(UnexpectedRule(p.extract_span())),
                             }
@@ -1178,4 +1225,62 @@ fn sole_expr_term(expr: Pair<'_>) -> Option<Pair<'_>> {
 fn expr2vld_spec(expr: Expr, cur_vld: ValidityTs) -> Result<ValidityTs> {
     let vld_span = expr.span();
     data_value_to_vld_spec(expr.eval_to_const()?, vld_span, cur_vld)
+}
+
+/// Width of a const-rule `data` expression: first row length of a
+/// list-of-lists, whether already folded to [`DataValue::List`] or still
+/// an [`OP_LIST`] Apply tree (model parse cannot fold Applies).
+///
+/// Empty data (`[]`) returns [`None`] so the caller falls back to the head
+/// length — `?[k, v] <- [] :create …` is legal and inherits arity from the
+/// head. A non-empty list whose first element is not a row returns [`None`]
+/// as well (engine `Constant::init_options` will refuse the shape later).
+fn const_rule_data_arity(data: &Expr) -> Option<usize> {
+    match data {
+        Expr::Const {
+            val: DataValue::List(rows),
+            ..
+        } => {
+            if rows.is_empty() {
+                return None;
+            }
+            rows.first().and_then(|r| r.get_slice()).map(|s| s.len())
+        }
+        Expr::Apply { op, args, .. } if op.name == OP_LIST.name => {
+            if args.is_empty() {
+                return None;
+            }
+            match args.first() {
+                Some(Expr::Apply {
+                    op: inner_op,
+                    args: cols,
+                    ..
+                }) if inner_op.name == OP_LIST.name => Some(cols.len()),
+                Some(Expr::Const {
+                    val: DataValue::List(cols),
+                    ..
+                }) => Some(cols.len()),
+                _ => None,
+            }
+        }
+        _ => data.clone().eval_to_const().ok().and_then(|v| match v {
+            DataValue::List(rows) if rows.is_empty() => None,
+            DataValue::List(rows) => rows.first().and_then(|r| r.get_slice()).map(|s| s.len()),
+            _ => None,
+        }),
+    }
+}
+
+/// `@ valid` or `@ system, valid` — system coordinate first when two are given.
+fn parse_at_clause(
+    vld_clause: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+) -> Result<AsOf> {
+    let mut coords = vld_clause.into_inner();
+    let first = expr2vld_spec(build_expr(coords.next().unwrap(), param_pool)?, cur_vld)?;
+    Ok(match coords.next() {
+        None => AsOf::current(first),
+        Some(second) => AsOf::at(first, expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?),
+    })
 }

@@ -9,9 +9,9 @@ error[E0382]: borrow of moved value: `tx`
    |             ^^ value borrowed here after move
    |
 note: `commit` takes ownership of the receiver `self`, which moves `tx`
-  --> src/storage/mod.rs
+  --> src/store/tx.rs
    |
-   |     fn commit(self) -> std::result::Result<Committed, CommitFailure>
+   |     fn commit(self) -> std::result::Result<(), CommitFailure>
    |               ^^^^
 help: consider further restricting type parameter `T` with trait `Copy`
    |

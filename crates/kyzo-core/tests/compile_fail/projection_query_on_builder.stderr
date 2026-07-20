@@ -1,6 +1,35 @@
-error[E0599]: no method named `query` found for struct `ProjectionBuilder<DemoKind>` in the current scope
-  --> tests/compile_fail/projection_query_on_builder.rs:26:20
+error[E0437]: type `Query` is not a member of trait `ProjectionKind`
+  --> tests/compile_fail/projection_query_on_builder.rs:18:5
    |
-25 | fn query_on_builder(builder: ProjectionBuilder<DemoKind>) {
+18 |     type Query = ();
+   |     ^^^^^^^^^^^^^^^^ not a member of trait `ProjectionKind`
+
+error[E0437]: type `Candidates` is not a member of trait `ProjectionKind`
+  --> tests/compile_fail/projection_query_on_builder.rs:19:5
+   |
+19 |     type Candidates = ();
+   |     ^^^^^^^^^^^^^^^^^^^^^ not a member of trait `ProjectionKind`
+
+error[E0407]: method `search` is not a member of trait `ProjectionKind`
+  --> tests/compile_fail/projection_query_on_builder.rs:21:5
+   |
+21 |     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a member of trait `ProjectionKind`
+
+error[E0220]: associated type `Query` not found for `Self`
+  --> tests/compile_fail/projection_query_on_builder.rs:21:37
+   |
+21 |     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
+   |                                     ^^^^^ there is an associated type `Query` in the trait `kyzo::project::projection::SealedQuery`
+
+error[E0220]: associated type `Candidates` not found for `Self`
+  --> tests/compile_fail/projection_query_on_builder.rs:21:53
+   |
+21 |     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
+   |                                                     ^^^^^^^^^^ there is an associated type `Candidates` in the trait `kyzo::project::projection::SealedQuery`
+
+error[E0599]: no method named `query` found for struct `ProjectionBuilder<K>` in the current scope
+  --> tests/compile_fail/projection_query_on_builder.rs:26:21
+   |
 26 |     let _ = builder.query(&());
-   |                    ^^^^^ method not found in `ProjectionBuilder<DemoKind>`
+   |                     ^^^^^ method not found in `ProjectionBuilder<DemoKind>`

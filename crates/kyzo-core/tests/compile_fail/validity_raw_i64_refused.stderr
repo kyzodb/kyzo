@@ -7,7 +7,7 @@ error[E0308]: mismatched types
    |             arguments to this function are incorrect
    |
 note: associated function defined here
-  --> src/data/value/wide/validity.rs
+  --> $WORKSPACE/crates/kyzo-model/src/value/kind/validity.rs
    |
-   |     pub fn new(timestamp: ValidityTs, is_assert: bool) -> Validity {
+   |     pub fn new(timestamp: ValidityTs, is_assert: bool) -> Option<Validity> {
    |            ^^^

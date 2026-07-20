@@ -79,7 +79,7 @@ use crate::session::catalog::{ConstraintRef, get_relation, list_relations, write
 use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
 use crate::store::retry::RetryError;
 use crate::store::scratch::TempTx;
-use crate::store::{ReadTx, Storage, WriteTx};
+use crate::store::{ReadTx, Storage};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::{
@@ -374,64 +374,85 @@ impl<S: Storage> Engine<S> {
                 crate::store::retry::write_tx_attempt(&self.store)?,
                 options.clone(),
             );
-
-            // Constraint names are one global namespace: scan the catalog.
-            for handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
-                if let Some(c) = handle.constraints.iter().find(|c| c.name() == &name.name) {
-                    return Err(RetryError::session(ConstraintNameTaken(
-                        c.name().to_string(),
-                        handle.name.to_string(),
-                    )));
+            match self.attach_constraint(&mut tx, name, source, &constraint, &read_set, cur_vld) {
+                Ok(rows) => {
+                    tx.commit_write().map_err(RetryError::from)?;
+                    Ok(rows)
+                }
+                Err(e) => {
+                    tx.abort_write();
+                    Err(e)
                 }
             }
-
-            // L4: a constraint current data violates never comes into
-            // being. Full-state evaluation inside the creating transaction,
-            // under the caller's budget.
-            let witnesses = self
-                .eval_constraint_body(
-                    &tx.store,
-                    &tx.temp,
-                    constraint.program().clone(),
-                    cur_vld,
-                    options,
-                )
-                .wrap_err_with(|| {
-                    format!("while checking integrity constraint '{name}' over existing data")
-                })
-                .map_err(RetryError::session_report)?;
-            if !witnesses.is_empty() {
-                let total = witnesses.len();
-                let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
-                return Err(RetryError::session(ConstraintRejectedOnCreation {
-                    name: name.to_string(),
-                    total,
-                    witnesses: shown,
-                    body: source.to_string(),
-                    span: SourceSpan(0, source.len()),
-                }));
-            }
-
-            // Attach: the identical substance mirrored onto every relation
-            // the body reads, kept name-sorted. Requires the trigger rung of
-            // the access ladder on each.
-            for rel in &read_set {
-                let mut handle =
-                    get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
-                if handle.access_level < AccessLevel::Protected {
-                    return Err(RetryError::session(InsufficientAccessLevel(
-                        handle.name.to_string(),
-                        "create constraint".to_string(),
-                        handle.access_level,
-                    )));
-                }
-                handle.constraints.push(constraint.clone());
-                handle.constraints.sort_by(|a, b| a.name().cmp(b.name()));
-                write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
-            }
-            tx.store.commit()?;
-            Ok(status_ok())
         })
+    }
+
+    /// Catalog half of `::constraint create`: name uniqueness, L4 existing-
+    /// data check, and mirrored attach onto every read-set relation. Caller
+    /// owns commit/abort of `tx`. Budget comes from `tx.options`.
+    fn attach_constraint(
+        &self,
+        tx: &mut SessionTx<S::WriteTx>,
+        name: &Symbol,
+        source: &str,
+        constraint: &ConstraintRef,
+        read_set: &BTreeSet<SmartString<LazyCompact>>,
+        cur_vld: ValidityTs,
+    ) -> std::result::Result<NamedRows, RetryError> {
+        // Constraint names are one global namespace: scan the catalog.
+        for handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
+            if let Some(c) = handle.constraints.iter().find(|c| c.name() == &name.name) {
+                return Err(RetryError::session(ConstraintNameTaken(
+                    c.name().to_string(),
+                    handle.name.to_string(),
+                )));
+            }
+        }
+
+        // L4: a constraint current data violates never comes into
+        // being. Full-state evaluation inside the creating transaction,
+        // under the caller's budget.
+        let witnesses = self
+            .eval_constraint_body(
+                &tx.store,
+                &tx.temp,
+                constraint.program().clone(),
+                cur_vld,
+                &tx.options,
+            )
+            .wrap_err_with(|| {
+                format!("while checking integrity constraint '{name}' over existing data")
+            })
+            .map_err(RetryError::session_report)?;
+        if !witnesses.is_empty() {
+            let total = witnesses.len();
+            let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
+            return Err(RetryError::session(ConstraintRejectedOnCreation {
+                name: name.to_string(),
+                total,
+                witnesses: shown,
+                body: source.to_string(),
+                span: SourceSpan(0, source.len()),
+            }));
+        }
+
+        // Attach: the identical substance mirrored onto every relation
+        // the body reads, kept name-sorted. Requires the trigger rung of
+        // the access ladder on each.
+        for rel in read_set {
+            let mut handle = get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
+            if handle.access_level < AccessLevel::Protected {
+                return Err(RetryError::session(InsufficientAccessLevel(
+                    handle.name.to_string(),
+                    "create constraint".to_string(),
+                    handle.access_level,
+                )));
+            }
+            handle.constraints.push(constraint.clone());
+            handle.constraints.sort_by(|a, b| a.name().cmp(b.name()));
+            write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
+        }
+        Ok(status_ok())
     }
 
     /// `::constraint drop <name>`: strip the constraint from every catalog
@@ -448,31 +469,47 @@ impl<S: Storage> Engine<S> {
                 crate::store::retry::write_tx_attempt(&self.store)?,
                 ScriptOptions::default(),
             );
-            let mut found = false;
-            for mut handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
-                let before = handle.constraints.len();
-                if handle.constraints.iter().any(|c| c.name() == &name.name)
-                    && handle.access_level < AccessLevel::Protected
-                {
-                    return Err(RetryError::session(InsufficientAccessLevel(
-                        handle.name.to_string(),
-                        "drop constraint".to_string(),
-                        handle.access_level,
-                    )));
+            match Self::detach_constraint(&mut tx, name) {
+                Ok(rows) => {
+                    tx.commit_write().map_err(RetryError::from)?;
+                    Ok(rows)
                 }
-                handle.constraints.retain(|c| c.name() != &name.name);
-                if handle.constraints.len() != before {
-                    found = true;
-                    write_relation_row(&mut tx.store, &handle)
-                        .map_err(RetryError::session_report)?;
+                Err(e) => {
+                    tx.abort_write();
+                    Err(e)
                 }
             }
-            if !found {
-                return Err(RetryError::session(NoSuchConstraint(name.to_string())));
-            }
-            tx.store.commit()?;
-            Ok(status_ok())
         })
+    }
+
+    /// Catalog half of `::constraint drop`: strip the named constraint from
+    /// every carrying row. Caller owns commit/abort of `tx`.
+    fn detach_constraint(
+        tx: &mut SessionTx<S::WriteTx>,
+        name: &Symbol,
+    ) -> std::result::Result<NamedRows, RetryError> {
+        let mut found = false;
+        for mut handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
+            let before = handle.constraints.len();
+            if handle.constraints.iter().any(|c| c.name() == &name.name)
+                && handle.access_level < AccessLevel::Protected
+            {
+                return Err(RetryError::session(InsufficientAccessLevel(
+                    handle.name.to_string(),
+                    "drop constraint".to_string(),
+                    handle.access_level,
+                )));
+            }
+            handle.constraints.retain(|c| c.name() != &name.name);
+            if handle.constraints.len() != before {
+                found = true;
+                write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
+            }
+        }
+        if !found {
+            return Err(RetryError::session(NoSuchConstraint(name.to_string())));
+        }
+        Ok(status_ok())
     }
 
     /// `::constraint list`: every (constraint, attached relation, body)

@@ -1910,6 +1910,7 @@ mod tests {
         // Must refuse typed, not panic and not hand back a handle carrying
         // an out-of-range id.
         RelationHandle::decode(&bytes).unwrap_err();
+        let _ = tx.abort();
     }
 
     /// `del_range` semantics through destroy: a relation created, filled,
@@ -2053,6 +2054,7 @@ mod tests {
             err.downcast_ref::<RelationIdSpaceExhausted>().is_some(),
             "expected typed exhaustion, got: {err:?}"
         );
+        let _ = tx.abort();
     }
 
     /// The persistent catalog refuses temp names (the session's temp store
@@ -2070,6 +2072,7 @@ mod tests {
         create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap();
         let err = create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap_err();
         assert!(err.downcast_ref::<RelNameConflictError>().is_some());
+        let _ = tx.abort();
     }
 
     /// Rename moves the catalog row and nothing else: same id, same data.
@@ -2200,7 +2203,7 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        drop(tx);
+        let _ = tx.abort();
 
         let tx = db.read_tx().unwrap();
         let handle = get_relation(&tx, "t").unwrap();

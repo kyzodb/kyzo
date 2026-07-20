@@ -1,0 +1,5 @@
+error[E0425]: cannot find type `TagOrdered` in crate `kyzo`
+ --> tests/compile_fail/tag_ordered_score_refused.rs:5:23
+  |
+5 |     let _score: kyzo::TagOrdered = unimplemented!();
+  |                       ^^^^^^^^^^ not found in `kyzo`

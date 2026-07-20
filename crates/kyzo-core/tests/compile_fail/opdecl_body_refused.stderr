@@ -1,0 +1,7 @@
+error[E0560]: struct `OpDecl` has no field named `body`
+  --> tests/compile_fail/opdecl_body_refused.rs:10:9
+   |
+10 |         body: 0u8,
+   |         ^^^^ `OpDecl` does not have this field
+   |
+   = note: all struct fields are already assigned

@@ -1,13 +1,19 @@
 error[E0308]: mismatched types
-  --> tests/compile_fail/arity_zero_refused.rs:18:27
+  --> tests/compile_fail/arity_zero_refused.rs:18:24
    |
 18 |     let _ = Arity::new(0);
    |             ---------- ^ expected `NonZero<usize>`, found integer
    |             |
    |             arguments to this function are incorrect
    |
+   = note: expected struct `NonZero<usize>`
+                found type `{integer}`
 note: associated function defined here
-  --> src/data/value/arity.rs
+  --> $WORKSPACE/crates/kyzo-model/src/value/arity.rs
    |
    |     pub const fn new(width: NonZeroUsize) -> Self {
    |                  ^^^
+help: consider calling `NonZero::new`
+   |
+18 |     let _ = Arity::new(NonZero::new(0).unwrap());
+   |                        +++++++++++++ ++++++++++

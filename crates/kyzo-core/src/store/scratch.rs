@@ -641,6 +641,8 @@ mod tests {
                     assert!(w[0].0 < w[1].0, "total_scan not strictly memcmp-ascending");
                 }
             }
+            let _ = fjall_tx.abort();
+            let _ = sim_tx.abort();
         }
     }
 
@@ -693,6 +695,8 @@ mod tests {
             {
                 assert_eq!(rows.len(), 3, "degenerate del_range deleted something");
             }
+            let _ = fjall_tx.abort();
+            let _ = sim_tx.abort();
         }
     }
 
@@ -799,6 +803,8 @@ mod tests {
             let at = AsOf::current(ValidityTs::from_raw(5));
             assert_eq!(temp_tx.range_skip_scan_tuple(&upper, &lower, at).count(), 0);
             assert_eq!(temp_tx.range_skip_scan_tuple(&lower, &lower, at).count(), 0);
+            let _ = fjall_tx.abort();
+            let _ = sim_tx.abort();
         }
     }
 }

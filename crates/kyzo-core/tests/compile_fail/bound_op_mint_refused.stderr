@@ -1,0 +1,5 @@
+error[E0422]: cannot find struct, variant or union type `BoundOp` in crate `kyzo`
+ --> tests/compile_fail/bound_op_mint_refused.rs:5:19
+  |
+5 |     let _ = kyzo::BoundOp {
+  |                   ^^^^^^^ not found in `kyzo`

@@ -1465,6 +1465,7 @@ mod tests {
             &f.inv,
         )
         .unwrap();
+        let _ = tx.abort();
     }
 
     /// A corrupt inverse-index row is a typed error with key context,
@@ -1520,6 +1521,7 @@ mod tests {
         garbage.push(0xc1);
         tx.put(&inv_key, &garbage).unwrap();
         assert!(lsh_del(&mut tx, &row, None, &f.idx, &f.inv).is_err());
+        let _ = tx.abort();
     }
 
     /// The manifest's wire form round-trips and its bytes are pinned: it

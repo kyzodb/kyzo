@@ -1,6 +1,59 @@
-error[E0599]: no method named `query` found for struct `Stale<DemoKind>` in the current scope
-  --> tests/compile_fail/projection_query_on_stale.rs:27:18
+error[E0437]: type `Query` is not a member of trait `ProjectionKind`
+  --> tests/compile_fail/projection_query_on_stale.rs:19:5
    |
-26 | fn query_on_stale(stale: Stale<DemoKind>) {
+19 |     type Query = ();
+   |     ^^^^^^^^^^^^^^^^ not a member of trait `ProjectionKind`
+
+error[E0437]: type `Candidates` is not a member of trait `ProjectionKind`
+  --> tests/compile_fail/projection_query_on_stale.rs:20:5
+   |
+20 |     type Candidates = ();
+   |     ^^^^^^^^^^^^^^^^^^^^^ not a member of trait `ProjectionKind`
+
+error[E0407]: method `search` is not a member of trait `ProjectionKind`
+  --> tests/compile_fail/projection_query_on_stale.rs:22:5
+   |
+22 |     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a member of trait `ProjectionKind`
+
+error[E0220]: associated type `Query` not found for `Self`
+  --> tests/compile_fail/projection_query_on_stale.rs:22:37
+   |
+22 |     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
+   |                                     ^^^^^ there is an associated type `Query` in the trait `kyzo::project::projection::SealedQuery`
+
+error[E0220]: associated type `Candidates` not found for `Self`
+  --> tests/compile_fail/projection_query_on_stale.rs:22:53
+   |
+22 |     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
+   |                                                     ^^^^^^^^^^ there is an associated type `Candidates` in the trait `kyzo::project::projection::SealedQuery`
+
+error[E0599]: no method named `query` found for struct `Stale<K>` in the current scope
+  --> tests/compile_fail/projection_query_on_stale.rs:27:19
+   |
 27 |     let _ = stale.query(&());
-   |                  ^^^^^ method not found in `Stale<DemoKind>`
+   |                   ^^^^^ method not found in `Stale<DemoKind>`
+
+error[E0599]: no associated function or constant named `new` found for struct `Generation` in the current scope
+  --> tests/compile_fail/projection_query_on_stale.rs:32:68
+   |
+32 |     let sealed = ProjectionBuilder::new(DemoKind).seal(Generation::new(1));
+   |                                                                    ^^^ associated function or constant not found in `Generation`
+   |
+help: there is a method `ne` with a similar name
+   |
+32 -     let sealed = ProjectionBuilder::new(DemoKind).seal(Generation::new(1));
+32 +     let sealed = ProjectionBuilder::new(DemoKind).seal(Generation::ne(1));
+   |
+
+error[E0599]: no associated function or constant named `new` found for struct `Generation` in the current scope
+  --> tests/compile_fail/projection_query_on_stale.rs:33:17
+   |
+33 |     Generation::new(2)
+   |                 ^^^ associated function or constant not found in `Generation`
+   |
+help: there is a method `ne` with a similar name
+   |
+33 -     Generation::new(2)
+33 +     Generation::ne(2)
+   |
