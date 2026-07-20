@@ -304,7 +304,7 @@ pub enum PackRefuse {
     #[error("pack hygiene: forbidden secret material at scrub point")]
     #[diagnostic(code(store::backup::hygiene_secret))]
     HygieneSecretMaterial,
-    #[error("import ceremony: foreign history unverified")]
+    #[error("ForeignHistoryUnverified: blind import refused")]
     #[diagnostic(code(store::backup::foreign_unverified))]
     ForeignHistoryUnverified,
     #[error("import ceremony: incomplete restore refused (never green-incomplete)")]
@@ -397,24 +397,42 @@ fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
 /// Import verify ceremony (§80): foreign dumps only under capability + chain /
 /// root verify. Blind import is a second write door for forged belief.
 ///
-/// Closed sum — never a bool standing in for verify authority.
+/// Sealed struct — never a public enum variant or bool standing in for verify
+/// authority. A verified capability is reachable only through
+/// [`Self::after_chain_root_verify`]; ambient / silent verified is
+/// Unconstructible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ImportCapability {
-    /// Caller presented chain/root verify authority.
-    Verified,
-    /// Foreign import without verify — ceremony refuses.
-    Unverified,
+pub struct ImportCapability {
+    /// True only when minted by [`Self::after_chain_root_verify`].
+    verified: bool,
 }
 
 impl ImportCapability {
     /// Mint after chain/root verification succeeded.
-    pub fn after_chain_verify() -> Self {
-        Self::Verified
+    ///
+    /// Equal recomputed roots → verified capability. Forged or mismatched
+    /// roots → [`PackRefuse::ForeignHistoryUnverified`] — never a silent
+    /// Verified costume.
+    pub fn after_chain_root_verify(
+        expected: crate::store::merkle::StateRoot,
+        observed: crate::store::merkle::StateRoot,
+    ) -> Result<Self, PackRefuse> {
+        if crate::store::merkle::roots_equal_at_cut(expected, observed) {
+            Ok(Self { verified: true })
+        } else {
+            Err(PackRefuse::ForeignHistoryUnverified)
+        }
     }
 
-    /// Unverified foreign import — ceremony will refuse.
+    /// Unverified foreign import — [`import_verify`] refuses
+    /// [`PackRefuse::ForeignHistoryUnverified`].
     pub fn unverified() -> Self {
-        Self::Unverified
+        Self { verified: false }
+    }
+
+    /// Whether this capability was minted by chain/root verify.
+    pub fn is_verified(self) -> bool {
+        self.verified
     }
 }
 
@@ -431,16 +449,18 @@ pub enum ObjectsCompleteness {
 
 /// Run the import verify ceremony over a leave-is-free pack.
 ///
-/// [`ShredLedger`] is consulted so post-shred restore of a pack that still
-/// carries a shredded segment's `WrappedShredSalt` converges to
-/// [`PackRefuse::Shredded`] (§64 / §80) — not silent unreadability.
+/// Requires [`ImportCapability`] minted by chain/root verify; unverified or
+/// forged history → [`PackRefuse::ForeignHistoryUnverified`]. [`ShredLedger`]
+/// is consulted so post-shred restore of a pack that still carries a shredded
+/// segment's `WrappedShredSalt` converges to [`PackRefuse::Shredded`]
+/// (§64 / §80) — not silent unreadability.
 pub fn import_verify(
     pack: &LeaveIsFreePack,
     cap: ImportCapability,
     objects: ObjectsCompleteness,
     shred_ledger: &ShredLedger,
 ) -> Result<(), PackRefuse> {
-    if matches!(cap, ImportCapability::Unverified) {
+    if !cap.is_verified() {
         return Err(PackRefuse::ForeignHistoryUnverified);
     }
     if pack.wrapped_shred_salts.is_empty() {
@@ -586,10 +606,12 @@ mod pins {
         .expect("pack with WrappedShredSalt + IncarnationId");
         assert!(!pack.wrapped_shred_salts().is_empty());
         let empty_ledger = ShredLedger::new();
+        let root = crate::store::merkle::StateRoot::from_digest([0xAB; 32]);
+        let verified = ImportCapability::after_chain_root_verify(root, root).expect("equal roots");
         assert!(
             import_verify(
                 &pack,
-                ImportCapability::after_chain_verify(),
+                verified,
                 ObjectsCompleteness::Complete,
                 &empty_ledger
             )
@@ -612,11 +634,170 @@ mod pins {
         assert!(matches!(
             import_verify(
                 &pack,
-                ImportCapability::after_chain_verify(),
+                verified,
                 ObjectsCompleteness::Complete,
                 &shredded
             ),
             Err(PackRefuse::Shredded)
         ));
+    }
+}
+
+/// Seat 80 — foreign-dump import verify ceremony.
+///
+/// Board Check filters `backup::import_verify`: capability + chain/root verify,
+/// forged/unverified → [`PackRefuse::ForeignHistoryUnverified`], silent import
+/// Unconstructible (no free Verified mint).
+#[cfg(test)]
+mod import_verify {
+    use super::{
+        ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
+        PackRefuse, import_verify,
+    };
+    use crate::store::FormatVersion;
+    use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
+    use crate::store::crypto::{
+        Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
+    };
+    use crate::store::epoch::{CryptoDomain, FenceEpoch};
+    use crate::store::merkle::{StateRoot, roots_equal_at_cut};
+    use crate::store::open::StoreId;
+
+    fn sample_pack() -> (LeaveIsFreePack, crate::store::crypto::WrappedShredSalt) {
+        let store = StoreId::from_digest([0x80; 32]);
+        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x81; 32]));
+        let wrapped = wrap_shred_salt(
+            &cap,
+            &ShredSalt::from_bytes([0x82; 32]),
+            SegmentCounter::ZERO,
+            domain,
+        )
+        .expect("wrap");
+        let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
+        let incarnation = mint.mint(Entropy::from_bytes([0x83; 32])).unwrap();
+        let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
+            kind: LeaveIsFreeKind::SealAndSuffix,
+            format_version: FormatVersion::CURRENT,
+            wrapped_shred_salts: vec![wrapped.clone()],
+            incarnation_history: vec![incarnation],
+            payload: b"leave-is-free-payload".to_vec(),
+        })
+        .expect("pack");
+        (pack, wrapped)
+    }
+
+    fn equal_roots() -> (StateRoot, StateRoot) {
+        let root = StateRoot::from_digest([0xCE; 32]);
+        (root, root)
+    }
+
+    #[test]
+    fn chain_root_verify_mints_capability_only_on_equal_roots() {
+        let (expected, observed) = equal_roots();
+        assert!(roots_equal_at_cut(expected, observed));
+        let cap = ImportCapability::after_chain_root_verify(expected, observed)
+            .expect("equal roots mint Verified");
+        assert!(cap.is_verified());
+
+        let forged = StateRoot::from_digest([0xFF; 32]);
+        assert!(!roots_equal_at_cut(expected, forged));
+        assert!(matches!(
+            ImportCapability::after_chain_root_verify(expected, forged),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+    }
+
+    #[test]
+    fn unverified_capability_refuses_foreign_history() {
+        let (pack, _) = sample_pack();
+        let ledger = ShredLedger::new();
+        assert!(matches!(
+            import_verify(
+                &pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &ledger
+            ),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+        assert!(!ImportCapability::unverified().is_verified());
+    }
+
+    #[test]
+    fn verified_ceremony_admits_complete_pack() {
+        let (pack, _) = sample_pack();
+        let (expected, observed) = equal_roots();
+        let cap = ImportCapability::after_chain_root_verify(expected, observed).unwrap();
+        let ledger = ShredLedger::new();
+        assert!(
+            import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
+            "verified + complete objects must admit"
+        );
+    }
+
+    #[test]
+    fn forged_root_never_reaches_import_verify_as_verified() {
+        let (pack, _) = sample_pack();
+        let expected = StateRoot::from_digest([0x01; 32]);
+        let forged = StateRoot::from_digest([0x02; 32]);
+        // Ceremony refuse happens at capability mint — silent Verified is
+        // Unconstructible; there is no ImportCapability::Verified free ctor.
+        let refuse = ImportCapability::after_chain_root_verify(expected, forged);
+        assert!(matches!(refuse, Err(PackRefuse::ForeignHistoryUnverified)));
+        // Only unverified remains constructible without equal roots, and import
+        // still refuses ForeignHistoryUnverified.
+        let ledger = ShredLedger::new();
+        assert!(matches!(
+            import_verify(
+                &pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &ledger
+            ),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+    }
+
+    #[test]
+    fn incomplete_objects_refuse_even_when_verified() {
+        let (pack, _) = sample_pack();
+        let (expected, observed) = equal_roots();
+        let cap = ImportCapability::after_chain_root_verify(expected, observed).unwrap();
+        let ledger = ShredLedger::new();
+        assert!(matches!(
+            import_verify(&pack, cap, ObjectsCompleteness::Incomplete, &ledger),
+            Err(PackRefuse::IncompleteRestore)
+        ));
+    }
+
+    #[test]
+    fn post_shred_restore_refuses_shredded() {
+        let (pack, wrapped) = sample_pack();
+        let (expected, observed) = equal_roots();
+        let cap = ImportCapability::after_chain_root_verify(expected, observed).unwrap();
+        let (_receipt, tombstone) = shred(wrapped);
+        let mut ledger = ShredLedger::new();
+        ledger.record(tombstone);
+        assert!(matches!(
+            import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger),
+            Err(PackRefuse::Shredded)
+        ));
+    }
+
+    #[test]
+    fn store_refuse_foreign_history_unverified_tag_matches_pack() {
+        // Seat 80 ledger tag must exist on the closed StoreRefuse sum and on
+        // PackRefuse — same refuse name, no reshape into RetentionDeclined.
+        let pack_tag = format!("{}", PackRefuse::ForeignHistoryUnverified);
+        let store_tag = format!("{}", crate::store::failure::StoreRefuse::ForeignHistoryUnverified);
+        assert!(
+            pack_tag.contains("ForeignHistoryUnverified"),
+            "pack refuse must name ForeignHistoryUnverified: {pack_tag}"
+        );
+        assert!(
+            store_tag.contains("ForeignHistoryUnverified"),
+            "store refuse must name ForeignHistoryUnverified: {store_tag}"
+        );
     }
 }

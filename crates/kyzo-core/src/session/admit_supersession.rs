@@ -7,11 +7,14 @@
  */
 
 //! Seat 34 — correction as supersession without overwrite.
+//! Seat / #270 T4 — semantic deletion as supersession-shaped records
+//! ([`SemanticDeletionKind`]): Invalidation / Tombstone / RetentionRedaction —
+//! never message-delete. Prior committed bytes stay; history appends.
 //!
-//! A correction is a **new** admitted [`KyzoRecord`] that supersedes a prior
-//! by [`RecordId`]. The prior stays committed. History appends; there is no
-//! rewrite / update-in-place / overwrite door on committed fact bytes.
-//! Dense [`CommitOrdinal`] advances on the successor at attach.
+//! A correction or semantic deletion is a **new** admitted [`KyzoRecord`] that
+//! supersedes a prior by [`RecordId`]. The prior stays committed. There is no
+//! rewrite / update-in-place / overwrite / message-delete door on committed
+//! fact bytes. Dense [`CommitOrdinal`] advances on the successor at attach.
 
 use kyzo_model::SourceSpan;
 use kyzo_model::value::canonical::encode_owned;
@@ -25,7 +28,7 @@ use crate::data::statement::{
 };
 use crate::session::catalog::RelationHandle;
 use crate::session::generation::{CatalogGeneration, RelationGeneration};
-use crate::store::replica::AdmissionCertificate;
+use crate::store::replica::{AdmissionCertificate, CrossingStatus};
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
 use crate::store::{StoreId, WriteTx};
@@ -35,16 +38,89 @@ use super::{
     LiveCertificateInputs, Placement, RecordCore, RecordId, SemanticSurface, admit_record,
 };
 
+/// Motive of a supersession link — correction or semantic deletion (#270 T4).
+///
+/// Semantic deletion kinds map to [`CrossingStatus`] variants that refuse
+/// live lowering. Correction has no deletion status (as-of still replays).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SupersessionKind {
+    /// Seat 34 correction — successor replaces prior meaning without overwrite.
+    Correction,
+    /// Semantic invalidation of prior meaning.
+    Invalidation,
+    /// Tombstone supersession — prior not lowerable as live meaning.
+    Tombstone,
+    /// Retention redaction — prior redacted under retention law.
+    RetentionRedaction,
+}
+
+impl SupersessionKind {
+    /// Crossing status this motive seals onto the prior's federation surface.
+    ///
+    /// [`None`] for correction (prior remains historically readable via as-of).
+    /// Semantic deletions map onto the closed [`CrossingStatus`] deletion set.
+    pub fn crossing_status(self) -> Option<CrossingStatus> {
+        match self {
+            Self::Correction => None,
+            Self::Invalidation => Some(CrossingStatus::Invalidated),
+            Self::Tombstone => Some(CrossingStatus::Tombstoned),
+            Self::RetentionRedaction => Some(CrossingStatus::RetentionRedacted),
+        }
+    }
+
+    /// True when this motive is a semantic deletion (never message-delete).
+    pub fn is_semantic_deletion(self) -> bool {
+        !matches!(self, Self::Correction)
+    }
+}
+
+/// Closed semantic-deletion kinds — Invalidation / Tombstone / RetentionRedaction.
+///
+/// Each is a supersession-shaped record admitted through this seat — never a
+/// message-delete / erase-bytes door (#270 T4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SemanticDeletionKind {
+    /// Invalidate prior meaning without overwrite.
+    Invalidation,
+    /// Tombstone the prior — not lowerable as live meaning.
+    Tombstone,
+    /// Retention redaction of the prior.
+    RetentionRedaction,
+}
+
+impl SemanticDeletionKind {
+    /// Lift into the supersession motive closed sum.
+    pub fn as_supersession_kind(self) -> SupersessionKind {
+        match self {
+            Self::Invalidation => SupersessionKind::Invalidation,
+            Self::Tombstone => SupersessionKind::Tombstone,
+            Self::RetentionRedaction => SupersessionKind::RetentionRedaction,
+        }
+    }
+
+    /// Crossing status sealed by this deletion kind.
+    pub fn crossing_status(self) -> CrossingStatus {
+        match self {
+            Self::Invalidation => CrossingStatus::Invalidated,
+            Self::Tombstone => CrossingStatus::Tombstoned,
+            Self::RetentionRedaction => CrossingStatus::RetentionRedacted,
+        }
+    }
+}
+
 /// Auditable link: successor admitted record supersedes prior by identity.
 ///
-/// Minted only when a correction attaches through [`seal_supersession`] —
-/// never by rewriting prior committed bytes.
+/// Minted only when a correction or semantic deletion attaches through
+/// [`seal_supersession`] / [`seal_semantic_deletion`] — never by rewriting
+/// prior committed bytes or message-deleting them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Supersession {
     prior: RecordId,
     successor: RecordId,
     /// Dense CommitOrdinal of the successor at attach (seat 34).
     commit_ordinal: CommitOrdinal,
+    /// Correction vs semantic-deletion motive (#270 T4).
+    kind: SupersessionKind,
 }
 
 impl Supersession {
@@ -53,7 +129,7 @@ impl Supersession {
         self.prior
     }
 
-    /// Successor record identity (the correction).
+    /// Successor record identity (the correction or deletion record).
     pub fn successor(self) -> RecordId {
         self.successor
     }
@@ -61,6 +137,11 @@ impl Supersession {
     /// Dense CommitOrdinal sealed with the successor.
     pub fn commit_ordinal(self) -> CommitOrdinal {
         self.commit_ordinal
+    }
+
+    /// Motive — correction or semantic deletion kind.
+    pub fn kind(self) -> SupersessionKind {
+        self.kind
     }
 }
 
@@ -74,6 +155,25 @@ fn digest_correction(prior: RecordId, relation: &str, row: &[DataValue]) -> Reco
     for v in row {
         h.update(encode_owned(v).as_bytes());
     }
+    RecordContentDigest::from_digest(h.finalize().into())
+}
+
+/// Content digest for a semantic deletion — binds kind + prior so deletion
+/// records cannot collide with corrections or each other.
+fn digest_semantic_deletion(
+    kind: SemanticDeletionKind,
+    prior: RecordId,
+    subject: &DataValue,
+) -> RecordContentDigest {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.semantic.deletion.v1");
+    h.update(match kind {
+        SemanticDeletionKind::Invalidation => b"invalidation".as_slice(),
+        SemanticDeletionKind::Tombstone => b"tombstone".as_slice(),
+        SemanticDeletionKind::RetentionRedaction => b"retention_redaction".as_slice(),
+    });
+    h.update(prior.as_bytes());
+    h.update(encode_owned(subject).as_bytes());
     RecordContentDigest::from_digest(h.finalize().into())
 }
 
@@ -125,6 +225,52 @@ pub(crate) fn admit_correction(
     Ok((record, cert))
 }
 
+/// Admit a semantic deletion record — Invalidation / Tombstone /
+/// RetentionRedaction — as supersession without message-delete (#270 T4).
+///
+/// Uses the ONTOK Invalidation construction (the statement-kernel deletion
+/// kind) with a digest that binds [`SemanticDeletionKind`] + prior. Does not
+/// touch prior committed bytes.
+pub(crate) fn admit_semantic_deletion(
+    store_id: StoreId,
+    live: &LiveCertificateInputs,
+    kind: SemanticDeletionKind,
+    prior: RecordId,
+    subject: DataValue,
+    valid: ValidityTs,
+) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+    let subject = StatementSubject::new(subject);
+    let value = StatementValue::new(DataValue::Null);
+    let (ontok_kind, statement) = crate::data::statement::construct::invalidation(
+        subject.clone(),
+        value,
+        ValidityTime::instant(valid.raw()),
+        StatementContext::Unscoped,
+        StatementSource::unbound(),
+    )
+    .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+    let digest = digest_semantic_deletion(kind, prior, subject.as_value());
+    let core = RecordCore::new(
+        store_id,
+        digest,
+        SemanticSurface::None,
+        None,
+        ontok_kind,
+        statement,
+    );
+    let (record, cert) = admit_record(super::AdmitRecordParts::new(
+        core,
+        Placement::Unrestricted,
+        None,
+        IngestShape::Record,
+        live.clone(),
+    ))?;
+    if record.record_id() == prior {
+        return Err(AdmitRefuse::SugarStatementRefuse);
+    }
+    Ok((record, cert))
+}
+
 /// Attach a correction certificate and seal the supersession link.
 ///
 /// Advances dense [`CommitOrdinal`] on the admission spine for the
@@ -135,6 +281,42 @@ pub(crate) fn seal_supersession(
     record: &KyzoRecord,
     certificate: AdmissionCertificate,
 ) -> Result<(AdmittedDurableWrite, Supersession), AdmitRefuse> {
+    seal_supersession_kind(
+        seats,
+        prior,
+        record,
+        certificate,
+        SupersessionKind::Correction,
+    )
+}
+
+/// Attach a semantic-deletion certificate and seal the supersession link.
+///
+/// Same append-only law as correction: prior stays committed; the deletion
+/// is a new record. Crossing status is the kind's [`CrossingStatus`].
+pub(crate) fn seal_semantic_deletion(
+    seats: &LiveAdmissionSeats,
+    kind: SemanticDeletionKind,
+    prior: RecordId,
+    record: &KyzoRecord,
+    certificate: AdmissionCertificate,
+) -> Result<(AdmittedDurableWrite, Supersession), AdmitRefuse> {
+    seal_supersession_kind(
+        seats,
+        prior,
+        record,
+        certificate,
+        kind.as_supersession_kind(),
+    )
+}
+
+fn seal_supersession_kind(
+    seats: &LiveAdmissionSeats,
+    prior: RecordId,
+    record: &KyzoRecord,
+    certificate: AdmissionCertificate,
+    kind: SupersessionKind,
+) -> Result<(AdmittedDurableWrite, Supersession), AdmitRefuse> {
     if record.record_id() == prior {
         return Err(AdmitRefuse::SugarStatementRefuse);
     }
@@ -144,6 +326,7 @@ pub(crate) fn seal_supersession(
         prior,
         successor: record.record_id(),
         commit_ordinal,
+        kind,
     };
     seats.retain_supersession(link);
     Ok((record.durable_write_permit(), link))
@@ -281,6 +464,8 @@ mod tests {
             vec![link],
             "supersession is retained on the live admission spine"
         );
+        assert_eq!(link.kind(), SupersessionKind::Correction);
+        assert!(!link.kind().is_semantic_deletion());
     }
 
     #[test]
@@ -430,21 +615,185 @@ mod tests {
             include_str!("../store/tx.rs"),
         ];
         // Split so this test body never contains a contiguous forbidden ident.
-        let forbidden: [String; 6] = [
+        let forbidden: [String; 9] = [
             ["fn rewr", "ite_committed"].concat(),
             ["fn overwr", "ite_fact"].concat(),
             ["fn overwr", "ite_committed"].concat(),
             ["fn muta", "te_committed"].concat(),
             ["fn update_in", "_place"].concat(),
             ["fn rewr", "ite_fact"].concat(),
+            ["fn message_de", "lete"].concat(),
+            ["fn delete_mes", "sage"].concat(),
+            ["fn erase_comm", "itted_bytes"].concat(),
         ];
         for src in sources {
             for needle in &forbidden {
                 assert!(
                     !src.contains(needle.as_str()),
-                    "forbidden rewrite API `{needle}` must not exist on committed facts"
+                    "forbidden rewrite/message-delete API `{needle}` must not exist on committed facts"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn semantic_deletion_kinds_map_to_crossing_status() {
+        assert_eq!(
+            SemanticDeletionKind::Invalidation.crossing_status(),
+            CrossingStatus::Invalidated
+        );
+        assert_eq!(
+            SemanticDeletionKind::Tombstone.crossing_status(),
+            CrossingStatus::Tombstoned
+        );
+        assert_eq!(
+            SemanticDeletionKind::RetentionRedaction.crossing_status(),
+            CrossingStatus::RetentionRedacted
+        );
+        for kind in [
+            SemanticDeletionKind::Invalidation,
+            SemanticDeletionKind::Tombstone,
+            SemanticDeletionKind::RetentionRedaction,
+        ] {
+            assert!(kind.as_supersession_kind().is_semantic_deletion());
+            assert!(kind.as_supersession_kind().crossing_status().is_some());
+        }
+        assert!(SupersessionKind::Correction.crossing_status().is_none());
+    }
+
+    #[test]
+    fn semantic_deletion_supersedes_without_message_delete() {
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
+        let (original, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::from_raw(100),
+        );
+        let prior = original.record_id();
+        let prior_commit = seats.origin_commit();
+
+        let kinds = [
+            SemanticDeletionKind::Invalidation,
+            SemanticDeletionKind::Tombstone,
+            SemanticDeletionKind::RetentionRedaction,
+        ];
+        let mut retained = Vec::new();
+        for (i, kind) in kinds.into_iter().enumerate() {
+            let live = seats.certificate_inputs(CatalogGeneration::from_relation(
+                RelationGeneration::witness(0),
+            ));
+            let subject = DataValue::List(vec![DataValue::from(1i64), DataValue::from(i as i64)]);
+            let (successor, cert) = admit_semantic_deletion(
+                seats.store_id(),
+                &live,
+                kind,
+                prior,
+                subject,
+                ValidityTs::from_raw(200 + i as i64),
+            )
+            .expect("admit semantic deletion");
+            let (_permit, link) =
+                seal_semantic_deletion(&seats, kind, prior, &successor, cert)
+                    .expect("seal semantic deletion");
+            assert_eq!(link.prior(), prior);
+            assert_eq!(link.successor(), successor.record_id());
+            assert_ne!(link.prior(), link.successor());
+            assert_eq!(link.kind(), kind.as_supersession_kind());
+            assert!(link.kind().is_semantic_deletion());
+            assert_eq!(link.kind().crossing_status(), Some(kind.crossing_status()));
+            retained.push(link);
+        }
+        assert!(
+            seats.origin_commit() > prior_commit,
+            "each semantic deletion advances dense CommitOrdinal"
+        );
+        let all = seats.retained_supersessions();
+        assert_eq!(all.len(), 3, "three semantic deletions retained");
+        for link in &retained {
+            assert!(all.contains(link));
+        }
+    }
+
+    #[test]
+    fn prior_committed_bytes_survive_semantic_deletion_append() {
+        let db = open_engine(SimStorage::new(0x2700_0004));
+        db.run_script(
+            "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
+            no_params(),
+        )
+        .expect("create");
+
+        let rtx = db.store.read_tx().expect("read");
+        let before: Vec<(Vec<u8>, Vec<u8>)> = rtx
+            .total_scan()
+            .map(|kv| {
+                let (k, v) = kv.expect("kv");
+                (k.to_vec(), v.to_vec())
+            })
+            .collect();
+        drop(rtx);
+        let before_len = before.len();
+
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
+        let (prior_record, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::from_raw(100),
+        );
+        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(0),
+        ));
+        let (deletion, cert) = admit_semantic_deletion(
+            seats.store_id(),
+            &live,
+            SemanticDeletionKind::Tombstone,
+            prior_record.record_id(),
+            DataValue::List(vec![DataValue::from(1i64)]),
+            ValidityTs::from_raw(200),
+        )
+        .expect("admit tombstone");
+        seal_semantic_deletion(
+            &seats,
+            SemanticDeletionKind::Tombstone,
+            prior_record.record_id(),
+            &deletion,
+            cert,
+        )
+        .expect("seal tombstone");
+
+        // Store bytes unchanged by admission alone — semantic deletion never
+        // message-deletes. Append path (retract) would add a Retract row; the
+        // prior Assert key must still exist either way.
+        let rtx = db.store.read_tx().expect("read after");
+        let after: Vec<(Vec<u8>, Vec<u8>)> = rtx
+            .total_scan()
+            .map(|kv| {
+                let (k, v) = kv.expect("kv");
+                (k.to_vec(), v.to_vec())
+            })
+            .collect();
+        assert_eq!(
+            after.len(),
+            before_len,
+            "admission-only semantic deletion must not erase store keys"
+        );
+        for (k, v) in &before {
+            let found = after.iter().find(|(ak, _)| ak == k);
+            assert!(
+                found.is_some(),
+                "prior committed key must still exist after semantic deletion admit"
+            );
+            assert_eq!(
+                found.map(|(_, av)| av.as_slice()),
+                Some(v.as_slice()),
+                "prior committed value bytes must be unchanged (no message-delete)"
+            );
         }
     }
 
