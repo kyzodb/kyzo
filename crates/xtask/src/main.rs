@@ -39,6 +39,7 @@ enum XtaskError {
     RepoRoot(anyhow::Error),
     Gate(gate::GateError),
     Process(proc::ProcessFailure),
+    Bench(verbs::BenchRefuse),
     Resonance(resonance::ResonanceError),
     UnsafeCheck(checks::unsafe_check::UnsafeCheckError),
     PureRust(checks::pure_rust::PureRustError),
@@ -52,6 +53,7 @@ impl fmt::Display for XtaskError {
             XtaskError::RepoRoot(e) => write!(f, "could not locate workspace root: {e:#}"),
             XtaskError::Gate(e) => write!(f, "{e}"),
             XtaskError::Process(e) => write!(f, "{e}"),
+            XtaskError::Bench(e) => write!(f, "{e}"),
             XtaskError::Resonance(e) => write!(f, "{e}"),
             XtaskError::UnsafeCheck(e) => write!(f, "{e}"),
             XtaskError::PureRust(e) => write!(f, "{e}"),
@@ -184,7 +186,7 @@ fn main() -> ExitCode {
             verbs::test_features_release_checked().map_err(XtaskError::Process)
         }
         Verb::Run { args } => verbs::run_bin(&args).map_err(XtaskError::Process),
-        Verb::Bench { graphs } => verbs::bench(&graphs).map_err(XtaskError::Process),
+        Verb::Bench { graphs } => verbs::bench(&graphs).map_err(XtaskError::Bench),
         Verb::MplHeaders => verbs::mpl_headers().map_err(XtaskError::Process),
         Verb::Deny => verbs::deny().map_err(XtaskError::Process),
         Verb::SupplyChain => verbs::supply_chain().map_err(XtaskError::Process),

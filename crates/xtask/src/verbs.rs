@@ -13,6 +13,7 @@
 //! fingerprint, and the fmt/clippy package lists below are the justfile's
 //! own hand-maintained `-p` lists, ported unchanged).
 
+use std::fmt;
 use std::process::Command;
 
 use crate::proc::{ProcessFailure, run_step};
@@ -228,12 +229,377 @@ pub fn run_bin(args: &[String]) -> Result<(), ProcessFailure> {
     run_step("run", cmd)
 }
 
-/// The transitive-closure benchmark over the SNAP graphs (kyzo-bench only).
-pub fn bench(graphs: &[String]) -> Result<(), ProcessFailure> {
-    let mut cmd = Command::new("bash");
-    cmd.arg("scripts/run-bench.sh");
-    cmd.args(graphs);
-    run_step("bench", cmd)
+// ── bench verb honesty chain (story #326 / seats 87, 86) ──────────────────
+//
+// Emitting a naked number is unrepresentable. Four conditions must hold as
+// typed proofs before any result may emit; each refusal is a named variant
+// of [`BenchRefuse`], fired by fixtures below. Softening the opponent to a
+// strawman, omitting caps, emitting from a dirty/untagged tree, or stubbing
+// answer-agreement to always agree are all illegal — the happy path is
+// unconstructable without [`BenchAdmit`].
+
+/// Sealed opponent-pin identity for the TC SNAP corpus. Not CLI-softenable:
+/// any other pin (including a convenient strawman) is [`BenchRefuse::OpponentPin`].
+pub const BENCH_OPPONENT_PIN: &str = "kyzo.bench.tc.snap.corpus.v1";
+
+/// Sealed expected answer digests (graph → digest identity). Answer-agreement
+/// compares observed digests against these exactly — never a stub that always
+/// agrees. Real SHA-256 campaign digests supersede these identities in later
+/// tasks; the comparison law is already fail-closed equality.
+pub const SEALED_EXPECTED_DIGESTS: &[(&str, &str)] = &[
+    ("email-Eu-core", "kyzo.tc.digest.email-Eu-core.v1"),
+    ("p2p-Gnutella08", "kyzo.tc.digest.p2p-Gnutella08.v1"),
+    ("wiki-Vote", "kyzo.tc.digest.wiki-Vote.v1"),
+];
+
+/// Memory and wall-time caps the bench must run under. Both axes required;
+/// missing either is [`BenchRefuse::Caps`] (no silent "unlimited" default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BenchCaps {
+    memory_kib: u64,
+    time_secs: u64,
+}
+
+impl BenchCaps {
+    /// Sealed required caps — same envelope `scripts/run-bench.sh` used
+    /// (12 GiB virtual, 1800s per graph). Not softenable to zero/absent.
+    pub const REQUIRED_MEMORY_KIB: u64 = 12 * 1024 * 1024;
+    pub const REQUIRED_TIME_SECS: u64 = 1800;
+
+    /// The only lawful caps object the verb arms.
+    pub fn required() -> Self {
+        Self {
+            memory_kib: Self::REQUIRED_MEMORY_KIB,
+            time_secs: Self::REQUIRED_TIME_SECS,
+        }
+    }
+
+    /// Construct caps only when both axes are present and positive.
+    pub fn try_from_parts(
+        memory_kib: Option<u64>,
+        time_secs: Option<u64>,
+    ) -> Result<Self, BenchRefuse> {
+        match (memory_kib, time_secs) {
+            (Some(m), Some(t)) if m > 0 && t > 0 => Ok(Self {
+                memory_kib: m,
+                time_secs: t,
+            }),
+            _ => Err(BenchRefuse::Caps),
+        }
+    }
+
+    pub fn memory_kib(&self) -> u64 {
+        self.memory_kib
+    }
+
+    pub fn time_secs(&self) -> u64 {
+        self.time_secs
+    }
+}
+
+/// Working-tree + tag state the tagged-clean commit condition requires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitState {
+    /// Clean tree at a named Spec/bench tag.
+    CleanTagged { tag: String, sha: String },
+    /// Dirty working tree — tagged-clean missing.
+    Dirty,
+    /// Clean but no tag on HEAD — tagged-clean missing.
+    Untagged { sha: String },
+}
+
+/// Evidence the honesty chain must prove before emit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BenchEvidence {
+    /// Must equal [`BENCH_OPPONENT_PIN`] exactly.
+    pub opponent_pin: String,
+    /// Both memory and time caps, or refuse [`BenchRefuse::Caps`].
+    pub caps: Option<BenchCaps>,
+    pub commit: CommitState,
+    /// Observed digests keyed by graph name — compared to [`SEALED_EXPECTED_DIGESTS`].
+    pub observed_digests: Vec<(String, String)>,
+}
+
+/// Every way the bench verb refuses an unprovable number (seat 87).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BenchRefuse {
+    /// Opponent pin missing or softenable to a strawman (not the sealed pin).
+    OpponentPin,
+    /// Memory and/or time caps missing.
+    Caps,
+    /// Tagged-clean commit missing (dirty working tree or untagged HEAD).
+    Untagged,
+    /// Observed digests failed answer-agreement against sealed expected digests.
+    AnswerAgreement {
+        graph: String,
+        expected: String,
+        observed: String,
+    },
+}
+
+impl fmt::Display for BenchRefuse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BenchRefuse::OpponentPin => write!(
+                f,
+                "bench: opponent pin missing or softenable — required pin is {BENCH_OPPONENT_PIN}"
+            ),
+            BenchRefuse::Caps => write!(
+                f,
+                "bench: memory/time caps missing — both axes required (no unlimited default)"
+            ),
+            BenchRefuse::Untagged => write!(
+                f,
+                "bench: tagged-clean commit missing (dirty working tree or untagged HEAD)"
+            ),
+            BenchRefuse::AnswerAgreement {
+                graph,
+                expected,
+                observed,
+            } => write!(
+                f,
+                "bench: answer-agreement failed for graph {graph}: expected {expected}, observed {observed}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BenchRefuse {}
+
+/// Proof that all four honesty conditions held. Private field: the only
+/// constructor is [`BenchAdmit::admit`]. Emit takes this by value — a happy
+/// path that skips a condition is unconstructable.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BenchAdmit {
+    _proof: (),
+}
+
+impl BenchAdmit {
+    /// Gate every refuse condition. Returns [`BenchAdmit`] only when opponent
+    /// pin, caps, tagged-clean commit, and answer-agreement all hold.
+    pub fn admit(evidence: &BenchEvidence) -> Result<Self, BenchRefuse> {
+        if evidence.opponent_pin != BENCH_OPPONENT_PIN {
+            return Err(BenchRefuse::OpponentPin);
+        }
+        let Some(caps) = evidence.caps else {
+            return Err(BenchRefuse::Caps);
+        };
+        if caps.memory_kib() == 0 || caps.time_secs() == 0 {
+            return Err(BenchRefuse::Caps);
+        }
+        match &evidence.commit {
+            CommitState::CleanTagged { .. } => {}
+            CommitState::Dirty | CommitState::Untagged { .. } => {
+                return Err(BenchRefuse::Untagged);
+            }
+        }
+        for &(graph, expected) in SEALED_EXPECTED_DIGESTS {
+            let observed = evidence
+                .observed_digests
+                .iter()
+                .find(|(g, _)| g == graph)
+                .map(|(_, d)| d.as_str());
+            match observed {
+                Some(d) if d == expected => {}
+                Some(d) => {
+                    return Err(BenchRefuse::AnswerAgreement {
+                        graph: graph.to_string(),
+                        expected: expected.to_string(),
+                        observed: d.to_string(),
+                    });
+                }
+                None => {
+                    return Err(BenchRefuse::AnswerAgreement {
+                        graph: graph.to_string(),
+                        expected: expected.to_string(),
+                        observed: String::new(),
+                    });
+                }
+            }
+        }
+        Ok(Self { _proof: () })
+    }
+}
+
+/// Emit is only reachable with a [`BenchAdmit`] token — numbers without the
+/// four proofs are unrepresentable at the type level.
+pub fn emit_bench(_admit: BenchAdmit) {
+    // T1: admit is the seal; measurement + number lines land in later tasks.
+}
+
+/// In-process honesty skeleton (story #326 T1): run the four-condition gate
+/// before any measure. Does not shell to `scripts/run-bench.sh` — that path
+/// is condemned and deleted in T3. Live evidence without sealed digests
+/// refuses [`BenchRefuse::AnswerAgreement`] (fail closed, not a stub agree).
+pub fn bench(_graphs: &[String]) -> Result<(), BenchRefuse> {
+    let evidence = BenchEvidence {
+        opponent_pin: BENCH_OPPONENT_PIN.to_string(),
+        caps: Some(BenchCaps::required()),
+        commit: probe_commit_state(),
+        // T1: no in-process measure yet — empty observed digests refuse
+        // answer-agreement against sealed expected digests (not a stub agree).
+        observed_digests: Vec::new(),
+    };
+    let admit = BenchAdmit::admit(&evidence)?;
+    emit_bench(admit);
+    Ok(())
+}
+
+/// Best-effort live commit probe for the verb path. Failure to spawn git or
+/// a dirty/untagged tree is [`CommitState::Dirty`] / [`CommitState::Untagged`]
+/// — never silently treated as clean-tagged.
+fn probe_commit_state() -> CommitState {
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(true);
+    if dirty {
+        return CommitState::Dirty;
+    }
+    let sha = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    let tag = Command::new("git")
+        .args(["describe", "--exact-match", "--tags", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if t.is_empty() { None } else { Some(t) }
+            } else {
+                None
+            }
+        });
+    match tag {
+        Some(tag) => CommitState::CleanTagged { tag, sha },
+        None => CommitState::Untagged { sha },
+    }
+}
+
+#[cfg(test)]
+mod bench_refuse_fixtures {
+    use super::*;
+
+    fn sealed_digests() -> Vec<(String, String)> {
+        SEALED_EXPECTED_DIGESTS
+            .iter()
+            .map(|(g, d)| ((*g).to_string(), (*d).to_string()))
+            .collect()
+    }
+
+    fn lawful_evidence() -> BenchEvidence {
+        BenchEvidence {
+            opponent_pin: BENCH_OPPONENT_PIN.to_string(),
+            caps: Some(BenchCaps::required()),
+            commit: CommitState::CleanTagged {
+                tag: "bench-seal-v1".to_string(),
+                sha: "abc123".to_string(),
+            },
+            observed_digests: sealed_digests(),
+        }
+    }
+
+    #[test]
+    fn fixture_refuse_opponent_pin_missing() {
+        let mut e = lawful_evidence();
+        e.opponent_pin.clear();
+        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::OpponentPin));
+    }
+
+    #[test]
+    fn fixture_refuse_opponent_pin_strawman_not_softenable() {
+        let mut e = lawful_evidence();
+        e.opponent_pin = "kyzo.bench.strawman.easy.v0".to_string();
+        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::OpponentPin));
+    }
+
+    #[test]
+    fn fixture_refuse_caps_missing() {
+        let mut e = lawful_evidence();
+        e.caps = None;
+        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::Caps));
+    }
+
+    #[test]
+    fn fixture_refuse_caps_incomplete_axes() {
+        assert_eq!(
+            BenchCaps::try_from_parts(Some(1), None),
+            Err(BenchRefuse::Caps)
+        );
+        assert_eq!(
+            BenchCaps::try_from_parts(None, Some(1)),
+            Err(BenchRefuse::Caps)
+        );
+    }
+
+    #[test]
+    fn fixture_refuse_untagged_dirty() {
+        let mut e = lawful_evidence();
+        e.commit = CommitState::Dirty;
+        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::Untagged));
+    }
+
+    #[test]
+    fn fixture_refuse_untagged_no_tag() {
+        let mut e = lawful_evidence();
+        e.commit = CommitState::Untagged {
+            sha: "abc123".to_string(),
+        };
+        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::Untagged));
+    }
+
+    #[test]
+    fn fixture_refuse_answer_agreement_mismatch() {
+        let mut e = lawful_evidence();
+        e.observed_digests = vec![
+            ("email-Eu-core".to_string(), "forged-digest".to_string()),
+            (
+                "p2p-Gnutella08".to_string(),
+                "kyzo.tc.digest.p2p-Gnutella08.v1".to_string(),
+            ),
+            ("wiki-Vote".to_string(), "kyzo.tc.digest.wiki-Vote.v1".to_string()),
+        ];
+        match BenchAdmit::admit(&e) {
+            Err(BenchRefuse::AnswerAgreement {
+                graph,
+                expected,
+                observed,
+            }) => {
+                assert_eq!(graph, "email-Eu-core");
+                assert_eq!(expected, "kyzo.tc.digest.email-Eu-core.v1");
+                assert_eq!(observed, "forged-digest");
+            }
+            other => panic!("expected AnswerAgreement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixture_refuse_answer_agreement_missing_observed() {
+        let mut e = lawful_evidence();
+        e.observed_digests.clear();
+        assert!(matches!(
+            BenchAdmit::admit(&e),
+            Err(BenchRefuse::AnswerAgreement { .. })
+        ));
+    }
+
+    #[test]
+    fn admit_all_four_conditions_yields_emit_token() {
+        let admit = BenchAdmit::admit(&lawful_evidence()).expect("lawful evidence must admit");
+        emit_bench(admit);
+    }
 }
 
 /// `bash scripts/check-mpl-headers.sh` — the MPL half of the license
