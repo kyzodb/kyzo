@@ -796,9 +796,97 @@ pub enum SweepSealFailure {
     MerkleChain(MerkleChainRefuse),
 }
 
+// ── Recovery SLA claim / bench-lane emit (decisions.md §28 / §86) ─────────
+//
+// Coefficients are **measured** by the power-cut DST corpus
+// (`kyzo-trials/src/dst.rs` → path-wired `dst` below). This surface publishes
+// the sealed `f` for the bench lane and refuses the durability/SLA *claim*
+// when exceeded — never Store open of a recoverable Store.
+
+/// Sealed intercept (ms) of `f(bytes_since_last_flush)`.
+///
+/// Measured as the corpus p999 residual
+/// `recovery_time_ms - bytes_since_last_flush` under slope 1 (story #221 T3).
+pub const RECOVERY_SLA_INTERCEPT_MS: u64 = 8;
+
+/// Sealed slope numerator (ms per byte) of `f`.
+pub const RECOVERY_SLA_SLOPE_NUM: u64 = 1;
+
+/// Sealed slope denominator of `f`.
+pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
+
+/// Sealed bound `f(bytes_since_last_flush)` in milliseconds.
+#[inline]
+pub fn recovery_time_bound_ms(bytes_since_last_flush: u64) -> u64 {
+    RECOVERY_SLA_INTERCEPT_MS
+        + bytes_since_last_flush.saturating_mul(RECOVERY_SLA_SLOPE_NUM) / RECOVERY_SLA_SLOPE_DEN
+}
+
+/// Successful bench-lane emit of the §86 recovery SLA claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoverySlaEmit {
+    /// Observed / published recovery-time p999 (ms).
+    pub recovery_time_p999_ms: u64,
+    /// Dirty-tail bytes the bound is evaluated against.
+    pub bytes_since_last_flush: u64,
+    /// Sealed `f(bytes_since_last_flush)` at emit time.
+    pub bound_ms: u64,
+}
+
+/// Refuse the published durability / SLA *claim* — not Store open (§28).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum RecoverySlaClaimRefuse {
+    /// Observed p999 exceeds sealed `f(bytes_since_last_flush)`.
+    #[error(
+        "recovery SLA claim refused: recovery_time_p999={recovery_time_p999_ms}ms \
+         exceeds f(bytes_since_last_flush={bytes_since_last_flush})={bound_ms}ms"
+    )]
+    #[diagnostic(code(store::sweep::recovery_sla_claim_above_bound))]
+    AboveBound {
+        /// Observed recovery-time p999 (ms).
+        recovery_time_p999_ms: u64,
+        /// Bytes since last flush at the claim site.
+        bytes_since_last_flush: u64,
+        /// Sealed bound at those bytes.
+        bound_ms: u64,
+    },
+}
+
+/// Bench-lane emit for the §86 recovery SLA claim.
+///
+/// When `recovery_time_p999_ms` exceeds sealed `f(bytes_since_last_flush)`,
+/// refuses the **claim** (badge / Spec “meets recovery SLA”). Does not gate
+/// Store open — recoverability is independent of the marketing bound (§28).
+pub fn emit_recovery_sla_claim(
+    recovery_time_p999_ms: u64,
+    bytes_since_last_flush: u64,
+) -> Result<RecoverySlaEmit, RecoverySlaClaimRefuse> {
+    let bound_ms = recovery_time_bound_ms(bytes_since_last_flush);
+    if recovery_time_p999_ms > bound_ms {
+        return Err(RecoverySlaClaimRefuse::AboveBound {
+            recovery_time_p999_ms,
+            bytes_since_last_flush,
+            bound_ms,
+        });
+    }
+    Ok(RecoverySlaEmit {
+        recovery_time_p999_ms,
+        bytes_since_last_flush,
+        bound_ms,
+    })
+}
+
 /// Overlap-only group-commit proof (story #221 T2) — lives in kyzo-trials
 /// `crash.rs` and is path-wired here so the test observes SweepDoor batch
 /// membership under the same crate wall as the door (no second commit door).
 #[cfg(test)]
 #[path = "../../../kyzo-trials/src/crash.rs"]
 mod crash;
+
+/// Power-cut / recovery-bound DST corpus (story #221 T3) — lives in
+/// kyzo-trials `dst.rs` and is path-wired here so the campaign seals
+/// `recovery_time_p999 ≤ f(bytes_since_last_flush)` against the same
+/// SweepDoor that mints `Committed` (no second commit door).
+#[cfg(test)]
+#[path = "../../../kyzo-trials/src/dst.rs"]
+mod dst;
