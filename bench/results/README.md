@@ -13,8 +13,9 @@ the textbook two-rule TC. This is the vanilla, community-standard measure for a
 Datalog engine; nothing here is bespoke.
 
 ## How it works
-- `scripts/fetch-bench-data.sh` downloads the standard SNAP graphs into
-  `bench/data/` (gitignored) — the URLs in it are the data provenance.
+- `cargo xtask fetch-bench-data` downloads the standard SNAP graphs into
+  `bench/data/` per `bench/manifest.json` (URL + SHA-256 per graph). Tampered
+  bytes refuse — integrity is computed SHA-256 compare, not filename/length.
 - `scripts/run-bench.sh` builds `examples/bench_tc.rs`, runs it over each graph
   at `HEAD`, and writes `bench/results/<short-sha>.txt` stamped with commit,
   date, and machine.

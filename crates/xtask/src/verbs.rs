@@ -14,7 +14,10 @@
 //! own hand-maintained `-p` lists, ported unchanged).
 
 use std::fmt;
-use std::process::Command;
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use serde::Deserialize;
 
 use crate::proc::{ProcessFailure, run_step};
 
@@ -445,6 +448,296 @@ pub fn bench(_graphs: &[String]) -> Result<(), BenchRefuse> {
     Ok(())
 }
 
+// ── dataset manifest + in-process fetch (story #326 T2 / seat 86) ─────────
+//
+// Every graph is URL + SHA-256. Fetch may use curl/gunzip as transport; the
+// integrity gate is in-process: compute SHA-256 of the bytes and compare to
+// the manifest. Filename/length checks are not integrity. Tampered bytes
+// must refuse — see `fixture_refuse_tampered_bytes_fail_sha256_manifest`.
+
+/// Repo-relative path of the sealed SNAP graph manifest.
+pub const BENCH_MANIFEST_PATH: &str = "bench/manifest.json";
+
+/// One graph entry: canonical URL plus SHA-256 of the uncompressed edge list.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct GraphManifestEntry {
+    pub name: String,
+    pub url: String,
+    pub sha256: String,
+}
+
+/// Dataset manifest: URL + SHA-256 per graph (seat 86).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DatasetManifest {
+    pub graphs: Vec<GraphManifestEntry>,
+}
+
+/// Refusal when dataset bytes fail the manifest integrity gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatasetRefuse {
+    /// Manifest file missing or unreadable.
+    ManifestIo(String),
+    /// Manifest JSON did not parse.
+    ManifestParse(String),
+    /// Named graph has no manifest entry.
+    UnknownGraph(String),
+    /// Computed SHA-256 of bytes ≠ sealed manifest hash (tamper / wrong mirror).
+    Sha256Mismatch {
+        graph: String,
+        expected: String,
+        observed: String,
+    },
+    /// Transport (curl/gunzip) failed to produce bytes.
+    Fetch(String),
+    /// Writing verified bytes to `bench/data/` failed.
+    Write(String),
+}
+
+impl fmt::Display for DatasetRefuse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DatasetRefuse::ManifestIo(msg) => write!(f, "bench dataset: manifest io: {msg}"),
+            DatasetRefuse::ManifestParse(msg) => {
+                write!(f, "bench dataset: manifest parse: {msg}")
+            }
+            DatasetRefuse::UnknownGraph(name) => {
+                write!(f, "bench dataset: unknown graph {name} (not in manifest)")
+            }
+            DatasetRefuse::Sha256Mismatch {
+                graph,
+                expected,
+                observed,
+            } => write!(
+                f,
+                "bench dataset: SHA-256 mismatch for graph {graph}: expected {expected}, observed {observed}"
+            ),
+            DatasetRefuse::Fetch(msg) => write!(f, "bench dataset: fetch failed: {msg}"),
+            DatasetRefuse::Write(msg) => write!(f, "bench dataset: write failed: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for DatasetRefuse {}
+
+/// Load `bench/manifest.json` from the repo root.
+pub fn load_dataset_manifest(root: &Path) -> Result<DatasetManifest, DatasetRefuse> {
+    let path = root.join(BENCH_MANIFEST_PATH);
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        DatasetRefuse::ManifestIo(format!("{}: {e}", path.display()))
+    })?;
+    serde_json::from_str(&text)
+        .map_err(|e| DatasetRefuse::ManifestParse(e.to_string()))
+}
+
+/// Compute SHA-256 of `bytes` and compare to the sealed hex digest.
+/// Real compute + compare — not a filename or length check.
+pub fn verify_sha256(
+    graph: &str,
+    bytes: &[u8],
+    expected_hex: &str,
+) -> Result<(), DatasetRefuse> {
+    let observed = sha256_hex(bytes);
+    let expected = expected_hex.trim().to_ascii_lowercase();
+    if observed == expected {
+        Ok(())
+    } else {
+        Err(DatasetRefuse::Sha256Mismatch {
+            graph: graph.to_string(),
+            expected,
+            observed,
+        })
+    }
+}
+
+/// Verify uncompressed graph bytes against a manifest entry (by name).
+pub fn verify_graph_bytes(
+    manifest: &DatasetManifest,
+    graph: &str,
+    bytes: &[u8],
+) -> Result<(), DatasetRefuse> {
+    let entry = manifest
+        .graphs
+        .iter()
+        .find(|g| g.name == graph)
+        .ok_or_else(|| DatasetRefuse::UnknownGraph(graph.to_string()))?;
+    verify_sha256(graph, bytes, &entry.sha256)
+}
+
+/// In-process fetch verb: for each manifest graph, ensure `bench/data/{name}.txt`
+/// holds bytes whose SHA-256 matches the sealed manifest. Existing files are
+/// re-verified (tampered on-disk bytes refuse). Missing files download from
+/// the sealed URL, gunzip, verify, then write — never write unverified bytes.
+pub fn fetch_bench_data() -> Result<(), DatasetRefuse> {
+    let root = crate::fsutil::repo_root()
+        .map_err(|e| DatasetRefuse::ManifestIo(e.to_string()))?;
+    let manifest = load_dataset_manifest(&root)?;
+    let data_dir = root.join("bench/data");
+    std::fs::create_dir_all(&data_dir).map_err(|e| {
+        DatasetRefuse::Write(format!("{}: {e}", data_dir.display()))
+    })?;
+
+    for entry in &manifest.graphs {
+        let out = data_dir.join(format!("{}.txt", entry.name));
+        if out.is_file() {
+            let bytes = std::fs::read(&out).map_err(|e| {
+                DatasetRefuse::ManifestIo(format!("{}: {e}", out.display()))
+            })?;
+            verify_sha256(&entry.name, &bytes, &entry.sha256)?;
+            println!("have  {} (sha256 ok)", out.display());
+            continue;
+        }
+        println!("fetch {} <- {}", entry.name, entry.url);
+        let bytes = download_gunzip(&entry.url)?;
+        verify_sha256(&entry.name, &bytes, &entry.sha256)?;
+        write_verified(&out, &bytes)?;
+        println!("wrote {} (sha256 ok)", out.display());
+    }
+    println!("done -> bench/data/ (manifest SHA-256 verified)");
+    Ok(())
+}
+
+fn write_verified(path: &Path, bytes: &[u8]) -> Result<(), DatasetRefuse> {
+    std::fs::write(path, bytes)
+        .map_err(|e| DatasetRefuse::Write(format!("{}: {e}", path.display())))
+}
+
+/// Transport only: curl the URL, gunzip to uncompressed bytes. Integrity is
+/// [`verify_sha256`] — this path must not skip that gate.
+fn download_gunzip(url: &str) -> Result<Vec<u8>, DatasetRefuse> {
+    let curl = Command::new("curl")
+        .args(["-sSL", url])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| DatasetRefuse::Fetch(format!("curl spawn: {e}")))?;
+    let curl_out = curl
+        .stdout
+        .ok_or_else(|| DatasetRefuse::Fetch("curl stdout missing".into()))?;
+
+    let gunzip = Command::new("gunzip")
+        .arg("-c")
+        .stdin(Stdio::from(curl_out))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| DatasetRefuse::Fetch(format!("gunzip: {e}")))?;
+
+    if !gunzip.status.success() {
+        return Err(DatasetRefuse::Fetch(format!(
+            "gunzip failed: {}",
+            String::from_utf8_lossy(&gunzip.stderr).trim()
+        )));
+    }
+    Ok(gunzip.stdout)
+}
+
+/// SHA-256 hex digest (lowercase). Pure in-process — the manifest meter.
+pub fn sha256_hex(data: &[u8]) -> String {
+    let digest = sha256(data);
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+/// FIPS 180-4 SHA-256 (in-process; no filename/length shortcut).
+fn sha256(data: &[u8]) -> [u8; 32] {
+    // Initial hash values (first 32 bits of the fractional parts of the
+    // square roots of the first 8 primes).
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    // Round constants (cube roots of the first 64 primes).
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let bit_len = (data.len() as u64).saturating_mul(8);
+    let mut padded = data.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    for chunk in padded.chunks_exact(64) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
+    }
+
+    let mut out = [0u8; 32];
+    for (i, word) in h.iter().enumerate() {
+        out[i * 4..(i + 1) * 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
 /// Best-effort live commit probe for the verb path. Failure to spawn git or
 /// a dirty/untagged tree is [`CommitState::Dirty`] / [`CommitState::Untagged`]
 /// — never silently treated as clean-tagged.
@@ -599,6 +892,73 @@ mod bench_refuse_fixtures {
     fn admit_all_four_conditions_yields_emit_token() {
         let admit = BenchAdmit::admit(&lawful_evidence()).expect("lawful evidence must admit");
         emit_bench(admit);
+    }
+}
+
+#[cfg(test)]
+mod dataset_manifest_fixtures {
+    use super::*;
+
+    /// NIST empty-string SHA-256 — proves the in-process hasher is real SHA-256.
+    #[test]
+    fn sha256_empty_string_matches_nist() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    /// Adversarial: byte-flipped blob must fail real SHA-256 verify (compute +
+    /// compare), not a filename/length check. Same length as the sealed bytes.
+    #[test]
+    fn fixture_refuse_tampered_bytes_fail_sha256_manifest() {
+        let sealed = b"0 1\n2 3\n2 4\nemail-Eu-core fixture edge list\n";
+        let expected = sha256_hex(sealed);
+        verify_sha256("email-Eu-core", sealed, &expected)
+            .expect("sealed bytes must verify against their own SHA-256");
+
+        let mut tampered = sealed.to_vec();
+        assert!(!tampered.is_empty());
+        tampered[0] ^= 0xff; // byte-flip — length unchanged
+        assert_eq!(
+            tampered.len(),
+            sealed.len(),
+            "adversary preserves length; length check would falsely pass"
+        );
+
+        match verify_sha256("email-Eu-core", &tampered, &expected) {
+            Err(DatasetRefuse::Sha256Mismatch {
+                graph,
+                expected: exp,
+                observed,
+            }) => {
+                assert_eq!(graph, "email-Eu-core");
+                assert_eq!(exp, expected);
+                assert_ne!(observed, expected);
+                assert_eq!(observed, sha256_hex(&tampered));
+            }
+            other => panic!("expected Sha256Mismatch for tampered bytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixture_manifest_entry_verify_uses_sha256_not_name() {
+        let manifest = DatasetManifest {
+            graphs: vec![GraphManifestEntry {
+                name: "wiki-Vote".into(),
+                url: "https://snap.stanford.edu/data/wiki-Vote.txt.gz".into(),
+                sha256: sha256_hex(b"honest wiki-Vote bytes"),
+            }],
+        };
+        // Same graph name, wrong bytes → refuse (name match is not integrity).
+        match verify_graph_bytes(&manifest, "wiki-Vote", b"tampered wiki-Vote bytes!!!!") {
+            Err(DatasetRefuse::Sha256Mismatch { graph, .. }) => {
+                assert_eq!(graph, "wiki-Vote");
+            }
+            other => panic!("expected Sha256Mismatch, got {other:?}"),
+        }
+        verify_graph_bytes(&manifest, "wiki-Vote", b"honest wiki-Vote bytes")
+            .expect("honest bytes must pass");
     }
 }
 

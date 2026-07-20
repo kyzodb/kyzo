@@ -1,0 +1,19 @@
+{
+  "graphs": [
+    {
+      "name": "email-Eu-core",
+      "url": "https://snap.stanford.edu/data/email-Eu-core.txt.gz",
+      "sha256": "23e0ca0bce21a053025e78f7e9691ac9210ae806a0689bd5edff3c3bac572d4c"
+    },
+    {
+      "name": "p2p-Gnutella08",
+      "url": "https://snap.stanford.edu/data/p2p-Gnutella08.txt.gz",
+      "sha256": "fecc14ef3c36ac13210bf9618cec773d7354ec9b033fe716a3af3fb815049499"
+    },
+    {
+      "name": "wiki-Vote",
+      "url": "https://snap.stanford.edu/data/wiki-Vote.txt.gz",
+      "sha256": "d2afbedf262126f820c6b3dd9f39a6d68e6f5ea839c0508297032ca77578b28a"
+    }
+  ]
+}

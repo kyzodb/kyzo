@@ -40,6 +40,7 @@ enum XtaskError {
     Gate(gate::GateError),
     Process(proc::ProcessFailure),
     Bench(verbs::BenchRefuse),
+    Dataset(verbs::DatasetRefuse),
     Resonance(resonance::ResonanceError),
     UnsafeCheck(checks::unsafe_check::UnsafeCheckError),
     PureRust(checks::pure_rust::PureRustError),
@@ -54,6 +55,7 @@ impl fmt::Display for XtaskError {
             XtaskError::Gate(e) => write!(f, "{e}"),
             XtaskError::Process(e) => write!(f, "{e}"),
             XtaskError::Bench(e) => write!(f, "{e}"),
+            XtaskError::Dataset(e) => write!(f, "{e}"),
             XtaskError::Resonance(e) => write!(f, "{e}"),
             XtaskError::UnsafeCheck(e) => write!(f, "{e}"),
             XtaskError::PureRust(e) => write!(f, "{e}"),
@@ -129,6 +131,9 @@ enum Verb {
         #[arg(trailing_var_arg = true)]
         graphs: Vec<String>,
     },
+    /// Fetch SNAP graphs per `bench/manifest.json` (URL + SHA-256); refuse
+    /// on digest mismatch. Replaces the condemned `scripts/fetch-bench-data.sh`.
+    FetchBenchData,
     /// MPL header preservation over every tracked .rs file.
     MplHeaders,
     /// `cargo deny check bans licenses advisories`.
@@ -187,6 +192,7 @@ fn main() -> ExitCode {
         }
         Verb::Run { args } => verbs::run_bin(&args).map_err(XtaskError::Process),
         Verb::Bench { graphs } => verbs::bench(&graphs).map_err(XtaskError::Bench),
+        Verb::FetchBenchData => verbs::fetch_bench_data().map_err(XtaskError::Dataset),
         Verb::MplHeaders => verbs::mpl_headers().map_err(XtaskError::Process),
         Verb::Deny => verbs::deny().map_err(XtaskError::Process),
         Verb::SupplyChain => verbs::supply_chain().map_err(XtaskError::Process),
