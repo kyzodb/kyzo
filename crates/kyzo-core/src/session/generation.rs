@@ -14,6 +14,10 @@
 //! per-index counters witness through [`RelationGeneration`] and
 //! [`IndexGeneration`], then lift into the catalog clock — never a bare
 //! `u64` and never a public `Generation::new(raw)`.
+//!
+//! [`IndexStatus`] is the index-status metric authority (§20): Catalog
+//! generation plus staleness of a sealed index. Exporters render
+//! [`IndexStatus::counter`] only — they never recompute a divergent value.
 
 use crate::project::projection::Generation;
 
@@ -45,6 +49,11 @@ impl CatalogGeneration {
     pub(crate) fn projection_stamp(self) -> Generation {
         Generation::stamp_from_counter(self.0)
     }
+
+    /// The one catalog-meaning counter exporters may render (§20).
+    pub(crate) fn counter(self) -> u64 {
+        self.0
+    }
 }
 
 /// Per-relation monotone write counter that witnesses catalog freshness.
@@ -64,6 +73,11 @@ impl RelationGeneration {
     /// Witness a loaded per-relation counter as relation freshness.
     pub(crate) fn witness(raw: u64) -> Self {
         RelationGeneration(raw)
+    }
+
+    /// The relation freshness counter (render-only for exporters).
+    pub(crate) fn counter(self) -> u64 {
+        self.0
     }
 
     /// Lift into the catalog clock, then mint a projection stamp.
@@ -87,15 +101,147 @@ pub(crate) struct IndexGeneration(u64);
 
 impl IndexGeneration {
     /// Witness a loaded per-index counter as index freshness.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn witness(raw: u64) -> Self {
         IndexGeneration(raw)
     }
 
+    /// The index freshness counter (render-only for exporters).
+    pub(crate) fn counter(self) -> u64 {
+        self.0
+    }
+
     /// Lift into the catalog clock, then mint a projection stamp.
-    #[allow(dead_code)] // door lands with index-resident rebuild consumers
     pub(crate) fn projection_stamp(self) -> Generation {
         CatalogGeneration::from_index(self).projection_stamp()
+    }
+}
+
+/// Index-status authority (§20): Catalog generation + staleness of a sealed index.
+///
+/// The sole counter exporters render for index-status is the live Catalog
+/// generation ([`IndexStatus::counter`]). Staleness is derived from that
+/// clock vs the index's last rebuild stamp — never a second independent
+/// metric counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct IndexStatus {
+    /// Live Catalog generation (Store commit-order position).
+    live: CatalogGeneration,
+    /// Last index rebuild stamp, if any rebuild has completed.
+    sealed: Option<IndexGeneration>,
+}
+
+impl Default for IndexStatus {
+    fn default() -> Self {
+        IndexStatus::witness(
+            CatalogGeneration::from_relation(RelationGeneration::witness(0)),
+            None,
+        )
+    }
+}
+
+impl IndexStatus {
+    /// Witness live Catalog generation and optional sealed index generation.
+    pub(crate) fn witness(live: CatalogGeneration, sealed: Option<IndexGeneration>) -> Self {
+        Self { live, sealed }
+    }
+
+    /// THE authoritative index-status counter — live Catalog generation (§20).
+    pub(crate) fn counter(self) -> u64 {
+        self.live.counter()
+    }
+
+    /// Live Catalog generation clock.
+    pub(crate) fn live(self) -> CatalogGeneration {
+        self.live
+    }
+
+    /// Sealed index rebuild stamp, if any.
+    pub(crate) fn sealed(self) -> Option<IndexGeneration> {
+        self.sealed
+    }
+
+    /// Staleness of the sealed index relative to the live Catalog clock.
+    pub(crate) fn staleness(self) -> IndexStaleness {
+        match self.sealed {
+            None => IndexStaleness::NeverBuilt { live: self.live },
+            Some(sealed) => {
+                let sealed_as_catalog = CatalogGeneration::from_index(sealed);
+                if sealed_as_catalog == self.live {
+                    IndexStaleness::Fresh {
+                        generation: self.live,
+                    }
+                } else {
+                    IndexStaleness::Stale {
+                        live: self.live,
+                        sealed,
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Staleness of an index relative to Catalog generation (§20).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum IndexStaleness {
+    /// No index rebuild has completed against this Catalog clock.
+    NeverBuilt { live: CatalogGeneration },
+    /// Sealed index generation matches the live Catalog clock.
+    Fresh { generation: CatalogGeneration },
+    /// Sealed index lags (or otherwise disagrees with) the live Catalog clock.
+    Stale {
+        live: CatalogGeneration,
+        sealed: IndexGeneration,
+    },
+}
+
+impl IndexStaleness {
+    /// True when the operator should treat the index as not matching live Catalog.
+    pub(crate) fn is_stale(self) -> bool {
+        !matches!(self, IndexStaleness::Fresh { .. })
+    }
+}
+
+#[cfg(test)]
+mod index_status_authority {
+    use super::*;
+
+    #[test]
+    fn index_status_counter_is_live_catalog_generation() {
+        let live = CatalogGeneration::from_relation(RelationGeneration::witness(12));
+        let status = IndexStatus::witness(live, Some(IndexGeneration::witness(9)));
+        assert_eq!(status.counter(), 12);
+        assert_eq!(status.counter(), live.counter());
+        match status.staleness() {
+            IndexStaleness::Stale { live: l, sealed } => {
+                assert_eq!(l.counter(), 12);
+                assert_eq!(sealed.counter(), 9);
+            }
+            other => panic!("expected Stale, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn index_status_fresh_when_sealed_matches_live() {
+        let sealed = IndexGeneration::witness(4);
+        let live = CatalogGeneration::from_index(sealed);
+        let status = IndexStatus::witness(live, Some(sealed));
+        assert!(matches!(
+            status.staleness(),
+            IndexStaleness::Fresh { generation } if generation == live
+        ));
+        assert!(!status.staleness().is_stale());
+    }
+
+    #[test]
+    fn index_status_never_built_is_stale() {
+        let live = CatalogGeneration::from_relation(RelationGeneration::witness(1));
+        let status = IndexStatus::witness(live, None);
+        assert!(status.staleness().is_stale());
+        assert!(matches!(
+            status.staleness(),
+            IndexStaleness::NeverBuilt { .. }
+        ));
     }
 }
 

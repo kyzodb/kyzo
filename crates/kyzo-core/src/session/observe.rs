@@ -65,6 +65,15 @@
 //! topology require [`OperatorCap`] on the sealed [`OperatorHealthSurface`]
 //! door — Cap-absent (tenant) asks refuse ([`TenantBlindRefuse`]); the
 //! Cap-unreachable test is the gate.
+//!
+//! ## One authoritative counter per metric (§20 / §42 / §44)
+//!
+//! Each metric has exactly one counter. Exporters hold a [`MetricExporter`]
+//! that **renders** [`MetricCounter`] — they never recompute a divergent
+//! number. Compaction-debt is witnessed only from [`DebtLedger`]; index-status
+//! is witnessed only from [`IndexStatus`] (Catalog generation / staleness).
+//! Ephemeral relation rows are projections of those authorities, not a second
+//! source of truth.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -74,12 +83,93 @@ use smartstring::{LazyCompact, SmartString};
 
 use crate::data::json::NamedRows;
 use crate::session::db::Engine;
+use crate::session::generation::IndexStatus;
 use crate::session::jobs::OperatorEphemeralRelations;
 use crate::store::Storage;
 use crate::store::failure::{
-    OperatorCap, OperatorHealthSurface, QuarantineRange,
+    DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange,
 };
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
+
+/// One authoritative metric counter. Private field — constructed only by
+/// authority doors ([`compaction_debt_counter`], [`index_status_counter`]).
+/// Exporters call [`MetricCounter::render`]; there is no recompute path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MetricCounter(u64);
+
+impl MetricCounter {
+    /// Render for exporters — the only legal way to obtain the exportable number.
+    pub fn render(self) -> RenderedMetric {
+        RenderedMetric(self.0)
+    }
+}
+
+/// A metric value obtained solely by rendering a [`MetricCounter`].
+/// An exporter cannot invent or recompute this; it can only hold and emit it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RenderedMetric(u64);
+
+impl RenderedMetric {
+    /// The rendered counter value.
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+/// Exporter surface: renders one [`MetricCounter`], never recomputes.
+///
+/// Construction requires a [`MetricCounter`] from an authority door. There is
+/// no API that accepts raw inputs to invent a divergent number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MetricExporter {
+    rendered: RenderedMetric,
+}
+
+impl MetricExporter {
+    /// Bind an exporter to one authoritative counter (render-only).
+    pub fn from_counter(counter: MetricCounter) -> Self {
+        Self {
+            rendered: counter.render(),
+        }
+    }
+
+    /// Emit the rendered counter value.
+    pub fn value(self) -> u64 {
+        self.rendered.as_u64()
+    }
+
+    /// Borrow the rendered metric (same number as [`Self::value`]).
+    pub fn rendered(self) -> RenderedMetric {
+        self.rendered
+    }
+}
+
+/// Compaction-debt counter — sole authority is [`DebtLedger`] (§42/§44).
+pub fn compaction_debt_counter(ledger: &DebtLedger) -> MetricCounter {
+    MetricCounter(ledger.outstanding())
+}
+
+/// Index-status counter — sole authority is [`IndexStatus`] Catalog generation (§20).
+pub(crate) fn index_status_counter(status: IndexStatus) -> MetricCounter {
+    MetricCounter(status.counter())
+}
+
+/// Project DebtLedger + IndexStatus into ephemeral fields for relation export.
+///
+/// Ephemeral `compaction_debt` / `index_status_generation` become **renderings**
+/// of the authorities — never independent counters that could disagree.
+fn project_authorities_into_ephemeral(
+    surface: &mut OperatorHealthSurface,
+    index_status: IndexStatus,
+) {
+    let debt = MetricExporter::from_counter(compaction_debt_counter(&surface.debt)).value();
+    let index = MetricExporter::from_counter(index_status_counter(index_status)).value();
+    let in_flight = surface.ephemeral().in_flight_tx();
+    let stats = surface.ephemeral().storage_stats();
+    surface
+        .ephemeral_mut()
+        .replace(in_flight, debt, index, stats);
+}
 
 /// Persisted outcome of one operator-scheduled deep-verify run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,7 +314,9 @@ pub(crate) type CallbackCollector = BTreeMap<SmartString<LazyCompact>, Vec<Callb
 ///
 /// Also carries the deep-verify operator schedule + persisted last-result
 /// (§51) and the sealed [`OperatorHealthSurface`] (§82) — same lock door so
-/// observe stays one session observation surface.
+/// observe stays one session observation surface. Index-status authority
+/// ([`IndexStatus`]) lives here so ephemeral index rows render one Catalog
+/// generation counter, never a second independent u64.
 #[derive(Default)]
 pub(crate) struct EventCallbackRegistry {
     pub(crate) by_id: BTreeMap<u32, CallbackDeclaration>,
@@ -232,6 +324,8 @@ pub(crate) struct EventCallbackRegistry {
     deep_verify: DeepVerifyOperatorState,
     /// Sealed operator health + ephemeral engine-state surface (§82).
     operator_health: OperatorHealthSurface,
+    /// Index-status authority (§20) — Catalog generation / staleness.
+    index_status: IndexStatus,
 }
 
 impl EventCallbackRegistry {
@@ -388,20 +482,60 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Snapshot the sealed [`OperatorHealthSurface`] (§82).
+    ///
+    /// Ephemeral compaction-debt / index-status fields are projections of
+    /// [`DebtLedger`] and [`IndexStatus`] — sealed into the returned snapshot
+    /// so a stale stored ephemeral cannot disagree with the authorities.
     pub fn operator_health_surface(&self) -> OperatorHealthSurface {
-        self.event_callbacks
+        let registry = self
+            .event_callbacks
             .read()
-            .expect("registry lock poisoned")
-            .operator_health
-            .clone()
+            .expect("registry lock poisoned");
+        let mut surface = registry.operator_health.clone();
+        project_authorities_into_ephemeral(&mut surface, registry.index_status);
+        surface
     }
 
     /// Replace the sealed operator health surface (operator wiring door).
-    pub fn set_operator_health_surface(&self, surface: OperatorHealthSurface) {
-        self.event_callbacks
+    ///
+    /// Always re-projects ephemeral debt/index from [`DebtLedger`] +
+    /// [`IndexStatus`] so ephemeral fields cannot become a second counter.
+    pub fn set_operator_health_surface(&self, mut surface: OperatorHealthSurface) {
+        let mut registry = self
+            .event_callbacks
             .write()
+            .expect("registry lock poisoned");
+        project_authorities_into_ephemeral(&mut surface, registry.index_status);
+        registry.operator_health = surface;
+    }
+
+    /// Set the index-status authority (§20) and project it into ephemeral.
+    pub(crate) fn set_index_status(&self, status: IndexStatus) {
+        let mut registry = self
+            .event_callbacks
+            .write()
+            .expect("registry lock poisoned");
+        registry.index_status = status;
+        project_authorities_into_ephemeral(&mut registry.operator_health, status);
+    }
+
+    /// Query the index-status authority (Catalog generation / staleness).
+    pub(crate) fn index_status(&self) -> IndexStatus {
+        self.event_callbacks
+            .read()
             .expect("registry lock poisoned")
-            .operator_health = surface;
+            .index_status
+    }
+
+    /// Compaction-debt metric exporter — renders [`DebtLedger`] only (§42/§44).
+    pub fn compaction_debt_exporter(&self) -> MetricExporter {
+        let surface = self.operator_health_surface();
+        MetricExporter::from_counter(compaction_debt_counter(&surface.debt))
+    }
+
+    /// Index-status metric exporter — renders [`IndexStatus`] only (§20).
+    pub fn index_status_exporter(&self) -> MetricExporter {
+        MetricExporter::from_counter(index_status_counter(self.index_status()))
     }
 
     /// Record a quarantine range on the sealed operator surface (never a
@@ -681,5 +815,130 @@ mod tenant_blind_operator_surface {
         assert!(op.has_operator_cap());
         assert_eq!(op.quarantine_relation().unwrap().rows().len(), 1);
         assert!(op.failure_topology(&lattice).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod one_counter_per_metric {
+    //! Adversarial: one authoritative counter per metric; exporters render,
+    //! never recompute a divergent value (§20 / §42 / §44).
+
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use crate::session::generation::{
+        CatalogGeneration, IndexGeneration, IndexStatus, IndexStaleness, RelationGeneration,
+    };
+    use crate::session::observe::{
+        MetricExporter, compaction_debt_counter, index_status_counter,
+    };
+    use crate::store::failure::{DebtLedger, OperatorHealthSurface};
+    use crate::store::fjall::new_fjall_storage;
+
+    /// Prove: DebtLedger is THE compaction-debt counter; Catalog IndexStatus
+    /// is THE index-status counter; MetricExporter can only render those —
+    /// a forged recompute disagrees and is not on the export path.
+    #[test]
+    fn exporters_render_one_counter_never_recompute_divergent() {
+        let mut ledger = DebtLedger::with_ceiling(100);
+        ledger.admit(17).expect("admit debt");
+
+        let debt_counter = compaction_debt_counter(&ledger);
+        let debt_exporter = MetricExporter::from_counter(debt_counter);
+        assert_eq!(debt_exporter.value(), 17);
+        assert_eq!(debt_exporter.value(), ledger.outstanding());
+        // Second exporter from the same authority agrees — one source.
+        assert_eq!(
+            MetricExporter::from_counter(compaction_debt_counter(&ledger)).value(),
+            debt_exporter.value()
+        );
+        // A recompute that invents another formula diverges — exporters must not.
+        let forged_recompute = ledger.outstanding().saturating_add(ledger.ceiling());
+        assert_ne!(
+            debt_exporter.value(),
+            forged_recompute,
+            "exporter must render the DebtLedger counter, not a recomputed formula"
+        );
+
+        let live = CatalogGeneration::from_relation(RelationGeneration::witness(9));
+        let status = IndexStatus::witness(live, Some(IndexGeneration::witness(4)));
+        assert!(matches!(status.staleness(), IndexStaleness::Stale { .. }));
+        assert!(status.staleness().is_stale());
+
+        let index_exporter = MetricExporter::from_counter(index_status_counter(status));
+        assert_eq!(index_exporter.value(), 9);
+        assert_eq!(index_exporter.value(), status.counter());
+        assert_eq!(
+            MetricExporter::from_counter(index_status_counter(status)).value(),
+            index_exporter.value()
+        );
+        // Forged recompute from sealed generation alone diverges from live Catalog.
+        let forged_from_sealed = status.sealed().unwrap().counter();
+        assert_ne!(
+            index_exporter.value(),
+            forged_from_sealed,
+            "index-status exporter renders Catalog generation, not a recomputed sealed stamp"
+        );
+    }
+
+    /// Engine projects DebtLedger + IndexStatus into ephemeral relations —
+    /// relation rows agree with exporters; a mismatched ephemeral seed is
+    /// overwritten by authority on seal (no second counter survives).
+    #[test]
+    fn engine_projects_authorities_so_ephemeral_cannot_diverge() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+            .expect("compose");
+
+        let mut debt = DebtLedger::with_ceiling(50);
+        debt.admit(11).expect("admit");
+        let mut surface = OperatorHealthSurface::default();
+        surface.debt = debt;
+        // Hostile seed: ephemeral debt/index disagree with authorities.
+        surface.ephemeral_mut().replace(
+            0,
+            99, // forged compaction-debt
+            88, // forged index-status
+            Default::default(),
+        );
+        db.set_operator_health_surface(surface);
+
+        // After seal, ephemeral debt must equal DebtLedger (not the forge).
+        assert_eq!(db.compaction_debt_exporter().value(), 11);
+        let rels = db.operator_ephemeral_relations();
+        assert_eq!(
+            rels.compaction_debt_relation().unwrap().rows()[0][0]
+                .get_int()
+                .unwrap(),
+            11,
+            "relation must render DebtLedger, not the forged ephemeral seed"
+        );
+
+        let status = IndexStatus::witness(
+            CatalogGeneration::from_relation(RelationGeneration::witness(7)),
+            Some(IndexGeneration::witness(7)),
+        );
+        assert!(!status.staleness().is_stale());
+        db.set_index_status(status);
+
+        assert_eq!(db.index_status_exporter().value(), 7);
+        assert_eq!(
+            db.operator_ephemeral_relations()
+                .index_status_relation()
+                .unwrap()
+                .rows()[0][0]
+                .get_int()
+                .unwrap(),
+            7
+        );
+        // Exporter and relation are the same counter — not two sources.
+        assert_eq!(
+            db.index_status_exporter().value(),
+            db.operator_ephemeral_relations()
+                .index_status_relation()
+                .unwrap()
+                .rows()[0][0]
+                .get_int()
+                .unwrap() as u64
+        );
     }
 }
