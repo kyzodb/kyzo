@@ -132,7 +132,15 @@ fn response(id: Value, result: Value) -> Value {
 /// door — never an engine host façade.
 fn validate(text: &str) -> Vec<Diagnostic> {
     let params = BTreeMap::<String, DataValue>::new();
-    match kyzo_model::parse::parse_script(text, &params, ValidityTs::from_raw(0)) {
+    // Live session stamp for `@` / `@ NOW` — wall-clock micros, never the
+    // from_raw(0) open-end sentinel the parse door forbids.
+    let cur_vld = ValidityTs::from_raw(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(1),
+    );
+    match kyzo_model::parse::parse_script(text, &params, cur_vld) {
         Ok(_) => Vec::new(),
         Err(report) => diagnostics_from_report(&report, text, &LineIndex::new(text)),
     }
