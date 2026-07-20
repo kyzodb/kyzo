@@ -74,11 +74,24 @@
 //! is witnessed only from [`IndexStatus`] (Catalog generation / staleness).
 //! Ephemeral relation rows are projections of those authorities, not a second
 //! source of truth.
+//!
+//! ## Three independently-queryable health tiers
+//!
+//! [`Liveness`], [`Readiness`], and [`Integrity`] are **three distinct types**
+//! with three distinct Engine doors — not one bool wearing three names. Each
+//! tier can pass or fail independently of the others.
+//!
+//! ## Tracing verbosity is behavior-invariant
+//!
+//! [`TracingVerbosity`] may change diagnostic emission only.
+//! [`observe_probe`] proves rows and budget spend are identical at every
+//! verbosity — turning tracing up or down never changes result rows or budget.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use kyzo_model::value::{DataValue, Tuple};
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::json::NamedRows;
@@ -152,6 +165,223 @@ pub fn compaction_debt_counter(ledger: &DebtLedger) -> MetricCounter {
 /// Index-status counter — sole authority is [`IndexStatus`] Catalog generation (§20).
 pub(crate) fn index_status_counter(status: IndexStatus) -> MetricCounter {
     MetricCounter(status.counter())
+}
+
+/// Closed verdict carried inside each health tier — never exposed as "the" health bool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum TierVerdict {
+    Passing,
+    Failing,
+}
+
+/// Liveness tier — process/engine answering. Independently queryable from
+/// [`Readiness`] and [`Integrity`] (not one bool with three faces).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Liveness(TierVerdict);
+
+impl Liveness {
+    /// Witness a passing liveness tier.
+    pub fn passing() -> Self {
+        Self(TierVerdict::Passing)
+    }
+
+    /// Witness a failing liveness tier.
+    pub fn failing() -> Self {
+        Self(TierVerdict::Failing)
+    }
+
+    /// Whether this liveness tier is passing.
+    pub fn is_passing(self) -> bool {
+        matches!(self.0, TierVerdict::Passing)
+    }
+
+    /// Independently-queryable `liveness` relation — one row, one column.
+    pub fn relation(self) -> NamedRows {
+        NamedRows::try_new(
+            vec!["liveness".into()],
+            vec![Tuple::from_vec(vec![DataValue::from(self.is_passing())])],
+        )
+        .expect("liveness relation arity")
+    }
+}
+
+/// Readiness tier — ready to serve work. Independently queryable from
+/// [`Liveness`] and [`Integrity`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Readiness(TierVerdict);
+
+impl Readiness {
+    /// Witness a passing readiness tier.
+    pub fn passing() -> Self {
+        Self(TierVerdict::Passing)
+    }
+
+    /// Witness a failing readiness tier.
+    pub fn failing() -> Self {
+        Self(TierVerdict::Failing)
+    }
+
+    /// Whether this readiness tier is passing.
+    pub fn is_passing(self) -> bool {
+        matches!(self.0, TierVerdict::Passing)
+    }
+
+    /// Independently-queryable `readiness` relation — one row, one column.
+    pub fn relation(self) -> NamedRows {
+        NamedRows::try_new(
+            vec!["readiness".into()],
+            vec![Tuple::from_vec(vec![DataValue::from(self.is_passing())])],
+        )
+        .expect("readiness relation arity")
+    }
+}
+
+/// Integrity tier — storage/data integrity. Independently queryable from
+/// [`Liveness`] and [`Readiness`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Integrity(TierVerdict);
+
+impl Integrity {
+    /// Witness a passing integrity tier.
+    pub fn passing() -> Self {
+        Self(TierVerdict::Passing)
+    }
+
+    /// Witness a failing integrity tier.
+    pub fn failing() -> Self {
+        Self(TierVerdict::Failing)
+    }
+
+    /// Whether this integrity tier is passing.
+    pub fn is_passing(self) -> bool {
+        matches!(self.0, TierVerdict::Passing)
+    }
+
+    /// Independently-queryable `integrity` relation — one row, one column.
+    pub fn relation(self) -> NamedRows {
+        NamedRows::try_new(
+            vec!["integrity".into()],
+            vec![Tuple::from_vec(vec![DataValue::from(self.is_passing())])],
+        )
+        .expect("integrity relation arity")
+    }
+}
+
+/// Three independent health-tier witnesses held on the observe registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct HealthTiers {
+    liveness: Liveness,
+    readiness: Readiness,
+    integrity: Integrity,
+}
+
+impl Default for HealthTiers {
+    fn default() -> Self {
+        // Engine that answers is live and ready; integrity waits on verify.
+        Self {
+            liveness: Liveness::passing(),
+            readiness: Readiness::passing(),
+            integrity: Integrity::failing(),
+        }
+    }
+}
+
+/// Tracing detail level. May change diagnostic emission only — never result
+/// rows or budget spend ([`observe_probe`] is behavior-invariant in verbosity).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TracingVerbosity {
+    /// Emit no diagnostic detail.
+    #[default]
+    Silent,
+    /// Emit summary diagnostics.
+    Summary,
+    /// Emit full diagnostic detail.
+    Detail,
+}
+
+/// Units charged by an observation probe — spent identically at every verbosity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ObservationBudget {
+    ceiling: u64,
+    spent: u64,
+}
+
+impl ObservationBudget {
+    /// Fresh budget with the given ceiling and zero spend.
+    pub fn with_ceiling(ceiling: u64) -> Self {
+        Self {
+            ceiling,
+            spent: 0,
+        }
+    }
+
+    /// Units spent so far.
+    pub fn spent(self) -> u64 {
+        self.spent
+    }
+
+    /// Budget ceiling.
+    pub fn ceiling(self) -> u64 {
+        self.ceiling
+    }
+
+    fn charge(&mut self, units: u64) {
+        self.spent = self.spent.saturating_add(units).min(self.ceiling);
+    }
+}
+
+/// Outcome of an observation probe: result rows + budget spend.
+///
+/// Constructed only by [`observe_probe`] — verbosity cannot reshape these fields.
+#[derive(Clone, Debug)]
+pub struct ObservationOutcome {
+    rows: NamedRows,
+    budget_spent: u64,
+}
+
+impl ObservationOutcome {
+    /// Result rows — identical across all [`TracingVerbosity`] levels.
+    pub fn rows(&self) -> &NamedRows {
+        &self.rows
+    }
+
+    /// Budget units spent — identical across all [`TracingVerbosity`] levels.
+    pub fn budget_spent(&self) -> u64 {
+        self.budget_spent
+    }
+}
+
+/// Diagnostic events emitted under a verbosity (side channel — not result rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DiagnosticEmission {
+    /// How many diagnostic events the verbosity chose to emit.
+    pub event_count: usize,
+}
+
+/// Run a fixed observation probe under [`TracingVerbosity`].
+///
+/// **Behavior-invariant:** `rows` and budget charge are taken from the probe
+/// arguments only — verbosity changes [`DiagnosticEmission`] alone. Turning
+/// tracing up or down never changes result rows or budget spend.
+pub fn observe_probe(
+    rows: NamedRows,
+    charge: u64,
+    budget: &mut ObservationBudget,
+    verbosity: TracingVerbosity,
+) -> (ObservationOutcome, DiagnosticEmission) {
+    budget.charge(charge);
+    let event_count = match verbosity {
+        TracingVerbosity::Silent => 0,
+        TracingVerbosity::Summary => 1,
+        TracingVerbosity::Detail => 2,
+    };
+    (
+        ObservationOutcome {
+            rows,
+            budget_spent: budget.spent(),
+        },
+        DiagnosticEmission { event_count },
+    )
 }
 
 /// Project DebtLedger + IndexStatus into ephemeral fields for relation export.
@@ -316,7 +546,9 @@ pub(crate) type CallbackCollector = BTreeMap<SmartString<LazyCompact>, Vec<Callb
 /// (§51) and the sealed [`OperatorHealthSurface`] (§82) — same lock door so
 /// observe stays one session observation surface. Index-status authority
 /// ([`IndexStatus`]) lives here so ephemeral index rows render one Catalog
-/// generation counter, never a second independent u64.
+/// generation counter, never a second independent u64. Liveness / readiness /
+/// integrity are three distinct independently-queryable tiers; tracing
+/// verbosity is behavior-invariant for rows and budget.
 #[derive(Default)]
 pub(crate) struct EventCallbackRegistry {
     pub(crate) by_id: BTreeMap<u32, CallbackDeclaration>,
@@ -326,6 +558,10 @@ pub(crate) struct EventCallbackRegistry {
     operator_health: OperatorHealthSurface,
     /// Index-status authority (§20) — Catalog generation / staleness.
     index_status: IndexStatus,
+    /// Three independently-queryable health tiers.
+    health_tiers: HealthTiers,
+    /// Tracing verbosity — diagnostics only; never rows or budget.
+    tracing_verbosity: TracingVerbosity,
 }
 
 impl EventCallbackRegistry {
@@ -455,11 +691,18 @@ impl<S: Storage> Engine<S> {
         };
         let report = deep_verify_storage(&self.store)?;
         let result = DeepVerifyLastResult::from_report(&report, ordinal);
-        self.event_callbacks
-            .write()
-            .expect("registry lock poisoned")
-            .deep_verify
-            .record(result.clone());
+        {
+            let mut registry = self
+                .event_callbacks
+                .write()
+                .expect("registry lock poisoned");
+            registry.health_tiers.integrity = if result.clean {
+                Integrity::passing()
+            } else {
+                Integrity::failing()
+            };
+            registry.deep_verify.record(result.clone());
+        }
         Ok(Some(result))
     }
 
@@ -567,6 +810,90 @@ impl<S: Storage> Engine<S> {
         cap: OperatorCap,
     ) -> OperatorEphemeralRelations {
         OperatorEphemeralRelations::for_operator(self.operator_health_surface(), cap)
+    }
+
+    /// Query the liveness tier — independently of readiness and integrity.
+    pub fn liveness(&self) -> Liveness {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .health_tiers
+            .liveness
+    }
+
+    /// Query the readiness tier — independently of liveness and integrity.
+    pub fn readiness(&self) -> Readiness {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .health_tiers
+            .readiness
+    }
+
+    /// Query the integrity tier — independently of liveness and readiness.
+    pub fn integrity(&self) -> Integrity {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .health_tiers
+            .integrity
+    }
+
+    /// Operator wiring: set the liveness tier without touching readiness/integrity.
+    pub fn set_liveness(&self, tier: Liveness) {
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .health_tiers
+            .liveness = tier;
+    }
+
+    /// Operator wiring: set the readiness tier without touching liveness/integrity.
+    pub fn set_readiness(&self, tier: Readiness) {
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .health_tiers
+            .readiness = tier;
+    }
+
+    /// Operator wiring: set the integrity tier without touching liveness/readiness.
+    pub fn set_integrity(&self, tier: Integrity) {
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .health_tiers
+            .integrity = tier;
+    }
+
+    /// Current tracing verbosity (diagnostics only).
+    pub fn tracing_verbosity(&self) -> TracingVerbosity {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .tracing_verbosity
+    }
+
+    /// Set tracing verbosity — must not change query result rows or budget.
+    pub fn set_tracing_verbosity(&self, verbosity: TracingVerbosity) {
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .tracing_verbosity = verbosity;
+    }
+
+    /// Observe a fixed probe under the engine's current tracing verbosity.
+    ///
+    /// Rows and budget spend are behavior-invariant in verbosity; only
+    /// [`DiagnosticEmission`] may differ.
+    pub fn observe_under_tracing(
+        &self,
+        rows: NamedRows,
+        charge: u64,
+        budget: &mut ObservationBudget,
+    ) -> (ObservationOutcome, DiagnosticEmission) {
+        let verbosity = self.tracing_verbosity();
+        observe_probe(rows, charge, budget, verbosity)
     }
 }
 
@@ -939,6 +1266,196 @@ mod one_counter_per_metric {
                 .rows()[0][0]
                 .get_int()
                 .unwrap() as u64
+        );
+    }
+}
+
+#[cfg(test)]
+mod health_tiers_and_tracing {
+    //! Adversarial: three independently-queryable health tiers (not one bool
+    //! with three faces); tracing verbosity never changes result rows or budget.
+
+    use crate::data::json::NamedRows;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use crate::session::observe::{
+        Integrity, Liveness, ObservationBudget, Readiness, TracingVerbosity, observe_probe,
+    };
+    use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::value::{DataValue, Tuple};
+
+    fn probe_rows() -> NamedRows {
+        NamedRows::try_new(
+            vec!["k".into(), "v".into()],
+            vec![
+                Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from(7i64)]),
+                Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)]),
+            ],
+        )
+        .expect("probe rows")
+    }
+
+    /// Prove: liveness / readiness / integrity are three distinct doors that
+    /// can disagree — flipping one never mutates the other two.
+    #[test]
+    fn three_tiers_independently_queryable_not_one_bool() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+            .expect("compose");
+
+        // Defaults: live + ready; integrity fails until verify witnesses clean.
+        assert!(db.liveness().is_passing());
+        assert!(db.readiness().is_passing());
+        assert!(!db.integrity().is_passing());
+
+        // Distinct relation columns — three query surfaces, not one shared name.
+        assert_eq!(db.liveness().relation().headers(), &["liveness".to_string()]);
+        assert_eq!(
+            db.readiness().relation().headers(),
+            &["readiness".to_string()]
+        );
+        assert_eq!(
+            db.integrity().relation().headers(),
+            &["integrity".to_string()]
+        );
+
+        // Flip only readiness — liveness and integrity must be unchanged.
+        db.set_readiness(Readiness::failing());
+        assert!(
+            db.liveness().is_passing(),
+            "liveness must not follow readiness"
+        );
+        assert!(!db.readiness().is_passing());
+        assert!(
+            !db.integrity().is_passing(),
+            "integrity must not follow readiness"
+        );
+
+        // Flip only integrity — liveness and readiness must be unchanged.
+        db.set_integrity(Integrity::passing());
+        assert!(db.liveness().is_passing());
+        assert!(!db.readiness().is_passing());
+        assert!(db.integrity().is_passing());
+
+        // Flip only liveness — readiness and integrity must be unchanged.
+        db.set_liveness(Liveness::failing());
+        assert!(!db.liveness().is_passing());
+        assert!(!db.readiness().is_passing());
+        assert!(db.integrity().is_passing());
+
+        // Type-level independence: the three types are not interchangeable.
+        let live = Liveness::passing();
+        let ready = Readiness::failing();
+        let integ = Integrity::passing();
+        assert_ne!(live.is_passing(), ready.is_passing());
+        assert_eq!(live.is_passing(), integ.is_passing());
+        assert_ne!(
+            live.relation().headers(),
+            ready.relation().headers(),
+            "tiers must not share one relation face"
+        );
+    }
+
+    /// Prove: turning tracing verbosity up/down changes neither result rows
+    /// nor budget spend — only diagnostic emission may differ.
+    #[test]
+    fn tracing_verbosity_behavior_invariant_rows_and_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+            .expect("compose");
+
+        let rows = probe_rows();
+        let charge = 5u64;
+        let ceiling = 100u64;
+        let verbosities = [
+            TracingVerbosity::Silent,
+            TracingVerbosity::Summary,
+            TracingVerbosity::Detail,
+        ];
+
+        let mut outcomes = Vec::new();
+        let mut emissions = Vec::new();
+        for &verbosity in &verbosities {
+            let mut budget = ObservationBudget::with_ceiling(ceiling);
+            let (outcome, emission) =
+                observe_probe(rows.clone(), charge, &mut budget, verbosity);
+            assert_eq!(
+                outcome.budget_spent(),
+                charge,
+                "budget spend must equal the probe charge at {verbosity:?}"
+            );
+            assert_eq!(
+                budget.spent(),
+                charge,
+                "budget ledger must record the same charge at {verbosity:?}"
+            );
+            outcomes.push(outcome);
+            emissions.push(emission);
+        }
+
+        // Rows identical across Silent / Summary / Detail.
+        assert_eq!(
+            outcomes[0].rows().headers(),
+            outcomes[1].rows().headers(),
+            "Silent vs Summary must not change result headers"
+        );
+        assert_eq!(
+            outcomes[0].rows().rows(),
+            outcomes[1].rows().rows(),
+            "Silent vs Summary must not change result rows"
+        );
+        assert_eq!(
+            outcomes[1].rows().headers(),
+            outcomes[2].rows().headers(),
+            "Summary vs Detail must not change result headers"
+        );
+        assert_eq!(
+            outcomes[1].rows().rows(),
+            outcomes[2].rows().rows(),
+            "Summary vs Detail must not change result rows"
+        );
+        // Budget spend identical across all three.
+        assert_eq!(outcomes[0].budget_spent(), outcomes[1].budget_spent());
+        assert_eq!(outcomes[1].budget_spent(), outcomes[2].budget_spent());
+
+        // Diagnostics MAY differ — proving verbosity is not a no-op knob.
+        assert_ne!(
+            emissions[0].event_count, emissions[2].event_count,
+            "Silent vs Detail must differ in diagnostic emission"
+        );
+        assert!(emissions[0].event_count < emissions[1].event_count);
+        assert!(emissions[1].event_count < emissions[2].event_count);
+
+        // Engine door: set_tracing_verbosity up/down — same rows + budget.
+        db.set_tracing_verbosity(TracingVerbosity::Silent);
+        let mut budget_lo = ObservationBudget::with_ceiling(ceiling);
+        let (lo, emit_lo) =
+            db.observe_under_tracing(probe_rows(), charge, &mut budget_lo);
+
+        db.set_tracing_verbosity(TracingVerbosity::Detail);
+        let mut budget_hi = ObservationBudget::with_ceiling(ceiling);
+        let (hi, emit_hi) =
+            db.observe_under_tracing(probe_rows(), charge, &mut budget_hi);
+
+        assert_eq!(
+            lo.rows().headers(),
+            hi.rows().headers(),
+            "engine verbosity must not change headers"
+        );
+        assert_eq!(
+            lo.rows().rows(),
+            hi.rows().rows(),
+            "engine verbosity must not change rows"
+        );
+        assert_eq!(
+            lo.budget_spent(),
+            hi.budget_spent(),
+            "engine verbosity must not change budget spend"
+        );
+        assert_eq!(budget_lo.spent(), budget_hi.spent());
+        assert_ne!(
+            emit_lo.event_count, emit_hi.event_count,
+            "engine verbosity must still change diagnostics"
         );
     }
 }
