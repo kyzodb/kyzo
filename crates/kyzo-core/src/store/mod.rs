@@ -82,7 +82,7 @@ pub use authority::{
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use backup::{
     ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
-    PackRefuse, dump_storage, import_verify, restore_storage,
+    PackRefuse, dump_storage, import_leave_is_free, import_verify, restore_storage,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use commit_cap::{ForkGenerationWitness, SnapshotFork, StableCommitCap};
@@ -128,8 +128,9 @@ pub use idempotency::{
 pub use keys::{Secret, SecretKeyRefuse, refuse_if_secret};
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use merkle::{
-    ChainLinkKind, ChainedStateRoot, ForkPoint, GENESIS_ROOT, MerkleChainRefuse, RootChain,
-    StateRoot, as_of_root, fork_equivalence, roots_equal_at_cut,
+    ChainLinkKind, ChainedStateRoot, ForkPoint, GENESIS_ROOT, MerkleChainRefuse,
+    ReplicaCutRecompute, RootChain, StateRoot, as_of_root, fork_equivalence,
+    replica_equivalence_at_cut, roots_equal_at_cut,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use nonce::{DomainCounter, MintDomain, NonceLease, nonce};

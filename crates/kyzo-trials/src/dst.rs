@@ -3210,9 +3210,9 @@ pub mod storage_campaign_lanes {
             payload: vec![1, 2, 3],
         })
         .expect("leave-is-free pack with wrapped salt");
-        let root = campaign_content_root(0x80);
+        let cut = pack.replica_cut_recompute();
         let verified =
-            ImportCapability::after_chain_root_verify(root, root).expect("equal roots");
+            ImportCapability::after_chain_root_verify(cut, cut).expect("pack cut self-verify");
         assert_eq!(
             import_verify(
                 &pack,
