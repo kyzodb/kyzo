@@ -264,8 +264,8 @@ pub struct BenchCaps {
 }
 
 impl BenchCaps {
-    /// Sealed required caps — same envelope `scripts/run-bench.sh` used
-    /// (12 GiB virtual, 1800s per graph). Not softenable to zero/absent.
+    /// Sealed required caps — 12 GiB virtual, 1800s per graph.
+    /// Not softenable to zero/absent.
     pub const REQUIRED_MEMORY_KIB: u64 = 12 * 1024 * 1024;
     pub const REQUIRED_TIME_SECS: u64 = 1800;
 
@@ -430,10 +430,10 @@ pub fn emit_bench(_admit: BenchAdmit) {
     // T1: admit is the seal; measurement + number lines land in later tasks.
 }
 
-/// In-process honesty skeleton (story #326 T1): run the four-condition gate
-/// before any measure. Does not shell to `scripts/run-bench.sh` — that path
-/// is condemned and deleted in T3. Live evidence without sealed digests
-/// refuses [`BenchRefuse::AnswerAgreement`] (fail closed, not a stub agree).
+/// In-process honesty skeleton (story #326): run the four-condition gate
+/// before any measure. Emit only via [`BenchAdmit::admit`] — no shell-out.
+/// Live evidence without sealed digests refuses
+/// [`BenchRefuse::AnswerAgreement`] (fail closed, not a stub agree).
 pub fn bench(_graphs: &[String]) -> Result<(), BenchRefuse> {
     let evidence = BenchEvidence {
         opponent_pin: BENCH_OPPONENT_PIN.to_string(),
