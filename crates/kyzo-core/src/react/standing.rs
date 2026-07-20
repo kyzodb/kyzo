@@ -74,7 +74,7 @@ use crate::rules::contract::CancelFlag;
 use crate::session::catalog::get_relation;
 use crate::session::db::{Engine, ScriptOptions, SessionTx};
 use crate::session::db::{SessionNormalizer, SessionView};
-use crate::session::observe::{CallbackEvent, CallbackOp};
+use crate::session::observe::{CallbackEvent, CallbackId, CallbackOp};
 use crate::store::Storage;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -114,7 +114,7 @@ fn entry_symbol() -> Symbol {
 /// One EDB dependency's live subscription: the callback id (for
 /// [`StandingQuery::teardown`]) and the receiver it delivers on.
 struct Subscription {
-    id: u32,
+    id: CallbackId,
     receiver: Receiver<CallbackEvent>,
     /// This relation's key-column count (`StoredRelationMetadata::keys.len()`
     /// at registration time), cached so [`StandingQuery::apply_pending`]
@@ -299,8 +299,8 @@ impl<S: Storage> StandingQuery<S> {
             // into an actually well-formed single patch, which its
             // filter already handles correctly.
             let mut net: BTreeMap<Tuple, i64> = BTreeMap::new();
-            while let Ok((op, new, old)) = sub.receiver.try_recv() {
-                match op {
+            while let Ok(event) = sub.receiver.try_recv() {
+                match event.op {
                     CallbackOp::Put => {
                         // A row present in BOTH sets is a redundant re-put
                         // of identical content at the same key (no value
@@ -310,8 +310,8 @@ impl<S: Storage> StandingQuery<S> {
                         // the difference here, not raw per-set facts, is
                         // what keeps that case from ever contributing a
                         // spurious `Minus`.
-                        let new_set: BTreeSet<Tuple> = new.into_iter().collect();
-                        let old_set: BTreeSet<Tuple> = old.into_iter().collect();
+                        let new_set: BTreeSet<Tuple> = event.new_rows.into_iter().collect();
+                        let old_set: BTreeSet<Tuple> = event.old_rows.into_iter().collect();
                         for row in new_set.difference(&old_set) {
                             *net.entry(row.clone()).or_default() += 1;
                         }
@@ -323,7 +323,7 @@ impl<S: Storage> StandingQuery<S> {
                         // `new` here is bare keys (k_bindings), never a
                         // real row this program's arity matches — only
                         // `old` (the full removed row) is a fact.
-                        for row in old {
+                        for row in event.old_rows {
                             *net.entry(row).or_default() -= 1;
                         }
                     }
@@ -730,13 +730,13 @@ mod tests {
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
         db.run_script(":create r {x: Int =>}", no_params()).unwrap();
         let sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
-        let ids: Vec<u32> = sq.subscriptions.values().map(|s| s.id).collect();
+        let ids: Vec<_> = sq.subscriptions.values().map(|s| s.id).collect();
         assert!(!ids.is_empty());
         sq.teardown();
         for id in ids {
             assert!(
                 !db.unregister_callback(id),
-                "id {id} should already be gone"
+                "id {id:?} should already be gone"
             );
         }
     }
@@ -751,9 +751,9 @@ mod tests {
         let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
         db.run_script(":create r {x: Int =>}", no_params()).unwrap();
-        let ids: Vec<u32> = {
+        let ids: Vec<_> = {
             let sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
-            let ids: Vec<u32> = sq.subscriptions.values().map(|s| s.id).collect();
+            let ids: Vec<_> = sq.subscriptions.values().map(|s| s.id).collect();
             assert!(!ids.is_empty());
             ids
             // `sq` drops HERE at scope exit — no `teardown()` call.
@@ -761,7 +761,7 @@ mod tests {
         for id in ids {
             assert!(
                 !db.unregister_callback(id),
-                "id {id} must already be gone after the StandingQuery dropped on scope exit"
+                "id {id:?} must already be gone after the StandingQuery dropped on scope exit"
             );
         }
     }

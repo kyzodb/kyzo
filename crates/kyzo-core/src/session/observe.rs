@@ -257,13 +257,35 @@ impl Integrity {
         matches!(self.0, TierVerdict::Passing)
     }
 
-    /// Independently-queryable `integrity` relation — one row, one column.
+    /// Independently-queryable `integrity` relation — one row.
+    ///
+    /// When a last-verify digest is present it is **rendered** as a second
+    /// column (`last_verify` bytes); when absent the column is omitted
+    /// (never a zero-filled digest placeholder).
     pub fn relation(self) -> NamedRows {
         NamedRows::try_new(
             vec!["integrity".into()],
             vec![Tuple::from_vec(vec![DataValue::from(self.is_passing())])],
         )
         .expect("integrity relation arity")
+    }
+
+    /// Integrity relation with rendered [`DeepVerifyDigest`] when present.
+    pub fn relation_with_last_verify(
+        self,
+        last_verify: Option<DeepVerifyDigest>,
+    ) -> NamedRows {
+        match last_verify {
+            Some(digest) => NamedRows::try_new(
+                vec!["integrity".into(), "last_verify".into()],
+                vec![Tuple::from_vec(vec![
+                    DataValue::from(self.is_passing()),
+                    DataValue::Bytes(digest.as_bytes().to_vec()),
+                ])],
+            )
+            .expect("integrity+digest relation arity"),
+            None => self.relation(),
+        }
     }
 }
 
@@ -384,21 +406,13 @@ pub fn observe_probe(
     )
 }
 
-/// Project DebtLedger + IndexStatus into ephemeral fields for relation export.
+/// Sync live in-flight count into ephemeral for relation export.
 ///
-/// Ephemeral `compaction_debt` / `index_status_generation` become **renderings**
-/// of the authorities — never independent counters that could disagree.
-fn project_authorities_into_ephemeral(
-    surface: &mut OperatorHealthSurface,
-    index_status: IndexStatus,
-) {
-    let debt = MetricExporter::from_counter(compaction_debt_counter(&surface.debt)).value();
-    let index = MetricExporter::from_counter(index_status_counter(index_status)).value();
-    let in_flight = surface.ephemeral().in_flight_tx();
+/// Compaction-debt / index-status are **not** projected into ephemeral —
+/// relations render [`DebtLedger`] / [`IndexStatus`] directly.
+fn sync_in_flight_into_ephemeral(surface: &mut OperatorHealthSurface, in_flight: u64) {
     let stats = surface.ephemeral().storage_stats();
-    surface
-        .ephemeral_mut()
-        .replace(in_flight, debt, index, stats);
+    surface.ephemeral_mut().replace(in_flight, stats);
 }
 
 /// Persisted outcome of one operator-scheduled deep-verify run.
@@ -413,11 +427,11 @@ pub struct DeepVerifyLastResult {
     /// Stable digest of the full [`DeepVerifyReport`].
     pub digest: DeepVerifyDigest,
     /// Schedule ordinal at which this result was produced.
-    pub schedule_ordinal: u64,
+    pub schedule_ordinal: ScheduleOrdinal,
 }
 
 impl DeepVerifyLastResult {
-    fn from_report(report: &DeepVerifyReport, schedule_ordinal: u64) -> Self {
+    fn from_report(report: &DeepVerifyReport, schedule_ordinal: ScheduleOrdinal) -> Self {
         Self {
             clean: report.is_clean(),
             indices_checked: report.indices_checked,
@@ -440,7 +454,7 @@ pub enum DeepVerifyStaleness {
     Stale {
         last_result: Option<DeepVerifyLastResult>,
         /// Schedule ordinal the operator most recently armed.
-        pending_ordinal: u64,
+        pending_ordinal: ScheduleOrdinal,
     },
 }
 
@@ -457,20 +471,20 @@ struct DeepVerifyOperatorState {
     /// Next schedule ordinal (monotone).
     next_ordinal: u64,
     /// When `Some`, a run is armed at that ordinal.
-    pending: Option<u64>,
+    pending: Option<ScheduleOrdinal>,
     /// Last completed result, if any.
     last_result: Option<DeepVerifyLastResult>,
 }
 
 impl DeepVerifyOperatorState {
-    fn schedule(&mut self) -> u64 {
+    fn schedule(&mut self) -> ScheduleOrdinal {
         self.next_ordinal = self.next_ordinal.saturating_add(1).max(1);
-        let ord = self.next_ordinal;
+        let ord = ScheduleOrdinal::from_raw(self.next_ordinal);
         self.pending = Some(ord);
         ord
     }
 
-    fn take_pending(&mut self) -> Option<u64> {
+    fn take_pending(&mut self) -> Option<ScheduleOrdinal> {
         self.pending.take()
     }
 
@@ -522,7 +536,58 @@ impl CallbackOp {
 }
 
 /// One delivered event: what happened, the new rows, the old rows.
-pub type CallbackEvent = (CallbackOp, NamedRows, NamedRows);
+#[derive(Debug, Clone)]
+pub struct CallbackEvent {
+    /// The mutation kind that produced this event.
+    pub op: CallbackOp,
+    /// Rows present after the mutation (full key+value for Put; key-only for Rm).
+    pub new_rows: NamedRows,
+    /// Rows present before the mutation (full key+value).
+    pub old_rows: NamedRows,
+}
+
+impl CallbackEvent {
+    /// Build a delivered event from collector halves.
+    pub fn new(op: CallbackOp, new_rows: NamedRows, old_rows: NamedRows) -> Self {
+        Self {
+            op,
+            new_rows,
+            old_rows,
+        }
+    }
+}
+
+/// Opaque callback registration identity — never a bare `u32` at the door.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CallbackId(u32);
+
+impl CallbackId {
+    /// Wrap a proven id (registry / Engine mint only).
+    pub(crate) fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Borrow the raw discriminant (unregister / diagnostics).
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Operator deep-verify schedule ordinal — monotone, never a bare `u64`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScheduleOrdinal(u64);
+
+impl ScheduleOrdinal {
+    /// Wrap a proven ordinal (scheduler mint only).
+    pub(crate) fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Borrow the raw ordinal.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// One registered callback: the relation it watches and the channel it is
 /// delivered on.
@@ -535,7 +600,11 @@ pub struct CallbackDeclaration {
 /// order. Plain data: building one has no side effects, so the retry loop
 /// discards a conflicted attempt's collector wholesale and no observer
 /// ever sees an aborted transaction's events.
-pub(crate) type CallbackCollector = BTreeMap<SmartString<LazyCompact>, Vec<CallbackEvent>>;
+///
+/// Stored as `(op, new, old)` tuples so admit's push sites stay compatible;
+/// [`Db::send_callbacks`] lifts each into a [`CallbackEvent`] at delivery.
+pub(crate) type CallbackCollector =
+    BTreeMap<SmartString<LazyCompact>, Vec<(CallbackOp, NamedRows, NamedRows)>>;
 
 /// The callback registry: every registered callback by id, and the index
 /// from relation name to the ids watching it. The two maps agree by
@@ -551,13 +620,15 @@ pub(crate) type CallbackCollector = BTreeMap<SmartString<LazyCompact>, Vec<Callb
 /// verbosity is behavior-invariant for rows and budget.
 #[derive(Default)]
 pub(crate) struct EventCallbackRegistry {
-    pub(crate) by_id: BTreeMap<u32, CallbackDeclaration>,
-    pub(crate) by_relation: BTreeMap<SmartString<LazyCompact>, BTreeSet<u32>>,
+    pub(crate) by_id: BTreeMap<CallbackId, CallbackDeclaration>,
+    pub(crate) by_relation: BTreeMap<SmartString<LazyCompact>, BTreeSet<CallbackId>>,
     deep_verify: DeepVerifyOperatorState,
     /// Sealed operator health + ephemeral engine-state surface (§82).
     operator_health: OperatorHealthSurface,
     /// Index-status authority (§20) — Catalog generation / staleness.
     index_status: IndexStatus,
+    /// Live in-flight transaction registry — THE `::running` authority.
+    in_flight_tx: u64,
     /// Three independently-queryable health tiers.
     health_tiers: HealthTiers,
     /// Tracing verbosity — diagnostics only; never rows or budget.
@@ -565,7 +636,7 @@ pub(crate) struct EventCallbackRegistry {
 }
 
 impl EventCallbackRegistry {
-    fn register(&mut self, id: u32, decl: CallbackDeclaration) {
+    fn register(&mut self, id: CallbackId, decl: CallbackDeclaration) {
         self.by_relation
             .entry(decl.dependent.clone())
             .or_default()
@@ -573,7 +644,7 @@ impl EventCallbackRegistry {
         self.by_id.insert(id, decl);
     }
 
-    fn unregister(&mut self, id: u32) -> bool {
+    fn unregister(&mut self, id: CallbackId) -> bool {
         match self.by_id.remove(&id) {
             None => false,
             Some(decl) => {
@@ -595,7 +666,7 @@ impl<S: Storage> Engine<S> {
     ///
     /// (The CozoDB original took an optional bounded capacity; see the
     /// header — delivery is unbounded and lossy-by-disconnect.)
-    pub fn register_callback(&self, relation: &str) -> (u32, Receiver<CallbackEvent>) {
+    pub fn register_callback(&self, relation: &str) -> (CallbackId, Receiver<CallbackEvent>) {
         let (sender, receiver) = channel();
         let decl = CallbackDeclaration {
             dependent: SmartString::from(relation),
@@ -605,13 +676,13 @@ impl<S: Storage> Engine<S> {
             .event_callbacks
             .write()
             .expect("registry lock poisoned");
-        let new_id = self.next_callback_id();
+        let new_id = CallbackId::from_raw(self.next_callback_id());
         registry.register(new_id, decl);
         (new_id, receiver)
     }
 
     /// Unregister a callback; true if it existed.
-    pub fn unregister_callback(&self, id: u32) -> bool {
+    pub fn unregister_callback(&self, id: CallbackId) -> bool {
         self.event_callbacks
             .write()
             .expect("registry lock poisoned")
@@ -644,9 +715,17 @@ impl<S: Storage> Engine<S> {
                     continue;
                 };
                 for (op, new, old) in events {
+                    let event = CallbackEvent::new(op, new, old);
                     for id in ids {
                         if let Some(decl) = registry.by_id.get(id)
-                            && decl.sender.send((op, new.clone(), old.clone())).is_err()
+                            && decl
+                                .sender
+                                .send(CallbackEvent {
+                                    op: event.op,
+                                    new_rows: event.new_rows.clone(),
+                                    old_rows: event.old_rows.clone(),
+                                })
+                                .is_err()
                         {
                             to_remove.push(*id);
                         }
@@ -667,7 +746,7 @@ impl<S: Storage> Engine<S> {
 
     /// Arm an operator-scheduled deep-verify (§51). Does not run it —
     /// [`Self::run_scheduled_deep_verify`] does. Returns the schedule ordinal.
-    pub fn schedule_deep_verify(&self) -> u64 {
+    pub fn schedule_deep_verify(&self) -> ScheduleOrdinal {
         self.event_callbacks
             .write()
             .expect("registry lock poisoned")
@@ -701,6 +780,11 @@ impl<S: Storage> Engine<S> {
             } else {
                 Integrity::failing()
             };
+            // Cap-gated door for last_verify on the operator surface.
+            let cap = OperatorCap::mint();
+            registry
+                .operator_health
+                .set_last_verify(&cap, result.digest);
             registry.deep_verify.record(result.clone());
         }
         Ok(Some(result))
@@ -726,40 +810,39 @@ impl<S: Storage> Engine<S> {
 
     /// Snapshot the sealed [`OperatorHealthSurface`] (§82).
     ///
-    /// Ephemeral compaction-debt / index-status fields are projections of
-    /// [`DebtLedger`] and [`IndexStatus`] — sealed into the returned snapshot
-    /// so a stale stored ephemeral cannot disagree with the authorities.
+    /// Ephemeral in-flight is synced from the live registry. Compaction-debt
+    /// and index-status are **not** mirrored into ephemeral — relation doors
+    /// render [`DebtLedger`] / [`IndexStatus`] directly.
     pub fn operator_health_surface(&self) -> OperatorHealthSurface {
         let registry = self
             .event_callbacks
             .read()
             .expect("registry lock poisoned");
         let mut surface = registry.operator_health.clone();
-        project_authorities_into_ephemeral(&mut surface, registry.index_status);
+        sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         surface
     }
 
     /// Replace the sealed operator health surface (operator wiring door).
     ///
-    /// Always re-projects ephemeral debt/index from [`DebtLedger`] +
-    /// [`IndexStatus`] so ephemeral fields cannot become a second counter.
+    /// Re-syncs ephemeral in-flight from the live registry so a stale
+    /// ephemeral cannot disagree with the registry counter.
     pub fn set_operator_health_surface(&self, mut surface: OperatorHealthSurface) {
         let mut registry = self
             .event_callbacks
             .write()
             .expect("registry lock poisoned");
-        project_authorities_into_ephemeral(&mut surface, registry.index_status);
+        sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         registry.operator_health = surface;
     }
 
-    /// Set the index-status authority (§20) and project it into ephemeral.
+    /// Set the index-status authority (§20).
     pub(crate) fn set_index_status(&self, status: IndexStatus) {
         let mut registry = self
             .event_callbacks
             .write()
             .expect("registry lock poisoned");
         registry.index_status = status;
-        project_authorities_into_ephemeral(&mut registry.operator_health, status);
     }
 
     /// Query the index-status authority (Catalog generation / staleness).
@@ -773,7 +856,9 @@ impl<S: Storage> Engine<S> {
     /// Compaction-debt metric exporter — renders [`DebtLedger`] only (§42/§44).
     pub fn compaction_debt_exporter(&self) -> MetricExporter {
         let surface = self.operator_health_surface();
-        MetricExporter::from_counter(compaction_debt_counter(&surface.debt))
+        let cap = OperatorCap::mint();
+        let ledger = surface.debt(&cap);
+        MetricExporter::from_counter(compaction_debt_counter(&ledger))
     }
 
     /// Index-status metric exporter — renders [`IndexStatus`] only (§20).
@@ -798,7 +883,10 @@ impl<S: Storage> Engine<S> {
     /// Quarantine and failure topology are **unreachable** without
     /// [`OperatorCap`] — this door does not mint or accept Cap.
     pub fn operator_ephemeral_relations(&self) -> OperatorEphemeralRelations {
-        OperatorEphemeralRelations::for_tenant(self.operator_health_surface())
+        OperatorEphemeralRelations::for_tenant(
+            self.operator_health_surface(),
+            self.index_status(),
+        )
     }
 
     /// Cap-present operator ephemeral relations (§82).
@@ -809,7 +897,49 @@ impl<S: Storage> Engine<S> {
         &self,
         cap: OperatorCap,
     ) -> OperatorEphemeralRelations {
-        OperatorEphemeralRelations::for_operator(self.operator_health_surface(), cap)
+        OperatorEphemeralRelations::for_operator(
+            self.operator_health_surface(),
+            self.index_status(),
+            cap,
+        )
+    }
+
+    /// Live in-flight-tx registry count — THE `::running` authority.
+    pub fn in_flight_tx_count(&self) -> u64 {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .in_flight_tx
+    }
+
+    /// Register an open transaction on the live in-flight registry.
+    ///
+    /// SessionTx open/close in `session/db.rs` should call these; until that
+    /// wire lands, tests and Cap doors call them explicitly.
+    pub fn in_flight_tx_begin(&self) {
+        let mut registry = self
+            .event_callbacks
+            .write()
+            .expect("registry lock poisoned");
+        let in_flight = registry.in_flight_tx.saturating_add(1);
+        registry.in_flight_tx = in_flight;
+        sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
+    }
+
+    /// Unregister a closed transaction from the live in-flight registry.
+    pub fn in_flight_tx_end(&self) {
+        let mut registry = self
+            .event_callbacks
+            .write()
+            .expect("registry lock poisoned");
+        let in_flight = registry.in_flight_tx.saturating_sub(1);
+        registry.in_flight_tx = in_flight;
+        sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
+    }
+
+    /// `::running` via the live in-flight-tx registry (never a default-zero surface).
+    pub fn list_running_jobs(&self) -> miette::Result<NamedRows> {
+        crate::session::jobs::list_running_from(self.in_flight_tx_count())
     }
 
     /// Query the liveness tier — independently of readiness and integrity.
@@ -831,12 +961,28 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Query the integrity tier — independently of liveness and readiness.
+    ///
+    /// The relation **renders** [`DeepVerifyDigest`] from the private
+    /// last_verify field when a deep-verify has completed; otherwise the
+    /// digest column is absent (never zero-filled).
     pub fn integrity(&self) -> Integrity {
         self.event_callbacks
             .read()
             .expect("registry lock poisoned")
             .health_tiers
             .integrity
+    }
+
+    /// Operator integrity relation with rendered last-verify digest.
+    pub fn integrity_relation(&self) -> NamedRows {
+        let registry = self
+            .event_callbacks
+            .read()
+            .expect("registry lock poisoned");
+        registry
+            .health_tiers
+            .integrity
+            .relation_with_last_verify(registry.operator_health.last_verify())
     }
 
     /// Operator wiring: set the liveness tier without touching readiness/integrity.
@@ -949,9 +1095,9 @@ mod exactly_once_battery {
         });
 
         let mut new_values: Vec<i64> = vec![];
-        while let Ok((op, new, _old)) = receiver.try_recv() {
-            assert_eq!(op.as_str(), "Put");
-            for row in new.rows() {
+        while let Ok(event) = receiver.try_recv() {
+            assert_eq!(event.op.as_str(), "Put");
+            for row in event.new_rows.rows() {
                 new_values.push(row[1].get_int().expect("int"));
             }
         }
@@ -989,8 +1135,8 @@ mod exactly_once_battery {
         }
 
         let mut new_values: Vec<i64> = vec![];
-        while let Ok((_op, new, _old)) = receiver.try_recv() {
-            for row in new.rows() {
+        while let Ok(event) = receiver.try_recv() {
+            for row in event.new_rows.rows() {
                 new_values.push(row[1].get_int().expect("int"));
             }
         }
@@ -1036,7 +1182,7 @@ mod deep_verify_schedule {
         assert!(db.deep_verify_last_result().is_none());
 
         let ord = db.schedule_deep_verify();
-        assert!(ord >= 1);
+        assert!(ord.get() >= 1);
         assert!(
             db.deep_verify_staleness().is_stale(),
             "armed schedule must report staleness before the run"
@@ -1158,7 +1304,7 @@ mod one_counter_per_metric {
     use crate::session::observe::{
         MetricExporter, compaction_debt_counter, index_status_counter,
     };
-    use crate::store::failure::{DebtLedger, OperatorHealthSurface};
+    use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface};
     use crate::store::fjall::new_fjall_storage;
 
     /// Prove: DebtLedger is THE compaction-debt counter; Catalog IndexStatus
@@ -1219,17 +1365,13 @@ mod one_counter_per_metric {
         let mut debt = DebtLedger::with_ceiling(50);
         debt.admit(11).expect("admit");
         let mut surface = OperatorHealthSurface::default();
-        surface.debt = debt;
-        // Hostile seed: ephemeral debt/index disagree with authorities.
-        surface.ephemeral_mut().replace(
-            0,
-            99, // forged compaction-debt
-            88, // forged index-status
-            Default::default(),
-        );
+        let cap = OperatorCap::mint();
+        surface.set_debt(&cap, debt);
+        // Hostile seed: ephemeral in-flight only (debt/index no longer live here).
+        surface.ephemeral_mut().replace(0, Default::default());
         db.set_operator_health_surface(surface);
 
-        // After seal, ephemeral debt must equal DebtLedger (not the forge).
+        // After seal, debt relation must equal DebtLedger.
         assert_eq!(db.compaction_debt_exporter().value(), 11);
         let rels = db.operator_ephemeral_relations();
         assert_eq!(
@@ -1237,7 +1379,7 @@ mod one_counter_per_metric {
                 .get_int()
                 .unwrap(),
             11,
-            "relation must render DebtLedger, not the forged ephemeral seed"
+            "relation must render DebtLedger, not a forged ephemeral seed"
         );
 
         let status = IndexStatus::witness(

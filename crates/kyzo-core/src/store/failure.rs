@@ -355,6 +355,30 @@ pub enum TenantBlindRefuse {
     FailureTopologyForbidden,
 }
 
+/// Operator-surface metric refuse — authority absent or Cap door required (§82).
+///
+/// Wired-complete or typed refuse: never a pub-raw zero standing in for an
+/// unbuilt seat-44 / seat-22 / seat-36 feed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum OperatorHealthRefuse {
+    /// Seat-44 reclaimable feed not attached (compaction debt authority).
+    #[error("operator health: reclaimable authority (seat 44) is not attached")]
+    #[diagnostic(code(store::refuse::reclaimable_authority_unbuilt))]
+    ReclaimableAuthorityUnbuilt,
+    /// Seat-22 staged-object pressure feed not attached.
+    #[error("operator health: staged-object pressure authority (seat 22) is not attached")]
+    #[diagnostic(code(store::refuse::staged_object_authority_unbuilt))]
+    StagedObjectPressureAuthorityUnbuilt,
+    /// Seat-36 fence-pressure feed not attached (live Fenced footprints).
+    #[error("operator health: fence-pressure authority (seat 36) is not attached")]
+    #[diagnostic(code(store::refuse::fence_pressure_authority_unbuilt))]
+    FencePressureAuthorityUnbuilt,
+    /// No deep-verify has completed — last_verify has nothing to render.
+    #[error("operator health: last_verify has never been set (deep-verify never completed)")]
+    #[diagnostic(code(store::refuse::last_verify_absent))]
+    LastVerifyAbsent,
+}
+
 /// Point-in-time storage counters carried on the operator ephemeral surface.
 ///
 /// Distinct from the fjall `StorageStats` type so the failure seat never
@@ -374,18 +398,15 @@ pub struct StorageStatsSnapshot {
 }
 
 /// Ephemeral engine counters queryable as relations on the sealed operator
-/// surface (§82): in-flight tx, compaction-debt, index-status, storage-stats.
+/// surface (§82): in-flight tx + storage-stats only.
 ///
-/// T2 seals one-counter-per-metric; T1 seats the relation surface and the
-/// tenant-blind gate around it.
+/// Compaction-debt renders from the one [`DebtLedger`]; index-status renders
+/// from [`crate::session::generation::IndexStatus`] — neither is duplicated
+/// here as a second counter.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EphemeralEngineState {
-    /// Open / in-flight transactions.
+    /// Open / in-flight transactions (projection of the live registry).
     in_flight_tx: u64,
-    /// Compaction debt outstanding (DebtLedger-aligned; T2 owns uniqueness).
-    compaction_debt: u64,
-    /// Catalog index generation / staleness witness (§20).
-    index_status_generation: u64,
     /// Storage stats snapshot.
     storage_stats: StorageStatsSnapshot,
 }
@@ -396,32 +417,14 @@ impl EphemeralEngineState {
         self.in_flight_tx
     }
 
-    /// Compaction-debt outstanding.
-    pub fn compaction_debt(&self) -> u64 {
-        self.compaction_debt
-    }
-
-    /// Index-status generation counter.
-    pub fn index_status_generation(&self) -> u64 {
-        self.index_status_generation
-    }
-
     /// Storage-stats snapshot.
     pub fn storage_stats(&self) -> StorageStatsSnapshot {
         self.storage_stats
     }
 
     /// Operator/wiring door: replace the ephemeral snapshot.
-    pub fn replace(
-        &mut self,
-        in_flight_tx: u64,
-        compaction_debt: u64,
-        index_status_generation: u64,
-        storage_stats: StorageStatsSnapshot,
-    ) {
+    pub fn replace(&mut self, in_flight_tx: u64, storage_stats: StorageStatsSnapshot) {
         self.in_flight_tx = in_flight_tx;
-        self.compaction_debt = compaction_debt;
-        self.index_status_generation = index_status_generation;
         self.storage_stats = storage_stats;
     }
 }
@@ -429,23 +432,21 @@ impl EphemeralEngineState {
 /// Operator-sealed health surface (§82) — tenant-blind.
 ///
 /// Ephemeral engine state is queryable as relations on this sealed operator
-/// door. Quarantine ranges are **private**: only callers presenting
-/// [`OperatorCap`] may select them. Cap-absent doors never reach this field.
+/// door. Debt ledger, last-verify digest, and quarantine are **private**:
+/// Cap-gated doors set them; render doors project them. Reclaimable /
+/// staged-object / fence-pressure have no pub-raw zero fields — each renders
+/// from its real authority or typed-refuses when that authority is unbuilt.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OperatorHealthSurface {
-    /// Current debt ledger snapshot.
-    pub debt: DebtLedger,
-    /// Bytes / objects reclaimable under operator pressure.
-    pub reclaimable: u64,
+    /// Debt ledger — **private**; set only through Cap-gated [`Self::set_debt`].
+    debt: DebtLedger,
+    /// Seat-44 reclaimable feed (compaction debt) — absent until attached.
+    compaction_debt_feed: Option<crate::store::compact::CompactionDebt>,
     /// Active quarantine ranges — **private**; Cap-gated accessor only.
     quarantine: Vec<QuarantineRange>,
-    /// Last verification walk outcome digest (or zero if never run).
-    pub last_verify: [u8; 32],
-    /// Staged-object pressure (Pending / PermanenceCandidate count proxy).
-    pub staged_object_pressure: u64,
-    /// Fence-pressure feed from live Fenced footprints.
-    pub fence_pressure: u64,
-    /// Ephemeral counters projected as relations.
+    /// Last deep-verify digest — **private**; never a zero-filled `[u8; 32]`.
+    last_verify: Option<crate::store::verify_walk::DeepVerifyDigest>,
+    /// Ephemeral counters projected as relations (in-flight + storage-stats).
     ephemeral: EphemeralEngineState,
 }
 
@@ -458,6 +459,78 @@ impl OperatorHealthSurface {
     /// Mutable ephemeral counters (operator / session wiring).
     pub fn ephemeral_mut(&mut self) -> &mut EphemeralEngineState {
         &mut self.ephemeral
+    }
+
+    /// Render outstanding debt from the private [`DebtLedger`] (tenant-visible metric).
+    pub fn render_debt_outstanding(&self) -> u64 {
+        self.debt.outstanding()
+    }
+
+    /// Cap-gated write door for the debt ledger (§82 / §44).
+    pub fn set_debt(&mut self, _cap: &OperatorCap, debt: DebtLedger) {
+        self.debt = debt;
+    }
+
+    /// Cap-gated read of the debt ledger.
+    pub fn debt(&self, _cap: &OperatorCap) -> DebtLedger {
+        self.debt
+    }
+
+    /// Attach seat-44 compaction-debt feed (reclaimable authority).
+    pub fn set_compaction_debt_feed(
+        &mut self,
+        _cap: &OperatorCap,
+        feed: crate::store::compact::CompactionDebt,
+    ) {
+        self.compaction_debt_feed = Some(feed);
+    }
+
+    /// Render reclaimable bytes from seat-44 compaction debt — or refuse.
+    pub fn render_reclaimable(
+        &self,
+        _cap: &OperatorCap,
+    ) -> Result<u64, OperatorHealthRefuse> {
+        self.compaction_debt_feed
+            .map(|d| d.reclaimable_bytes)
+            .ok_or(OperatorHealthRefuse::ReclaimableAuthorityUnbuilt)
+    }
+
+    /// Staged-object pressure (seat 22) — refuse until ObjectStore feed is attached.
+    pub fn render_staged_object_pressure(
+        &self,
+        _cap: &OperatorCap,
+    ) -> Result<u64, OperatorHealthRefuse> {
+        Err(OperatorHealthRefuse::StagedObjectPressureAuthorityUnbuilt)
+    }
+
+    /// Fence pressure (seat 36) — refuse until FootprintIndex feed is attached.
+    pub fn render_fence_pressure(
+        &self,
+        _cap: &OperatorCap,
+    ) -> Result<u64, OperatorHealthRefuse> {
+        Err(OperatorHealthRefuse::FencePressureAuthorityUnbuilt)
+    }
+
+    /// Cap-gated write of last deep-verify digest.
+    pub fn set_last_verify(
+        &mut self,
+        _cap: &OperatorCap,
+        digest: crate::store::verify_walk::DeepVerifyDigest,
+    ) {
+        self.last_verify = Some(digest);
+    }
+
+    /// Render last-verify digest — refuse when never run (never zero-fill).
+    pub fn render_last_verify(
+        &self,
+    ) -> Result<crate::store::verify_walk::DeepVerifyDigest, OperatorHealthRefuse> {
+        self.last_verify
+            .ok_or(OperatorHealthRefuse::LastVerifyAbsent)
+    }
+
+    /// Borrow last-verify when present (for integrity relation rendering).
+    pub fn last_verify(&self) -> Option<crate::store::verify_walk::DeepVerifyDigest> {
+        self.last_verify
     }
 
     /// Record a quarantine range on the operator surface (never a tenant door).
