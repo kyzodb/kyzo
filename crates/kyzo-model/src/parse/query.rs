@@ -30,16 +30,17 @@ use crate::program::query::{
     WriteValidity,
 };
 use crate::program::rule::{
-    FixedRuleApply, FixedRuleArg, FixedRuleHandle, FixedRuleOptions, HeadAggrSlot, InputAtom,
-    InputInlineRule, InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
-    InputRelationApplyAtom, InputRuleApplyAtom, SearchInput, Trivia, Unification, ValidityClause,
+    DeltaAxis, FixedRuleApply, FixedRuleArg, FixedRuleHandle, FixedRuleOptions, HeadAggrSlot,
+    InputAtom, InputInlineRule, InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom,
+    InputProgram, InputRelationApplyAtom, InputRuleApplyAtom, SearchInput, Trivia, Unification,
+    ValidityClause,
 };
 use crate::program::span::SourceSpan;
 use crate::program::symbol::{Symbol, SymbolKind};
 use crate::schema::column::{ColType, ColumnDef, NullableColType};
 use crate::schema::relation::StoredRelationMetadata;
 use crate::value::validity_coerce::data_value_to_vld_spec;
-use crate::value::{AsOf, DataValue, ValidityTs};
+use crate::value::{AsOf, DataValue, MAX_VALIDITY_TS, ValidityTs};
 
 use super::expr::build_expr;
 use super::schema::parse_schema;
@@ -812,12 +813,8 @@ fn parse_atom(
             for v in src.next().unwrap().into_inner() {
                 args.push(build_expr(v, param_pool)?);
             }
-            let validity = match src.next() {
-                None => None,
-                Some(vld_clause) => Some(ValidityClause::At(parse_at_clause(
-                    vld_clause, param_pool, cur_vld,
-                )?)),
-            };
+            let validity =
+                parse_read_validity_clause(src.next(), param_pool, cur_vld, ignored_counter)?;
             InputAtom::Relation {
                 inner: InputRelationApplyAtom {
                     name: Symbol::new(&name.as_str()[1..], name.extract_span()),
@@ -870,12 +867,8 @@ fn parse_atom(
                 let (k, v) = extract_named_apply_arg(arg, param_pool)?;
                 args.insert(k, v);
             }
-            let validity = match src.next() {
-                None => None,
-                Some(vld_clause) => Some(ValidityClause::At(parse_at_clause(
-                    vld_clause, param_pool, cur_vld,
-                )?)),
-            };
+            let validity =
+                parse_read_validity_clause(src.next(), param_pool, cur_vld, ignored_counter)?;
             InputAtom::NamedFieldRelation {
                 inner: InputNamedFieldRelationApplyAtom {
                     name,
@@ -1281,6 +1274,66 @@ fn parse_at_clause(
     let first = expr2vld_spec(build_expr(coords.next().unwrap(), param_pool)?, cur_vld)?;
     Ok(match coords.next() {
         None => AsOf::current(first),
-        Some(second) => AsOf::at(first, expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?),
+        Some(second) => AsOf::at(
+            first,
+            expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?,
+        ),
     })
+}
+
+/// Optional trailing `@` clause on a stored-relation atom: point-in-time
+/// (`@ expr`), or story #62's `@spans` / `@delta` / `@delta_sys` — one
+/// grammar seat (`read_validity_clause`), dispatched by which alternative
+/// matched. Silent in the grammar, so the pair is the matched alternative.
+fn parse_read_validity_clause(
+    clause: Option<Pair<'_>>,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+    ignored_counter: &mut u32,
+) -> Result<Option<ValidityClause>> {
+    let Some(clause) = clause else {
+        return Ok(None);
+    };
+    Ok(Some(match clause.as_rule() {
+        Rule::validity_clause => ValidityClause::At(parse_at_clause(clause, param_pool, cur_vld)?),
+        Rule::spans_clause => {
+            let mut children = clause.into_inner();
+            children.next().unwrap(); // spans_kw
+            let var_pair = children.next().unwrap();
+            let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
+            if matches!(var.kind(), SymbolKind::Ignored) {
+                var.name = format!("*^*{}", *ignored_counter).into();
+                *ignored_counter += 1;
+            }
+            let sys = match children.next() {
+                None => MAX_VALIDITY_TS,
+                Some(sys_expr) => expr2vld_spec(build_expr(sys_expr, param_pool)?, cur_vld)?,
+            };
+            ValidityClause::Spans { sys, var }
+        }
+        Rule::delta_clause | Rule::delta_sys_clause => {
+            let axis = if clause.as_rule() == Rule::delta_sys_clause {
+                DeltaAxis::Sys
+            } else {
+                DeltaAxis::Valid
+            };
+            let mut children = clause.into_inner();
+            children.next().unwrap(); // delta_kw / delta_sys_kw
+            let from = expr2vld_spec(build_expr(children.next().unwrap(), param_pool)?, cur_vld)?;
+            let to = expr2vld_spec(build_expr(children.next().unwrap(), param_pool)?, cur_vld)?;
+            let var_pair = children.next().unwrap();
+            let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
+            if matches!(var.kind(), SymbolKind::Ignored) {
+                var.name = format!("*^*{}", *ignored_counter).into();
+                *ignored_counter += 1;
+            }
+            ValidityClause::Delta {
+                axis,
+                from,
+                to,
+                var,
+            }
+        }
+        _ => bail!(UnexpectedRule(clause.extract_span())),
+    }))
 }

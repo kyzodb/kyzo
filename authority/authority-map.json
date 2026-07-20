@@ -199,21 +199,21 @@
     {
       "class": "error-downcast",
       "file": "crates/kyzo-core/src/session/verify.rs",
-      "line": 344,
+      "line": 400,
       "excerpt": ".downcast_ref::<ProvenanceLimitExceeded>",
       "note": "Report.downcast_ref recovering typed errors in product code"
     },
     {
       "class": "error-downcast",
       "file": "crates/kyzo-core/src/session/verify.rs",
-      "line": 349,
+      "line": 405,
       "excerpt": ".downcast_ref::<ProvenanceUnsupported>",
       "note": "Report.downcast_ref recovering typed errors in product code"
     },
     {
       "class": "error-downcast",
       "file": "crates/kyzo-core/src/session/verify.rs",
-      "line": 368,
+      "line": 424,
       "excerpt": ".downcast_ref::<ProvenanceLimitExceeded>",
       "note": "Report.downcast_ref recovering typed errors in product code"
     },

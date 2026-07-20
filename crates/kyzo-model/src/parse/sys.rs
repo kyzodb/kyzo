@@ -464,10 +464,7 @@ pub(crate) fn parse_sys(
                 }
                 Rule::constraint_drop => {
                     let name_p = op.children().expect("the constraint's name")?;
-                    SysScript::RemoveConstraint(Symbol::new(
-                        name_p.as_str(),
-                        name_p.extract_span(),
-                    ))
+                    SysScript::RemoveConstraint(Symbol::new(name_p.as_str(), name_p.extract_span()))
                 }
                 Rule::constraint_list => SysScript::ListConstraints,
                 _ => return Err(unexpected("a constraint operation", &op)),

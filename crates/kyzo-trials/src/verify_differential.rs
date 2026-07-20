@@ -792,8 +792,8 @@ fn verify_matches_a_negated_historical_read() {
     );
 }
 
-/// `@spans` fails at the language door (never silent Match). `:limit`
-/// returns NamedRows `unsupported` naming limit specifically. Control:
+/// `@spans` is NamedRows `unsupported` naming the relation (never silent
+/// Match). `:limit` returns NamedRows `unsupported` naming limit. Control:
 /// the unlimited query still Matches against eval.
 #[test]
 fn verify_refuses_a_spans_read_by_name() {
@@ -801,13 +801,19 @@ fn verify_refuses_a_spans_read_by_name() {
     db.run_script(":create hist {k: Int => v: Any}", no_params())
         .expect("create hist");
 
-    let spans = db.run_script(
-        "::verify { ?[k, v, iv] := *hist[k, v @spans iv] }",
-        no_params(),
-    );
+    let spans = db
+        .run_script(
+            "::verify { ?[k, v, iv] := *hist[k, v @spans iv] }",
+            no_params(),
+        )
+        .expect("::verify returns NamedRows for @spans");
+    assert_eq!(status_of(&spans), "unsupported");
+    assert_ne!(status_of(&spans), "match");
+    let spans_summary = summary_of(&spans);
     assert!(
-        spans.is_err(),
-        "@spans must fail at the language door, got {spans:?}"
+        spans_summary.contains("hist")
+            && (spans_summary.contains("spans") || spans_summary.contains("interval")),
+        "expected hist + spans/interval named in unsupported summary, got {spans_summary}"
     );
 
     let unlimited = "?[x, y] := *edge[x, y]";

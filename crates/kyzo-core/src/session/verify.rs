@@ -20,7 +20,8 @@
 //! [`VerifyOutcome::Mismatch`] (reproducible bundle), rendered as NamedRows
 //! `["status", "summary", "detail"]`.
 //!
-//! Unsupported constructs (mutations, `:order`/`:limit`/`:offset`, bodies that
+//! Unsupported constructs (mutations, `:order`/`:limit`/`:offset`,
+//! `@spans`/`@delta`/`@delta_sys` interval-derivation reads, bodies that
 //! cannot attribute premises) are named [`VerifyOutcome::Unsupported`] — never
 //! a silent pass.
 //!
@@ -65,6 +66,10 @@ use crate::store::merkle::{
 };
 use crate::store::{CommitOrdinal, ReadTx, Storage};
 use kyzo_model::program::InputProgram;
+use kyzo_model::program::rule::{
+    InputAtom, InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom,
+    ValidityClause,
+};
 use kyzo_model::value::{DataValue, Tuple, ValidityTs};
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -189,6 +194,13 @@ pub enum VerifyUnsupported {
     )]
     #[diagnostic(code(verify::order_limit_offset))]
     OrderLimitOffset,
+    #[error(
+        "relation atom '{name}' is an interval-derivation (@spans) or diff \
+         (@delta/@delta_sys) read: these bind an extra column beyond the \
+         relation's own arity — not supported by this cut of ::verify"
+    )]
+    #[diagnostic(code(verify::interval_derivation))]
+    IntervalDerivation { name: String },
     #[error("provenance unavailable: {reason}")]
     #[diagnostic(code(verify::provenance_unavailable))]
     ProvenanceUnavailable { reason: &'static str },
@@ -241,6 +253,47 @@ impl VerifyOutcome {
     }
 }
 
+/// First stored-relation atom carrying `@spans` / `@delta` / `@delta_sys`,
+/// if any — the language-door shape provenance `::verify` refuses rather
+/// than silently matching.
+fn first_interval_derivation(program: &InputProgram) -> Option<String> {
+    for (_name, def) in program.iter_all() {
+        let InputInlineRulesOrFixed::Rules { rules } = def else {
+            continue;
+        };
+        for rule in rules {
+            if let Some(rel) = rule.body.iter().find_map(atom_interval_derivation) {
+                return Some(rel);
+            }
+        }
+    }
+    None
+}
+
+fn atom_interval_derivation(atom: &InputAtom) -> Option<String> {
+    match atom {
+        InputAtom::Relation {
+            inner: InputRelationApplyAtom { name, validity, .. },
+        }
+        | InputAtom::NamedFieldRelation {
+            inner: InputNamedFieldRelationApplyAtom { name, validity, .. },
+        } => match validity {
+            Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
+                Some(name.name.to_string())
+            }
+            Some(ValidityClause::At(_)) | None => None,
+        },
+        InputAtom::Negation { inner, .. } => atom_interval_derivation(inner),
+        InputAtom::Conjunction { inner, .. } | InputAtom::Disjunction { inner, .. } => {
+            inner.iter().find_map(atom_interval_derivation)
+        }
+        InputAtom::Rule { .. }
+        | InputAtom::Predicate { .. }
+        | InputAtom::Unification { .. }
+        | InputAtom::Search { .. } => None,
+    }
+}
+
 impl<S: Storage> Engine<S> {
     /// Rust API: parse `payload` and run provenance-backed `::verify`.
     pub fn verify_script(
@@ -275,6 +328,9 @@ impl<S: Storage> Engine<S> {
             || program.out_opts().offset.is_some()
         {
             return Ok(VerifyUnsupported::OrderLimitOffset.into());
+        }
+        if let Some(name) = first_interval_derivation(&program) {
+            return Ok(VerifyUnsupported::IntervalDerivation { name }.into());
         }
 
         let out_opts = program.out_opts().clone();
