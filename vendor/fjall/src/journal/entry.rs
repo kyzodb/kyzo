@@ -63,7 +63,7 @@ pub fn serialize_marker_item<W: Write>(
     };
 
     // NOTE: Truncation is okay and actually needed
-    writer.write_u64::<LittleEndian>(keyspace_id)?;
+    writer.write_u64::<LittleEndian>(keyspace_id.get())?;
 
     // NOTE: Truncation is okay and actually needed
     #[expect(clippy::cast_possible_truncation)]
@@ -150,7 +150,7 @@ impl Entry {
             }
             Clear { keyspace_id } => {
                 writer.write_u8(Tag::Clear.into())?;
-                writer.write_u64::<LittleEndian>(*keyspace_id)?;
+                writer.write_u64::<LittleEndian>(keyspace_id.get())?;
             }
         }
         Ok(())
@@ -172,7 +172,7 @@ impl Entry {
                 let compression = CompressionType::decode_from(reader)?;
 
                 // Read keyspace ID
-                let keyspace_id = reader.read_u64::<LittleEndian>()?;
+                let keyspace_id = InternalKeyspaceId::new(reader.read_u64::<LittleEndian>()?);
 
                 // Read key len
                 let key_len = reader.read_u16::<LittleEndian>()?;
@@ -236,7 +236,7 @@ impl Entry {
                 Ok(Self::End(checksum))
             }
             Tag::Clear => {
-                let keyspace_id = reader.read_u64::<LittleEndian>()?;
+                let keyspace_id = InternalKeyspaceId::new(reader.read_u64::<LittleEndian>()?);
                 Ok(Self::Clear { keyspace_id })
             }
         }
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn test_serialize_and_deserialize_success() -> crate::Result<()> {
         let item = Entry::Item {
-            keyspace_id: 0,
+            keyspace_id: InternalKeyspaceId::new(0),
             key: vec![1, 2, 3].into(),
             value: vec![].into(),
             value_type: ValueType::Value,

@@ -383,7 +383,7 @@ impl AbstractTree for BlobTree {
             table_folder.clone(),
             self.index.table_id_counter.clone(),
             64 * 1_024 * 1_024,
-            0,
+            crate::table::Level::new(0),
         )?
         .use_data_block_restart_interval(data_block_restart_interval)
         .use_index_block_restart_interval(index_block_restart_interval)

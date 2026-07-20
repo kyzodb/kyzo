@@ -7,7 +7,7 @@ use crate::{
     checksum::ChecksummedWriter,
     config::BloomConstructionPolicy,
     table::{
-        block::{BlockIdentity, Header as BlockHeader},
+        block::{BlockIdentity, Header as BlockHeader, Level},
         filter::standard_bloom::Builder,
         Block, BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle, TableId,
     },
@@ -38,11 +38,11 @@ pub struct PartitionedFilterWriter {
     compression: CompressionType,
 
     table_id: TableId,
-    level: u8,
+    level: Level,
 }
 
 impl PartitionedFilterWriter {
-    pub fn new(bloom_policy: BloomConstructionPolicy, table_id: TableId, level: u8) -> Self {
+    pub fn new(bloom_policy: BloomConstructionPolicy, table_id: TableId, level: Level) -> Self {
         Self {
             final_filter_buffer: Vec::new(),
 

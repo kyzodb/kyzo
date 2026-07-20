@@ -7,7 +7,7 @@ use crate::table::{IndexBlock, KeyedBlockHandle};
 use crate::SeqNo;
 use crate::{
     table::{
-        block::BlockType,
+        block::{BlockType, Level},
         block_index::{iter::OwnedIndexBlockIter, BlockIndexIter},
         util::load_block,
     },
@@ -25,7 +25,7 @@ pub struct TwoLevelBlockIndex {
     pub(crate) top_level_index: IndexBlock,
     pub(crate) table_id: GlobalTableId,
     /// Write-time level bound into block checksums (§49).
-    pub(crate) level: u8,
+    pub(crate) level: Level,
     pub(crate) path: Arc<PathBuf>,
     pub(crate) file_accessor: FileAccessor,
     pub(crate) cache: Arc<Cache>,
@@ -68,7 +68,7 @@ pub struct Iter {
     hi: Option<(UserKey, SeqNo)>,
 
     table_id: GlobalTableId,
-    level: u8,
+    level: Level,
     path: Arc<PathBuf>,
     file_accessor: FileAccessor,
     cache: Arc<Cache>,

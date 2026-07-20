@@ -5,7 +5,7 @@
 use crate::{
     checksum::ChecksummedWriter,
     table::{
-        block::{BlockIdentity, Header as BlockHeader},
+        block::{BlockIdentity, Header as BlockHeader, Level},
         index_block::KeyedBlockHandle,
         writer::index::BlockIndexWriter,
         Block, BlockHandle, BlockOffset, IndexBlock, TableId,
@@ -35,11 +35,11 @@ pub struct PartitionedIndexWriter {
     final_write_buffer: Vec<u8>,
 
     table_id: TableId,
-    level: u8,
+    level: Level,
 }
 
 impl PartitionedIndexWriter {
-    pub fn new(table_id: TableId, level: u8) -> Self {
+    pub fn new(table_id: TableId, level: Level) -> Self {
         Self {
             relative_file_pos: 0,
             buffer_size: 0,

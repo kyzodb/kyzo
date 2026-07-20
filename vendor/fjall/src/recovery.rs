@@ -25,7 +25,7 @@ pub fn recover_keyspaces(db: &Database, meta_keyspace: &MetaKeyspace) -> crate::
     #[expect(clippy::expect_used)]
     let mut keyspaces_lock = db.supervisor.keyspaces.write().expect("lock is poisoned");
 
-    let mut highest_id = 1;
+    let mut highest_id = InternalKeyspaceId::new(1);
 
     for dirent in std::fs::read_dir(&keyspaces_folder)? {
         let dirent = dirent?;
@@ -47,7 +47,7 @@ pub fn recover_keyspaces(db: &Database, meta_keyspace: &MetaKeyspace) -> crate::
             .expect("should be valid integer");
 
         // NOTE: Is meta keyspace
-        if keyspace_id == 0 {
+        if keyspace_id == InternalKeyspaceId::new(0) {
             continue;
         }
 
@@ -111,7 +111,7 @@ pub fn recover_keyspaces(db: &Database, meta_keyspace: &MetaKeyspace) -> crate::
         log::trace!("Recovered keyspace {keyspace_name:?}");
     }
 
-    db.keyspace_id_counter.set(highest_id + 1);
+    db.keyspace_id_counter.set(highest_id.get() + 1);
 
     Ok(())
 }

@@ -15,7 +15,7 @@ mod r#type;
 pub(crate) use decoder::{Decodable, Decoder, ParsedItem};
 pub(crate) use encoder::{Encodable, Encoder};
 pub use header::Header;
-pub use identity::BlockIdentity;
+pub use identity::{BlockIdentity, BlockKind, Level};
 pub use offset::BlockOffset;
 pub use r#type::BlockType;
 pub(crate) use trailer::{Trailer, TRAILER_START_MARKER};
@@ -45,7 +45,7 @@ impl Block {
 
     /// Encodes a block into a writer.
     ///
-    /// The data checksum covers [`BlockIdentity`] (table id / level / offset) plus payload.
+    /// The data checksum covers [`BlockIdentity`] (table id / kind / offset) plus payload.
     pub fn write_into<W: std::io::Write>(
         mut writer: &mut W,
         data: &[u8],
@@ -94,7 +94,7 @@ impl Block {
     pub(crate) fn rebind_checksums(
         buffer: &mut [u8],
         table_id: TableId,
-        level: u8,
+        level: Level,
         base_offset: BlockOffset,
     ) -> crate::Result<()> {
         let mut pos = 0usize;
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn block_roundtrip_uncompressed() -> crate::Result<()> {
-        let identity = BlockIdentity::new(1, 0, BlockOffset(0));
+        let identity = BlockIdentity::new(1, Level::new(0), BlockOffset(0));
         let mut writer = vec![];
 
         Block::write_into(
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     #[cfg(feature = "lz4")]
     fn block_roundtrip_lz4() -> crate::Result<()> {
-        let identity = BlockIdentity::new(1, 0, BlockOffset(0));
+        let identity = BlockIdentity::new(1, Level::new(0), BlockOffset(0));
         let mut writer = vec![];
 
         Block::write_into(
@@ -280,11 +280,11 @@ mod tests {
     }
 
     /// A relocated-but-intact block must fail verification: checksum covers
-    /// logical block identity (table id / level / offset), not content alone.
+    /// logical block identity (table id / kind / offset), not content alone.
     #[test]
     fn relocated_but_intact_block_fails_verification() -> crate::Result<()> {
-        let original = BlockIdentity::new(7, 2, BlockOffset(4_096));
-        let relocated = BlockIdentity::new(7, 2, BlockOffset(8_192));
+        let original = BlockIdentity::new(7, Level::new(2), BlockOffset(4_096));
+        let relocated = BlockIdentity::new(7, Level::new(2), BlockOffset(8_192));
 
         let mut bytes = vec![];
         Block::write_into(
@@ -303,7 +303,7 @@ mod tests {
         }
 
         // Wrong table id is also caught (swap-two-tables).
-        let other_table = BlockIdentity::new(8, 2, BlockOffset(4_096));
+        let other_table = BlockIdentity::new(8, Level::new(2), BlockOffset(4_096));
         match Block::from_reader(&mut &bytes[..], CompressionType::None, &other_table) {
             Err(crate::Error::ChecksumMismatch { .. }) => {}
             Err(err) => panic!("expected ChecksumMismatch, got {err:?}"),

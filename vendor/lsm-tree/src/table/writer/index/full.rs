@@ -5,7 +5,7 @@
 use crate::{
     checksum::ChecksummedWriter,
     table::{
-        block::{BlockIdentity, BlockOffset, Header as BlockHeader},
+        block::{BlockIdentity, BlockOffset, Header as BlockHeader, Level},
         index_block::KeyedBlockHandle,
         writer::index::BlockIndexWriter,
         Block, IndexBlock, TableId,
@@ -21,11 +21,11 @@ pub struct FullIndexWriter {
     compression: CompressionType,
     block_handles: Vec<KeyedBlockHandle>,
     table_id: TableId,
-    level: u8,
+    level: Level,
 }
 
 impl FullIndexWriter {
-    pub fn new(table_id: TableId, level: u8) -> Self {
+    pub fn new(table_id: TableId, level: Level) -> Self {
         Self {
             compression: CompressionType::None,
             block_handles: Vec::new(),

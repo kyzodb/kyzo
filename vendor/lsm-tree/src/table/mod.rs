@@ -20,7 +20,7 @@ pub mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use block::{Block, BlockIdentity, BlockOffset};
+pub use block::{Block, BlockIdentity, BlockKind, BlockOffset, Level};
 pub use data_block::DataBlock;
 pub use id::{GlobalTableId, TableId};
 pub use index_block::{BlockHandle, IndexBlock, KeyedBlockHandle};
@@ -430,7 +430,7 @@ impl Table {
         file: &File,
         compression: CompressionType,
         table_id: TableId,
-        level: u8,
+        level: Level,
     ) -> crate::Result<IndexBlock> {
         log::trace!("Reading TLI block, with tli_ptr={:?}", regions.tli);
 

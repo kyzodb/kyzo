@@ -93,7 +93,7 @@ fn create_data_block_reader(block: DataBlock) -> OwnedDataBlockIter {
 
 pub struct Iter {
     table_id: GlobalTableId,
-    level: u8,
+    level: crate::table::block::Level,
     path: Arc<PathBuf>,
 
     global_seqno: SeqNo,
@@ -122,7 +122,7 @@ pub struct Iter {
 impl Iter {
     pub fn new(
         table_id: GlobalTableId,
-        level: u8,
+        level: crate::table::block::Level,
         global_seqno: SeqNo,
         path: Arc<PathBuf>,
         index_iter: BlockIndexIterImpl,

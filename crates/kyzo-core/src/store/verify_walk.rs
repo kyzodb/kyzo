@@ -57,6 +57,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use fjall::Slice;
 use miette::{Result, bail};
 use sha2::{Digest, Sha256};
+use smartstring::{LazyCompact, SmartString};
 use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle};
 use crate::store::failure::{KeyspaceId, QuarantineRange};
 use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
@@ -325,14 +326,57 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
 // ---------------------------------------------------------------------------
 
 /// One index whose re-derived expected content disagreed with stored bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IndexMismatch {
     /// Catalog name of the index backing (`{base}:{index}`).
     pub index_name: String,
-    /// Index kind label (`plain` / `temporal` / `hnsw` / `fts` / `lsh`).
-    pub kind: &'static str,
+    /// Index kind — the catalog [`IndexKind`], never a string label.
+    pub(crate) kind: IndexKind,
     /// Human-locatable diff summary.
     pub detail: String,
+}
+
+/// Catalog relation name — owned identity for name→id maps, never a bare `String`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct RelationName(SmartString<LazyCompact>);
+
+impl RelationName {
+    /// Lift from a [`RelationHandle::name`] (or any catalog SmartString name).
+    #[must_use]
+    pub fn from_handle_name(name: &SmartString<LazyCompact>) -> Self {
+        Self(name.clone())
+    }
+
+    /// Borrow as `&str`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<&str> for RelationName {
+    fn from(s: &str) -> Self {
+        Self(SmartString::from(s))
+    }
+}
+
+impl From<String> for RelationName {
+    fn from(s: String) -> Self {
+        Self(SmartString::from(s))
+    }
+}
+
+impl std::fmt::Display for RelationName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
+impl AsRef<str> for RelationName {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
 }
 
 /// Domain-separated digest of a [`DeepVerifyReport`].
@@ -353,6 +397,38 @@ impl DeepVerifyDigest {
     /// Borrow the digest bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+/// Domain-separated digest of one index row's content for set-diff (§51).
+///
+/// Owned identity for expected/stored deep-verify sets — never a bare
+/// `[u8; 32]`. Bytes are produced only by [`digest_bytes`] under the
+/// `kyzo.index_row_digest.v1` domain tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct IndexRowDigest([u8; 32]);
+
+const _: () =
+    assert!(std::mem::size_of::<IndexRowDigest>() == std::mem::size_of::<[u8; 32]>());
+const _: () =
+    assert!(std::mem::align_of::<IndexRowDigest>() == std::mem::align_of::<[u8; 32]>());
+
+impl IndexRowDigest {
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Stable digest tag for an [`IndexKind`] discriminant (PartialEq-only kinds).
+fn index_kind_digest_tag(kind: &IndexKind) -> &'static [u8] {
+    match kind {
+        IndexKind::Plain { .. } => b"plain",
+        IndexKind::Temporal => b"temporal",
+        IndexKind::Hnsw(_) => b"hnsw",
+        IndexKind::Fts(_) => b"fts",
+        IndexKind::Lsh { .. } => b"lsh",
     }
 }
 
@@ -389,25 +465,28 @@ impl DeepVerifyReport {
         h.update(u64::to_be_bytes(self.index_mismatches.len() as u64));
         for m in &self.index_mismatches {
             h.update(m.index_name.as_bytes());
-            h.update(m.kind.as_bytes());
+            h.update(index_kind_digest_tag(&m.kind));
             h.update(m.detail.as_bytes());
         }
         DeepVerifyDigest(h.finalize().into())
     }
 }
 
-fn digest_bytes(payload: &[u8]) -> [u8; 32] {
+fn digest_bytes(payload: &[u8]) -> IndexRowDigest {
     let mut h = Sha256::new();
     h.update(b"kyzo.index_row_digest.v1");
     h.update(payload);
-    h.finalize().into()
+    IndexRowDigest(h.finalize().into())
 }
 
-fn digest_tuple_cols(cols: &[DataValue]) -> [u8; 32] {
+fn digest_tuple_cols(cols: &[DataValue]) -> IndexRowDigest {
     digest_bytes(&encode_tuple_bare(cols))
 }
 
-fn set_diff_detail(expected: &BTreeSet<[u8; 32]>, stored: &BTreeSet<[u8; 32]>) -> Option<String> {
+fn set_diff_detail(
+    expected: &BTreeSet<IndexRowDigest>,
+    stored: &BTreeSet<IndexRowDigest>,
+) -> Option<String> {
     let only_expected = expected.difference(stored).count();
     let only_stored = stored.difference(expected).count();
     if only_expected == 0 && only_stored == 0 {
@@ -454,7 +533,7 @@ fn project_mapper_cols(mapper: &[usize], row: &[DataValue], base_name: &str) -> 
 /// Collect catalog handles keyed by relation id, plus name→id for index resolve.
 fn load_catalog_handles(
     tx: &impl ReadTx,
-) -> Result<(BTreeMap<RelationId, RelationHandle>, BTreeMap<String, RelationId>)> {
+) -> Result<(BTreeMap<RelationId, RelationHandle>, BTreeMap<RelationName, RelationId>)> {
     let mut by_id = BTreeMap::new();
     let mut by_name = BTreeMap::new();
     let lower = Tuple::default().encode_as_key(RelationId::SYSTEM);
@@ -468,7 +547,7 @@ fn load_catalog_handles(
         match tup.first() {
             Some(DataValue::Str(_)) => {
                 let h = RelationHandle::decode(&v).map_err(|e| miette::miette!("{e}"))?;
-                by_name.insert(h.name.to_string(), h.id);
+                by_name.insert(RelationName::from_handle_name(&h.name), h.id);
                 by_id.insert(h.id, h);
             }
             _ => {}
@@ -482,6 +561,7 @@ fn rederive_plain(
     base: &RelationHandle,
     idx: &RelationHandle,
     mapper: &[usize],
+    kind: IndexKind,
 ) -> Result<Option<IndexMismatch>> {
     let mut expected = BTreeSet::new();
     for row in base.scan_all(tx) {
@@ -496,7 +576,7 @@ fn rederive_plain(
     }
     Ok(set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
         index_name: idx.name.to_string(),
-        kind: "plain",
+        kind,
         detail,
     }))
 }
@@ -505,6 +585,7 @@ fn rederive_temporal(
     tx: &impl ReadTx,
     base: &RelationHandle,
     idx: &RelationHandle,
+    kind: IndexKind,
 ) -> Result<Option<IndexMismatch>> {
     // Re-derive every posting from every stored base VERSION (not as-of
     // current) — same rebuildability law as temporal backfill.
@@ -559,7 +640,7 @@ fn rederive_temporal(
 
     Ok(set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
         index_name: idx.name.to_string(),
-        kind: "temporal",
+        kind,
         detail,
     }))
 }
@@ -568,6 +649,7 @@ fn rederive_hnsw(
     tx: &impl ReadTx,
     base: &RelationHandle,
     idx: &RelationHandle,
+    kind: IndexKind,
 ) -> Result<Option<IndexMismatch>> {
     // HNSW graph edges are not uniquely determined by base facts alone in a
     // byte-stable way without a full deterministic rebuild; deep-verify
@@ -615,7 +697,7 @@ fn rederive_hnsw(
     Ok(
         set_diff_detail(&expected, &stored_nodes).map(|detail| IndexMismatch {
             index_name: idx.name.to_string(),
-            kind: "hnsw",
+            kind,
             detail,
         }),
     )
@@ -626,6 +708,7 @@ fn rederive_fts(
     base: &RelationHandle,
     idx: &RelationHandle,
     manifest: &crate::project::text::FtsIndexManifest,
+    kind: IndexKind,
 ) -> Result<Option<IndexMismatch>> {
     let extractor = bind_extractor(base, &manifest.extractor)?;
     let analyzer = manifest.tokenizer.build(&manifest.filters)?;
@@ -671,7 +754,7 @@ fn rederive_fts(
 
     Ok(set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
         index_name: idx.name.to_string(),
-        kind: "fts",
+        kind,
         detail,
     }))
 }
@@ -682,6 +765,7 @@ fn rederive_lsh(
     idx: &RelationHandle,
     inv: &RelationHandle,
     manifest: &crate::project::dedup::lsh::MinHashLshIndexManifest,
+    kind: IndexKind,
 ) -> Result<Option<IndexMismatch>> {
     use crate::project::dedup::lsh::HashValues;
 
@@ -753,13 +837,13 @@ fn rederive_lsh(
     if let Some(detail) = set_diff_detail(&expected_bands, &stored_bands) {
         return Ok(Some(IndexMismatch {
             index_name: idx.name.to_string(),
-            kind: "lsh",
+            kind,
             detail,
         }));
     }
     Ok(set_diff_detail(&expected_inv, &stored_inv).map(|detail| IndexMismatch {
         index_name: inv.name.to_string(),
-        kind: "lsh",
+        kind,
         detail: format!("inverse: {detail}"),
     }))
 }
@@ -768,14 +852,15 @@ fn deep_verify_one_index(
     tx: &impl ReadTx,
     base: &RelationHandle,
     index_ref: &IndexRef,
-    by_name: &BTreeMap<String, RelationId>,
+    by_name: &BTreeMap<RelationName, RelationId>,
     by_id: &BTreeMap<RelationId, RelationHandle>,
 ) -> Result<Option<IndexMismatch>> {
     let idx_name = index_ref.relation_name(&base.name);
-    let Some(idx_id) = by_name.get(&idx_name) else {
+    let idx_key = RelationName::from(idx_name.as_str());
+    let Some(idx_id) = by_name.get(&idx_key) else {
         return Ok(Some(IndexMismatch {
             index_name: idx_name,
-            kind: "missing",
+            kind: index_ref.kind.clone(),
             detail: "index backing relation absent from catalog while IndexRef is attached"
                 .into(),
         }));
@@ -783,33 +868,38 @@ fn deep_verify_one_index(
     let Some(idx) = by_id.get(idx_id) else {
         return Ok(Some(IndexMismatch {
             index_name: idx_name,
-            kind: "missing",
+            kind: index_ref.kind.clone(),
             detail: "index RelationId not loadable during deep-verify".into(),
         }));
     };
 
     match &index_ref.kind {
-        IndexKind::Plain { mapper } => rederive_plain(tx, base, idx, mapper),
-        IndexKind::Temporal => rederive_temporal(tx, base, idx),
-        IndexKind::Hnsw(_) => rederive_hnsw(tx, base, idx),
-        IndexKind::Fts(manifest) => rederive_fts(tx, base, idx, manifest),
+        IndexKind::Plain { mapper } => {
+            rederive_plain(tx, base, idx, mapper, index_ref.kind.clone())
+        }
+        IndexKind::Temporal => rederive_temporal(tx, base, idx, index_ref.kind.clone()),
+        IndexKind::Hnsw(_) => rederive_hnsw(tx, base, idx, index_ref.kind.clone()),
+        IndexKind::Fts(manifest) => {
+            rederive_fts(tx, base, idx, manifest, index_ref.kind.clone())
+        }
         IndexKind::Lsh { manifest, inverse } => {
             let inv_name = format!("{}:{}", base.name, inverse);
-            let Some(inv_id) = by_name.get(&inv_name) else {
+            let inv_key = RelationName::from(inv_name.as_str());
+            let Some(inv_id) = by_name.get(&inv_key) else {
                 return Ok(Some(IndexMismatch {
                     index_name: inv_name,
-                    kind: "lsh",
+                    kind: index_ref.kind.clone(),
                     detail: "lsh inverse relation missing from catalog".into(),
                 }));
             };
             let Some(inv) = by_id.get(inv_id) else {
                 return Ok(Some(IndexMismatch {
                     index_name: inv_name,
-                    kind: "lsh",
+                    kind: index_ref.kind.clone(),
                     detail: "lsh inverse RelationId not loadable".into(),
                 }));
             };
-            rederive_lsh(tx, base, idx, inv, manifest)
+            rederive_lsh(tx, base, idx, inv, manifest, index_ref.kind.clone())
         }
     }
 }
@@ -855,10 +945,10 @@ pub fn deep_verify_storage<S: Storage>(db: &S) -> Result<DeepVerifyReport> {
 mod pins {
     //! verify_storage battery (re-homed from storage/tests.rs).
 
-    use crate::session::catalog::Catalog;
+    use crate::session::catalog::{Catalog, IndexKind};
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
-    use crate::store::verify_walk::verify_storage;
+    use crate::store::verify_walk::{deep_verify_storage, verify_storage};
     use crate::store::{ReadTx, Storage};
 
     #[test]
@@ -1050,7 +1140,9 @@ mod pins {
             "deep-verify must catch phantom index row re-derived from base facts: {deep:?}"
         );
         assert!(
-            deep.index_mismatches.iter().any(|m| m.kind == "plain"),
+            deep.index_mismatches
+                .iter()
+                .any(|m| matches!(m.kind, IndexKind::Plain { .. })),
             "expected a plain-index mismatch: {:?}",
             deep.index_mismatches
         );

@@ -33,7 +33,53 @@ use write_delay::perform_write_stall;
 /// Keyspace key (a.k.a. column family, locality group)
 pub type KeyspaceKey = byteview::StrView;
 
-pub type InternalKeyspaceId = u64;
+/// Internal keyspace identity (column-family id).
+///
+/// Distinct from the user-facing [`KeyspaceKey`] name: this is the durable
+/// numeric id used in journal entries, config keys, and on-disk folders.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(transparent)]
+pub struct InternalKeyspaceId(u64);
+
+impl InternalKeyspaceId {
+    /// Construct from a raw id (recovery / counter mint).
+    #[must_use]
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Borrow the raw id at interchange sites (journal encode, path names).
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Big-endian bytes for meta-keyspace config key prefixes.
+    #[must_use]
+    pub const fn to_be_bytes(self) -> [u8; 8] {
+        self.0.to_be_bytes()
+    }
+}
+
+impl std::fmt::Display for InternalKeyspaceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for InternalKeyspaceId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.parse()?))
+    }
+}
+
+impl From<u64> for InternalKeyspaceId {
+    fn from(id: u64) -> Self {
+        Self::new(id)
+    }
+}
 
 pub fn apply_to_base_config(
     config: lsm_tree::Config,

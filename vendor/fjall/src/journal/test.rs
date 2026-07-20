@@ -444,7 +444,7 @@ fn journal_truncation_repeating_item_marker() -> crate::Result<()> {
     {
         let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
         Entry::Item {
-            keyspace_id: 0,
+            keyspace_id: crate::keyspace::InternalKeyspaceId::new(0),
             key: (*b"zzz").into(),
             value: (*b"").into(),
             value_type: ValueType::Tombstone,
@@ -466,7 +466,7 @@ fn journal_truncation_repeating_item_marker() -> crate::Result<()> {
     for _ in 0..5 {
         let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
         Entry::Item {
-            keyspace_id: 0,
+            keyspace_id: crate::keyspace::InternalKeyspaceId::new(0),
             key: (*b"zzz").into(),
             value: (*b"").into(),
             value_type: ValueType::Tombstone,

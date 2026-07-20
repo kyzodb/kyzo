@@ -6,7 +6,7 @@ use super::{Block, BlockHandle, DataBlock};
 use crate::{
     checksum::ChecksumType,
     coding::Decode,
-    table::block::{BlockIdentity, BlockType},
+    table::block::{BlockIdentity, BlockType, Level},
     CompressionType, KeyRange, SeqNo, TableId,
 };
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -40,7 +40,7 @@ impl From<u128> for Timestamp {
 pub struct ParsedMeta {
     pub id: TableId,
     /// Write-time LSM level bound into block checksums (§49).
-    pub initial_level: u8,
+    pub initial_level: Level,
     pub created_at: Timestamp,
     pub data_block_count: u64,
     pub index_block_count: u64,
@@ -147,7 +147,7 @@ impl ParsedMeta {
         );
 
         let id = read_u64!(block, b"table_id");
-        let initial_level = read_u8!(block, b"initial_level");
+        let initial_level = Level::new(read_u8!(block, b"initial_level"));
         let item_count = read_u64!(block, b"item_count");
         let tombstone_count = read_u64!(block, b"tombstone_count");
         let data_block_count = read_u64!(block, b"block_count#data");

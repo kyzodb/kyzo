@@ -6,7 +6,7 @@ use super::KeyedBlockHandle;
 use crate::{
     file_accessor::FileAccessor,
     table::{
-        block::BlockType,
+        block::{BlockType, Level},
         block_index::{iter::OwnedIndexBlockIter, BlockIndexIter},
         util::load_block,
         BlockHandle, IndexBlock,
@@ -24,7 +24,7 @@ use crate::Metrics;
 pub struct VolatileBlockIndex {
     pub(crate) table_id: GlobalTableId,
     /// Write-time level bound into block checksums (§49).
-    pub(crate) level: u8,
+    pub(crate) level: Level,
     pub(crate) path: Arc<PathBuf>,
     pub(crate) file_accessor: FileAccessor,
     pub(crate) cache: Arc<Cache>,
@@ -50,7 +50,7 @@ impl VolatileBlockIndex {
 pub struct Iter {
     inner: Option<OwnedIndexBlockIter>,
     table_id: GlobalTableId,
-    level: u8,
+    level: Level,
     path: Arc<PathBuf>,
     file_accessor: FileAccessor,
     cache: Arc<Cache>,

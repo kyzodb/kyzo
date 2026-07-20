@@ -5,7 +5,7 @@
 use super::{Block, DataBlock};
 use crate::{
     table::{
-        block::{BlockIdentity, BlockOffset, BlockType},
+        block::{BlockIdentity, BlockOffset, BlockType, Level},
         iter::OwnedDataBlockIter,
     },
     CompressionType, InternalValue, SeqNo, TableId,
@@ -24,7 +24,7 @@ pub struct Scanner {
     global_seqno: SeqNo,
 
     table_id: TableId,
-    level: u8,
+    level: Level,
     next_offset: BlockOffset,
 }
 
@@ -35,7 +35,7 @@ impl Scanner {
         compression: CompressionType,
         global_seqno: SeqNo,
         table_id: TableId,
-        level: u8,
+        level: Level,
     ) -> crate::Result<Self> {
         // TODO: a larger buffer size may be better for HDD, maybe make this configurable
         // TODO: benchmarks were inconclusive on SSD, not much difference between 4KB - 2MB

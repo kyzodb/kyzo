@@ -5,7 +5,7 @@
 use super::{Block, BlockHandle, GlobalTableId};
 use crate::{
     file_accessor::FileAccessor,
-    table::block::{BlockIdentity, BlockType},
+    table::block::{BlockIdentity, BlockType, Level},
     version::run::Ranged,
     Cache, CompressionType, KeyRange, Table,
 };
@@ -33,7 +33,7 @@ pub struct SliceIndexes(pub usize, pub usize);
 #[warn(clippy::too_many_arguments)]
 pub fn load_block(
     table_id: GlobalTableId,
-    level: u8,
+    level: Level,
     path: &Path,
     file_accessor: &FileAccessor,
     cache: &Cache,

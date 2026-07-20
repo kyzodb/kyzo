@@ -50,7 +50,7 @@ impl<'a> Ingestion<'a> {
             folder.clone(),
             tree.table_id_counter.clone(),
             64 * 1_024 * 1_024,
-            6,
+            crate::table::Level::new(6),
         )?
         .use_bloom_policy({
             if tree.config.expect_point_read_hits {

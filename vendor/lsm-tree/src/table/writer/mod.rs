@@ -7,7 +7,7 @@ mod index;
 mod meta;
 
 use super::{
-    block::{BlockIdentity, Header as BlockHeader},
+    block::{BlockIdentity, Header as BlockHeader, Level},
     filter::BloomConstructionPolicy,
     Block, BlockOffset, DataBlock, KeyedBlockHandle,
 };
@@ -92,11 +92,11 @@ pub struct Writer {
 
     linked_blob_files: Vec<LinkedFile>,
 
-    initial_level: u8,
+    initial_level: Level,
 }
 
 impl Writer {
-    pub fn new(path: PathBuf, table_id: TableId, initial_level: u8) -> crate::Result<Self> {
+    pub fn new(path: PathBuf, table_id: TableId, initial_level: Level) -> crate::Result<Self> {
         let writer = BufWriter::with_capacity(u16::MAX.into(), File::create_new(&path)?);
         let writer = ChecksummedWriter::new(writer);
         let mut writer = sfa::Writer::from_writer(writer);
@@ -566,7 +566,7 @@ mod tests {
     fn table_writer_count() -> crate::Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("1");
-        let mut writer = Writer::new(path, 1, 0)?;
+        let mut writer = Writer::new(path, 1, super::Level::new(0))?;
 
         assert_eq!(0, writer.meta.key_count);
         assert_eq!(0, writer.chunk_size);

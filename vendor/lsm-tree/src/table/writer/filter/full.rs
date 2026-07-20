@@ -7,7 +7,7 @@ use crate::{
     checksum::ChecksummedWriter,
     config::BloomConstructionPolicy,
     table::{
-        block::{BlockIdentity, BlockOffset},
+        block::{BlockIdentity, BlockOffset, Level},
         filter::standard_bloom::Builder,
         Block, TableId,
     },
@@ -24,11 +24,11 @@ pub struct FullFilterWriter {
 
     bloom_policy: BloomConstructionPolicy,
     table_id: TableId,
-    level: u8,
+    level: Level,
 }
 
 impl FullFilterWriter {
-    pub fn new(bloom_policy: BloomConstructionPolicy, table_id: TableId, level: u8) -> Self {
+    pub fn new(bloom_policy: BloomConstructionPolicy, table_id: TableId, level: Level) -> Self {
         Self {
             bloom_hash_buffer: Vec::new(),
             bloom_policy,

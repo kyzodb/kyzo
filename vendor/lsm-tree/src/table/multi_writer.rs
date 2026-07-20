@@ -7,6 +7,7 @@ use crate::{
     blob_tree::handle::BlobIndirection, table::writer::LinkedFile, value::InternalValue,
     vlog::BlobFileId, Checksum, CompressionType, HashMap, SequenceNumberCounter, TableId, UserKey,
 };
+use crate::table::block::Level;
 use std::path::PathBuf;
 
 /// Like `Writer` but will rotate to a new table, once a table grows larger than `target_size`
@@ -47,7 +48,7 @@ pub struct MultiWriter {
     linked_blobs: HashMap<BlobFileId, LinkedFile>,
 
     /// Level the tables are written to
-    initial_level: u8,
+    initial_level: Level,
 }
 
 impl MultiWriter {
@@ -56,7 +57,7 @@ impl MultiWriter {
         base_path: PathBuf,
         table_id_generator: SequenceNumberCounter,
         target_size: u64,
-        initial_level: u8,
+        initial_level: Level,
     ) -> crate::Result<Self> {
         let current_table_id = table_id_generator.next();
 

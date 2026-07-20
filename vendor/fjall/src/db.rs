@@ -8,7 +8,7 @@ use crate::{
     file::{fsync_directory, KEYSPACES_FOLDER, LOCK_FILE, VERSION_MARKER},
     flush::manager::FlushManager,
     journal::{manager::JournalManager, writer::PersistMode, Journal},
-    keyspace::{name::is_valid_keyspace_name, KeyspaceKey},
+    keyspace::{name::is_valid_keyspace_name, InternalKeyspaceId, KeyspaceKey},
     locked_file::LockedFileGuard,
     meta_keyspace::MetaKeyspace,
     poison_dart::PoisonDart,
@@ -464,7 +464,7 @@ impl Database {
         } else {
             let name: KeyspaceKey = name.into();
 
-            let keyspace_id = self.keyspace_id_counter.next();
+            let keyspace_id = InternalKeyspaceId::new(self.keyspace_id_counter.next());
 
             let mut opts = create_options();
 
