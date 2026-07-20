@@ -8,28 +8,14 @@
 
 //! Seat 8 forge wall (#268 T5 / #347): Store cannot mint KyzoRecord.
 //!
-//! Trybuild compile-fail proves store/encode/WAL/SST-shaped paths cannot
-//! construct a KyzoRecord (private constructors at admission only). Grep
-//! proves no put path embeds a forged record and no blob-form type sits on
-//! the store admission surface.
-
-#[test]
-fn forge_wall_store_cannot_construct_kyzo_record() {
-    let t = trybuild::TestCases::new();
-    t.compile_fail("tests/compile_fail/forge_wall_store_mint_kyzo_record.rs");
-}
-
-#[test]
-fn forge_wall_wal_sst_cannot_mint_kyzo_record() {
-    let t = trybuild::TestCases::new();
-    t.compile_fail("tests/compile_fail/forge_wall_wal_sst_mint_kyzo_record.rs");
-}
-
-#[test]
-fn forge_wall_encode_cannot_mint_kyzo_record() {
-    let t = trybuild::TestCases::new();
-    t.compile_fail("tests/compile_fail/forge_wall_encode_mint_kyzo_record.rs");
-}
+//! Seat 8 is proven by (1) Rust module/field privacy — `pub(crate) mod session`
+//! → `pub(crate) mod admit`, private `KyzoRecord.core`, sibling `store` cannot
+//! construct (enforced by `cargo check -p kyzo`); and (2) the grep-proof
+//! harness below (`forge_wall_grep_*`). External trybuild cannot test that
+//! `pub(crate)` internal wall without exposing `session`/`admit` at the crate
+//! door, which would weaken seat 8 — so no external compile-fail suite here.
+//! Grep proves no put path embeds a forged record and no blob-form type sits
+//! on the store admission surface.
 
 #[test]
 fn forge_wall_grep_no_put_embeds_forged_record() {

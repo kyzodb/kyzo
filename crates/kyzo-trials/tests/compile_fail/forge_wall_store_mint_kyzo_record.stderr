@@ -1,5 +1,0 @@
-error[E0422]: cannot find struct, variant or union type `KyzoRecord` in crate `kyzo_trials`
-  --> tests/compile_fail/forge_wall_store_mint_kyzo_record.rs:13:26
-   |
-13 |     let _ = kyzo_trials::KyzoRecord {
-   |                          ^^^^^^^^^^ not found in `kyzo_trials`

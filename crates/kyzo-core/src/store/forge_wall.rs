@@ -14,10 +14,13 @@
 //! admission seam (`session/admit.rs`); checksum-valid forge-as-record is
 //! Unconstructible here.
 //!
-//! Proofs live in `kyzo-trials` (`forge_wall`): trybuild compile-fail that
-//! store/encode/WAL/SST paths cannot construct a KyzoRecord, plus grep that
-//! no put path embeds a forged record and no blob-form type sits on the
-//! store admission surface.
+//! Seat 8 is proven by module/field privacy (`pub(crate) mod session` →
+//! `pub(crate) mod admit`, private `KyzoRecord.core` — sibling `store` cannot
+//! construct; `cargo check -p kyzo`) plus the grep-proof harness in
+//! `kyzo-trials` (`forge_wall_grep_*`: no put path embeds a forged record, no
+//! blob-form type on the store admission surface). External trybuild cannot
+//! exercise that `pub(crate)` internal wall without exposing admission at the
+//! crate door.
 
 /// Witness that this module is the named seat-8 wall — not a Record mint door.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

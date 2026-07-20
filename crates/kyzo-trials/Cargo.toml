@@ -25,4 +25,3 @@ rayon = "1"
 [dev-dependencies]
 kyzo = { path = "../kyzo-core" }
 tempfile = "3"
-trybuild = "1"
