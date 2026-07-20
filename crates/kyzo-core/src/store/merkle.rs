@@ -255,7 +255,7 @@ pub(crate) fn relation_root(
 /// Plaintext-canonical state root digest (32 bytes). Cipher-invariant —
 /// never computed over ciphertext (§59 / crypto ban).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StateRoot(pub [u8; 32]);
+pub struct StateRoot([u8; 32]);
 
 impl StateRoot {
     /// Wrap an already-proven root digest.
@@ -407,6 +407,27 @@ impl ForkPoint {
     }
 }
 
+/// Domain-separated composition digest of meaning tip × WAL tip.
+///
+/// Owned identity for [`DurableCommitCut::composed`] — never a bare `[u8; 32]`.
+/// Bytes are produced only by [`compose_durable_cut`] under the
+/// `kyzo.durable_commit_cut.v1` domain tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct DurableCutDigest([u8; 32]);
+
+const _: () =
+    assert!(std::mem::size_of::<DurableCutDigest>() == std::mem::size_of::<[u8; 32]>());
+const _: () =
+    assert!(std::mem::align_of::<DurableCutDigest>() == std::mem::align_of::<[u8; 32]>());
+
+impl DurableCutDigest {
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// One durable commit boundary: meaning-layer tip × WAL byte-chain tip.
 ///
 /// Seat 24 (WAL hash chain) and seat 56 ([`RootChain`]) meet here — not as two
@@ -419,7 +440,7 @@ pub struct DurableCommitCut {
     /// WAL [`WalHash`] / `final_hash` tip after the Commit record at this cut.
     wal_final_hash: WalHash,
     /// Domain-separated composition of both tips (load-bearing bind).
-    composed: [u8; 32],
+    composed: DurableCutDigest,
 }
 
 impl DurableCommitCut {
@@ -452,7 +473,7 @@ impl DurableCommitCut {
     }
 
     /// Domain-separated composition digest of both tips.
-    pub fn composed(self) -> [u8; 32] {
+    pub fn composed(self) -> DurableCutDigest {
         self.composed
     }
 }
@@ -470,13 +491,13 @@ fn compose_durable_cut(
     meaning_root: StateRoot,
     wal_final_hash: WalHash,
     commit_ordinal: CommitOrdinal,
-) -> [u8; 32] {
+) -> DurableCutDigest {
     let mut h = Sha256::new();
     h.update(b"kyzo.durable_commit_cut.v1");
     h.update(meaning_root.as_bytes());
     h.update(wal_final_hash);
     h.update(u64::to_be_bytes(commit_ordinal.get()));
-    h.finalize().into()
+    DurableCutDigest(h.finalize().into())
 }
 
 /// An ordered chain of chained roots — supports as-of lookup.
