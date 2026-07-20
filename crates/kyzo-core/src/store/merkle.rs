@@ -537,6 +537,8 @@ mod tests {
     //!   snapshot fails [`roots_equal_at_cut`] against the stored prior tip;
     //! - **historical_edit** of a past [`ChainedStateRoot`]: every forward
     //!   chained root breaks — [`chain_bind`] covers the predecessor (proven);
+    //! - **point-in-time** [`as_of_root`] (§57): at a real past cut the returned
+    //!   root equals that cut's [`StateRoot`] and differs from tip / later cuts;
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
 
@@ -1041,6 +1043,117 @@ mod tests {
             verify.append(h2),
             Err(MerkleChainRefuse::PredecessorMismatch),
             "historical_edit: honest forward link refuses edited past tip"
+        );
+    }
+
+    /// Point-in-time (§57): [`as_of_root`] is the who-believed-what-when anchor
+    /// at a *real past cut* — not a tip-only digest. Multi-commit chain; ask at
+    /// an earlier [`CommitOrdinal`]; equals that cut's [`StateRoot`]; differs
+    /// from tip and from a later cut.
+    #[test]
+    fn as_of_root_point_in_time_returns_past_cut_anchor() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, as_of_root,
+            roots_equal_at_cut,
+        };
+
+        let store_id = StoreId::from_digest([0x57; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+
+        let state_v1: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"k00".to_vec(), b"v0".to_vec()),
+            (b"k01".to_vec(), b"v1".to_vec()),
+        ];
+        let state_v2: Vec<(Vec<u8>, Vec<u8>)> = {
+            let mut s = state_v1.clone();
+            s.push((b"k02".to_vec(), b"v2".to_vec()));
+            s
+        };
+        let state_v3: Vec<(Vec<u8>, Vec<u8>)> = {
+            let mut s = state_v2.clone();
+            s.push((b"k03".to_vec(), b"v3".to_vec()));
+            s
+        };
+
+        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1));
+        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2));
+        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3));
+        assert_ne!(content_v1, content_v2);
+        assert_ne!(content_v2, content_v3);
+
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let o3 = o2.successor().unwrap();
+
+        let mut chain = RootChain::empty();
+        let link1 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            content_v1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        let cut_root_o1 = link1.root();
+        chain.append(link1).unwrap();
+
+        let link2 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            content_v2,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        let cut_root_o2 = link2.root();
+        chain.append(link2).unwrap();
+
+        let link3 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            content_v3,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        let tip_root = link3.root();
+        chain.append(link3).unwrap();
+
+        // Past cut: as_of_root equals the StateRoot minted at that cut.
+        let as_of_o1 = as_of_root(&chain, o1).unwrap();
+        assert!(
+            roots_equal_at_cut(as_of_o1, cut_root_o1),
+            "point-in-time: as_of_root at o1 equals that cut's StateRoot"
+        );
+
+        // Mid cut likewise.
+        let as_of_o2 = as_of_root(&chain, o2).unwrap();
+        assert!(
+            roots_equal_at_cut(as_of_o2, cut_root_o2),
+            "point-in-time: as_of_root at o2 equals that cut's StateRoot"
+        );
+
+        // Past ≠ tip; past ≠ later cut — who-believed-what-when is cut-scoped.
+        let tip_as_of = as_of_root(&chain, o3).unwrap();
+        assert!(
+            roots_equal_at_cut(tip_as_of, tip_root),
+            "point-in-time: as_of_root at tip equals tip StateRoot"
+        );
+        assert!(
+            !roots_equal_at_cut(as_of_o1, tip_as_of),
+            "point-in-time: past cut as_of_root differs from tip"
+        );
+        assert!(
+            !roots_equal_at_cut(as_of_o1, as_of_o2),
+            "point-in-time: earlier cut differs from a later cut"
+        );
+        assert!(
+            !roots_equal_at_cut(as_of_o2, tip_as_of),
+            "point-in-time: mid cut differs from tip"
         );
     }
 
