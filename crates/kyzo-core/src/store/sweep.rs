@@ -798,47 +798,52 @@ pub enum SweepSealFailure {
 
 // ── Recovery SLA claim / bench-lane emit (decisions.md §28 / §86) ─────────
 //
-// Coefficients are **sealed from wall-clock calibration** in
+// Coefficients are **derived then sealed** from wall-clock calibration in
 // `crates/kyzo-core/benches/recovery_sla.rs` over real
-// `kyzo::bench_recovery::replay` on WalSegment dirty-tails (§87: opponent pin
-// `RECOVERY_SLA_OPPONENT_PIN`, answer-agreement vs sealed `f`, tagged-commit
-// identity `RECOVERY_SLA_TAGGED_COMMIT`). The path-wired DST corpus
-// (`kyzo-trials/src/dst.rs` → `dst` below) proves recovery correctness +
-// structural bound shape against these sealed numbers — it does not invent
-// them. This surface publishes sealed `f` and refuses the durability/SLA
+// `kyzo::bench_recovery::replay` / `wal::replay` on MB / tens-of-MB WalSegment
+// dirty-tails (§87). Campaign identity:
+// - opponent pin `kyzo.recovery_sla.corpus.v2` (1–32 MiB dirty-tails)
+// - tagged commit `kyzo.recovery_sla.seal.v2`
+// Campaign-derived ceiling (margin 2/1) — sealed from the first honest derive
+// printout. Later bench runs re-derive for transparency but assert only
+// measured_p999 ≤ f(sealed) and that derived does not exceed sealed (re-seal
+// upward on regression; never require bit-stable equality — wall-clock noise).
+// Unit is nanoseconds — honest for sub-ms / per-byte replay cost. The
+// path-wired DST corpus (`kyzo-trials/src/dst.rs` → `dst` below) proves
+// recovery correctness + structural bound *shape* against these sealed numbers
+// — it does not invent them and does not equate structural work-units with
+// wall-clock. This surface publishes sealed `f` and refuses the durability/SLA
 // *claim* when exceeded — never Store open of a recoverable Store.
 
-/// Sealed intercept (ms) of `f(bytes_since_last_flush)`.
+/// Sealed intercept (ns) of `f(bytes_since_last_flush)`.
 ///
-/// Spec-sealed from `benches/recovery_sla.rs` wall-clock of real
-/// `bench_recovery::replay` (opponent pin `RECOVERY_SLA_OPPONENT_PIN` /
-/// tagged commit `RECOVERY_SLA_TAGGED_COMMIT`) — story #221 T3. Real
-/// recovery respects `8 + bytes` on the corpus; left at that seal (not
-/// clamped to preserve fiat).
-pub const RECOVERY_SLA_INTERCEPT_MS: u64 = 8;
+/// Campaign ceiling from `kyzo.recovery_sla.corpus.v2` /
+/// `kyzo.recovery_sla.seal.v2` real `wal::replay` (margin 2/1) — story #221 T3.
+/// Bound, not bit-stable equality to every re-derive.
+pub const RECOVERY_SLA_INTERCEPT_NS: u64 = 811_352;
 
-/// Sealed slope numerator (ms per byte) of `f` — from real-replay `recovery_sla` bench.
-pub const RECOVERY_SLA_SLOPE_NUM: u64 = 1;
+/// Sealed slope numerator (ns per byte) of `f` — corpus.v2 / seal.v2 real-replay.
+pub const RECOVERY_SLA_SLOPE_NUM: u64 = 2;
 
-/// Sealed slope denominator of `f` — from real-replay `recovery_sla` bench.
+/// Sealed slope denominator of `f` — corpus.v2 / seal.v2 real-replay.
 pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 
-/// Sealed bound `f(bytes_since_last_flush)` in milliseconds.
+/// Sealed bound `f(bytes_since_last_flush)` in nanoseconds.
 #[inline]
-pub fn recovery_time_bound_ms(bytes_since_last_flush: u64) -> u64 {
-    RECOVERY_SLA_INTERCEPT_MS
+pub fn recovery_time_bound_ns(bytes_since_last_flush: u64) -> u64 {
+    RECOVERY_SLA_INTERCEPT_NS
         + bytes_since_last_flush.saturating_mul(RECOVERY_SLA_SLOPE_NUM) / RECOVERY_SLA_SLOPE_DEN
 }
 
 /// Successful bench-lane emit of the §86 recovery SLA claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecoverySlaEmit {
-    /// Observed / published recovery-time p999 (ms).
-    pub recovery_time_p999_ms: u64,
+    /// Observed / published recovery-time p999 (ns).
+    pub recovery_time_p999_ns: u64,
     /// Dirty-tail bytes the bound is evaluated against.
     pub bytes_since_last_flush: u64,
     /// Sealed `f(bytes_since_last_flush)` at emit time.
-    pub bound_ms: u64,
+    pub bound_ns: u64,
 }
 
 /// Refuse the published durability / SLA *claim* — not Store open (§28).
@@ -846,41 +851,41 @@ pub struct RecoverySlaEmit {
 pub enum RecoverySlaClaimRefuse {
     /// Observed p999 exceeds sealed `f(bytes_since_last_flush)`.
     #[error(
-        "recovery SLA claim refused: recovery_time_p999={recovery_time_p999_ms}ms \
-         exceeds f(bytes_since_last_flush={bytes_since_last_flush})={bound_ms}ms"
+        "recovery SLA claim refused: recovery_time_p999={recovery_time_p999_ns}ns \
+         exceeds f(bytes_since_last_flush={bytes_since_last_flush})={bound_ns}ns"
     )]
     #[diagnostic(code(store::sweep::recovery_sla_claim_above_bound))]
     AboveBound {
-        /// Observed recovery-time p999 (ms).
-        recovery_time_p999_ms: u64,
+        /// Observed recovery-time p999 (ns).
+        recovery_time_p999_ns: u64,
         /// Bytes since last flush at the claim site.
         bytes_since_last_flush: u64,
         /// Sealed bound at those bytes.
-        bound_ms: u64,
+        bound_ns: u64,
     },
 }
 
 /// Bench-lane emit for the §86 recovery SLA claim.
 ///
-/// When `recovery_time_p999_ms` exceeds sealed `f(bytes_since_last_flush)`,
+/// When `recovery_time_p999_ns` exceeds sealed `f(bytes_since_last_flush)`,
 /// refuses the **claim** (badge / Spec “meets recovery SLA”). Does not gate
 /// Store open — recoverability is independent of the marketing bound (§28).
 pub fn emit_recovery_sla_claim(
-    recovery_time_p999_ms: u64,
+    recovery_time_p999_ns: u64,
     bytes_since_last_flush: u64,
 ) -> Result<RecoverySlaEmit, RecoverySlaClaimRefuse> {
-    let bound_ms = recovery_time_bound_ms(bytes_since_last_flush);
-    if recovery_time_p999_ms > bound_ms {
+    let bound_ns = recovery_time_bound_ns(bytes_since_last_flush);
+    if recovery_time_p999_ns > bound_ns {
         return Err(RecoverySlaClaimRefuse::AboveBound {
-            recovery_time_p999_ms,
+            recovery_time_p999_ns,
             bytes_since_last_flush,
-            bound_ms,
+            bound_ns,
         });
     }
     Ok(RecoverySlaEmit {
-        recovery_time_p999_ms,
+        recovery_time_p999_ns,
         bytes_since_last_flush,
-        bound_ms,
+        bound_ns,
     })
 }
 

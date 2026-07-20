@@ -22,7 +22,10 @@ use crate::store::open::{
 
 pub use crate::store::epoch::FenceEpoch;
 pub use crate::store::open::StoreId;
-pub use crate::store::sweep::CommitOrdinal;
+pub use crate::store::sweep::{
+    recovery_time_bound_ns, CommitOrdinal, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN,
+    RECOVERY_SLA_SLOPE_NUM,
+};
 pub use crate::store::wal::{
     replay, WalPayload, WalRecord, WalRefuse, WalReplayState, WalSegment,
 };

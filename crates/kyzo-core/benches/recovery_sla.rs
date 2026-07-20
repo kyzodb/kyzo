@@ -11,21 +11,21 @@
 //! `bytes_since_last_flush`.
 //!
 //! Times real [`kyzo::bench_recovery::replay`] over real [`WalSegment`]
-//! dirty-tails (flushed empty prefix + unflushed Commit payloads — same
-//! adversarial shape as the DST power_cut corpus). Asserts
-//! `measured_p999(real replay) ≤ f(bytes_since_last_flush)` — bound, not
-//! equality.
+//! dirty-tails at **MB / tens-of-MB** scale (flushed empty prefix + unflushed
+//! Commit payloads — same adversarial shape as the DST power_cut corpus).
+//! Measures in nanoseconds so sub-ms / per-byte cost is visible.
 //!
-//! **Spec-sealed coefficients** (published on `store::sweep` after this
-//! calibration; do not invent elsewhere):
-//! - `RECOVERY_SLA_INTERCEPT_MS = 8`
-//! - `RECOVERY_SLA_SLOPE_NUM = 1`
-//! - `RECOVERY_SLA_SLOPE_DEN = 1`
+//! **Derive-then-ceiling (§86 / §87):** coefficients are computed from the
+//! measured distribution (intercept = fixed-cost floor × margin; slope = max
+//! per-byte cost × margin) for transparency. Sealed `RECOVERY_SLA_*` on
+//! `store::sweep` is a **campaign ceiling** — wall-clock noise means a later
+//! run may derive lower; equality to re-derived-every-run is wrong. Fail-closed:
+//! measured latency ≤ sealed `f`; if this run's derived intercept/slope would
+//! *exceed* sealed, panic asking to re-seal upward (never shrink).
 //!
 //! §87 protocol:
 //! - **Opponent pin** — [`RECOVERY_SLA_OPPONENT_PIN`] names the dirty-tail corpus.
-//! - **Answer-agreement** — observed `recovery_time_p999` must stay ≤ sealed
-//!   `f(bytes_since_last_flush)` across the corpus.
+//! - **Answer-agreement** — observed recovery latency ≤ sealed `f`.
 //! - **Tagged commit** — [`RECOVERY_SLA_TAGGED_COMMIT`] is the emit identity
 //!   line this lane prints when sealing.
 //!
@@ -35,32 +35,46 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use kyzo::bench_recovery::{
-    commit_ordinal, mint_store_identity, replay, WalPayload, WalRecord, WalSegment,
+    commit_ordinal, mint_store_identity, recovery_time_bound_ns, replay, WalPayload, WalRecord,
+    WalSegment, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
 };
 
-/// Opponent-pin corpus identity (§87) — dirty-tail recovery calibration v1.
-pub const RECOVERY_SLA_OPPONENT_PIN: &str = "kyzo.recovery_sla.corpus.v1";
+/// Opponent-pin corpus identity (§87) — MB-scale dirty-tail recovery calibration.
+pub const RECOVERY_SLA_OPPONENT_PIN: &str = "kyzo.recovery_sla.corpus.v2";
 
 /// Tagged-commit emit identity (§87) printed when this lane seals coefficients.
-pub const RECOVERY_SLA_TAGGED_COMMIT: &str = "kyzo.recovery_sla.seal.v1";
+pub const RECOVERY_SLA_TAGGED_COMMIT: &str = "kyzo.recovery_sla.seal.v2";
 
-/// Spec-sealed intercept (ms) — must match `store::sweep::RECOVERY_SLA_INTERCEPT_MS`.
-const SEALED_INTERCEPT_MS: u64 = 8;
-/// Spec-sealed slope numerator — must match `store::sweep::RECOVERY_SLA_SLOPE_NUM`.
-const SEALED_SLOPE_NUM: u64 = 1;
-/// Spec-sealed slope denominator — must match `store::sweep::RECOVERY_SLA_SLOPE_DEN`.
-const SEALED_SLOPE_DEN: u64 = 1;
+/// Modest seal margin above the measured distribution (2×).
+const SEAL_MARGIN_NUM: u64 = 2;
+const SEAL_MARGIN_DEN: u64 = 1;
 
-fn sealed_bound_ms(bytes_since_last_flush: u64) -> u64 {
-    SEALED_INTERCEPT_MS
-        + bytes_since_last_flush.saturating_mul(SEALED_SLOPE_NUM) / SEALED_SLOPE_DEN
-}
+/// Dirty-tail body-byte targets — MB / tens-of-MB so real replay is non-vacuous.
+const CORPUS_TARGET_BYTES: &[u64] = &[
+    1 << 20,  // 1 MiB
+    2 << 20,  // 2 MiB
+    4 << 20,  // 4 MiB
+    8 << 20,  // 8 MiB
+    16 << 20, // 16 MiB
+    32 << 20, // 32 MiB
+];
+
+/// Repeats per target size (seeded) for a stable p999 / slope fit.
+const SAMPLES_PER_TARGET: u64 = 4;
 
 /// One dirty-tail sample: unflushed body bytes + measured real-replay latency.
 #[derive(Clone, Copy)]
 struct Sample {
     bytes_since_last_flush: u64,
-    recovery_time_ms: u64,
+    recovery_time_ns: u64,
+}
+
+/// Coefficients derived from the campaign (with [`SEAL_MARGIN_NUM`] / [`SEAL_MARGIN_DEN`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Derived {
+    intercept_ns: u64,
+    slope_num: u64,
+    slope_den: u64,
 }
 
 fn commit_body(seed: u64, ordinal: u64, body_len: usize) -> Vec<u8> {
@@ -82,24 +96,52 @@ fn payload_body_len(payload: &WalPayload) -> u64 {
     }
 }
 
-/// Build one adversarial dirty-tail (flushed empty prefix + unflushed Commits)
-/// and wall-clock time real [`replay`] over it.
-fn sample_real_replay(seed: u64) -> Sample {
+fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+fn reduce_slope(num: u64, den: u64) -> (u64, u64) {
+    if num == 0 {
+        return (0, 1);
+    }
+    let g = gcd_u64(num, den);
+    (num / g, den / g)
+}
+
+/// Build one adversarial dirty-tail sized near `target_bytes` and wall-clock
+/// time real [`replay`] over it (nanosecond resolution).
+fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
     let mut identity = [0u8; 32];
     identity[..8].copy_from_slice(&seed.to_le_bytes());
+    identity[8..16].copy_from_slice(&target_bytes.to_le_bytes());
     let (store_id, fence_epoch) = mint_store_identity(identity);
 
-    let n_commits = 1 + (seed % 8) as usize;
-    let body_len = 64usize.saturating_mul(1 + (seed as usize % 16));
+    let n_commits = 1 + (seed % 4) as usize;
+    // Ceil-split so Σ body lengths ≥ target (truncating div left samples short).
+    let body_len_base = target_bytes.div_ceil(n_commits as u64).max(64);
+    let mut remaining = target_bytes;
 
     let flushed = WalSegment::open(store_id, fence_epoch, 0);
     let mut unflushed = WalSegment::open(store_id, fence_epoch, 1);
     let mut pred = flushed.terminal_hash();
     for i in 0..n_commits {
         let ord = commit_ordinal((i as u64).saturating_add(1));
+        let body_len = if i + 1 == n_commits {
+            // Pad final commit so cumulative payload bytes ≥ target.
+            remaining.max(body_len_base) as usize
+        } else {
+            let len = body_len_base.min(remaining).max(64);
+            remaining = remaining.saturating_sub(len);
+            len as usize
+        };
         let payload = WalPayload::Commit {
             commit_ordinal: ord,
-            body: commit_body(seed, ord.get(), body_len.saturating_add(i * 8)),
+            body: commit_body(seed, ord.get(), body_len),
         };
         let record = WalRecord::seal(pred, payload);
         pred = record.record_hash();
@@ -111,6 +153,10 @@ fn sample_real_replay(seed: u64) -> Sample {
         .iter()
         .map(|r| payload_body_len(r.payload()))
         .sum();
+    debug_assert!(
+        bytes_since_last_flush >= target_bytes,
+        "dirty-tail bytes {bytes_since_last_flush} below target {target_bytes}"
+    );
 
     let segments = [flushed, unflushed];
     // Warm once so the timed pass is steady-state cache behavior.
@@ -120,12 +166,11 @@ fn sample_real_replay(seed: u64) -> Sample {
     let start = Instant::now();
     let recovered = replay(store_id, &segments).expect("timed replay");
     black_box(recovered);
-    // Saturating cast: sub-ms runs still report 0; SLA bound stays upper.
-    let recovery_time_ms = start.elapsed().as_millis() as u64;
+    let recovery_time_ns = start.elapsed().as_nanos() as u64;
 
     Sample {
         bytes_since_last_flush,
-        recovery_time_ms,
+        recovery_time_ns,
     }
 }
 
@@ -138,47 +183,191 @@ fn percentile_999(values: &mut [u64]) -> u64 {
 }
 
 fn calibrate_corpus() -> Vec<Sample> {
-    // Growing dirty tails — same adversarial shape as the DST WAL suffix
-    // (commit count × body length varying with seed).
-    (0u64..256).map(sample_real_replay).collect()
+    let mut samples = Vec::with_capacity(CORPUS_TARGET_BYTES.len() * SAMPLES_PER_TARGET as usize);
+    let mut seed = 0u64;
+    for &target in CORPUS_TARGET_BYTES {
+        for _ in 0..SAMPLES_PER_TARGET {
+            samples.push(sample_real_replay(seed, target));
+            seed = seed.saturating_add(1);
+        }
+    }
+    samples
+}
+
+/// Derive sealed `f` from the measured distribution.
+///
+/// - intercept ← min observed latency × margin (fixed-cost floor)
+/// - slope ← max over samples of ceil((time×margin − intercept) / bytes),
+///   reduced as num/den (ns per byte)
+fn derive_coefficients(samples: &[Sample]) -> Derived {
+    assert!(!samples.is_empty(), "corpus must be non-empty");
+    let floor_ns = samples
+        .iter()
+        .map(|s| s.recovery_time_ns)
+        .min()
+        .expect("corpus");
+    let intercept_ns = floor_ns
+        .saturating_mul(SEAL_MARGIN_NUM)
+        .div_ceil(SEAL_MARGIN_DEN)
+        .max(1);
+
+    let mut slope_num = 0u64;
+    let slope_den = 1u64;
+    for s in samples {
+        if s.bytes_since_last_flush == 0 {
+            continue;
+        }
+        let budget_ns = s
+            .recovery_time_ns
+            .saturating_mul(SEAL_MARGIN_NUM)
+            .div_ceil(SEAL_MARGIN_DEN);
+        let after_intercept = budget_ns.saturating_sub(intercept_ns);
+        let need = after_intercept.div_ceil(s.bytes_since_last_flush);
+        slope_num = slope_num.max(need);
+    }
+
+    assert!(
+        slope_num > 0,
+        "expected a visible per-byte replay trend on the MB corpus; derived slope 0 — \
+         widen CORPUS_TARGET_BYTES or inspect timing noise"
+    );
+
+    let (slope_num, slope_den) = reduce_slope(slope_num, slope_den);
+    Derived {
+        intercept_ns,
+        slope_num,
+        slope_den,
+    }
+}
+
+fn derived_bound_ns(d: Derived, bytes_since_last_flush: u64) -> u64 {
+    d.intercept_ns + bytes_since_last_flush.saturating_mul(d.slope_num) / d.slope_den
 }
 
 fn main() {
     println!("opponent_pin={RECOVERY_SLA_OPPONENT_PIN}");
     println!("tagged_commit={RECOVERY_SLA_TAGGED_COMMIT}");
+    println!(
+        "seal_margin={SEAL_MARGIN_NUM}/{SEAL_MARGIN_DEN} \
+         corpus_targets_mib={}",
+        CORPUS_TARGET_BYTES
+            .iter()
+            .map(|b| format!("{}", b >> 20))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
 
     let samples = calibrate_corpus();
-    let mut times: Vec<u64> = samples.iter().map(|s| s.recovery_time_ms).collect();
+    let mut times: Vec<u64> = samples.iter().map(|s| s.recovery_time_ns).collect();
     let recovery_time_p999 = percentile_999(&mut times);
     let worst_bytes = samples
         .iter()
         .map(|s| s.bytes_since_last_flush)
         .max()
         .expect("corpus");
+    let min_bytes = samples
+        .iter()
+        .map(|s| s.bytes_since_last_flush)
+        .min()
+        .expect("corpus");
 
-    // Answer-agreement (§87): every sample and corpus p999 ≤ sealed f.
+    assert!(
+        recovery_time_p999 > 0,
+        "vacuous recovery_time_p999=0ns — corpus too small for Instant resolution"
+    );
+    assert!(
+        min_bytes >= (1 << 20),
+        "corpus min bytes_since_last_flush={min_bytes} below 1 MiB — widen targets"
+    );
+
+    let derived = derive_coefficients(&samples);
+    println!(
+        "derived RECOVERY_SLA_INTERCEPT_NS={} \
+         RECOVERY_SLA_SLOPE_NUM={} \
+         RECOVERY_SLA_SLOPE_DEN={} \
+         (margin {SEAL_MARGIN_NUM}/{SEAL_MARGIN_DEN})",
+        derived.intercept_ns, derived.slope_num, derived.slope_den
+    );
+    println!(
+        "sealed  RECOVERY_SLA_INTERCEPT_NS={RECOVERY_SLA_INTERCEPT_NS} \
+         RECOVERY_SLA_SLOPE_NUM={RECOVERY_SLA_SLOPE_NUM} \
+         RECOVERY_SLA_SLOPE_DEN={RECOVERY_SLA_SLOPE_DEN} \
+         (campaign ceiling — wall-clock noise may derive lower)"
+    );
+
+    // Fail-closed ceiling: sealed must cover this run's derived. If derived
+    // exceeds sealed, re-seal upward — never shrink; never require equality
+    // (wall-clock is not bit-stable across runs).
+    assert!(
+        derived.intercept_ns <= RECOVERY_SLA_INTERCEPT_NS,
+        "derived intercept {}ns exceeds sealed RECOVERY_SLA_INTERCEPT_NS={}ns — \
+         re-seal upward (never shrink):\n\
+         RECOVERY_SLA_INTERCEPT_NS = {};\n\
+         RECOVERY_SLA_SLOPE_NUM = {};\n\
+         RECOVERY_SLA_SLOPE_DEN = {};",
+        derived.intercept_ns,
+        RECOVERY_SLA_INTERCEPT_NS,
+        derived.intercept_ns,
+        derived.slope_num.max(RECOVERY_SLA_SLOPE_NUM),
+        derived.slope_den
+    );
+    // slope_num/slope_den as rationals: derived ≤ sealed.
+    assert!(
+        derived
+            .slope_num
+            .saturating_mul(RECOVERY_SLA_SLOPE_DEN)
+            <= RECOVERY_SLA_SLOPE_NUM.saturating_mul(derived.slope_den),
+        "derived slope {}/{} exceeds sealed RECOVERY_SLA_SLOPE {}/{} — \
+         re-seal upward (never shrink):\n\
+         RECOVERY_SLA_INTERCEPT_NS = {};\n\
+         RECOVERY_SLA_SLOPE_NUM = {};\n\
+         RECOVERY_SLA_SLOPE_DEN = {};",
+        derived.slope_num,
+        derived.slope_den,
+        RECOVERY_SLA_SLOPE_NUM,
+        RECOVERY_SLA_SLOPE_DEN,
+        derived.intercept_ns.max(RECOVERY_SLA_INTERCEPT_NS),
+        derived.slope_num,
+        derived.slope_den
+    );
+
+    // Derived f itself must cover every sample (sanity on the fit).
     for s in &samples {
-        let bound = sealed_bound_ms(s.bytes_since_last_flush);
+        let bound = derived_bound_ns(derived, s.bytes_since_last_flush);
         assert!(
-            s.recovery_time_ms <= bound,
-            "recovery_time_ms={} exceeds f(bytes_since_last_flush={})={} — \
-             re-seal RECOVERY_SLA_* upward after path change, never shrink the meter",
-            s.recovery_time_ms,
+            s.recovery_time_ns <= bound,
+            "derived f under-covers sample: recovery_time_ns={} \
+             f(bytes_since_last_flush={})={}",
+            s.recovery_time_ns,
             s.bytes_since_last_flush,
             bound
         );
     }
-    let bound_worst = sealed_bound_ms(worst_bytes);
+
+    // Answer-agreement (§87): every sample and corpus p999 ≤ sealed f (bound).
+    for s in &samples {
+        let bound = recovery_time_bound_ns(s.bytes_since_last_flush);
+        assert!(
+            s.recovery_time_ns <= bound,
+            "recovery_time_ns={} exceeds f(bytes_since_last_flush={})={} — \
+             re-seal RECOVERY_SLA_* upward after path change, never shrink the meter",
+            s.recovery_time_ns,
+            s.bytes_since_last_flush,
+            bound
+        );
+    }
+    let bound_worst = recovery_time_bound_ns(worst_bytes);
     assert!(
         recovery_time_p999 <= bound_worst,
-        "recovery_time_p999={recovery_time_p999} exceeds f(bytes_since_last_flush={worst_bytes})={bound_worst}"
+        "recovery_time_p999={recovery_time_p999} exceeds \
+         f(bytes_since_last_flush={worst_bytes})={bound_worst}"
     );
 
     // Claim-shaped check without the private emit door (mirrors
-    // `emit_recovery_sla_claim`): at bound → emit ok; one ms over → refuse.
+    // `emit_recovery_sla_claim`): at bound → emit ok; one ns over → refuse.
     let bytes_since_last_flush = samples[0].bytes_since_last_flush;
-    let bound = sealed_bound_ms(bytes_since_last_flush);
-    let claim_ok = |p999: u64, bytes: u64| -> bool { p999 <= sealed_bound_ms(bytes) };
+    let bound = recovery_time_bound_ns(bytes_since_last_flush);
+    let claim_ok = |p999: u64, bytes: u64| -> bool { p999 <= recovery_time_bound_ns(bytes) };
     assert!(
         claim_ok(bound, bytes_since_last_flush),
         "claim at sealed f(bytes_since_last_flush) must succeed"
@@ -187,21 +376,21 @@ fn main() {
         !claim_ok(bound.saturating_add(1), bytes_since_last_flush),
         "claim above f(bytes_since_last_flush) must refuse"
     );
-    // Observed corpus p999 is itself an emit input against worst-bytes f.
     assert!(
         claim_ok(recovery_time_p999, worst_bytes),
         "calibrated recovery_time_p999 must answer-agree with sealed f"
     );
 
     println!(
-        "sealed RECOVERY_SLA_INTERCEPT_MS={SEALED_INTERCEPT_MS} \
-         RECOVERY_SLA_SLOPE_NUM={SEALED_SLOPE_NUM} \
-         RECOVERY_SLA_SLOPE_DEN={SEALED_SLOPE_DEN}"
+        "sealed RECOVERY_SLA_INTERCEPT_NS={RECOVERY_SLA_INTERCEPT_NS} \
+         RECOVERY_SLA_SLOPE_NUM={RECOVERY_SLA_SLOPE_NUM} \
+         RECOVERY_SLA_SLOPE_DEN={RECOVERY_SLA_SLOPE_DEN}"
     );
     println!(
-        "calibrated recovery_time_p999={recovery_time_p999}ms \
+        "calibrated recovery_time_p999={recovery_time_p999}ns \
+         bytes_since_last_flush_min={min_bytes} \
          bytes_since_last_flush_worst={worst_bytes} \
-         f_worst={bound_worst}ms \
+         f_worst={bound_worst}ns \
          opponent_pin={RECOVERY_SLA_OPPONENT_PIN} \
          tagged_commit={RECOVERY_SLA_TAGGED_COMMIT}"
     );
