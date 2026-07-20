@@ -798,21 +798,26 @@ pub enum SweepSealFailure {
 
 // ── Recovery SLA claim / bench-lane emit (decisions.md §28 / §86) ─────────
 //
-// Coefficients are **measured** by the power-cut DST corpus
-// (`kyzo-trials/src/dst.rs` → path-wired `dst` below). This surface publishes
-// the sealed `f` for the bench lane and refuses the durability/SLA *claim*
-// when exceeded — never Store open of a recoverable Store.
+// Coefficients are **sealed from wall-clock calibration** in
+// `crates/kyzo-core/benches/recovery_sla.rs` (§87: opponent pin
+// `RECOVERY_SLA_OPPONENT_PIN`, answer-agreement vs sealed `f`, tagged-commit
+// identity `RECOVERY_SLA_TAGGED_COMMIT`). The path-wired DST corpus
+// (`kyzo-trials/src/dst.rs` → `dst` below) proves recovery correctness +
+// structural bound shape against these sealed numbers — it does not invent
+// them. This surface publishes sealed `f` and refuses the durability/SLA
+// *claim* when exceeded — never Store open of a recoverable Store.
 
 /// Sealed intercept (ms) of `f(bytes_since_last_flush)`.
 ///
-/// Measured as the corpus p999 residual
-/// `recovery_time_ms - bytes_since_last_flush` under slope 1 (story #221 T3).
+/// Spec-sealed from `benches/recovery_sla.rs` wall-clock calibration
+/// (opponent pin `RECOVERY_SLA_OPPONENT_PIN` / tagged commit
+/// `RECOVERY_SLA_TAGGED_COMMIT`) — story #221 T3.
 pub const RECOVERY_SLA_INTERCEPT_MS: u64 = 8;
 
-/// Sealed slope numerator (ms per byte) of `f`.
+/// Sealed slope numerator (ms per byte) of `f` — from `recovery_sla` bench.
 pub const RECOVERY_SLA_SLOPE_NUM: u64 = 1;
 
-/// Sealed slope denominator of `f`.
+/// Sealed slope denominator of `f` — from `recovery_sla` bench.
 pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 
 /// Sealed bound `f(bytes_since_last_flush)` in milliseconds.
@@ -883,10 +888,11 @@ pub fn emit_recovery_sla_claim(
 #[path = "../../../kyzo-trials/src/crash.rs"]
 mod crash;
 
-/// Power-cut / recovery-bound DST corpus (story #221 T3) — lives in
-/// kyzo-trials `dst.rs` and is path-wired here so the campaign seals
-/// `recovery_time_p999 ≤ f(bytes_since_last_flush)` against the same
-/// SweepDoor that mints `Committed` (no second commit door).
+/// Power-cut / recovery-bound + query-path DST corpus (story #221 T3) —
+/// lives in kyzo-trials `dst.rs` and is path-wired here so campaigns
+/// compile under the crate wall (`pub(crate)` store/exec doors) and the
+/// power-cut campaign asserts `recovery_time_p999 ≤ f(bytes_since_last_flush)`
+/// against the same SweepDoor that mints `Committed` (no second commit door).
 #[cfg(test)]
 #[path = "../../../kyzo-trials/src/dst.rs"]
 mod dst;
