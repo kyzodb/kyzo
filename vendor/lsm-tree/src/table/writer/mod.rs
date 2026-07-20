@@ -7,8 +7,9 @@ mod index;
 mod meta;
 
 use super::{
-    block::Header as BlockHeader, filter::BloomConstructionPolicy, Block, BlockOffset, DataBlock,
-    KeyedBlockHandle,
+    block::{BlockIdentity, Header as BlockHeader},
+    filter::BloomConstructionPolicy,
+    Block, BlockOffset, DataBlock, KeyedBlockHandle,
 };
 use crate::{
     checksum::{ChecksumType, ChecksummedWriter},
@@ -122,8 +123,12 @@ impl Writer {
 
             path: std::path::absolute(path)?,
 
-            index_writer: Box::new(FullIndexWriter::new()),
-            filter_writer: Box::new(FullFilterWriter::new(BloomConstructionPolicy::default())),
+            index_writer: Box::new(FullIndexWriter::new(table_id, initial_level)),
+            filter_writer: Box::new(FullFilterWriter::new(
+                BloomConstructionPolicy::default(),
+                table_id,
+                initial_level,
+            )),
 
             block_buffer: Vec::new(),
             file_writer: writer,
@@ -160,15 +165,22 @@ impl Writer {
 
     #[must_use]
     pub fn use_partitioned_filter(mut self) -> Self {
-        self.filter_writer = Box::new(filter::PartitionedFilterWriter::new(self.bloom_policy))
-            .use_tli_compression(self.index_block_compression);
+        self.filter_writer = Box::new(filter::PartitionedFilterWriter::new(
+            self.bloom_policy,
+            self.table_id,
+            self.initial_level,
+        ))
+        .use_tli_compression(self.index_block_compression);
         self
     }
 
     #[must_use]
     pub fn use_partitioned_index(mut self) -> Self {
-        self.index_writer = Box::new(index::PartitionedIndexWriter::new())
-            .use_compression(self.index_block_compression);
+        self.index_writer = Box::new(index::PartitionedIndexWriter::new(
+            self.table_id,
+            self.initial_level,
+        ))
+        .use_compression(self.index_block_compression);
         self
     }
 
@@ -314,11 +326,14 @@ impl Writer {
             self.data_block_hash_ratio,
         )?;
 
+        let identity =
+            BlockIdentity::new(self.table_id, self.initial_level, self.meta.file_pos);
         let header = Block::write_into(
             &mut self.file_writer,
             &self.block_buffer,
             super::block::BlockType::Data,
             self.data_block_compression,
+            &identity,
         )?;
 
         self.meta.uncompressed_size += u64::from(header.uncompressed_length);
@@ -369,7 +384,7 @@ impl Writer {
     #[expect(clippy::too_many_lines)]
     /// Finishes the table, making sure all data is written durably
     pub fn finish(mut self) -> crate::Result<Option<(TableId, Checksum)>> {
-        use std::io::Write;
+        use std::io::{Seek, Write};
 
         self.spill_block()?;
 
@@ -412,6 +427,7 @@ impl Writer {
 
         // Write metadata
         self.file_writer.start("meta")?;
+        let meta_offset = BlockOffset(self.file_writer.get_mut().stream_position()?);
 
         {
             fn meta(key: &str, value: &[u8]) -> InternalValue {
@@ -505,11 +521,13 @@ impl Writer {
             // TODO: disable binary index: https://github.com/fjall-rs/lsm-tree/issues/185
             DataBlock::encode_into(&mut self.block_buffer, &meta_items, 1, 0.0)?;
 
+            let identity = BlockIdentity::meta(self.table_id, meta_offset);
             Block::write_into(
                 &mut self.file_writer,
                 &self.block_buffer,
                 crate::table::block::BlockType::Meta,
                 CompressionType::None,
+                &identity,
             )?;
         };
 

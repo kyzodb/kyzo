@@ -5,8 +5,10 @@
 use crate::{
     checksum::ChecksummedWriter,
     table::{
-        block::Header as BlockHeader, index_block::KeyedBlockHandle,
-        writer::index::BlockIndexWriter, Block, BlockHandle, BlockOffset, IndexBlock,
+        block::{BlockIdentity, Header as BlockHeader},
+        index_block::KeyedBlockHandle,
+        writer::index::BlockIndexWriter,
+        Block, BlockHandle, BlockOffset, IndexBlock, TableId,
     },
     CompressionType,
 };
@@ -31,10 +33,13 @@ pub struct PartitionedIndexWriter {
     block_buffer: Vec<u8>,
 
     final_write_buffer: Vec<u8>,
+
+    table_id: TableId,
+    level: u8,
 }
 
 impl PartitionedIndexWriter {
-    pub fn new() -> Self {
+    pub fn new(table_id: TableId, level: u8) -> Self {
         Self {
             relative_file_pos: 0,
             buffer_size: 0,
@@ -48,6 +53,9 @@ impl PartitionedIndexWriter {
             block_buffer: Vec::with_capacity(4_096),
 
             final_write_buffer: Vec::new(),
+
+            table_id,
+            level,
         }
     }
 
@@ -55,11 +63,14 @@ impl PartitionedIndexWriter {
         let mut bytes = vec![];
         IndexBlock::encode_into(&mut bytes, &self.data_block_handles)?;
 
+        let identity =
+            BlockIdentity::new(self.table_id, self.level, BlockOffset(self.relative_file_pos));
         let header = Block::write_into(
             &mut self.block_buffer,
             &bytes,
             crate::table::block::BlockType::Index,
             self.compression,
+            &identity,
         )?;
 
         #[expect(
@@ -109,6 +120,8 @@ impl PartitionedIndexWriter {
         index_base_offset: BlockOffset,
     ) -> crate::Result<()> {
         file_writer.start("tli")?;
+        let offset = BlockOffset(file_writer.get_mut().stream_position()?);
+        let identity = BlockIdentity::new(self.table_id, self.level, offset);
 
         for item in &mut self.tli_handles {
             item.shift(index_base_offset);
@@ -122,6 +135,7 @@ impl PartitionedIndexWriter {
             &bytes,
             crate::table::block::BlockType::Index,
             self.compression,
+            &identity,
         )?;
 
         #[expect(
@@ -190,6 +204,13 @@ impl<W: std::io::Write + std::io::Seek> BlockIndexWriter<W> for PartitionedIndex
         }
 
         let index_base_offset = BlockOffset(file_writer.get_mut().stream_position()?);
+
+        Block::rebind_checksums(
+            &mut self.final_write_buffer,
+            self.table_id,
+            self.level,
+            index_base_offset,
+        )?;
 
         file_writer.start("index")?;
         file_writer.write_all(&self.final_write_buffer)?;

@@ -5,7 +5,7 @@
 use crate::{
     checksum::ChecksumType,
     coding::{Decode, Encode},
-    table::{Block, DataBlock},
+    table::{block::BlockIdentity, Block, BlockOffset, DataBlock},
     vlog::BlobFileId,
     CompressionType, InternalValue, KeyRange, SeqNo, Slice,
 };
@@ -92,17 +92,20 @@ impl Metadata {
         // TODO: no binary index
         let buf = DataBlock::encode_into_vec(&meta_items, 1, 0.0)?;
 
+        // Meta block sits immediately after the magic prefix.
+        let identity = BlockIdentity::meta(self.id, BlockOffset(METADATA_HEADER_MAGIC.len() as u64));
         Block::write_into(
             writer,
             &buf,
             crate::table::block::BlockType::Meta,
             CompressionType::None,
+            &identity,
         )?;
 
         Ok(())
     }
 
-    pub fn from_slice(slice: &Slice) -> crate::Result<Self> {
+    pub fn from_slice(slice: &Slice, blob_file_id: BlobFileId) -> crate::Result<Self> {
         let reader = &mut &slice[..];
 
         // Check header
@@ -113,8 +116,12 @@ impl Metadata {
             return Err(crate::Error::InvalidHeader("BlobFileMeta"));
         }
 
-        // TODO: Block::from_slice
-        let block = Block::from_reader(reader, CompressionType::None)?;
+        // Section-relative offset after the magic prefix (matches encode_into).
+        let identity = BlockIdentity::meta(
+            blob_file_id,
+            BlockOffset(METADATA_HEADER_MAGIC.len() as u64),
+        );
+        let block = Block::from_reader(reader, CompressionType::None, &identity)?;
         let block = DataBlock::new(block);
 
         let id = read_u64!(block, b"id");
@@ -180,7 +187,7 @@ mod tests {
         meta.encode_into(&mut buf).unwrap();
         let buf = Slice::from(buf);
 
-        let meta2 = Metadata::from_slice(&buf).unwrap();
+        let meta2 = Metadata::from_slice(&buf, meta.id).unwrap();
         assert_eq!(meta, meta2);
     }
 }

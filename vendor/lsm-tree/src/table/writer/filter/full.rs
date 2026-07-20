@@ -6,23 +6,34 @@ use super::FilterWriter;
 use crate::{
     checksum::ChecksummedWriter,
     config::BloomConstructionPolicy,
-    table::{filter::standard_bloom::Builder, Block},
+    table::{
+        block::{BlockIdentity, BlockOffset},
+        filter::standard_bloom::Builder,
+        Block, TableId,
+    },
     CompressionType, UserKey,
 };
-use std::{fs::File, io::BufWriter};
+use std::{
+    fs::File,
+    io::{BufWriter, Seek},
+};
 
 pub struct FullFilterWriter {
     /// Key hashes for AMQ filter
     pub bloom_hash_buffer: Vec<u64>,
 
     bloom_policy: BloomConstructionPolicy,
+    table_id: TableId,
+    level: u8,
 }
 
 impl FullFilterWriter {
-    pub fn new(bloom_policy: BloomConstructionPolicy) -> Self {
+    pub fn new(bloom_policy: BloomConstructionPolicy, table_id: TableId, level: u8) -> Self {
         Self {
             bloom_hash_buffer: Vec::new(),
             bloom_policy,
+            table_id,
+            level,
         }
     }
 }
@@ -57,6 +68,8 @@ impl<W: std::io::Write + std::io::Seek> FilterWriter<W> for FullFilterWriter {
             log::trace!("Filter writer has no buffered hashes - not building filter");
         } else {
             file_writer.start("filter")?;
+            let offset = BlockOffset(file_writer.get_mut().stream_position()?);
+            let identity = BlockIdentity::new(self.table_id, self.level, offset);
 
             let n = self.bloom_hash_buffer.len();
 
@@ -88,6 +101,7 @@ impl<W: std::io::Write + std::io::Seek> FilterWriter<W> for FullFilterWriter {
                 &filter_bytes,
                 crate::table::block::BlockType::Filter,
                 CompressionType::None,
+                &identity,
             )?;
         }
 

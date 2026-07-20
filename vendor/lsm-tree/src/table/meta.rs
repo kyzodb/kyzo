@@ -4,8 +4,10 @@
 
 use super::{Block, BlockHandle, DataBlock};
 use crate::{
-    checksum::ChecksumType, coding::Decode, table::block::BlockType, CompressionType, KeyRange,
-    SeqNo, TableId,
+    checksum::ChecksumType,
+    coding::Decode,
+    table::block::{BlockIdentity, BlockType},
+    CompressionType, KeyRange, SeqNo, TableId,
 };
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::{fs::File, ops::Deref};
@@ -37,6 +39,8 @@ impl From<u128> for Timestamp {
 #[derive(Debug)]
 pub struct ParsedMeta {
     pub id: TableId,
+    /// Write-time LSM level bound into block checksums (§49).
+    pub initial_level: u8,
     pub created_at: Timestamp,
     pub data_block_count: u64,
     pub index_block_count: u64,
@@ -76,8 +80,13 @@ macro_rules! read_u64 {
 
 impl ParsedMeta {
     #[expect(clippy::expect_used, clippy::too_many_lines)]
-    pub fn load_with_handle(file: &File, handle: &BlockHandle) -> crate::Result<Self> {
-        let block = Block::from_file(file, *handle, CompressionType::None)?;
+    pub fn load_with_handle(
+        file: &File,
+        handle: &BlockHandle,
+        table_id: TableId,
+    ) -> crate::Result<Self> {
+        let identity = BlockIdentity::meta(table_id, handle.offset());
+        let block = Block::from_file(file, *handle, CompressionType::None, &identity)?;
 
         if block.header.block_type != BlockType::Meta {
             return Err(crate::Error::InvalidTag((
@@ -138,6 +147,7 @@ impl ParsedMeta {
         );
 
         let id = read_u64!(block, b"table_id");
+        let initial_level = read_u8!(block, b"initial_level");
         let item_count = read_u64!(block, b"item_count");
         let tombstone_count = read_u64!(block, b"tombstone_count");
         let data_block_count = read_u64!(block, b"block_count#data");
@@ -209,6 +219,7 @@ impl ParsedMeta {
 
         Ok(Self {
             id,
+            initial_level,
             created_at,
             data_block_count,
             index_block_count,

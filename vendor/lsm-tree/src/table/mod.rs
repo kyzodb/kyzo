@@ -20,7 +20,7 @@ pub mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use block::{Block, BlockOffset};
+pub use block::{Block, BlockIdentity, BlockOffset};
 pub use data_block::DataBlock;
 pub use id::{GlobalTableId, TableId};
 pub use index_block::{BlockHandle, IndexBlock, KeyedBlockHandle};
@@ -201,6 +201,7 @@ impl Table {
     ) -> crate::Result<Block> {
         load_block(
             self.global_id(),
+            self.metadata.initial_level,
             &self.path,
             &self.file_accessor,
             &self.cache,
@@ -367,6 +368,8 @@ impl Table {
             block_count,
             self.metadata.data_block_compression,
             self.global_seqno(),
+            self.metadata.id,
+            self.metadata.initial_level,
         )
     }
 
@@ -396,6 +399,7 @@ impl Table {
 
         let mut iter = Iter::new(
             self.global_id(),
+            self.metadata.initial_level,
             self.global_seqno(),
             self.path.clone(),
             index_iter,
@@ -425,10 +429,13 @@ impl Table {
         regions: &ParsedRegions,
         file: &File,
         compression: CompressionType,
+        table_id: TableId,
+        level: u8,
     ) -> crate::Result<IndexBlock> {
         log::trace!("Reading TLI block, with tli_ptr={:?}", regions.tli);
 
-        let block = Block::from_file(file, regions.tli, compression)?;
+        let identity = BlockIdentity::new(table_id, level, regions.tli.offset());
+        let block = Block::from_file(file, regions.tli, compression, &identity)?;
 
         if block.header.block_type != BlockType::Index {
             return Err(crate::Error::InvalidTag((
@@ -465,6 +472,15 @@ impl Table {
         let mut file = std::fs::File::open(&file_path)?;
         let file_path = Arc::new(file_path);
 
+        let table_id_from_path = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|s| s.parse::<TableId>().ok())
+            .ok_or_else(|| {
+                log::error!("invalid table file name {}", file_path.display());
+                crate::Error::Unrecoverable
+            })?;
+
         #[cfg(feature = "metrics")]
         metrics
             .table_file_opened_uncached
@@ -474,7 +490,8 @@ impl Table {
         let regions = ParsedRegions::parse_from_toc(trailer.toc())?;
 
         log::trace!("Reading meta block, with meta_ptr={:?}", regions.metadata);
-        let metadata = ParsedMeta::load_with_handle(&file, &regions.metadata)?;
+        let metadata =
+            ParsedMeta::load_with_handle(&file, &regions.metadata, table_id_from_path)?;
 
         let file = Arc::new(file);
 
@@ -484,13 +501,21 @@ impl Table {
             FileAccessor::File(file.clone())
         };
 
+        let level = metadata.initial_level;
+
         let block_index = if regions.index.is_some() {
             log::trace!(
                 "Creating partitioned block index, with tli_ptr={:?}",
                 regions.tli,
             );
 
-            let block = Self::read_tli(&regions, &file, metadata.index_block_compression)?;
+            let block = Self::read_tli(
+                &regions,
+                &file,
+                metadata.index_block_compression,
+                metadata.id,
+                level,
+            )?;
 
             BlockIndexImpl::TwoLevel(TwoLevelBlockIndex {
                 top_level_index: block,
@@ -499,6 +524,7 @@ impl Table {
                 path: Arc::clone(&file_path),
                 file_accessor: file_accessor.clone(),
                 table_id: (tree_id, metadata.id).into(),
+                level,
 
                 #[cfg(feature = "metrics")]
                 metrics: metrics.clone(),
@@ -509,7 +535,13 @@ impl Table {
                 regions.tli,
             );
 
-            let block = Self::read_tli(&regions, &file, metadata.index_block_compression)?;
+            let block = Self::read_tli(
+                &regions,
+                &file,
+                metadata.index_block_compression,
+                metadata.id,
+                level,
+            )?;
             BlockIndexImpl::Full(FullBlockIndex::new(block))
         } else {
             log::trace!("Creating volatile, full block index");
@@ -521,6 +553,7 @@ impl Table {
                 handle: regions.tli,
                 path: Arc::clone(&file_path),
                 table_id: (tree_id, metadata.id).into(),
+                level,
 
                 #[cfg(feature = "metrics")]
                 metrics: metrics.clone(),
@@ -528,8 +561,13 @@ impl Table {
         };
 
         let pinned_filter_index = if let Some(filter_tli_handle) = regions.filter_tli {
-            let block =
-                Block::from_file(&file, filter_tli_handle, metadata.index_block_compression)?;
+            let identity = BlockIdentity::new(metadata.id, level, filter_tli_handle.offset());
+            let block = Block::from_file(
+                &file,
+                filter_tli_handle,
+                metadata.index_block_compression,
+                &identity,
+            )?;
             Some(IndexBlock::new(block))
         } else {
             None
@@ -544,10 +582,13 @@ impl Table {
                         "Loading and pinning filter block, with filter_ptr={filter_handle:?}"
                     );
 
+                    let identity =
+                        BlockIdentity::new(metadata.id, level, filter_handle.offset());
                     let block = Block::from_file(
                         &file,
                         filter_handle,
                         crate::CompressionType::None, // NOTE: We never write a filter block with compression
+                        &identity,
                     )
                     .and_then(|block| {
                         if block.header.block_type == BlockType::Filter {

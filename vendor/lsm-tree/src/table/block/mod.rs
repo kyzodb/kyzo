@@ -7,6 +7,7 @@ pub mod decoder;
 mod encoder;
 pub mod hash_index;
 mod header;
+mod identity;
 mod offset;
 mod trailer;
 mod r#type;
@@ -14,6 +15,7 @@ mod r#type;
 pub(crate) use decoder::{Decodable, Decoder, ParsedItem};
 pub(crate) use encoder::{Encodable, Encoder};
 pub use header::Header;
+pub use identity::BlockIdentity;
 pub use offset::BlockOffset;
 pub use r#type::BlockType;
 pub(crate) use trailer::{Trailer, TRAILER_START_MARKER};
@@ -21,7 +23,7 @@ pub(crate) use trailer::{Trailer, TRAILER_START_MARKER};
 use crate::{
     coding::{Decode, Encode},
     table::BlockHandle,
-    Checksum, CompressionType, Slice,
+    Checksum, CompressionType, Slice, TableId,
 };
 use std::fs::File;
 
@@ -42,11 +44,14 @@ impl Block {
     }
 
     /// Encodes a block into a writer.
+    ///
+    /// The data checksum covers [`BlockIdentity`] (table id / level / offset) plus payload.
     pub fn write_into<W: std::io::Write>(
         mut writer: &mut W,
         data: &[u8],
         block_type: BlockType,
         compression: CompressionType,
+        identity: &BlockIdentity,
     ) -> crate::Result<Header> {
         let mut header = Header {
             block_type,
@@ -67,14 +72,14 @@ impl Block {
         #[expect(clippy::cast_possible_truncation, reason = "blocks are limited to u32")]
         {
             header.data_length = data.len() as u32;
-            header.checksum = Checksum::from_raw(crate::hash::hash128(data));
+            header.checksum = identity.checksum(data);
         }
 
         header.encode_into(&mut writer)?;
         writer.write_all(data)?;
 
         log::trace!(
-            "Writing block with size {}B (compressed: {}B) (excluding header of {}B)",
+            "Writing block with size {}B (compressed: {}B) (excluding header of {}B) identity={identity:?}",
             header.uncompressed_length,
             header.data_length,
             Header::serialized_len(),
@@ -83,20 +88,60 @@ impl Block {
         Ok(header)
     }
 
+    /// Rebind each block's data checksum in a concatenated buffer to absolute offsets.
+    ///
+    /// Used by partitioned index/filter writers that first encode at relative offsets.
+    pub(crate) fn rebind_checksums(
+        buffer: &mut [u8],
+        table_id: TableId,
+        level: u8,
+        base_offset: BlockOffset,
+    ) -> crate::Result<()> {
+        let mut pos = 0usize;
+
+        while pos < buffer.len() {
+            let abs_offset = BlockOffset(base_offset.0 + pos as u64);
+            let identity = BlockIdentity::new(table_id, level, abs_offset);
+
+            let header = Header::decode_from(&mut &buffer[pos..])?;
+            let data_start = pos + Header::serialized_len();
+            let data_end = data_start + header.data_length as usize;
+
+            if data_end > buffer.len() {
+                return Err(crate::Error::InvalidHeader("Block"));
+            }
+
+            let new_header = Header {
+                block_type: header.block_type,
+                checksum: identity.checksum(&buffer[data_start..data_end]),
+                data_length: header.data_length,
+                uncompressed_length: header.uncompressed_length,
+            };
+
+            let encoded = new_header.encode_into_vec();
+            debug_assert_eq!(encoded.len(), Header::serialized_len());
+            buffer[pos..data_start].copy_from_slice(&encoded);
+
+            pos = data_end;
+        }
+
+        Ok(())
+    }
+
     /// Reads a block from a reader.
     pub fn from_reader<R: std::io::Read>(
         reader: &mut R,
         compression: CompressionType,
+        identity: &BlockIdentity,
     ) -> crate::Result<Self> {
         let header = Header::decode_from(reader)?;
         let raw_data = Slice::from_reader(reader, header.data_length as usize)?;
 
-        let checksum = Checksum::from_raw(crate::hash::hash128(&raw_data));
+        let checksum = identity.checksum(&raw_data);
 
         checksum.check(header.checksum).inspect_err(|_| {
             log::error!(
-                "Checksum mismatch for <bufreader>, got={}, expected={}",
-                checksum,
+                "Checksum mismatch for identity={identity:?}, got={checksum}, expected={}",
                 header.checksum,
             );
         })?;
@@ -132,18 +177,18 @@ impl Block {
         file: &File,
         handle: BlockHandle,
         compression: CompressionType,
+        identity: &BlockIdentity,
     ) -> crate::Result<Self> {
         let buf = crate::file::read_exact(file, *handle.offset(), handle.size() as usize)?;
 
         let header = Header::decode_from(&mut &buf[..])?;
 
         #[expect(clippy::indexing_slicing)]
-        let checksum = Checksum::from_raw(crate::hash::hash128(&buf[Header::serialized_len()..]));
+        let checksum = identity.checksum(&buf[Header::serialized_len()..]);
 
         checksum.check(header.checksum).inspect_err(|_| {
             log::error!(
-                "Checksum mismatch for block {handle:?}, got={}, expected={}",
-                checksum,
+                "Checksum mismatch for block {handle:?} identity={identity:?}, got={checksum}, expected={}",
                 header.checksum,
             );
         })?;
@@ -191,6 +236,7 @@ mod tests {
 
     #[test]
     fn block_roundtrip_uncompressed() -> crate::Result<()> {
+        let identity = BlockIdentity::new(1, 0, BlockOffset(0));
         let mut writer = vec![];
 
         Block::write_into(
@@ -198,19 +244,22 @@ mod tests {
             b"abcdefabcdefabcdef",
             BlockType::Data,
             CompressionType::None,
+            &identity,
         )?;
 
         {
             let mut reader = &writer[..];
-            let block = Block::from_reader(&mut reader, CompressionType::None)?;
+            let block = Block::from_reader(&mut reader, CompressionType::None, &identity)?;
             assert_eq!(b"abcdefabcdefabcdef", &*block.data);
         }
 
         Ok(())
     }
+
     #[test]
     #[cfg(feature = "lz4")]
     fn block_roundtrip_lz4() -> crate::Result<()> {
+        let identity = BlockIdentity::new(1, 0, BlockOffset(0));
         let mut writer = vec![];
 
         Block::write_into(
@@ -218,13 +267,60 @@ mod tests {
             b"abcdefabcdefabcdef",
             BlockType::Data,
             CompressionType::Lz4,
+            &identity,
         )?;
 
         {
             let mut reader = &writer[..];
-            let block = Block::from_reader(&mut reader, CompressionType::Lz4)?;
+            let block = Block::from_reader(&mut reader, CompressionType::Lz4, &identity)?;
             assert_eq!(b"abcdefabcdefabcdef", &*block.data);
         }
+
+        Ok(())
+    }
+
+    /// A relocated-but-intact block must fail verification: checksum covers
+    /// logical block identity (table id / level / offset), not content alone.
+    #[test]
+    fn relocated_but_intact_block_fails_verification() -> crate::Result<()> {
+        let original = BlockIdentity::new(7, 2, BlockOffset(4_096));
+        let relocated = BlockIdentity::new(7, 2, BlockOffset(8_192));
+
+        let mut bytes = vec![];
+        Block::write_into(
+            &mut bytes,
+            b"intact-payload-bytes",
+            BlockType::Data,
+            CompressionType::None,
+            &original,
+        )?;
+
+        // Same bytes, different logical identity → must refuse.
+        match Block::from_reader(&mut &bytes[..], CompressionType::None, &relocated) {
+            Err(crate::Error::ChecksumMismatch { .. }) => {}
+            Err(err) => panic!("expected ChecksumMismatch, got {err:?}"),
+            Ok(_) => panic!("relocated-but-intact block must fail verification"),
+        }
+
+        // Wrong table id is also caught (swap-two-tables).
+        let other_table = BlockIdentity::new(8, 2, BlockOffset(4_096));
+        match Block::from_reader(&mut &bytes[..], CompressionType::None, &other_table) {
+            Err(crate::Error::ChecksumMismatch { .. }) => {}
+            Err(err) => panic!("expected ChecksumMismatch, got {err:?}"),
+            Ok(_) => panic!("cross-table relocated block must fail verification"),
+        }
+
+        // Content-only checksum would accept the relocated bytes; identity binding must not.
+        let content_only = Checksum::from_raw(crate::hash::hash128(b"intact-payload-bytes"));
+        let header = Header::decode_from(&mut &bytes[..])?;
+        assert_ne!(
+            header.checksum, content_only,
+            "data checksum must bind logical block identity, not content alone"
+        );
+
+        // Original identity still verifies.
+        let block = Block::from_reader(&mut &bytes[..], CompressionType::None, &original)?;
+        assert_eq!(b"intact-payload-bytes", &*block.data);
 
         Ok(())
     }

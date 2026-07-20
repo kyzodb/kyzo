@@ -96,7 +96,7 @@ pub fn recover_blob_files(
                     metadata_section.len() as usize,
                 )?;
 
-                Metadata::from_slice(&metadata_slice)?
+                Metadata::from_slice(&metadata_slice, blob_file_id)?
             };
 
             let file_accessor = if let Some(dt) = descriptor_table.cloned() {

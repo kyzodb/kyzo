@@ -4,8 +4,11 @@
 
 use super::{Block, DataBlock};
 use crate::{
-    table::{block::BlockType, iter::OwnedDataBlockIter},
-    CompressionType, InternalValue, SeqNo,
+    table::{
+        block::{BlockIdentity, BlockOffset, BlockType},
+        iter::OwnedDataBlockIter,
+    },
+    CompressionType, InternalValue, SeqNo, TableId,
 };
 use std::{fs::File, io::BufReader, path::Path};
 
@@ -19,6 +22,10 @@ pub struct Scanner {
     read_count: usize,
 
     global_seqno: SeqNo,
+
+    table_id: TableId,
+    level: u8,
+    next_offset: BlockOffset,
 }
 
 impl Scanner {
@@ -27,12 +34,20 @@ impl Scanner {
         block_count: usize,
         compression: CompressionType,
         global_seqno: SeqNo,
+        table_id: TableId,
+        level: u8,
     ) -> crate::Result<Self> {
         // TODO: a larger buffer size may be better for HDD, maybe make this configurable
         // TODO: benchmarks were inconclusive on SSD, not much difference between 4KB - 2MB
         let mut reader = BufReader::with_capacity(8 * 4_096, File::open(path)?);
 
-        let block = Self::fetch_next_block(&mut reader, compression)?;
+        let mut next_offset = BlockOffset(0);
+        let block = Self::fetch_next_block(
+            &mut reader,
+            compression,
+            &BlockIdentity::new(table_id, level, next_offset),
+            &mut next_offset,
+        )?;
         let iter = OwnedDataBlockIter::new(block, DataBlock::iter);
 
         Ok(Self {
@@ -44,14 +59,20 @@ impl Scanner {
             read_count: 1,
 
             global_seqno,
+
+            table_id,
+            level,
+            next_offset,
         })
     }
 
     fn fetch_next_block(
         reader: &mut BufReader<File>,
         compression: CompressionType,
+        identity: &BlockIdentity,
+        next_offset: &mut BlockOffset,
     ) -> crate::Result<DataBlock> {
-        let block = Block::from_reader(reader, compression);
+        let block = Block::from_reader(reader, compression, identity);
 
         match block {
             Ok(block) => {
@@ -61,6 +82,10 @@ impl Scanner {
                         block.header.block_type.into(),
                     )));
                 }
+
+                *next_offset += u64::from(
+                    crate::table::block::Header::serialized_len() as u32 + block.header.data_length,
+                );
 
                 Ok(DataBlock::new(block))
             }
@@ -84,7 +109,13 @@ impl Iterator for Scanner {
             }
 
             // Init new block
-            let block = fail_iter!(Self::fetch_next_block(&mut self.reader, self.compression));
+            let identity = BlockIdentity::new(self.table_id, self.level, self.next_offset);
+            let block = fail_iter!(Self::fetch_next_block(
+                &mut self.reader,
+                self.compression,
+                &identity,
+                &mut self.next_offset,
+            ));
             self.iter = OwnedDataBlockIter::new(block, DataBlock::iter);
 
             self.read_count += 1;

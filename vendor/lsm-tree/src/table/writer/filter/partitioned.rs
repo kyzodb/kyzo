@@ -7,8 +7,9 @@ use crate::{
     checksum::ChecksummedWriter,
     config::BloomConstructionPolicy,
     table::{
-        block::Header as BlockHeader, filter::standard_bloom::Builder, Block, BlockHandle,
-        BlockOffset, IndexBlock, KeyedBlockHandle,
+        block::{BlockIdentity, Header as BlockHeader},
+        filter::standard_bloom::Builder,
+        Block, BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle, TableId,
     },
     CompressionType, UserKey,
 };
@@ -35,10 +36,13 @@ pub struct PartitionedFilterWriter {
     last_key: Option<UserKey>,
 
     compression: CompressionType,
+
+    table_id: TableId,
+    level: u8,
 }
 
 impl PartitionedFilterWriter {
-    pub fn new(bloom_policy: BloomConstructionPolicy) -> Self {
+    pub fn new(bloom_policy: BloomConstructionPolicy, table_id: TableId, level: u8) -> Self {
         Self {
             final_filter_buffer: Vec::new(),
 
@@ -54,6 +58,9 @@ impl PartitionedFilterWriter {
             last_key: None,
 
             compression: CompressionType::None,
+
+            table_id,
+            level,
         }
     }
 
@@ -68,11 +75,14 @@ impl PartitionedFilterWriter {
             builder.build()
         };
 
+        let identity =
+            BlockIdentity::new(self.table_id, self.level, BlockOffset(self.relative_file_pos));
         let header = Block::write_into(
             &mut self.final_filter_buffer,
             &filter_bytes,
             crate::table::block::BlockType::Filter,
             CompressionType::None,
+            &identity,
         )?;
 
         #[expect(
@@ -106,6 +116,8 @@ impl PartitionedFilterWriter {
         index_base_offset: BlockOffset,
     ) -> crate::Result<()> {
         file_writer.start("filter_tli")?;
+        let offset = BlockOffset(file_writer.get_mut().stream_position()?);
+        let identity = BlockIdentity::new(self.table_id, self.level, offset);
 
         for item in &mut self.tli_handles {
             item.shift(index_base_offset);
@@ -119,6 +131,7 @@ impl PartitionedFilterWriter {
             &bytes,
             crate::table::block::BlockType::Index,
             self.compression,
+            &identity,
         )?;
 
         #[expect(
@@ -195,6 +208,13 @@ impl<W: std::io::Write + std::io::Seek> FilterWriter<W> for PartitionedFilterWri
         }
 
         let index_base_offset = BlockOffset(file_writer.get_mut().stream_position()?);
+
+        Block::rebind_checksums(
+            &mut self.final_filter_buffer,
+            self.table_id,
+            self.level,
+            index_base_offset,
+        )?;
 
         file_writer.start("filter")?;
         file_writer.write_all(&self.final_filter_buffer)?;

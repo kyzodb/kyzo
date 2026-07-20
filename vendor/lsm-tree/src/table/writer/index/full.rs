@@ -5,23 +5,32 @@
 use crate::{
     checksum::ChecksummedWriter,
     table::{
-        block::Header as BlockHeader, index_block::KeyedBlockHandle,
-        writer::index::BlockIndexWriter, Block, IndexBlock,
+        block::{BlockIdentity, BlockOffset, Header as BlockHeader},
+        index_block::KeyedBlockHandle,
+        writer::index::BlockIndexWriter,
+        Block, IndexBlock, TableId,
     },
     CompressionType,
 };
-use std::{fs::File, io::BufWriter};
+use std::{
+    fs::File,
+    io::{BufWriter, Seek},
+};
 
 pub struct FullIndexWriter {
     compression: CompressionType,
     block_handles: Vec<KeyedBlockHandle>,
+    table_id: TableId,
+    level: u8,
 }
 
 impl FullIndexWriter {
-    pub fn new() -> Self {
+    pub fn new(table_id: TableId, level: u8) -> Self {
         Self {
             compression: CompressionType::None,
             block_handles: Vec::new(),
+            table_id,
+            level,
         }
     }
 }
@@ -57,6 +66,8 @@ impl<W: std::io::Write + std::io::Seek> BlockIndexWriter<W> for FullIndexWriter 
         file_writer: &mut sfa::Writer<ChecksummedWriter<BufWriter<File>>>,
     ) -> crate::Result<usize> {
         file_writer.start("tli")?;
+        let offset = BlockOffset(file_writer.get_mut().stream_position()?);
+        let identity = BlockIdentity::new(self.table_id, self.level, offset);
 
         let mut bytes = vec![];
         IndexBlock::encode_into(&mut bytes, &self.block_handles)?;
@@ -66,6 +77,7 @@ impl<W: std::io::Write + std::io::Seek> BlockIndexWriter<W> for FullIndexWriter 
             &bytes,
             crate::table::block::BlockType::Index,
             self.compression,
+            &identity,
         )?;
 
         #[expect(

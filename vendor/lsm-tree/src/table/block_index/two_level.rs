@@ -24,6 +24,8 @@ use crate::Metrics;
 pub struct TwoLevelBlockIndex {
     pub(crate) top_level_index: IndexBlock,
     pub(crate) table_id: GlobalTableId,
+    /// Write-time level bound into block checksums (§49).
+    pub(crate) level: u8,
     pub(crate) path: Arc<PathBuf>,
     pub(crate) file_accessor: FileAccessor,
     pub(crate) cache: Arc<Cache>,
@@ -43,6 +45,7 @@ impl TwoLevelBlockIndex {
             lo: None,
             hi: None,
             table_id: self.table_id,
+            level: self.level,
             path: self.path.clone(),
             file_accessor: self.file_accessor.clone(),
             cache: self.cache.clone(),
@@ -65,6 +68,7 @@ pub struct Iter {
     hi: Option<(UserKey, SeqNo)>,
 
     table_id: GlobalTableId,
+    level: u8,
     path: Arc<PathBuf>,
     file_accessor: FileAccessor,
     cache: Arc<Cache>,
@@ -127,6 +131,7 @@ impl Iterator for Iter {
             if let Some(handle) = next_lowest_block {
                 let block = fail_iter!(load_block(
                     self.table_id,
+                    self.level,
                     &self.path,
                     &self.file_accessor,
                     &self.cache,
@@ -190,6 +195,7 @@ impl DoubleEndedIterator for Iter {
             if let Some(handle) = next_highest_block {
                 let block = fail_iter!(load_block(
                     self.table_id,
+                    self.level,
                     &self.path,
                     &self.file_accessor,
                     &self.cache,

@@ -93,6 +93,7 @@ fn create_data_block_reader(block: DataBlock) -> OwnedDataBlockIter {
 
 pub struct Iter {
     table_id: GlobalTableId,
+    level: u8,
     path: Arc<PathBuf>,
 
     global_seqno: SeqNo,
@@ -121,6 +122,7 @@ pub struct Iter {
 impl Iter {
     pub fn new(
         table_id: GlobalTableId,
+        level: u8,
         global_seqno: SeqNo,
         path: Arc<PathBuf>,
         index_iter: BlockIndexIterImpl,
@@ -131,6 +133,7 @@ impl Iter {
     ) -> Self {
         Self {
             table_id,
+            level,
             path,
 
             global_seqno,
@@ -251,6 +254,7 @@ impl Iterator for Iter {
                 None => {
                     fail_iter!(load_block(
                         self.table_id,
+                        self.level,
                         &self.path,
                         &self.file_accessor,
                         &self.cache,
@@ -372,6 +376,7 @@ impl DoubleEndedIterator for Iter {
                 None => {
                     fail_iter!(load_block(
                         self.table_id,
+                        self.level,
                         &self.path,
                         &self.file_accessor,
                         &self.cache,

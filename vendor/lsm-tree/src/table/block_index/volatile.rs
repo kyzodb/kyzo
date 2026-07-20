@@ -23,6 +23,8 @@ use crate::Metrics;
 /// The index is loaded on demand.
 pub struct VolatileBlockIndex {
     pub(crate) table_id: GlobalTableId,
+    /// Write-time level bound into block checksums (§49).
+    pub(crate) level: u8,
     pub(crate) path: Arc<PathBuf>,
     pub(crate) file_accessor: FileAccessor,
     pub(crate) cache: Arc<Cache>,
@@ -48,6 +50,7 @@ impl VolatileBlockIndex {
 pub struct Iter {
     inner: Option<OwnedIndexBlockIter>,
     table_id: GlobalTableId,
+    level: u8,
     path: Arc<PathBuf>,
     file_accessor: FileAccessor,
     cache: Arc<Cache>,
@@ -66,6 +69,7 @@ impl Iter {
         Self {
             inner: None,
             table_id: index.table_id,
+            level: index.level,
             path: index.path.clone(),
             file_accessor: index.file_accessor.clone(),
             cache: index.cache.clone(),
@@ -102,6 +106,7 @@ impl Iterator for Iter {
         } else {
             let block = fail_iter!(load_block(
                 self.table_id,
+                self.level,
                 &self.path,
                 &self.file_accessor,
                 &self.cache,
@@ -142,6 +147,7 @@ impl DoubleEndedIterator for Iter {
         } else {
             let block = fail_iter!(load_block(
                 self.table_id,
+                self.level,
                 &self.path,
                 &self.file_accessor,
                 &self.cache,

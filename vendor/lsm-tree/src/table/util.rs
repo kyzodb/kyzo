@@ -4,8 +4,10 @@
 
 use super::{Block, BlockHandle, GlobalTableId};
 use crate::{
-    file_accessor::FileAccessor, table::block::BlockType, version::run::Ranged, Cache,
-    CompressionType, KeyRange, Table,
+    file_accessor::FileAccessor,
+    table::block::{BlockIdentity, BlockType},
+    version::run::Ranged,
+    Cache, CompressionType, KeyRange, Table,
 };
 use std::{path::Path, sync::Arc};
 
@@ -31,6 +33,7 @@ pub struct SliceIndexes(pub usize, pub usize);
 #[warn(clippy::too_many_arguments)]
 pub fn load_block(
     table_id: GlobalTableId,
+    level: u8,
     path: &Path,
     file_accessor: &FileAccessor,
     cache: &Cache,
@@ -76,7 +79,8 @@ pub fn load_block(
         (Arc::new(fd), true)
     };
 
-    let block = Block::from_file(&fd, *handle, compression)?;
+    let identity = BlockIdentity::new(table_id.table_id(), level, handle.offset());
+    let block = Block::from_file(&fd, *handle, compression, &identity)?;
 
     if block.header.block_type != block_type {
         return Err(crate::Error::InvalidTag((
