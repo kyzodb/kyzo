@@ -47,6 +47,15 @@
 //! the event is gone. Callbacks are a notification surface, not a
 //! replication log — an observer that must not miss events should read the
 //! relation, not trust the channel.
+//!
+//! ## Deep-verify operator surface (§51)
+//!
+//! Deep-verify is **operator-scheduled** (never a silent background-only
+//! pass with no query door). [`Engine::schedule_deep_verify`] arms a run;
+//! [`Engine::run_scheduled_deep_verify`] executes
+//! [`crate::store::verify_walk::deep_verify_storage`] and persists the
+//! [`DeepVerifyLastResult`] on this registry; [`Engine::deep_verify_last_result`]
+//! and [`Engine::deep_verify_staleness`] are the queryable doors.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -57,6 +66,102 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::json::NamedRows;
 use crate::session::db::Engine;
 use crate::store::Storage;
+use crate::store::verify_walk::{DeepVerifyReport, deep_verify_storage};
+
+/// Persisted outcome of one operator-scheduled deep-verify run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepVerifyLastResult {
+    /// Whether walk + every index re-derivation agreed.
+    pub clean: bool,
+    /// Indexes re-derived in that run.
+    pub indices_checked: u64,
+    /// Count of index mismatches (re-derived ≠ stored).
+    pub mismatch_count: u64,
+    /// Stable digest of the full [`DeepVerifyReport`].
+    pub digest: [u8; 32],
+    /// Schedule ordinal at which this result was produced.
+    pub schedule_ordinal: u64,
+}
+
+impl DeepVerifyLastResult {
+    fn from_report(report: &DeepVerifyReport, schedule_ordinal: u64) -> Self {
+        Self {
+            clean: report.is_clean(),
+            indices_checked: report.indices_checked,
+            mismatch_count: report.index_mismatches.len() as u64,
+            digest: report.digest(),
+            schedule_ordinal,
+        }
+    }
+}
+
+/// Queryable staleness of the persisted deep-verify last-result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeepVerifyStaleness {
+    /// No deep-verify has ever completed on this Engine.
+    NeverRun,
+    /// Last result matches the latest completed schedule (nothing pending).
+    Fresh { last_result: DeepVerifyLastResult },
+    /// Operator has scheduled (or re-scheduled) since the last completed run,
+    /// or a run is armed and has never completed.
+    Stale {
+        last_result: Option<DeepVerifyLastResult>,
+        /// Schedule ordinal the operator most recently armed.
+        pending_ordinal: u64,
+    },
+}
+
+impl DeepVerifyStaleness {
+    /// True when the operator should run (or re-run) deep-verify.
+    pub fn is_stale(&self) -> bool {
+        matches!(self, DeepVerifyStaleness::NeverRun | DeepVerifyStaleness::Stale { .. })
+    }
+}
+
+/// Operator schedule + persisted last-result for deep-verify (§51).
+#[derive(Debug, Default)]
+struct DeepVerifyOperatorState {
+    /// Next schedule ordinal (monotone).
+    next_ordinal: u64,
+    /// When `Some`, a run is armed at that ordinal.
+    pending: Option<u64>,
+    /// Last completed result, if any.
+    last_result: Option<DeepVerifyLastResult>,
+}
+
+impl DeepVerifyOperatorState {
+    fn schedule(&mut self) -> u64 {
+        self.next_ordinal = self.next_ordinal.saturating_add(1).max(1);
+        let ord = self.next_ordinal;
+        self.pending = Some(ord);
+        ord
+    }
+
+    fn take_pending(&mut self) -> Option<u64> {
+        self.pending.take()
+    }
+
+    fn record(&mut self, result: DeepVerifyLastResult) {
+        self.last_result = Some(result);
+    }
+
+    fn last_result(&self) -> Option<DeepVerifyLastResult> {
+        self.last_result.clone()
+    }
+
+    fn staleness(&self) -> DeepVerifyStaleness {
+        match (&self.pending, &self.last_result) {
+            (None, None) => DeepVerifyStaleness::NeverRun,
+            (None, Some(r)) => DeepVerifyStaleness::Fresh {
+                last_result: r.clone(),
+            },
+            (Some(pending), last) => DeepVerifyStaleness::Stale {
+                last_result: last.clone(),
+                pending_ordinal: *pending,
+            },
+        }
+    }
+}
 
 /// Represents the kind of operation that triggered the callback.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -103,10 +208,14 @@ pub(crate) type CallbackCollector = BTreeMap<SmartString<LazyCompact>, Vec<Callb
 /// from relation name to the ids watching it. The two maps agree by
 /// construction — `register`, `unregister`, and the disconnect pruning in
 /// [`Db::send_callbacks`] are the only mutators, and each maintains both.
+///
+/// Also carries the deep-verify operator schedule + persisted last-result
+/// (§51) — same lock door so observe stays one session observation surface.
 #[derive(Default)]
 pub(crate) struct EventCallbackRegistry {
     pub(crate) by_id: BTreeMap<u32, CallbackDeclaration>,
     pub(crate) by_relation: BTreeMap<SmartString<LazyCompact>, BTreeSet<u32>>,
+    deep_verify: DeepVerifyOperatorState,
 }
 
 impl EventCallbackRegistry {
@@ -208,6 +317,58 @@ impl<S: Storage> Engine<S> {
                 registry.unregister(id);
             }
         }
+    }
+
+    /// Arm an operator-scheduled deep-verify (§51). Does not run it —
+    /// [`Self::run_scheduled_deep_verify`] does. Returns the schedule ordinal.
+    pub fn schedule_deep_verify(&self) -> u64 {
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .deep_verify
+            .schedule()
+    }
+
+    /// Run deep-verify if one is scheduled. Persists
+    /// [`DeepVerifyLastResult`] for later query. Returns `Ok(None)` when
+    /// nothing is pending.
+    pub fn run_scheduled_deep_verify(&self) -> miette::Result<Option<DeepVerifyLastResult>> {
+        let ordinal = {
+            let mut registry = self
+                .event_callbacks
+                .write()
+                .expect("registry lock poisoned");
+            match registry.deep_verify.take_pending() {
+                Some(ord) => ord,
+                None => return Ok(None),
+            }
+        };
+        let report = deep_verify_storage(&self.store)?;
+        let result = DeepVerifyLastResult::from_report(&report, ordinal);
+        self.event_callbacks
+            .write()
+            .expect("registry lock poisoned")
+            .deep_verify
+            .record(result.clone());
+        Ok(Some(result))
+    }
+
+    /// Query the persisted deep-verify last-result, if any run has completed.
+    pub fn deep_verify_last_result(&self) -> Option<DeepVerifyLastResult> {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .deep_verify
+            .last_result()
+    }
+
+    /// Query deep-verify staleness relative to the operator schedule.
+    pub fn deep_verify_staleness(&self) -> DeepVerifyStaleness {
+        self.event_callbacks
+            .read()
+            .expect("registry lock poisoned")
+            .deep_verify
+            .staleness()
     }
 }
 
@@ -314,5 +475,76 @@ mod exactly_once_battery {
             new_values, want,
             "spurious-conflict retries must leak no phantom events and lose none"
         );
+    }
+}
+
+#[cfg(test)]
+mod deep_verify_schedule {
+    //! Operator-scheduled deep-verify: last_result + staleness are queryable.
+
+    use std::collections::BTreeMap;
+
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use crate::session::observe::DeepVerifyStaleness;
+    use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::value::DataValue;
+
+    fn no_params() -> BTreeMap<String, DataValue> {
+        BTreeMap::new()
+    }
+
+    #[test]
+    fn scheduled_deep_verify_persists_queryable_last_result_and_staleness() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+            .expect("compose");
+        db.run_script("?[k, v] <- [[1, 7]] :create t {k => v}", no_params())
+            .unwrap();
+        db.run_script("::index create t:by_v {v}", no_params())
+            .unwrap();
+
+        assert!(matches!(
+            db.deep_verify_staleness(),
+            DeepVerifyStaleness::NeverRun
+        ));
+        assert!(db.deep_verify_last_result().is_none());
+
+        let ord = db.schedule_deep_verify();
+        assert!(ord >= 1);
+        assert!(
+            db.deep_verify_staleness().is_stale(),
+            "armed schedule must report staleness before the run"
+        );
+
+        let result = db
+            .run_scheduled_deep_verify()
+            .expect("deep-verify runs")
+            .expect("pending schedule must produce a result");
+        assert!(result.clean, "healthy store deep-verify: {result:?}");
+        assert!(result.indices_checked >= 1);
+        assert_eq!(result.schedule_ordinal, ord);
+
+        let persisted = db.deep_verify_last_result().expect("last_result queryable");
+        assert_eq!(persisted, result);
+        assert!(matches!(
+            db.deep_verify_staleness(),
+            DeepVerifyStaleness::Fresh { .. }
+        ));
+
+        // Re-schedule → stale again even though a prior result exists.
+        db.schedule_deep_verify();
+        match db.deep_verify_staleness() {
+            DeepVerifyStaleness::Stale {
+                last_result: Some(prev),
+                pending_ordinal,
+            } => {
+                assert_eq!(prev.digest, result.digest);
+                assert!(pending_ordinal > ord);
+            }
+            other => panic!("expected Stale with prior result, got {other:?}"),
+        }
+        assert!(db.run_scheduled_deep_verify().unwrap().is_some());
+        assert!(db.run_scheduled_deep_verify().unwrap().is_none());
     }
 }
