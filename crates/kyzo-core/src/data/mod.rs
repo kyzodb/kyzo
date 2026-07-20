@@ -8,6 +8,9 @@
  */
 
 pub(crate) mod json;
+/// Typed digest / region identities for the private record model (#268 purity).
+#[allow(dead_code)] // mid-wiring seat; callers land with admit surfaces
+pub(crate) mod digest;
 /// Statement-body types + ONTOK constructions for the one private KyzoRecord.
 #[allow(dead_code)] // mid-wiring seat (#268 T1); callers land in later T#s
 pub(crate) mod statement;

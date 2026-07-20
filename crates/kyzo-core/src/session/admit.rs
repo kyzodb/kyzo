@@ -34,6 +34,9 @@ use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::data::digest::{
+    ContentHash, ProvenanceDigest, RecordContentDigest, RegionId,
+};
 use crate::data::json::NamedRows;
 use crate::data::statement::{
     OntokKind, SourceArtifactId, StatementBody, StatementContext, StatementPredicate,
@@ -118,30 +121,62 @@ pub enum SemanticSurface {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EvidenceCoordinates {
     /// Span start offset.
-    pub start: u64,
+    start: u64,
     /// Span end offset.
-    pub end: u64,
+    end: u64,
     /// Content hash of the evidence span.
-    pub hash: [u8; 32],
+    hash: ContentHash,
     /// Provenance digest.
-    pub provenance: [u8; 32],
+    provenance: ProvenanceDigest,
+}
+
+impl EvidenceCoordinates {
+    /// Assemble sealed evidence coordinates.
+    pub fn new(start: u64, end: u64, hash: ContentHash, provenance: ProvenanceDigest) -> Self {
+        Self {
+            start,
+            end,
+            hash,
+            provenance,
+        }
+    }
+
+    /// Span start offset.
+    pub fn start(&self) -> u64 {
+        self.start
+    }
+
+    /// Span end offset.
+    pub fn end(&self) -> u64 {
+        self.end
+    }
+
+    /// Content hash of the evidence span.
+    pub fn hash(&self) -> ContentHash {
+        self.hash
+    }
+
+    /// Provenance digest.
+    pub fn provenance(&self) -> ProvenanceDigest {
+        self.provenance
+    }
 }
 
 /// Placement constraint for geography / residency (§77).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlacementConstraint {
     /// Allowed region ids (empty = unrestricted).
-    pub allowed_regions: Vec<[u8; 16]>,
+    pub allowed_regions: Vec<RegionId>,
 }
 
 /// Privately constructed Record — admission monopoly (§8/§93).
 ///
 /// No public constructor. Store/decode modules cannot mint this type.
 ///
-/// Statement body (subject/predicate/value + validity-time/context/source)
-/// lives as typed fields on this one record. ONTOK variants are constructions
-/// over that kernel ([`crate::data::statement::construct`]), not a second
-/// record type (#268 T1; seats 8/10/11).
+/// Statement body lives as one [`StatementBody`] value object on this one
+/// record. ONTOK variants are constructions over that kernel
+/// ([`crate::data::statement::construct`]), not a second record type
+/// (#268 T1 / purity-hold; seats 8/10/11).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KyzoRecord {
     /// Store that admitted this record.
@@ -149,25 +184,15 @@ pub struct KyzoRecord {
     /// Admitted identity — minted only at [`admit_record`].
     record_id: RecordId,
     /// Record content digest.
-    digest: [u8; 32],
+    digest: RecordContentDigest,
     /// Optional semantic surface.
     surface: SemanticSurface,
     /// Evidence coordinates (required for interpreted knowledge).
     evidence: Option<EvidenceCoordinates>,
     /// ONTOK kind / type authority.
     kind: OntokKind,
-    /// Statement subject.
-    subject: StatementSubject,
-    /// Statement predicate.
-    predicate: StatementPredicate,
-    /// Statement value.
-    value: StatementValue,
-    /// Validity-time scope.
-    validity_time: ValidityTime,
-    /// Durable context scope.
-    context: StatementContext,
-    /// Source artifact binding.
-    source: StatementSource,
+    /// Full typed statement body (subject/predicate/value + time/context/source).
+    statement: StatementBody,
 }
 
 impl KyzoRecord {
@@ -183,8 +208,8 @@ impl KyzoRecord {
         }
     }
 
-    /// Digest.
-    pub fn digest(&self) -> &[u8; 32] {
+    /// Record content digest.
+    pub fn digest(&self) -> &RecordContentDigest {
         &self.digest
     }
 
@@ -210,32 +235,32 @@ impl KyzoRecord {
 
     /// Statement subject.
     pub fn subject(&self) -> &StatementSubject {
-        &self.subject
+        self.statement.subject()
     }
 
     /// Statement predicate.
     pub fn predicate(&self) -> &StatementPredicate {
-        &self.predicate
+        self.statement.predicate()
     }
 
     /// Statement value.
     pub fn value(&self) -> &StatementValue {
-        &self.value
+        self.statement.value()
     }
 
     /// Validity-time scope.
     pub fn validity_time(&self) -> ValidityTime {
-        self.validity_time
+        self.statement.validity_time()
     }
 
     /// Durable context scope.
     pub fn context(&self) -> &StatementContext {
-        &self.context
+        self.statement.context()
     }
 
     /// Source artifact binding.
     pub fn source(&self) -> &StatementSource {
-        &self.source
+        self.statement.source()
     }
 
     /// Type-entailed deterministic lowering to the closed six-dimension set.
@@ -256,7 +281,7 @@ pub struct AdmitRecordParts {
     /// Target Store.
     pub store_id: StoreId,
     /// Record content digest.
-    pub digest: [u8; 32],
+    pub digest: RecordContentDigest,
     /// Semantic surface.
     pub surface: SemanticSurface,
     /// Evidence coordinates for interpreted knowledge.
@@ -268,7 +293,7 @@ pub struct AdmitRecordParts {
     /// Placement constraint (refuse-before-write).
     pub placement: PlacementConstraint,
     /// Region this write would land in.
-    pub write_region: [u8; 16],
+    pub write_region: RegionId,
     /// Whether any indexed key column carries Secret-class material.
     pub secret_in_indexed_key: Option<Secret>,
     /// True when the ingest path is raw KV-as-truth (§17/§90).
@@ -351,8 +376,6 @@ pub(crate) fn admit_record(
     }
     let certificate = mint_admission_certificate(parts.certificate)?;
     let record_id = RecordId::mint_at_admit(parts.digest);
-    let (subject, predicate, value, validity_time, context, source) =
-        parts.statement.into_fields();
     let record = KyzoRecord {
         store_id: parts.store_id,
         record_id,
@@ -360,12 +383,7 @@ pub(crate) fn admit_record(
         surface: parts.surface,
         evidence: parts.evidence,
         kind: parts.kind,
-        subject,
-        predicate,
-        value,
-        validity_time,
-        context,
-        source,
+        statement: parts.statement,
     };
     Ok((record, certificate))
 }
@@ -388,14 +406,14 @@ const LOCAL_SUGAR_STORE_DIGEST: [u8; 32] = {
 };
 
 /// Digest a sugar relation row into a content-addressed record digest.
-fn digest_sugar_row(relation: &str, row: &[DataValue]) -> [u8; 32] {
+fn digest_sugar_row(relation: &str, row: &[DataValue]) -> RecordContentDigest {
     let mut h = Sha256::new();
     h.update(b"kyzo.sugar.row.v1");
     h.update(relation.as_bytes());
     for v in row {
         h.update(encode_owned(v).as_bytes());
     }
-    h.finalize().into()
+    RecordContentDigest::from_digest(h.finalize().into())
 }
 
 /// [OPEN] Sugar source-artifact binding until user-visible writes carry
@@ -414,7 +432,7 @@ fn sugar_source_artifact(relation: &str) -> SourceArtifactId {
 /// [`mint_admission_certificate`] so the door is one.
 fn sugar_certificate_parts(
     store_id: StoreId,
-    record_digest: [u8; 32],
+    record_digest: RecordContentDigest,
 ) -> AdmissionCertificateParts {
     AdmissionCertificateParts {
         protocol_version: *b"kyzo.v01",
@@ -422,7 +440,7 @@ fn sugar_certificate_parts(
         origin_epoch: FenceEpoch::genesis(store_id),
         origin_commit: CommitOrdinal::ZERO,
         schema_cut: [0x11; 32],
-        record_digest,
+        record_digest: *record_digest.as_digest(),
         predecessor_history_digest: [0x22; 32],
         post_state_root: [0x33; 32],
         authorizing_key_id: [0x44; 32],
@@ -465,7 +483,7 @@ pub(crate) fn admit_sugar_relation_row(
         placement: PlacementConstraint {
             allowed_regions: vec![],
         },
-        write_region: [0; 16],
+        write_region: RegionId::from_bytes([0; 16]),
         secret_in_indexed_key: None,
         kv_as_truth: false,
         chunk_shaped: false,
@@ -502,7 +520,7 @@ pub(crate) fn admit_sugar_retract(
         placement: PlacementConstraint {
             allowed_regions: vec![],
         },
-        write_region: [0; 16],
+        write_region: RegionId::from_bytes([0; 16]),
         secret_in_indexed_key: None,
         kv_as_truth: false,
         chunk_shaped: false,

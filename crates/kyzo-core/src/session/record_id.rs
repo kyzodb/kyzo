@@ -12,6 +12,8 @@
 //! ([`crate::session::admit::admit_record`]). Projections and retrieval
 //! spans resolve to this id or refuse — never a free-floating truth.
 
+use crate::data::digest::RecordContentDigest;
+
 /// Admitted record identity — minted only by [`crate::session::admit::admit_record`].
 ///
 /// Private field: no public / anonymous constructor.
@@ -22,8 +24,8 @@ impl RecordId {
     /// Admission-only mint from the record content digest.
     ///
     /// Call site law: only [`crate::session::admit::admit_record`].
-    pub(crate) fn mint_at_admit(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub(crate) fn mint_at_admit(digest: RecordContentDigest) -> Self {
+        Self(*digest.as_digest())
     }
 
     /// Borrow the identity digest bytes.

@@ -113,6 +113,7 @@ fn surface_tag(surface: SemanticSurface) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::digest::{RecordContentDigest, RegionId};
     use crate::data::statement::{
         construct, ContextId, SourceArtifactId, StatementBody, StatementContext, StatementSource,
         StatementSubject, StatementValue, ValidityTime,
@@ -129,7 +130,7 @@ mod tests {
 
     fn admit_claim_record() -> KyzoRecord {
         let store = StoreId::from_digest([0x26; 32]);
-        let digest = [0xA1; 32];
+        let digest = RecordContentDigest::from_digest([0xA1; 32]);
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("widget")),
             crate::data::statement::StatementPredicate::new("part_of").expect("predicate"),
@@ -148,7 +149,7 @@ mod tests {
             placement: PlacementConstraint {
                 allowed_regions: vec![],
             },
-            write_region: [0; 16],
+            write_region: RegionId::from_bytes([0; 16]),
             secret_in_indexed_key: None,
             kv_as_truth: false,
             chunk_shaped: false,
@@ -158,7 +159,7 @@ mod tests {
                 origin_epoch: FenceEpoch::genesis(store),
                 origin_commit: CommitOrdinal::ZERO,
                 schema_cut: [0x11; 32],
-                record_digest: digest,
+                record_digest: *digest.as_digest(),
                 predecessor_history_digest: [0x22; 32],
                 post_state_root: [0x33; 32],
                 authorizing_key_id: [0x44; 32],
@@ -173,7 +174,7 @@ mod tests {
 
     fn admit_kind(kind_body: (OntokKind, StatementBody)) -> KyzoRecord {
         let store = StoreId::from_digest([0x27; 32]);
-        let digest = [0xB2; 32];
+        let digest = RecordContentDigest::from_digest([0xB2; 32]);
         let (kind, statement) = kind_body;
         admit_record(AdmitRecordParts {
             store_id: store,
@@ -185,7 +186,7 @@ mod tests {
             placement: PlacementConstraint {
                 allowed_regions: vec![],
             },
-            write_region: [0; 16],
+            write_region: RegionId::from_bytes([0; 16]),
             secret_in_indexed_key: None,
             kv_as_truth: false,
             chunk_shaped: false,
@@ -195,7 +196,7 @@ mod tests {
                 origin_epoch: FenceEpoch::genesis(store),
                 origin_commit: CommitOrdinal::ZERO,
                 schema_cut: [0x11; 32],
-                record_digest: digest,
+                record_digest: *digest.as_digest(),
                 predecessor_history_digest: [0x22; 32],
                 post_state_root: [0x33; 32],
                 authorizing_key_id: [0x44; 32],
