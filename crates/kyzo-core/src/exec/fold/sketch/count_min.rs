@@ -115,10 +115,7 @@ impl CountMinSketch {
     }
 
     /// The estimated frequency of `value`: the minimum of its row counters.
-    /// A pure function of the table bytes.
-    // Query-side API: exercised by the tests here and consumed by the query
-    // tier (a `count_min_query(sketch, value)` scalar function) on landing.
-    #[allow(dead_code)]
+    /// A pure function of the table bytes. Live query door for stored sketches.
     pub(crate) fn estimate(&self, value: &DataValue) -> u64 {
         (0..self.depth)
             .map(|row| {
@@ -131,11 +128,7 @@ impl CountMinSketch {
 
     /// Merge `other` into `self` by element-wise addition — the monoid
     /// operation. Sketches must share dimensions. Returns whether any
-    /// counter changed (for uniformity with the meet contract, though
-    /// Count-Min is not exposed as a meet).
-    // Shard-merge API: exercised by tests; consumed when partitioned
-    // sketch-building lands.
-    #[allow(dead_code)]
+    /// counter changed. Live door: [`super::aggr::AggrCountMin`] shard fold.
     pub(crate) fn merge(&mut self, other: &CountMinSketch) -> Result<bool> {
         ensure!(
             self.width == other.width && self.depth == other.depth,
@@ -169,9 +162,7 @@ impl CountMinSketch {
     }
 
     /// Parse the stored form, validating tag, dimensions, and length.
-    // Read-side API: exercised by tests; consumed when a stored sketch is
-    // decoded for querying by the runtime tier.
-    #[allow(dead_code)]
+    /// Live door: [`super::aggr::AggrCountMin`] shard fold + query decode.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let [tag, depth, w0, w1, w2, w3, w4, w5, w6, w7, rest @ ..] = bytes else {
             bail!("Count-Min bytes too short: {} bytes", bytes.len());

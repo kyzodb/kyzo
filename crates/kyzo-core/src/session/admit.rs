@@ -52,13 +52,15 @@ use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::authority::WriteAuthority;
 use crate::store::keys::Secret;
 use crate::store::merkle::{GENESIS_ROOT, RootChain};
+use crate::store::commit_cap::SnapshotFork;
 use crate::store::open::{
     EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
 };
 use crate::store::ReadTx;
 use crate::store::replica::{
-    AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, ReplicaRefuse,
-    ScopeManifestDigest, mint_admission_certificate, sign_admission_parts,
+    AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
+    PostStateRoot, ReplicaRefuse, ScopeManifestDigest, mint_admission_certificate,
+    sign_admission_parts,
 };
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
@@ -256,7 +258,7 @@ impl LiveAdmissionSeats {
             size_class: SizeClass::Compact,
             entropy_arm: EntropyArm::OsRandom,
             stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-                snapshot_fork: false,
+                snapshot_fork: SnapshotFork::No,
             },
         });
         Self {
@@ -270,6 +272,11 @@ impl LiveAdmissionSeats {
 
     pub(crate) fn store_id(&self) -> StoreId {
         self.store_id
+    }
+
+    /// The live [`RootChain`] tip these seats carry (tamper-evidence expected).
+    pub(crate) fn root_chain(&self) -> &RootChain {
+        &self.root_chain
     }
 
     /// Capture [`LiveCertificateInputs`] from these seats + a live catalog clock.
@@ -291,7 +298,7 @@ impl LiveAdmissionSeats {
 fn unscoped_scope_manifest_digest() -> ScopeManifestDigest {
     let mut h = Sha256::new();
     h.update(b"kyzo.scope.manifest.unscoped.v1");
-    h.finalize().into()
+    ScopeManifestDigest::from_digest(h.finalize().into())
 }
 
 /// Wired from Catalog generation, RootChain tip, and session
@@ -362,8 +369,8 @@ fn mint_certificate_from_live(
         // Single digest: certificate record_digest IS the core digest.
         record_digest: *core.digest.as_digest(),
         predecessor_history_digest: live.predecessor_history_digest,
-        post_state_root: live.post_state_root,
-        authorizing_key_id: live.authorizing_key_id,
+        post_state_root: PostStateRoot::from_digest(live.post_state_root),
+        authorizing_key_id: AuthorizingKeyId::from_digest(live.authorizing_key_id),
         scope_manifest_digest: live.scope_manifest_digest,
         operation_key: None,
         signature: [0u8; 64],

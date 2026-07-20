@@ -308,7 +308,7 @@ pub(crate) enum IndexKind {
 /// write-side-adjacent chunk) is the first consumer that resolves it by
 /// name — but it must be a real, stable `ColumnDef` name because the
 /// posting relation's catalog row is real schema, decoded like any other.
-#[allow(dead_code)] // mid-wiring / test-only surface
+#[cfg(test)]
 pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 
 // ---------------------------------------------------------------------------
@@ -348,7 +348,7 @@ impl ConstraintRef {
         _fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
         _cur_vld: ValidityTs,
     ) -> Result<ConstraintRef> {
-        let program = parse_script(source, &BTreeMap::new())?.get_single_program()?;
+        let program = parse_script(source, &BTreeMap::new(), _cur_vld)?.get_single_program()?;
         Ok(ConstraintRef {
             name: name.into(),
             program,
@@ -478,7 +478,7 @@ impl Trigger {
         _fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
         _cur_vld: ValidityTs,
     ) -> Result<Trigger> {
-        let program = parse_script(source, &BTreeMap::new())?.get_single_program()?;
+        let program = parse_script(source, &BTreeMap::new(), _cur_vld)?.get_single_program()?;
         Ok(Trigger { program })
     }
 
@@ -807,7 +807,10 @@ impl RelationHandle {
     ///
     /// When called without an Engine session, genesis-mints live admission
     /// seats at the door (real [`genesis`], never placeholder fills).
-    #[allow(dead_code)] // RelationHandle store door mid-wiring
+    /// Test / harness fact-write door. Production mutation goes through
+    /// [`crate::session::admit`]; this path genesis-mints live seats and is
+    /// exercised by in-crate index/operator tests.
+    #[cfg(test)]
     pub(crate) fn put_fact(
         &self,
         tx: &mut impl WriteTx,
@@ -840,7 +843,9 @@ impl RelationHandle {
     ///
     /// #268 T3: mints Invalidation through [`admit_sugar_retract`] /
     /// [`admit_record`] before the store put.
-    #[allow(dead_code)] // RelationHandle store door mid-wiring
+    /// Test / harness fact-retract door. Production mutation goes through
+    /// [`crate::session::admit`].
+    #[cfg(test)]
     pub(crate) fn retract_fact(
         &self,
         tx: &mut impl WriteTx,
@@ -1119,7 +1124,7 @@ impl RelationHandle {
 
     /// Whether the fact is CURRENTLY asserted (facts) or the exact key
     /// present (algorithm state).
-    #[allow(dead_code)] // RelationHandle store door mid-wiring
+    #[cfg(test)]
     pub(crate) fn exists(&self, tx: &impl ReadTx, key: &[DataValue]) -> Result<bool> {
         match self.keyspace_kind {
             KeyspaceKind::Facts => Ok(self
@@ -1269,7 +1274,6 @@ impl RelationHandle {
 
     /// As-of variant of
     /// [`scan_bounded_prefix_projected`](Self::scan_bounded_prefix_projected).
-    #[allow(dead_code)] // RelationHandle store door mid-wiring
     pub(crate) fn skip_scan_bounded_prefix_projected<'a>(
         &self,
         tx: &'a impl ReadTx,
@@ -1308,26 +1312,6 @@ impl RelationHandle {
             .map(|opt| opt.map(|t| Self::strip_time_slots(len, t)))
     }
 
-    /// Bitemporal as-of variant of
-    /// [`scan_bounded_prefix`](Self::scan_bounded_prefix), yielding
-    /// LOGICAL rows.
-    #[allow(dead_code)] // RelationHandle store door mid-wiring
-    pub(crate) fn skip_scan_bounded_prefix<'a>(
-        &self,
-        tx: &'a impl ReadTx,
-        prefix: &Tuple,
-        lower: &[ScanBound],
-        upper: &[ScanBound],
-        as_of: AsOf,
-    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let lower_encoded = scan_key_lower(self.id, prefix.as_slice(), lower);
-        let upper_encoded = scan_key_upper(self.id, prefix.as_slice(), upper);
-        let keys_len = self.metadata.keys.len();
-        Box::new(
-            tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)
-                .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------

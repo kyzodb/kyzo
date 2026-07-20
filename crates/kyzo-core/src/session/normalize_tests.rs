@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use kyzo_model::value::DataValue;
+use kyzo_model::value::{DataValue, ValidityTs};
 
 use crate::data::json::NamedRows;
 use crate::parse::{Script, parse_script};
@@ -15,6 +15,10 @@ use super::SessionNormalizer;
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
+}
+
+fn test_vld() -> ValidityTs {
+    ValidityTs::from_raw(0)
 }
 
 /// Test-local composition: Store + fresh Catalog. Not the deleted fused
@@ -149,9 +153,9 @@ fn negation_and_named_field_through_public_api() {
 /// bound-recursive query to have triggered it.
 fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
     let _ = db; // fixed rules bind later at session normalize; parse is params-only
-    let prog = match parse_script(script, &no_params()).unwrap() {
+    let prog = match parse_script(script, &no_params(), test_vld()).unwrap() {
         Script::Query(p) => p,
-        Script::Imperative { .. } | Script::Sys { .. } => panic!("expected a single query"),
+        Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
     };
     let tx = SessionTx::new_read(db.store.read_tx().unwrap(), ScriptOptions::default());
     let view = SessionView {

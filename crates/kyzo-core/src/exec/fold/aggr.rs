@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::{Result, bail, ensure, miette};
 
 use kyzo_model::data_value_any;
-use kyzo_model::program::aggregate::{AggrKind, Aggregation};
+use kyzo_model::program::aggregate::Aggregation;
 use kyzo_model::value::{DataValue, Num, NumRepr};
 
 use crate::exec::fold::sketch::aggr::{
@@ -235,32 +235,6 @@ impl MeetAggr {
     }
 }
 
-/// Declares a meet aggregation descriptor (kind-as-data). Fold binding is
-/// via [`meet_op`] / [`normal_op`]. The `$meet_var` / `$normal` tokens keep
-/// the historical macro signature; factories live in the match arms.
-#[allow(unused_macros)]
-macro_rules! meet_aggr {
-    ($aggr:ident, $name:literal, $_meet_var:ident, $_meet:expr, $_norm_var:ident, $_normal:ty) => {
-        #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
-        const $aggr: Aggregation = Aggregation {
-            name: $name,
-            kind: AggrKind::Meet,
-        };
-    };
-}
-
-/// Declares a normal-only aggregation descriptor (kind-as-data).
-#[allow(unused_macros)]
-macro_rules! normal_aggr {
-    ($aggr:ident, $name:literal, $_norm_var:ident, $_normal:ty) => {
-        #[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
-        const $aggr: Aggregation = Aggregation {
-            name: $name,
-            kind: AggrKind::Normal,
-        };
-    };
-}
-
 /// The meet form for a model [`Aggregation`], if it is a meet.
 pub(crate) fn meet_op(a: &Aggregation) -> Option<MeetAggr> {
     match a.name {
@@ -319,8 +293,7 @@ pub(crate) fn normal_op(a: &Aggregation, args: &[DataValue]) -> Result<NormalAgg
 }
 
 // ── Fold bodies (from condemned data/aggr.rs) ────────────────────────────
-
-meet_aggr!(AGGR_AND, "and", And, MeetAggrAnd, And, AggrAnd);
+// Aggregation descriptors live solely in kyzo_model::program::aggregate::parse_aggr.
 
 /// Conjunction as a fold: `true` until any row is `false`.
 pub(crate) struct AggrAnd {
@@ -378,8 +351,6 @@ impl MeetAggrObj for MeetAggrAnd {
     }
 }
 
-meet_aggr!(AGGR_OR, "or", Or, MeetAggrOr, Or, AggrOr);
-
 /// Disjunction as a fold: `false` until any row is `true`.
 #[derive(Default)]
 pub(crate) struct AggrOr {
@@ -431,8 +402,6 @@ impl MeetAggrObj for MeetAggrOr {
     }
 }
 
-normal_aggr!(AGGR_UNIQUE, "unique", Unique, AggrUnique);
-
 /// The distinct values seen, as a sorted list.
 #[derive(Default)]
 pub(crate) struct AggrUnique {
@@ -451,8 +420,6 @@ impl NormalAggrObj for AggrUnique {
         Ok(DataValue::List(self.accum.iter().cloned().collect()))
     }
 }
-
-normal_aggr!(AGGR_GROUP_COUNT, "group_count", GroupCount, AggrGroupCount);
 
 /// Each distinct value with its multiplicity, as a sorted list of pairs.
 #[derive(Default)]
@@ -479,13 +446,6 @@ impl NormalAggrObj for AggrGroupCount {
     }
 }
 
-normal_aggr!(
-    AGGR_COUNT_UNIQUE,
-    "count_unique",
-    CountUnique,
-    AggrCountUnique
-);
-
 /// How many distinct values were seen.
 #[derive(Default)]
 pub(crate) struct AggrCountUnique {
@@ -508,8 +468,6 @@ impl NormalAggrObj for AggrCountUnique {
         Ok(DataValue::from(self.count))
     }
 }
-
-meet_aggr!(AGGR_UNION, "union", Union, MeetAggrUnion, Union, AggrUnion);
 
 /// Set union of list-valued rows, as a fold.
 #[derive(Default)]
@@ -581,15 +539,6 @@ impl MeetAggrObj for MeetAggrUnion {
         }
     }
 }
-
-meet_aggr!(
-    AGGR_INTERSECTION,
-    "intersection",
-    Intersection,
-    MeetAggrIntersection,
-    Intersection,
-    AggrIntersection
-);
 
 /// Set intersection of list-valued rows, as a fold.
 #[derive(Default)]
@@ -703,12 +652,6 @@ fn collect_factory(args: &[DataValue]) -> Result<NormalAggr> {
     })
 }
 
-#[allow(dead_code)] // mid-wiring seat; lands with host doors (epic #348)
-const AGGR_COLLECT: Aggregation = Aggregation {
-    name: "collect",
-    kind: AggrKind::Normal,
-};
-
 /// The values in arrival order, as a list, optionally truncated to a limit.
 #[derive(Default)]
 pub(crate) struct AggrCollect {
@@ -743,8 +686,6 @@ impl NormalAggrObj for AggrCollect {
     }
 }
 
-normal_aggr!(AGGR_COUNT, "count", Count, AggrCount);
-
 /// How many rows were seen (including nulls).
 #[derive(Default)]
 pub(crate) struct AggrCount {
@@ -763,8 +704,6 @@ impl NormalAggrObj for AggrCount {
         Ok(DataValue::from(self.count))
     }
 }
-
-normal_aggr!(AGGR_VARIANCE, "variance", Variance, AggrVariance);
 
 /// Sample variance (Bessel-corrected), accumulated in floating point.
 #[derive(Default)]
@@ -800,8 +739,6 @@ impl NormalAggrObj for AggrVariance {
     }
 }
 
-normal_aggr!(AGGR_STD_DEV, "std_dev", StdDev, AggrStdDev);
-
 /// Sample standard deviation (sqrt of sample variance).
 #[derive(Default)]
 pub(crate) struct AggrStdDev {
@@ -835,8 +772,6 @@ impl NormalAggrObj for AggrStdDev {
     }
 }
 
-normal_aggr!(AGGR_MEAN, "mean", Mean, AggrMean);
-
 /// The arithmetic mean, accumulated in floating point.
 #[derive(Default)]
 pub(crate) struct AggrMean {
@@ -862,8 +797,6 @@ impl NormalAggrObj for AggrMean {
         Ok(DataValue::from(self.sum / (self.count as f64)))
     }
 }
-
-normal_aggr!(AGGR_SUM, "sum", Sum, AggrSum);
 
 /// Exact-while-possible numeric accumulator for `sum` and `product`.
 #[derive(Clone, Copy)]
@@ -929,8 +862,6 @@ impl NormalAggrObj for AggrSum {
     }
 }
 
-normal_aggr!(AGGR_PRODUCT, "product", Product, AggrProduct);
-
 /// The product, accumulated exactly via [`NumAccum`].
 pub(crate) struct AggrProduct {
     prod: NumAccum,
@@ -961,8 +892,6 @@ impl NormalAggrObj for AggrProduct {
         Ok(self.prod.finish())
     }
 }
-
-meet_aggr!(AGGR_MIN, "min", Min, MeetAggrMin, Min, AggrMin);
 
 /// The numerical minimum, ignoring nulls; `Null` *result* when no row had
 /// a number. In-state absence is [`Option::None`], never a Null sentinel.
@@ -1039,8 +968,6 @@ impl MeetAggrObj for MeetAggrMin {
     }
 }
 
-meet_aggr!(AGGR_MAX, "max", Max, MeetAggrMax, Max, AggrMax);
-
 /// The greatest numeric value, via exact [`Num`] order. Nulls are skipped.
 #[derive(Default)]
 pub(crate) struct AggrMax {
@@ -1115,8 +1042,6 @@ impl MeetAggrObj for MeetAggrMax {
     }
 }
 
-normal_aggr!(AGGR_LATEST_BY, "latest_by", LatestBy, AggrLatestBy);
-
 /// Of `[payload, cost]` pairs, the payload whose cost sorts greatest.
 #[derive(Default)]
 pub(crate) struct AggrLatestBy {
@@ -1152,8 +1077,6 @@ impl NormalAggrObj for AggrLatestBy {
     }
 }
 
-normal_aggr!(AGGR_SMALLEST_BY, "smallest_by", SmallestBy, AggrSmallestBy);
-
 /// Of `[payload, cost]` pairs, the payload whose cost sorts least.
 #[derive(Default)]
 pub(crate) struct AggrSmallestBy {
@@ -1188,15 +1111,6 @@ impl NormalAggrObj for AggrSmallestBy {
         Ok(self.found.clone().unwrap_or(DataValue::Null))
     }
 }
-
-meet_aggr!(
-    AGGR_MIN_COST,
-    "min_cost",
-    MinCost,
-    MeetAggrMinCost,
-    MinCost,
-    AggrMinCost
-);
 
 /// Of `[payload, cost]` pairs, the pair with the numerically least cost.
 #[derive(Default)]
@@ -1292,15 +1206,6 @@ impl MeetAggrObj for MeetAggrMinCost {
     }
 }
 
-meet_aggr!(
-    AGGR_SHORTEST,
-    "shortest",
-    Shortest,
-    MeetAggrShortest,
-    Shortest,
-    AggrShortest
-);
-
 /// The shortest list-valued row; ties keep the incumbent.
 #[derive(Default)]
 pub(crate) struct AggrShortest {
@@ -1367,15 +1272,6 @@ impl MeetAggrObj for MeetAggrShortest {
     }
 }
 
-meet_aggr!(
-    AGGR_CHOICE,
-    "choice",
-    Choice,
-    MeetAggrChoice,
-    Choice,
-    AggrChoice
-);
-
 /// An arbitrary non-null row: the first one seen wins.
 #[derive(Default)]
 pub(crate) struct AggrChoice {
@@ -1420,15 +1316,6 @@ impl MeetAggrObj for MeetAggrChoice {
         })
     }
 }
-
-meet_aggr!(
-    AGGR_BIT_AND,
-    "bit_and",
-    BitAnd,
-    MeetAggrBitAnd,
-    BitAnd,
-    AggrBitAnd
-);
 
 /// Bytewise AND of equal-length byte strings, as a fold.
 #[derive(Default)]
@@ -1512,15 +1399,6 @@ impl MeetAggrObj for MeetAggrBitAnd {
     }
 }
 
-meet_aggr!(
-    AGGR_BIT_OR,
-    "bit_or",
-    BitOr,
-    MeetAggrBitOr,
-    BitOr,
-    AggrBitOr
-);
-
 /// Bytewise OR of equal-length byte strings, as a fold.
 #[derive(Default)]
 pub(crate) struct AggrBitOr {
@@ -1602,8 +1480,6 @@ impl MeetAggrObj for MeetAggrBitOr {
         }
     }
 }
-
-normal_aggr!(AGGR_BIT_XOR, "bit_xor", BitXor, AggrBitXor);
 
 /// Bytewise XOR of equal-length byte strings. Not a meet.
 #[derive(Default)]

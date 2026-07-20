@@ -31,7 +31,7 @@ use crate::exec::provenance::semiring::{
 };
 use crate::parse::{Script, parse_script};
 use crate::session::verify::{MismatchProgram, VerifyOutcome};
-use kyzo_model::value::{DataValue, Tuple};
+use kyzo_model::value::{DataValue, Tuple, ValidityTs};
 
 /// Structural fault the trials injector applies to a sealed golden proof.
 ///
@@ -128,7 +128,7 @@ fn seal_golden_path_certificate() -> (
     let d_base = graph
         .add_derivation(Derivation {
             head: "path:1-2",
-            label: 0,
+            label: DerivationId::from_rule_index(0),
             weight: NonZeroU64::new(1).expect("1 is nonzero"),
             premises: vec!["edge:1-2"],
         })
@@ -136,7 +136,7 @@ fn seal_golden_path_certificate() -> (
     let d_rec = graph
         .add_derivation(Derivation {
             head: "path:1-3",
-            label: 1,
+            label: DerivationId::from_rule_index(1),
             weight: NonZeroU64::new(1).expect("1 is nonzero"),
             premises: vec!["path:1-2", "edge:2-3"],
         })
@@ -145,13 +145,13 @@ fn seal_golden_path_certificate() -> (
     let honest = ProofNode::Step {
         node: "path:1-3",
         derivation: d_rec,
-        label: 1,
+        label: DerivationId::from_rule_index(1),
         cost: 2,
         premises: vec![
             ProofNode::Step {
                 node: "path:1-2",
                 derivation: d_base,
-                label: 0,
+                label: DerivationId::from_rule_index(0),
                 cost: 1,
                 premises: vec![ProofNode::Fact { node: "edge:1-2" }],
             },
@@ -231,11 +231,12 @@ fn fixture_mismatch_program() -> MismatchProgram {
     let script = parse_script(
         "path[x, y] := *edge[x, y]\n?[x, y] := path[x, y]",
         &Default::default(),
+        ValidityTs::from_raw(0),
     )
     .expect("fixture program parses");
     match script {
         Script::Query(prog) => MismatchProgram(prog),
-        Script::Sys { .. } | Script::Imperative { .. } => {
+        Script::Sys(_) | Script::Imperative(_) => {
             panic!("fixture must be a query script")
         }
     }

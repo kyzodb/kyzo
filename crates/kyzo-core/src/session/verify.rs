@@ -79,7 +79,6 @@ use kyzo_model::value::{DataValue, Tuple, ValidityTs};
 /// Outcome of root tamper-evidence [`verify`]: intact chain match, or a
 /// reproducible mismatch between the stored tip and an independent rescan.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub enum RootVerifyOutcome {
     /// Recomputed content seals to the stored [`RootChain`] tip at the cut.
     Intact { root: StateRoot },
@@ -101,7 +100,8 @@ pub enum RootVerifyOutcome {
 /// A caller-supplied [`StateRoot`] is not a parameter of this door and
 /// cannot become the expected digest. Forged / swapped store bytes surface
 /// as [`RootVerifyOutcome::Tampered`].
-#[allow(dead_code)] // mid-wiring / test-only surface
+///
+/// Live caller: [`crate::session::db::Engine::verify_root_chain`].
 pub(crate) fn verify(
     tx: &impl ReadTx,
     chain: &RootChain,
@@ -303,9 +303,9 @@ impl<S: Storage> Engine<S> {
         options: ScriptOptions,
     ) -> Result<VerifyOutcome> {
         let cur_vld = current_validity()?;
-        match parse_script(payload, &params)? {
+        match parse_script(payload, &params, cur_vld)? {
             Script::Query(prog) => self.verify_input_program(prog, cur_vld, &options),
-            Script::Sys { .. } | Script::Imperative { .. } => {
+            Script::Sys(_) | Script::Imperative(_) => {
                 Ok(VerifyUnsupported::NotSingleRead.into())
             }
         }

@@ -1269,9 +1269,12 @@ fn note_pending(
     rule_n: usize,
     premises: &Premises<'_>,
 ) {
-    pending
-        .entry(key)
-        .or_insert_with(|| (rule_n, premises.to_rows()));
+    pending.entry(key).or_insert_with(|| {
+        (
+            crate::exec::provenance::semiring::DerivationId::from_rule_index(rule_n),
+            premises.to_rows(),
+        )
+    });
 }
 
 /// A tuple's projection onto the given head positions, in the order the

@@ -60,7 +60,6 @@ pub(crate) mod fixpoint {
 pub(crate) mod op;
 pub(crate) mod plan {
     pub(crate) mod compile;
-    pub(crate) mod expr;
     pub(crate) mod graph;
     pub(crate) mod magic;
     pub(crate) mod normalize;
@@ -69,7 +68,6 @@ pub(crate) mod plan {
     pub(crate) mod stratify;
 }
 pub(crate) mod provenance {
-    pub(crate) mod counted;
     pub(crate) mod eval;
     pub(crate) mod semiring;
 }

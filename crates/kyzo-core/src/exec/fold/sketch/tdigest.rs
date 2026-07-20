@@ -159,7 +159,6 @@ impl TDigest {
         }
     }
 
-    #[allow(dead_code)] // used by `merge` (itself pre-landing) and by tests.
     pub(crate) fn is_empty(&self) -> bool {
         self.centroids.is_empty()
     }
@@ -202,10 +201,8 @@ impl TDigest {
     /// weighted points, sort by mean, and re-run the build sweep.
     /// Deterministic and commutative; **not** claimed associative (see the
     /// module docs), so callers must not depend on grouping.
-    // Shard-merge API: exercised by tests; consumed when partitioned
-    // digest-building lands. The aggregation never uses it (it builds from
-    // sorted values instead).
-    #[allow(dead_code)]
+    /// Shard-merge door — also used when [`super::aggr::AggrTDigest`] folds
+    /// stored digest `Bytes`.
     pub(crate) fn merge(&self, other: &TDigest) -> Result<TDigest> {
         ensure!(
             self.compression == other.compression,
@@ -267,9 +264,7 @@ impl TDigest {
     }
 
     /// Parse the stored form, validating tag, length, and centroid count.
-    // Read-side API: exercised by tests; consumed when a stored digest is
-    // decoded for querying by the runtime tier.
-    #[allow(dead_code)]
+    /// Live door: [`super::aggr::AggrTDigest`] shard fold + query decode.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         ensure!(!bytes.is_empty(), "empty t-digest bytes");
         ensure!(

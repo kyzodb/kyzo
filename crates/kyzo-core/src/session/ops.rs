@@ -100,15 +100,6 @@ impl<T: WriteTx> SessionTx<T> {
             .collect()
     }
 
-    /// Parse + resolve + compile a row expression (extractor or filter)
-    /// against the base relation's columns.
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    fn compile_row_expr(base: &RelationHandle, src: &str) -> Result<Expr> {
-        let mut expr = crate::parse::parse_expressions(src, &BTreeMap::new())?;
-        expr.fill_binding_indices(&Self::base_column_frame(base))?;
-        Ok(expr)
-    }
-
     /// Bind an already-parsed row extractor ([`crate::parse::sys::FtsIndexConfig::extractor`]
     /// / the manifest's stored typed substance) to the base column frame.
     /// The extractor is never re-parsed from source at build time — it arrives typed.
@@ -506,7 +497,11 @@ impl<T: WriteTx> SessionTx<T> {
     /// — see [`IndexKind::Temporal`]). The stored posting rows are the
     /// write's own valid instant as a leading column, followed by the
     /// base relation's key columns.
-    #[allow(dead_code)] // mid-wiring surface
+    ///
+    /// No parsed `SysOp` surface yet (grammar lives outside this door);
+    /// exercised by in-crate temporal index tests that drive `SessionTx`
+    /// directly — the same code the eventual parsed surface will call.
+    #[cfg(test)]
     pub(crate) fn create_temporal_index(&mut self, rel: &str, idx_name: &str) -> Result<NamedRows> {
         let base = self.get_relation(rel)?;
         let mut keys = Vec::with_capacity(1 + base.metadata.keys.len());

@@ -28,7 +28,7 @@ use crate::exec::fixpoint::eval::{
     PremiseSource, RuleBody, project_positions, store_of,
 };
 use crate::exec::plan::program::MagicSymbol;
-use crate::exec::provenance::semiring::{Derivation, DerivationGraph};
+use crate::exec::provenance::semiring::{Derivation, DerivationGraph, DerivationId};
 use kyzo_model::value::Tuple;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -43,6 +43,10 @@ use kyzo_model::value::Tuple;
 pub struct Witness {
     pub store: MagicSymbol,
     pub tuple: Tuple,
+    /// First-witness rule label as [`DerivationId::index`] plus premises.
+    /// Public field stays `usize` so `oracle_harness` hosts need no
+    /// `DerivationId` re-export from `lib.rs`; typed identity lives in
+    /// [`PendingWitnesses`] / [`Derivation::label`].
     pub derivation: Option<(usize, Vec<Tuple>)>,
 }
 
@@ -66,7 +70,7 @@ impl WitnessTable {
 /// tuple for a regular store, group key for a meet store) → first
 /// derivation. Built during (possibly parallel) rule evaluation, each map
 /// owned by its own rule set; consumed at the sequential merge barrier.
-pub(crate) type PendingWitnesses = BTreeMap<Tuple, (usize, Vec<Tuple>)>;
+pub(crate) type PendingWitnesses = BTreeMap<Tuple, (DerivationId, Vec<Tuple>)>;
 
 /// How a pending-witness map is keyed for one store at the merge barrier.
 /// Meet groups project onto [`HeadPos`]s; regular stores key on the full
@@ -105,7 +109,7 @@ impl AdmissionSink for WitnessBinder<'_> {
         self.table.entries.push(Witness {
             store: self.store.clone(),
             tuple: full,
-            derivation,
+            derivation: derivation.map(|(id, premises)| (id.index(), premises)),
         });
         Ok(())
     }
@@ -230,7 +234,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                     spent += 1;
                     if spent > ceiling {
                         return Err(crate::exec::provenance::semiring::ProvenanceLimitExceeded {
-                            dimension: "enumerated derivations",
+                            dimension: crate::exec::provenance::semiring::ProvenanceBudgetDimension::EnumeratedDerivations,
                             spent,
                             ceiling,
                         }
@@ -267,7 +271,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                             PremiseSource::Rule(name.clone()),
                             Tuple::from_vec(head.into_owned()),
                         ),
-                        label: rule_n,
+                        label: DerivationId::from_rule_index(rule_n),
                         weight,
                         premises: premise_nodes,
                     })?;

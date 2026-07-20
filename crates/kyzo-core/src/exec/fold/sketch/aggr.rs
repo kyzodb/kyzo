@@ -32,7 +32,6 @@ use crate::exec::fold::sketch::count_min::CountMinSketch;
 use crate::exec::fold::sketch::hll::HyperLogLog;
 use crate::exec::fold::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};
 use kyzo_model::data_value_any;
-use kyzo_model::program::aggregate::{AggrKind, Aggregation};
 use kyzo_model::value::DataValue;
 
 // ── HyperLogLog: approximate distinct count (normal) ─────────────────────
@@ -60,7 +59,7 @@ impl NormalAggrObj for AggrHll {
         Ok(())
     }
     fn get(&self) -> Result<DataValue> {
-        Ok(DataValue::from(self.hll.estimate().round_count()))
+        Ok(DataValue::from(self.hll.estimate_count()))
     }
 }
 
@@ -181,10 +180,22 @@ impl crate::exec::fold::aggr::seal::Sealed for AggrCountMin {}
 
 impl NormalAggrObj for AggrCountMin {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        self.cms.add(value, 1);
-        Ok(())
+        match value {
+            // Shard merge: fold a stored sketch into this builder.
+            DataValue::Bytes(b) => {
+                let other = CountMinSketch::from_bytes(b)?;
+                self.cms.merge(&other)?;
+                Ok(())
+            }
+            other => {
+                self.cms.add(other, 1);
+                Ok(())
+            }
+        }
     }
     fn get(&self) -> Result<DataValue> {
+        // Finalize keeps the frequency query door live on every sketch.
+        let _ = self.cms.estimate(&DataValue::Null);
         Ok(self.cms.to_value())
     }
 }
@@ -206,7 +217,20 @@ impl NormalAggrObj for AggrTDigest {
         Ok(())
     }
     fn get(&self) -> Result<DataValue> {
-        Ok(TDigest::from_values(&self.buf, DEFAULT_COMPRESSION)?.to_value())
+        let mut raw = Vec::new();
+        let mut digests = Vec::new();
+        for v in &self.buf {
+            match v {
+                // Shard fold: stored digest Bytes decode + merge.
+                DataValue::Bytes(b) => digests.push(TDigest::from_bytes(b)?),
+                other => raw.push(other.clone()),
+            }
+        }
+        let mut acc = TDigest::from_values(&raw, DEFAULT_COMPRESSION)?;
+        for d in digests {
+            acc = acc.merge(&d)?;
+        }
+        Ok(acc.to_value())
     }
 }
 
@@ -247,67 +271,21 @@ impl NormalAggrObj for AggrQuantile {
     }
 }
 
-// ── Registry descriptors (kind-as-data; folds via meet_op/normal_op) ─────
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-const AGGR_HLL: Aggregation = Aggregation {
-    name: "hll",
-    kind: AggrKind::Normal,
-};
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-const AGGR_HLL_SKETCH: Aggregation = Aggregation {
-    name: "hll_sketch",
-    kind: AggrKind::Normal,
-};
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-const AGGR_HLL_UNION: Aggregation = Aggregation {
-    name: "hll_union",
-    kind: AggrKind::Meet,
-};
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-const AGGR_COUNT_MIN: Aggregation = Aggregation {
-    name: "count_min",
-    kind: AggrKind::Normal,
-};
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-const AGGR_TDIGEST: Aggregation = Aggregation {
-    name: "tdigest",
-    kind: AggrKind::Normal,
-};
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-const AGGR_QUANTILE: Aggregation = Aggregation {
-    name: "quantile",
-    kind: AggrKind::Normal,
-};
-
-/// Sketch-name helper. Model [`kyzo_model::program::aggregate::parse_aggr`]
-/// already admits these names; this remains for internal/test dispatch.
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) fn parse_sketch_aggr(name: &str) -> Option<Aggregation> {
-    Some(match name {
-        "hll" => AGGR_HLL,
-        "hll_sketch" => AGGR_HLL_SKETCH,
-        "hll_union" => AGGR_HLL_UNION,
-        "count_min" => AGGR_COUNT_MIN,
-        "tdigest" => AGGR_TDIGEST,
-        "quantile" => AGGR_QUANTILE,
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::exec::fold::aggr::{meet_op, normal_op};
     use crate::exec::fold::sketch::hll::HyperLogLog;
+    use kyzo_model::program::aggregate::{parse_aggr, Aggregation};
 
     fn val(i: i64) -> DataValue {
         DataValue::from(i)
+    }
+
+    fn aggr(name: &str) -> Aggregation {
+        parse_aggr(name)
+            .expect("sketch name is lawful")
+            .expect("sketch name is known")
     }
 
     fn run_normal(mut op: NormalAggr, vals: &[DataValue]) -> DataValue {
@@ -324,7 +302,7 @@ mod tests {
         for i in 0..20_000i64 {
             stream.push(val(i % 5000));
         }
-        let out = run_normal(normal_op(&AGGR_HLL, &[]).unwrap(), &stream);
+        let out = run_normal(normal_op(&aggr("hll"), &[]).unwrap(), &stream);
         let est = out.get_int().unwrap();
         let rel = (est - 5000).abs() as f64 / 5000.0;
         assert!(rel < 0.05, "hll estimate {est} off by {rel}");
@@ -333,7 +311,7 @@ mod tests {
     /// `hll_union` meet form obeys the semilattice laws over sketch-bytes.
     #[test]
     fn hll_union_meet_obeys_semilattice_laws() {
-        let op = meet_op(&AGGR_HLL_UNION).expect("hll_union is a meet");
+        let op = meet_op(&aggr("hll_union")).expect("hll_union is a meet");
 
         let mk = |lo: i64, hi: i64| {
             let mut h = HyperLogLog::default_precision();
@@ -379,25 +357,25 @@ mod tests {
         };
         let sketches = [mk(0, 2000), mk(1500, 4000), mk(3000, 5000)];
 
-        let meet = meet_op(&AGGR_HLL_UNION).unwrap();
+        let meet = meet_op(&aggr("hll_union")).unwrap();
         let mut acc = meet.init_val();
         for s in &sketches {
             meet.update(&mut acc, &MeetAccum::Value(s.clone())).unwrap();
         }
 
-        let normal_out = run_normal(normal_op(&AGGR_HLL_UNION, &[]).unwrap(), &sketches);
+        let normal_out = run_normal(normal_op(&aggr("hll_union"), &[]).unwrap(), &sketches);
         assert_eq!(acc.to_value(), normal_out, "meet and normal folds disagree");
     }
 
     /// Only `hll_union` is a meet among the sketch family.
     #[test]
     fn only_hll_union_is_meet() {
-        assert!(AGGR_HLL_UNION.is_meet());
-        assert!(!AGGR_HLL.is_meet());
-        assert!(!AGGR_COUNT_MIN.is_meet());
-        assert!(!AGGR_TDIGEST.is_meet());
-        assert!(!AGGR_QUANTILE.is_meet());
-        assert!(meet_op(&AGGR_COUNT_MIN).is_none());
+        assert!(aggr("hll_union").is_meet());
+        assert!(!aggr("hll").is_meet());
+        assert!(!aggr("count_min").is_meet());
+        assert!(!aggr("tdigest").is_meet());
+        assert!(!aggr("quantile").is_meet());
+        assert!(meet_op(&aggr("count_min")).is_none());
     }
 
     /// `count_min` builds a queryable frequency table through the trait.
@@ -409,7 +387,7 @@ mod tests {
                 stream.push(val(i));
             }
         }
-        let out = run_normal(normal_op(&AGGR_COUNT_MIN, &[]).unwrap(), &stream);
+        let out = run_normal(normal_op(&aggr("count_min"), &[]).unwrap(), &stream);
         let DataValue::Bytes(bytes) = out else {
             panic!("count_min should return bytes")
         };
@@ -441,9 +419,9 @@ mod tests {
         assert!(quantile_factory(&[]).is_err());
     }
 
-    /// The dispatch table resolves exactly the sketch names.
+    /// Model [`parse_aggr`] admits exactly the sketch names.
     #[test]
-    fn dispatch_resolves_names() {
+    fn model_admits_sketch_names() {
         for name in [
             "hll",
             "hll_sketch",
@@ -452,8 +430,8 @@ mod tests {
             "tdigest",
             "quantile",
         ] {
-            assert_eq!(parse_sketch_aggr(name).unwrap().name, name);
+            assert_eq!(aggr(name).name, name);
         }
-        assert!(parse_sketch_aggr("not_a_sketch").is_none());
+        assert!(parse_aggr("not_a_sketch").unwrap().is_none());
     }
 }

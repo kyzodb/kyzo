@@ -394,6 +394,17 @@ impl<S: Storage> Engine<S> {
         self.callback_count.fetch_add(1, Ordering::SeqCst) + 1
     }
 
+    /// Tamper-evidence door: recompute the store content root and compare
+    /// it to this Engine's live [`RootChain`] tip at `cut`.
+    pub fn verify_root_chain(
+        &self,
+        cut: crate::store::sweep::CommitOrdinal,
+        budget: std::num::NonZeroU64,
+    ) -> Result<crate::session::verify::RootVerifyOutcome> {
+        let tx = self.store.read_tx()?;
+        crate::session::verify::verify(&tx, self.admission.root_chain(), cut, budget)
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Script entry
     // ─────────────────────────────────────────────────────────────────────
@@ -416,17 +427,21 @@ impl<S: Storage> Engine<S> {
         options: ScriptOptions,
     ) -> Result<NamedRows> {
         let cur_vld = current_validity()?;
-        match parse_script(payload, &params)? {
+        match parse_script(payload, &params, cur_vld)? {
             Script::Query(prog) => self.execute_single(prog, cur_vld, &options),
             // The parsed `::…` script validated as syntax; the engine-typed
             // lift (`crate::parse::sys`) admits it into a `SysOp` — sealing
             // index configs and admitting tokenizers — before dispatch. The
             // whole payload is the sys script, so it re-parses cleanly.
-            Script::Sys { .. } => {
-                let op = crate::parse::sys::lift(crate::parse::parse_sys(payload, &params)?)?;
+            Script::Sys(_) => {
+                let op = crate::parse::sys::lift(crate::parse::parse_sys(
+                    payload,
+                    &params,
+                    cur_vld,
+                )?)?;
                 self.run_sys_op(op, cur_vld, &options)
             }
-            Script::Imperative { .. } => bail!(EngineRefuse::ImperativeNotWired),
+            Script::Imperative(_) => bail!(EngineRefuse::ImperativeNotWired),
         }
     }
 
@@ -951,28 +966,6 @@ impl<T: ReadTx> SessionTx<T> {
         }
     }
 
-    /// Read one key from the store the relation lives in.
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn get_routed(
-        &self,
-        residency: Residency,
-        key: &[u8],
-    ) -> Result<Option<fjall::Slice>> {
-        match residency {
-            Residency::Temp => self.temp.get(key),
-            Residency::Stored => self.store.get(key),
-        }
-    }
-
-    /// Existence of one key in the store the relation lives in.
-    #[allow(dead_code)] // mid-wiring surface
-    pub(crate) fn exists_routed(&self, residency: Residency, key: &[u8]) -> Result<bool> {
-        match residency {
-            Residency::Temp => self.temp.exists(key),
-            Residency::Stored => self.store.exists(key),
-        }
-    }
-
     /// The fact's LOGICAL row governing AT `valid`, routed: the versioned
     /// format's point read (a bitemporal probe under the fact's key
     /// prefix, resolved with the newest system knowledge), replacing
@@ -1120,14 +1113,6 @@ impl<T: WriteTx> SessionTx<T> {
         }
     }
 
-    /// Delete one key from the store the relation lives in.
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn del_routed(&mut self, residency: Residency, key: &[u8]) -> Result<()> {
-        match residency {
-            Residency::Temp => self.temp.del(key),
-            Residency::Stored => self.store.del(key),
-        }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

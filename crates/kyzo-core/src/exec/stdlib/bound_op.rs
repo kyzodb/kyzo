@@ -11,7 +11,6 @@ pub struct BoundOp {
     body: fn(&[DataValue]) -> Result<DataValue>,
 }
 
-#[allow(dead_code)] // BoundOp query surface for hosts/tests mid-wiring
 impl BoundOp {
     /// Sole apply door — typed NaN Refuse (`StdlibRefuse::NanAnswer`).
     pub fn apply(&self, args: &[DataValue]) -> Result<DataValue> {
@@ -32,51 +31,50 @@ impl BoundOp {
         Ok(result)
     }
 
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    /// Declaration twin — hosts/tests inspect arity and name without apply.
     pub fn decl(&self) -> OpDecl {
         self.decl
     }
 
-    #[allow(dead_code)] // mid-wiring surface
     pub fn name(&self) -> &'static str {
-        self.decl.name
+        self.decl().name
     }
 
     pub fn display_name(&self) -> String {
-        self.decl.display_name()
+        self.decl().display_name()
     }
 
     pub fn min_arity(&self) -> usize {
-        self.decl.min_arity
+        self.decl().min_arity
     }
 
     pub fn is_vararg(&self) -> bool {
-        self.decl.is_vararg()
+        self.decl().is_vararg()
     }
 
     pub fn is_deterministic(&self) -> bool {
-        self.decl.is_deterministic()
+        self.decl().is_deterministic()
     }
 
     pub fn arity_matches(&self, n: usize) -> bool {
-        self.decl.arity_matches(n)
+        self.decl().arity_matches(n)
     }
 
     pub fn arity_requirement(&self) -> String {
-        self.decl.arity_requirement()
+        self.decl().arity_requirement()
     }
 }
 
 impl PartialEq for BoundOp {
     fn eq(&self, other: &Self) -> bool {
-        self.decl.name == other.decl.name
+        self.name() == other.name()
     }
 }
 impl Eq for BoundOp {}
 
 impl std::fmt::Debug for BoundOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.decl.name)
+        write!(f, "{}", self.name())
     }
 }
 

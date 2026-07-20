@@ -90,6 +90,24 @@ pub(crate) struct SemiringOverflow {
     pub(crate) right: u64,
 }
 
+/// Which provenance budget dimension was exceeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProvenanceBudgetDimension {
+    /// Grounded-derivation enumeration while building the graph.
+    EnumeratedDerivations,
+    /// Semiring solver fixpoint passes.
+    SolverPasses,
+}
+
+impl std::fmt::Display for ProvenanceBudgetDimension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::EnumeratedDerivations => "enumerated derivations",
+            Self::SolverPasses => "solver passes",
+        })
+    }
+}
+
 /// The provenance pass exceeded an armed ceiling. Both dimensions are
 /// deterministic (functions of the graph and the ceiling alone), so the
 /// refusal is byte-identical on every run at any thread count.
@@ -100,7 +118,7 @@ pub(crate) struct SemiringOverflow {
     help("raise the provenance ceiling, or narrow the query")
 )]
 pub(crate) struct ProvenanceLimitExceeded {
-    pub(crate) dimension: &'static str,
+    pub(crate) dimension: ProvenanceBudgetDimension,
     pub(crate) spent: u64,
     pub(crate) ceiling: u64,
 }
@@ -148,39 +166,8 @@ pub(crate) enum NoDerivation {
 pub(crate) struct ProvenanceInvariantError(pub(crate) &'static str);
 
 // ─────────────────────────────────────────────────────────────────────────
-// The semiring algebra (sealed enum — not an open trait)
+// The semiring algebra (sealed products — kind is the type, not an enum)
 // ─────────────────────────────────────────────────────────────────────────
-
-/// Which commutative semiring annotates the derivation graph.
-///
-/// Exactly the two **idempotent** algebras whose fixpoints are finite.
-/// Counting/polynomial are refused at this door — they are not variants.
-/// Each variant's annotation is a sealed product type
-/// ([`BooleanAnn`] / [`TropicalAnn`]): kind mismatch does not compile.
-///
-/// Laws (asserted on randomized values by the axiom tests in
-/// `query/provenance.rs`):
-///
-/// - `⊕` associative, commutative, identity `0`;
-/// - `⊗` associative, commutative, identity `1`, annihilator `0`
-///   (`0 ⊗ a = 0`);
-/// - `⊗` distributes over `⊕`.
-///
-/// **Solver contract beyond the axioms**: `⊕` is idempotent (`a ⊕ a = a`)
-/// and every `⊕`-chain stabilizes after finitely many strict changes —
-/// true of [`BooleanAnn`] (one flip) and [`TropicalAnn`] (a strictly
-/// decreasing `u64` chain is finite). The solver's pass ceiling turns any
-/// non-stabilizing chain into a typed refusal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) enum Semiring {
-    /// `({⊥,⊤}, ∨, ∧, ⊥, ⊤)`: does a derivation exist. Support equals the
-    /// engine's set semantics — asserted by differential against the oracle.
-    Boolean,
-    /// `(ℕ∪{∞}, min, +, ∞, 0)`: cheapest derivation cost. Derivation
-    /// *depth* is deliberately not offered (min-max is not a semiring `⊗`).
-    Tropical,
-}
 
 /// A tropical annotation: the cost of the cheapest known derivation, or
 /// [`Cost::Infinite`] for "none". The derived `Ord` is the tropical order
@@ -193,8 +180,8 @@ pub(crate) enum Cost {
 }
 
 /// The algebra operations every sealed annotation product exposes. The
-/// associated value *is* the annotation — there is no independent
-/// `Annotation` enum that can disagree with its [`Semiring`].
+/// associated value *is* the annotation — kind lives in the type
+/// ([`BooleanAnn`] / [`TropicalAnn`]), never a parallel discriminant.
 pub(crate) trait AnnAlgebra: Copy + Clone + PartialEq + Eq + Ord + Debug + Sized {
     fn zero() -> Self;
     fn one() -> Self;
@@ -203,19 +190,16 @@ pub(crate) trait AnnAlgebra: Copy + Clone + PartialEq + Eq + Ord + Debug + Sized
     fn lift_weight(weight: NonZeroU64) -> Self;
 }
 
-/// Sealed product: [`Semiring::Boolean`] × existence bit. Ops are total
-/// on this type alone — a tropical value cannot be passed here.
+/// Sealed boolean annotation: existence bit. Ops are total on this type
+/// alone — a tropical value cannot be passed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) struct BooleanAnn(bool);
 
 impl BooleanAnn {
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new(present: bool) -> Self {
         Self(present)
     }
 
-    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn get(self) -> bool {
         self.0
     }
@@ -243,13 +227,12 @@ impl AnnAlgebra for BooleanAnn {
     }
 }
 
-/// Sealed product: [`Semiring::Tropical`] × [`Cost`]. Ops are total on
-/// this type alone — a boolean value cannot be passed here.
+/// Sealed tropical annotation over [`Cost`]. Ops are total on this type
+/// alone — a boolean value cannot be passed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TropicalAnn(Cost);
 
 impl TropicalAnn {
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new(cost: Cost) -> Self {
         Self(cost)
     }
@@ -293,15 +276,14 @@ impl AnnAlgebra for TropicalAnn {
 
 /// One grounded rule application: `head ← premises`, by rule `label` of
 /// the head's rule set, charging `weight`. The graph is semiring-agnostic
-/// — one graph solves under [`Semiring::Boolean`] and [`Semiring::Tropical`]
-/// alike.
+/// — one graph solves under [`BooleanAnn`] and [`TropicalAnn`] alike.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Derivation<K> {
     pub(crate) head: K,
     /// The per-head rule index (the same index the witness seam records),
     /// carried into certificates so an independent checker can resolve
     /// the rule and re-derive the instantiation from scratch.
-    pub(crate) label: usize,
+    pub(crate) label: DerivationId,
     /// The rule application's cost. `NonZeroU64` by construction: a
     /// zero-weight rule would let a min-cost cycle tie with itself and
     /// unfound certificate extraction (see [`extract_min_cost_proof`]).
@@ -310,19 +292,23 @@ pub(crate) struct Derivation<K> {
     pub(crate) premises: Vec<K>,
 }
 
-/// Typed index into [`DerivationGraph::derivations`] — certificates name
-/// steps by this id, never a bare `usize` (P104).
+/// Typed derivation identity — graph step index **or** per-head rule label.
+/// Never a bare `usize` at the provenance seam (P104).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct DerivationId(usize);
+pub struct DerivationId(usize);
 
 impl DerivationId {
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn index(self) -> usize {
+    pub fn index(self) -> usize {
         self.0
     }
 
+    /// Mint from a per-head rule index (witness seam / [`Derivation::label`]).
+    pub(crate) fn from_rule_index(index: usize) -> Self {
+        Self(index)
+    }
+
     /// Unchecked id for the trials certificate-mutation injector only.
-    /// Production certificates obtain ids solely from [`DerivationGraph::add_derivation`].
+    /// Production graph steps obtain ids solely from [`DerivationGraph::add_derivation`].
     pub(crate) fn unchecked(index: usize) -> Self {
         Self(index)
     }
@@ -547,7 +533,7 @@ pub(crate) fn solve<A: AnnAlgebra, K: Ord + Clone + Debug>(
         }
     }
     Err(ProvenanceLimitExceeded {
-        dimension: "solver passes",
+        dimension: ProvenanceBudgetDimension::SolverPasses,
         spent: u64::from(ceiling),
         ceiling: u64::from(ceiling),
     }
@@ -583,7 +569,7 @@ pub(crate) enum ProofNode<K> {
     Step {
         node: K,
         derivation: DerivationId,
-        label: usize,
+        label: DerivationId,
         cost: u64,
         premises: Vec<ProofNode<K>>,
     },
@@ -595,7 +581,6 @@ impl<K> ProofNode<K> {
             ProofNode::Fact { node } | ProofNode::Step { node, .. } => node,
         }
     }
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn cost(&self) -> u64 {
         match self {
             ProofNode::Fact { .. } => 0,

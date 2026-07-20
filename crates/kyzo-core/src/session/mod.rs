@@ -42,5 +42,4 @@ pub(crate) mod observe;
 pub(crate) mod ops;
 #[allow(dead_code)] // mid-wiring seat
 pub(crate) mod record_id;
-pub(crate) mod spatial;
 pub(crate) mod verify;
