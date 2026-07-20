@@ -46,7 +46,7 @@ pub(crate) mod nonce;
 pub(crate) mod objects;
 /// Identity + open capability + genesis (07 seat).
 pub(crate) mod open;
-/// AdmissionCertificate + verify_replica + NamespacedRecordIdentity + crossing validation (07 seat).
+/// AdmissionCertificate + verify_replica + NamespacedRecordIdentity + crossing validation + promotion (#270).
 pub(crate) mod replica;
 pub(crate) mod retry;
 pub(crate) mod scratch;
@@ -152,10 +152,12 @@ pub use replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
     AuthorizingKeyTable, CrossingCapabilitySet, CrossingContext, CrossingEnvelope,
     CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingRefuse, CrossingStatus,
-    CrossingValidated, LocalProjection, NamespacedRecordIdentity, OriginContinuity,
-    PostStateRoot, ReplicaCustody, ReplicaCustodyTable, ReplicaKey, ReplicaRefuse,
-    ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, TenantId, anchor_pending,
+    CrossingValidated, GraphBoundKey, GraphBoundary, KeyBoundaryRefuse, LocalProjection,
+    NamespacedRecordIdentity, OriginContinuity, PostStateRoot, PromotionMeaning, PromotionRefuse,
+    ReplicaCustody, ReplicaCustodyTable, ReplicaKey, ReplicaRefuse, ScopeManifestDigest,
+    ScopeManifestStatus, ScopeManifestTable, TenantId, anchor_pending, prove_promotion_replay,
     refuse_in_place_local_reinterpretation, validate_crossing_before_lower, verify_replica,
+    view_under_schema_cut,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use seal::{

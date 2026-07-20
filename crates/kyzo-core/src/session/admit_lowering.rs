@@ -13,19 +13,23 @@
 //! record's typed fields — never a memoized cache on the record.
 //! Every lowered row carries the source [`RecordId`].
 //!
-//! Crossing / federation receive (#270 T1): a foreign record may lower only
+//! Crossing / federation receive (#270 T1/T3): a foreign record may lower only
 //! after [`crate::store::replica::validate_crossing_before_lower`] mints
-//! [`CrossingValidated`]. [`lower_after_crossing`] is that door — local
-//! [`lower_record`] remains the same-store path.
+//! [`CrossingValidated`]. [`lower_after_crossing`] seals rows under the
+//! token's `origin_schema_cut` ([`OriginSealedLowering`]) — local Catalog
+//! cuts cannot reshape it; kind mismatch refuses in release builds.
 
 use crate::data::statement::{OntokKind, StatementContext, StatementSource};
 use crate::project::dimension::{LoweredRow, RecordLowering, StatementDimension};
 use crate::store::replica::{
     AdmissionCertificate, CrossingCapabilitySet, CrossingContext, CrossingEnvelope,
-    CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingStatus, CrossingValidated,
+    CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingRefuse, CrossingStatus,
+    CrossingValidated, GraphBoundKey, GraphBoundary, NamespacedRecordIdentity, PromotionMeaning,
+    ReplicaKey, TenantId, view_under_schema_cut,
 };
 use kyzo_model::value::canonical::encode_owned;
 use kyzo_model::value::DataValue;
+use sha2::{Digest, Sha256};
 
 use super::{KyzoRecord, SemanticSurface};
 
@@ -182,23 +186,145 @@ pub(crate) fn crossing_envelope_from_record(
     )
 }
 
-/// Lower a crossing record only after full contract validation (#270 T1).
+/// Lowering sealed under the origin schema cut (#270 T3 / seat 69).
+///
+/// Equality and [`OriginSealedLowering::replay_digest`] include the cut —
+/// carrying-but-ignoring `origin_schema_cut` is deleted. A different local
+/// Catalog cut cannot reshape this via [`OriginSealedLowering::under_local_cut`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OriginSealedLowering {
+    origin_schema_cut: [u8; 32],
+    kind: CrossingKind,
+    custody_key: ReplicaKey,
+    rows: RecordLowering,
+}
+
+impl OriginSealedLowering {
+    /// Seal rows under the validated origin schema cut — private mint path.
+    fn seal(
+        origin_schema_cut: [u8; 32],
+        kind: CrossingKind,
+        custody_key: ReplicaKey,
+        rows: RecordLowering,
+    ) -> Self {
+        Self {
+            origin_schema_cut,
+            kind,
+            custody_key,
+            rows,
+        }
+    }
+
+    /// Origin schema cut that constrains this lowering.
+    pub fn origin_schema_cut(&self) -> &[u8; 32] {
+        &self.origin_schema_cut
+    }
+
+    /// Validated ONTOK kind sealed with the cut.
+    pub fn kind(&self) -> CrossingKind {
+        self.kind
+    }
+
+    /// Custody key from crossing validation — confine via [`Self::confine_to_graph`].
+    pub fn custody_key(&self) -> ReplicaKey {
+        self.custody_key
+    }
+
+    /// Projection rows — only meaningful as-of [`Self::origin_schema_cut`].
+    pub fn lowering(&self) -> &RecordLowering {
+        &self.rows
+    }
+
+    /// Seat 69: view under a local Catalog cut — equal cut only; else refuse.
+    pub fn under_local_cut(
+        &self,
+        local_schema_cut: &[u8; 32],
+    ) -> Result<&RecordLowering, CrossingRefuse> {
+        view_under_schema_cut(&self.origin_schema_cut, local_schema_cut)?;
+        Ok(&self.rows)
+    }
+
+    /// Confine the sealed custody key to a graph boundary (#270 T3).
+    pub fn confine_to_graph(&self, graph: GraphBoundary) -> GraphBoundKey {
+        GraphBoundKey::bind(graph, &self.custody_key)
+    }
+
+    /// Replay meter: origin cut + kind + custody key + concatenated row bytes.
+    pub fn replay_digest(&self) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.origin_sealed_lowering.v1");
+        h.update(self.origin_schema_cut);
+        h.update([self.kind.as_wire()]);
+        h.update(self.custody_key.as_bytes());
+        h.update(self.rows.concatenated_bytes());
+        h.finalize().into()
+    }
+}
+
+/// Lower a crossing record only after full contract validation (#270 T1/T3).
 ///
 /// Requires [`CrossingValidated`] from [`validate_crossing_before_lower`].
-/// Origin schema cut on the token is the sealed meaning — never a local
-/// Catalog reinterpretation.
+/// Consumes `origin_schema_cut` to seal [`OriginSealedLowering`] — kind
+/// mismatch refuses in release (not `debug_assert`); local Catalog
+/// reinterpretation is Unconstructible via [`OriginSealedLowering::under_local_cut`].
 pub(crate) fn lower_after_crossing(
     record: &KyzoRecord,
     validated: &CrossingValidated,
-) -> RecordLowering {
-    debug_assert_eq!(
-        crossing_kind_from_ontok(record.kind()),
+) -> Result<OriginSealedLowering, CrossingRefuse> {
+    let record_kind = crossing_kind_from_ontok(record.kind());
+    if record_kind != validated.kind() {
+        return Err(CrossingRefuse::KindMismatch);
+    }
+    // Consume origin_schema_cut: seal lowering under it (not a local Catalog cut).
+    // under_local_cut / replay_digest constrain meaning to this cut in release.
+    let origin_schema_cut = *validated.origin_schema_cut();
+    let custody_key = validated.custody().key();
+    let rows = lower_record(record);
+    Ok(OriginSealedLowering::seal(
+        origin_schema_cut,
         validated.kind(),
-        "crossing lower kind must match validated envelope"
+        custody_key,
+        rows,
+    ))
+}
+
+/// Digest of validity-time for [`PromotionMeaning`] (#270 T3).
+pub(crate) fn promotion_valid_time_digest(record: &KyzoRecord) -> [u8; 32] {
+    let encoded = encode_owned(&DataValue::Interval(record.validity_time().as_interval()));
+    let mut h = Sha256::new();
+    h.update(b"kyzo.promotion.valid_time.v1");
+    h.update(encoded.as_bytes());
+    h.finalize().into()
+}
+
+/// Digest of provenance / source for [`PromotionMeaning`] (#270 T3).
+pub(crate) fn promotion_provenance_digest(record: &KyzoRecord) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.promotion.provenance.v1");
+    match record.source() {
+        StatementSource::Unbound => h.update(b"unbound"),
+        StatementSource::Artifact(id) => h.update(id.as_digest()),
+    }
+    h.finalize().into()
+}
+
+/// Bind promotion meaning seats from an admitted record + certificate (#270 T3).
+pub(crate) fn promotion_meaning_from_record(
+    record: &KyzoRecord,
+    certificate: &AdmissionCertificate,
+    tenant: TenantId,
+) -> PromotionMeaning {
+    let identity = NamespacedRecordIdentity::from_certificate(
+        *record.record_id().as_bytes(),
+        certificate,
+        tenant,
     );
-    let _origin_cut = validated.origin_schema_cut();
-    let _custody = validated.custody();
-    lower_record(record)
+    PromotionMeaning::bind(
+        identity,
+        promotion_valid_time_digest(record),
+        promotion_provenance_digest(record),
+        *certificate.schema_cut(),
+    )
 }
 
 fn encode_dimension_row(record: &KyzoRecord, dimension: StatementDimension) -> Vec<u8> {
@@ -610,15 +736,17 @@ mod tests {
         assert_eq!(record.record_id().as_bytes(), record.digest().as_digest());
     }
 
-    /// Crossing lower requires CrossingValidated — same rows as local lower
-    /// once the token is present (#270 T1).
+    /// Crossing lower seals under origin_schema_cut; rows match local lower
+    /// under that cut (#270 T1/T3). Kind mismatch and local-cut reinterpret
+    /// refuse in release builds.
     #[test]
     fn lower_after_crossing_matches_local_lower() {
         use crate::store::epoch::FenceEpoch;
         use crate::store::replica::{
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
-            CrossingEvidenceDemand, CrossingStatus, OriginContinuity, PostStateRoot,
-            ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, mint_admission_certificate,
+            CrossingEvidenceDemand, CrossingStatus, GraphBoundary, KeyBoundaryRefuse,
+            OriginContinuity, PostStateRoot, ScopeManifestDigest, ScopeManifestStatus,
+            ScopeManifestTable, TenantId, mint_admission_certificate, prove_promotion_replay,
             sign_admission_parts, validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
@@ -671,9 +799,105 @@ mod tests {
             &CrossingCapabilitySet::new(),
         )
         .expect("crossing contract");
+
+        let sealed = super::lower_after_crossing(&record, &validated).expect("lower");
+        // Origin cut is consumed: sealed into the result and constrains views.
+        assert_eq!(sealed.origin_schema_cut(), cert.schema_cut());
+        assert_eq!(
+            sealed.under_local_cut(cert.schema_cut()).expect("same cut"),
+            &lower_record(&record)
+        );
+        assert_eq!(
+            sealed.under_local_cut(&[0x99; 32]),
+            Err(crate::store::replica::CrossingRefuse::LocalReinterpretationUnconstructible)
+        );
+        // Replay digest includes the cut — different cut would diverge.
+        let again = super::lower_after_crossing(&record, &validated).expect("re-lower");
+        assert_eq!(sealed.replay_digest(), again.replay_digest());
+        assert_eq!(sealed, again);
+
+        // Promotion: identity/time/provenance/schema replay-equal across "host move".
+        let tenant = TenantId::from_digest([0x7E; 32]);
+        let before = record.promotion_meaning(&cert, tenant);
+        let after = record.promotion_meaning(&cert, tenant);
+        assert_eq!(prove_promotion_replay(&before, &after), Ok(()));
+        assert_eq!(before.schema_cut(), cert.schema_cut());
+
+        // Key confinement: custody key authorizes only in its graph.
+        let home = GraphBoundary::from_tenant(tenant);
+        let foreign = GraphBoundary::from_tenant(TenantId::from_digest([0x7F; 32]));
+        let bound = sealed.confine_to_graph(home);
+        assert_eq!(bound.authorize(home), Ok(()));
+        assert_eq!(
+            bound.authorize(foreign),
+            Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
+        );
+    }
+
+    /// Kind mismatch refuses in release — not debug_assert-only (#270 T3).
+    #[test]
+    fn lower_after_crossing_kind_mismatch_refuses() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::replica::{
+            AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
+            CrossingContext, CrossingEnvelope, CrossingEvidence, CrossingEvidenceDemand,
+            CrossingKind, CrossingRefuse, CrossingStatus, OriginContinuity, PostStateRoot,
+            ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable,
+            mint_admission_certificate, sign_admission_parts, validate_crossing_before_lower,
+        };
+        use crate::store::sweep::CommitOrdinal;
+
+        let record = admit_claim_record();
+        let key = AuthorizingKey::mint_with_verifying_id([0x28; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x61; 32]);
+        let mut parts = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store: record.store_id(),
+            origin_epoch: FenceEpoch::genesis(record.store_id()),
+            origin_commit: CommitOrdinal::ZERO,
+            schema_cut: [0x51; 32],
+            record_digest: *record.digest().as_digest(),
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts.signature = sign_admission_parts(&parts, &key).expect("sign");
+        let cert = mint_admission_certificate(parts).expect("mint");
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key);
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+
+        // Envelope claims Entity while record is Claim — validate would pass
+        // envelope-vs-cert; lower_after_crossing must still refuse KindMismatch.
+        let mismatched = CrossingEnvelope::new(
+            CrossingKind::Entity,
+            *cert.protocol_version(),
+            *cert.schema_cut(),
+            cert.authorizing_key_id(),
+            CrossingContext::Unscoped,
+            CrossingEvidenceDemand::NotRequired,
+            CrossingEvidence::Absent,
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        );
+        let validated = validate_crossing_before_lower(
+            &cert,
+            &mismatched,
+            record.store_id(),
+            CommitOrdinal::ZERO,
+            &keys,
+            &scopes,
+            Some(&OriginContinuity::mint()),
+            &CrossingCapabilitySet::new(),
+        )
+        .expect("envelope kind is a known ONTOK tag");
         assert_eq!(
             super::lower_after_crossing(&record, &validated),
-            lower_record(&record)
+            Err(CrossingRefuse::KindMismatch)
         );
     }
 }

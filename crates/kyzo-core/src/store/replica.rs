@@ -13,8 +13,10 @@
 //! [`NamespacedRecordIdentity`], [`ReplicaCustody`], [`ReplicaCustodyTable`],
 //! PendingAnchor anchoring, [`LocalProjection`] contract,
 //! [`AuthorizingKey`] / [`AuthorizingKeyTable`], [`ScopeManifestTable`],
-//! [`OriginContinuity`], and full crossing-contract validation before lowering
-//! ([`validate_crossing_before_lower`], [`CrossingEnvelope`], [`CrossingValidated`]).
+//! [`OriginContinuity`], full crossing-contract validation before lowering
+//! ([`validate_crossing_before_lower`], [`CrossingEnvelope`], [`CrossingValidated`]),
+//! schema-preserving [`PromotionMeaning`] replay equality, and
+//! [`GraphBoundKey`] key-never-crosses-graph-boundary enforcement (#270 T3).
 //!
 //! Bans: reshape/re-author of certified meaning; in-place local reinterpretation
 //! under a local Catalog cut; strict-contiguous-only or head-attested catch-up;
@@ -25,7 +27,9 @@
 //! lowering a crossing record without validating kind/schema/authority/
 //! context/evidence/status/capabilities; folding ScopeUnknown/Revoked/Denied
 //! into RetentionDeclined; silent drop of missing declared evidence;
-//! identity that lets distinct origins collapse into one (content-only id).
+//! identity that lets distinct origins collapse into one (content-only id);
+//! promotion that diverges identity/time/provenance/schema; a storage key
+//! authorizing outside its [`GraphBoundary`].
 //!
 //! Authoring mints at `session/admit.rs` through [`mint_admission_certificate`];
 //! replicas verify + mint custody — never re-author.
@@ -692,21 +696,26 @@ impl ReplicaCustodyTable {
 /// Record through ordinary admission carrying the certificate as evidence —
 /// no third constructor. In-place reinterpretation of a certified Record
 /// under a local Catalog cut is Unconstructible
-/// ([`refuse_in_place_local_reinterpretation`]).
+/// ([`refuse_in_place_local_reinterpretation`] /
+/// [`view_under_schema_cut`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalProjection {
     /// Origin certificate this projection was built from.
     origin: AdmissionCertificate,
-    /// Local Catalog generation (Store commit position) at projection build.
-    catalog_generation: u64,
+    /// Local Catalog schema cut at projection build — never reshapes origin
+    /// certificate meaning; cache under projection law only.
+    local_schema_cut: [u8; 32],
 }
 
 impl LocalProjection {
-    /// Bind a verified certificate to a local Catalog generation.
-    pub(crate) fn from_certificate(origin: AdmissionCertificate, catalog_generation: u64) -> Self {
+    /// Bind a verified certificate to a local Catalog schema cut.
+    pub(crate) fn from_certificate(
+        origin: AdmissionCertificate,
+        local_schema_cut: [u8; 32],
+    ) -> Self {
         Self {
             origin,
-            catalog_generation,
+            local_schema_cut,
         }
     }
 
@@ -715,9 +724,9 @@ impl LocalProjection {
         &self.origin
     }
 
-    /// Catalog generation at build.
-    pub fn catalog_generation(&self) -> u64 {
-        self.catalog_generation
+    /// Local Catalog schema cut at build (projection cache only).
+    pub fn local_schema_cut(&self) -> &[u8; 32] {
+        &self.local_schema_cut
     }
 }
 
@@ -1296,6 +1305,10 @@ pub enum CrossingRefuse {
     #[error("KindInvalid: crossing kind is not a known ONTOK tag")]
     #[diagnostic(code(store::replica::crossing_kind_invalid))]
     KindInvalid,
+    /// Record ONTOK kind ≠ validated envelope kind (release-enforced).
+    #[error("KindMismatch: record kind disagreed with CrossingValidated kind")]
+    #[diagnostic(code(store::replica::crossing_kind_mismatch))]
+    KindMismatch,
     /// Envelope schema version ≠ certificate protocol_version.
     #[error("SchemaVersionMismatch: envelope schema version disagreed with certificate")]
     #[diagnostic(code(store::replica::crossing_schema_version))]
@@ -1423,6 +1436,184 @@ pub fn validate_crossing_before_lower(
 /// a newly admitted derived Record — never mutates the certified record in place.
 pub fn refuse_in_place_local_reinterpretation() -> CrossingRefuse {
     CrossingRefuse::LocalReinterpretationUnconstructible
+}
+
+/// View certified origin meaning under a candidate schema cut (§69 / #270 T3).
+///
+/// Equal cuts → same sealed interpretation. A different local Catalog cut is
+/// Unconstructible in place — produce [`LocalProjection`] or a derived Record.
+pub fn view_under_schema_cut(
+    origin_schema_cut: &[u8; 32],
+    candidate_cut: &[u8; 32],
+) -> Result<(), CrossingRefuse> {
+    if origin_schema_cut == candidate_cut {
+        Ok(())
+    } else {
+        Err(CrossingRefuse::LocalReinterpretationUnconstructible)
+    }
+}
+
+// ── Promotion replay equality + graph-bound keys (#270 T3) ───────────────────
+
+/// Graph / tenant boundary a storage key is confined to (#270 T3).
+///
+/// A key never crosses this boundary as authority — per-graph blast radius.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GraphBoundary(TenantId);
+
+impl GraphBoundary {
+    /// Bind a tenant / graph-scope as the confinement boundary.
+    pub fn from_tenant(tenant: TenantId) -> Self {
+        Self(tenant)
+    }
+
+    /// Borrow the tenant / graph-scope.
+    pub fn tenant(self) -> TenantId {
+        self.0
+    }
+}
+
+/// Typed refuse when a storage key is offered as authority outside its graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum KeyBoundaryRefuse {
+    /// Key's sealed graph ≠ acting graph — authority does not travel.
+    #[error("KeyCrossesGraphBoundary: storage key cannot authorize outside its graph")]
+    #[diagnostic(code(store::replica::key_crosses_graph_boundary))]
+    KeyCrossesGraphBoundary,
+}
+
+/// Storage / custody key confined to one [`GraphBoundary`] (#270 T3).
+///
+/// Holding key bytes is not authority under a foreign graph. Authorize only
+/// when the acting graph equals the sealed boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GraphBoundKey {
+    graph: GraphBoundary,
+    key: [u8; 32],
+}
+
+impl GraphBoundKey {
+    /// Confine a [`ReplicaKey`] to a graph boundary.
+    pub fn bind(graph: GraphBoundary, key: &ReplicaKey) -> Self {
+        Self {
+            graph,
+            key: *key.as_bytes(),
+        }
+    }
+
+    /// Confine an already-proven key digest to a graph boundary.
+    pub fn bind_digest(graph: GraphBoundary, key: [u8; 32]) -> Self {
+        Self { graph, key }
+    }
+
+    /// Sealed graph boundary.
+    pub fn graph(self) -> GraphBoundary {
+        self.graph
+    }
+
+    /// Key digest bytes (not authority under a foreign graph).
+    pub fn key_digest(&self) -> &[u8; 32] {
+        &self.key
+    }
+
+    /// Authorize under `acting` only when it equals the sealed boundary.
+    pub fn authorize(&self, acting: GraphBoundary) -> Result<(), KeyBoundaryRefuse> {
+        if self.graph == acting {
+            Ok(())
+        } else {
+            Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
+        }
+    }
+}
+
+/// Meaning seats preserved across promotion (#270 T3).
+///
+/// Identity / valid-time / provenance / schema — export/import and
+/// local-to-hosted promotion must replay-equal on these four. Digests only
+/// at the store seat (session binds live record fields into digests).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PromotionMeaning {
+    identity: NamespacedRecordIdentity,
+    valid_time: [u8; 32],
+    provenance: [u8; 32],
+    schema_cut: [u8; 32],
+}
+
+impl PromotionMeaning {
+    /// Bind the four preserved seats — private fields, one constructor.
+    pub fn bind(
+        identity: NamespacedRecordIdentity,
+        valid_time: [u8; 32],
+        provenance: [u8; 32],
+        schema_cut: [u8; 32],
+    ) -> Self {
+        Self {
+            identity,
+            valid_time,
+            provenance,
+            schema_cut,
+        }
+    }
+
+    /// Federation identity seat.
+    pub fn identity(&self) -> &NamespacedRecordIdentity {
+        &self.identity
+    }
+
+    /// Valid-time digest seat.
+    pub fn valid_time(&self) -> &[u8; 32] {
+        &self.valid_time
+    }
+
+    /// Provenance / source digest seat.
+    pub fn provenance(&self) -> &[u8; 32] {
+        &self.provenance
+    }
+
+    /// Origin schema cut seat — never a local Catalog rewrite.
+    pub fn schema_cut(&self) -> &[u8; 32] {
+        &self.schema_cut
+    }
+
+    /// Stable digest over all four seats (replay meter).
+    pub fn digest(&self) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.promotion_meaning.v1");
+        h.update(self.identity.digest());
+        h.update(self.valid_time);
+        h.update(self.provenance);
+        h.update(self.schema_cut);
+        h.finalize().into()
+    }
+
+    /// Replay equality: every seat identical (where it runs may change).
+    pub fn replay_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// Typed refuse when promotion diverges sealed meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum PromotionRefuse {
+    /// Identity / time / provenance / schema diverged across promotion.
+    #[error("MeaningDiverged: promotion did not preserve identity/time/provenance/schema")]
+    #[diagnostic(code(store::replica::promotion_meaning_diverged))]
+    MeaningDiverged,
+}
+
+/// Prove export/import or local-to-hosted promotion preserved meaning (#270 T3).
+///
+/// Destination StoreId / host may change; the four meaning seats must
+/// [`PromotionMeaning::replay_equal`].
+pub fn prove_promotion_replay(
+    before: &PromotionMeaning,
+    after: &PromotionMeaning,
+) -> Result<(), PromotionRefuse> {
+    if before.replay_equal(after) {
+        Ok(())
+    } else {
+        Err(PromotionRefuse::MeaningDiverged)
+    }
 }
 
 /// Anchor a PendingAnchor into Queryable once origin coordinates are continuous.
@@ -2160,5 +2351,108 @@ mod identity {
         assert_eq!(a.content(), b.content());
         assert_ne!(a.digest(), b.digest());
         assert_ne!(a, b);
+    }
+}
+
+/// Promotion replay equality + graph-bound key proofs (#270 T3).
+#[cfg(test)]
+mod promotion {
+    use super::*;
+
+    fn sample_meaning(schema_cut: [u8; 32], provenance: [u8; 32]) -> PromotionMeaning {
+        let identity = NamespacedRecordIdentity::bind(
+            [0x11; 32],
+            AuthorizingKeyId::from_digest([0xA1; 32]),
+            TenantId::from_digest([0x7E; 32]),
+            [0xC0; 32],
+        );
+        PromotionMeaning::bind(identity, [0x71; 32], provenance, schema_cut)
+    }
+
+    #[test]
+    fn promotion_replay_equality_preserves_four_seats() {
+        let before = sample_meaning([0x51; 32], [0xB1; 32]);
+        // Local-to-hosted: same meaning seats, different host — equality holds.
+        let after = sample_meaning([0x51; 32], [0xB1; 32]);
+        assert!(before.replay_equal(&after));
+        assert_eq!(before.digest(), after.digest());
+        assert_eq!(prove_promotion_replay(&before, &after), Ok(()));
+    }
+
+    #[test]
+    fn promotion_schema_divergence_refuses() {
+        let before = sample_meaning([0x51; 32], [0xB1; 32]);
+        let after = sample_meaning([0x99; 32], [0xB1; 32]);
+        assert!(!before.replay_equal(&after));
+        assert_eq!(
+            prove_promotion_replay(&before, &after),
+            Err(PromotionRefuse::MeaningDiverged)
+        );
+    }
+
+    #[test]
+    fn promotion_provenance_divergence_refuses() {
+        let before = sample_meaning([0x51; 32], [0xB1; 32]);
+        let after = sample_meaning([0x51; 32], [0xB2; 32]);
+        assert_eq!(
+            prove_promotion_replay(&before, &after),
+            Err(PromotionRefuse::MeaningDiverged)
+        );
+    }
+
+    #[test]
+    fn view_under_schema_cut_consumes_origin_cut() {
+        let origin = [0x51u8; 32];
+        assert_eq!(view_under_schema_cut(&origin, &origin), Ok(()));
+        assert_eq!(
+            view_under_schema_cut(&origin, &[0x99; 32]),
+            Err(CrossingRefuse::LocalReinterpretationUnconstructible)
+        );
+        // LocalProjection is the lawful different-cut path — not in-place reshape.
+        let key = AuthorizingKey::mint_with_verifying_id([0xC3; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5E; 32]);
+        let mut parts = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store: StoreId::from_digest([0x01; 32]),
+            origin_epoch: FenceEpoch::genesis(StoreId::from_digest([0x01; 32])),
+            origin_commit: CommitOrdinal::ZERO,
+            schema_cut: origin,
+            record_digest: [0xAA; 32],
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts.signature = sign_admission_parts(&parts, &key).expect("sign");
+        let cert = mint_admission_certificate(parts).expect("mint");
+        let projection = LocalProjection::from_certificate(cert, [0x99; 32]);
+        assert_ne!(projection.local_schema_cut(), projection.origin().schema_cut());
+    }
+
+    #[test]
+    fn graph_bound_key_never_crosses_boundary() {
+        let home = GraphBoundary::from_tenant(TenantId::from_digest([0x7E; 32]));
+        let foreign = GraphBoundary::from_tenant(TenantId::from_digest([0x7F; 32]));
+        let key = ReplicaKey::derive(
+            StoreId::from_digest([0x01; 32]),
+            FenceEpoch::genesis(StoreId::from_digest([0x01; 32])),
+            CommitOrdinal::ZERO,
+            &[0xC0; 32],
+        );
+        let bound = GraphBoundKey::bind(home, &key);
+        assert_eq!(bound.authorize(home), Ok(()));
+        assert_eq!(
+            bound.authorize(foreign),
+            Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
+        );
+        // Same digest under foreign graph is a different confinement — no bleed.
+        let foreign_bound = GraphBoundKey::bind(foreign, &key);
+        assert_ne!(bound, foreign_bound);
+        assert_eq!(
+            foreign_bound.authorize(home),
+            Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
+        );
     }
 }

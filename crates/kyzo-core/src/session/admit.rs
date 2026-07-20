@@ -698,16 +698,26 @@ impl KyzoRecord {
         lowering::lower_record(self)
     }
 
-    /// Lower only after full crossing-contract validation (#270 T1).
+    /// Lower only after full crossing-contract validation (#270 T1/T3).
     ///
     /// Requires [`CrossingValidated`] — kind/schema/authority/context/
     /// evidence/status/capabilities already checked; missing declared
-    /// evidence refused typed, not silently dropped.
+    /// evidence refused typed, not silently dropped. Seals rows under
+    /// `origin_schema_cut` ([`lowering::OriginSealedLowering`]).
     pub fn lower_crossing(
         &self,
         validated: &crate::store::replica::CrossingValidated,
-    ) -> crate::project::dimension::RecordLowering {
+    ) -> Result<lowering::OriginSealedLowering, crate::store::replica::CrossingRefuse> {
         lowering::lower_after_crossing(self, validated)
+    }
+
+    /// Bind identity/time/provenance/schema seats for promotion replay (#270 T3).
+    pub fn promotion_meaning(
+        &self,
+        certificate: &AdmissionCertificate,
+        tenant: crate::store::replica::TenantId,
+    ) -> crate::store::replica::PromotionMeaning {
+        lowering::promotion_meaning_from_record(self, certificate, tenant)
     }
 }
 
@@ -715,9 +725,12 @@ impl KyzoRecord {
 #[path = "admit_lowering.rs"]
 pub(crate) mod lowering;
 
-pub(crate) use lowering::{crossing_envelope_from_record, lower_after_crossing};
+pub(crate) use lowering::{
+    crossing_envelope_from_record, lower_after_crossing, promotion_meaning_from_record,
+    OriginSealedLowering,
+};
 
-/// Validate the full crossing contract then lower (#270 T1).
+/// Validate the full crossing contract then lower (#270 T1/T3).
 ///
 /// Runs [`validate_crossing_before_lower`] then [`lower_after_crossing`].
 /// Missing declared evidence → [`AdmitRefuse::Crossing`] wrapping
@@ -736,7 +749,7 @@ pub(crate) fn validate_and_lower_crossing(
     held_capabilities: &crate::store::replica::CrossingCapabilitySet,
     status: crate::store::replica::CrossingStatus,
     shared_capabilities: crate::store::replica::CrossingCapabilitySet,
-) -> Result<crate::project::dimension::RecordLowering, AdmitRefuse> {
+) -> Result<lowering::OriginSealedLowering, AdmitRefuse> {
     use crate::store::replica::validate_crossing_before_lower;
     let envelope = crossing_envelope_from_record(record, certificate, status, shared_capabilities);
     let validated = validate_crossing_before_lower(
@@ -749,7 +762,7 @@ pub(crate) fn validate_and_lower_crossing(
         continuity,
         held_capabilities,
     )?;
-    Ok(lower_after_crossing(record, &validated))
+    Ok(lower_after_crossing(record, &validated)?)
 }
 
 /// Inputs for the admission door (private mint path).
