@@ -8,3 +8,6 @@
  */
 
 pub(crate) mod json;
+/// Statement-body types + ONTOK constructions for the one private KyzoRecord.
+#[allow(dead_code)] // mid-wiring seat (#268 T1); callers land in later T#s
+pub(crate) mod statement;

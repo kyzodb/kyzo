@@ -37,6 +37,10 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::json::NamedRows;
+use crate::data::statement::{
+    OntokKind, StatementBody, StatementContext, StatementPredicate, StatementSource,
+    StatementSubject, StatementValue, ValidityTime,
+};
 use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
@@ -107,6 +111,11 @@ pub struct PlacementConstraint {
 /// Privately constructed Record — admission monopoly (§8/§93).
 ///
 /// No public constructor. Store/decode modules cannot mint this type.
+///
+/// Statement body (subject/predicate/value + validity-time/context/source)
+/// lives as typed fields on this one record. ONTOK variants are constructions
+/// over that kernel ([`crate::data::statement::construct`]), not a second
+/// record type (#268 T1; seats 8/10/11).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KyzoRecord {
     /// Store that admitted this record.
@@ -117,6 +126,20 @@ pub struct KyzoRecord {
     surface: SemanticSurface,
     /// Evidence coordinates (required for interpreted knowledge).
     evidence: Option<EvidenceCoordinates>,
+    /// ONTOK kind / type authority.
+    kind: OntokKind,
+    /// Statement subject.
+    subject: StatementSubject,
+    /// Statement predicate.
+    predicate: StatementPredicate,
+    /// Statement value.
+    value: StatementValue,
+    /// Validity-time scope.
+    validity_time: ValidityTime,
+    /// Durable context scope.
+    context: StatementContext,
+    /// Source artifact binding.
+    source: StatementSource,
 }
 
 impl KyzoRecord {
@@ -139,6 +162,41 @@ impl KyzoRecord {
     pub fn store_id(&self) -> StoreId {
         self.store_id
     }
+
+    /// ONTOK kind.
+    pub fn kind(&self) -> OntokKind {
+        self.kind
+    }
+
+    /// Statement subject.
+    pub fn subject(&self) -> &StatementSubject {
+        &self.subject
+    }
+
+    /// Statement predicate.
+    pub fn predicate(&self) -> &StatementPredicate {
+        &self.predicate
+    }
+
+    /// Statement value.
+    pub fn value(&self) -> &StatementValue {
+        &self.value
+    }
+
+    /// Validity-time scope.
+    pub fn validity_time(&self) -> ValidityTime {
+        self.validity_time
+    }
+
+    /// Durable context scope.
+    pub fn context(&self) -> &StatementContext {
+        &self.context
+    }
+
+    /// Source artifact binding.
+    pub fn source(&self) -> &StatementSource {
+        &self.source
+    }
 }
 
 /// Inputs for the admission door (private mint path).
@@ -152,6 +210,10 @@ pub struct AdmitRecordParts {
     pub surface: SemanticSurface,
     /// Evidence coordinates for interpreted knowledge.
     pub evidence: Option<EvidenceCoordinates>,
+    /// ONTOK kind / type authority.
+    pub kind: OntokKind,
+    /// Full typed statement body (subject/predicate/value + time/context/source).
+    pub statement: StatementBody,
     /// Placement constraint (refuse-before-write).
     pub placement: PlacementConstraint,
     /// Region this write would land in.
@@ -230,11 +292,20 @@ pub(crate) fn admit_record(
         return Err(AdmitRefuse::MissingEvidenceCoordinates);
     }
     let certificate = mint_admission_certificate(parts.certificate)?;
+    let (subject, predicate, value, validity_time, context, source) =
+        parts.statement.into_fields();
     let record = KyzoRecord {
         store_id: parts.store_id,
         digest: parts.digest,
         surface: parts.surface,
         evidence: parts.evidence,
+        kind: parts.kind,
+        subject,
+        predicate,
+        value,
+        validity_time,
+        context,
+        source,
     };
     Ok((record, certificate))
 }
