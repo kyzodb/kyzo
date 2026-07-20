@@ -23,7 +23,7 @@ pub mod temporal;
 
 use std::sync::Arc;
 
-use kyzo_model::value::DataValue;
+use kyzo_model::value::{DataValue, NumRepr};
 
 pub use eval::{
     Bindings, FixedRule, HeadAggr, HeadClass, Literal, Name, NameIntroduction, OracleBudget,
@@ -97,6 +97,37 @@ pub fn builtin_fold(name: &str) -> Option<Arc<dyn AggrFold>> {
     }
 }
 
+/// Built-in fold, or an unknown-name fold that refuses on every use.
+/// Panic-free construction for [`eval::HeadAggr::named`].
+pub(crate) fn fold_named(name: &str) -> Arc<dyn AggrFold> {
+    builtin_fold(name).unwrap_or_else(|| {
+        Arc::new(UnknownBuiltin {
+            name: name.to_string(),
+        })
+    })
+}
+
+/// Fold that refuses every use — stands in when [`eval::HeadAggr::named`] is
+/// given an unknown aggregation so construction stays panic-free and
+/// evaluation returns a typed aggr error.
+struct UnknownBuiltin {
+    name: String,
+}
+impl AggrFold for UnknownBuiltin {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_meet(&self) -> bool {
+        false
+    }
+    fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
+        Err(format!("unknown aggregation: {}", self.name))
+    }
+    fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
+        None
+    }
+}
+
 // ── Built-in meet/normal set (oracle-local; trials replaces for differentials) ──
 
 struct BuiltinCount;
@@ -128,25 +159,44 @@ impl AggrFold for BuiltinCount {
 }
 
 struct BuiltinSum;
+
+/// Exact-while-possible numeric accumulator — mirrors engine `NumAccum`:
+/// stays in i128 until a float appears or int overflow forces promotion.
+/// Never truncates float→i64.
+#[derive(Clone, Copy)]
+enum SumState {
+    Int(i128),
+    Float(f64),
+}
+
 struct SumAccum {
-    sum: i64,
+    sum: SumState,
 }
 impl NormalAccum for SumAccum {
     fn set(&mut self, value: &DataValue) -> Result<(), String> {
         match value {
             DataValue::Num(n) => {
-                let add = n.as_int().unwrap_or_else(|| n.to_f64() as i64);
-                self.sum = self
-                    .sum
-                    .checked_add(add)
-                    .ok_or_else(|| "sum overflow".to_string())?;
+                self.sum = match (self.sum, n.repr()) {
+                    (SumState::Int(acc), NumRepr::Int(i)) => match acc.checked_add(i as i128) {
+                        Some(acc) => SumState::Int(acc),
+                        None => SumState::Float(acc as f64 + i as f64),
+                    },
+                    (SumState::Int(acc), NumRepr::Float(f)) => SumState::Float(acc as f64 + f),
+                    (SumState::Float(acc), _) => SumState::Float(acc + n.to_f64()),
+                };
                 Ok(())
             }
             v => Err(format!("cannot compute 'sum': encountered value {v:?}")),
         }
     }
     fn get(&self) -> Result<DataValue, String> {
-        Ok(DataValue::from(self.sum))
+        Ok(match self.sum {
+            SumState::Int(acc) => match i64::try_from(acc) {
+                Ok(i) => DataValue::from(i),
+                Err(_) => DataValue::from(acc as f64),
+            },
+            SumState::Float(f) => DataValue::from(f),
+        })
     }
 }
 impl AggrFold for BuiltinSum {
@@ -157,7 +207,9 @@ impl AggrFold for BuiltinSum {
         false
     }
     fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
-        Ok(Box::new(SumAccum { sum: 0 }))
+        Ok(Box::new(SumAccum {
+            sum: SumState::Int(0),
+        }))
     }
     fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
         None

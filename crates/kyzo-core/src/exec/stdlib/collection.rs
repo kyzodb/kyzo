@@ -370,6 +370,9 @@ pub(crate) fn op_slice(args: &[DataValue]) -> Result<DataValue> {
         .ok_or_else(|| miette!("third argument to 'slice' mut be an integer"))?;
     let m = get_index(m, l.len(), false)?;
     let n = get_index(n, l.len(), true)?;
+    if m > n {
+        bail!("slice start index {m} must be <= end index {n}");
+    }
     Ok(DataValue::List(l[m..n].to_vec()))
 }
 

@@ -115,10 +115,11 @@ impl AsyncAuthorizeRequest<Body> for MyAuth {
             if authorized {
                 Ok(request)
             } else {
-                Err(Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body(Body::empty())
-                    .unwrap())
+                // Builder with only a status cannot fail; construct the 401
+                // without unwrap so a poisoned builder cannot panic the gate.
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::UNAUTHORIZED;
+                Err(response)
             }
         })
     }

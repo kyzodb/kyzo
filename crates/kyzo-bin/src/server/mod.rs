@@ -85,9 +85,8 @@
  *   (a one-connection memory-exhaustion DoS). Only `/import` now raises its
  *   limit, via a route-specific `DefaultBodyLimit::max` layer sized by
  *   `--max-import-body-mb`; every other route keeps axum's own default.
- * - **Startup bind/port parse** remains process-entry unwrap today (lawful
- *   under the zone's no-panic-escapes-a-HANDLER clause); lifting to a typed
- *   refusal on arrival is this seat's recorded next edit.
+ * - **Startup bind/port parse** refuses with a typed miette error (address
+ *   parse, auth-token write, listen, serve) — never process-entry unwrap.
  */
 
 //! The HTTP API server: route table, shared state, and startup. Each route
@@ -177,20 +176,21 @@ struct DbState {
     rule_counter: Arc<AtomicU32>,
 }
 
-pub(crate) async fn server_main(args: ServerArgs) {
+pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
     let handle = match engine::open(&args.engine, &args.path, args.storage) {
         Ok(h) => h,
         Err(err) => {
             error!("{err}");
-            panic!("cannot open database")
+            return Err(miette::miette!("cannot open database: {err}"));
         }
     };
     if let Some(p) = &args.restore
         && let Err(err) = kyzo::restore_storage(&handle.storage, p)
     {
         error!("{err}");
-        error!("Restore from backup failed, terminate");
-        panic!()
+        return Err(miette::miette!(
+            "restore from backup failed, terminate: {err}"
+        ));
     }
 
     let skip_auth = args.bind == "127.0.0.1";
@@ -207,7 +207,9 @@ pub(crate) async fn server_main(args: ServerArgs) {
             Ok(s) => s.trim().to_string(),
             Err(_) => {
                 let s = Alphanumeric.sample_string(&mut rand::rng(), 64);
-                tokio::fs::write(&conf_path, &s).await.unwrap();
+                tokio::fs::write(&conf_path, &s).await.map_err(|err| {
+                    miette::miette!("failed to write auth token file {conf_path}: {err}")
+                })?;
                 s
             }
         }
@@ -259,9 +261,21 @@ pub(crate) async fn server_main(args: ServerArgs) {
         .layer(CompressionLayer::new());
 
     let addr = if Ipv6Addr::from_str(&args.bind).is_ok() {
-        SocketAddr::from_str(&format!("[{}]:{}", args.bind, args.port)).unwrap()
+        SocketAddr::from_str(&format!("[{}]:{}", args.bind, args.port)).map_err(|err| {
+            miette::miette!(
+                "invalid bind address '[{}]:{}': {err}",
+                args.bind,
+                args.port
+            )
+        })?
     } else {
-        SocketAddr::from_str(&format!("{}:{}", args.bind, args.port)).unwrap()
+        SocketAddr::from_str(&format!("{}:{}", args.bind, args.port)).map_err(|err| {
+            miette::miette!(
+                "invalid bind address '{}:{}': {err}",
+                args.bind,
+                args.port
+            )
+        })?
     };
 
     if args.bind != "127.0.0.1" {
@@ -274,10 +288,13 @@ pub(crate) async fn server_main(args: ServerArgs) {
         args.engine, addr
     );
 
-    let listener = TcpListener::bind(&addr).await.unwrap();
+    let listener = TcpListener::bind(&addr).await.map_err(|err| {
+        miette::miette!("failed to bind TCP listener on {addr}: {err}")
+    })?;
     axum::serve(listener, app.into_make_service())
         .await
-        .unwrap();
+        .map_err(|err| miette::miette!("HTTP server failed: {err}"))?;
+    Ok(())
 }
 
 /// Map a JSON envelope carrying an `"ok"` boolean (kyzo-core's

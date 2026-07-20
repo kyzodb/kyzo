@@ -55,11 +55,20 @@ fn main() {
     match AppArgs::parse().command {
         Commands::Server(args) => {
             env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-            tokio::runtime::Builder::new_multi_thread()
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(server_main(args))
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    eprintln!("failed to build tokio runtime: {err}");
+                    exit(1);
+                }
+            };
+            if let Err(err) = runtime.block_on(server_main(args)) {
+                eprintln!("{err:?}");
+                exit(1);
+            }
         }
         Commands::Repl(args) => {
             if let Err(e) = repl_main(args) {

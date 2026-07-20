@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use kyzo_model::value::{DataValue, Tuple};
 
 use crate::temporal::{AsOf, Event, resolve_relation};
-use crate::{AggrFold, MeetAccum, MeetOp, NormalAccum, builtin_fold};
+use crate::{AggrFold, MeetAccum, MeetOp, NormalAccum, fold_named};
 
 /// Oracle relation / variable name. Content-eq `Arc<str>`.
 #[derive(Clone, Debug)]
@@ -223,11 +223,11 @@ impl HeadAggr {
         }
     }
 
-    /// Built-in fold by name (module tests / corpus).
+    /// Built-in fold by name (module tests / corpus). Unknown names construct
+    /// a refuse-on-use fold — never panics; evaluation yields [`Rejection::AggrError`].
     pub fn named(name: &str) -> Self {
         HeadAggr::Aggregated {
-            fold: builtin_fold(name)
-                .unwrap_or_else(|| panic!("builtin aggregation exists: {name}")),
+            fold: fold_named(name),
             args: vec![],
         }
     }
@@ -639,7 +639,7 @@ pub fn check_wellformed(program: &Program) -> Result<(), Rejection> {
 }
 
 /// Bellman-Ford stratum assignment (assumes stratifiability).
-pub fn strata(program: &Program) -> HashMap<Rel, usize> {
+pub fn strata(program: &Program) -> Result<HashMap<Rel, usize>, Rejection> {
     let edges = dependency_edges(program);
     let mut s: HashMap<Rel, usize> = HashMap::new();
     let rels: HashSet<Rel> = program
@@ -671,10 +671,12 @@ pub fn strata(program: &Program) -> HashMap<Rel, usize> {
             }
         }
         if !changed {
-            return s;
+            return Ok(s);
         }
     }
-    unreachable!("stratum assignment must converge on stratifiable programs");
+    Err(Rejection::Unstratifiable(
+        "stratum assignment did not converge: program is not stratifiable".into(),
+    ))
 }
 
 pub type Bindings = HashMap<Name, DataValue>;
@@ -976,7 +978,7 @@ fn naive_eval_at_impl(
     check_safety(program)?;
     check_stratifiable(program)?;
     let classes = head_classes(program);
-    let strata_of = strata(program);
+    let strata_of = strata(program)?;
     let max_stratum = strata_of.values().copied().max().unwrap_or(0);
 
     let mut db = program.facts.clone();
@@ -1031,10 +1033,11 @@ fn naive_eval_at_impl(
         let mut rounds = 0usize;
         loop {
             rounds += 1;
-            assert!(
-                rounds <= 100_000,
-                "fixpoint bound exceeded: non-termination"
-            );
+            if rounds > 100_000 {
+                return Err(Rejection::BudgetExceeded(
+                    "fixpoint bound exceeded: non-termination".into(),
+                ));
+            }
             if let Some(b) = budget {
                 check_oracle_budget(b, &db, rounds)?;
             }

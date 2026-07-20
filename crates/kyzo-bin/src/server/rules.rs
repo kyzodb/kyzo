@@ -37,6 +37,13 @@ use kyzo::{Engine, FjallStorage, NamedRows, SimpleFixedRule};
 
 use super::DbState;
 
+fn lock_poisoned() -> (StatusCode, Json<JsonValue>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"ok": false, "message": "rule sender map lock poisoned"}).into(),
+    )
+}
+
 #[derive(serde_derive::Deserialize)]
 pub(super) struct RuleRegisterOptions {
     arity: usize,
@@ -50,7 +57,10 @@ pub(super) async fn post_rule_result(
     let res = match NamedRows::from_json(&res) {
         Ok(res) => res,
         Err(err) => {
-            if let Some(ch) = st.rule_senders.lock().unwrap().remove(&id) {
+            let Ok(mut senders) = st.rule_senders.lock() else {
+                return lock_poisoned();
+            };
+            if let Some(ch) = senders.remove(&id) {
                 let _ = ch.send(Err(miette!("downstream posted malformed result")));
             }
             return (
@@ -59,7 +69,10 @@ pub(super) async fn post_rule_result(
             );
         }
     };
-    if let Some(ch) = st.rule_senders.lock().unwrap().remove(&id) {
+    let Ok(mut senders) = st.rule_senders.lock() else {
+        return lock_poisoned();
+    };
+    if let Some(ch) = senders.remove(&id) {
         match ch.send(Ok(res)) {
             Ok(_) => (StatusCode::OK, json!({"ok": true}).into()),
             Err(err) => (
@@ -76,7 +89,10 @@ pub(super) async fn post_rule_err(
     State(st): State<DbState>,
     Path(id): Path<u32>,
 ) -> (StatusCode, Json<JsonValue>) {
-    if let Some(ch) = st.rule_senders.lock().unwrap().remove(&id) {
+    let Ok(mut senders) = st.rule_senders.lock() else {
+        return lock_poisoned();
+    };
+    if let Some(ch) = senders.remove(&id) {
         match ch.send(Err(miette!("downstream cancelled computation"))) {
             Ok(_) => (StatusCode::OK, json!({"ok": true}).into()),
             Err(err) => (
@@ -115,7 +131,16 @@ pub(super) async fn register_rule(
                 if down_sender.blocking_send((id, inputs, options)).is_err() {
                     let _ = sender.send(Err(miette!("cannot send request to downstream")));
                 } else {
-                    rule_senders.lock().unwrap().insert(id, sender);
+                    match rule_senders.lock() {
+                        Ok(mut map) => {
+                            map.insert(id, sender);
+                        }
+                        Err(_) => {
+                            let _ = sender.send(Err(miette!(
+                                "rule sender map lock poisoned; cannot register reply channel"
+                            )));
+                        }
+                    }
                 }
             }
         });

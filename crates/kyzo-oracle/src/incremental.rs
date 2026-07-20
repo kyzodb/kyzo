@@ -51,7 +51,7 @@ pub fn edb_relations(program: &Program) -> BTreeSet<Rel> {
 }
 
 /// Full topological order over every dependency edge.
-pub fn topological_order(program: &Program) -> Vec<Rel> {
+pub fn topological_order(program: &Program) -> Result<Vec<Rel>, Rejection> {
     let edges = dependency_edges(program);
     let mut all_rels: BTreeSet<Rel> = edb_relations(program);
     for rule in &program.rules {
@@ -90,12 +90,13 @@ pub fn topological_order(program: &Program) -> Vec<Rel> {
                 progressed = true;
             }
         }
-        assert!(
-            progressed,
-            "topological_order called on a cyclic program: incremental_eval must refuse first"
-        );
+        if !progressed {
+            return Err(Rejection::Unstratifiable(
+                "topological_order: cyclic program — incremental_eval must refuse first".into(),
+            ));
+        }
     }
-    order
+    Ok(order)
 }
 
 fn has_any_cycle(program: &Program) -> bool {
@@ -314,7 +315,12 @@ fn eval_one_group(
         }
         for binding in body_bindings_from(rule, program, db, default_as_of, seed) {
             let row = ground(&rule.head_args, &binding);
-            let ops = ops.get_or_insert_with(|| fresh_ops().expect("infallible fresh fold"));
+            if ops.is_none() {
+                ops = Some(fresh_ops()?);
+            }
+            let ops = ops
+                .as_mut()
+                .ok_or_else(|| Rejection::AggrError("fresh fold state missing".into()))?;
             for (op, (i, _, _)) in ops.iter_mut().zip(val_positions) {
                 op.set(&row[*i]).map_err(aggr_err)?;
             }
@@ -441,7 +447,7 @@ pub fn incremental_eval(
     }
 
     let old_total = naive_eval(program)?;
-    let order = topological_order(program);
+    let order = topological_order(program)?;
     let edb = edb_relations(program);
     let mut rel_deltas: BTreeMap<Rel, BTreeSet<SignedFact>> = BTreeMap::new();
     let mut new_total: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();

@@ -85,7 +85,7 @@ pub(crate) fn repl_main(args: ReplArgs) -> Result<()> {
              The current query keeps running to its own budget/deadline."
         );
     })
-    .expect("Error setting Ctrl-C handler");
+    .map_err(|err| miette::miette!("failed to install Ctrl-C handler: {err}"))?;
 
     println!("Welcome to the KyzoDB REPL.");
     println!("Type a space followed by newline to enter multiline mode.");
