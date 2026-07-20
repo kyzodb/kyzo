@@ -52,7 +52,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
 
 use kyzo::{Catalog, Engine, FjallStorage, new_fjall_storage};
-use kyzo_model::DataValue;
+use kyzo_model::{DataValue, ValidityTs};
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, Diagnostic, Hover, HoverContents,
     HoverProviderCapability, InitializeResult, MarkupContent, MarkupKind, OneOf, Position,
@@ -135,7 +135,7 @@ fn response(id: Value, result: Value) -> Value {
 /// door — never an engine host façade.
 fn validate(text: &str) -> Vec<Diagnostic> {
     let params = BTreeMap::<String, DataValue>::new();
-    match kyzo_model::parse::parse_script(text, &params) {
+    match kyzo_model::parse::parse_script(text, &params, ValidityTs::from_raw(0)) {
         Ok(_) => Vec::new(),
         Err(report) => diagnostics_from_report(&report, text, &LineIndex::new(text)),
     }

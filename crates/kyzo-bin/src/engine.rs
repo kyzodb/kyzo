@@ -32,7 +32,7 @@ use std::path::Path;
 
 use kyzo::{
     Catalog, Engine, EntropyArm, FjallStorage, GenesisParams, GenesisSealedView, SizeClass,
-    StableCommitCapArm, StagingTtl, StorageOptions, WriteAuthority, genesis,
+    SnapshotFork, StableCommitCapArm, StagingTtl, StorageOptions, WriteAuthority, genesis,
     new_fjall_storage_with,
 };
 use miette::{IntoDiagnostic, Result, miette};
@@ -96,7 +96,7 @@ impl Default for GenesisConfig {
             // Native fsync proof: SnapshotFork=no until the live-fork SIV arm
             // campaign greens (signatures unfrozen — seat map carried obligation).
             stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-                snapshot_fork: false,
+                snapshot_fork: SnapshotFork::No,
             },
         }
     }

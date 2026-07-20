@@ -19,6 +19,7 @@
 use crate::store::open::{
     genesis, EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl,
 };
+use crate::store::commit_cap::SnapshotFork;
 
 pub use crate::store::epoch::FenceEpoch;
 pub use crate::store::open::StoreId;
@@ -39,7 +40,7 @@ pub fn mint_store_identity(identity_seed: [u8; 32]) -> (StoreId, FenceEpoch) {
         size_class: SizeClass::Compact,
         entropy_arm: EntropyArm::OsRandom,
         stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-            snapshot_fork: false,
+            snapshot_fork: SnapshotFork::No,
         },
     });
     (sealed.store_id(), sealed.fence_epoch())

@@ -329,7 +329,8 @@ pub use store::{
 // 07 identity + authority seats — host genesis injection (kyzo-bin engine.rs).
 pub use store::{
     CryptoDomain, EntropyArm, FenceEpoch, GenesisParams, GenesisSealed, GenesisSealedView,
-    SizeClass, StableCommitCapArm, StagingTtl, StoreId, StoreOpen, WriteAuthority, genesis,
+    SizeClass, SnapshotFork, StableCommitCapArm, StagingTtl, StoreId, StoreOpen, WriteAuthority,
+    genesis,
 };
 
 /// Build→seal→query projection machine (story #305). Public so compile-fail

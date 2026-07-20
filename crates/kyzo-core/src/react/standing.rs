@@ -72,6 +72,7 @@ use crate::parse::{Script, parse_script};
 use crate::react::incremental::{self, IncrementalProgram, MaintainedState};
 use crate::rules::contract::CancelFlag;
 use crate::session::catalog::get_relation;
+use crate::session::current_validity;
 use crate::session::db::{Engine, ScriptOptions, SessionTx};
 use crate::session::db::{SessionNormalizer, SessionView};
 use crate::session::observe::{CallbackEvent, CallbackId, CallbackOp};
@@ -428,9 +429,10 @@ impl<S: Storage> Engine<S> {
         query: &str,
         params: BTreeMap<String, DataValue>,
     ) -> Result<StandingQuery<S>> {
-        let program = match parse_script(query, &params)? {
+        let cur_vld = current_validity()?;
+        let program = match parse_script(query, &params, cur_vld)? {
             Script::Query(prog) => prog,
-            Script::Sys { .. } | Script::Imperative { .. } => {
+            Script::Sys(_) | Script::Imperative(_) => {
                 return Err(StandingRegisterRefusal::NotSingleRead.into());
             }
         };
