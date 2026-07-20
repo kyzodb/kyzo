@@ -372,3 +372,6 @@ pub mod oracle_harness {
 
 // Sealed single-host doors deleted. Tooling speaks the sealed contract or
 // goes red — bespoke façades were contract debt.
+
+#[cfg(feature = "bench-internals")]
+pub mod bench_recovery;

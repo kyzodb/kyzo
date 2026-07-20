@@ -67,9 +67,9 @@
 //! and `emit_recovery_sla_claim` refuses above sealed `f` (never open).
 //! Path-wired from [`sweep`](../../../../kyzo-core/src/store/sweep.rs) as
 //! `kyzo::store::sweep::dst` under `cfg(test)`. Sealed `RECOVERY_SLA_*`
-//! coefficients are calibrated on the `recovery_sla` bench lane (§87), not
-//! invented here; this corpus proves recovery correctness + structural bound
-//! shape against those sealed numbers.
+//! coefficients are calibrated on the `recovery_sla` bench lane via real
+//! `bench_recovery::replay` (§87), not invented here; this corpus proves
+//! recovery correctness + structural bound shape against those sealed numbers.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;

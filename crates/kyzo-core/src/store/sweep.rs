@@ -799,7 +799,8 @@ pub enum SweepSealFailure {
 // ── Recovery SLA claim / bench-lane emit (decisions.md §28 / §86) ─────────
 //
 // Coefficients are **sealed from wall-clock calibration** in
-// `crates/kyzo-core/benches/recovery_sla.rs` (§87: opponent pin
+// `crates/kyzo-core/benches/recovery_sla.rs` over real
+// `kyzo::bench_recovery::replay` on WalSegment dirty-tails (§87: opponent pin
 // `RECOVERY_SLA_OPPONENT_PIN`, answer-agreement vs sealed `f`, tagged-commit
 // identity `RECOVERY_SLA_TAGGED_COMMIT`). The path-wired DST corpus
 // (`kyzo-trials/src/dst.rs` → `dst` below) proves recovery correctness +
@@ -809,15 +810,17 @@ pub enum SweepSealFailure {
 
 /// Sealed intercept (ms) of `f(bytes_since_last_flush)`.
 ///
-/// Spec-sealed from `benches/recovery_sla.rs` wall-clock calibration
-/// (opponent pin `RECOVERY_SLA_OPPONENT_PIN` / tagged commit
-/// `RECOVERY_SLA_TAGGED_COMMIT`) — story #221 T3.
+/// Spec-sealed from `benches/recovery_sla.rs` wall-clock of real
+/// `bench_recovery::replay` (opponent pin `RECOVERY_SLA_OPPONENT_PIN` /
+/// tagged commit `RECOVERY_SLA_TAGGED_COMMIT`) — story #221 T3. Real
+/// recovery respects `8 + bytes` on the corpus; left at that seal (not
+/// clamped to preserve fiat).
 pub const RECOVERY_SLA_INTERCEPT_MS: u64 = 8;
 
-/// Sealed slope numerator (ms per byte) of `f` — from `recovery_sla` bench.
+/// Sealed slope numerator (ms per byte) of `f` — from real-replay `recovery_sla` bench.
 pub const RECOVERY_SLA_SLOPE_NUM: u64 = 1;
 
-/// Sealed slope denominator of `f` — from `recovery_sla` bench.
+/// Sealed slope denominator of `f` — from real-replay `recovery_sla` bench.
 pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 
 /// Sealed bound `f(bytes_since_last_flush)` in milliseconds.

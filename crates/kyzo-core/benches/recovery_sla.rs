@@ -10,7 +10,13 @@
 //! §87 recovery-SLA calibration lane — wall-clock recovery latency vs
 //! `bytes_since_last_flush`.
 //!
-//! **Spec-sealed coefficients** (published on `kyzo::store::sweep` after this
+//! Times real [`kyzo::bench_recovery::replay`] over real [`WalSegment`]
+//! dirty-tails (flushed empty prefix + unflushed Commit payloads — same
+//! adversarial shape as the DST power_cut corpus). Asserts
+//! `measured_p999(real replay) ≤ f(bytes_since_last_flush)` — bound, not
+//! equality.
+//!
+//! **Spec-sealed coefficients** (published on `store::sweep` after this
 //! calibration; do not invent elsewhere):
 //! - `RECOVERY_SLA_INTERCEPT_MS = 8`
 //! - `RECOVERY_SLA_SLOPE_NUM = 1`
@@ -23,21 +29,14 @@
 //! - **Tagged commit** — [`RECOVERY_SLA_TAGGED_COMMIT`] is the emit identity
 //!   line this lane prints when sealing.
 //!
-//! Run: `cargo bench -p kyzo --bench recovery_sla`
-//!
-//! ## Reachability note
-//! `emit_recovery_sla_claim` / `WalSegment` / `replay` live under
-//! `pub(crate) store::sweep` / `wal` and are **not** on the sealed public
-//! `kyzo` surface. This bench therefore measures wall-clock recovery work
-//! over a growing dirty-tail byte corpus (same load shape the DST WAL
-//! suffix exercises) and documents coefficients that match the sealed
-//! constants. Claim refuse-above-`f` is proven in the path-wired DST;
-//! re-exporting emit for this lane needs an off-allowlist `lib.rs` /
-//! `store/mod.rs` door.
+//! Run: `cargo bench -p kyzo --features bench-internals --bench recovery_sla`
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hint::black_box;
 use std::time::Instant;
+
+use kyzo::bench_recovery::{
+    commit_ordinal, mint_store_identity, replay, WalPayload, WalRecord, WalSegment,
+};
 
 /// Opponent-pin corpus identity (§87) — dirty-tail recovery calibration v1.
 pub const RECOVERY_SLA_OPPONENT_PIN: &str = "kyzo.recovery_sla.corpus.v1";
@@ -57,51 +56,77 @@ fn sealed_bound_ms(bytes_since_last_flush: u64) -> u64 {
         + bytes_since_last_flush.saturating_mul(SEALED_SLOPE_NUM) / SEALED_SLOPE_DEN
 }
 
-/// One dirty-tail sample: unflushed body bytes + measured recovery latency.
+/// One dirty-tail sample: unflushed body bytes + measured real-replay latency.
 #[derive(Clone, Copy)]
 struct Sample {
     bytes_since_last_flush: u64,
     recovery_time_ms: u64,
 }
 
-fn dirty_tail(seed: u64, body_len: usize) -> Vec<u8> {
+fn commit_body(seed: u64, ordinal: u64, body_len: usize) -> Vec<u8> {
     let mut body = Vec::with_capacity(body_len.max(16));
     body.extend_from_slice(&seed.to_le_bytes());
-    body.extend_from_slice(&RECOVERY_SLA_OPPONENT_PIN.hash_bytes());
+    body.extend_from_slice(&ordinal.to_le_bytes());
+    body.extend_from_slice(RECOVERY_SLA_OPPONENT_PIN.as_bytes());
     while body.len() < body_len {
         body.push(0xA5 ^ (body.len() as u8) ^ ((seed >> (body.len() % 8)) as u8));
     }
     body
 }
 
-trait PinHash {
-    fn hash_bytes(&self) -> [u8; 8];
-}
-impl PinHash for str {
-    fn hash_bytes(&self) -> [u8; 8] {
-        let mut h = DefaultHasher::new();
-        self.hash(&mut h);
-        h.finish().to_le_bytes()
+fn payload_body_len(payload: &WalPayload) -> u64 {
+    match payload {
+        WalPayload::Commit { body, .. } => body.len() as u64,
+        WalPayload::NonceFloor { .. } => 0,
+        WalPayload::IncarnationSealed { .. } => 0,
     }
 }
 
-/// Wall-clock recovery work over a dirty tail: hash-verify each byte once
-/// (replay touches each unflushed body byte) plus a fixed per-record verify.
-fn measure_recovery_ms(tail: &[u8], n_records: usize) -> u64 {
-    let start = Instant::now();
-    let mut acc = 0u64;
-    for _ in 0..n_records {
-        let mut h = DefaultHasher::new();
-        tail.hash(&mut h);
-        acc ^= h.finish();
-        // Touch every byte — dirty-tail scan / apply shape.
-        for (i, b) in tail.iter().enumerate() {
-            acc = acc.wrapping_add(u64::from(*b).wrapping_mul(i as u64 + 1));
-        }
+/// Build one adversarial dirty-tail (flushed empty prefix + unflushed Commits)
+/// and wall-clock time real [`replay`] over it.
+fn sample_real_replay(seed: u64) -> Sample {
+    let mut identity = [0u8; 32];
+    identity[..8].copy_from_slice(&seed.to_le_bytes());
+    let (store_id, fence_epoch) = mint_store_identity(identity);
+
+    let n_commits = 1 + (seed % 8) as usize;
+    let body_len = 64usize.saturating_mul(1 + (seed as usize % 16));
+
+    let flushed = WalSegment::open(store_id, fence_epoch, 0);
+    let mut unflushed = WalSegment::open(store_id, fence_epoch, 1);
+    let mut pred = flushed.terminal_hash();
+    for i in 0..n_commits {
+        let ord = commit_ordinal((i as u64).saturating_add(1));
+        let payload = WalPayload::Commit {
+            commit_ordinal: ord,
+            body: commit_body(seed, ord.get(), body_len.saturating_add(i * 8)),
+        };
+        let record = WalRecord::seal(pred, payload);
+        pred = record.record_hash();
+        unflushed.append(record).expect("unflushed WAL append");
     }
-    std::hint::black_box(acc);
+
+    let bytes_since_last_flush = unflushed
+        .records()
+        .iter()
+        .map(|r| payload_body_len(r.payload()))
+        .sum();
+
+    let segments = [flushed, unflushed];
+    // Warm once so the timed pass is steady-state cache behavior.
+    let warm = replay(store_id, &segments).expect("warm replay");
+    black_box(warm);
+
+    let start = Instant::now();
+    let recovered = replay(store_id, &segments).expect("timed replay");
+    black_box(recovered);
     // Saturating cast: sub-ms runs still report 0; SLA bound stays upper.
-    start.elapsed().as_millis() as u64
+    let recovery_time_ms = start.elapsed().as_millis() as u64;
+
+    Sample {
+        bytes_since_last_flush,
+        recovery_time_ms,
+    }
 }
 
 fn percentile_999(values: &mut [u64]) -> u64 {
@@ -115,24 +140,7 @@ fn percentile_999(values: &mut [u64]) -> u64 {
 fn calibrate_corpus() -> Vec<Sample> {
     // Growing dirty tails — same adversarial shape as the DST WAL suffix
     // (commit count × body length varying with seed).
-    let mut samples = Vec::with_capacity(256);
-    for seed in 0u64..256 {
-        let n_records = 1 + (seed % 8) as usize;
-        let body_len = 64usize.saturating_mul(1 + (seed as usize % 16));
-        let mut combined = Vec::new();
-        for i in 0..n_records {
-            combined.extend_from_slice(&dirty_tail(seed, body_len.saturating_add(i * 8)));
-        }
-        let bytes_since_last_flush = combined.len() as u64;
-        // Warm once so the timed pass is steady-state cache behavior.
-        let _ = measure_recovery_ms(&combined, n_records);
-        let recovery_time_ms = measure_recovery_ms(&combined, n_records);
-        samples.push(Sample {
-            bytes_since_last_flush,
-            recovery_time_ms,
-        });
-    }
-    samples
+    (0u64..256).map(sample_real_replay).collect()
 }
 
 fn main() {

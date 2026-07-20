@@ -127,6 +127,7 @@ required-features = ["bench-internals"]
 [[bench]]
 name = "recovery_sla"
 harness = false
+required-features = ["bench-internals"]
 
 [features]
 # Sealed RA-bench façade (`bench_api`) + SimStorage in non-test builds.
