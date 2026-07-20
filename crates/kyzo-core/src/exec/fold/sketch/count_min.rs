@@ -115,7 +115,12 @@ impl CountMinSketch {
     }
 
     /// The estimated frequency of `value`: the minimum of its row counters.
-    /// A pure function of the table bytes. Live query door for stored sketches.
+    /// A pure function of the table bytes.
+    ///
+    /// Live consumers: aggregation finalize tests decode via [`Self::from_bytes`]
+    /// then call this; a named frequency-query stdlib op is not yet seated —
+    /// keep the door honest (`#[allow]`) rather than fabricating a discard caller.
+    #[allow(dead_code)] // frequency-query stdlib op unbuilt; tests exercise the door
     pub(crate) fn estimate(&self, value: &DataValue) -> u64 {
         (0..self.depth)
             .map(|row| {

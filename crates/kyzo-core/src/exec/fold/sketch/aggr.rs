@@ -194,8 +194,6 @@ impl NormalAggrObj for AggrCountMin {
         }
     }
     fn get(&self) -> Result<DataValue> {
-        // Finalize keeps the frequency query door live on every sketch.
-        let _ = self.cms.estimate(&DataValue::Null);
         Ok(self.cms.to_value())
     }
 }
