@@ -56,7 +56,7 @@ sha2 = "0.11.0"
 # codec fjall/lsm-tree already carry (no lz4-sys).
 aes-gcm-siv = "0.11.1"
 chacha20poly1305 = "0.11"
-lz4_flex = "0.13"
+lz4_flex = "0.14"
 fjall = "3.1.5"
 # Fixed-rule tier (both pure Rust end-to-end):
 # csv → csv-core/itoa/ryu/serde; priority-queue → indexmap/equivalent/hashbrown.
