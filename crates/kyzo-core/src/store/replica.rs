@@ -10,7 +10,8 @@
 //! Admission certificates, custody, and replica verification (decisions.md §69, §70).
 //!
 //! Owns: [`AdmissionCertificate`], [`verify_replica`], [`ReplicaKey`],
-//! [`ReplicaCustody`], PendingAnchor anchoring, [`LocalProjection`] contract,
+//! [`NamespacedRecordIdentity`], [`ReplicaCustody`], [`ReplicaCustodyTable`],
+//! PendingAnchor anchoring, [`LocalProjection`] contract,
 //! [`AuthorizingKey`] / [`AuthorizingKeyTable`], [`ScopeManifestTable`],
 //! [`OriginContinuity`], and full crossing-contract validation before lowering
 //! ([`validate_crossing_before_lower`], [`CrossingEnvelope`], [`CrossingValidated`]).
@@ -23,7 +24,8 @@
 //! public-key verify only — receivers must not hold the origin seed);
 //! lowering a crossing record without validating kind/schema/authority/
 //! context/evidence/status/capabilities; folding ScopeUnknown/Revoked/Denied
-//! into RetentionDeclined; silent drop of missing declared evidence.
+//! into RetentionDeclined; silent drop of missing declared evidence;
+//! identity that lets distinct origins collapse into one (content-only id).
 //!
 //! Authoring mints at `session/admit.rs` through [`mint_admission_certificate`];
 //! replicas verify + mint custody — never re-author.
@@ -463,6 +465,8 @@ impl AdmissionCertificate {
 /// Replica custody key (§70): H(origin_store, origin_epoch, origin_commit, record_digest).
 ///
 /// Makes re-delivery converge — at-least-once bytes, exactly-once custody.
+/// The one custody authority — [`NamespacedRecordIdentity::custody_key`]
+/// delegates here; never a second competing key space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReplicaKey([u8; 32]);
 
@@ -486,6 +490,125 @@ impl ReplicaKey {
     /// Borrow the key digest.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+/// Tenant / graph-scope digest bound into federation identity (#270 T2).
+///
+/// Distinct from origin authority and StoreId: a receiver may hold many
+/// tenants; collapsing tenant out of identity lets distinct graphs collide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TenantId([u8; 32]);
+
+impl TenantId {
+    /// Wrap an already-proven tenant / graph-scope digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the tenant digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for TenantId {
+    fn from(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for TenantId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Namespaced federation record identity (#270 T2 / seat 70).
+///
+/// Four-tuple: **local id + origin authority + tenant + content**. Content
+/// alone is never federation identity — two origins admitting identical
+/// bytes must remain distinct. Custody still keys through [`ReplicaKey`]
+/// (one authority); this type is the anti-collapse equality domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NamespacedRecordIdentity {
+    local_id: [u8; 32],
+    origin_authority: AuthorizingKeyId,
+    tenant: TenantId,
+    content: [u8; 32],
+}
+
+impl NamespacedRecordIdentity {
+    /// Bind the four namespace seats — private fields, one constructor.
+    pub fn bind(
+        local_id: [u8; 32],
+        origin_authority: AuthorizingKeyId,
+        tenant: TenantId,
+        content: [u8; 32],
+    ) -> Self {
+        Self {
+            local_id,
+            origin_authority,
+            tenant,
+            content,
+        }
+    }
+
+    /// Bind from a verified certificate's authority + content, plus local id
+    /// and tenant supplied by the receiving / admitting door.
+    pub fn from_certificate(
+        local_id: [u8; 32],
+        certificate: &AdmissionCertificate,
+        tenant: TenantId,
+    ) -> Self {
+        Self::bind(
+            local_id,
+            certificate.authorizing_key_id(),
+            tenant,
+            *certificate.record_digest(),
+        )
+    }
+
+    /// Local admitted id bytes (session [`crate::session::record_id::RecordId`]).
+    pub fn local_id(&self) -> &[u8; 32] {
+        &self.local_id
+    }
+
+    /// Origin authorizing key id — distinct origins never share this seat.
+    pub fn origin_authority(&self) -> AuthorizingKeyId {
+        self.origin_authority
+    }
+
+    /// Tenant / graph scope.
+    pub fn tenant(&self) -> TenantId {
+        self.tenant
+    }
+
+    /// Record content digest.
+    pub fn content(&self) -> &[u8; 32] {
+        &self.content
+    }
+
+    /// Federation-stable digest of the four-tuple (not a custody key).
+    pub fn digest(&self) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.namespaced_record_identity.v1");
+        h.update(self.local_id);
+        h.update(self.origin_authority.as_bytes());
+        h.update(self.tenant.as_bytes());
+        h.update(self.content);
+        h.finalize().into()
+    }
+
+    /// Custody key under origin coordinates — delegates to [`ReplicaKey`]
+    /// (seat 70); does not mint a second custody authority.
+    pub fn custody_key(
+        &self,
+        origin_store: StoreId,
+        origin_epoch: FenceEpoch,
+        origin_commit: CommitOrdinal,
+    ) -> ReplicaKey {
+        ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &self.content)
     }
 }
 
@@ -513,6 +636,54 @@ pub enum ReplicaCustody {
         /// Sealed certificate retained opaque until anchored.
         certificate: AdmissionCertificate,
     },
+}
+
+impl ReplicaCustody {
+    /// Convergent [`ReplicaKey`] for this custody — Queryable and PendingAnchor share it.
+    pub fn key(&self) -> ReplicaKey {
+        match self {
+            Self::Queryable { key, .. } | Self::PendingAnchor { key, .. } => *key,
+        }
+    }
+}
+
+/// Exactly-once custody ledger keyed by [`ReplicaKey`] (§70 / #270 T2).
+///
+/// At-least-once fabric deliveries admit through [`ReplicaCustodyTable::admit`]:
+/// first delivery inserts; duplicates converge on the held custody — no
+/// reshape, no double-mint.
+#[derive(Debug, Default, Clone)]
+pub struct ReplicaCustodyTable {
+    by_key: BTreeMap<[u8; 32], ReplicaCustody>,
+}
+
+impl ReplicaCustodyTable {
+    /// Empty custody ledger.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Admit custody under its [`ReplicaKey`]. Duplicate key → existing entry
+    /// (idempotent). Never reshapes a held custody into a second mint.
+    pub fn admit(&mut self, custody: ReplicaCustody) -> &ReplicaCustody {
+        let key = *custody.key().as_bytes();
+        self.by_key.entry(key).or_insert(custody)
+    }
+
+    /// Lookup held custody by key, if any.
+    pub fn get(&self, key: &ReplicaKey) -> Option<&ReplicaCustody> {
+        self.by_key.get(key.as_bytes())
+    }
+
+    /// Number of distinct custody keys held.
+    pub fn len(&self) -> usize {
+        self.by_key.len()
+    }
+
+    /// True when no custody is held.
+    pub fn is_empty(&self) -> bool {
+        self.by_key.is_empty()
+    }
 }
 
 /// Local rebuildable projection of origin-schema interpretation (§69).
@@ -773,7 +944,12 @@ pub(crate) fn sign_admission_parts(
 ///
 /// Accepting verify produces durable custody carrying origin coordinates
 /// (what) and local `(StoreId, CommitOrdinal)` (when); creates NO new Record
-/// identity. Re-delivery with the same [`ReplicaKey`] converges.
+/// identity. Re-delivery with the same [`ReplicaKey`] converges — admit into
+/// [`ReplicaCustodyTable`] for exactly-once ledger retention.
+///
+/// Federation-facing equality is [`NamespacedRecordIdentity`] (local id +
+/// origin authority + tenant + content); content-only ids must not collapse
+/// distinct origins. Custody still keys through [`ReplicaKey`] — one authority.
 ///
 /// Authenticity, scope, and anchor are **derived**:
 /// - signature checked against [`AuthorizingKeyTable`] lookup of
@@ -1751,5 +1927,238 @@ mod crossing_contract_tests {
             CrossingContext::from_wire(2, None),
             Err(CrossingRefuse::ContextInvalid)
         );
+    }
+}
+
+/// Non-collision + custody-idempotency proofs (#270 T2 / seat 70).
+///
+/// Board Check filters `replica::identity` — keep this module name stable.
+#[cfg(test)]
+mod identity {
+    use super::*;
+
+    fn mint_signed(
+        origin_store: StoreId,
+        origin_epoch: FenceEpoch,
+        origin_commit: CommitOrdinal,
+        record_digest: [u8; 32],
+        key: &AuthorizingKey,
+        scope: ScopeManifestDigest,
+    ) -> AdmissionCertificate {
+        let mut parts = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store,
+            origin_epoch,
+            origin_commit,
+            schema_cut: [0x51; 32],
+            record_digest,
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts.signature = sign_admission_parts(&parts, key).expect("sign");
+        mint_admission_certificate(parts).expect("mint")
+    }
+
+    #[test]
+    fn distinct_origins_never_collapse_on_same_content() {
+        // Same local id + content; only origin authority differs → identities diverge.
+        let content = [0xE1; 32];
+        let local_id = content; // admission law: RecordId is a view of content
+        let tenant = TenantId::from_digest([0x7E; 32]);
+        let auth_a = AuthorizingKeyId::from_digest([0xA1; 32]);
+        let auth_b = AuthorizingKeyId::from_digest([0xB2; 32]);
+
+        let a = NamespacedRecordIdentity::bind(local_id, auth_a, tenant, content);
+        let b = NamespacedRecordIdentity::bind(local_id, auth_b, tenant, content);
+
+        assert_ne!(
+            a, b,
+            "distinct origin authorities must not collapse into one identity"
+        );
+        assert_ne!(a.digest(), b.digest());
+        assert_eq!(a.content(), b.content());
+        assert_eq!(a.local_id(), b.local_id());
+        assert_eq!(a.tenant(), b.tenant());
+    }
+
+    #[test]
+    fn distinct_tenants_never_collapse_on_same_content() {
+        let content = [0xE1; 32];
+        let local_id = content;
+        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
+        let tenant_a = TenantId::from_digest([0x71; 32]);
+        let tenant_b = TenantId::from_digest([0x72; 32]);
+
+        let a = NamespacedRecordIdentity::bind(local_id, auth, tenant_a, content);
+        let b = NamespacedRecordIdentity::bind(local_id, auth, tenant_b, content);
+
+        assert_ne!(a, b, "distinct tenants must not collapse into one identity");
+        assert_ne!(a.digest(), b.digest());
+    }
+
+    #[test]
+    fn distinct_local_ids_never_collapse_on_same_content() {
+        let content = [0xE1; 32];
+        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
+        let tenant = TenantId::from_digest([0x7E; 32]);
+
+        let a = NamespacedRecordIdentity::bind([0x01; 32], auth, tenant, content);
+        let b = NamespacedRecordIdentity::bind([0x02; 32], auth, tenant, content);
+
+        assert_ne!(a, b, "distinct local ids must not collapse into one identity");
+        assert_ne!(a.digest(), b.digest());
+    }
+
+    #[test]
+    fn same_namespace_tuple_is_equal_and_stable() {
+        let content = [0xE1; 32];
+        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
+        let tenant = TenantId::from_digest([0x7E; 32]);
+        let a = NamespacedRecordIdentity::bind(content, auth, tenant, content);
+        let b = NamespacedRecordIdentity::bind(content, auth, tenant, content);
+        assert_eq!(a, b);
+        assert_eq!(a.digest(), b.digest());
+    }
+
+    #[test]
+    fn certificate_bind_carries_authority_and_content() {
+        let store = StoreId::from_digest([0xC7; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id([0xC1; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
+        let content = [0xE1; 32];
+        let cert = mint_signed(
+            store,
+            FenceEpoch::genesis(store),
+            CommitOrdinal::ZERO,
+            content,
+            &key,
+            scope,
+        );
+        let tenant = TenantId::from_digest([0x7E; 32]);
+        let id = NamespacedRecordIdentity::from_certificate(content, &cert, tenant);
+        assert_eq!(id.origin_authority(), key.id());
+        assert_eq!(id.content(), &content);
+        assert_eq!(id.tenant(), tenant);
+        assert_eq!(id.local_id(), &content);
+    }
+
+    #[test]
+    fn distinct_origin_stores_yield_distinct_replica_keys() {
+        let content = [0xE1; 32];
+        let store_a = StoreId::from_digest([0x01; 32]);
+        let store_b = StoreId::from_digest([0x02; 32]);
+        let epoch_a = FenceEpoch::genesis(store_a);
+        let epoch_b = FenceEpoch::genesis(store_b);
+        let key_a = ReplicaKey::derive(store_a, epoch_a, CommitOrdinal::ZERO, &content);
+        let key_b = ReplicaKey::derive(store_b, epoch_b, CommitOrdinal::ZERO, &content);
+        assert_ne!(
+            key_a, key_b,
+            "same content under distinct origins must not share ReplicaKey"
+        );
+    }
+
+    #[test]
+    fn custody_key_delegates_to_replica_key_authority() {
+        let content = [0xE1; 32];
+        let store = StoreId::from_digest([0xC7; 32]);
+        let epoch = FenceEpoch::genesis(store);
+        let id = NamespacedRecordIdentity::bind(
+            content,
+            AuthorizingKeyId::from_digest([0xA1; 32]),
+            TenantId::from_digest([0x7E; 32]),
+            content,
+        );
+        assert_eq!(
+            id.custody_key(store, epoch, CommitOrdinal::ZERO),
+            ReplicaKey::derive(store, epoch, CommitOrdinal::ZERO, &content),
+            "namespaced custody must extend ReplicaKey — not fork a second key"
+        );
+    }
+
+    #[test]
+    fn replica_key_custody_idempotent_under_duplicate_delivery() {
+        let origin = StoreId::from_digest([0x69; 32]);
+        let local = StoreId::from_digest([0x70; 32]);
+        let origin_epoch = FenceEpoch::genesis(origin);
+        let origin_commit = CommitOrdinal::ZERO;
+        let record_digest = [0xE1; 32];
+        let key = AuthorizingKey::mint_with_verifying_id([0x69; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+        let continuity = OriginContinuity::mint();
+        let cert = mint_signed(
+            origin,
+            origin_epoch,
+            origin_commit,
+            record_digest,
+            &key,
+            scope,
+        );
+        let expected = ReplicaKey::derive(origin, origin_epoch, origin_commit, &record_digest);
+        let tenant = TenantId::from_digest([0x7E; 32]);
+        let namespaced =
+            NamespacedRecordIdentity::from_certificate(record_digest, &cert, tenant);
+        assert_eq!(
+            namespaced.custody_key(origin, origin_epoch, origin_commit),
+            expected
+        );
+
+        let mut table = ReplicaCustodyTable::new();
+        let mut first: Option<ReplicaCustody> = None;
+        for delivery in 0..5 {
+            let custody = verify_replica(
+                &cert,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&continuity),
+            )
+            .unwrap_or_else(|e| panic!("delivery {delivery}: verify_replica {e:?}"));
+            assert_eq!(custody.key(), expected, "delivery {delivery}: ReplicaKey");
+            let held = table.admit(custody.clone());
+            assert_eq!(held.key(), expected);
+            match &first {
+                None => first = Some(custody),
+                Some(prior) => assert_eq!(
+                    prior, &custody,
+                    "delivery {delivery}: duplicate delivery must converge"
+                ),
+            }
+        }
+        assert_eq!(
+            table.len(),
+            1,
+            "five at-least-once deliveries → exactly one custody"
+        );
+        assert_eq!(table.get(&expected), first.as_ref());
+    }
+
+    #[test]
+    fn content_only_id_is_not_federation_identity() {
+        // Two origins, identical content: content digests equal, namespaced ids do not.
+        let content = [0xAA; 32];
+        let a = NamespacedRecordIdentity::bind(
+            content,
+            AuthorizingKeyId::from_digest([0x01; 32]),
+            TenantId::from_digest([0x10; 32]),
+            content,
+        );
+        let b = NamespacedRecordIdentity::bind(
+            content,
+            AuthorizingKeyId::from_digest([0x02; 32]),
+            TenantId::from_digest([0x10; 32]),
+            content,
+        );
+        assert_eq!(a.content(), b.content());
+        assert_ne!(a.digest(), b.digest());
+        assert_ne!(a, b);
     }
 }

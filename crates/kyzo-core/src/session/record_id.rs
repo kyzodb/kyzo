@@ -6,15 +6,20 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Admitted record identity (#268 T3).
+//! Admitted record identity (#268 T3) and federation namespacing (#270 T2).
 //!
 //! [`RecordId`] is a derived view of the one stored
 //! [`RecordContentDigest`](crate::data::digest::RecordContentDigest) —
 //! minted only at the admission seam
 //! ([`crate::session::admit::admit_record`]). Projections and retrieval
 //! spans resolve to this id or refuse — never a free-floating truth.
+//!
+//! Across instance boundaries, [`RecordId`] alone is not federation identity:
+//! use [`RecordId::namespaced`] → [`NamespacedRecordIdentity`] so distinct
+//! origins never collapse (local id + origin authority + tenant + content).
 
 use crate::data::digest::RecordContentDigest;
+use crate::store::replica::{AuthorizingKeyId, NamespacedRecordIdentity, TenantId};
 
 /// Admitted record identity — derived view of the record content digest.
 ///
@@ -35,5 +40,24 @@ impl RecordId {
     /// Borrow the identity digest bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// Federation-stable namespaced identity (#270 T2).
+    ///
+    /// Binds this local id with origin authority, tenant, and content so
+    /// distinct origins never collapse into one. Custody still keys through
+    /// [`crate::store::replica::ReplicaKey`] — one authority, not a fork.
+    pub fn namespaced(
+        self,
+        origin_authority: AuthorizingKeyId,
+        tenant: TenantId,
+        content: RecordContentDigest,
+    ) -> NamespacedRecordIdentity {
+        NamespacedRecordIdentity::bind(
+            self.0,
+            origin_authority,
+            tenant,
+            *content.as_digest(),
+        )
     }
 }
