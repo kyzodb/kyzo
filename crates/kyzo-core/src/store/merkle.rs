@@ -535,6 +535,8 @@ mod tests {
     //!   leaf input;
     //! - **valid-but-stale rollback** (§56–§58): an older internally-consistent
     //!   snapshot fails [`roots_equal_at_cut`] against the stored prior tip;
+    //! - **historical_edit** of a past [`ChainedStateRoot`]: every forward
+    //!   chained root breaks — [`chain_bind`] covers the predecessor (proven);
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
 
@@ -899,6 +901,147 @@ mod tests {
         // Controls: same cut equals itself; tip equals tip.
         assert!(roots_equal_at_cut(stale_as_of, root_at_v1));
         assert!(roots_equal_at_cut(stored_prior, chain.prior_root()));
+    }
+
+    /// Adversarial historical_edit: mutate a past commit's content (and thus its
+    /// [`ChainedStateRoot`]), then remint every later link with the *same*
+    /// forward content roots. If [`chain_bind`] omitted the predecessor, those
+    /// forward digests would still match the honest chain — the equality fails
+    /// prove coverage. Also: an honest forward link refuses to append after the
+    /// edited past tip ([`MerkleChainRefuse::PredecessorMismatch`]).
+    #[test]
+    fn historical_edit_breaks_every_forward_chained_root() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, MerkleChainRefuse, RootChain,
+            as_of_root, roots_equal_at_cut,
+        };
+
+        let store_id = StoreId::from_digest([0xED; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+
+        let state_v1: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"k00".to_vec(), b"v0".to_vec()),
+            (b"k01".to_vec(), b"v1".to_vec()),
+        ];
+        // Edit past commit bytes — one value byte differs at the historical cut.
+        let state_v1_edited: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"k00".to_vec(), b"v0".to_vec()),
+            (b"k01".to_vec(), b"vX".to_vec()),
+        ];
+        let state_v2: Vec<(Vec<u8>, Vec<u8>)> = {
+            let mut s = state_v1.clone();
+            s.push((b"k02".to_vec(), b"v2".to_vec()));
+            s
+        };
+        let state_v3: Vec<(Vec<u8>, Vec<u8>)> = {
+            let mut s = state_v2.clone();
+            s.push((b"k03".to_vec(), b"v3".to_vec()));
+            s
+        };
+
+        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1));
+        let content_v1_edited = StateRoot::from_merkle(root_of_pairs(&state_v1_edited));
+        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2));
+        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3));
+        assert_ne!(
+            content_v1, content_v1_edited,
+            "historical edit must change past content root"
+        );
+
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let o3 = o2.successor().unwrap();
+
+        let mut honest = RootChain::empty();
+        let h1 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            content_v1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        honest.append(h1).unwrap();
+        let h2 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            content_v2,
+            honest.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        honest.append(h2).unwrap();
+        let h3 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            content_v3,
+            honest.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        honest.append(h3).unwrap();
+
+        let honest_r1 = as_of_root(&honest, o1).unwrap();
+        let honest_r2 = as_of_root(&honest, o2).unwrap();
+        let honest_r3 = as_of_root(&honest, o3).unwrap();
+
+        // historical_edit past commit → rebind every forward link (same content).
+        let mut edited = RootChain::empty();
+        let e1 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            content_v1_edited,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        edited.append(e1).unwrap();
+        assert!(
+            !roots_equal_at_cut(honest_r1, as_of_root(&edited, o1).unwrap()),
+            "historical_edit changes the past ChainedStateRoot"
+        );
+
+        let e2 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            content_v2,
+            edited.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        edited.append(e2).unwrap();
+        let e3 = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            content_v3,
+            edited.prior_root(),
+            ChainLinkKind::Ordinary,
+        );
+        edited.append(e3).unwrap();
+
+        // Every forward root breaks — fails if chain_bind drops the predecessor.
+        assert!(
+            !roots_equal_at_cut(honest_r2, as_of_root(&edited, o2).unwrap()),
+            "historical_edit: forward chained root at o2 must break"
+        );
+        assert!(
+            !roots_equal_at_cut(honest_r3, as_of_root(&edited, o3).unwrap()),
+            "historical_edit: forward chained root at o3 must break"
+        );
+
+        // Chain verification: honest forward link cannot cover the edited past tip.
+        let mut verify = RootChain::empty();
+        verify.append(e1).unwrap();
+        assert_eq!(
+            verify.append(h2),
+            Err(MerkleChainRefuse::PredecessorMismatch),
+            "historical_edit: honest forward link refuses edited past tip"
+        );
     }
 
     // ── content-addressing: same content ⇒ same root, 1 bit ⇒ different ──
