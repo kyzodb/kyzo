@@ -507,8 +507,12 @@ impl<'de> serde::Deserialize<'de> for FixedRuleOptionDecl {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Search modality option declarations — extensible closed vocabulary.
-// Spatial / sparse option names are [OPEN] to #207/#209 (engine SearchConfig
-// variants); add OPT_* here when those modalities gain a query-relation form.
+//
+// [OPEN] cross-story dep — #249 T1 under epic #353: engine `SearchConfig`
+// today admits only Hnsw/Fts/Lsh. Spatial/sparse modality option names
+// (`SEARCH_OPT_*`) land here when those `SearchConfig` variants exist.
+// Unknown surface names already refuse via `resolve_search_modality_option`
+// → `UnknownSearchModalityOption` (not a placeholder path).
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Declaration of a search-atom modality option name. Closed vocabulary:
@@ -549,8 +553,9 @@ pub const SEARCH_OPT_SCORE_KIND: SearchModalityOptionDecl =
 /// Resolve a search modality option surface name to a [`SearchModalityOptionDecl`].
 /// Unknown / misspelled names return `None` — unconstructible into the options bag.
 ///
-/// [OPEN] #207/#209: spatial / sparse modality option names land here when
-/// engine `SearchConfig` gains those variants.
+/// [OPEN] cross-story dep — #249 T1 / #353: append spatial / sparse
+/// `SEARCH_OPT_*` names here when engine `SearchConfig` gains those variants.
+/// Until then unknown names refuse; this vocabulary is complete for Hnsw/Fts/Lsh.
 pub fn resolve_search_modality_option(name: &str) -> Option<SearchModalityOptionDecl> {
     Some(match name {
         "k" => SEARCH_OPT_K,

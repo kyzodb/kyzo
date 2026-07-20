@@ -30,8 +30,10 @@
 //! cross-type order. Decode is total over any 8-byte body (every `u64`
 //! is a lawful curve key and maps to a unique cell pair).
 //!
-//! Engine-side `project/spatial` floor()-quantize retirement is [OPEN]
-//! to #202 — this seat is the value-plane encoding authority it replaces.
+//! [OPEN] cross-story dep — #288 under epic #353: engine-side
+//! `project/spatial` must retire floor()-quantize / Z-order in favor of this
+//! seat's Hilbert fixed-point encoding. This value-plane kind is complete;
+//! the engine projection retirement is not inventable here.
 
 /// One axis cell on the 32-bit fixed-point grid. Private field; mint only
 /// through [`Geometry`] constructors that already hold the proof.

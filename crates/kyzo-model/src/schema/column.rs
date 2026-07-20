@@ -230,12 +230,7 @@ impl NullableColType {
     ///
     /// This is the contract applied at the data boundary: the returned
     /// value is proven to satisfy the column typing, so nothing downstream
-    /// re-checks it.
-    // The mutation tier (runtime/db.rs) is coerce's lib consumer and lands
-    // later; the law tests keep it live under cfg(test). `allow`, not
-    // `expect`: an item-level dead_code expectation marks the item a live
-    // root, so it can never be fulfilled.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// re-checks it. The mutation / admit tier is the live consumer.
     pub fn coerce(&self, data: DataValue, cur_vld: ValidityTs) -> Result<DataValue> {
         if matches!(data, DataValue::Null) {
             return if self.is_nullable() {

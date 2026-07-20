@@ -480,9 +480,11 @@ pub enum InputAtom {
     /// An index search (`~rel:idx{...}`) as an ordinary relation on the
     /// Candidates&lt;K&gt; seam (seat 14): joinable, filterable, and
     /// **negatable-shaped** — it sits under [`InputAtom::Negation`] like any
-    /// other body atom. Engine-side `NegatedSearchUnsupported` retirement is
-    /// [OPEN] to #209; spatial/sparse `SearchConfig` variants [OPEN] to
-    /// #207/#209.
+    /// other body atom.
+    ///
+    /// [OPEN] cross-story deps under epic #353:
+    /// - engine `NegatedSearchUnsupported` retirement → #249 T2
+    /// - spatial/sparse `SearchConfig` variants (query-relation form) → #249 T1
     Search {
         inner: SearchInput,
     },
@@ -632,7 +634,8 @@ pub struct SearchQueryRequired {
 #[diagnostic(help(
     "Modality option names are an extensible closed vocabulary; unknown \
      names are unconstructible. `query` and `filter` are first-class fields, \
-     not modality options. Spatial/sparse option names are [OPEN] to #207/#209."
+     not modality options. Spatial/sparse option names are [OPEN] to #249 T1 \
+     / #353 (engine SearchConfig Spatial/Sparse variants)."
 ))]
 pub struct UnknownSearchModalityOption {
     pub name: String,
@@ -644,8 +647,9 @@ pub struct UnknownSearchModalityOption {
 /// [`resolve_search_modality_option`]. Identity keys are [`Symbol`]; an
 /// unknown name cannot enter this type.
 ///
-/// Extensible by appending `SEARCH_OPT_*` in `program/op.rs` — spatial /
-/// sparse names [OPEN] to #207/#209 when engine `SearchConfig` grows.
+/// Extensible by appending `SEARCH_OPT_*` in `program/op.rs`. Spatial /
+/// sparse names are [OPEN] cross-story dep #249 T1 / #353 — land when
+/// engine `SearchConfig` gains those variants; until then unknown names refuse.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SearchModalityOptions {
     entries: BTreeMap<Symbol, Expr>,
@@ -741,9 +745,10 @@ pub enum SearchAtomConstructRefuse {
 /// - **query** — first-class body-bound [`Expr`] (correlated subquery;
 ///   `$param`-only shape retired)
 /// - **modality** — extensible closed vocabulary ([`SearchModalityOptions`]);
-///   spatial/sparse names [OPEN] to #207/#209 (engine `SearchConfig` variants)
+///   spatial/sparse names [OPEN] cross-story dep #249 T1 / #353 (engine
+///   `SearchConfig` Spatial/Sparse variants — not inventable here)
 /// - **negatable-shaped** — sits under [`InputAtom::Negation`] like any
-///   relation; engine `NegatedSearchUnsupported` retirement [OPEN] to #209
+///   relation; engine `NegatedSearchUnsupported` retirement [OPEN] #249 T2 / #353
 #[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct SearchInput {
     pub relation: Symbol,

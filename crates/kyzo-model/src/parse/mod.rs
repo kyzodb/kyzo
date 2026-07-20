@@ -19,8 +19,8 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): seated in kyzo-model; public `parse_script` is the LSP /
- * host language door (params only — fixed-rule binding is exec-tier);
- * sys / imperative scripts validate as syntax with deferred typed lift.
+ * host language door (params + session stamp — fixed-rule binding is
+ * exec-tier); sys / imperative scripts lift to typed pure-data IR.
  */
 
 use std::collections::BTreeMap;
@@ -28,15 +28,17 @@ use std::collections::BTreeMap;
 use miette::{Diagnostic, Result, bail};
 use pest::Parser;
 use pest::error::InputLocation;
+use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::program::InputProgram;
 use crate::program::span::SourceSpan;
-use crate::value::{DataValue, MAX_VALIDITY_TS, ValidityTs};
+use crate::value::{DataValue, ValidityTs};
 
 pub mod expr;
 pub mod query;
 pub mod schema;
+pub mod script;
 pub mod search;
 pub mod sys;
 
@@ -52,18 +54,96 @@ pub(crate) struct KyzoScriptParser;
 pub(crate) type Pair<'a> = pest::iterators::Pair<'a, Rule>;
 pub(crate) type Pairs<'a> = pest::iterators::Pairs<'a, Rule>;
 
-/// A parsed KyzoScript script: query IR, or a syntax-validated system /
-/// imperative script whose typed lift seats land later (`parse/sys`,
-/// `parse/script`).
+/// A parsed KyzoScript script: one of the language's three genera.
 #[derive(Debug)]
 pub enum Script {
     /// One query program (`?[…] := …` / options / const / fixed rules).
     Query(InputProgram),
-    /// `::…` system op — pest-validated; typed SysOp lift is a later seat.
-    Sys { span: SourceSpan },
-    /// `%…` imperative block — pest-validated; typed lift is a later seat.
-    Imperative { span: SourceSpan },
+    /// `::…` system op — pure-data [`sys::SysScript`] (engine `SysOp` lift
+    /// lives in kyzo-core).
+    Sys(sys::SysScript),
+    /// `%…` imperative block — composition of proven programs + control flow.
+    Imperative(ImperativeProgram),
 }
+
+/// One query inside an imperative script, with the optional temp relation
+/// (`as _name`) its result is stored under.
+#[derive(Debug)]
+pub struct ImperativeStmtClause {
+    pub prog: InputProgram,
+    pub store_as: Option<SmartString<LazyCompact>>,
+}
+
+/// One system operation inside an imperative script, with the optional temp
+/// relation its result is stored under. Carries pure-data [`sys::SysScript`];
+/// the engine admits it to `SysOp` at the kyzo-core seam.
+#[derive(Debug)]
+pub struct ImperativeSysop {
+    pub sysop: sys::SysScript,
+    pub store_as: Option<SmartString<LazyCompact>>,
+}
+
+/// A value source in an imperative script: an inline query, or the name of
+/// a temporary relation holding an earlier result. (The CozoDB original
+/// used `either::Either` here, with *opposite* orientations at its two use
+/// sites — conditions were `Left(name)`, returns were `Left(clause)`; one
+/// named type removes both the dependency and the trap.)
+#[derive(Debug)]
+pub enum QueryOrRelation {
+    /// Boxed: a clause holds a whole program (clippy::large_enum_variant).
+    Query(Box<ImperativeStmtClause>),
+    Relation(SmartString<LazyCompact>),
+}
+
+/// The condition of an `%if`/`%if_not`: a temp relation tested for
+/// non-emptiness, or an inline query.
+pub type ImperativeCondition = QueryOrRelation;
+
+/// One statement of an imperative script.
+#[derive(Debug)]
+pub enum ImperativeStmt {
+    Break {
+        target: Option<SmartString<LazyCompact>>,
+        span: SourceSpan,
+    },
+    Continue {
+        target: Option<SmartString<LazyCompact>>,
+        span: SourceSpan,
+    },
+    Return {
+        returns: Vec<QueryOrRelation>,
+    },
+    Program {
+        prog: ImperativeStmtClause,
+    },
+    SysOp {
+        sysop: ImperativeSysop,
+    },
+    IgnoreErrorProgram {
+        prog: ImperativeStmtClause,
+    },
+    If {
+        condition: ImperativeCondition,
+        then_branch: ImperativeProgram,
+        else_branch: ImperativeProgram,
+        negated: bool,
+    },
+    Loop {
+        label: Option<SmartString<LazyCompact>>,
+        body: ImperativeProgram,
+    },
+    TempSwap {
+        left: SmartString<LazyCompact>,
+        right: SmartString<LazyCompact>,
+    },
+    TempDebug {
+        temp: SmartString<LazyCompact>,
+    },
+}
+
+/// A chained query: a series of `{}` queries possibly with imperative
+/// directives like `%if` and `%loop`.
+pub type ImperativeProgram = Vec<ImperativeStmt>;
 
 impl Script {
     /// Refuse unless this script is a single query program.
@@ -75,7 +155,7 @@ impl Script {
 
         match self {
             Script::Query(s) => Ok(s),
-            Script::Imperative { .. } | Script::Sys { .. } => bail!(ExpectSingleProgram),
+            Script::Imperative(_) | Script::Sys(_) => bail!(ExpectSingleProgram),
         }
     }
 }
@@ -94,36 +174,58 @@ pub struct ParseError {
 #[diagnostic(code(parser::unexpected_rule))]
 pub(crate) struct UnexpectedRule(#[label] pub(crate) SourceSpan);
 
-/// Public language door: source text + param pool → typed [`Script`] with
-/// spans, or a labeled refusal. Resolves `kyzo_model::parse::parse_script`
-/// for kyzo-lsp validation.
+/// Map a pest parse failure into the spanned [`ParseError`].
+fn pest_to_parse_error(err: pest::error::Error<Rule>) -> ParseError {
+    let span = match err.location {
+        InputLocation::Pos(p) => SourceSpan(p, 0),
+        InputLocation::Span((start, end)) => SourceSpan(start, end - start),
+    };
+    ParseError { span }
+}
+
+/// Top-level pest match produced no root pair — grammar/consumer drift.
+#[derive(Debug, Error, Diagnostic)]
+#[error("parse-tree shape violates the grammar: top-level parse produced no root pair ({expected})")]
+#[diagnostic(code(parser::grammar_shape))]
+#[diagnostic(help("This is a bug: grammar.pest and its consumer disagree. Please report it."))]
+struct EmptyParseRoot {
+    expected: &'static str,
+}
+
+fn expect_root_pair<'a>(
+    mut pairs: Pairs<'a>,
+    expected: &'static str,
+) -> Result<Pair<'a>> {
+    pairs.next().ok_or_else(|| EmptyParseRoot { expected }.into())
+}
+
+/// Public language door: source text + param pool + session stamp → typed
+/// [`Script`] with spans, or a labeled refusal.
 ///
-/// Current validity for `@` clauses defaults to the open (latest) system
-/// coordinate — hosts that need a session clock pass through a later
-/// engine-facing wrapper; the LSP door is params-only.
-pub fn parse_script(src: &str, param_pool: &BTreeMap<String, DataValue>) -> Result<Script> {
-    let cur_vld = MAX_VALIDITY_TS;
-    let parsed = KyzoScriptParser::parse(Rule::script, src)
-        .map_err(|err| {
-            let span = match err.location {
-                InputLocation::Pos(p) => SourceSpan(p, 0),
-                InputLocation::Span((start, end)) => SourceSpan(start, end - start),
-            };
-            ParseError { span }
-        })?
-        .next()
-        .unwrap();
+/// `cur_vld` is the live session coordinate for `@` / `@ NOW` clauses —
+/// hosts must pass the real stamp; there is no open-end default on this door.
+pub fn parse_script(
+    src: &str,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+) -> Result<Script> {
+    let parsed = expect_root_pair(
+        KyzoScriptParser::parse(Rule::script, src).map_err(pest_to_parse_error)?,
+        "a script root",
+    )?;
     Ok(match parsed.as_rule() {
         Rule::query_script => {
             let q = query::parse_query(parsed.into_inner(), param_pool, cur_vld)?;
             Script::Query(q)
         }
-        Rule::imperative_script => Script::Imperative {
-            span: parsed.extract_span(),
-        },
-        Rule::sys_script => Script::Sys {
-            span: parsed.extract_span(),
-        },
+        Rule::imperative_script => {
+            let prog = script::parse_imperative_block(parsed, param_pool, cur_vld)?;
+            Script::Imperative(prog)
+        }
+        Rule::sys_script => {
+            let op = sys::parse_sys(parsed.into_inner(), param_pool, cur_vld)?;
+            Script::Sys(op)
+        }
         _ => bail!(UnexpectedRule(parsed.extract_span())),
     })
 }
@@ -133,21 +235,17 @@ pub fn parse_expressions(
     src: &str,
     param_pool: &BTreeMap<String, DataValue>,
 ) -> Result<crate::program::Expr> {
-    let parsed = KyzoScriptParser::parse(Rule::expression_script, src)
-        .map_err(|err| {
-            let span = match err.location {
-                InputLocation::Pos(p) => SourceSpan(p, 0),
-                InputLocation::Span((start, end)) => SourceSpan(start, end - start),
-            };
-            ParseError { span }
-        })?
-        .next()
-        .unwrap();
-    expr::build_expr(parsed.into_inner().next().unwrap(), param_pool)
+    let parsed = expect_root_pair(
+        KyzoScriptParser::parse(Rule::expression_script, src).map_err(pest_to_parse_error)?,
+        "an expression_script root",
+    )?;
+    let expr_pair = parsed.children().expect("the expression")?;
+    expr::build_expr(expr_pair, param_pool)
 }
 
 /// Engine-facing language door for `::…` system scripts: source text +
-/// param pool → pure-data [`sys::SysScript`] syntax, or a labeled refusal.
+/// param pool + session stamp → pure-data [`sys::SysScript`] syntax, or a
+/// labeled refusal.
 ///
 /// The pure-data half of the sys-op lift. The grammar walk, option
 /// validation, and constant folding land here (parse zone, no engine
@@ -156,21 +254,17 @@ pub fn parse_expressions(
 /// `parse::sys`, which lifts this `SysScript` into its `SysOp`. See
 /// [`sys`]'s module doc for the seam.
 ///
-/// Current validity for embedded `@` clauses defaults to the open (latest)
-/// coordinate, exactly as [`parse_script`] does; fixed-rule binding is
-/// exec-tier and never happens here.
-pub fn parse_sys(src: &str, param_pool: &BTreeMap<String, DataValue>) -> Result<sys::SysScript> {
-    let cur_vld = MAX_VALIDITY_TS;
-    let parsed = KyzoScriptParser::parse(Rule::script, src)
-        .map_err(|err| {
-            let span = match err.location {
-                InputLocation::Pos(p) => SourceSpan(p, 0),
-                InputLocation::Span((start, end)) => SourceSpan(start, end - start),
-            };
-            ParseError { span }
-        })?
-        .next()
-        .unwrap();
+/// `cur_vld` is the live session coordinate for embedded `@` clauses —
+/// same contract as [`parse_script`]. Fixed-rule binding is exec-tier.
+pub fn parse_sys(
+    src: &str,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+) -> Result<sys::SysScript> {
+    let parsed = expect_root_pair(
+        KyzoScriptParser::parse(Rule::script, src).map_err(pest_to_parse_error)?,
+        "a script root",
+    )?;
     match parsed.as_rule() {
         Rule::sys_script => sys::parse_sys(parsed.into_inner(), param_pool, cur_vld),
         _ => bail!(UnexpectedRule(parsed.extract_span())),
@@ -179,17 +273,12 @@ pub fn parse_sys(src: &str, param_pool: &BTreeMap<String, DataValue>) -> Result<
 
 /// Parse a standalone column type string.
 pub fn parse_type(src: &str) -> Result<crate::schema::NullableColType> {
-    let parsed = KyzoScriptParser::parse(Rule::col_type_with_term, src)
-        .map_err(|err| {
-            let span = match err.location {
-                InputLocation::Pos(p) => SourceSpan(p, 0),
-                InputLocation::Span((start, end)) => SourceSpan(start, end - start),
-            };
-            ParseError { span }
-        })?
-        .next()
-        .unwrap();
-    schema::parse_nullable_type(parsed.into_inner().next().unwrap())
+    let parsed = expect_root_pair(
+        KyzoScriptParser::parse(Rule::col_type_with_term, src).map_err(pest_to_parse_error)?,
+        "a col_type_with_term root",
+    )?;
+    let type_pair = parsed.children().expect("the column type")?;
+    schema::parse_nullable_type(type_pair)
 }
 
 pub(crate) trait ExtractSpan {
@@ -327,11 +416,4 @@ impl<'a> IntoChildren<'a> for Pair<'a> {
             inner: self.into_inner(),
         }
     }
-}
-
-/// Session clock for `@ NOW` — kept for internal lifts; public door uses
-/// [`MAX_VALIDITY_TS`] until an engine wrapper threads the live stamp.
-#[allow(dead_code)]
-pub(crate) fn default_cur_vld() -> ValidityTs {
-    MAX_VALIDITY_TS
 }

@@ -12,10 +12,10 @@ pub struct StoredRelationMetadata {
 }
 
 /// Write shape that decides which stored columns an input must satisfy.
-/// Variants are constructed by the mutation tier (unlanded) and by tests
-/// that exercise [`CompatibleInputSchema::prove`].
+///
+/// Constructed by the mutation / catalog tier when proving an input schema
+/// against stored metadata via [`CompatibleInputSchema::prove`].
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[allow(dead_code)]
 pub enum RelationWriteShape {
     /// Full put: every stored key and non-key must be provided (or defaulted).
     Put,

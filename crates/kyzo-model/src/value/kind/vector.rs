@@ -13,7 +13,9 @@
 //! storage position. Every component passes through Num's float law
 //! (`-0.0 → +0.0`, one canonical NaN); exact float is the authority.
 //! Quantized codes are a rebuildable projection of those floats
-//! (engine-side, [OPEN] to #207/#308) — never a second identity.
+//! (engine-side, [OPEN] cross-story dep #308 under epic #353) — never a
+//! second identity. This value-plane identity seat is complete; quantized
+//! traversal/rerank wiring is not inventable here.
 //!
 //! Similarity metrics are operator/query context, never part of identity.
 //! Storage order (dimension first, then elementwise float order) is
