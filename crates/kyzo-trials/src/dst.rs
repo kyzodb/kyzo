@@ -3005,21 +3005,22 @@ pub mod storage_campaign_lanes {
             cert.record_digest(),
         );
 
-        // Feed advancing catalog_generation into LocalProjection; origin binding
-        // (AcceptedReplica / ReplicaKey) must stay unchanged across rebuilds.
+        // Feed advancing local_schema_cut digests into LocalProjection; origin
+        // binding (AcceptedReplica / ReplicaKey) must stay unchanged across rebuilds.
         let mut prior_origin = None;
-        for catalog_generation in [0u64, 1, 2, 7, 99] {
+        for cut_tag in [0u8, 1, 2, 7, 99] {
+            let local_schema_cut = [cut_tag; 32];
             let projection =
-                LocalProjection::from_certificate(cert.clone(), catalog_generation);
+                LocalProjection::from_certificate(cert.clone(), local_schema_cut);
             assert_eq!(
-                projection.catalog_generation(),
-                catalog_generation,
-                "LocalProjection rebuilds under advancing catalog_generation"
+                projection.local_schema_cut(),
+                &local_schema_cut,
+                "LocalProjection rebuilds under advancing local_schema_cut"
             );
             assert_eq!(
                 projection.origin(),
                 &cert,
-                "catalog_generation={catalog_generation}: AcceptedReplica origin unchanged"
+                "local_schema_cut={cut_tag}: AcceptedReplica origin unchanged"
             );
             let again = ReplicaKey::derive(
                 projection.origin().origin_store(),
@@ -3029,14 +3030,14 @@ pub mod storage_campaign_lanes {
             );
             assert_eq!(
                 origin_key, again,
-                "catalog_generation={catalog_generation}: ReplicaKey interpretation unchanged"
+                "local_schema_cut={cut_tag}: ReplicaKey interpretation unchanged"
             );
             match &prior_origin {
                 None => prior_origin = Some(projection.origin().clone()),
                 Some(prev) => assert_eq!(
                     prev,
                     projection.origin(),
-                    "origin certificate identity stable across catalog advance"
+                    "origin certificate identity stable across schema-cut advance"
                 ),
             }
         }
@@ -3209,10 +3210,13 @@ pub mod storage_campaign_lanes {
             payload: vec![1, 2, 3],
         })
         .expect("leave-is-free pack with wrapped salt");
+        let root = campaign_content_root(0x80);
+        let verified =
+            ImportCapability::after_chain_root_verify(root, root).expect("equal roots");
         assert_eq!(
             import_verify(
                 &pack,
-                ImportCapability::after_chain_verify(),
+                verified,
                 ObjectsCompleteness::Complete,
                 &ledger,
             ),
