@@ -28,7 +28,9 @@ mod verbs;
 use std::fmt;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+use resonance::ResonanceCheck;
 
 /// The one closed sum of every verb's own closed refusal type. `main`'s
 /// dispatch match arm is the only place a per-verb error is converted into
@@ -65,6 +67,37 @@ impl fmt::Display for XtaskError {
     }
 }
 
+/// Authority verb mode — check / write / update-baseline are mutually
+/// exclusive; `(write, update_baseline)` both-true is unconstructable
+/// (clap `authority_mode` group + this enum).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum GateMode {
+    /// Self-test + ratchet + artifact freshness (default).
+    #[default]
+    Check,
+    /// Regenerate authority/authority-map.json and authority-report.md.
+    Write,
+    /// Tighten crates/xtask/authority-baseline.json to current finding counts.
+    UpdateBaseline,
+}
+
+impl GateMode {
+    /// Map clap's mutually-exclusive flags onto the closed mode sum.
+    /// `(true, true)` is rejected by clap's `authority_mode` group before
+    /// this runs — the illegal state is unconstructable.
+    fn from_flags(write: bool, update_baseline: bool) -> Self {
+        match (write, update_baseline) {
+            (false, false) => Self::Check,
+            (true, false) => Self::Write,
+            (false, true) => Self::UpdateBaseline,
+            (true, true) => unreachable!(
+                "clap authority_mode group forbids --write with --update-baseline"
+            ),
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "xtask",
@@ -97,30 +130,23 @@ enum Verb {
     BuildScriptSandbox,
     /// The Type Authority Graph: self-test, ratchet, artifact freshness.
     Authority {
-        /// Regenerate authority/authority-map.json and
-        /// authority-report.md instead of running the gate check (the
-        /// ported tool's report mode).
-        #[arg(long)]
+        /// Regenerate authority artifacts (`GateMode::Write`).
+        #[arg(long, group = "authority_mode")]
         write: bool,
-        /// Tighten crates/xtask/authority-baseline.json to the current tree's
-        /// finding counts instead of running the gate check.
-        #[arg(long)]
+        /// Tighten the authority baseline (`GateMode::UpdateBaseline`).
+        #[arg(long, group = "authority_mode")]
         update_baseline: bool,
     },
     /// The five resonance-gate ontology checks (story #81).
     Resonance {
-        /// Run a single named check instead of all five.
-        #[arg(long)]
-        only: Option<String>,
+        /// Run a single named check instead of all five (+ later ratchets).
+        #[arg(long, value_enum)]
+        only: Option<ResonanceCheck>,
     },
     /// The full first-party test suite.
     Test,
-    /// Former sealed-door feature tests (no-op; doors deleted).
-    TestFeatures,
     /// The whole test suite under the `release-checked` profile (overflow-checks live).
     TestReleaseChecked,
-    /// Former sealed-door feature tests under release-checked (no-op; doors deleted).
-    TestFeaturesReleaseChecked,
     /// Run the freshly-built binary in the container.
     Run {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -178,18 +204,16 @@ fn main() -> ExitCode {
         Verb::Authority {
             write,
             update_baseline,
-        } => match (write, update_baseline) {
-            (true, _) => verbs::authority_write().map_err(XtaskError::Authority),
-            (false, true) => verbs::authority_update_baseline().map_err(XtaskError::Authority),
-            (false, false) => verbs::authority().map_err(XtaskError::Authority),
+        } => match GateMode::from_flags(write, update_baseline) {
+            GateMode::Check => verbs::authority().map_err(XtaskError::Authority),
+            GateMode::Write => verbs::authority_write().map_err(XtaskError::Authority),
+            GateMode::UpdateBaseline => {
+                verbs::authority_update_baseline().map_err(XtaskError::Authority)
+            }
         },
-        Verb::Resonance { only } => resonance::run(only.as_deref()).map_err(XtaskError::Resonance),
+        Verb::Resonance { only } => resonance::run(only).map_err(XtaskError::Resonance),
         Verb::Test => verbs::test().map_err(XtaskError::Process),
-        Verb::TestFeatures => verbs::test_features().map_err(XtaskError::Process),
         Verb::TestReleaseChecked => verbs::test_release_checked().map_err(XtaskError::Process),
-        Verb::TestFeaturesReleaseChecked => {
-            verbs::test_features_release_checked().map_err(XtaskError::Process)
-        }
         Verb::Run { args } => verbs::run_bin(&args).map_err(XtaskError::Process),
         Verb::Bench { graphs } => verbs::bench(&graphs).map_err(XtaskError::Bench),
         Verb::FetchBenchData => verbs::fetch_bench_data().map_err(XtaskError::Dataset),

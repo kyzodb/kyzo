@@ -13,6 +13,7 @@
 //! fingerprint, and the fmt/clippy package lists below are the justfile's
 //! own hand-maintained `-p` lists, ported unchanged).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -187,13 +188,6 @@ pub fn test() -> Result<(), ProcessFailure> {
     run_step("test", cmd)
 }
 
-/// Former bench-internals/fuzz-internals lib tests. Sealed doors are gone;
-/// this step is a no-op so the gate does not keep a ghost feature alive.
-pub fn test_features() -> Result<(), ProcessFailure> {
-    println!("test-features: skipped — sealed doors deleted (bench_api/fuzz_api)");
-    Ok(())
-}
-
 /// The whole first-party test suite repeated under the `release-checked`
 /// profile (overflow-checks + debug-assertions live, release-speed
 /// optimization) — the gate's mechanical proof that no raw stored-byte
@@ -217,13 +211,6 @@ pub fn test_release_checked() -> Result<(), ProcessFailure> {
     run_step("test-release-checked", cmd)
 }
 
-/// Former bench-internals/fuzz-internals lib tests under release-checked.
-/// Sealed doors are gone; no-op (see `test_features`).
-pub fn test_features_release_checked() -> Result<(), ProcessFailure> {
-    println!("test-features-release-checked: skipped — sealed doors deleted (bench_api/fuzz_api)");
-    Ok(())
-}
-
 /// Run the freshly-built binary IN the container: `cargo xtask run -- <args>`.
 pub fn run_bin(args: &[String]) -> Result<(), ProcessFailure> {
     let mut cmd = Command::new("cargo");
@@ -243,17 +230,165 @@ pub fn run_bin(args: &[String]) -> Result<(), ProcessFailure> {
 
 /// Sealed opponent-pin identity for the TC SNAP corpus. Not CLI-softenable:
 /// any other pin (including a convenient strawman) is [`BenchRefuse::OpponentPin`].
-pub const BENCH_OPPONENT_PIN: &str = "kyzo.bench.tc.snap.corpus.v1";
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OpponentPin(String);
 
-/// Sealed expected answer digests (graph → digest identity). Answer-agreement
-/// compares observed digests against these exactly — never a stub that always
-/// agrees. Real SHA-256 campaign digests supersede these identities in later
-/// tasks; the comparison law is already fail-closed equality.
-pub const SEALED_EXPECTED_DIGESTS: &[(&str, &str)] = &[
-    ("email-Eu-core", "kyzo.tc.digest.email-Eu-core.v1"),
-    ("p2p-Gnutella08", "kyzo.tc.digest.p2p-Gnutella08.v1"),
-    ("wiki-Vote", "kyzo.tc.digest.wiki-Vote.v1"),
-];
+impl OpponentPin {
+    /// The only lawful pin identity. Not softenable.
+    pub const SEALED: &'static str = "kyzo.bench.tc.snap.corpus.v1";
+
+    /// The sealed pin the verb arms.
+    pub fn sealed() -> Self {
+        Self(Self::SEALED.to_string())
+    }
+
+    /// Evidence-construction only — [`BenchAdmit::admit`] refuses any value
+    /// other than [`Self::sealed`].
+    pub fn from_raw(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OpponentPin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// SNAP corpus graph identity — never a bare `String` at honesty sites.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(transparent)]
+pub struct GraphName(String);
+
+impl GraphName {
+    pub fn new(s: impl AsRef<str>) -> Self {
+        Self(s.as_ref().to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for GraphName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<&str> for GraphName {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for GraphName {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl PartialEq<&str> for GraphName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+/// Real SHA-256 digest bytes (FIPS 180-4). Never a placeholder identity string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Sha256([u8; 32]);
+
+impl Sha256 {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn hash(data: &[u8]) -> Self {
+        Self(sha256(data))
+    }
+
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        let hex = hex.trim().as_bytes();
+        if hex.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, slot) in out.iter_mut().enumerate() {
+            let hi = from_hex_nibble(hex[i * 2])?;
+            let lo = from_hex_nibble(hex[i * 2 + 1])?;
+            *slot = (hi << 4) | lo;
+        }
+        Some(Self(out))
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    pub fn to_hex(&self) -> String {
+        let mut out = String::with_capacity(64);
+        for byte in &self.0 {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out
+    }
+}
+
+impl fmt::Display for Sha256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+fn from_hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// One graph's sealed or observed answer digest.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GraphDigest {
+    pub graph: GraphName,
+    pub digest: Sha256,
+}
+
+impl GraphDigest {
+    pub fn new(graph: GraphName, digest: Sha256) -> Self {
+        Self { graph, digest }
+    }
+}
+
+impl FromIterator<GraphDigest> for BTreeMap<GraphName, Sha256> {
+    fn from_iter<I: IntoIterator<Item = GraphDigest>>(iter: I) -> Self {
+        iter.into_iter()
+            .map(|GraphDigest { graph, digest }| (graph, digest))
+            .collect()
+    }
+}
+
+/// Corpus graph names the opponent pin covers (names only — not digests).
+pub fn corpus_graph_names() -> [GraphName; 3] {
+    [
+        GraphName::new("email-Eu-core"),
+        GraphName::new("p2p-Gnutella08"),
+        GraphName::new("wiki-Vote"),
+    ]
+}
+
+/// Production sealed answer digests. Empty until the pinned corpus is run and
+/// real SHA-256 answers are sealed. **No placeholder identity strings** —
+/// an empty map makes answer-agreement refuse.
+pub fn production_sealed_digests() -> BTreeMap<GraphName, Sha256> {
+    BTreeMap::new()
+}
 
 /// Memory and wall-time caps the bench must run under. Both axes required;
 /// missing either is [`BenchRefuse::Caps`] (no silent "unlimited" default).
@@ -314,13 +449,13 @@ pub enum CommitState {
 /// Evidence the honesty chain must prove before emit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BenchEvidence {
-    /// Must equal [`BENCH_OPPONENT_PIN`] exactly.
-    pub opponent_pin: String,
+    /// Must equal [`OpponentPin::sealed`] exactly.
+    pub opponent_pin: OpponentPin,
     /// Both memory and time caps, or refuse [`BenchRefuse::Caps`].
     pub caps: Option<BenchCaps>,
     pub commit: CommitState,
-    /// Observed digests keyed by graph name — compared to [`SEALED_EXPECTED_DIGESTS`].
-    pub observed_digests: Vec<(String, String)>,
+    /// Observed digests keyed by graph — compared to the sealed digest set.
+    pub observed_digests: BTreeMap<GraphName, Sha256>,
 }
 
 /// Every way the bench verb refuses an unprovable number (seat 87).
@@ -332,12 +467,16 @@ pub enum BenchRefuse {
     Caps,
     /// Tagged-clean commit missing (dirty working tree or untagged HEAD).
     Untagged,
-    /// Observed digests failed answer-agreement against sealed expected digests.
+    /// Observed digests failed answer-agreement against sealed expected digests,
+    /// or no sealed digests exist yet (`expected` / `observed` may be absent).
     AnswerAgreement {
-        graph: String,
-        expected: String,
-        observed: String,
+        graph: GraphName,
+        expected: Option<Sha256>,
+        observed: Option<Sha256>,
     },
+    /// In-process TC measurement infrastructure is not built (no runner to
+    /// produce real observed digests). Loud refuse — never an empty stub body.
+    MeasurementUnbuilt,
 }
 
 impl fmt::Display for BenchRefuse {
@@ -345,7 +484,8 @@ impl fmt::Display for BenchRefuse {
         match self {
             BenchRefuse::OpponentPin => write!(
                 f,
-                "bench: opponent pin missing or softenable — required pin is {BENCH_OPPONENT_PIN}"
+                "bench: opponent pin missing or softenable — required pin is {}",
+                OpponentPin::SEALED
             ),
             BenchRefuse::Caps => write!(
                 f,
@@ -359,9 +499,24 @@ impl fmt::Display for BenchRefuse {
                 graph,
                 expected,
                 observed,
-            } => write!(
+            } => {
+                let exp = expected
+                    .as_ref()
+                    .map(Sha256::to_hex)
+                    .unwrap_or_else(|| "<absent — no sealed digest>".to_string());
+                let obs = observed
+                    .as_ref()
+                    .map(Sha256::to_hex)
+                    .unwrap_or_else(|| "<absent>".to_string());
+                write!(
+                    f,
+                    "bench: answer-agreement failed for graph {graph}: expected {exp}, observed {obs}"
+                )
+            }
+            BenchRefuse::MeasurementUnbuilt => write!(
                 f,
-                "bench: answer-agreement failed for graph {graph}: expected {expected}, observed {observed}"
+                "bench: measurement infrastructure unbuilt — cannot compute real observed digests \
+                 (no in-process TC runner); refusing rather than emitting a stub"
             ),
         }
     }
@@ -370,18 +525,27 @@ impl fmt::Display for BenchRefuse {
 impl std::error::Error for BenchRefuse {}
 
 /// Proof that all four honesty conditions held. Private field: the only
-/// constructor is [`BenchAdmit::admit`]. Emit takes this by value — a happy
-/// path that skips a condition is unconstructable.
+/// constructors are [`BenchAdmit::admit`] / [`BenchAdmit::admit_with_sealed`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct BenchAdmit {
     _proof: (),
 }
 
 impl BenchAdmit {
-    /// Gate every refuse condition. Returns [`BenchAdmit`] only when opponent
-    /// pin, caps, tagged-clean commit, and answer-agreement all hold.
+    /// Gate against [`production_sealed_digests`]. Empty sealed set →
+    /// [`BenchRefuse::AnswerAgreement`] (corpus unsealed — no placeholders).
     pub fn admit(evidence: &BenchEvidence) -> Result<Self, BenchRefuse> {
-        if evidence.opponent_pin != BENCH_OPPONENT_PIN {
+        Self::admit_with_sealed(evidence, &production_sealed_digests())
+    }
+
+    /// Gate every refuse condition against an explicit sealed digest map.
+    /// Fixtures inject **real** SHA-256 values; production passes the empty
+    /// sealed map until the corpus seals answers.
+    pub fn admit_with_sealed(
+        evidence: &BenchEvidence,
+        sealed: &BTreeMap<GraphName, Sha256>,
+    ) -> Result<Self, BenchRefuse> {
+        if evidence.opponent_pin != OpponentPin::sealed() {
             return Err(BenchRefuse::OpponentPin);
         }
         let Some(caps) = evidence.caps else {
@@ -396,26 +560,32 @@ impl BenchAdmit {
                 return Err(BenchRefuse::Untagged);
             }
         }
-        for &(graph, expected) in SEALED_EXPECTED_DIGESTS {
-            let observed = evidence
-                .observed_digests
-                .iter()
-                .find(|(g, _)| g == graph)
-                .map(|(_, d)| d.as_str());
-            match observed {
-                Some(d) if d == expected => {}
-                Some(d) => {
+        if sealed.is_empty() {
+            let graph = corpus_graph_names()
+                .into_iter()
+                .next()
+                .expect("corpus names non-empty");
+            return Err(BenchRefuse::AnswerAgreement {
+                graph: graph.clone(),
+                expected: None,
+                observed: evidence.observed_digests.get(&graph).copied(),
+            });
+        }
+        for (graph, expected) in sealed {
+            match evidence.observed_digests.get(graph) {
+                Some(obs) if obs == expected => {}
+                Some(obs) => {
                     return Err(BenchRefuse::AnswerAgreement {
-                        graph: graph.to_string(),
-                        expected: expected.to_string(),
-                        observed: d.to_string(),
+                        graph: graph.clone(),
+                        expected: Some(*expected),
+                        observed: Some(*obs),
                     });
                 }
                 None => {
                     return Err(BenchRefuse::AnswerAgreement {
-                        graph: graph.to_string(),
-                        expected: expected.to_string(),
-                        observed: String::new(),
+                        graph: graph.clone(),
+                        expected: Some(*expected),
+                        observed: None,
                     });
                 }
             }
@@ -424,27 +594,45 @@ impl BenchAdmit {
     }
 }
 
-/// Emit is only reachable with a [`BenchAdmit`] token — numbers without the
-/// four proofs are unrepresentable at the type level.
-pub fn emit_bench(_admit: BenchAdmit) {
-    // T1: admit is the seal; measurement + number lines land in later tasks.
+/// Run the measurement, compute real observed digests, then gate through
+/// [`BenchAdmit::admit`]. If measurement infra is unbuilt →
+/// [`BenchRefuse::MeasurementUnbuilt`] — never an empty body / `BTreeMap::new()` stub.
+pub fn emit_bench(
+    opponent_pin: OpponentPin,
+    caps: BenchCaps,
+    commit: CommitState,
+    graphs: &[GraphName],
+) -> Result<BenchAdmit, BenchRefuse> {
+    let observed_digests = measure_corpus(graphs)?;
+    let evidence = BenchEvidence {
+        opponent_pin,
+        caps: Some(caps),
+        commit,
+        observed_digests,
+    };
+    BenchAdmit::admit(&evidence)
 }
 
-/// In-process honesty skeleton (story #326): run the four-condition gate
-/// before any measure. Emit only via [`BenchAdmit::admit`] — no shell-out.
-/// Live evidence without sealed digests refuses
-/// [`BenchRefuse::AnswerAgreement`] (fail closed, not a stub agree).
-pub fn bench(_graphs: &[String]) -> Result<(), BenchRefuse> {
-    let evidence = BenchEvidence {
-        opponent_pin: BENCH_OPPONENT_PIN.to_string(),
-        caps: Some(BenchCaps::required()),
-        commit: probe_commit_state(),
-        // T1: no in-process measure yet — empty observed digests refuse
-        // answer-agreement against sealed expected digests (not a stub agree).
-        observed_digests: Vec::new(),
+/// In-process TC measurement over the pinned corpus. Infrastructure is not
+/// wired yet (`examples/bench_tc` deleted with the condemned shell runner) —
+/// refuse loudly; never return empty digests.
+fn measure_corpus(_graphs: &[GraphName]) -> Result<BTreeMap<GraphName, Sha256>, BenchRefuse> {
+    Err(BenchRefuse::MeasurementUnbuilt)
+}
+
+/// In-process honesty path: measure → admit. No shell-out, no stub emit.
+pub fn bench(graphs: &[String]) -> Result<(), BenchRefuse> {
+    let graphs: Vec<GraphName> = if graphs.is_empty() {
+        corpus_graph_names().to_vec()
+    } else {
+        graphs.iter().map(|g| GraphName::new(g)).collect()
     };
-    let admit = BenchAdmit::admit(&evidence)?;
-    emit_bench(admit);
+    let _admit = emit_bench(
+        OpponentPin::sealed(),
+        BenchCaps::required(),
+        probe_commit_state(),
+        &graphs,
+    )?;
     Ok(())
 }
 
@@ -461,7 +649,7 @@ pub const BENCH_MANIFEST_PATH: &str = "bench/manifest.json";
 /// One graph entry: canonical URL plus SHA-256 of the uncompressed edge list.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct GraphManifestEntry {
-    pub name: String,
+    pub name: GraphName,
     pub url: String,
     pub sha256: String,
 }
@@ -480,10 +668,10 @@ pub enum DatasetRefuse {
     /// Manifest JSON did not parse.
     ManifestParse(String),
     /// Named graph has no manifest entry.
-    UnknownGraph(String),
+    UnknownGraph(GraphName),
     /// Computed SHA-256 of bytes ≠ sealed manifest hash (tamper / wrong mirror).
     Sha256Mismatch {
-        graph: String,
+        graph: GraphName,
         expected: String,
         observed: String,
     },
@@ -532,17 +720,17 @@ pub fn load_dataset_manifest(root: &Path) -> Result<DatasetManifest, DatasetRefu
 /// Compute SHA-256 of `bytes` and compare to the sealed hex digest.
 /// Real compute + compare — not a filename or length check.
 pub fn verify_sha256(
-    graph: &str,
+    graph: &GraphName,
     bytes: &[u8],
     expected_hex: &str,
 ) -> Result<(), DatasetRefuse> {
-    let observed = sha256_hex(bytes);
+    let observed = Sha256::hash(bytes).to_hex();
     let expected = expected_hex.trim().to_ascii_lowercase();
     if observed == expected {
         Ok(())
     } else {
         Err(DatasetRefuse::Sha256Mismatch {
-            graph: graph.to_string(),
+            graph: graph.clone(),
             expected,
             observed,
         })
@@ -552,14 +740,14 @@ pub fn verify_sha256(
 /// Verify uncompressed graph bytes against a manifest entry (by name).
 pub fn verify_graph_bytes(
     manifest: &DatasetManifest,
-    graph: &str,
+    graph: &GraphName,
     bytes: &[u8],
 ) -> Result<(), DatasetRefuse> {
     let entry = manifest
         .graphs
         .iter()
-        .find(|g| g.name == graph)
-        .ok_or_else(|| DatasetRefuse::UnknownGraph(graph.to_string()))?;
+        .find(|g| &g.name == graph)
+        .ok_or_else(|| DatasetRefuse::UnknownGraph(graph.clone()))?;
     verify_sha256(graph, bytes, &entry.sha256)
 }
 
@@ -633,12 +821,7 @@ fn download_gunzip(url: &str) -> Result<Vec<u8>, DatasetRefuse> {
 
 /// SHA-256 hex digest (lowercase). Pure in-process — the manifest meter.
 pub fn sha256_hex(data: &[u8]) -> String {
-    let digest = sha256(data);
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
+    Sha256::hash(data).to_hex()
 }
 
 /// FIPS 180-4 SHA-256 (in-process; no filename/length shortcut).
@@ -785,44 +968,71 @@ fn probe_commit_state() -> CommitState {
 mod bench_refuse_fixtures {
     use super::*;
 
-    fn sealed_digests() -> Vec<(String, String)> {
-        SEALED_EXPECTED_DIGESTS
-            .iter()
-            .map(|(g, d)| ((*g).to_string(), (*d).to_string()))
+    /// Fixture sealed digests are **real** SHA-256 of known corpus labels —
+    /// never placeholder identity strings like `kyzo.tc.digest.*`.
+    fn fixture_sealed_digests() -> BTreeMap<GraphName, Sha256> {
+        corpus_graph_names()
+            .into_iter()
+            .map(|name| {
+                GraphDigest::new(
+                    name.clone(),
+                    Sha256::hash(format!("fixture-answer:{}", name.as_str()).as_bytes()),
+                )
+            })
             .collect()
     }
 
-    fn lawful_evidence() -> BenchEvidence {
+    fn lawful_evidence(sealed: &BTreeMap<GraphName, Sha256>) -> BenchEvidence {
         BenchEvidence {
-            opponent_pin: BENCH_OPPONENT_PIN.to_string(),
+            opponent_pin: OpponentPin::sealed(),
             caps: Some(BenchCaps::required()),
             commit: CommitState::CleanTagged {
                 tag: "bench-seal-v1".to_string(),
                 sha: "abc123".to_string(),
             },
-            observed_digests: sealed_digests(),
+            observed_digests: sealed.clone(),
         }
     }
 
     #[test]
+    fn production_sealed_digests_are_absent_not_placeholders() {
+        assert!(
+            production_sealed_digests().is_empty(),
+            "no placeholder sealed-digest constant may exist until the corpus seals real SHA-256"
+        );
+    }
+
+    #[test]
     fn fixture_refuse_opponent_pin_missing() {
-        let mut e = lawful_evidence();
-        e.opponent_pin.clear();
-        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::OpponentPin));
+        let sealed = fixture_sealed_digests();
+        let mut e = lawful_evidence(&sealed);
+        e.opponent_pin = OpponentPin::from_raw("");
+        assert_eq!(
+            BenchAdmit::admit_with_sealed(&e, &sealed),
+            Err(BenchRefuse::OpponentPin)
+        );
     }
 
     #[test]
     fn fixture_refuse_opponent_pin_strawman_not_softenable() {
-        let mut e = lawful_evidence();
-        e.opponent_pin = "kyzo.bench.strawman.easy.v0".to_string();
-        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::OpponentPin));
+        let sealed = fixture_sealed_digests();
+        let mut e = lawful_evidence(&sealed);
+        e.opponent_pin = OpponentPin::from_raw("kyzo.bench.strawman.easy.v0");
+        assert_eq!(
+            BenchAdmit::admit_with_sealed(&e, &sealed),
+            Err(BenchRefuse::OpponentPin)
+        );
     }
 
     #[test]
     fn fixture_refuse_caps_missing() {
-        let mut e = lawful_evidence();
+        let sealed = fixture_sealed_digests();
+        let mut e = lawful_evidence(&sealed);
         e.caps = None;
-        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::Caps));
+        assert_eq!(
+            BenchAdmit::admit_with_sealed(&e, &sealed),
+            Err(BenchRefuse::Caps)
+        );
     }
 
     #[test]
@@ -839,40 +1049,44 @@ mod bench_refuse_fixtures {
 
     #[test]
     fn fixture_refuse_untagged_dirty() {
-        let mut e = lawful_evidence();
+        let sealed = fixture_sealed_digests();
+        let mut e = lawful_evidence(&sealed);
         e.commit = CommitState::Dirty;
-        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::Untagged));
+        assert_eq!(
+            BenchAdmit::admit_with_sealed(&e, &sealed),
+            Err(BenchRefuse::Untagged)
+        );
     }
 
     #[test]
     fn fixture_refuse_untagged_no_tag() {
-        let mut e = lawful_evidence();
+        let sealed = fixture_sealed_digests();
+        let mut e = lawful_evidence(&sealed);
         e.commit = CommitState::Untagged {
             sha: "abc123".to_string(),
         };
-        assert_eq!(BenchAdmit::admit(&e), Err(BenchRefuse::Untagged));
+        assert_eq!(
+            BenchAdmit::admit_with_sealed(&e, &sealed),
+            Err(BenchRefuse::Untagged)
+        );
     }
 
     #[test]
     fn fixture_refuse_answer_agreement_mismatch() {
-        let mut e = lawful_evidence();
-        e.observed_digests = vec![
-            ("email-Eu-core".to_string(), "forged-digest".to_string()),
-            (
-                "p2p-Gnutella08".to_string(),
-                "kyzo.tc.digest.p2p-Gnutella08.v1".to_string(),
-            ),
-            ("wiki-Vote".to_string(), "kyzo.tc.digest.wiki-Vote.v1".to_string()),
-        ];
-        match BenchAdmit::admit(&e) {
+        let sealed = fixture_sealed_digests();
+        let mut e = lawful_evidence(&sealed);
+        let graph = GraphName::new("email-Eu-core");
+        let forged = Sha256::hash(b"forged-digest-bytes");
+        e.observed_digests.insert(graph.clone(), forged);
+        match BenchAdmit::admit_with_sealed(&e, &sealed) {
             Err(BenchRefuse::AnswerAgreement {
-                graph,
+                graph: g,
                 expected,
                 observed,
             }) => {
-                assert_eq!(graph, "email-Eu-core");
-                assert_eq!(expected, "kyzo.tc.digest.email-Eu-core.v1");
-                assert_eq!(observed, "forged-digest");
+                assert_eq!(g, graph);
+                assert_eq!(expected, sealed.get(&graph).copied());
+                assert_eq!(observed, Some(forged));
             }
             other => panic!("expected AnswerAgreement, got {other:?}"),
         }
@@ -880,18 +1094,50 @@ mod bench_refuse_fixtures {
 
     #[test]
     fn fixture_refuse_answer_agreement_missing_observed() {
-        let mut e = lawful_evidence();
+        let sealed = fixture_sealed_digests();
+        let mut e = lawful_evidence(&sealed);
         e.observed_digests.clear();
         assert!(matches!(
+            BenchAdmit::admit_with_sealed(&e, &sealed),
+            Err(BenchRefuse::AnswerAgreement {
+                observed: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fixture_refuse_answer_agreement_when_production_sealed_absent() {
+        let sealed = fixture_sealed_digests();
+        let e = lawful_evidence(&sealed);
+        assert!(matches!(
             BenchAdmit::admit(&e),
-            Err(BenchRefuse::AnswerAgreement { .. })
+            Err(BenchRefuse::AnswerAgreement {
+                expected: None,
+                ..
+            })
         ));
     }
 
     #[test]
     fn admit_all_four_conditions_yields_emit_token() {
-        let admit = BenchAdmit::admit(&lawful_evidence()).expect("lawful evidence must admit");
-        emit_bench(admit);
+        let sealed = fixture_sealed_digests();
+        let _admit = BenchAdmit::admit_with_sealed(&lawful_evidence(&sealed), &sealed)
+            .expect("lawful evidence must admit");
+    }
+
+    #[test]
+    fn emit_bench_refuses_measurement_unbuilt_not_empty_stub() {
+        let err = emit_bench(
+            OpponentPin::sealed(),
+            BenchCaps::required(),
+            CommitState::CleanTagged {
+                tag: "bench-seal-v1".into(),
+                sha: "abc123".into(),
+            },
+            &corpus_graph_names(),
+        );
+        assert_eq!(err, Err(BenchRefuse::MeasurementUnbuilt));
     }
 }
 
@@ -912,9 +1158,10 @@ mod dataset_manifest_fixtures {
     /// compare), not a filename/length check. Same length as the sealed bytes.
     #[test]
     fn fixture_refuse_tampered_bytes_fail_sha256_manifest() {
+        let graph = GraphName::new("email-Eu-core");
         let sealed = b"0 1\n2 3\n2 4\nemail-Eu-core fixture edge list\n";
         let expected = sha256_hex(sealed);
-        verify_sha256("email-Eu-core", sealed, &expected)
+        verify_sha256(&graph, sealed, &expected)
             .expect("sealed bytes must verify against their own SHA-256");
 
         let mut tampered = sealed.to_vec();
@@ -926,13 +1173,13 @@ mod dataset_manifest_fixtures {
             "adversary preserves length; length check would falsely pass"
         );
 
-        match verify_sha256("email-Eu-core", &tampered, &expected) {
+        match verify_sha256(&graph, &tampered, &expected) {
             Err(DatasetRefuse::Sha256Mismatch {
-                graph,
+                graph: g,
                 expected: exp,
                 observed,
             }) => {
-                assert_eq!(graph, "email-Eu-core");
+                assert_eq!(g, graph);
                 assert_eq!(exp, expected);
                 assert_ne!(observed, expected);
                 assert_eq!(observed, sha256_hex(&tampered));
@@ -943,21 +1190,22 @@ mod dataset_manifest_fixtures {
 
     #[test]
     fn fixture_manifest_entry_verify_uses_sha256_not_name() {
+        let graph = GraphName::new("wiki-Vote");
         let manifest = DatasetManifest {
             graphs: vec![GraphManifestEntry {
-                name: "wiki-Vote".into(),
+                name: graph.clone(),
                 url: "https://snap.stanford.edu/data/wiki-Vote.txt.gz".into(),
                 sha256: sha256_hex(b"honest wiki-Vote bytes"),
             }],
         };
         // Same graph name, wrong bytes → refuse (name match is not integrity).
-        match verify_graph_bytes(&manifest, "wiki-Vote", b"tampered wiki-Vote bytes!!!!") {
-            Err(DatasetRefuse::Sha256Mismatch { graph, .. }) => {
-                assert_eq!(graph, "wiki-Vote");
+        match verify_graph_bytes(&manifest, &graph, b"tampered wiki-Vote bytes!!!!") {
+            Err(DatasetRefuse::Sha256Mismatch { graph: g, .. }) => {
+                assert_eq!(g, graph);
             }
             other => panic!("expected Sha256Mismatch, got {other:?}"),
         }
-        verify_graph_bytes(&manifest, "wiki-Vote", b"honest wiki-Vote bytes")
+        verify_graph_bytes(&manifest, &graph, b"honest wiki-Vote bytes")
             .expect("honest bytes must pass");
     }
 }

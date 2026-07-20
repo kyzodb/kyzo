@@ -8,8 +8,8 @@
  */
 
 //! The `gate` verb: the one-command seal. Runs env-report, check, fmt,
-//! clippy, unsafe, pure-rust, authority, test, and test-features, plus the
-//! resonance suite, in that dependency order — cheapest/most-arguable
+//! clippy, unsafe, pure-rust, authority, test, and test-release-checked,
+//! plus the resonance suite, in that dependency order — cheapest/most-arguable
 //! checks first, the full test suite last — stopping at the first failure
 //! (story #322's Engineering Choice, task 1).
 
@@ -39,9 +39,7 @@ pub enum GateError {
     Authority(AuthorityError),
     Resonance(ResonanceError),
     Test(ProcessFailure),
-    TestFeatures(ProcessFailure),
     TestReleaseChecked(ProcessFailure),
-    TestFeaturesReleaseChecked(ProcessFailure),
 }
 
 impl fmt::Display for GateError {
@@ -59,12 +57,8 @@ impl fmt::Display for GateError {
             GateError::Authority(e) => write!(f, "authority step failed: {e}"),
             GateError::Resonance(e) => write!(f, "resonance step failed: {e}"),
             GateError::Test(e) => write!(f, "test step failed: {e}"),
-            GateError::TestFeatures(e) => write!(f, "test-features step failed: {e}"),
             GateError::TestReleaseChecked(e) => {
                 write!(f, "test-release-checked step failed: {e}")
-            }
-            GateError::TestFeaturesReleaseChecked(e) => {
-                write!(f, "test-features-release-checked step failed: {e}")
             }
         }
     }
@@ -83,9 +77,7 @@ pub fn run() -> Result<(), GateError> {
     verbs::authority().map_err(GateError::Authority)?;
     resonance::run(None).map_err(GateError::Resonance)?;
     verbs::test().map_err(GateError::Test)?;
-    verbs::test_features().map_err(GateError::TestFeatures)?;
     verbs::test_release_checked().map_err(GateError::TestReleaseChecked)?;
-    verbs::test_features_release_checked().map_err(GateError::TestFeaturesReleaseChecked)?;
 
     println!("=== GATE PASSED ===");
     Ok(())

@@ -16,7 +16,33 @@
 
 use std::fmt;
 
+use clap::ValueEnum;
+
 use crate::{allowlist, checks, fsutil};
+
+/// The five story #81 resonance ontology checks. Illegal check names are
+/// unconstructable at the CLI (`--only` is a [`ValueEnum`], not a free string).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum ResonanceCheck {
+    DeriveBypass,
+    PanicLint,
+    CopyDetector,
+    DeadCodeRatchet,
+    AgreementRegistry,
+}
+
+impl ResonanceCheck {
+    fn as_meter_name(self) -> &'static str {
+        match self {
+            ResonanceCheck::DeriveBypass => "derive_bypass",
+            ResonanceCheck::PanicLint => "panic_lint",
+            ResonanceCheck::CopyDetector => "copy_detector",
+            ResonanceCheck::DeadCodeRatchet => "dead_code_ratchet",
+            ResonanceCheck::AgreementRegistry => "agreement_registry",
+        }
+    }
+}
 
 /// Every way the resonance verb can refuse. Closed and phase-specific: a
 /// caller (the gate summary, a human reading the exit) always knows which
@@ -68,11 +94,10 @@ impl fmt::Display for ResonanceError {
 
 impl std::error::Error for ResonanceError {}
 
-/// Run the resonance gate. `only`, if given, runs a single named check
-/// (`derive_bypass`, `panic_lint`, `copy_detector`, `dead_code_ratchet`,
-/// `agreement_registry`, `allocation_admission`, `boundary_closure`,
-/// `unchecked_arith`) — what the bite-proof harness uses.
-pub fn run(only: Option<&str>) -> Result<(), ResonanceError> {
+/// Run the resonance gate. `only`, if given, runs a single story #81 check.
+/// When `only` is `None`, all five plus the later ratchets
+/// (`allocation_admission`, `boundary_closure`, `unchecked_arith`) run.
+pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
     let root = fsutil::repo_root().map_err(ResonanceError::RepoRoot)?;
     let files = fsutil::walk_engine_sources(&root).map_err(ResonanceError::SourceScan)?;
     if files.is_empty() {
@@ -81,48 +106,49 @@ pub fn run(only: Option<&str>) -> Result<(), ResonanceError> {
     let allow = allowlist::load(&root).map_err(ResonanceError::AllowlistLoad)?;
 
     let mut failing_checks: Vec<&'static str> = Vec::new();
-    let want = |name: &str| only.map(|o| o == name).unwrap_or(true);
+    let want = |check: ResonanceCheck| only.map(|o| o == check).unwrap_or(true);
+    let run_later_ratchets = only.is_none();
 
-    if want("derive_bypass") && !run_derive_bypass(&files, &allow) {
-        failing_checks.push("derive_bypass");
+    if want(ResonanceCheck::DeriveBypass) && !run_derive_bypass(&files, &allow) {
+        failing_checks.push(ResonanceCheck::DeriveBypass.as_meter_name());
     }
-    if want("panic_lint") {
+    if want(ResonanceCheck::PanicLint) {
         match run_panic_lint(&files, &allow, &root) {
             Ok(true) => {}
-            Ok(false) => failing_checks.push("panic_lint"),
+            Ok(false) => failing_checks.push(ResonanceCheck::PanicLint.as_meter_name()),
             Err(source) => {
                 return Err(ResonanceError::CheckConfig {
-                    check: "panic_lint",
+                    check: ResonanceCheck::PanicLint.as_meter_name(),
                     source,
                 });
             }
         }
     }
-    if want("copy_detector") && !run_copy_detector(&files, &allow) {
-        failing_checks.push("copy_detector");
+    if want(ResonanceCheck::CopyDetector) && !run_copy_detector(&files, &allow) {
+        failing_checks.push(ResonanceCheck::CopyDetector.as_meter_name());
     }
-    if want("dead_code_ratchet") && !run_dead_code_ratchet(&files, &allow) {
-        failing_checks.push("dead_code_ratchet");
+    if want(ResonanceCheck::DeadCodeRatchet) && !run_dead_code_ratchet(&files, &allow) {
+        failing_checks.push(ResonanceCheck::DeadCodeRatchet.as_meter_name());
     }
-    if want("agreement_registry") {
+    if want(ResonanceCheck::AgreementRegistry) {
         match run_agreement_registry(&files, &root) {
             Ok(true) => {}
-            Ok(false) => failing_checks.push("agreement_registry"),
+            Ok(false) => failing_checks.push(ResonanceCheck::AgreementRegistry.as_meter_name()),
             Err(source) => {
                 return Err(ResonanceError::CheckConfig {
-                    check: "agreement_registry",
+                    check: ResonanceCheck::AgreementRegistry.as_meter_name(),
                     source,
                 });
             }
         }
     }
-    if want("allocation_admission") && !run_allocation_admission(&files) {
+    if run_later_ratchets && !run_allocation_admission(&files) {
         failing_checks.push("allocation_admission");
     }
-    if want("boundary_closure") && !run_boundary_closure(&files) {
+    if run_later_ratchets && !run_boundary_closure(&files) {
         failing_checks.push("boundary_closure");
     }
-    if want("unchecked_arith") {
+    if run_later_ratchets {
         match run_unchecked_arith(&files, &root) {
             Ok(true) => {}
             Ok(false) => failing_checks.push("unchecked_arith"),
