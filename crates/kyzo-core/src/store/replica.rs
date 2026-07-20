@@ -1264,12 +1264,16 @@ impl CrossingEnvelope {
 ///
 /// Opaque: only [`validate_crossing_before_lower`] mints this. Holding this
 /// token means kind/schema/authority/context/evidence/status/capabilities
-/// were checked and [`verify_replica`] accepted custody.
+/// were checked, [`verify_replica`] accepted custody, and the certificate's
+/// record content digest is bound — the token authorizes that record only
+/// (seat 69: no confused-deputy reuse across same-kind records).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrossingValidated {
     custody: ReplicaCustody,
     origin_schema_cut: [u8; 32],
     kind: CrossingKind,
+    /// Certificate [`AdmissionCertificate::record_digest`] this validation sealed.
+    record_content_digest: [u8; 32],
     _priv: (),
 }
 
@@ -1287,6 +1291,16 @@ impl CrossingValidated {
     /// Validated ONTOK kind.
     pub fn kind(&self) -> CrossingKind {
         self.kind
+    }
+
+    /// Record content digest this token validated — identity gate for lowering.
+    pub fn record_digest(&self) -> &[u8; 32] {
+        &self.record_content_digest
+    }
+
+    /// Alias for [`Self::record_digest`].
+    pub fn record_content_digest(&self) -> &[u8; 32] {
+        self.record_digest()
     }
 }
 
@@ -1309,6 +1323,12 @@ pub enum CrossingRefuse {
     #[error("KindMismatch: record kind disagreed with CrossingValidated kind")]
     #[diagnostic(code(store::replica::crossing_kind_mismatch))]
     KindMismatch,
+    /// Record content digest ≠ digest sealed on [`CrossingValidated`] (seat 69).
+    #[error(
+        "RecordIdentityMismatch: record digest disagreed with CrossingValidated record digest"
+    )]
+    #[diagnostic(code(store::replica::crossing_record_identity))]
+    RecordIdentityMismatch,
     /// Envelope schema version ≠ certificate protocol_version.
     #[error("SchemaVersionMismatch: envelope schema version disagreed with certificate")]
     #[diagnostic(code(store::replica::crossing_schema_version))]
@@ -1425,6 +1445,7 @@ pub fn validate_crossing_before_lower(
         custody,
         origin_schema_cut: *certificate.schema_cut(),
         kind: envelope.kind(),
+        record_content_digest: *certificate.record_digest(),
         _priv: (),
     })
 }

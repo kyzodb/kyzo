@@ -275,6 +275,10 @@ pub(crate) fn lower_after_crossing(
     if record_kind != validated.kind() {
         return Err(CrossingRefuse::KindMismatch);
     }
+    // Seat 69: token binds the certificate record digest — same-kind B refuses.
+    if record.digest().as_digest() != validated.record_digest() {
+        return Err(CrossingRefuse::RecordIdentityMismatch);
+    }
     // Consume origin_schema_cut: seal lowering under it (not a local Catalog cut).
     // under_local_cut / replay_digest constrain meaning to this cut in release.
     let origin_schema_cut = *validated.origin_schema_cut();
@@ -835,15 +839,14 @@ mod tests {
     }
 
     /// NASTY (guardian, seat 69): a `CrossingValidated` minted for record A must
-    /// NOT authorize lowering an unrelated same-kind record B. The token binds
-    /// kind only — confused deputy. RED until `CrossingValidated` binds the
-    /// validated record identity and `lower_after_crossing` gates on it.
+    /// NOT authorize lowering an unrelated same-kind record B. Token binds the
+    /// validated record content digest; `lower_after_crossing` gates on it.
     #[test]
     fn crossing_validation_for_a_must_not_authorize_lowering_b() {
         use crate::store::epoch::FenceEpoch;
         use crate::store::replica::{
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
-            CrossingStatus, OriginContinuity, PostStateRoot, ScopeManifestDigest,
+            CrossingRefuse, CrossingStatus, OriginContinuity, PostStateRoot, ScopeManifestDigest,
             ScopeManifestStatus, ScopeManifestTable, mint_admission_certificate,
             sign_admission_parts, validate_crossing_before_lower,
         };
@@ -890,6 +893,11 @@ mod tests {
             &CrossingCapabilitySet::new(),
         )
         .expect("validate A");
+        assert_eq!(
+            validated.record_digest(),
+            record.digest().as_digest(),
+            "token must seal A's certificate record digest"
+        );
 
         // B: a DIFFERENT Claim record that never passed crossing validation.
         let b = admit_kind(construct::claim(
@@ -910,10 +918,16 @@ mod tests {
             b.kind(),
             "same kind — only an identity binding can refuse B"
         );
+        assert_ne!(
+            record.digest().as_digest(),
+            b.digest().as_digest(),
+            "A and B must have distinct content digests"
+        );
 
-        assert!(
-            super::lower_after_crossing(&b, &validated).is_err(),
-            "CONFUSED DEPUTY: CrossingValidated minted for record A authorized lowering unrelated record B — token binds kind, not identity (seat 69)"
+        assert_eq!(
+            super::lower_after_crossing(&b, &validated),
+            Err(CrossingRefuse::RecordIdentityMismatch),
+            "CONFUSED DEPUTY: CrossingValidated minted for record A authorized lowering unrelated record B — token must bind record identity (seat 69)"
         );
     }
 
