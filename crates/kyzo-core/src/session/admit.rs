@@ -51,7 +51,9 @@ use crate::session::generation::{CatalogGeneration, RelationGeneration};
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::authority::WriteAuthority;
 use crate::store::keys::Secret;
-use crate::store::merkle::{GENESIS_ROOT, RootChain};
+use crate::store::merkle::{
+    ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, StateRoot,
+};
 use crate::store::commit_cap::SnapshotFork;
 use crate::store::open::{
     EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
@@ -59,13 +61,16 @@ use crate::store::open::{
 use crate::store::ReadTx;
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
-    PostStateRoot, ReplicaRefuse, ScopeManifestDigest, mint_admission_certificate,
-    sign_admission_parts,
+    AuthorizingKeyTable, PostStateRoot, ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus,
+    ScopeManifestTable, mint_admission_certificate, sign_admission_parts, verify_replica,
 };
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
 use crate::store::{Storage, WriteTx};
 use crate::store::FenceEpoch;
+use rand::RngCore;
+use std::fmt;
+use std::sync::{Arc, Mutex};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
@@ -229,22 +234,56 @@ impl RecordCore {
     }
 }
 
-/// Live inputs required to mint an [`AdmissionCertificate`].
-///
-/// Engine-held live admission seats — genesis StoreId + write token + root
-/// chain tip. Clone copies the token bytes (certificate signing material);
-/// affine SweepDoor open still consumes a moved [`WriteAuthority`] elsewhere.
-#[derive(Clone, Debug)]
-pub(crate) struct LiveAdmissionSeats {
-    store_id: StoreId,
-    write_token: [u8; 32],
+/// Advancing chain tip + retained certificates (shared across [`Engine`] clones).
+#[derive(Debug)]
+struct LiveAdmissionChain {
     root_chain: RootChain,
     origin_commit: CommitOrdinal,
+    /// Certificates attached after admit — never mint-and-drop.
+    retained_certificates: Vec<AdmissionCertificate>,
+}
+
+/// Engine-held live admission seats — genesis StoreId, write token (SweepDoor),
+/// distinct ed25519 signing seed, and advancing root / commit / scope spine.
+///
+/// Signing seed ≠ write_token; authorizing_key_id is the verifying public key
+/// bytes (never equal to the seed). Affine SweepDoor open still consumes a
+/// moved [`WriteAuthority`] elsewhere.
+#[derive(Clone)]
+pub(crate) struct LiveAdmissionSeats {
+    store_id: StoreId,
+    /// Opaque write-token identity — SweepDoor presentation only; never cert seed.
+    /// Gap: SweepDoor presentation from seats is not yet a live caller.
+    #[allow(dead_code)]
+    write_token: [u8; 32],
+    /// Origin-only ed25519 signing seed (OS entropy at genesis). Never equals id.
+    signing_seed: [u8; 32],
+    /// Public authorizing key id = ed25519 verifying key bytes.
+    authorizing_key_id: AuthorizingKeyId,
     scope_manifest_digest: ScopeManifestDigest,
+    /// Public verifying material for self-verify after mint (receivers' table shape).
+    authorizing_keys: AuthorizingKeyTable,
+    scopes: ScopeManifestTable,
+    chain: Arc<Mutex<LiveAdmissionChain>>,
+}
+
+impl fmt::Debug for LiveAdmissionSeats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LiveAdmissionSeats")
+            .field("store_id", &self.store_id)
+            .field("write_token", &"<redacted>")
+            .field("signing_seed", &"<redacted-signing-seed>")
+            .field("authorizing_key_id", &self.authorizing_key_id)
+            .field("scope_manifest_digest", &self.scope_manifest_digest)
+            .field("authorizing_keys", &self.authorizing_keys)
+            .field("scopes", &self.scopes)
+            .field("chain", &self.chain)
+            .finish()
+    }
 }
 
 impl LiveAdmissionSeats {
-    /// Mint seats via store [`genesis`] — real identity, never placeholders.
+    /// Mint seats via store [`genesis`] — real identity + asymmetric cert spine.
     pub(crate) fn mint_genesis() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -261,12 +300,65 @@ impl LiveAdmissionSeats {
                 snapshot_fork: SnapshotFork::No,
             },
         });
+        let store_id = sealed.store_id();
+        let write_token = *sealed.write_authority().token_id();
+
+        // Distinct OS entropy — never derived from write_token / token_id.
+        let mut signing_seed = [0u8; 32];
+        rand::rng().fill_bytes(&mut signing_seed);
+        let origin_key = AuthorizingKey::mint_with_verifying_id(signing_seed);
+        let authorizing_key_id = origin_key.id();
+        debug_assert_ne!(
+            *authorizing_key_id.as_bytes(),
+            signing_seed,
+            "authorizing_key_id must not equal signing seed"
+        );
+
+        let scope_manifest_digest = genesis_scope_manifest_digest(
+            store_id,
+            authorizing_key_id,
+            origin_key.verifying_bytes(),
+        );
+
+        let mut authorizing_keys = AuthorizingKeyTable::new();
+        authorizing_keys.insert(origin_key);
+
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope_manifest_digest, ScopeManifestStatus::Verified);
+
+        // Genesis accountability link so the tip is not forever the empty
+        // GENESIS_ROOT sentinel — binds store + authorizing public key.
+        let mut root_chain = RootChain::empty();
+        let genesis_content = {
+            let mut h = Sha256::new();
+            h.update(b"kyzo.admission.seats.genesis_root.v1");
+            h.update(store_id.as_bytes());
+            h.update(authorizing_key_id.as_bytes());
+            StateRoot::from_digest(h.finalize().into())
+        };
+        let genesis_link = ChainedStateRoot::mint(
+            store_id,
+            FenceEpoch::genesis(store_id),
+            CommitOrdinal::ZERO,
+            genesis_content,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        let _ = root_chain.append(genesis_link);
+
         Self {
-            store_id: sealed.store_id(),
-            write_token: *sealed.write_authority().token_id(),
-            root_chain: RootChain::empty(),
-            origin_commit: CommitOrdinal::ZERO,
-            scope_manifest_digest: unscoped_scope_manifest_digest(),
+            store_id,
+            write_token,
+            signing_seed,
+            authorizing_key_id,
+            scope_manifest_digest,
+            authorizing_keys,
+            scopes,
+            chain: Arc::new(Mutex::new(LiveAdmissionChain {
+                root_chain,
+                origin_commit: CommitOrdinal::ZERO,
+                retained_certificates: Vec::new(),
+            })),
         }
     }
 
@@ -274,9 +366,13 @@ impl LiveAdmissionSeats {
         self.store_id
     }
 
-    /// The live [`RootChain`] tip these seats carry (tamper-evidence expected).
-    pub(crate) fn root_chain(&self) -> &RootChain {
-        &self.root_chain
+    /// Snapshot of the live [`RootChain`] tip (tamper-evidence expected).
+    pub(crate) fn root_chain(&self) -> RootChain {
+        self.chain
+            .lock()
+            .expect("live admission chain lock")
+            .root_chain
+            .clone()
     }
 
     /// Capture [`LiveCertificateInputs`] from these seats + a live catalog clock.
@@ -284,26 +380,91 @@ impl LiveAdmissionSeats {
         &self,
         catalog_generation: CatalogGeneration,
     ) -> LiveCertificateInputs {
-        let authority = WriteAuthority::mint(self.store_id, self.write_token);
-        LiveCertificateInputs::from_live(
+        let chain = self.chain.lock().expect("live admission chain lock");
+        LiveCertificateInputs::from_authorizing(
             catalog_generation,
-            &self.root_chain,
-            &authority,
-            self.origin_commit,
+            &chain.root_chain,
+            *self.authorizing_key_id.as_bytes(),
+            self.signing_seed,
+            chain.origin_commit,
             self.scope_manifest_digest,
         )
     }
+
+    /// Persist + verify a minted certificate on the admit path (not mint-and-drop).
+    ///
+    /// Advances `root_chain` / `origin_commit` so subsequent certs bind a real
+    /// post-state tip. Gap: SweepDoor durable `Committed` ordinals remain the
+    /// history-authoritative floor — seats advance the admission cert spine
+    /// here; syncing seats from SweepDoor seals is not yet a live door.
+    pub(crate) fn attach_verified(
+        &self,
+        record: &KyzoRecord,
+        certificate: AdmissionCertificate,
+    ) -> Result<(), AdmitRefuse> {
+        if certificate.record_digest() != record.digest().as_digest() {
+            return Err(AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
+        }
+        // Verify with public table material only (receiver shape).
+        let _custody = verify_replica(
+            &certificate,
+            self.store_id,
+            certificate.origin_commit(),
+            &self.authorizing_keys,
+            &self.scopes,
+            None, // Gap: OriginContinuity → Queryable; PendingAnchor is honest here.
+        )?;
+
+        let mut chain = self
+            .chain
+            .lock()
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?;
+        let next_commit = chain
+            .origin_commit
+            .successor()
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?;
+        let content_root = StateRoot::from_digest(*record.digest().as_digest());
+        let predecessor = chain.root_chain.prior_root();
+        let link = ChainedStateRoot::mint(
+            self.store_id,
+            FenceEpoch::genesis(self.store_id),
+            next_commit,
+            content_root,
+            predecessor,
+            ChainLinkKind::Ordinary,
+        );
+        chain
+            .root_chain
+            .append(link)
+            .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?;
+        chain.origin_commit = next_commit;
+        chain.retained_certificates.push(certificate);
+        Ok(())
+    }
 }
 
-fn unscoped_scope_manifest_digest() -> ScopeManifestDigest {
+/// Scope digest bound to this Store's authorizing public key (not H(fixed alone)).
+fn genesis_scope_manifest_digest(
+    store_id: StoreId,
+    key_id: AuthorizingKeyId,
+    verifying_bytes: [u8; 32],
+) -> ScopeManifestDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.scope.manifest.unscoped.v1");
+    h.update(b"kyzo.scope.manifest.v1");
+    h.update(store_id.as_bytes());
+    h.update(key_id.as_bytes());
+    h.update(verifying_bytes);
     ScopeManifestDigest::from_digest(h.finalize().into())
 }
 
-/// Wired from Catalog generation, RootChain tip, and session
-/// [`WriteAuthority`] — never 0x11..0x66 placeholders. Construct only via
-/// [`LiveCertificateInputs::from_live`].
+fn fresh_signing_seed() -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    rand::rng().fill_bytes(&mut seed);
+    seed
+}
+
+/// Wired from Catalog generation, RootChain tip, and distinct authorizing
+/// key id + ed25519 seed — never 0x11..0x66 placeholders; never id==seed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveCertificateInputs {
     catalog_generation: CatalogGeneration,
@@ -320,7 +481,12 @@ impl LiveCertificateInputs {
     ///
     /// - `schema_cut` ← Catalog generation
     /// - predecessor / post_state_root ← RootChain tip (or [`GENESIS_ROOT`])
-    /// - authorizing_key_id + signature material ← [`WriteAuthority`]
+    /// - authorizing_key_id = public id; authorizing_key_material = ed25519 seed
+    ///
+    /// Callers that only hold [`WriteAuthority`] still go through this door:
+    /// the write token is **not** used as signing material (seed is fresh OS
+    /// entropy; id is the derived verifying key). Prefer seats /
+    /// [`from_authorizing`] when a stable origin key is held.
     pub(crate) fn from_live(
         catalog_generation: CatalogGeneration,
         root_chain: &RootChain,
@@ -328,6 +494,32 @@ impl LiveCertificateInputs {
         origin_commit: CommitOrdinal,
         scope_manifest_digest: ScopeManifestDigest,
     ) -> Self {
+        let _store = write_authority.store_id();
+        let seed = fresh_signing_seed();
+        let key = AuthorizingKey::mint_with_verifying_id(seed);
+        Self::from_authorizing(
+            catalog_generation,
+            root_chain,
+            *key.id().as_bytes(),
+            seed,
+            origin_commit,
+            scope_manifest_digest,
+        )
+    }
+
+    /// Origin path: public id + distinct ed25519 seed (id must not equal seed).
+    pub(crate) fn from_authorizing(
+        catalog_generation: CatalogGeneration,
+        root_chain: &RootChain,
+        authorizing_key_id: [u8; 32],
+        authorizing_key_material: [u8; 32],
+        origin_commit: CommitOrdinal,
+        scope_manifest_digest: ScopeManifestDigest,
+    ) -> Self {
+        debug_assert_ne!(
+            authorizing_key_id, authorizing_key_material,
+            "authorizing_key_id must not equal authorizing_key_material (seed)"
+        );
         let (predecessor_history_digest, post_state_root) = match root_chain.links().last() {
             Some(link) => (
                 *link.predecessor_root().as_bytes(),
@@ -335,13 +527,12 @@ impl LiveCertificateInputs {
             ),
             None => (*GENESIS_ROOT.as_bytes(), *GENESIS_ROOT.as_bytes()),
         };
-        let token = *write_authority.token_id();
         Self {
             catalog_generation,
             predecessor_history_digest,
             post_state_root,
-            authorizing_key_id: token,
-            authorizing_key_material: token,
+            authorizing_key_id,
+            authorizing_key_material,
             origin_commit,
             scope_manifest_digest,
         }
@@ -1703,7 +1894,7 @@ impl<T: WriteTx> SessionTx<T> {
         valid: ValidityTs,
     ) -> Result<()> {
         let live = db.live_certificate_inputs(&self.store, relation_store.id);
-        let (record, _cert) = admit_sugar_relation_row(
+        let (record, cert) = admit_sugar_relation_row(
             db.store_id(),
             &live,
             relation_store.name.as_str(),
@@ -1712,6 +1903,7 @@ impl<T: WriteTx> SessionTx<T> {
             valid,
         )?;
         let _permit = record.durable_write_permit();
+        db.admission.attach_verified(&record, cert)?;
         Ok(())
     }
 
@@ -1725,7 +1917,7 @@ impl<T: WriteTx> SessionTx<T> {
     ) -> Result<()> {
         let live = db.live_certificate_inputs(&self.store, relation_store.id);
         let keys_len = relation_store.metadata.keys.len().min(key_cols.len());
-        let (record, _cert) = admit_sugar_retract(
+        let (record, cert) = admit_sugar_retract(
             db.store_id(),
             &live,
             relation_store.name.as_str(),
@@ -1733,6 +1925,7 @@ impl<T: WriteTx> SessionTx<T> {
             valid,
         )?;
         let _permit = record.durable_write_permit();
+        db.admission.attach_verified(&record, cert)?;
         Ok(())
     }
 

@@ -402,7 +402,8 @@ impl<S: Storage> Engine<S> {
         budget: std::num::NonZeroU64,
     ) -> Result<crate::session::verify::RootVerifyOutcome> {
         let tx = self.store.read_tx()?;
-        crate::session::verify::verify(&tx, self.admission.root_chain(), cut, budget)
+        let chain = self.admission.root_chain();
+        crate::session::verify::verify(&tx, &chain, cut, budget)
     }
 
     // ─────────────────────────────────────────────────────────────────────
