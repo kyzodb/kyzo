@@ -12,9 +12,18 @@
 //! There is no per-write projection menu. Each call recomputes from the
 //! record's typed fields — never a memoized cache on the record.
 //! Every lowered row carries the source [`RecordId`].
+//!
+//! Crossing / federation receive (#270 T1): a foreign record may lower only
+//! after [`crate::store::replica::validate_crossing_before_lower`] mints
+//! [`CrossingValidated`]. [`lower_after_crossing`] is that door — local
+//! [`lower_record`] remains the same-store path.
 
 use crate::data::statement::{OntokKind, StatementContext, StatementSource};
 use crate::project::dimension::{LoweredRow, RecordLowering, StatementDimension};
+use crate::store::replica::{
+    AdmissionCertificate, CrossingCapabilitySet, CrossingContext, CrossingEnvelope,
+    CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingStatus, CrossingValidated,
+};
 use kyzo_model::value::canonical::encode_owned;
 use kyzo_model::value::DataValue;
 
@@ -105,6 +114,9 @@ pub(crate) fn dimensions_entailed(kind: OntokKind) -> &'static [StatementDimensi
 ///
 /// Recomputes from typed fields on every call. Same record → same rows/bytes.
 /// Every row carries [`RecordId`] so projections resolve home (#268 T3).
+///
+/// **Local / same-store path only.** Crossing receive must use
+/// [`lower_after_crossing`] after [`validate_crossing_before_lower`].
 pub(crate) fn lower_record(record: &KyzoRecord) -> RecordLowering {
     let source = record.record_id();
     let mut rows = Vec::with_capacity(4);
@@ -113,6 +125,80 @@ pub(crate) fn lower_record(record: &KyzoRecord) -> RecordLowering {
         rows.push(LoweredRow::new(dimension, source, payload));
     }
     RecordLowering::from_ordered_rows(rows)
+}
+
+/// Map ONTOK kind to the crossing wire tag (#270 T1).
+pub(crate) fn crossing_kind_from_ontok(kind: OntokKind) -> CrossingKind {
+    match kind {
+        OntokKind::Entity => CrossingKind::Entity,
+        OntokKind::Event => CrossingKind::Event,
+        OntokKind::State => CrossingKind::State,
+        OntokKind::Role => CrossingKind::Role,
+        OntokKind::Relation => CrossingKind::Relation,
+        OntokKind::Claim => CrossingKind::Claim,
+        OntokKind::Evidence => CrossingKind::Evidence,
+        OntokKind::Context => CrossingKind::Context,
+        OntokKind::Concept => CrossingKind::Concept,
+        OntokKind::Rule => CrossingKind::Rule,
+        OntokKind::Derivation => CrossingKind::Derivation,
+        OntokKind::Invalidation => CrossingKind::Invalidation,
+    }
+}
+
+/// Build a crossing envelope from an admitted record + its certificate.
+///
+/// Evidence demand follows semantic surface: interpreted surfaces declare
+/// evidence required; [`SemanticSurface::None`] does not.
+pub(crate) fn crossing_envelope_from_record(
+    record: &KyzoRecord,
+    certificate: &AdmissionCertificate,
+    status: CrossingStatus,
+    shared_capabilities: CrossingCapabilitySet,
+) -> CrossingEnvelope {
+    let evidence_demand = match record.surface() {
+        SemanticSurface::None => CrossingEvidenceDemand::NotRequired,
+        SemanticSurface::Embedding | SemanticSurface::FullText | SemanticSurface::Lexical => {
+            CrossingEvidenceDemand::DeclaredRequired
+        }
+    };
+    let evidence = match record.evidence() {
+        Some(coords) => CrossingEvidence::Present(*coords.hash().as_digest()),
+        None => CrossingEvidence::Absent,
+    };
+    let context = match record.context() {
+        StatementContext::Unscoped => CrossingContext::Unscoped,
+        StatementContext::Scoped(id) => CrossingContext::Scoped(*id.as_digest()),
+    };
+    CrossingEnvelope::new(
+        crossing_kind_from_ontok(record.kind()),
+        *certificate.protocol_version(),
+        *certificate.schema_cut(),
+        certificate.authorizing_key_id(),
+        context,
+        evidence_demand,
+        evidence,
+        status,
+        shared_capabilities,
+    )
+}
+
+/// Lower a crossing record only after full contract validation (#270 T1).
+///
+/// Requires [`CrossingValidated`] from [`validate_crossing_before_lower`].
+/// Origin schema cut on the token is the sealed meaning — never a local
+/// Catalog reinterpretation.
+pub(crate) fn lower_after_crossing(
+    record: &KyzoRecord,
+    validated: &CrossingValidated,
+) -> RecordLowering {
+    debug_assert_eq!(
+        crossing_kind_from_ontok(record.kind()),
+        validated.kind(),
+        "crossing lower kind must match validated envelope"
+    );
+    let _origin_cut = validated.origin_schema_cut();
+    let _custody = validated.custody();
+    lower_record(record)
 }
 
 fn encode_dimension_row(record: &KyzoRecord, dimension: StatementDimension) -> Vec<u8> {
@@ -522,5 +608,72 @@ mod tests {
     fn record_id_is_derived_view_of_digest() {
         let record = admit_claim_record();
         assert_eq!(record.record_id().as_bytes(), record.digest().as_digest());
+    }
+
+    /// Crossing lower requires CrossingValidated — same rows as local lower
+    /// once the token is present (#270 T1).
+    #[test]
+    fn lower_after_crossing_matches_local_lower() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::replica::{
+            AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
+            CrossingEvidenceDemand, CrossingStatus, OriginContinuity, PostStateRoot,
+            ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, mint_admission_certificate,
+            sign_admission_parts, validate_crossing_before_lower,
+        };
+        use crate::store::sweep::CommitOrdinal;
+
+        let record = admit_claim_record();
+        let key = AuthorizingKey::mint_with_verifying_id([0x27; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x51; 32]);
+        let mut parts = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store: record.store_id(),
+            origin_epoch: FenceEpoch::genesis(record.store_id()),
+            origin_commit: CommitOrdinal::ZERO,
+            schema_cut: [0x51; 32],
+            record_digest: *record.digest().as_digest(),
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts.signature = sign_admission_parts(&parts, &key).expect("sign");
+        let cert = mint_admission_certificate(parts).expect("mint");
+
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key);
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+
+        // Claim with None surface → evidence not required.
+        let envelope = super::crossing_envelope_from_record(
+            &record,
+            &cert,
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        );
+        assert_eq!(
+            envelope.evidence_demand(),
+            CrossingEvidenceDemand::NotRequired
+        );
+
+        let validated = validate_crossing_before_lower(
+            &cert,
+            &envelope,
+            record.store_id(),
+            CommitOrdinal::ZERO,
+            &keys,
+            &scopes,
+            Some(&OriginContinuity::mint()),
+            &CrossingCapabilitySet::new(),
+        )
+        .expect("crossing contract");
+        assert_eq!(
+            super::lower_after_crossing(&record, &validated),
+            lower_record(&record)
+        );
     }
 }

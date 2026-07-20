@@ -691,14 +691,66 @@ impl KyzoRecord {
     /// Type-entailed deterministic lowering to the closed six-dimension set.
     ///
     /// Recomputes from typed fields every call — never memoized (#268 T2).
+    /// **Local / same-store path.** Crossing receive must use
+    /// [`KyzoRecord::lower_crossing`] after
+    /// [`crate::store::replica::validate_crossing_before_lower`].
     pub fn lower(&self) -> crate::project::dimension::RecordLowering {
         lowering::lower_record(self)
+    }
+
+    /// Lower only after full crossing-contract validation (#270 T1).
+    ///
+    /// Requires [`CrossingValidated`] — kind/schema/authority/context/
+    /// evidence/status/capabilities already checked; missing declared
+    /// evidence refused typed, not silently dropped.
+    pub fn lower_crossing(
+        &self,
+        validated: &crate::store::replica::CrossingValidated,
+    ) -> crate::project::dimension::RecordLowering {
+        lowering::lower_after_crossing(self, validated)
     }
 }
 
 /// Type-entailed deterministic lowering (#268 T2).
 #[path = "admit_lowering.rs"]
 pub(crate) mod lowering;
+
+pub(crate) use lowering::{crossing_envelope_from_record, lower_after_crossing};
+
+/// Validate the full crossing contract then lower (#270 T1).
+///
+/// Runs [`validate_crossing_before_lower`] then [`lower_after_crossing`].
+/// Missing declared evidence → [`AdmitRefuse::Crossing`] wrapping
+/// [`crate::store::replica::CrossingRefuse::DeclaredEvidenceMissing`];
+/// ScopeUnknown/Revoked/Denied stay distinct from RetentionDeclined via
+/// [`crate::store::replica::CrossingRefuse::Replica`].
+#[allow(clippy::too_many_arguments)] // crossing door carries explicit trust + envelope seats
+pub(crate) fn validate_and_lower_crossing(
+    record: &KyzoRecord,
+    certificate: &AdmissionCertificate,
+    local_store: StoreId,
+    local_commit: CommitOrdinal,
+    authorizing_keys: &AuthorizingKeyTable,
+    scopes: &ScopeManifestTable,
+    continuity: Option<&crate::store::replica::OriginContinuity>,
+    held_capabilities: &crate::store::replica::CrossingCapabilitySet,
+    status: crate::store::replica::CrossingStatus,
+    shared_capabilities: crate::store::replica::CrossingCapabilitySet,
+) -> Result<crate::project::dimension::RecordLowering, AdmitRefuse> {
+    use crate::store::replica::validate_crossing_before_lower;
+    let envelope = crossing_envelope_from_record(record, certificate, status, shared_capabilities);
+    let validated = validate_crossing_before_lower(
+        certificate,
+        &envelope,
+        local_store,
+        local_commit,
+        authorizing_keys,
+        scopes,
+        continuity,
+        held_capabilities,
+    )?;
+    Ok(lower_after_crossing(record, &validated))
+}
 
 /// Inputs for the admission door (private mint path).
 ///
@@ -787,6 +839,10 @@ pub enum AdmitRefuse {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Replica(#[from] ReplicaRefuse),
+    /// Crossing-contract refuse (full validation before lowering — #270 T1).
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Crossing(#[from] crate::store::replica::CrossingRefuse),
     /// Sugar statement construction failed (empty predicate / relation name).
     #[error("SugarStatementRefuse: relational sugar could not form a typed statement")]
     #[diagnostic(code(session::admit::sugar_statement_refuse))]

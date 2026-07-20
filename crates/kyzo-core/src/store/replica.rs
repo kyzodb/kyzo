@@ -12,14 +12,18 @@
 //! Owns: [`AdmissionCertificate`], [`verify_replica`], [`ReplicaKey`],
 //! [`ReplicaCustody`], PendingAnchor anchoring, [`LocalProjection`] contract,
 //! [`AuthorizingKey`] / [`AuthorizingKeyTable`], [`ScopeManifestTable`],
-//! [`OriginContinuity`].
+//! [`OriginContinuity`], and full crossing-contract validation before lowering
+//! ([`validate_crossing_before_lower`], [`CrossingEnvelope`], [`CrossingValidated`]).
 //!
 //! Bans: reshape/re-author of certified meaning; in-place local reinterpretation
 //! under a local Catalog cut; strict-contiguous-only or head-attested catch-up;
 //! exposing never-anchored PendingAnchor as queryable; caller-asserted
 //! `scope_ok` / `anchored` verdicts; authenticity that ignores the sealed
 //! signature; symmetric MAC standing in for certificate signatures (ed25519
-//! public-key verify only — receivers must not hold the origin seed).
+//! public-key verify only — receivers must not hold the origin seed);
+//! lowering a crossing record without validating kind/schema/authority/
+//! context/evidence/status/capabilities; folding ScopeUnknown/Revoked/Denied
+//! into RetentionDeclined; silent drop of missing declared evidence.
 //!
 //! Authoring mints at `session/admit.rs` through [`mint_admission_certificate`];
 //! replicas verify + mint custody — never re-author.
@@ -419,6 +423,20 @@ impl AdmissionCertificate {
         self.post_state_root
     }
 
+    /// Protocol / format version tag sealed into the certificate.
+    pub fn protocol_version(&self) -> &[u8; 8] {
+        &self.protocol_version
+    }
+
+    /// Origin schema cut sealed into the certificate (§69).
+    ///
+    /// Crossing receivers interpret as-of this cut forever. A local Catalog
+    /// cut never rewrites this field in place — only [`LocalProjection`] or a
+    /// newly admitted derived Record may carry a different reading.
+    pub fn schema_cut(&self) -> &[u8; 32] {
+        &self.schema_cut
+    }
+
     /// Sealed signature bytes.
     pub fn signature(&self) -> &[u8; 64] {
         &self.signature
@@ -501,7 +519,9 @@ pub enum ReplicaCustody {
 ///
 /// A local Catalog produces exactly this (rebuildable cache) or a derived
 /// Record through ordinary admission carrying the certificate as evidence —
-/// no third constructor.
+/// no third constructor. In-place reinterpretation of a certified Record
+/// under a local Catalog cut is Unconstructible
+/// ([`refuse_in_place_local_reinterpretation`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalProjection {
     /// Origin certificate this projection was built from.
@@ -761,6 +781,10 @@ pub(crate) fn sign_admission_parts(
 /// - scope refuse derived from [`ScopeManifestTable::resolve`]
 /// - Queryable vs PendingAnchor from [`OriginContinuity`] evidence (projection
 ///   / chain door), never a caller-asserted bool
+///
+/// Full crossing-contract validation (kind/schema/authority/context/evidence/
+/// status/capabilities) before lowering is [`validate_crossing_before_lower`] —
+/// this door alone does not authorize lowering.
 pub fn verify_replica(
     certificate: &AdmissionCertificate,
     local_store: StoreId,
@@ -808,6 +832,421 @@ pub fn verify_replica(
             certificate: certificate.clone(),
         }),
     }
+}
+
+// ── Crossing contract before lowering (§69 / story #270 T1) ─────────────────
+
+/// Closed ONTOK kind wire tags on a crossing envelope — unknown tag refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum CrossingKind {
+    /// Entity.
+    Entity = 0,
+    /// Event.
+    Event = 1,
+    /// State.
+    State = 2,
+    /// Role.
+    Role = 3,
+    /// Relation.
+    Relation = 4,
+    /// Claim.
+    Claim = 5,
+    /// Evidence.
+    Evidence = 6,
+    /// Context.
+    Context = 7,
+    /// Concept.
+    Concept = 8,
+    /// Rule.
+    Rule = 9,
+    /// Derivation.
+    Derivation = 10,
+    /// Invalidation.
+    Invalidation = 11,
+}
+
+impl CrossingKind {
+    /// Decode a wire tag; unknown → [`CrossingRefuse::KindInvalid`].
+    pub fn from_wire(tag: u8) -> Result<Self, CrossingRefuse> {
+        match tag {
+            0 => Ok(Self::Entity),
+            1 => Ok(Self::Event),
+            2 => Ok(Self::State),
+            3 => Ok(Self::Role),
+            4 => Ok(Self::Relation),
+            5 => Ok(Self::Claim),
+            6 => Ok(Self::Evidence),
+            7 => Ok(Self::Context),
+            8 => Ok(Self::Concept),
+            9 => Ok(Self::Rule),
+            10 => Ok(Self::Derivation),
+            11 => Ok(Self::Invalidation),
+            _ => Err(CrossingRefuse::KindInvalid),
+        }
+    }
+
+    /// Wire tag for this kind.
+    pub fn as_wire(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Context scope carried on a crossing envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CrossingContext {
+    /// No durable context scope.
+    Unscoped,
+    /// Scoped to a context digest.
+    Scoped([u8; 32]),
+}
+
+impl CrossingContext {
+    /// Decode wire form: `0` → Unscoped, `1` + digest → Scoped; else ContextInvalid.
+    pub fn from_wire(tag: u8, digest: Option<[u8; 32]>) -> Result<Self, CrossingRefuse> {
+        match (tag, digest) {
+            (0, None) => Ok(Self::Unscoped),
+            (1, Some(d)) => Ok(Self::Scoped(d)),
+            _ => Err(CrossingRefuse::ContextInvalid),
+        }
+    }
+}
+
+/// Whether the envelope declares evidence as required.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CrossingEvidenceDemand {
+    /// Interpreted knowledge — evidence must be present.
+    DeclaredRequired,
+    /// Evidence not required for this surface/kind.
+    NotRequired,
+}
+
+/// Evidence payload presence on the envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CrossingEvidence {
+    /// Evidence digest present.
+    Present([u8; 32]),
+    /// No evidence payload.
+    Absent,
+}
+
+/// Crossing record status — only [`CrossingStatus::Active`] may lower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CrossingStatus {
+    /// Live certified meaning — may lower after full validation.
+    Active,
+    /// Semantic invalidation — not lowerable as live meaning.
+    Invalidated,
+    /// Tombstone supersession — not lowerable as live meaning.
+    Tombstoned,
+    /// Retention redaction — not lowerable as live meaning.
+    RetentionRedacted,
+}
+
+/// Opaque shared-capability digests claimed by a crossing envelope.
+///
+/// Receiver must hold every claimed digest or refuse
+/// [`CrossingRefuse::CapabilityMissing`] — never reshape into
+/// [`ReplicaRefuse::RetentionDeclined`] or [`ReplicaRefuse::ScopeDenied`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct CrossingCapabilitySet {
+    digests: BTreeMap<[u8; 32], ()>,
+}
+
+impl CrossingCapabilitySet {
+    /// Empty capability set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a claimed / held capability digest.
+    pub fn insert(&mut self, digest: [u8; 32]) {
+        self.digests.insert(digest, ());
+    }
+
+    /// True when every digest in `claimed` is present in this set.
+    pub fn covers(&self, claimed: &CrossingCapabilitySet) -> bool {
+        claimed.digests.keys().all(|d| self.digests.contains_key(d))
+    }
+
+    /// Borrow claimed digests in ascending order.
+    pub fn digests(&self) -> impl Iterator<Item = &[u8; 32]> {
+        self.digests.keys()
+    }
+}
+
+/// Declared crossing envelope validated against the certificate before lowering.
+///
+/// Kind, schema version, schema cut, issuing authority, context, evidence
+/// demand/presence, status, and shared capabilities — the full contract the
+/// receiver checks before any projection lower (§69 / #270 T1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossingEnvelope {
+    /// ONTOK kind wire tag.
+    kind: CrossingKind,
+    /// Protocol / schema version — must equal certificate protocol_version.
+    schema_version: [u8; 8],
+    /// Schema cut — must equal certificate schema_cut (origin cut forever).
+    schema_cut: [u8; 32],
+    /// Issuing authority — must equal certificate authorizing_key_id.
+    issuing_authority: AuthorizingKeyId,
+    /// Durable context scope.
+    context: CrossingContext,
+    /// Whether evidence is declared required.
+    evidence_demand: CrossingEvidenceDemand,
+    /// Evidence payload presence.
+    evidence: CrossingEvidence,
+    /// Record status.
+    status: CrossingStatus,
+    /// Shared capabilities the envelope claims.
+    shared_capabilities: CrossingCapabilitySet,
+}
+
+impl CrossingEnvelope {
+    /// Assemble a crossing envelope from declared contract fields.
+    #[allow(clippy::too_many_arguments)] // closed contract fields are explicit seats
+    pub fn new(
+        kind: CrossingKind,
+        schema_version: [u8; 8],
+        schema_cut: [u8; 32],
+        issuing_authority: AuthorizingKeyId,
+        context: CrossingContext,
+        evidence_demand: CrossingEvidenceDemand,
+        evidence: CrossingEvidence,
+        status: CrossingStatus,
+        shared_capabilities: CrossingCapabilitySet,
+    ) -> Self {
+        Self {
+            kind,
+            schema_version,
+            schema_cut,
+            issuing_authority,
+            context,
+            evidence_demand,
+            evidence,
+            status,
+            shared_capabilities,
+        }
+    }
+
+    /// ONTOK kind.
+    pub fn kind(&self) -> CrossingKind {
+        self.kind
+    }
+
+    /// Schema / protocol version bytes.
+    pub fn schema_version(&self) -> &[u8; 8] {
+        &self.schema_version
+    }
+
+    /// Schema cut digest.
+    pub fn schema_cut(&self) -> &[u8; 32] {
+        &self.schema_cut
+    }
+
+    /// Issuing authority key id.
+    pub fn issuing_authority(&self) -> AuthorizingKeyId {
+        self.issuing_authority
+    }
+
+    /// Context scope.
+    pub fn context(&self) -> CrossingContext {
+        self.context
+    }
+
+    /// Evidence demand.
+    pub fn evidence_demand(&self) -> CrossingEvidenceDemand {
+        self.evidence_demand
+    }
+
+    /// Evidence presence.
+    pub fn evidence(&self) -> CrossingEvidence {
+        self.evidence
+    }
+
+    /// Status.
+    pub fn status(&self) -> CrossingStatus {
+        self.status
+    }
+
+    /// Shared capabilities claimed.
+    pub fn shared_capabilities(&self) -> &CrossingCapabilitySet {
+        &self.shared_capabilities
+    }
+}
+
+/// Proof that the full crossing contract passed — required before lowering.
+///
+/// Opaque: only [`validate_crossing_before_lower`] mints this. Holding this
+/// token means kind/schema/authority/context/evidence/status/capabilities
+/// were checked and [`verify_replica`] accepted custody.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossingValidated {
+    custody: ReplicaCustody,
+    origin_schema_cut: [u8; 32],
+    kind: CrossingKind,
+    _priv: (),
+}
+
+impl CrossingValidated {
+    /// Custody produced by [`verify_replica`] under this validation.
+    pub fn custody(&self) -> &ReplicaCustody {
+        &self.custody
+    }
+
+    /// Origin schema cut sealed on the certificate — never a local Catalog cut.
+    pub fn origin_schema_cut(&self) -> &[u8; 32] {
+        &self.origin_schema_cut
+    }
+
+    /// Validated ONTOK kind.
+    pub fn kind(&self) -> CrossingKind {
+        self.kind
+    }
+}
+
+/// Closed crossing-contract refuse sum (§69 / #270 T1).
+///
+/// Manifest outcomes stay on [`ReplicaRefuse`] (`ScopeUnknown` / `ScopeRevoked`
+/// / `ScopeDenied`) and are **never** folded into `RetentionDeclined`.
+/// Envelope-specific refuses are distinct arms here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub enum CrossingRefuse {
+    /// Replica authenticity / scope / chain refuse (includes typed Scope*).
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Replica(#[from] ReplicaRefuse),
+    /// Envelope kind wire tag unknown or refused.
+    #[error("KindInvalid: crossing kind is not a known ONTOK tag")]
+    #[diagnostic(code(store::replica::crossing_kind_invalid))]
+    KindInvalid,
+    /// Envelope schema version ≠ certificate protocol_version.
+    #[error("SchemaVersionMismatch: envelope schema version disagreed with certificate")]
+    #[diagnostic(code(store::replica::crossing_schema_version))]
+    SchemaVersionMismatch,
+    /// Envelope schema cut ≠ certificate origin schema_cut.
+    #[error("SchemaCutMismatch: envelope schema cut disagreed with certificate")]
+    #[diagnostic(code(store::replica::crossing_schema_cut))]
+    SchemaCutMismatch,
+    /// Envelope issuing authority ≠ certificate authorizing_key_id.
+    #[error("AuthorityMismatch: envelope authority disagreed with certificate")]
+    #[diagnostic(code(store::replica::crossing_authority))]
+    AuthorityMismatch,
+    /// Envelope context is not a closed CrossingContext form.
+    #[error("ContextInvalid: crossing context refused")]
+    #[diagnostic(code(store::replica::crossing_context))]
+    ContextInvalid,
+    /// Envelope declared evidence required but evidence is absent.
+    #[error("DeclaredEvidenceMissing: declared evidence required but absent")]
+    #[diagnostic(code(store::replica::declared_evidence_missing))]
+    DeclaredEvidenceMissing,
+    /// Status is not Active — cannot lower as live meaning.
+    #[error("StatusNotLowerable: crossing status refuses live lowering")]
+    #[diagnostic(code(store::replica::crossing_status))]
+    StatusNotLowerable,
+    /// Receiver lacks a claimed shared capability.
+    #[error("CapabilityMissing: shared capability claimed but not held")]
+    #[diagnostic(code(store::replica::crossing_capability))]
+    CapabilityMissing,
+    /// In-place local reinterpretation under a local schema cut (§69).
+    #[error(
+        "LocalReinterpretationUnconstructible: certified meaning under a local Catalog cut is Unconstructible — use LocalProjection or a derived Record"
+    )]
+    #[diagnostic(code(store::replica::local_reinterpretation))]
+    LocalReinterpretationUnconstructible,
+}
+
+/// Validate the full crossing contract **before** any lowering (§69 / #270 T1).
+///
+/// Order: [`verify_replica`] (authenticity + typed Scope* ≠ RetentionDeclined)
+/// then envelope kind / schema version / schema cut / authority / context /
+/// evidence / status / shared capabilities. Missing declared evidence →
+/// [`CrossingRefuse::DeclaredEvidenceMissing`] (typed, not silent drop).
+///
+/// Success mints [`CrossingValidated`] — the only token that authorizes
+/// crossing lowering. In-place reinterpretation under a local schema cut is
+/// Unconstructible ([`CrossingRefuse::LocalReinterpretationUnconstructible`]);
+/// use [`LocalProjection`] or admit a derived Record.
+#[allow(clippy::too_many_arguments)] // trust tables + envelope seats are explicit
+pub fn validate_crossing_before_lower(
+    certificate: &AdmissionCertificate,
+    envelope: &CrossingEnvelope,
+    local_store: StoreId,
+    local_commit: CommitOrdinal,
+    authorizing_keys: &AuthorizingKeyTable,
+    scopes: &ScopeManifestTable,
+    continuity: Option<&OriginContinuity>,
+    held_capabilities: &CrossingCapabilitySet,
+) -> Result<CrossingValidated, CrossingRefuse> {
+    // 1) Replica path first — ScopeUnknown/Revoked/Denied stay distinct.
+    let custody = verify_replica(
+        certificate,
+        local_store,
+        local_commit,
+        authorizing_keys,
+        scopes,
+        continuity,
+    )?;
+
+    // 2) Kind — closed wire set (construction already typed; belt for raw tags).
+    let _kind = CrossingKind::from_wire(envelope.kind().as_wire())?;
+
+    // 3) Schema version ↔ certificate protocol_version.
+    if envelope.schema_version() != certificate.protocol_version() {
+        return Err(CrossingRefuse::SchemaVersionMismatch);
+    }
+
+    // 4) Schema cut ↔ certificate origin cut (never a local Catalog rewrite).
+    if envelope.schema_cut() != certificate.schema_cut() {
+        return Err(CrossingRefuse::SchemaCutMismatch);
+    }
+
+    // 5) Issuing authority ↔ certificate authorizing key.
+    if envelope.issuing_authority() != certificate.authorizing_key_id() {
+        return Err(CrossingRefuse::AuthorityMismatch);
+    }
+
+    // 6) Context — closed sum only (Unscoped | Scoped); third form Unconstructible
+    // at construction / [`CrossingContext::from_wire`].
+    match envelope.context() {
+        CrossingContext::Unscoped | CrossingContext::Scoped(_) => {}
+    }
+
+    // 7) Evidence — declared required + absent → typed refuse (not silent drop).
+    match (envelope.evidence_demand(), envelope.evidence()) {
+        (CrossingEvidenceDemand::DeclaredRequired, CrossingEvidence::Absent) => {
+            return Err(CrossingRefuse::DeclaredEvidenceMissing);
+        }
+        (CrossingEvidenceDemand::DeclaredRequired, CrossingEvidence::Present(_))
+        | (CrossingEvidenceDemand::NotRequired, CrossingEvidence::Absent)
+        | (CrossingEvidenceDemand::NotRequired, CrossingEvidence::Present(_)) => {}
+    }
+
+    // 8) Status — only Active may lower as live meaning.
+    if !matches!(envelope.status(), CrossingStatus::Active) {
+        return Err(CrossingRefuse::StatusNotLowerable);
+    }
+
+    // 9) Shared capabilities — every claimed digest must be held.
+    if !held_capabilities.covers(envelope.shared_capabilities()) {
+        return Err(CrossingRefuse::CapabilityMissing);
+    }
+
+    Ok(CrossingValidated {
+        custody,
+        origin_schema_cut: *certificate.schema_cut(),
+        kind: envelope.kind(),
+        _priv: (),
+    })
+}
+
+/// Explicit refuse for in-place local reinterpretation under a local Catalog cut.
+///
+/// §69: certified origin meaning is sealed as-of the certificate schema cut.
+/// A local Catalog wanting a different reading produces [`LocalProjection`] or
+/// a newly admitted derived Record — never mutates the certified record in place.
+pub fn refuse_in_place_local_reinterpretation() -> CrossingRefuse {
+    CrossingRefuse::LocalReinterpretationUnconstructible
 }
 
 /// Anchor a PendingAnchor into Queryable once origin coordinates are continuous.
@@ -978,5 +1417,339 @@ mod authorizing_key_ed25519_tests {
             AuthorizingKey::mint_verifying(self.id, self.verifying_bytes())
                 .expect("verifying bytes round-trip")
         }
+    }
+}
+
+#[cfg(test)]
+mod crossing_contract_tests {
+    use super::*;
+
+    fn mint_signed(
+        key: &AuthorizingKey,
+        scope: ScopeManifestDigest,
+        schema_cut: [u8; 32],
+    ) -> AdmissionCertificate {
+        let store = StoreId::from_digest([0xC7; 32]);
+        let mut parts = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store: store,
+            origin_epoch: FenceEpoch::genesis(store),
+            origin_commit: CommitOrdinal::ZERO,
+            schema_cut,
+            record_digest: [0xE1; 32],
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts.signature = sign_admission_parts(&parts, key).expect("sign");
+        mint_admission_certificate(parts).expect("mint")
+    }
+
+    fn matching_envelope(cert: &AdmissionCertificate) -> CrossingEnvelope {
+        CrossingEnvelope::new(
+            CrossingKind::Claim,
+            *cert.protocol_version(),
+            *cert.schema_cut(),
+            cert.authorizing_key_id(),
+            CrossingContext::Unscoped,
+            CrossingEvidenceDemand::DeclaredRequired,
+            CrossingEvidence::Present([0xEE; 32]),
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        )
+    }
+
+    #[test]
+    fn missing_declared_evidence_typed_refuse() {
+        let key = AuthorizingKey::mint_with_verifying_id([0xC1; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let local = StoreId::from_digest([0xD1; 32]);
+
+        let envelope = CrossingEnvelope::new(
+            CrossingKind::Claim,
+            *cert.protocol_version(),
+            *cert.schema_cut(),
+            cert.authorizing_key_id(),
+            CrossingContext::Unscoped,
+            CrossingEvidenceDemand::DeclaredRequired,
+            CrossingEvidence::Absent,
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        );
+
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &envelope,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&OriginContinuity::mint()),
+                &CrossingCapabilitySet::new(),
+            ),
+            Err(CrossingRefuse::DeclaredEvidenceMissing),
+            "missing declared evidence must typed-refuse, not silent drop"
+        );
+    }
+
+    #[test]
+    fn scope_unknown_revoked_denied_distinct_from_retention_declined() {
+        let key = AuthorizingKey::mint_with_verifying_id([0xC2; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5D; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let local = StoreId::from_digest([0xD2; 32]);
+        let envelope = matching_envelope(&cert);
+        let held = CrossingCapabilitySet::new();
+
+        let empty_scopes = ScopeManifestTable::new();
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &envelope,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &empty_scopes,
+                Some(&OriginContinuity::mint()),
+                &held,
+            ),
+            Err(CrossingRefuse::Replica(ReplicaRefuse::ScopeUnknown))
+        );
+
+        let mut revoked = ScopeManifestTable::new();
+        revoked.set(scope, ScopeManifestStatus::Revoked);
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &envelope,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &revoked,
+                Some(&OriginContinuity::mint()),
+                &held,
+            ),
+            Err(CrossingRefuse::Replica(ReplicaRefuse::ScopeRevoked))
+        );
+
+        let mut denied = ScopeManifestTable::new();
+        denied.set(scope, ScopeManifestStatus::Incompatible);
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &envelope,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &denied,
+                Some(&OriginContinuity::mint()),
+                &held,
+            ),
+            Err(CrossingRefuse::Replica(ReplicaRefuse::ScopeDenied))
+        );
+
+        assert_ne!(
+            ReplicaRefuse::ScopeUnknown,
+            ReplicaRefuse::RetentionDeclined
+        );
+        assert_ne!(ReplicaRefuse::ScopeRevoked, ReplicaRefuse::RetentionDeclined);
+        assert_ne!(ReplicaRefuse::ScopeDenied, ReplicaRefuse::RetentionDeclined);
+        assert_ne!(
+            CrossingRefuse::DeclaredEvidenceMissing,
+            CrossingRefuse::Replica(ReplicaRefuse::RetentionDeclined)
+        );
+    }
+
+    #[test]
+    fn full_contract_validates_before_lower_token() {
+        let key = AuthorizingKey::mint_with_verifying_id([0xC3; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5E; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let local = StoreId::from_digest([0xD3; 32]);
+        let mut claimed = CrossingCapabilitySet::new();
+        claimed.insert([0xCA; 32]);
+        let envelope = CrossingEnvelope::new(
+            CrossingKind::Claim,
+            *cert.protocol_version(),
+            *cert.schema_cut(),
+            cert.authorizing_key_id(),
+            CrossingContext::Scoped([0xC0; 32]),
+            CrossingEvidenceDemand::DeclaredRequired,
+            CrossingEvidence::Present([0xEE; 32]),
+            CrossingStatus::Active,
+            claimed.clone(),
+        );
+        let mut held = CrossingCapabilitySet::new();
+        held.insert([0xCA; 32]);
+
+        let validated = validate_crossing_before_lower(
+            &cert,
+            &envelope,
+            local,
+            CommitOrdinal::ZERO,
+            &keys,
+            &scopes,
+            Some(&OriginContinuity::mint()),
+            &held,
+        )
+        .expect("full contract must pass");
+        assert_eq!(validated.kind(), CrossingKind::Claim);
+        assert_eq!(validated.origin_schema_cut(), cert.schema_cut());
+        assert!(matches!(
+            validated.custody(),
+            ReplicaCustody::Queryable { .. }
+        ));
+
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &envelope,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&OriginContinuity::mint()),
+                &CrossingCapabilitySet::new(),
+            ),
+            Err(CrossingRefuse::CapabilityMissing)
+        );
+
+        let tombstoned = CrossingEnvelope::new(
+            CrossingKind::Claim,
+            *cert.protocol_version(),
+            *cert.schema_cut(),
+            cert.authorizing_key_id(),
+            CrossingContext::Unscoped,
+            CrossingEvidenceDemand::NotRequired,
+            CrossingEvidence::Absent,
+            CrossingStatus::Tombstoned,
+            CrossingCapabilitySet::new(),
+        );
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &tombstoned,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&OriginContinuity::mint()),
+                &CrossingCapabilitySet::new(),
+            ),
+            Err(CrossingRefuse::StatusNotLowerable)
+        );
+
+        assert_eq!(
+            refuse_in_place_local_reinterpretation(),
+            CrossingRefuse::LocalReinterpretationUnconstructible
+        );
+    }
+
+    #[test]
+    fn schema_authority_mismatch_refuse() {
+        let key = AuthorizingKey::mint_with_verifying_id([0xC4; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x5F; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let local = StoreId::from_digest([0xD4; 32]);
+
+        let bad_schema = CrossingEnvelope::new(
+            CrossingKind::Entity,
+            *b"bad.vers",
+            *cert.schema_cut(),
+            cert.authorizing_key_id(),
+            CrossingContext::Unscoped,
+            CrossingEvidenceDemand::NotRequired,
+            CrossingEvidence::Absent,
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        );
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &bad_schema,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&OriginContinuity::mint()),
+                &CrossingCapabilitySet::new(),
+            ),
+            Err(CrossingRefuse::SchemaVersionMismatch)
+        );
+
+        let bad_cut = CrossingEnvelope::new(
+            CrossingKind::Entity,
+            *cert.protocol_version(),
+            [0xFF; 32],
+            cert.authorizing_key_id(),
+            CrossingContext::Unscoped,
+            CrossingEvidenceDemand::NotRequired,
+            CrossingEvidence::Absent,
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        );
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &bad_cut,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&OriginContinuity::mint()),
+                &CrossingCapabilitySet::new(),
+            ),
+            Err(CrossingRefuse::SchemaCutMismatch)
+        );
+
+        let bad_auth = CrossingEnvelope::new(
+            CrossingKind::Entity,
+            *cert.protocol_version(),
+            *cert.schema_cut(),
+            AuthorizingKeyId::from_digest([0x00; 32]),
+            CrossingContext::Unscoped,
+            CrossingEvidenceDemand::NotRequired,
+            CrossingEvidence::Absent,
+            CrossingStatus::Active,
+            CrossingCapabilitySet::new(),
+        );
+        assert_eq!(
+            validate_crossing_before_lower(
+                &cert,
+                &bad_auth,
+                local,
+                CommitOrdinal::ZERO,
+                &keys,
+                &scopes,
+                Some(&OriginContinuity::mint()),
+                &CrossingCapabilitySet::new(),
+            ),
+            Err(CrossingRefuse::AuthorityMismatch)
+        );
+
+        assert_eq!(CrossingKind::from_wire(99), Err(CrossingRefuse::KindInvalid));
+        assert_eq!(
+            CrossingContext::from_wire(2, None),
+            Err(CrossingRefuse::ContextInvalid)
+        );
     }
 }
