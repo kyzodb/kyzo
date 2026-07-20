@@ -8,14 +8,17 @@
  */
 
 //! Check 3: near-identical function/method/closure bodies across files, by
-//! normalized token-stream similarity. The live fixture is the bitemporal
-//! skip-scan walk, triplicated across `storage/fjall.rs` (`SkipIterator::next`),
-//! `storage/temp.rs` (the `iter::from_fn` closure inside
-//! `range_skip_scan_tuple`), and `storage/sim.rs` (`SimSkipIter::next`) — the
-//! same 8-9 statement seek/peek/decide loop, differing only in the outer
-//! wrapper (struct-`impl Iterator` vs. a boxed closure) and each call's
-//! receiver. Story #78 deletes two of the three copies; until then this
-//! check proves it can find them, allowlisted with that citation.
+//! normalized token-stream similarity.
+//!
+//! Story #78 closed the original calibration fixture: the bitemporal
+//! skip-scan walk that was triplicated across `store/fjall.rs`
+//! (`SkipIterator::next`), `store/temp.rs` (the `iter::from_fn` closure
+//! inside `range_skip_scan_tuple`), and `store/sim.rs` (`SimSkipIter::next`)
+//! now exists once as `store/skip_walk.rs`. That deferral is resolved — not
+//! an open cross-story dependency. Remaining `[[copy_detector]]` waivers in
+//! `resonance-allow.toml` cite other independent twins (oracle/engine
+//! differentials, etc.); every waiver member must still match a live unit
+//! or the check fails as a stale allowlist entry (never silent green).
 //!
 //! Normalization: every identifier collapses to one placeholder token so
 //! renamed locals/receivers don't defeat the comparison; every other token
@@ -54,11 +57,12 @@ const SHINGLE_LEN: usize = 20;
 /// `MIN_TOKENS = 100` restricts the comparison to bodies large enough that
 /// "near-identical" is meaningful risk (a 15-line getter coincidentally
 /// resembling another 15-line getter is not the hazard this check exists
-/// for; a 50-60 line hand-copied algorithm is). At this size, `fjall.rs`'s
-/// `SkipIterator::next` and `sim.rs`'s `SimSkipIter::next` — the live
-/// fixture — score 0.81 against each other, comfortably above the 0.5
-/// threshold; unrelated functions in the tree score well under 0.2 (see the
-/// story report for the full distribution this was tuned against).
+/// for; a 50-60 line hand-copied algorithm is). At this size, historically
+/// `fjall.rs`'s `SkipIterator::next` and `sim.rs`'s `SimSkipIter::next`
+/// scored 0.81 against each other (story #78's calibration fixture, now
+/// deleted into `skip_walk.rs`); unrelated functions in the tree score well
+/// under 0.2 (see the story report for the full distribution this was
+/// tuned against).
 pub const THRESHOLD: f64 = 0.5;
 
 pub struct Unit {
@@ -273,7 +277,7 @@ fn allowlisted(allow: &Allowlist, key_a: &str, key_b: &str) -> bool {
     })
 }
 
-pub fn check(files: &[SourceFile], allow: &Allowlist) -> (Vec<Violation>, Vec<Pair>, Vec<Unit>) {
+pub fn check(files: &[SourceFile], allow: &Allowlist) -> (Vec<Violation>, Vec<Pair>, Vec<Unit>, Vec<String>) {
     let units = collect_units(files);
     let pairs = find_similar_pairs(&units, THRESHOLD);
     let mut violations = Vec::new();
@@ -293,5 +297,51 @@ pub fn check(files: &[SourceFile], allow: &Allowlist) -> (Vec<Violation>, Vec<Pa
             similarity: p.similarity,
         });
     }
-    (violations, pairs, units)
+
+    // Stale-waiver check: every allowlist member must still name a unit in
+    // the tree. Story #78's SkipIterator/SimSkipIter members are gone —
+    // leaving them in resonance-allow.toml must red, not pass as a no-op.
+    let mut stale = Vec::new();
+    for e in &allow.copy_detector {
+        for member in &e.members {
+            let still_present = units.iter().any(|u| member_key(u).ends_with(member.as_str()));
+            if !still_present {
+                stale.push(format!(
+                    "copy_detector allowlist member `{member}` no longer matches any \
+                     comparison unit — remove it (citation: {})",
+                    e.citation
+                ));
+            }
+        }
+    }
+
+    (violations, pairs, units, stale)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::allowlist::{Allowlist, CopyGroupEntry};
+
+    #[test]
+    fn deleted_story_78_fixture_members_are_stale_not_silent() {
+        let allow = Allowlist {
+            copy_detector: vec![CopyGroupEntry {
+                members: vec![
+                    "crates/kyzo-core/src/store/fjall.rs::next".into(),
+                    "crates/kyzo-crashfs/src/sim.rs::next".into(),
+                ],
+                citation: "Story #78's known-real fixture — deleted into skip_walk.rs".into(),
+            }],
+            ..Allowlist::default()
+        };
+        let (_violations, _pairs, _units, stale) = check(&[], &allow);
+        assert_eq!(
+            stale.len(),
+            2,
+            "renamed/deleted #78 skip-scan copies must red as stale waivers"
+        );
+        assert!(stale.iter().all(|s| s.contains("no longer matches")));
+    }
+}
+

@@ -24,6 +24,8 @@
 //! fixture in `runtime/relation.rs` (`ShadowHandle`) reconstructs the
 //! condemned trigger shape on purpose, to prove decode refuses it.
 
+use std::fmt;
+
 use syn::visit::{self, Visit};
 
 use crate::fsutil::{SourceFile, span_line};
@@ -37,11 +39,29 @@ const CONDEMNED_TRIGGER_FIELDS: &[&str] = &["put_triggers", "rm_triggers", "repl
 /// as text, for the `.to_string()`-capture and struct-literal checks.
 const CONDEMNED_EXTRACTOR_NAMES: &[&str] = &["extractor", "extract_filter"];
 
+/// Closed set of condemned boundary shapes story #299 deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CondemnedShape {
+    StoredSourceTriggerField,
+    ExtractorDisplaySplice,
+    ExtractorToStringCapture,
+}
+
+impl fmt::Display for CondemnedShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::StoredSourceTriggerField => "stored-source-trigger-field",
+            Self::ExtractorDisplaySplice => "extractor-display-splice",
+            Self::ExtractorToStringCapture => "extractor-to-string-capture",
+        })
+    }
+}
+
 /// One condemned shape found back in non-test `kyzo-core`/`kyzo-bin` code.
 pub struct Violation {
     pub file: String,
     pub line: usize,
-    pub shape: &'static str,
+    pub shape: CondemnedShape,
     pub detail: String,
 }
 
@@ -100,7 +120,7 @@ fn format_macro_looks_like_if_splice(mac: &syn::ExprMacro) -> bool {
 }
 
 struct Scanner {
-    hits: Vec<(usize, &'static str, String)>,
+    hits: Vec<(usize, CondemnedShape, String)>,
 }
 
 impl<'ast> Visit<'ast> for Scanner {
@@ -121,7 +141,7 @@ impl<'ast> Visit<'ast> for Scanner {
             {
                 self.hits.push((
                     span_line(&ident.span()),
-                    "stored-source-trigger-field",
+                    CondemnedShape::StoredSourceTriggerField,
                     format!(
                         "field `{name}` is typed as a string collection — triggers must be \
                          stored as parsed typed substances, never raw source re-parsed at \
@@ -146,7 +166,7 @@ impl<'ast> Visit<'ast> for Scanner {
                 {
                     self.hits.push((
                         span_line(&mac.mac.path.segments.last().unwrap().ident.span()),
-                        "extractor-display-splice",
+                        CondemnedShape::ExtractorDisplaySplice,
                         "format!(...) textually splices an `if(filter, extractor)` extractor \
                          expression back together — fold typed sub-expressions instead \
                          (see `combine_extractor`)"
@@ -162,7 +182,7 @@ impl<'ast> Visit<'ast> for Scanner {
                 {
                     self.hits.push((
                         span_line(&seg.ident.span()),
-                        "extractor-to-string-capture",
+                        CondemnedShape::ExtractorToStringCapture,
                         format!(
                             "`{}` is assigned a `.to_string()` capture of a parsed extractor \
                              expression — store the typed `Expr`, never its Display text",
@@ -179,7 +199,7 @@ impl<'ast> Visit<'ast> for Scanner {
                     {
                         self.hits.push((
                             span_line(&ident.span()),
-                            "extractor-to-string-capture",
+                            CondemnedShape::ExtractorToStringCapture,
                             format!(
                                 "field `{ident}` is initialized from a `.to_string()` capture \
                                  of a parsed extractor expression — store the typed `Expr`, \
@@ -243,7 +263,7 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .all(|v| v.shape == "stored-source-trigger-field")
+                .all(|v| v.shape == CondemnedShape::StoredSourceTriggerField)
         );
     }
 
@@ -269,7 +289,7 @@ mod tests {
         );
         let violations = check(&[f]);
         assert_eq!(violations.len(), 1);
-        assert_eq!(violations[0].shape, "extractor-display-splice");
+        assert_eq!(violations[0].shape, CondemnedShape::ExtractorDisplaySplice);
     }
 
     #[test]
@@ -290,7 +310,7 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .all(|v| v.shape == "extractor-to-string-capture")
+                .all(|v| v.shape == CondemnedShape::ExtractorToStringCapture)
         );
     }
 

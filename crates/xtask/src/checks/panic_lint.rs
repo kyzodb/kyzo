@@ -19,8 +19,13 @@
 //! calling another defined in the same file) — a narrow, deterministic,
 //! auditable notion of "reachable," not a whole-crate call graph that could
 //! silently drift as the crate grows.
+//!
+//! A renamed or deleted entrypoint named in the config is a hard FAIL
+//! (config problem), never silent green: the declaration is the meter, so
+//! a declaration that no longer points at a real function is drift.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 
 use serde::Deserialize;
 use syn::visit::{self, Visit};
@@ -129,40 +134,86 @@ impl<'ast> Visit<'ast> for CallTargets {
     }
 }
 
-const PANIC_MACROS: &[&str] = &[
-    "assert",
-    "assert_eq",
-    "assert_ne",
-    "panic",
-    "todo",
-    "unimplemented",
-    "unreachable",
-];
+/// Closed set of panic-shaped constructs this lint recognizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanicKind {
+    Assert,
+    AssertEq,
+    AssertNe,
+    Panic,
+    Todo,
+    Unimplemented,
+    Unreachable,
+    Unwrap,
+    UnwrapErr,
+    Expect,
+}
+
+impl PanicKind {
+    fn from_macro_ident(name: &str) -> Option<Self> {
+        match name {
+            "assert" => Some(Self::Assert),
+            "assert_eq" => Some(Self::AssertEq),
+            "assert_ne" => Some(Self::AssertNe),
+            "panic" => Some(Self::Panic),
+            "todo" => Some(Self::Todo),
+            "unimplemented" => Some(Self::Unimplemented),
+            "unreachable" => Some(Self::Unreachable),
+            _ => None,
+        }
+    }
+
+    fn from_method_ident(name: &str) -> Option<Self> {
+        match name {
+            "unwrap" => Some(Self::Unwrap),
+            "unwrap_err" => Some(Self::UnwrapErr),
+            "expect" => Some(Self::Expect),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for PanicKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Assert => "assert",
+            Self::AssertEq => "assert_eq",
+            Self::AssertNe => "assert_ne",
+            Self::Panic => "panic",
+            Self::Todo => "todo",
+            Self::Unimplemented => "unimplemented",
+            Self::Unreachable => "unreachable",
+            Self::Unwrap => "unwrap",
+            Self::UnwrapErr => "unwrap_err",
+            Self::Expect => "expect",
+        })
+    }
+}
 
 pub struct Occurrence {
     pub file: String,
     pub function: String,
     pub line: usize,
-    pub kind: String,
+    pub kind: PanicKind,
 }
 
 struct PanicScanner {
-    hits: Vec<(usize, String)>,
+    hits: Vec<(usize, PanicKind)>,
 }
 impl<'ast> Visit<'ast> for PanicScanner {
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
         if let Some(seg) = node.path.segments.last() {
             let name = seg.ident.to_string();
-            if PANIC_MACROS.contains(&name.as_str()) {
-                self.hits.push((span_line(&node.path.span()), name));
+            if let Some(kind) = PanicKind::from_macro_ident(&name) {
+                self.hits.push((span_line(&node.path.span()), kind));
             }
         }
         visit::visit_macro(self, node);
     }
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         let m = node.method.to_string();
-        if m == "unwrap" || m == "unwrap_err" || m == "expect" {
-            self.hits.push((span_line(&node.method.span()), m));
+        if let Some(kind) = PanicKind::from_method_ident(&m) {
+            self.hits.push((span_line(&node.method.span()), kind));
         }
         visit::visit_expr_method_call(self, node);
     }
@@ -215,6 +266,14 @@ pub fn check(
                 for m in matches {
                     queue.push_back(m.qualified.as_str());
                 }
+            } else {
+                // Renamed/deleted entrypoint: the declaration no longer
+                // names a real function — red, never silent green.
+                missing_files.push(format!(
+                    "decode-surfaces.toml declares entrypoint `{ep}` in `{surface_file}` \
+                     but it is not in the tree — renamed or deleted decode entrypoints \
+                     must be removed from the config or restored"
+                ));
             }
         }
 
@@ -279,4 +338,59 @@ pub fn check(
     }
 
     (occurrences, missing_files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::allowlist::Allowlist;
+
+    fn src(rel: &str, content: &str) -> SourceFile {
+        SourceFile {
+            rel_path: rel.to_string(),
+            text: content.to_string(),
+            ast: syn::parse_file(content).expect("parse fixture"),
+        }
+    }
+
+    #[test]
+    fn missing_entrypoint_is_config_problem_not_silent_green() {
+        let f = src(
+            "crates/kyzo-model/src/data/value.rs",
+            "fn still_here() { let _ = Ok::<(), ()>(()); }",
+        );
+        let surfaces = vec![(
+            "crates/kyzo-model/src/data/value.rs".to_string(),
+            vec!["decode".to_string()],
+        )];
+        let allow = Allowlist::default();
+        let (occurrences, missing) = check(&[f], &surfaces, &allow);
+        assert!(
+            occurrences.is_empty(),
+            "no panic sites when the entrypoint itself is missing"
+        );
+        assert_eq!(missing.len(), 1, "missing entrypoint must red");
+        assert!(
+            missing[0].contains("entrypoint `decode`"),
+            "message names the missing entrypoint: {}",
+            missing[0]
+        );
+    }
+
+    #[test]
+    fn present_entrypoint_with_unwrap_is_reported() {
+        let f = src(
+            "crates/kyzo-model/src/data/value.rs",
+            "fn decode() { let _ = Ok::<(), ()>(()).unwrap(); }",
+        );
+        let surfaces = vec![(
+            "crates/kyzo-model/src/data/value.rs".to_string(),
+            vec!["decode".to_string()],
+        )];
+        let allow = Allowlist::default();
+        let (occurrences, missing) = check(&[f], &surfaces, &allow);
+        assert!(missing.is_empty());
+        assert_eq!(occurrences.len(), 1);
+        assert_eq!(occurrences[0].kind, PanicKind::Unwrap);
+    }
 }

@@ -26,6 +26,7 @@
 //! `Deserialize` the way `Interval`/`RelationId` were.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use syn::visit::{self, Visit};
 
@@ -33,13 +34,40 @@ use crate::allowlist::Allowlist;
 use crate::fsutil::{SourceFile, span_line};
 use crate::synutil::mod_is_test_scope;
 
-const BYPASS_DERIVES: &[&str] = &["Deserialize", "From", "Default"];
+/// Closed set of derives that bypass a fallible constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BypassDerive {
+    Deserialize,
+    From,
+    Default,
+}
+
+impl BypassDerive {
+    fn from_ident(name: &str) -> Option<Self> {
+        match name {
+            "Deserialize" => Some(Self::Deserialize),
+            "From" => Some(Self::From),
+            "Default" => Some(Self::Default),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for BypassDerive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Deserialize => "Deserialize",
+            Self::From => "From",
+            Self::Default => "Default",
+        })
+    }
+}
 
 /// One derive-bearing type: does it derive a bypass-relevant trait, and at
 /// what span (for reporting).
 #[derive(Default, Clone)]
 struct TypeFacts {
-    derives_bypass: Vec<String>,
+    derives_bypass: Vec<BypassDerive>,
     def_line: usize,
 }
 
@@ -55,7 +83,7 @@ struct Collector {
     ctors: Vec<FallibleCtor>,
 }
 
-fn derive_hits(attrs: &[syn::Attribute]) -> Vec<String> {
+fn derive_hits(attrs: &[syn::Attribute]) -> Vec<BypassDerive> {
     let mut hits = Vec::new();
     for attr in attrs {
         if !attr.path().is_ident("derive") {
@@ -69,8 +97,8 @@ fn derive_hits(attrs: &[syn::Attribute]) -> Vec<String> {
         for p in paths {
             if let Some(last) = p.segments.last() {
                 let ident = last.ident.to_string();
-                if BYPASS_DERIVES.contains(&ident.as_str()) {
-                    hits.push(ident);
+                if let Some(d) = BypassDerive::from_ident(&ident) {
+                    hits.push(d);
                 }
             }
         }
@@ -167,7 +195,7 @@ pub struct Violation {
     pub def_line: usize,
     pub ctor_name: String,
     pub ctor_line: usize,
-    pub derives: Vec<String>,
+    pub derives: Vec<BypassDerive>,
 }
 
 pub fn check(files: &[SourceFile], allow: &Allowlist) -> (Vec<Violation>, Vec<String>) {

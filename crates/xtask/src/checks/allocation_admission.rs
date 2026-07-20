@@ -19,26 +19,53 @@
 //! expressed as `admit(declared, available)`, so there is no exception to
 //! grant.
 
+use std::fmt;
+
 use syn::visit::{self, Visit};
 
 use crate::fsutil::{SourceFile, span_line};
 use crate::synutil::mod_is_test_scope;
 
-/// Reservation method calls (`x.reserve(n)` …) whose size argument this check
-/// governs. `with_capacity` is an associated function, handled separately.
-const RESERVE_METHODS: &[&str] = &[
-    "reserve",
-    "reserve_exact",
-    "try_reserve",
-    "try_reserve_exact",
-];
+/// Closed set of reservation calls whose size argument this check governs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReservationCall {
+    WithCapacity,
+    Reserve,
+    ReserveExact,
+    TryReserve,
+    TryReserveExact,
+}
+
+impl ReservationCall {
+    fn from_method_ident(name: &str) -> Option<Self> {
+        match name {
+            "reserve" => Some(Self::Reserve),
+            "reserve_exact" => Some(Self::ReserveExact),
+            "try_reserve" => Some(Self::TryReserve),
+            "try_reserve_exact" => Some(Self::TryReserveExact),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ReservationCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::WithCapacity => "with_capacity",
+            Self::Reserve => "reserve",
+            Self::ReserveExact => "reserve_exact",
+            Self::TryReserve => "try_reserve",
+            Self::TryReserveExact => "try_reserve_exact",
+        })
+    }
+}
 
 /// One inline-capped reservation: a `with_capacity`/`reserve` call whose size
 /// argument carries a `.min(...)` instead of routing through `capacity::admit`.
 pub struct Violation {
     pub file: String,
     pub line: usize,
-    pub call: String,
+    pub call: ReservationCall,
 }
 
 /// Detects a `.min(...)` method call anywhere within a reservation-size
@@ -60,7 +87,7 @@ fn arg_has_min_cap(arg: &syn::Expr) -> bool {
 }
 
 struct Scanner {
-    hits: Vec<(usize, String)>,
+    hits: Vec<(usize, ReservationCall)>,
 }
 impl<'ast> Visit<'ast> for Scanner {
     fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
@@ -82,17 +109,17 @@ impl<'ast> Visit<'ast> for Scanner {
                     && arg_has_min_cap(arg)
                 {
                     self.hits
-                        .push((span_line(&seg.ident.span()), "with_capacity".to_string()));
+                        .push((span_line(&seg.ident.span()), ReservationCall::WithCapacity));
                 }
             }
             // `x.reserve(arg)` / `x.reserve_exact(arg)` — method calls.
             syn::Expr::MethodCall(m) => {
                 let name = m.method.to_string();
-                if RESERVE_METHODS.contains(&name.as_str())
+                if let Some(call) = ReservationCall::from_method_ident(&name)
                     && let Some(arg) = m.args.first()
                     && arg_has_min_cap(arg)
                 {
-                    self.hits.push((span_line(&m.method.span()), name));
+                    self.hits.push((span_line(&m.method.span()), call));
                 }
             }
             _ => {}
@@ -136,11 +163,14 @@ mod tests {
             "fn a(k: usize, v: Vec<u8>) { let _ = Vec::<u8>::with_capacity(k.min(v.len())); }\n\
              fn b(k: usize) { let mut w: Vec<u8> = Vec::new(); w.reserve(k.min(4)); }",
         );
+        let violations = check(&[f]);
         assert_eq!(
-            check(&[f]).len(),
+            violations.len(),
             2,
             "both the with_capacity and the reserve inline caps are flagged"
         );
+        assert_eq!(violations[0].call, ReservationCall::WithCapacity);
+        assert_eq!(violations[1].call, ReservationCall::Reserve);
     }
 
     #[test]

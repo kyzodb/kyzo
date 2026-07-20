@@ -36,8 +36,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::SystemTime;
 
-use serde::Deserialize;
 use walkdir::WalkDir;
+
+use crate::cargo_meta::CargoMetadata;
 
 /// Where a violating write was traced to: a single package by name, or — if
 /// the evidence does not pin it down to exactly one — the full set of
@@ -161,30 +162,10 @@ pub fn check() -> Result<String, BuildScriptSandboxError> {
     check_at(&repo_root)
 }
 
-/// Shape of `cargo metadata --format-version=1` (full graph — no `--no-deps`:
-/// a build-script target can belong to any dependency, not only a workspace
-/// member), trimmed to what target discovery and attribution need.
-#[derive(Deserialize)]
-struct CargoMetadata {
-    packages: Vec<MetaPackage>,
-    workspace_members: Vec<String>,
-    target_directory: String,
-    workspace_root: String,
-}
-
-#[derive(Deserialize)]
-struct MetaPackage {
-    id: String,
-    name: String,
-    version: String,
-    manifest_path: String,
-    targets: Vec<MetaTarget>,
-}
-
-#[derive(Deserialize)]
-struct MetaTarget {
-    kind: Vec<String>,
-}
+/// Shape of `cargo metadata --format-version=1` lives in [`crate::cargo_meta`]
+/// — shared with the pure-Rust gate so the two never drift. Full-graph
+/// (no `--no-deps`): a build-script target can belong to any dependency, not
+/// only a workspace member.
 
 fn combined_output(output: &Output) -> String {
     format!(

@@ -17,6 +17,7 @@
 //! `resonance` verb; it joins `gate`'s sequence on day one.
 
 mod allowlist;
+mod cargo_meta;
 mod checks;
 mod fsutil;
 mod gate;

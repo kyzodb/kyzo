@@ -19,7 +19,8 @@ use std::process::Command;
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde::Deserialize;
+
+use crate::cargo_meta::CargoMetadata;
 
 /// Crates whose presence means a C/C++ compiler or a banned base backend
 /// got in. The C-carrying crypto/compression stacks are named explicitly as
@@ -85,30 +86,6 @@ fn run_cargo(repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::O
         .args(args)
         .current_dir(repo_root)
         .output()
-}
-
-/// Shape of `cargo metadata --format-version=1 --no-deps`, trimmed to the
-/// fields root discovery needs. `--no-deps` deliberately skips dependency
-/// resolution: root discovery only needs the workspace's own package list,
-/// and resolving no-deps sidesteps whole-workspace feature unification,
-/// which would otherwise attribute another workspace member's activated
-/// features (and their crates) to whatever is being scanned.
-#[derive(Deserialize)]
-struct CargoMetadata {
-    packages: Vec<MetaPackage>,
-    workspace_members: Vec<String>,
-    workspace_root: String,
-}
-
-#[derive(Deserialize)]
-struct MetaPackage {
-    id: String,
-    name: String,
-    manifest_path: String,
-    /// `null` unless the manifest sets `publish`; `Some([])` is exactly
-    /// `publish = false`, `Some([..])` is a registry allowlist, both of
-    /// which still ship somewhere and stay in scope.
-    publish: Option<Vec<String>>,
 }
 
 /// Story #322: replaces the hard-coded `ENGINE_PACKAGES` list entirely — no

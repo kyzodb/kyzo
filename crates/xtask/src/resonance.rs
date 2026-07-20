@@ -224,18 +224,22 @@ fn run_panic_lint(
 
 fn run_copy_detector(files: &[fsutil::SourceFile], allow: &allowlist::Allowlist) -> bool {
     println!("== check 3: copy-detector ==");
-    let (violations, _pairs, units) = checks::copy_detector::check(files, allow);
+    let (violations, _pairs, units, stale) = checks::copy_detector::check(files, allow);
     for v in &violations {
         println!(
             "FAIL near-identical bodies (similarity {:.2}): {}:{} `{}`  <->  {}:{} `{}`",
             v.similarity, v.file_a, v.line_a, v.label_a, v.file_b, v.line_b, v.label_b
         );
     }
-    let ok = violations.is_empty();
+    for s in &stale {
+        println!("FAIL (stale allowlist) {s}");
+    }
+    let ok = violations.is_empty() && stale.is_empty();
     println!(
-        "check 3: {} ({} unwaived near-duplicate pair(s), {} comparison units >= {} tokens)",
+        "check 3: {} ({} unwaived near-duplicate pair(s), {} stale waiver member(s), {} comparison units >= {} tokens)",
         if ok { "PASS" } else { "FAIL" },
         violations.len(),
+        stale.len(),
         units.len(),
         checks::copy_detector::MIN_TOKENS
     );
