@@ -293,6 +293,7 @@ impl<'a> Ingestion<'a> {
             .map(|(table_id, checksum)| -> crate::Result<Table> {
                 Table::recover(
                     self.folder.join(table_id.to_string()),
+                    table_id,
                     checksum,
                     global_seqno,
                     self.tree.id,

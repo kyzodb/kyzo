@@ -355,6 +355,7 @@ impl StandardCompaction {
             .map(|(table_id, checksum)| -> crate::Result<Table> {
                 Table::recover(
                     table_base_folder.join(table_id.to_string()),
+                    table_id,
                     checksum,
                     0,
                     opts.tree_id,

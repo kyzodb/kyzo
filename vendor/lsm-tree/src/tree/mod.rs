@@ -415,6 +415,7 @@ impl AbstractTree for Tree {
             .map(|(table_id, checksum)| -> crate::Result<Table> {
                 Table::recover(
                     folder.join(table_id.to_string()),
+                    table_id,
                     checksum,
                     0,
                     self.id,
@@ -1133,6 +1134,7 @@ impl Tree {
 
                 let table = Table::recover(
                     table_file_path,
+                    table_id,
                     checksum,
                     global_seqno,
                     tree_id,

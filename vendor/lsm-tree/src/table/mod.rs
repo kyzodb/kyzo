@@ -455,6 +455,7 @@ impl Table {
     )]
     pub fn recover(
         file_path: PathBuf,
+        table_id: TableId,
         checksum: Checksum,
         global_seqno: SeqNo,
         tree_id: TreeId,
@@ -472,15 +473,6 @@ impl Table {
         let mut file = std::fs::File::open(&file_path)?;
         let file_path = Arc::new(file_path);
 
-        let table_id_from_path = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|s| s.parse::<TableId>().ok())
-            .ok_or_else(|| {
-                log::error!("invalid table file name {}", file_path.display());
-                crate::Error::Unrecoverable
-            })?;
-
         #[cfg(feature = "metrics")]
         metrics
             .table_file_opened_uncached
@@ -490,8 +482,15 @@ impl Table {
         let regions = ParsedRegions::parse_from_toc(trailer.toc())?;
 
         log::trace!("Reading meta block, with meta_ptr={:?}", regions.metadata);
-        let metadata =
-            ParsedMeta::load_with_handle(&file, &regions.metadata, table_id_from_path)?;
+        let metadata = ParsedMeta::load_with_handle(&file, &regions.metadata, table_id)?;
+
+        if metadata.id != table_id {
+            log::error!(
+                "table id mismatch: expected {table_id}, meta has {}",
+                metadata.id,
+            );
+            return Err(crate::Error::Unrecoverable);
+        }
 
         let file = Arc::new(file);
 

@@ -481,6 +481,7 @@ impl AbstractTree for BlobTree {
             .map(|(table_id, checksum)| -> crate::Result<Table> {
                 Table::recover(
                     table_folder.join(table_id.to_string()),
+                    table_id,
                     checksum,
                     0,
                     self.index.id,

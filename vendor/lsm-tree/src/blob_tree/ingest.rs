@@ -223,6 +223,7 @@ impl<'a> BlobIngestion<'a> {
                         .path
                         .join(crate::file::TABLES_FOLDER)
                         .join(table_id.to_string()),
+                    table_id,
                     checksum,
                     global_seqno,
                     index.id,

@@ -47,6 +47,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -77,6 +78,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -107,6 +109,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -137,6 +140,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -167,6 +171,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -215,6 +220,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -244,6 +250,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -273,6 +280,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -303,6 +311,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file.clone(),
+                0,
                 checksum,
                 0,
                 0,
@@ -333,6 +342,7 @@ fn test_with_table(
 
             let table = Table::recover(
                 file,
+                0,
                 checksum,
                 0,
                 0,
@@ -1218,6 +1228,7 @@ fn table_read_fuzz_1() -> crate::Result<()> {
 
     let table = crate::Table::recover(
         file,
+        0,
         crate::Checksum::from_raw(0),
         0,
         0,
@@ -1292,6 +1303,7 @@ fn table_partitioned_index() -> crate::Result<()> {
 
     let table = crate::Table::recover(
         file,
+        0,
         crate::Checksum::from_raw(0),
         0,
         0,
@@ -1401,6 +1413,7 @@ fn table_global_seqno() -> crate::Result<()> {
 
     let table = crate::Table::recover(
         file,
+        0,
         crate::Checksum::from_raw(0),
         7,
         0,
@@ -1450,6 +1463,7 @@ fn table_return_global_seqno() -> crate::Result<()> {
 
     let table = crate::Table::recover(
         file,
+        0,
         crate::Checksum::from_raw(0),
         SEQNO,
         0,
