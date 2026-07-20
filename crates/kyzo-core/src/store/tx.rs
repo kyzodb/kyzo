@@ -280,9 +280,15 @@ pub trait WriteTx: ReadTx {
     /// as-of system cut a genuine serial-order prefix under SSI.
     fn system_stamp(&self) -> ValidityTs;
 
-    /// Set a key to a value, overwriting any existing value. The key joins
-    /// the conflict surface: a concurrent committed write to it aborts this
-    /// transaction's commit.
+    /// Set a key to a value, overwriting any existing value at that exact
+    /// key. The key joins the conflict surface: a concurrent committed write
+    /// to it aborts this transaction's commit.
+    ///
+    /// Seat 34: committed bitemporal **facts** are not rewritten in place.
+    /// A correction mints a new `(valid, sys)` key and leaves prior keys
+    /// intact — see [`crate::session::admit::supersession`]. Raw `put` on
+    /// an identical key is last-write-wins KV mechanics, not a fact-rewrite
+    /// API.
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
 
     /// Delete a key. The key joins the conflict surface exactly as in

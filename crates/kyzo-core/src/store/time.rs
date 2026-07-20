@@ -20,6 +20,13 @@
 //! (decisions.md §30/§31): order within one Store is dense
 //! [`CommitOrdinal`](super::sweep::CommitOrdinal); client-supplied and
 //! foreign timestamps that would reorder local commits are refused.
+//!
+//! **Seat 34 (durable layer supersedes; it never overwrites history):**
+//! a correction is a new WAL-authoritative supersession at a new
+//! `(valid, sys)` key. Prior committed fact keys are not rewritten,
+//! updated in place, or overwritten. As-of a pre-correction cut still
+//! materializes the prior value. There is no rewrite API on committed
+//! facts — see [`crate::session::admit::supersession`].
 
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;

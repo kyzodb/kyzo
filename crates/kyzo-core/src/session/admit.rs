@@ -22,6 +22,11 @@
 //! ObjectRef material, never KyzoRecord — store/decode modules have no mint
 //! path (compile-fail; T5).
 //!
+//! Seat 34 (#268 T4): correction is supersession without overwrite —
+//! [`supersession`] admits a new record by prior [`RecordId`], appends a
+//! new bitemporal key, and leaves prior committed bytes intact so as-of
+//! pre-correction cuts replay the original exactly.
+//!
 //! `execute_relation` receives the evaluated rows and the `:put`/`:rm`/…
 //! operation, coerces each row through the relation's declared column
 //! types, writes through the session, maintains plain/temporal indices,
@@ -241,6 +246,8 @@ struct LiveAdmissionChain {
     origin_commit: CommitOrdinal,
     /// Certificates attached after admit — never mint-and-drop.
     retained_certificates: Vec<AdmissionCertificate>,
+    /// Seat 34 supersession links (prior → successor by RecordId).
+    supersessions: Vec<supersession::Supersession>,
 }
 
 /// Engine-held live admission seats — genesis StoreId, write token (SweepDoor),
@@ -358,12 +365,39 @@ impl LiveAdmissionSeats {
                 root_chain,
                 origin_commit: CommitOrdinal::ZERO,
                 retained_certificates: Vec::new(),
+                supersessions: Vec::new(),
             })),
         }
     }
 
     pub(crate) fn store_id(&self) -> StoreId {
         self.store_id
+    }
+
+    /// Dense CommitOrdinal of the admission spine tip (after last attach).
+    pub(crate) fn origin_commit(&self) -> CommitOrdinal {
+        self.chain
+            .lock()
+            .expect("live admission chain lock")
+            .origin_commit
+    }
+
+    /// Retain a seat-34 supersession link on the live spine.
+    pub(crate) fn retain_supersession(&self, link: supersession::Supersession) {
+        self.chain
+            .lock()
+            .expect("live admission chain lock")
+            .supersessions
+            .push(link);
+    }
+
+    /// Retained supersession links (tests / accountability).
+    pub(crate) fn retained_supersessions(&self) -> Vec<supersession::Supersession> {
+        self.chain
+            .lock()
+            .expect("live admission chain lock")
+            .supersessions
+            .clone()
     }
 
     /// Snapshot of the live [`RootChain`] tip (tamper-evidence expected).
@@ -863,6 +897,14 @@ pub(crate) fn admit_sugar_relation_row(
         live.clone(),
     ))
 }
+
+/// Seat 34 — correction as supersession without overwrite.
+///
+/// A correction is a new admitted record superseding the prior by
+/// [`RecordId`]; the prior stays committed. As-of a pre-correction cut
+/// replays the original. There is no rewrite API on committed facts.
+#[path = "admit_supersession.rs"]
+pub(crate) mod supersession;
 
 /// Relational sugar retract (:rm / retract_fact) — mints an Invalidation
 /// through [`admit_record`]. No anonymous durable retract mint.
