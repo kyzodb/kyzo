@@ -17,6 +17,13 @@
 //! each [`Committed`] mint extends it via [`RootChain::append`](super::merkle::RootChain::append);
 //! [`Applied`] never extends history-authoritative roots (§25 / §56).
 //!
+//! **One boundary, two chains (§24 + §56).** At the durable seal the door
+//! advances the WAL byte hash-chain (`WalRecord` / [`WalHash`] tip) and the
+//! meaning-layer [`RootChain`] together, then seals a
+//! [`DurableCommitCut`](super::merkle::DurableCommitCut) that composes both
+//! tips. A third independent predecessor digest is deleted — the WAL tip *is*
+//! the CommitOrdinal predecessor-hash seal.
+//!
 //! **Overlap-only group commit.** A durable barrier batches only writers
 //! whose arrival overlaps an in-flight fsync ([`SweepDoor::begin_fsync_window`]
 //! … [`SweepDoor::seal_durable_overlap_batch`]). A non-overlapping arrival
@@ -42,9 +49,14 @@ use std::collections::VecDeque;
 use super::authority::{IncarnationId, WriteAuthority};
 use super::commit_cap::StableCommitCap;
 use super::epoch::FenceEpoch;
-use super::merkle::{ChainLinkKind, ChainedStateRoot, MerkleChainRefuse, RootChain, StateRoot};
+use super::merkle::{
+    ChainLinkKind, ChainedStateRoot, DurableCommitCut, MerkleChainRefuse, RootChain, StateRoot,
+};
 use super::open::StoreId;
 use super::tx::{CommitFailure, WriteTx};
+use super::wal::{
+    GENESIS_PREDECESSOR, WalHash, WalPayload, WalRecord, WalRefuse, WalSegment,
+};
 
 /// Store-monotonic contention ordinal. Minted at admission; may gap freely
 /// (conflicts, capacity refuses, cancels). Never sealed history.
@@ -358,12 +370,17 @@ pub struct SweepDoor {
     last_sealed_intent: Option<IntentOrdinal>,
     /// Highest sealed CommitOrdinal (dense floor); next durable seal assigns successor.
     highest_commit: CommitOrdinal,
-    /// Predecessor-hash chain head over CommitOrdinal (sole history seal).
-    predecessor_hash: [u8; 32],
+    /// WAL byte-chain tip ([`WalHash`] / replay `final_hash`) — predecessor-hash
+    /// seal over CommitOrdinal (seat 24 + 25). Advanced only at durable seal.
+    wal_tip: WalHash,
+    /// Live WAL segment receiving durable Commit records at this door.
+    wal_segment: WalSegment,
     /// Spec §56 chained state roots — extended only at [`Self::seal_durable`]
     /// (`Committed` mint). Prior tip is stored here so accountability is not
     /// cold on-demand only. Never extended by [`Self::seal`] / [`Applied`].
     root_chain: RootChain,
+    /// Last composed durable cut (meaning tip × WAL tip) at this door.
+    last_durable_cut: Option<DurableCommitCut>,
     /// Overlap-only fsync window: `Open` means a barrier is in flight.
     fsync_window: FsyncWindow,
     /// Intents whose arrival overlaps the in-flight fsync (carriage for one barrier).
@@ -400,8 +417,10 @@ impl SweepDoor {
             next_intent: IntentOrdinal::ZERO,
             last_sealed_intent: None,
             highest_commit: CommitOrdinal::ZERO,
-            predecessor_hash: [0u8; 32],
+            wal_tip: GENESIS_PREDECESSOR,
+            wal_segment: WalSegment::open(store_id, fence_epoch, 0),
             root_chain: RootChain::empty(),
+            last_durable_cut: None,
             fsync_window: FsyncWindow::Closed,
             overlap_cohort: Vec::new(),
             last_overlap_batch: None,
@@ -436,6 +455,21 @@ impl SweepDoor {
     /// Prior [`StateRoot`] the next `Committed` mint must cover (or genesis).
     pub fn prior_root(&self) -> StateRoot {
         self.root_chain.prior_root()
+    }
+
+    /// WAL byte-chain tip ([`WalHash`] / replay `final_hash`) at this door.
+    pub fn wal_final_hash(&self) -> WalHash {
+        self.wal_tip
+    }
+
+    /// Live WAL segment sealed at this door's durable commits.
+    pub fn wal_segment(&self) -> &WalSegment {
+        &self.wal_segment
+    }
+
+    /// Last composed durable cut (meaning × WAL), if any durable seal occurred.
+    pub fn last_durable_cut(&self) -> Option<DurableCommitCut> {
+        self.last_durable_cut
     }
 
     /// Whether an overlap-only fsync window is currently in flight.
@@ -583,9 +617,12 @@ impl SweepDoor {
     /// [`OverlapBatch`] on success.
     ///
     /// On success, mints a Spec [`ChainedStateRoot`] over `content_root`
-    /// (plaintext-canonical digest at this cut) and extends [`RootChain`] via
-    /// [`RootChain::append`]. History-authoritative roots extend only here —
-    /// never on [`Self::seal`] / [`Applied`] (§25 / §56).
+    /// (plaintext-canonical digest at this cut), extends [`RootChain`] via
+    /// [`RootChain::append`], advances the WAL byte hash-chain with a Commit
+    /// record whose body binds the meaning tip, and seals a
+    /// [`DurableCommitCut`] composing both tips. History-authoritative roots
+    /// and WAL tips extend only here — never on [`Self::seal`] / [`Applied`]
+    /// (§24 / §25 / §56).
     pub fn seal_durable<W: WriteTx>(
         &mut self,
         intent: AdmittedIntent,
@@ -693,7 +730,8 @@ impl SweepDoor {
         self.last_sealed_intent = Some(intent_ordinal);
     }
 
-    /// Post-barrier sole [`Committed`] mint + root-chain append (§25 / §56).
+    /// Post-barrier sole [`Committed`] mint: RootChain + WAL byte chain +
+    /// composed [`DurableCommitCut`] at one durable boundary (§24 / §25 / §56).
     fn mint_committed_after_barrier(
         &mut self,
         intent_ordinal: IntentOrdinal,
@@ -704,10 +742,9 @@ impl SweepDoor {
             .highest_commit
             .successor()
             .map_err(SweepSealFailure::Sweep)?;
-        self.predecessor_hash =
-            seal_predecessor_hash(self.predecessor_hash, self.store_id, commit_ordinal);
         self.highest_commit = commit_ordinal;
 
+        // Meaning-layer chain (seat 56).
         let chained = ChainedStateRoot::mint(
             self.store_id,
             self.fence_epoch,
@@ -720,26 +757,29 @@ impl SweepDoor {
             .append(chained)
             .map_err(SweepSealFailure::MerkleChain)?;
 
+        // WAL byte chain (seat 24): Commit body binds the meaning tip so the
+        // byte chain covers the RootChain digest at this ordinal.
+        let record = WalRecord::seal(
+            self.wal_tip,
+            WalPayload::Commit {
+                commit_ordinal,
+                body: chained.root().as_bytes().to_vec(),
+            },
+        );
+        self.wal_segment
+            .append(record.clone())
+            .map_err(SweepSealFailure::Wal)?;
+        self.wal_tip = record.record_hash();
+
+        // One boundary, two chains — compose both tips.
+        self.last_durable_cut = Some(DurableCommitCut::compose(&chained, self.wal_tip));
+
         Ok(Committed::mint(
             self.store_id,
             self.fence_epoch,
             commit_ordinal,
         ))
     }
-}
-
-fn seal_predecessor_hash(
-    predecessor: [u8; 32],
-    store_id: StoreId,
-    commit_ordinal: CommitOrdinal,
-) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(b"kyzo.commit_ordinal.seal.v1");
-    h.update(predecessor);
-    h.update(store_id.as_bytes());
-    h.update(u64::to_be_bytes(commit_ordinal.get()));
-    h.finalize().into()
 }
 
 /// Typed refuse from the SweepDoor (non-SSI family).
@@ -794,6 +834,10 @@ pub enum SweepSealFailure {
     #[error(transparent)]
     #[diagnostic(transparent)]
     MerkleChain(MerkleChainRefuse),
+    /// WAL byte-chain append refused (predecessor / segment law).
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Wal(#[from] WalRefuse),
 }
 
 // ── Recovery SLA claim / bench-lane emit (decisions.md §28 / §86) ─────────
@@ -887,6 +931,151 @@ pub fn emit_recovery_sla_claim(
         bytes_since_last_flush,
         bound_ns,
     })
+}
+
+#[cfg(test)]
+mod composition_tests {
+    //! Prove RootChain × WAL byte-chain meet at [`SweepDoor::seal_durable`].
+
+    use super::*;
+    use crate::store::authority::{Entropy, OpenOrdinal};
+    use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+    use crate::store::merkle::{DurableCommitCut, GENESIS_ROOT, cuts_equal};
+    use crate::store::open::{
+        EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, genesis,
+    };
+    use crate::store::scratch::TempTx;
+    use crate::store::wal::{GENESIS_PREDECESSOR, WalPayload, WalRecord, replay};
+
+    fn open_live_door() -> (SweepDoor, IncarnationId, SweepSession) {
+        let sealed = genesis(GenesisParams {
+            identity_seed: [0x24; 32],
+            recovery_matrix: None,
+            staging_ttl: StagingTtl::new(1_024),
+            size_class: SizeClass::Compact,
+            entropy_arm: EntropyArm::OsRandom,
+            stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
+                snapshot_fork: false,
+            },
+        });
+        let store_id = sealed.store_id();
+        let fence_epoch = sealed.fence_epoch();
+        let (_view, auth) = sealed.take_write_authority();
+        let incarnation = auth
+            .incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes([0x56; 32]))
+            .expect("incarnation mint");
+        let session = SweepSession::new(store_id, fence_epoch, incarnation);
+        let cap = StableCommitCap::NativeFsyncProof {
+            snapshot_fork: SnapshotFork::No,
+        };
+        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
+            .expect("live SweepDoor");
+        (door, incarnation, session)
+    }
+
+    fn content_root(tag: u8) -> StateRoot {
+        let mut bytes = *GENESIS_ROOT.as_bytes();
+        bytes[0] = tag;
+        StateRoot::from_digest(bytes)
+    }
+
+    /// Load-bearing at the door: seal_durable advances both chains and seals
+    /// a composed cut. Breaking the WAL tip bind (or the meaning tip) at the
+    /// boundary breaks cut equality against the door's last durable cut.
+    #[test]
+    fn seal_durable_composes_root_chain_with_wal_byte_chain() {
+        let (mut door, incarnation, session) = open_live_door();
+        let store_id = session.store_id();
+
+        let intent = door.admit(incarnation, &session).expect("admit");
+        let proof = door
+            .seal_durable(intent, TempTx::default(), content_root(0xA1), &session)
+            .expect("durable seal");
+
+        let cut = door
+            .last_durable_cut()
+            .expect("composed cut after durable seal");
+        assert_eq!(cut.commit_ordinal(), proof.commit_ordinal());
+        assert_eq!(cut.wal_final_hash(), door.wal_final_hash());
+        assert_eq!(
+            door.root_chain().links().last().map(|l| l.root()),
+            Some(cut.meaning_root()),
+            "meaning tip on RootChain must equal composed cut"
+        );
+
+        // Replay of the door's WAL segment reproduces final_hash.
+        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))
+            .expect("WAL replay");
+        assert_eq!(
+            recovered.final_hash, door.wal_final_hash(),
+            "replay final_hash must equal door WAL tip"
+        );
+        assert_eq!(
+            recovered.commit_bodies.len(),
+            1,
+            "one Commit record at the durable boundary"
+        );
+        assert_eq!(
+            recovered.commit_bodies[0].1.as_slice(),
+            cut.meaning_root().as_bytes(),
+            "WAL Commit body binds the meaning tip"
+        );
+
+        // Recompose from observed tips — equals the door's cut.
+        let meaning = door.root_chain().links().last().copied().expect("link");
+        let recomposed = DurableCommitCut::compose(&meaning, door.wal_final_hash());
+        assert!(
+            cuts_equal(cut, recomposed),
+            "recomposed cut must equal door cut"
+        );
+
+        // Break WAL tip bind: reseal a Commit with a different body under the
+        // same predecessor — forged tip ≠ door tip → composed cut breaks.
+        let forged_wal = WalRecord::seal(
+            GENESIS_PREDECESSOR,
+            WalPayload::Commit {
+                commit_ordinal: proof.commit_ordinal(),
+                body: vec![0xFF; 32],
+            },
+        )
+        .record_hash();
+        let wal_broken = DurableCommitCut::compose(&meaning, forged_wal);
+        assert!(
+            !cuts_equal(cut, wal_broken),
+            "breaking WAL bind at the boundary must break composed cut equality"
+        );
+
+        // Break meaning tip: remint with different content under same ordinal
+        // metadata shape — forged meaning ≠ door meaning → cut breaks.
+        let forged_meaning = ChainedStateRoot::mint(
+            store_id,
+            session.fence_epoch(),
+            proof.commit_ordinal(),
+            content_root(0xB2),
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        let meaning_broken =
+            DurableCommitCut::compose(&forged_meaning, door.wal_final_hash());
+        assert!(
+            !cuts_equal(cut, meaning_broken),
+            "breaking meaning bind at the boundary must break composed cut equality"
+        );
+
+        // Second durable seal advances both chains again (cross-commit chain).
+        let intent2 = door.admit(incarnation, &session).expect("admit 2");
+        let _ = door
+            .seal_durable(intent2, TempTx::default(), content_root(0xC3), &session)
+            .expect("second durable seal");
+        let cut2 = door.last_durable_cut().expect("second cut");
+        assert!(!cuts_equal(cut, cut2), "second cut must differ from first");
+        assert_eq!(door.root_chain().links().len(), 2);
+        let recovered2 = replay(store_id, std::slice::from_ref(door.wal_segment()))
+            .expect("replay after second seal");
+        assert_eq!(recovered2.final_hash, door.wal_final_hash());
+        assert_eq!(recovered2.commit_bodies.len(), 2);
+    }
 }
 
 /// Overlap-only group-commit proof (story #221 T2) — lives in kyzo-trials

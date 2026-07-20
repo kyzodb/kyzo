@@ -13,6 +13,10 @@
 //! Owns: epoch-headed segment format, cross-segment hash chain, [`replay`],
 //! mutable floors ([`NonceLease`] floors + [`IncarnationId`] records).
 //!
+//! The byte hash-chain ([`WalHash`] / replay [`WalReplayState::final_hash`])
+//! meets the meaning-layer [`super::merkle::RootChain`] at the SweepDoor
+//! durable commit — one boundary, two chains ([`super::merkle::DurableCommitCut`]).
+//!
 //! Bans: SST-as-source-of-truth after flush; per-segment checksums without
 //! the cross-boundary chain.
 

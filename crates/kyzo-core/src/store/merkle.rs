@@ -76,6 +76,7 @@ use super::ReadTx;
 use super::epoch::FenceEpoch;
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
+use super::wal::WalHash;
 use kyzo_model::value::RelationId;
 
 /// The number of `(k,v)` pairs a root scan may touch before it refuses. The
@@ -403,6 +404,78 @@ impl ForkPoint {
     pub fn commit_ordinal(self) -> CommitOrdinal {
         self.commit_ordinal
     }
+}
+
+/// One durable commit boundary: meaning-layer tip × WAL byte-chain tip.
+///
+/// Seat 24 (WAL hash chain) and seat 56 ([`RootChain`]) meet here — not as two
+/// independent chains that never compose. [`compose`](DurableCommitCut::compose)
+/// domain-separates both tips; breaking either bind breaks [`cuts_equal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DurableCommitCut {
+    meaning_root: StateRoot,
+    commit_ordinal: CommitOrdinal,
+    /// WAL [`WalHash`] / `final_hash` tip after the Commit record at this cut.
+    wal_final_hash: WalHash,
+    /// Domain-separated composition of both tips (load-bearing bind).
+    composed: [u8; 32],
+}
+
+impl DurableCommitCut {
+    /// Compose meaning tip with WAL byte-chain tip at the SweepDoor durable seal.
+    pub(crate) fn compose(meaning: &ChainedStateRoot, wal_final_hash: WalHash) -> Self {
+        let meaning_root = meaning.root();
+        let commit_ordinal = meaning.commit_ordinal();
+        let composed = compose_durable_cut(meaning_root, wal_final_hash, commit_ordinal);
+        Self {
+            meaning_root,
+            commit_ordinal,
+            wal_final_hash,
+            composed,
+        }
+    }
+
+    /// Meaning-layer chained root at this cut.
+    pub fn meaning_root(self) -> StateRoot {
+        self.meaning_root
+    }
+
+    /// Dense commit ordinal at this cut.
+    pub fn commit_ordinal(self) -> CommitOrdinal {
+        self.commit_ordinal
+    }
+
+    /// WAL byte-chain tip (`final_hash`) at this cut.
+    pub fn wal_final_hash(self) -> WalHash {
+        self.wal_final_hash
+    }
+
+    /// Domain-separated composition digest of both tips.
+    pub fn composed(self) -> [u8; 32] {
+        self.composed
+    }
+}
+
+/// Composed cuts equal iff both tips and the composition digest agree.
+pub fn cuts_equal(left: DurableCommitCut, right: DurableCommitCut) -> bool {
+    left.composed() == right.composed()
+        && left.meaning_root() == right.meaning_root()
+        && left.wal_final_hash() == right.wal_final_hash()
+        && left.commit_ordinal() == right.commit_ordinal()
+}
+
+/// Domain-separated bind of meaning tip + WAL tip at one commit ordinal.
+fn compose_durable_cut(
+    meaning_root: StateRoot,
+    wal_final_hash: WalHash,
+    commit_ordinal: CommitOrdinal,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"kyzo.durable_commit_cut.v1");
+    h.update(meaning_root.as_bytes());
+    h.update(wal_final_hash);
+    h.update(u64::to_be_bytes(commit_ordinal.get()));
+    h.finalize().into()
 }
 
 /// An ordered chain of chained roots — supports as-of lookup.
@@ -1367,5 +1440,118 @@ mod tests {
         assert!(err.to_string().contains("ceiling"), "{err}");
         // Ceiling at the exact count succeeds.
         assert!(state_root(&tx, NonZeroU64::new(10).unwrap()).is_ok());
+    }
+
+    // ── meaning × WAL byte-chain composition (§24 + §56) ─────────────────
+
+    /// Load-bearing: [`DurableCommitCut`] binds meaning tip and WAL
+    /// `final_hash` together. Breaking either chain's tip at the boundary
+    /// breaks composed-cut equality. If `compose_durable_cut` omitted
+    /// `wal_final_hash`, a broken WAL tip would still equal the honest cut.
+    #[test]
+    fn durable_commit_cut_composition_binds_meaning_and_wal_hash() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+        use crate::store::wal::{GENESIS_PREDECESSOR, WalPayload, WalRecord};
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, DurableCommitCut, GENESIS_ROOT, cuts_equal,
+        };
+
+        let store_id = StoreId::from_digest([0x24; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let ordinal = CommitOrdinal::ZERO.successor().unwrap();
+        let content = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+
+        let meaning = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            ordinal,
+            content,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+
+        // Honest WAL Commit record: body binds the meaning tip; tip = final_hash.
+        let honest_record = WalRecord::seal(
+            GENESIS_PREDECESSOR,
+            WalPayload::Commit {
+                commit_ordinal: ordinal,
+                body: meaning.root().as_bytes().to_vec(),
+            },
+        );
+        let honest_wal = honest_record.record_hash();
+        let honest = DurableCommitCut::compose(&meaning, honest_wal);
+        assert_eq!(honest.wal_final_hash(), honest_wal);
+        assert_eq!(honest.meaning_root(), meaning.root());
+        assert!(cuts_equal(honest, DurableCommitCut::compose(&meaning, honest_wal)));
+
+        // Break meaning bind (different content → different chained root).
+        let other_content =
+            StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"X".to_vec())]));
+        let broken_meaning = ChainedStateRoot::mint(
+            store_id,
+            fence,
+            ordinal,
+            other_content,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        );
+        let meaning_broken = DurableCommitCut::compose(&broken_meaning, honest_wal);
+        assert!(
+            !cuts_equal(honest, meaning_broken),
+            "breaking meaning tip at the boundary must break composed cut"
+        );
+
+        // Break WAL bind (different body under same predecessor → different final_hash).
+        let broken_wal_record = WalRecord::seal(
+            GENESIS_PREDECESSOR,
+            WalPayload::Commit {
+                commit_ordinal: ordinal,
+                body: vec![0xDE, 0xAD],
+            },
+        );
+        let wal_broken = DurableCommitCut::compose(&meaning, broken_wal_record.record_hash());
+        assert_ne!(
+            honest.wal_final_hash(),
+            wal_broken.wal_final_hash(),
+            "WAL body edit must change final_hash"
+        );
+        assert!(
+            !cuts_equal(honest, wal_broken),
+            "breaking WAL tip at the boundary must break composed cut"
+        );
+
+        // Control: a composition that omitted wal_final_hash would still match
+        // when only the WAL tip changes — prove the bind covers WalHash.
+        let meaning_only = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(b"kyzo.durable_commit_cut.v1");
+            h.update(honest.meaning_root().as_bytes());
+            // deliberately omit wal_final_hash
+            h.update(u64::to_be_bytes(ordinal.get()));
+            let d: [u8; 32] = h.finalize().into();
+            d
+        };
+        let meaning_only_broken_wal = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(b"kyzo.durable_commit_cut.v1");
+            h.update(honest.meaning_root().as_bytes());
+            h.update(u64::to_be_bytes(ordinal.get()));
+            let d: [u8; 32] = h.finalize().into();
+            d
+        };
+        assert_eq!(
+            meaning_only, meaning_only_broken_wal,
+            "control: omitting WalHash hides a WAL tip break"
+        );
+        assert_ne!(
+            honest.composed(),
+            wal_broken.composed(),
+            "real compose covers wal_final_hash — WAL tip break changes composed"
+        );
     }
 }
