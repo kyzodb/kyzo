@@ -29,7 +29,9 @@ use std::collections::HashSet;
 use sha2::{Digest as ShaDigest, Sha256};
 
 use super::epoch::CryptoDomain;
-use super::transcript::{CanonicalTranscript, encode_key_commitment};
+use super::transcript::{
+    CanonicalTranscript, encode_key_commitment, encode_wrapped_shred_salt_aad,
+};
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// AEAD nonce (96-bit). Distinct from [`Digest`] / [`Mac`] / key material.
@@ -380,24 +382,23 @@ fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Domain + segment binding bytes used as wrap AAD.
-fn wrap_aad(crypto_domain: CryptoDomain, segment: SegmentCounter) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(4 + 32 + 8 + 8);
-    aad.extend_from_slice(b"WSS1");
-    aad.extend_from_slice(crypto_domain.store_id().as_bytes());
-    aad.extend_from_slice(&u64::to_be_bytes(crypto_domain.fence_epoch().get()));
-    aad.extend_from_slice(&u64::to_be_bytes(segment.get()));
-    aad
+/// Mint the ONE WrappedShredSalt wrap-AAD CanonicalTranscript (seat 59).
+fn shred_salt_wrap_transcript(
+    crypto_domain: CryptoDomain,
+    segment: SegmentCounter,
+) -> Result<CanonicalTranscript, CryptoRefuse> {
+    encode_wrapped_shred_salt_aad(crypto_domain, segment.get())
+        .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Deterministic 96-bit nonce for KEK wrap (SIV makes repeat safe).
-fn wrap_nonce(crypto_domain: CryptoDomain, segment: SegmentCounter) -> Nonce {
+///
+/// Digests the ONE wrap-AAD [`CanonicalTranscript`] — no second serialization path.
+/// Misuse-resistant SIV keeps deterministic nonce repeat message-equality-only.
+fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce {
     let mut h = Sha256::new();
-    h.update(b"kyzo.wrap.shred_salt.nonce.v1");
-    h.update(crypto_domain.store_id().as_bytes());
-    h.update(u64::to_be_bytes(crypto_domain.fence_epoch().get()));
-    h.update(u64::to_be_bytes(segment.get()));
+    h.update(transcript.as_bytes());
     let dig = h.finalize();
     let mut nonce = [0u8; 12];
     nonce.copy_from_slice(&dig[..12]);
@@ -688,14 +689,14 @@ pub fn wrap_shred_salt(
     segment: SegmentCounter,
     crypto_domain: CryptoDomain,
 ) -> Result<WrappedShredSalt, CryptoRefuse> {
-    let nonce = wrap_nonce(crypto_domain, segment);
-    let aad = wrap_aad(crypto_domain, segment);
+    let aad = shred_salt_wrap_transcript(crypto_domain, segment)?;
+    let nonce = wrap_nonce(&aad);
     // KeyCommitment posture on for all AEAD sites — wrap uses SIV + CMT-1 under KEK.
     let body = seal_arm_kek(
         AeadArm::Siv,
         cap.kek(),
         &nonce,
-        &aad,
+        aad.as_bytes(),
         salt.as_bytes(),
         crypto_domain,
     )?;
@@ -719,13 +720,13 @@ pub fn unwrap_shred_salt(
     if ledger.is_shredded(wrapped) {
         return Err(CryptoRefuse::Shredded);
     }
-    let nonce = wrap_nonce(wrapped.crypto_domain, wrapped.segment);
-    let aad = wrap_aad(wrapped.crypto_domain, wrapped.segment);
+    let aad = shred_salt_wrap_transcript(wrapped.crypto_domain, wrapped.segment)?;
+    let nonce = wrap_nonce(&aad);
     let pt = match open_arm_kek(
         AeadArm::Siv,
         cap.kek(),
         &nonce,
-        &aad,
+        aad.as_bytes(),
         &wrapped.ciphertext,
         wrapped.crypto_domain,
     ) {
@@ -989,24 +990,28 @@ mod pins {
     use crate::store::contract::FormatVersion;
     use crate::store::epoch::FenceEpoch;
     use crate::store::open::StoreId;
-    use crate::store::transcript::{CanonicalTranscriptBuilder, FieldId, SealedArtifactKind};
+    use crate::store::transcript::{
+        CanonicalTranscriptBuilder, FieldId, SealedArtifactKind, WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC,
+        encode_wrapped_shred_salt_aad, parse_golden_hex,
+    };
 
     /// GUARDIAN GATE (#376 T2) — CMT-1 key-commitment over the Gcm collision.
     /// Empirically constructed (invisible-salamanders / Partitioning Oracle Attacks): ONE
     /// (ciphertext ‖ tag) that the base ChaCha20-Poly1305 AEAD accepts under TWO distinct
-    /// keys, using our exact `wrap_aad` framing. The collision block was solved over
-    /// GF(2^130-5) so both keys' Poly1305 tags coincide. With CMT-1 via CanonicalTranscript,
-    /// C binds only the opening key (+ CryptoDomain): present (ct‖tag‖C_K1) → opens under K1
-    /// and refuses under K2 with [`CryptoRefuse::KeyCommitmentMismatch`]
-    /// (K2 recomputes C_K2 ≠ C_K1). Exercises two-key rejection through production
-    /// [`open_arm`], not a short-input refuse.
+    /// keys, under a fixed AAD byte string the collision was solved against. The collision
+    /// block was solved over GF(2^130-5) so both keys' Poly1305 tags coincide. With CMT-1
+    /// via CanonicalTranscript, C binds only the opening key (+ CryptoDomain): present
+    /// (ct‖tag‖C_K1) → opens under K1 and refuses under K2 with
+    /// [`CryptoRefuse::KeyCommitmentMismatch`] (K2 recomputes C_K2 ≠ C_K1). Exercises
+    /// two-key rejection through production [`open_arm`], not a short-input refuse.
+    /// AAD bytes below are collision-fixture constants — not the production wrap path.
     #[test]
     fn gcm_arm_is_not_key_committing() {
         let k1 = Kek::from_bytes([0x11u8; 32]);
         let k2 = Kek::from_bytes([0x22u8; 32]);
         let nonce = Nonce::from_bytes([0x24u8; 12]);
         let domain = test_domain();
-        // production wrap_aad framing: "WSS1" || store_id || epoch_be || segment_be.
+        // Collision-fixture AAD (fixed historical bytes the Poly1305 collision targets).
         let mut aad = Vec::new();
         aad.extend_from_slice(b"WSS1");
         aad.extend_from_slice(&[0x5au8; 32]);
@@ -1232,7 +1237,9 @@ mod pins {
             "Dek and Kek must remain distinct types"
         );
         // Wrap-derived nonce is typed Nonce, not a free [u8;12].
-        let n = wrap_nonce(domain, SegmentCounter::ZERO);
+        let wrap_aad = encode_wrapped_shred_salt_aad(domain, SegmentCounter::ZERO.get())
+            .expect("wrap AAD transcript");
+        let n = wrap_nonce(&wrap_aad);
         let _: Nonce = n;
         // encrypt door takes &Dek + Nonce — naked [u8;12] / &Kek are type errors.
         let salt = ShredSalt::from_bytes([0x22; 32]);
@@ -1313,8 +1320,18 @@ mod pins {
             "wrap/unwrap must route through KekUnwrapCap + *_kek doors"
         );
         assert!(
-            crypto_prod.contains("fn wrap_nonce(crypto_domain: CryptoDomain, segment: SegmentCounter) -> Nonce"),
-            "wrap_nonce must return Nonce"
+            crypto_prod.contains("fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce"),
+            "wrap_nonce must digest CanonicalTranscript and return Nonce"
+        );
+        assert!(
+            crypto_prod.contains("encode_wrapped_shred_salt_aad(")
+                && crypto_prod.contains("fn shred_salt_wrap_transcript(")
+                && !crypto_prod.contains("fn wrap_aad("),
+            "wrap AAD must route through encode_wrapped_shred_salt_aad; hand-rolled wrap_aad gone"
+        );
+        assert!(
+            !crypto_prod.contains("kyzo.wrap.shred_salt.nonce.v1"),
+            "wrap_nonce must not hand-frame a second domain-label serialization"
         );
         assert!(
             crypto_prod.contains("pub fn leaf_mac(&self, transcript: &CanonicalTranscript) -> Mac"),
@@ -1352,5 +1369,58 @@ mod pins {
                 && replica_prod.contains("fn signing_body_digest("),
             "signing_body_digest must return Digest"
         );
+    }
+
+    /// RED-first (#376 T18 / seat 59): wrap AAD is the ONE CanonicalTranscript path;
+    /// production encode matches the independent golden; hand-rolled WSS1 framing is gone
+    /// from production; wrap/unwrap still round-trips; main encrypt AAD remains
+    /// `&CanonicalTranscript` only.
+    #[test]
+    fn t18_wrap_aad_is_sole_canonical_transcript_path() {
+        let store = StoreId::from_digest([0x11; 32]);
+        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let production = encode_wrapped_shred_salt_aad(domain, 0).expect("encode wrap AAD");
+        let golden = parse_golden_hex(WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC).expect("golden parses");
+        assert_eq!(
+            production.as_bytes(),
+            golden.as_slice(),
+            "production encode_wrapped_shred_salt_aad must match independent golden"
+        );
+
+        let crypto = include_str!("crypto.rs");
+        let crypto_prod = crypto.split("#[cfg(test)]").next().unwrap_or(crypto);
+        assert!(
+            !crypto_prod.contains("fn wrap_aad("),
+            "hand-rolled wrap_aad must be deleted from production"
+        );
+        // Split so this gate body never contains a contiguous production WSS1 concat needle.
+        let wss1_concat = ["extend_from_slice(b\"", "WSS1\")"].concat();
+        assert!(
+            !crypto_prod.contains(wss1_concat.as_str()),
+            "production must not hand-concat WSS1 wrap AAD bytes"
+        );
+        assert!(
+            crypto_prod.contains("aad: &CanonicalTranscript")
+                && crypto_prod.contains("pub fn encrypt(")
+                && crypto_prod.contains("aad.as_bytes()"),
+            "main encrypt AAD must remain sole CanonicalTranscript path"
+        );
+
+        let kek = Kek::from_bytes([0x11; 32]);
+        let cap = KekUnwrapCap::from_kek(kek);
+        let salt = ShredSalt::from_bytes([0x22; 32]);
+        let seg = SegmentCounter::from_raw(7);
+        let wrap_domain = test_domain();
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, wrap_domain).expect("wrap");
+        let ledger = ShredLedger::new();
+        let opened = unwrap_shred_salt(&cap, &wrapped, &ledger).expect("unwrap");
+        let dek = derive_dek(&cap, wrap_domain, seg, &opened);
+        assert_eq!(dek.crypto_domain(), wrap_domain);
+
+        // Nonce is deterministic bytes-from-transcript-digest (SIV misuse-resistant).
+        let aad = shred_salt_wrap_transcript(wrap_domain, seg).expect("aad");
+        let n1 = wrap_nonce(&aad);
+        let n2 = wrap_nonce(&aad);
+        assert_eq!(n1, n2);
     }
 }

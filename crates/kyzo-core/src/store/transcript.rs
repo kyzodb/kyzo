@@ -73,6 +73,8 @@ pub enum SealedArtifactKind {
     ChainedStateRoot = 11,
     /// AncestorReadGrant decrypt-scope payload (§68).
     AncestorReadGrant = 12,
+    /// WrappedShredSalt KEK-wrap AAD (§59 / shred-salt wrap).
+    WrappedShredSalt = 13,
 }
 
 impl SealedArtifactKind {
@@ -628,6 +630,7 @@ pub const SEALED_ARTIFACT_KINDS: &[SealedArtifactKind] = &[
     SealedArtifactKind::LeaveIsFreePack,
     SealedArtifactKind::ChainedStateRoot,
     SealedArtifactKind::AncestorReadGrant,
+    SealedArtifactKind::WrappedShredSalt,
 ];
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -679,7 +682,8 @@ pub fn refuse_residual_secrets_in_all_sealed_kinds(
             | SealedArtifactKind::StateRootHead
             | SealedArtifactKind::LeaveIsFreePack
             | SealedArtifactKind::ChainedStateRoot
-            | SealedArtifactKind::AncestorReadGrant => {}
+            | SealedArtifactKind::AncestorReadGrant
+            | SealedArtifactKind::WrappedShredSalt => {}
         }
     }
     for kind in SEALED_ARTIFACT_KINDS {
@@ -815,6 +819,8 @@ pub const AUDIT_KEY_LEAF_DOMAIN_LABEL: &[u8] = b"kyzo.audit_key_leaf.v1";
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for AdmissionCertificate envelopes.
 pub const ADMISSION_CERTIFICATE_DOMAIN_LABEL: &[u8] = b"kyzo.admission_certificate.v1";
+/// Domain label for WrappedShredSalt KEK-wrap AAD (former raw `"WSS1"` prefix).
+pub const WRAPPED_SHRED_SALT_AAD_DOMAIN_LABEL: &[u8] = b"WSS1";
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Independently derived golden for [`SealedArtifactKind::KeyCommit`] (seat 59).
@@ -831,6 +837,21 @@ pub const KEY_COMMIT_GOLDEN_VEC: &str = r#"
 # Kind: KeyCommit
 # Decision: seat-59 — independently derived wire bytes (not captured from production encoder)
 4b5458310136000000060001010000000000000008000202000000013600030308018b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a800040308028c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a90005020000000a4b45595f434f4d4d49540008010000000000000000
+"#;
+
+/// Independently derived golden for [`SealedArtifactKind::WrappedShredSalt`] (seat 59).
+///
+/// Hex is hand-derived from the CanonicalTranscript wire format for the normative
+/// fixture — never captured by calling [`encode_wrapped_shred_salt_aad`].
+/// Production [`encode_wrapped_shred_salt_aad`] must match this derivation.
+///
+/// Normative fixture: store-id `[0x11; 32]`, fence_epoch = 0, segment = 0,
+/// domain label `WSS1`.
+pub const WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC: &str = r#"
+# FormatVersion: 6
+# Kind: WrappedShredSalt
+# Decision: seat-59 — independently derived wire bytes (not captured from production encoder)
+4b545831013600000006000101000000000000000d00020200000001360005020000000457535331003d031111111111111111111111111111111111111111111111111111111111111111003e010000000000000000003f010000000000000000
 "#;
 
 /// Open a builder with ARTIFACT_KIND + FORMAT_VERSION + DOMAIN_LABEL — the shared
@@ -868,6 +889,25 @@ pub fn encode_key_commitment(
     )?;
     b.append_bytes(FieldId::DOMAIN_LABEL, KEY_COMMIT_DOMAIN_LABEL)?;
     b.append_u64(FieldId::FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
+    Ok(b.seal())
+}
+
+/// Mint the WrappedShredSalt KEK-wrap AAD transcript: domain-label + store + epoch + segment.
+///
+/// This is the ONE sealed-byte constructor for shred-salt wrap AAD (seat 59).
+/// A hand-rolled `"WSS1" ‖ store_id ‖ fence_epoch ‖ segment` layout is Unconstructible.
+pub fn encode_wrapped_shred_salt_aad(
+    crypto_domain: CryptoDomain,
+    segment: u64,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    let mut b = begin_sealed_artifact(
+        SealedArtifactKind::WrappedShredSalt,
+        FormatVersion::CURRENT,
+        WRAPPED_SHRED_SALT_AAD_DOMAIN_LABEL,
+    )?;
+    b.append_digest32(FieldId::SALT_STORE_ID, crypto_domain.store_id().as_bytes())?;
+    b.append_u64(FieldId::SALT_FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
+    b.append_u64(FieldId::SEGMENT_COUNTER, segment)?;
     Ok(b.seal())
 }
 
@@ -1581,6 +1621,10 @@ pub fn encode_normative_production_transcript(
         SealedArtifactKind::AncestorReadGrant => {
             encode_ancestor_read_grant_payload(&dig, 0, &dig, 1, &dig)
         }
+        SealedArtifactKind::WrappedShredSalt => {
+            let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+            encode_wrapped_shred_salt_aad(domain, 0)
+        }
     }
 }
 
@@ -1872,6 +1916,13 @@ mod pins {
                 w.digest32(49, &dig); // TO_EPOCH_STORE_ID
                 w.finish()
             }
+            SealedArtifactKind::WrappedShredSalt => {
+                let mut w = indep_begin_sealed(13, b"WSS1");
+                w.digest32(61, &store); // SALT_STORE_ID
+                w.u64(62, 0); // SALT_FENCE_EPOCH
+                w.u64(63, 0); // SEGMENT_COUNTER
+                w.finish()
+            }
         }
     }
 
@@ -1891,6 +1942,7 @@ mod pins {
             SealedArtifactKind::ChainedStateRoot => include_str!("golden/chained_state_root.vec"),
             SealedArtifactKind::AncestorReadGrant => include_str!("golden/ancestor_read_grant.vec"),
             SealedArtifactKind::KeyCommit => KEY_COMMIT_GOLDEN_VEC,
+            SealedArtifactKind::WrappedShredSalt => WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC,
         })
     }
 
@@ -2086,6 +2138,7 @@ mod pins {
         assert!(encode_audit_key_leaf(&dig, &dig).is_ok());
         assert!(encode_admission_certificate(&normative_admission_parts()).is_ok());
         assert!(encode_key_commitment(&dig, domain).is_ok());
+        assert!(encode_wrapped_shred_salt_aad(domain, 0).is_ok());
         for kind in SEALED_ARTIFACT_KINDS {
             assert!(
                 encode_normative_production_transcript(*kind).is_ok(),
