@@ -1400,7 +1400,7 @@ pub struct AdmissionCertificateTranscriptParts {
     /// Optional OperationKey.
     pub operation_key: Option<[u8; 32]>,
     /// Signature over the signing body.
-    pub signature: [u8; 64],
+    pub signature: super::crypto::Signature,
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -1431,7 +1431,7 @@ pub fn encode_admission_certificate(
         Some(op) => b.append_digest32(FieldId::OPERATION_KEY, &op)?,
         None => b.append_optional_absent(FieldId::OPERATION_KEY)?,
     }
-    b.append_bytes(FieldId::SIGNATURE, &parts.signature)?;
+    b.append_bytes(FieldId::SIGNATURE, parts.signature.as_bytes())?;
     Ok(b.seal())
 }
 
@@ -1496,7 +1496,7 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
         authorizing_key_id: dig,
         scope_manifest_digest: dig,
         operation_key: None,
-        signature: [0u8; 64],
+        signature: super::crypto::Signature::from_bytes([0u8; 64]),
     }
 }
 
@@ -1763,7 +1763,7 @@ mod pins {
                 w.digest32(76, &dig); // SCOPE_MANIFEST_DIGEST
                 w.digest32(77, &store); // ORIGIN_EPOCH_STORE_ID
                 w.optional_absent(78); // OPERATION_KEY absent
-                w.bytes(79, &[0u8; 64]); // SIGNATURE
+                w.bytes(79, &[0u8; 64]); // SIGNATURE (wire width; typed as Signature above)
                 w.finish()
             }
             SealedArtifactKind::ForkGrant => {

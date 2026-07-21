@@ -822,7 +822,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key).expect("sign");
         let cert = mint_admission_certificate(parts).expect("mint");
@@ -920,7 +920,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
         };
         parts_a.signature = sign_admission_parts(&parts_a, &key).expect("sign A");
         let cert_a = mint_admission_certificate(parts_a).expect("mint A");
@@ -951,7 +951,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
         };
         parts_b.signature = sign_admission_parts(&parts_b, &key).expect("sign B");
         let cert_b = mint_admission_certificate(parts_b).expect("mint B");
@@ -1020,7 +1020,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key).expect("sign");
         let cert = mint_admission_certificate(parts).expect("mint");
@@ -1111,7 +1111,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key).expect("sign");
         let cert = mint_admission_certificate(parts).expect("mint");

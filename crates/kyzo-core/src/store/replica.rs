@@ -42,10 +42,11 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use sha2::{Digest, Sha256};
+use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, VerifyingKey};
+use sha2::{Digest as ShaDigest, Sha256};
 
 use super::contract::FormatVersion;
+use super::crypto::{Digest, Signature};
 use super::epoch::FenceEpoch;
 use super::merkle::{
     ConsistencyProof, GossipConsistency, MerkleChainRefuse, StateRootHead, check_sth_gossip,
@@ -253,20 +254,24 @@ impl AuthorizingKey {
     }
 
     /// ed25519 signature over the signing body (64-byte sealed width).
-    pub(crate) fn sign(&self, body: &[u8; 32]) -> Result<[u8; 64], ReplicaRefuse> {
+    pub(crate) fn sign(&self, body: &Digest) -> Result<Signature, ReplicaRefuse> {
         let signing = self
             .signing
             .as_ref()
             .ok_or(ReplicaRefuse::AuthenticityFailed)?;
-        Ok(signing.sign(body.as_slice()).to_bytes())
+        Ok(Signature::from_bytes(
+            signing.sign(body.as_bytes().as_slice()).to_bytes(),
+        ))
     }
 
     /// Verify a sealed ed25519 signature against this key's public material.
-    pub(crate) fn verify_signature(&self, body: &[u8; 32], signature: &[u8; 64]) -> bool {
-        let Ok(sig) = Signature::try_from(signature.as_slice()) else {
+    pub(crate) fn verify_signature(&self, body: &Digest, signature: &Signature) -> bool {
+        let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
             return false;
         };
-        self.verifying.verify_strict(body.as_slice(), &sig).is_ok()
+        self.verifying
+            .verify_strict(body.as_bytes().as_slice(), &sig)
+            .is_ok()
     }
 }
 
@@ -386,7 +391,7 @@ pub struct AdmissionCertificate {
     operation_key: Option<[u8; 32]>,
     authorizing_key_id: AuthorizingKeyId,
     scope_manifest_digest: ScopeManifestDigest,
-    signature: [u8; 64],
+    signature: Signature,
     protocol_version: [u8; 8],
     schema_cut: [u8; 32],
     predecessor_history_digest: [u8; 32],
@@ -456,12 +461,12 @@ impl AdmissionCertificate {
     }
 
     /// Sealed signature bytes.
-    pub fn signature(&self) -> &[u8; 64] {
+    pub fn signature(&self) -> &Signature {
         &self.signature
     }
 
     /// Signing body digest recomputed from sealed fields (excludes signature).
-    pub fn signing_body(&self) -> [u8; 32] {
+    pub fn signing_body(&self) -> Digest {
         signing_body_digest(
             &self.protocol_version,
             self.origin_store,
@@ -824,7 +829,7 @@ pub struct AdmissionCertificateParts {
     /// Optional OperationKey when composed.
     pub operation_key: Option<[u8; 32]>,
     /// Signature over the signing body under the authorizing key.
-    pub signature: [u8; 64],
+    pub signature: Signature,
 }
 
 #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
@@ -840,7 +845,7 @@ fn signing_body_digest(
     authorizing_key_id: &AuthorizingKeyId,
     scope_manifest_digest: &ScopeManifestDigest,
     operation_key: Option<&[u8; 32]>,
-) -> [u8; 32] {
+) -> Digest {
     let mut h = Sha256::new();
     h.update(b"kyzo.admission_certificate.sign.v1");
     h.update(protocol_version);
@@ -862,7 +867,7 @@ fn signing_body_digest(
         }
         None => h.update([0u8]),
     }
-    h.finalize().into()
+    Digest::from_bytes(h.finalize().into())
 }
 
 /// Mint an AdmissionCertificate — callable only from the admission seam.
@@ -923,7 +928,7 @@ pub(crate) fn mint_admission_certificate(
         ),
         (
             b"signature".to_vec(),
-            MapValue::Bytes(parts.signature.to_vec()),
+            MapValue::Bytes(parts.signature.as_bytes().to_vec()),
         ),
     ];
     if let Some(op) = parts.operation_key {
@@ -965,7 +970,7 @@ pub(crate) fn mint_admission_certificate(
 pub(crate) fn sign_admission_parts(
     parts: &AdmissionCertificateParts,
     key: &AuthorizingKey,
-) -> Result<[u8; 64], ReplicaRefuse> {
+) -> Result<Signature, ReplicaRefuse> {
     if key.id() != parts.authorizing_key_id {
         return Err(ReplicaRefuse::AuthenticityFailed);
     }
@@ -1801,7 +1806,7 @@ impl SthGossipObligation {
 pub struct SignedStateRootHead {
     head: StateRootHead,
     authorizing_key_id: AuthorizingKeyId,
-    signature: [u8; 64],
+    signature: Signature,
 }
 
 impl SignedStateRootHead {
@@ -1811,7 +1816,7 @@ impl SignedStateRootHead {
     /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
     /// head fields.
     pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
-        let body = head.compact_digest();
+        let body = Digest::from_bytes(head.compact_digest());
         let signature = key.sign(&body)?;
         Ok(Self {
             head,
@@ -1832,8 +1837,8 @@ impl SignedStateRootHead {
     }
 
     #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-    /// ed25519 signature bytes.
-    pub fn signature(&self) -> &[u8; 64] {
+    /// ed25519 signature.
+    pub fn signature(&self) -> &Signature {
         &self.signature
     }
 
@@ -1845,7 +1850,7 @@ impl SignedStateRootHead {
         let key = keys
             .lookup(&self.authorizing_key_id)
             .ok_or(ReplicaRefuse::AuthenticityFailed)?;
-        let body = self.head.compact_digest();
+        let body = Digest::from_bytes(self.head.compact_digest());
         if key.verify_signature(&body, &self.signature) {
             Ok(())
         } else {
@@ -1911,7 +1916,10 @@ mod authorizing_key_ed25519_tests {
             AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xAA; 32]), identity_key)
                 .expect("ed25519-dalek from_bytes accepts the small-order key (probe-confirmed)");
         assert!(
-            !weak.verify_signature(&[0x99u8; 32], &forged_sig),
+            !weak.verify_signature(
+                &Digest::from_bytes([0x99u8; 32]),
+                &Signature::from_bytes(forged_sig),
+            ),
             "FORGERY ACCEPTED: verify_signature admits a signature under a small-order \
              (identity) authorizing key over an arbitrary body -- the permissive \
              .verify() must become verify_strict"
@@ -1947,7 +1955,7 @@ mod authorizing_key_ed25519_tests {
         // Golden vector: RFC public key verifies RFC signature (empty message).
         // This is the sovereign-store verify path — public material only.
         let vk = VerifyingKey::from_bytes(&expect_pk).expect("RFC public key");
-        let rfc_sig = Signature::try_from(expect_sig.as_slice()).expect("RFC sig");
+        let rfc_sig = Ed25519Signature::try_from(expect_sig.as_slice()).expect("RFC sig");
         assert!(
             vk.verify(b"", &rfc_sig).is_ok(),
             "RFC 8032 TEST 1 signature must verify under RFC public key"
@@ -1957,7 +1965,7 @@ mod authorizing_key_ed25519_tests {
         assert!(!receiver.can_sign());
         assert!(
             matches!(
-                receiver.sign(&[0u8; 32]),
+                receiver.sign(&Digest::from_bytes([0u8; 32])),
                 Err(ReplicaRefuse::AuthenticityFailed)
             ),
             "public-only key cannot forge"
@@ -1969,7 +1977,7 @@ mod authorizing_key_ed25519_tests {
         let origin = AuthorizingKey::mint([0xA1; 32], seed);
         assert_eq!(origin.verifying_bytes(), dalek_pk);
         assert!(origin.can_sign());
-        let body = [0x5eu8; 32];
+        let body = Digest::from_bytes([0x5eu8; 32]);
         let sig = origin.sign(&body).expect("origin signs body");
         assert!(origin.verify_signature(&body, &sig));
         assert!(
@@ -1999,7 +2007,7 @@ mod authorizing_key_ed25519_tests {
             "id is the verifying key bytes"
         );
         assert!(origin.can_sign());
-        let body = [0xABu8; 32];
+        let body = Digest::from_bytes([0xABu8; 32]);
         let sig = origin.sign(&body).expect("sign");
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
@@ -2013,9 +2021,9 @@ mod authorizing_key_ed25519_tests {
         let seed = [0x42u8; 32];
         let id = AuthorizingKeyId::from_digest([0x11; 32]);
         let origin = AuthorizingKey::mint(id, seed);
-        let body = [0xCAu8; 32];
+        let body = Digest::from_bytes([0xCAu8; 32]);
         let sig = origin.sign(&body).expect("origin can sign");
-        assert_eq!(sig.len(), 64);
+        assert_eq!(sig.as_bytes().len(), 64);
         assert!(origin.verify_signature(&body, &sig));
 
         let mut table = AuthorizingKeyTable::new();
@@ -2038,15 +2046,16 @@ mod authorizing_key_ed25519_tests {
 
     #[test]
     fn wrong_key_and_flipped_byte_fail_verify() {
-        let body = [0xEEu8; 32];
+        let body = Digest::from_bytes([0xEEu8; 32]);
         let origin = AuthorizingKey::mint([0x01; 32], [0x7Au8; 32]);
-        let mut sig = origin.sign(&body).expect("sign");
+        let sig = origin.sign(&body).expect("sign");
         assert!(origin.verify_signature(&body, &sig));
 
         // Flipped signature byte → refuse.
-        sig[0] ^= 0x01;
-        assert!(!origin.verify_signature(&body, &sig));
-        sig[0] ^= 0x01;
+        let mut flipped = *sig.as_bytes();
+        flipped[0] ^= 0x01;
+        let flipped_sig = Signature::from_bytes(flipped);
+        assert!(!origin.verify_signature(&body, &flipped_sig));
         assert!(origin.verify_signature(&body, &sig));
 
         // Wrong verifying key → refuse.
@@ -2093,7 +2102,7 @@ mod crossing_contract_tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: Signature::from_bytes([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, key).expect("sign");
         mint_admission_certificate(parts).expect("mint")
@@ -2438,7 +2447,7 @@ mod identity {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: Signature::from_bytes([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, key).expect("sign");
         mint_admission_certificate(parts).expect("mint")
@@ -2715,7 +2724,7 @@ mod promotion {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: Signature::from_bytes([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key).expect("sign");
         let cert = mint_admission_certificate(parts).expect("mint");

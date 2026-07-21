@@ -2179,8 +2179,8 @@ pub mod storage_campaign_lanes {
         CompactRefuse, LineageHash, MergeProof, MergeProofParts, PacketContentHash,
     };
     use crate::store::crypto::{
-        CryptoRefuse, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, derive_dek, shred,
-        unwrap_shred_salt, wrap_shred_salt,
+        CryptoRefuse, Digest, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, Signature,
+        derive_dek, shred, unwrap_shred_salt, wrap_shred_salt,
     };
     use crate::store::failure::{
         CarriageReport, KeyspaceId, ScopedMismatchCarriage, UnknownInvariantCarriage,
@@ -2259,7 +2259,8 @@ pub mod storage_campaign_lanes {
         predecessor: StoreId,
         consent_seed: [u8; 32],
     ) {
-        let (vk, _) = sign_fork_consent(consent_seed, predecessor, &[0u8; 32]);
+        let (vk, _) =
+            sign_fork_consent(consent_seed, predecessor, &Digest::from_bytes([0u8; 32]));
         table
             .insert(predecessor, vk)
             .expect("register predecessor consent key");
@@ -2328,7 +2329,7 @@ pub mod storage_campaign_lanes {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: [0u8; 64],
+            signature: Signature::from_bytes([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, key).expect("sign admission parts");
         mint_admission_certificate(parts).expect("mint admission certificate")

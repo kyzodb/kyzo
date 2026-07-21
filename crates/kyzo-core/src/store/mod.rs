@@ -103,10 +103,10 @@ pub use contract::{FormatVersion, Storage};
 pub(crate) use contract::{SystemClock, SystemClockRefuse};
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use crypto::{
-    AeadArm, AuditKey, Ciphertext, CompressedBytes, CryptoRefuse, Dek, Kek, KekUnwrapCap,
-    SegmentCounter, ShredLedger, ShredReceipt, ShredSalt, ShredTombstone, WrappedShredSalt,
-    compress, compress_then_encrypt, decompress, decrypt, derive_dek, encrypt, shred,
-    unwrap_shred_salt, wrap_shred_salt,
+    AeadArm, AuditKey, Ciphertext, CompressedBytes, CryptoRefuse, Dek, Digest, Kek, KekUnwrapCap,
+    Mac, Nonce, SegmentCounter, ShredLedger, ShredReceipt, ShredSalt, ShredTombstone, Signature,
+    WrappedShredSalt, compress, compress_then_encrypt, decompress, decrypt, derive_dek, encrypt,
+    shred, unwrap_shred_salt, wrap_shred_salt,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use epoch::{

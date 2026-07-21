@@ -60,6 +60,7 @@ use crate::store::merkle::{ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootCh
 use crate::store::open::{
     EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
 };
+use crate::store::crypto::Signature;
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
     AuthorizingKeyTable, PostStateRoot, ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus,
@@ -592,7 +593,7 @@ fn mint_certificate_from_live(
         authorizing_key_id: key.id(),
         scope_manifest_digest: live.scope_manifest_digest,
         operation_key: None,
-        signature: [0u8; 64],
+        signature: Signature::from_bytes([0u8; 64]),
     };
     parts.signature = sign_admission_parts(&parts, key)?;
     Ok(mint_admission_certificate(parts)?)
@@ -2840,7 +2841,7 @@ mod live_certificate_verifiability {
         let predecessor_history_digest = *tip.predecessor_root().as_bytes();
         let (record, cert) = admit_record(claim_parts(seats.store_id(), live)).expect("admit");
 
-        let mut flipped = *cert.signature();
+        let mut flipped = *cert.signature().as_bytes();
         flipped[0] ^= 0x01;
         let bad = mint_admission_certificate(AdmissionCertificateParts {
             protocol_version: *cert.protocol_version(),
@@ -2854,7 +2855,7 @@ mod live_certificate_verifiability {
             authorizing_key_id: cert.authorizing_key_id(),
             scope_manifest_digest: cert.scope_manifest_digest(),
             operation_key: cert.operation_key().copied(),
-            signature: flipped,
+            signature: Signature::from_bytes(flipped),
         })
         .expect("mint seals flipped-signature parts without re-checking authenticity");
 

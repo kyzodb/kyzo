@@ -26,10 +26,82 @@
 
 use std::collections::HashSet;
 
-use sha2::{Digest, Sha256};
+use sha2::{Digest as ShaDigest, Sha256};
 
 use super::epoch::CryptoDomain;
 use super::transcript::{CanonicalTranscript, encode_key_commitment};
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// AEAD nonce (96-bit). Distinct from [`Digest`] / [`Mac`] / key material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Nonce([u8; 12]);
+
+impl Nonce {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+    /// Wrap already-proven nonce bytes (mint / wrap-derive sites).
+    pub fn from_bytes(bytes: [u8; 12]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow nonce bytes at the RustCrypto / wire edge only.
+    pub fn as_bytes(&self) -> &[u8; 12] {
+        &self.0
+    }
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Fixed 32-byte digest (SHA-256 / CMT-1 commitment). Distinct from [`Mac`] / keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Digest([u8; 32]);
+
+impl Digest {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+    /// Wrap already-proven digest bytes (hash finalize / decode sites).
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow digest bytes at transcript / compare edges only.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Authenticator MAC (AuditKey leaf). Distinct from [`Digest`] — wrong-kind unconstructible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Mac([u8; 32]);
+
+impl Mac {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+    /// Wrap already-proven MAC bytes (leaf-MAC finalize).
+    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow MAC bytes at compare / pack edges only.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Sealed signature bytes (ed25519 / FROST wire width 64). Distinct from digests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Signature([u8; 64]);
+
+impl Signature {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+    /// Wrap already-proven signature bytes (sign / decode sites).
+    pub fn from_bytes(bytes: [u8; 64]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow signature bytes at the RustCrypto verify edge only.
+    pub fn as_bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+}
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Per-segment counter separating DEK space under one CryptoDomain.
@@ -99,7 +171,8 @@ impl Kek {
         Self(bytes)
     }
 
-    fn as_bytes(&self) -> &[u8; 32] {
+    /// Borrow KEK bytes at the RustCrypto edge only.
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -124,8 +197,8 @@ impl Dek {
         }
     }
 
-    /// Borrow DEK bytes for the encrypt door.
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    /// Borrow DEK bytes at the RustCrypto edge only.
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.bytes
     }
 
@@ -218,7 +291,7 @@ impl AuditKey {
 
     #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Leaf MAC over a sealed CanonicalTranscript (cipher-invariant roots).
-    pub fn leaf_mac(&self, transcript: &CanonicalTranscript) -> [u8; 32] {
+    pub fn leaf_mac(&self, transcript: &CanonicalTranscript) -> Mac {
         let mut h = Sha256::new();
         h.update(b"kyzo.audit.leaf.v1");
         h.update(self.0);
@@ -226,7 +299,7 @@ impl AuditKey {
         let dig = h.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&dig);
-        out
+        Mac::from_bytes(out)
     }
 }
 
@@ -263,11 +336,13 @@ const AEAD_TAG_LEN: usize = 16;
 const KEY_COMMIT_LEN: usize = 32;
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// CMT-1 key-commitment: `C = H_canonical(KEY_COMMIT domain-label, key-id, CryptoDomain)`.
+/// CMT-1 key-commitment over raw key bytes — RustCrypto / `.as_bytes()` edge only.
 ///
-/// Minted through the ONE [`encode_key_commitment`] CanonicalTranscript constructor
-/// (seat 59). The AEAD tag already binds nonce+aad+message; C adds only key-binding.
-fn key_commitment(key: &[u8; 32], crypto_domain: CryptoDomain) -> Result<[u8; 32], CryptoRefuse> {
+/// Callers must pass [`Dek::as_bytes`] or [`Kek::as_bytes`]; never a peer digest/MAC.
+fn key_commitment_bytes(
+    key: &[u8; 32],
+    crypto_domain: CryptoDomain,
+) -> Result<Digest, CryptoRefuse> {
     let transcript =
         encode_key_commitment(key, crypto_domain).map_err(|_| CryptoRefuse::AeadFailed)?;
     let mut h = Sha256::new();
@@ -275,12 +350,28 @@ fn key_commitment(key: &[u8; 32], crypto_domain: CryptoDomain) -> Result<[u8; 32
     let dig = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&dig);
-    Ok(out)
+    Ok(Digest::from_bytes(out))
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Constant-time equality over a 32-byte commitment.
-fn ct_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
+/// CMT-1 key-commitment for the DEK encrypt door — [`Kek`] cannot satisfy this.
+///
+/// Minted through the ONE [`encode_key_commitment`] CanonicalTranscript constructor
+/// (seat 59). The AEAD tag already binds nonce+aad+message; C adds only key-binding.
+fn key_commitment(key: &Dek, crypto_domain: CryptoDomain) -> Result<Digest, CryptoRefuse> {
+    key_commitment_bytes(key.as_bytes(), crypto_domain)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// CMT-1 key-commitment for the KEK wrap door — [`Dek`] cannot satisfy this.
+fn key_commitment_kek(key: &Kek, crypto_domain: CryptoDomain) -> Result<Digest, CryptoRefuse> {
+    key_commitment_bytes(key.as_bytes(), crypto_domain)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Constant-time equality over typed digests.
+fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
     let mut diff = 0u8;
     for i in 0..32 {
         diff |= a[i] ^ b[i];
@@ -301,7 +392,7 @@ fn wrap_aad(crypto_domain: CryptoDomain, segment: SegmentCounter) -> Vec<u8> {
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Deterministic 96-bit nonce for KEK wrap (SIV makes repeat safe).
-fn wrap_nonce(crypto_domain: CryptoDomain, segment: SegmentCounter) -> [u8; 12] {
+fn wrap_nonce(crypto_domain: CryptoDomain, segment: SegmentCounter) -> Nonce {
     let mut h = Sha256::new();
     h.update(b"kyzo.wrap.shred_salt.nonce.v1");
     h.update(crypto_domain.store_id().as_bytes());
@@ -310,7 +401,7 @@ fn wrap_nonce(crypto_domain: CryptoDomain, segment: SegmentCounter) -> [u8; 12] 
     let dig = h.finalize();
     let mut nonce = [0u8; 12];
     nonce.copy_from_slice(&dig[..12]);
-    nonce
+    Nonce::from_bytes(nonce)
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -410,45 +501,94 @@ fn chacha20poly1305_open(
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Base AEAD seal (ciphertext ‖ tag) — no key-commitment.
-fn seal_aead_arm(
+/// Base AEAD seal over raw key bytes — after [`Dek::as_bytes`] / [`Kek::as_bytes`] only.
+fn seal_aead_arm_bytes(
     arm: AeadArm,
     key: &[u8; 32],
-    nonce: &[u8; 12],
+    nonce: &Nonce,
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     match arm {
-        AeadArm::Siv => aes_gcm_siv_seal(key, nonce, aad, plaintext),
-        AeadArm::Gcm => chacha20poly1305_seal(key, nonce, aad, plaintext),
+        AeadArm::Siv => aes_gcm_siv_seal(key, nonce.as_bytes(), aad, plaintext),
+        AeadArm::Gcm => chacha20poly1305_seal(key, nonce.as_bytes(), aad, plaintext),
     }
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Base AEAD open over ciphertext ‖ tag — no key-commitment.
-fn open_aead_arm(
+/// Base AEAD open over raw key bytes — after [`Dek::as_bytes`] / [`Kek::as_bytes`] only.
+fn open_aead_arm_bytes(
     arm: AeadArm,
     key: &[u8; 32],
-    nonce: &[u8; 12],
+    nonce: &Nonce,
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
     match arm {
-        AeadArm::Siv => aes_gcm_siv_open(key, nonce, aad, ciphertext),
-        AeadArm::Gcm => chacha20poly1305_open(key, nonce, aad, ciphertext),
+        AeadArm::Siv => aes_gcm_siv_open(key, nonce.as_bytes(), aad, ciphertext),
+        AeadArm::Gcm => chacha20poly1305_open(key, nonce.as_bytes(), aad, ciphertext),
     }
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Committing-AEAD seal: base arm then append CMT-1 `C`.
+/// Base AEAD seal (ciphertext ‖ tag) under a DEK — no key-commitment. [`Kek`] cannot enter.
+fn seal_aead_arm(
+    arm: AeadArm,
+    key: &Dek,
+    nonce: &Nonce,
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    seal_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, plaintext)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Base AEAD seal under a KEK — wrap path only. [`Dek`] cannot enter.
+fn seal_aead_arm_kek(
+    arm: AeadArm,
+    key: &Kek,
+    nonce: &Nonce,
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    seal_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, plaintext)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Base AEAD open over ciphertext ‖ tag under a DEK — no key-commitment. [`Kek`] cannot enter.
+fn open_aead_arm(
+    arm: AeadArm,
+    key: &Dek,
+    nonce: &Nonce,
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    open_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, ciphertext)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Base AEAD open under a KEK — wrap path only. [`Dek`] cannot enter.
+fn open_aead_arm_kek(
+    arm: AeadArm,
+    key: &Kek,
+    nonce: &Nonce,
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    open_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, ciphertext)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Committing-AEAD seal under a DEK: base arm then append CMT-1 `C`.
 ///
 /// Sealed bytes = ciphertext ‖ tag ‖ C, with
 /// `C = H_canonical(KEY_COMMIT domain-label, key-id, CryptoDomain)`.
 /// KeyCommitment posture is on for all AEAD sites (seat 27 pattern).
+/// A [`Kek`] is type-stopped here — DEK↔KEK swap is unconstructable.
 fn seal_arm(
     arm: AeadArm,
-    key: &[u8; 32],
-    nonce: &[u8; 12],
+    key: &Dek,
+    nonce: &Nonce,
     aad: &[u8],
     plaintext: &[u8],
     crypto_domain: CryptoDomain,
@@ -458,19 +598,38 @@ fn seal_arm(
         return Err(CryptoRefuse::AeadFailed);
     }
     let c = key_commitment(key, crypto_domain)?;
-    sealed.extend_from_slice(&c);
+    sealed.extend_from_slice(c.as_bytes());
     Ok(sealed)
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Committing-AEAD open: base arm, then constant-time key-commitment check.
+/// Committing-AEAD seal under a KEK — shred-salt wrap door. [`Dek`] cannot enter.
+fn seal_arm_kek(
+    arm: AeadArm,
+    key: &Kek,
+    nonce: &Nonce,
+    aad: &[u8],
+    plaintext: &[u8],
+    crypto_domain: CryptoDomain,
+) -> Result<Vec<u8>, CryptoRefuse> {
+    let mut sealed = seal_aead_arm_kek(arm, key, nonce, aad, plaintext)?;
+    if sealed.len() < AEAD_TAG_LEN {
+        return Err(CryptoRefuse::AeadFailed);
+    }
+    let c = key_commitment_kek(key, crypto_domain)?;
+    sealed.extend_from_slice(c.as_bytes());
+    Ok(sealed)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Committing-AEAD open under a DEK: base arm, then constant-time key-commitment check.
 ///
 /// On commitment mismatch returns [`CryptoRefuse::KeyCommitmentMismatch`] and
-/// does not release the AEAD plaintext.
+/// does not release the AEAD plaintext. A [`Kek`] is type-stopped here.
 fn open_arm(
     arm: AeadArm,
-    key: &[u8; 32],
-    nonce: &[u8; 12],
+    key: &Dek,
+    nonce: &Nonce,
     aad: &[u8],
     sealed: &[u8],
     crypto_domain: CryptoDomain,
@@ -484,8 +643,34 @@ fn open_arm(
     let expected = key_commitment(key, crypto_domain)?;
     let mut presented = [0u8; KEY_COMMIT_LEN];
     presented.copy_from_slice(presented_c);
-    if !ct_eq_32(&expected, &presented) {
+    if !ct_eq_digest(&expected, &Digest::from_bytes(presented)) {
         // never release plaintext on commitment mismatch
+        drop(plaintext);
+        return Err(CryptoRefuse::KeyCommitmentMismatch);
+    }
+    Ok(plaintext)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Committing-AEAD open under a KEK — shred-salt unwrap door. [`Dek`] cannot enter.
+fn open_arm_kek(
+    arm: AeadArm,
+    key: &Kek,
+    nonce: &Nonce,
+    aad: &[u8],
+    sealed: &[u8],
+    crypto_domain: CryptoDomain,
+) -> Result<Vec<u8>, CryptoRefuse> {
+    if sealed.len() < AEAD_TAG_LEN + KEY_COMMIT_LEN {
+        return Err(CryptoRefuse::AeadFailed);
+    }
+    let split = sealed.len() - KEY_COMMIT_LEN;
+    let (aead_body, presented_c) = sealed.split_at(split);
+    let plaintext = open_aead_arm_kek(arm, key, nonce, aad, aead_body)?;
+    let expected = key_commitment_kek(key, crypto_domain)?;
+    let mut presented = [0u8; KEY_COMMIT_LEN];
+    presented.copy_from_slice(presented_c);
+    if !ct_eq_digest(&expected, &Digest::from_bytes(presented)) {
         drop(plaintext);
         return Err(CryptoRefuse::KeyCommitmentMismatch);
     }
@@ -505,10 +690,10 @@ pub fn wrap_shred_salt(
 ) -> Result<WrappedShredSalt, CryptoRefuse> {
     let nonce = wrap_nonce(crypto_domain, segment);
     let aad = wrap_aad(crypto_domain, segment);
-    // KeyCommitment posture on for all AEAD sites — wrap uses SIV + CMT-1.
-    let body = seal_arm(
+    // KeyCommitment posture on for all AEAD sites — wrap uses SIV + CMT-1 under KEK.
+    let body = seal_arm_kek(
         AeadArm::Siv,
-        cap.kek().as_bytes(),
+        cap.kek(),
         &nonce,
         &aad,
         salt.as_bytes(),
@@ -536,9 +721,9 @@ pub fn unwrap_shred_salt(
     }
     let nonce = wrap_nonce(wrapped.crypto_domain, wrapped.segment);
     let aad = wrap_aad(wrapped.crypto_domain, wrapped.segment);
-    let pt = match open_arm(
+    let pt = match open_arm_kek(
         AeadArm::Siv,
-        cap.kek().as_bytes(),
+        cap.kek(),
         &nonce,
         &aad,
         &wrapped.ciphertext,
@@ -602,7 +787,7 @@ impl CompressedBytes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ciphertext {
     arm: AeadArm,
-    nonce: [u8; 12],
+    nonce: Nonce,
     body: Vec<u8>,
 }
 
@@ -615,7 +800,7 @@ impl Ciphertext {
 
     #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Nonce sealed into the ciphertext.
-    pub fn nonce(&self) -> &[u8; 12] {
+    pub fn nonce(&self) -> &Nonce {
         &self.nonce
     }
 
@@ -647,13 +832,13 @@ pub fn decompress(compressed: &CompressedBytes) -> Result<Vec<u8>, CryptoRefuse>
 pub fn encrypt(
     compressed: CompressedBytes,
     dek: &Dek,
-    nonce: [u8; 12],
+    nonce: Nonce,
     arm: AeadArm,
     aad: &CanonicalTranscript,
 ) -> Result<Ciphertext, CryptoRefuse> {
     let body = seal_arm(
         arm,
-        dek.as_bytes(),
+        dek,
         &nonce,
         aad.as_bytes(),
         compressed.as_bytes(),
@@ -671,7 +856,7 @@ pub fn decrypt(
 ) -> Result<CompressedBytes, CryptoRefuse> {
     let pt = open_arm(
         ciphertext.arm,
-        dek.as_bytes(),
+        dek,
         &ciphertext.nonce,
         aad.as_bytes(),
         &ciphertext.body,
@@ -685,7 +870,7 @@ pub fn decrypt(
 pub fn compress_then_encrypt(
     plaintext: &[u8],
     dek: &Dek,
-    nonce: [u8; 12],
+    nonce: Nonce,
     arm: AeadArm,
     aad: &CanonicalTranscript,
 ) -> Result<Ciphertext, CryptoRefuse> {
@@ -817,9 +1002,9 @@ mod pins {
     /// [`open_arm`], not a short-input refuse.
     #[test]
     fn gcm_arm_is_not_key_committing() {
-        let k1 = [0x11u8; 32];
-        let k2 = [0x22u8; 32];
-        let nonce = [0x24u8; 12];
+        let k1 = Kek::from_bytes([0x11u8; 32]);
+        let k2 = Kek::from_bytes([0x22u8; 32]);
+        let nonce = Nonce::from_bytes([0x24u8; 12]);
         let domain = test_domain();
         // production wrap_aad framing: "WSS1" || store_id || epoch_be || segment_be.
         let mut aad = Vec::new();
@@ -841,23 +1026,23 @@ mod pins {
         let mut aead_body = ct.to_vec();
         aead_body.extend_from_slice(&tag);
         assert!(
-            open_aead_arm(AeadArm::Gcm, &k1, &nonce, &aad, &aead_body).is_ok()
-                && open_aead_arm(AeadArm::Gcm, &k2, &nonce, &aad, &aead_body).is_ok(),
+            open_aead_arm_kek(AeadArm::Gcm, &k1, &nonce, &aad, &aead_body).is_ok()
+                && open_aead_arm_kek(AeadArm::Gcm, &k2, &nonce, &aad, &aead_body).is_ok(),
             "fixture must still be a two-key Poly1305 collision under the base Gcm arm"
         );
         // Commit under K1 via CanonicalTranscript CMT-1; present (ct‖tag‖C_K1).
-        let c_k1 = key_commitment(&k1, domain).expect("mint C_K1");
+        let c_k1 = key_commitment_kek(&k1, domain).expect("mint C_K1");
         let mut msg = aead_body;
-        msg.extend_from_slice(&c_k1);
-        let o1 = open_arm(AeadArm::Gcm, &k1, &nonce, &aad, &msg, domain);
-        let o2 = open_arm(AeadArm::Gcm, &k2, &nonce, &aad, &msg, domain);
+        msg.extend_from_slice(c_k1.as_bytes());
+        let o1 = open_arm_kek(AeadArm::Gcm, &k1, &nonce, &aad, &msg, domain);
+        let o2 = open_arm_kek(AeadArm::Gcm, &k2, &nonce, &aad, &msg, domain);
         assert!(
             o1.is_ok(),
             "committed ciphertext must open under the committing key K1"
         );
         assert!(
             matches!(o2, Err(CryptoRefuse::KeyCommitmentMismatch)),
-            "production open_arm must refuse the K1-committed collision under K2 with \
+            "production open_arm_kek must refuse the K1-committed collision under K2 with \
              KeyCommitmentMismatch (got {o2:?})"
         );
     }
@@ -888,7 +1073,7 @@ mod pins {
         let ledger = ShredLedger::new();
         let opened = unwrap_shred_salt(&cap, &wrapped, &ledger).expect("unwrap");
         let dek = derive_dek(&cap, domain, seg, &opened);
-        assert_eq!(dek.as_bytes().len(), 32);
+        assert_eq!(dek.crypto_domain(), domain);
         let (receipt, tombstone) = shred(wrapped);
         assert_eq!(receipt.segment(), seg);
         assert!(tombstone.covers(&WrappedShredSalt::from_persisted(vec![0], seg, domain)));
@@ -975,8 +1160,14 @@ mod pins {
             plaintext,
             "compress must not be a silent identity no-op"
         );
-        let ct =
-            compress_then_encrypt(plaintext, &dek, [9u8; 12], AeadArm::Siv, &aad).expect("encrypt");
+        let ct = compress_then_encrypt(
+            plaintext,
+            &dek,
+            Nonce::from_bytes([9u8; 12]),
+            AeadArm::Siv,
+            &aad,
+        )
+        .expect("encrypt");
         assert_eq!(ct.arm(), AeadArm::Siv);
         assert!(!ct.body().is_empty());
         let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
@@ -992,10 +1183,174 @@ mod pins {
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let aad = test_aad();
-        let ct = compress_then_encrypt(b"gcm-arm", &dek, [1u8; 12], AeadArm::Gcm, &aad)
-            .expect("encrypt");
+        let ct = compress_then_encrypt(
+            b"gcm-arm",
+            &dek,
+            Nonce::from_bytes([1u8; 12]),
+            AeadArm::Gcm,
+            &aad,
+        )
+        .expect("encrypt");
         assert_eq!(ct.arm(), AeadArm::Gcm);
         let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
         assert_eq!(decompress(&opened).expect("decompress"), b"gcm-arm");
+    }
+
+    /// RED-first (#376 T17): Mac / Digest / Nonce / Signature / Dek / Kek are
+    /// distinct newtypes — a MAC cannot be passed where a Digest is required,
+    /// encrypt doors take `&Dek`, wrap doors take `&Kek` / `KekUnwrapCap`, and
+    /// neither role satisfies the other's door (no shared AeadKeyBytes trait).
+    #[test]
+    fn wrong_kind_fixed_arrays_are_unconstructible_as_peer_kinds() {
+        let domain = test_domain();
+        let aad = test_aad();
+        let audit = AuditKey::from_bytes([0xABu8; 32]);
+        let mac = audit.leaf_mac(&aad);
+        let _: Mac = mac;
+        // Digest from CMT-1 KEK door is not a Mac; Mac has no From/Into Digest bridge.
+        let kek = Kek::from_bytes([0x11; 32]);
+        let digest = key_commitment_kek(&kek, domain).expect("commitment");
+        let _: Digest = digest;
+        assert_ne!(
+            std::any::type_name::<Mac>(),
+            std::any::type_name::<Digest>(),
+            "Mac and Digest must remain distinct types"
+        );
+        assert_ne!(
+            std::any::type_name::<Nonce>(),
+            std::any::type_name::<Digest>(),
+            "Nonce and Digest must remain distinct types"
+        );
+        assert_ne!(
+            std::any::type_name::<Signature>(),
+            std::any::type_name::<Digest>(),
+            "Signature and Digest must remain distinct types"
+        );
+        assert_ne!(
+            std::any::type_name::<Dek>(),
+            std::any::type_name::<Kek>(),
+            "Dek and Kek must remain distinct types"
+        );
+        // Wrap-derived nonce is typed Nonce, not a free [u8;12].
+        let n = wrap_nonce(domain, SegmentCounter::ZERO);
+        let _: Nonce = n;
+        // encrypt door takes &Dek + Nonce — naked [u8;12] / &Kek are type errors.
+        let salt = ShredSalt::from_bytes([0x22; 32]);
+        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x33; 32]));
+        let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
+        let ct = compress_then_encrypt(b"typed-nonce", &dek, n, AeadArm::Siv, &aad).expect("enc");
+        assert_eq!(ct.nonce(), &n);
+    }
+
+    /// Grep gate obligation (#376 T17): named crypto/auth doors must not take or
+    /// return naked `[u8;32]` / `[u8;12]` / `[u8;64]`, and DEK/KEK doors must be
+    /// role-split (no shared `AeadKeyBytes` / `impl AeadKeyBytes` door).
+    ///
+    /// Parent escalate: durable guardian copy belongs in `crates/xtask` (off
+    /// allowlist) scanning the full store surface — this pin locks the T17
+    /// doors until that lands.
+    #[test]
+    fn t17_no_naked_fixed_arrays_in_auth_fn_signatures() {
+        let crypto = include_str!("crypto.rs");
+        let grants = include_str!("grants.rs");
+        let replica = include_str!("replica.rs");
+        let crypto_prod = crypto.split("#[cfg(test)]").next().unwrap_or(crypto);
+
+        // RustCrypto edge may take naked arrays; committing-AEAD role doors must not.
+        for name in [
+            "fn seal_arm(",
+            "fn open_arm(",
+            "fn key_commitment(",
+            "fn seal_arm_kek(",
+            "fn open_arm_kek(",
+            "fn key_commitment_kek(",
+            "fn wrap_nonce(",
+        ] {
+            let line = crypto_prod
+                .lines()
+                .find(|l| l.trim_start().starts_with(name) || l.contains(name))
+                .unwrap_or_else(|| panic!("missing door {name}"));
+            for needle in ["[u8; 32]", "[u8; 12]", "[u8; 64]"] {
+                assert!(
+                    !line.contains(needle),
+                    "crypto.rs: {name} still exposes naked {needle}: {line}"
+                );
+            }
+            assert!(
+                !line.contains("AeadKeyBytes") && !line.contains("impl AeadKeyBytes"),
+                "crypto.rs: {name} must not use AeadKeyBytes: {line}"
+            );
+        }
+        assert!(
+            !crypto_prod.contains("trait AeadKeyBytes")
+                && !crypto_prod.contains("impl AeadKeyBytes")
+                && !crypto_prod.contains("&impl AeadKeyBytes"),
+            "AeadKeyBytes shared door must be gone — DEK and KEK need distinct typed doors"
+        );
+        assert!(
+            crypto_prod.contains("fn key_commitment(key: &Dek, crypto_domain: CryptoDomain)")
+                && crypto_prod.contains("fn seal_arm(")
+                && crypto_prod.contains("key: &Dek,"),
+            "encrypt-path commitment/seal doors must take &Dek"
+        );
+        assert!(
+            crypto_prod.contains("fn key_commitment_kek(key: &Kek, crypto_domain: CryptoDomain)")
+                && crypto_prod.contains("fn seal_arm_kek(")
+                && crypto_prod.contains("fn open_arm_kek("),
+            "wrap-path commitment/seal/open doors must take &Kek"
+        );
+        assert!(
+            crypto_prod.contains("pub fn encrypt(")
+                && crypto_prod.contains("dek: &Dek,")
+                && crypto_prod.contains("nonce: Nonce"),
+            "encrypt must take &Dek + Nonce (not AeadKeyBytes)"
+        );
+        assert!(
+            crypto_prod.contains("pub fn wrap_shred_salt(")
+                && crypto_prod.contains("cap: &KekUnwrapCap,")
+                && crypto_prod.contains("seal_arm_kek(")
+                && crypto_prod.contains("open_arm_kek("),
+            "wrap/unwrap must route through KekUnwrapCap + *_kek doors"
+        );
+        assert!(
+            crypto_prod.contains("fn wrap_nonce(crypto_domain: CryptoDomain, segment: SegmentCounter) -> Nonce"),
+            "wrap_nonce must return Nonce"
+        );
+        assert!(
+            crypto_prod.contains("pub fn leaf_mac(&self, transcript: &CanonicalTranscript) -> Mac"),
+            "leaf_mac must return Mac"
+        );
+
+        let grants_prod = grants.split("#[cfg(test)]").next().unwrap_or(grants);
+        assert!(
+            grants_prod.contains("fn hash_transcript(transcript: &CanonicalTranscript) -> Digest"),
+            "hash_transcript must return Digest"
+        );
+        assert!(
+            grants_prod.contains("fn consent_key_id_digest(verifying_key: &[u8; 32]) -> Digest"),
+            "consent_key_id_digest must return Digest"
+        );
+        assert!(
+            grants_prod.contains("payload_digest: &Digest")
+                && grants_prod.contains("signature: &Signature"),
+            "consent/entitlement verify doors must take Digest + Signature"
+        );
+
+        let replica_prod = replica.split("#[cfg(test)]").next().unwrap_or(replica);
+        assert!(
+            replica_prod.contains("pub(crate) fn sign(&self, body: &Digest) -> Result<Signature, ReplicaRefuse>"),
+            "AuthorizingKey::sign must take Digest and return Signature"
+        );
+        assert!(
+            replica_prod.contains(
+                "pub(crate) fn verify_signature(&self, body: &Digest, signature: &Signature) -> bool"
+            ),
+            "AuthorizingKey::verify_signature must take Digest + Signature"
+        );
+        assert!(
+            replica_prod.contains(") -> Digest")
+                && replica_prod.contains("fn signing_body_digest("),
+            "signing_body_digest must return Digest"
+        );
     }
 }

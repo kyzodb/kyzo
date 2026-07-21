@@ -1209,7 +1209,7 @@ mod tests {
         use crate::store::open::StoreId;
         use crate::store::transcript::{CanonicalTranscriptBuilder, FieldId, SealedArtifactKind};
         use crate::store::{
-            AeadArm, Kek, KekUnwrapCap, SegmentCounter, ShredSalt, compress_then_encrypt,
+            AeadArm, Kek, KekUnwrapCap, Nonce, SegmentCounter, ShredSalt, compress_then_encrypt,
             decompress, decrypt, derive_dek,
         };
 
@@ -1245,8 +1245,9 @@ mod tests {
         // only lawful merkle input). Ciphertext body must not be the leaf.
         let mut opened_pairs = Vec::with_capacity(logical.len());
         for (i, (k, plaintext)) in logical.iter().enumerate() {
-            let mut nonce = [0u8; 12];
-            nonce[..4].copy_from_slice(&(i as u32).to_be_bytes());
+            let mut nonce_bytes = [0u8; 12];
+            nonce_bytes[..4].copy_from_slice(&(i as u32).to_be_bytes());
+            let nonce = Nonce::from_bytes(nonce_bytes);
             let ct =
                 compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad).expect("encrypt");
             assert_ne!(

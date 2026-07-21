@@ -27,10 +27,11 @@
 
 use std::collections::BTreeMap;
 
-use ed25519_dalek::{Signature, VerifyingKey};
-use sha2::{Digest, Sha256};
+use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
+use sha2::{Digest as ShaDigest, Sha256};
 
 use super::authority::{RecoveryMatrix, WriteAuthority, WriteTokenId};
+use super::crypto::{Digest, Signature};
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
 use super::transcript::{
@@ -226,8 +227,8 @@ impl PredecessorConsentTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PredecessorConsentProof {
     predecessor_store: StoreId,
-    payload_digest: [u8; 32],
-    key_id_digest: [u8; 32],
+    payload_digest: Digest,
+    key_id_digest: Digest,
     _priv: (),
 }
 
@@ -241,8 +242,8 @@ impl PredecessorConsentProof {
     pub fn verify(
         consent_table: &PredecessorConsentTable,
         predecessor_store: StoreId,
-        payload_digest: &[u8; 32],
-        signature: &[u8; 64],
+        payload_digest: &Digest,
+        signature: &Signature,
     ) -> Result<Self, MaterializeRefuse> {
         let Some(consent_verifying_key) = consent_table.get(predecessor_store) else {
             return Err(MaterializeRefuse::ConsentKeyUnknown);
@@ -250,13 +251,13 @@ impl PredecessorConsentProof {
         let Ok(verifying) = VerifyingKey::from_bytes(consent_verifying_key) else {
             return Err(MaterializeRefuse::ConsentUnverified);
         };
-        let Ok(sig) = Signature::try_from(signature.as_slice()) else {
+        let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
             return Err(MaterializeRefuse::ConsentUnverified);
         };
         let mut message = Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
         message.extend_from_slice(FORK_CONSENT_DOMAIN);
         message.extend_from_slice(predecessor_store.as_bytes());
-        message.extend_from_slice(payload_digest);
+        message.extend_from_slice(payload_digest.as_bytes());
         if verifying.verify_strict(message.as_slice(), &sig).is_err() {
             return Err(MaterializeRefuse::ConsentUnverified);
         }
@@ -274,12 +275,12 @@ impl PredecessorConsentProof {
     }
 
     /// Payload digest the predecessor consented to.
-    pub fn payload_digest(&self) -> &[u8; 32] {
+    pub fn payload_digest(&self) -> &Digest {
         &self.payload_digest
     }
 
     /// Digest of the consent verifying key sealed into this proof.
-    pub fn key_id_digest(&self) -> &[u8; 32] {
+    pub fn key_id_digest(&self) -> &Digest {
         &self.key_id_digest
     }
 }
@@ -392,8 +393,8 @@ impl ForkGrant {
 /// No public free constructor — mint only via [`RecoveryQuorumProof::verify`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryQuorumProof {
-    matrix_digest: [u8; 32],
-    payload_digest: [u8; 32],
+    matrix_digest: Digest,
+    payload_digest: Digest,
     _priv: (),
 }
 
@@ -409,7 +410,7 @@ impl RecoveryQuorumProof {
     /// participated.
     pub fn verify(
         matrix: &RecoveryMatrix,
-        payload_digest: &[u8; 32],
+        payload_digest: &Digest,
         aggregate_signature: &[u8],
     ) -> Result<Self, MaterializeRefuse> {
         let Ok(verifying) = frost_ed25519::VerifyingKey::deserialize(
@@ -426,7 +427,7 @@ impl RecoveryQuorumProof {
 
         let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
         message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
-        message.extend_from_slice(payload_digest);
+        message.extend_from_slice(payload_digest.as_bytes());
 
         if verifying.verify(message.as_slice(), &signature).is_err() {
             // Below-threshold / wrong-share / forged aggregate: FROST verify
@@ -446,12 +447,12 @@ impl RecoveryQuorumProof {
     }
 
     /// Matrix digest sealed into this proof.
-    pub fn matrix_digest(&self) -> &[u8; 32] {
+    pub fn matrix_digest(&self) -> &Digest {
         &self.matrix_digest
     }
 
     /// Payload digest this quorum signed.
-    pub fn payload_digest(&self) -> &[u8; 32] {
+    pub fn payload_digest(&self) -> &Digest {
         &self.payload_digest
     }
 }
@@ -1002,8 +1003,8 @@ impl AncestorEntitlementTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AncestorEntitlementProof {
     store_id: StoreId,
-    payload_digest: [u8; 32],
-    key_id_digest: [u8; 32],
+    payload_digest: Digest,
+    key_id_digest: Digest,
     _priv: (),
 }
 
@@ -1017,8 +1018,8 @@ impl AncestorEntitlementProof {
     pub fn verify(
         entitlement_table: &AncestorEntitlementTable,
         store_id: StoreId,
-        payload_digest: &[u8; 32],
-        signature: &[u8; 64],
+        payload_digest: &Digest,
+        signature: &Signature,
     ) -> Result<Self, AncestorReadRefuse> {
         let Some(entitlement_verifying_key) = entitlement_table.get(store_id) else {
             return Err(AncestorReadRefuse::EntitlementKeyUnknown);
@@ -1026,13 +1027,13 @@ impl AncestorEntitlementProof {
         let Ok(verifying) = VerifyingKey::from_bytes(entitlement_verifying_key) else {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         };
-        let Ok(sig) = Signature::try_from(signature.as_slice()) else {
+        let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         };
         let mut message = Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
         message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
         message.extend_from_slice(store_id.as_bytes());
-        message.extend_from_slice(payload_digest);
+        message.extend_from_slice(payload_digest.as_bytes());
         if verifying.verify_strict(message.as_slice(), &sig).is_err() {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         }
@@ -1050,12 +1051,12 @@ impl AncestorEntitlementProof {
     }
 
     /// Payload digest the entitlement key authorized.
-    pub fn payload_digest(&self) -> &[u8; 32] {
+    pub fn payload_digest(&self) -> &Digest {
         &self.payload_digest
     }
 
     /// Digest of the entitlement verifying key sealed into this proof.
-    pub fn key_id_digest(&self) -> &[u8; 32] {
+    pub fn key_id_digest(&self) -> &Digest {
         &self.key_id_digest
     }
 }
@@ -1202,15 +1203,15 @@ impl AncestorReadGrant {
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// SHA-256 over sealed [`CanonicalTranscript`] bytes — the only digest step on
 /// the grant surface. Field layout lives solely in the transcript encoders.
-fn hash_transcript(transcript: &CanonicalTranscript) -> [u8; 32] {
+fn hash_transcript(transcript: &CanonicalTranscript) -> Digest {
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
-    h.finalize().into()
+    Digest::from_bytes(h.finalize().into())
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fork-consent verifying-key id via [`encode_fork_consent_key_id`].
-fn consent_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
+fn consent_key_id_digest(verifying_key: &[u8; 32]) -> Digest {
     let transcript = encode_fork_consent_key_id(verifying_key)
         .expect("INVARIANT(CanonicalTranscript): fork consent key-id encode");
     hash_transcript(&transcript)
@@ -1225,7 +1226,7 @@ pub(crate) fn fork_grant_payload_digest(
     successor_principal: &SuccessorPrincipal,
     identity_seed: &IdentitySeed,
     key_material_commitment: &KeyMaterialCommitment,
-) -> [u8; 32] {
+) -> Digest {
     let transcript = encode_fork_grant_payload(
         grant_id.as_bytes(),
         predecessor_store.as_bytes(),
@@ -1240,7 +1241,7 @@ pub(crate) fn fork_grant_payload_digest(
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// RecoveryMatrix digest via [`encode_recovery_matrix`].
-fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> [u8; 32] {
+fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> Digest {
     let transcript = encode_recovery_matrix(
         matrix.threshold(),
         matrix.max_signers(),
@@ -1258,7 +1259,7 @@ pub(crate) fn recovery_grant_payload_digest(
     predecessor_epoch: FenceEpoch,
     successor_identity_seed: &IdentitySeed,
     key_material_commitment: &KeyMaterialCommitment,
-) -> [u8; 32] {
+) -> Digest {
     let transcript = encode_recovery_grant_payload(
         grant_id.as_bytes(),
         store_id.as_bytes(),
@@ -1283,7 +1284,7 @@ fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
         fork.key_material_commitment().as_bytes(),
     )
     .expect("INVARIANT(CanonicalTranscript): fork store-id encode");
-    StoreId::from_digest(hash_transcript(&transcript))
+    StoreId::from_digest(*hash_transcript(&transcript).as_bytes())
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -1296,7 +1297,7 @@ fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> WriteTokenId 
         fork.key_material_commitment().as_bytes(),
     )
     .expect("INVARIANT(CanonicalTranscript): fork write-token encode");
-    WriteTokenId::from_digest(hash_transcript(&transcript))
+    WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes())
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -1312,12 +1313,12 @@ fn derive_recovery_write_token(recovery: &RecoveryGrant) -> WriteTokenId {
         recovery.key_material_commitment().as_bytes(),
     )
     .expect("INVARIANT(CanonicalTranscript): recovery write-token encode");
-    WriteTokenId::from_digest(hash_transcript(&transcript))
+    WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes())
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Ancestor-entitlement verifying-key id via [`encode_ancestor_entitlement_key_id`].
-fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
+fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> Digest {
     let transcript = encode_ancestor_entitlement_key_id(verifying_key)
         .expect("INVARIANT(CanonicalTranscript): ancestor entitlement key-id encode");
     hash_transcript(&transcript)
@@ -1329,7 +1330,7 @@ fn ancestor_read_grant_payload_digest(
     store_id: StoreId,
     from_epoch: FenceEpoch,
     to_epoch: FenceEpoch,
-) -> [u8; 32] {
+) -> Digest {
     let transcript = encode_ancestor_read_grant_payload(
         store_id.as_bytes(),
         from_epoch.get(),
@@ -1348,7 +1349,7 @@ fn ancestor_read_grant_payload_digest(
 #[cfg(test)]
 pub(crate) fn frost_sign_recovery_quorum(
     dealer_seed: [u8; 32],
-    payload_digest: &[u8; 32],
+    payload_digest: &Digest,
 ) -> (RecoveryMatrix, Vec<u8>) {
     frost_recovery_aggregate(dealer_seed, 3, 2, 2, payload_digest)
 }
@@ -1363,7 +1364,7 @@ fn frost_recovery_aggregate(
     max_signers: u16,
     min_signers: u16,
     participating: u16,
-    payload_digest: &[u8; 32],
+    payload_digest: &Digest,
 ) -> (RecoveryMatrix, Vec<u8>) {
     use std::collections::BTreeMap;
 
@@ -1403,7 +1404,7 @@ fn frost_recovery_aggregate(
 
     let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
     message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
-    message.extend_from_slice(payload_digest);
+    message.extend_from_slice(payload_digest.as_bytes());
 
     let mut nonces_map = BTreeMap::new();
     let mut commitments_map = BTreeMap::new();
@@ -1439,7 +1440,7 @@ fn frost_recovery_aggregate(
 #[cfg(test)]
 fn frost_try_aggregate_below_threshold(
     dealer_seed: [u8; 32],
-    payload_digest: &[u8; 32],
+    payload_digest: &Digest,
 ) -> Result<Vec<u8>, frost_ed25519::Error> {
     use std::collections::BTreeMap;
 
@@ -1469,7 +1470,7 @@ fn frost_try_aggregate_below_threshold(
 
     let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
     message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
-    message.extend_from_slice(payload_digest);
+    message.extend_from_slice(payload_digest.as_bytes());
 
     // Enough commitments for a valid SigningPackage (min_signers).
     let mut nonces_map = BTreeMap::new();
@@ -1504,8 +1505,8 @@ pub(crate) fn sign_domain_label(
     domain: &[u8],
     seed: [u8; 32],
     store_id: StoreId,
-    payload_digest: &[u8; 32],
-) -> ([u8; 32], [u8; 64]) {
+    payload_digest: &Digest,
+) -> ([u8; 32], Signature) {
     use ed25519_dalek::{Signer, SigningKey};
 
     let signing = SigningKey::from_bytes(&seed);
@@ -1513,8 +1514,8 @@ pub(crate) fn sign_domain_label(
     let mut message = Vec::with_capacity(domain.len() + 32 + 32);
     message.extend_from_slice(domain);
     message.extend_from_slice(store_id.as_bytes());
-    message.extend_from_slice(payload_digest);
-    let sig = signing.sign(message.as_slice()).to_bytes();
+    message.extend_from_slice(payload_digest.as_bytes());
+    let sig = Signature::from_bytes(signing.sign(message.as_slice()).to_bytes());
     (verifying, sig)
 }
 
@@ -1524,8 +1525,8 @@ pub(crate) fn sign_domain_label(
 pub(crate) fn sign_fork_consent(
     seed: [u8; 32],
     predecessor_store: StoreId,
-    payload_digest: &[u8; 32],
-) -> ([u8; 32], [u8; 64]) {
+    payload_digest: &Digest,
+) -> ([u8; 32], Signature) {
     sign_domain_label(FORK_CONSENT_DOMAIN, seed, predecessor_store, payload_digest)
 }
 
@@ -1535,8 +1536,8 @@ pub(crate) fn sign_fork_consent(
 pub(crate) fn sign_ancestor_entitlement(
     seed: [u8; 32],
     store_id: StoreId,
-    payload_digest: &[u8; 32],
-) -> ([u8; 32], [u8; 64]) {
+    payload_digest: &Digest,
+) -> ([u8; 32], Signature) {
     sign_domain_label(ANCESTOR_ENTITLEMENT_DOMAIN, seed, store_id, payload_digest)
 }
 
@@ -1608,7 +1609,13 @@ mod tests {
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
-            PredecessorConsentProof::verify(&table, store, &[0x33; 32], &forged).is_err(),
+            PredecessorConsentProof::verify(
+                &table,
+                store,
+                &Digest::from_bytes([0x33; 32]),
+                &Signature::from_bytes(forged),
+            )
+            .is_err(),
             "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
              at PredecessorConsentProof::verify (verify_strict)"
         );
@@ -1627,7 +1634,13 @@ mod tests {
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
-            AncestorEntitlementProof::verify(&table, store, &[0x33; 32], &forged).is_err(),
+            AncestorEntitlementProof::verify(
+                &table,
+                store,
+                &Digest::from_bytes([0x33; 32]),
+                &Signature::from_bytes(forged),
+            )
+            .is_err(),
             "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
              at AncestorEntitlementProof::verify (verify_strict)"
         );
@@ -1748,7 +1761,7 @@ mod tests {
     /// (wrong-share / wrong group key) — production verify door.
     #[test]
     fn frost_recovery_wrong_group_aggregate_refuses() {
-        let payload = [0x44u8; 32];
+        let payload = Digest::from_bytes([0x44u8; 32]);
         let (matrix_a, sig_a) = frost_sign_recovery_quorum([0x11; 32], &payload);
         let (matrix_b, _sig_b) = frost_sign_recovery_quorum([0x22; 32], &payload);
         assert_ne!(
@@ -1775,7 +1788,7 @@ mod tests {
         // One sealed matrix for the store; each grant gets its own FROST aggregate
         // over its payload under that same group key (re-deal with fixed seed so
         // the group verifying key matches).
-        let probe_payload = [0u8; 32];
+        let probe_payload = Digest::from_bytes([0u8; 32]);
         let (matrix, _) = frost_sign_recovery_quorum([0xE1; 32], &probe_payload);
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
@@ -1863,7 +1876,7 @@ mod tests {
     fn prior_recovery_fabricated_grant_id_cannot_presquat_legitimate_recovery() {
         let store_id = StoreId::from_digest([0xF0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
-        let probe_payload = [0u8; 32];
+        let probe_payload = Digest::from_bytes([0u8; 32]);
         let (matrix, _) = frost_sign_recovery_quorum([0xF1; 32], &probe_payload);
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
@@ -1952,7 +1965,12 @@ mod tests {
 
         // Forged signature bytes — no proof, no grant power.
         assert_eq!(
-            PredecessorConsentProof::verify(&table, victim, &payload, &[0xFFu8; 64]),
+            PredecessorConsentProof::verify(
+                &table,
+                victim,
+                &payload,
+                &Signature::from_bytes([0xFFu8; 64]),
+            ),
             Err(MaterializeRefuse::ConsentUnverified)
         );
 
@@ -2145,12 +2163,12 @@ mod tests {
             &self.verifying
         }
 
-        fn sign_consent(&self, predecessor_store: StoreId, payload_digest: &[u8; 32]) -> [u8; 64] {
+        fn sign_consent(&self, predecessor_store: StoreId, payload_digest: &Digest) -> Signature {
             let mut message = Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
             message.extend_from_slice(FORK_CONSENT_DOMAIN);
             message.extend_from_slice(predecessor_store.as_bytes());
-            message.extend_from_slice(payload_digest);
-            self.signing.sign(message.as_slice()).to_bytes()
+            message.extend_from_slice(payload_digest.as_bytes());
+            Signature::from_bytes(self.signing.sign(message.as_slice()).to_bytes())
         }
     }
 
@@ -2171,12 +2189,12 @@ mod tests {
             &self.verifying
         }
 
-        fn sign_entitlement(&self, store_id: StoreId, payload_digest: &[u8; 32]) -> [u8; 64] {
+        fn sign_entitlement(&self, store_id: StoreId, payload_digest: &Digest) -> Signature {
             let mut message = Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
             message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
             message.extend_from_slice(store_id.as_bytes());
-            message.extend_from_slice(payload_digest);
-            self.signing.sign(message.as_slice()).to_bytes()
+            message.extend_from_slice(payload_digest.as_bytes());
+            Signature::from_bytes(self.signing.sign(message.as_slice()).to_bytes())
         }
     }
 
@@ -2259,7 +2277,12 @@ mod tests {
 
         // Forged signature bytes under the registered key — still refuse.
         assert_eq!(
-            AncestorEntitlementProof::verify(&sealed_table, victim, &payload, &[0xFFu8; 64]),
+            AncestorEntitlementProof::verify(
+                &sealed_table,
+                victim,
+                &payload,
+                &Signature::from_bytes([0xFFu8; 64]),
+            ),
             Err(AncestorReadRefuse::EntitlementUnverified)
         );
     }
