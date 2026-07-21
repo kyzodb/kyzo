@@ -7,7 +7,10 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Compile-time ABSENCE proofs for the value plane's authority model.
+//! Compile-time ABSENCE proofs for the value plane's authority model,
+//! plus near-exhaustive runtime campaigns for the one-law encode /
+//! comparator layer (Tag prefixes, sentinel-free unbounded encodings,
+//! cross-type total order).
 //!
 //! The authority types are only sound if the forbidden operations are
 //! *unrepresentable*, not merely un-called. Every `const _` below is a
@@ -23,6 +26,16 @@
 //! `Default` (conjure one), `From<RawShape>` (launder raw bytes into a
 //! witness), and `Clone`/`Copy` (duplicate a one-per-admission or
 //! one-per-mint token).
+//!
+//! ## Near-exhaustive one-law campaigns (`#[cfg(test)]`)
+//!
+//! `canonical.rs`'s order-embedding tests are semi-circular: they agree
+//! `encode` with an in-file semantic mirror that tracks the same grammar.
+//! A consistent-wrong change that updates both stays green. The campaigns
+//! below pin the format-v1 literals (tag bytes, unbounded markers) as an
+//! independent oracle over a small enumerable universe — the zone where
+//! DST's random edge-bouncing is the wrong tool and exhaustive checking
+//! is tractable.
 
 use super::DataValue;
 use super::Tuple;
@@ -182,10 +195,147 @@ assert_not_impl!(Tuple: std::ops::DerefMut);
 
 #[cfg(test)]
 mod tests {
-    //! The absence proofs above are compile-time. This runtime test just
-    //! re-states, executably, that the LAWFUL mints exist and the checked
-    //! door refuses — a positive companion to the negatives.
+    //! Compile-time absences above; runtime positives + near-exhaustive
+    //! one-law campaigns below. Oracles are pinned format-v1 literals —
+    //! not `DataValue::Ord` and not `canonical`'s in-file semantic mirror.
+    use std::collections::BTreeSet;
+
     use super::*;
+    use crate::value::kind::interval::{Bound, Hi, Interval, Lo};
+    use crate::value::kind::json::Json;
+    use crate::value::kind::regex::{RegexFlags, RegexSource};
+    use crate::value::kind::validity::{Validity, ValidityTs};
+    use crate::value::number::Num;
+    use crate::value::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
+    use crate::value::{
+        DataValue, Geometry, UuidWrapper, Vector, decode, encode_owned,
+    };
+
+    /// Format v1 tag table — the independent oracle. A consistent-wrong
+    /// retag of `Tag` + `encode` still fails here.
+    const FORMAT_V1_TAGS: [(Tag, u8); 14] = [
+        (Tag::Null, 0x05),
+        (Tag::Bool, 0x08),
+        (Tag::Num, 0x10),
+        (Tag::Str, 0x18),
+        (Tag::Bytes, 0x20),
+        (Tag::Uuid, 0x28),
+        (Tag::Regex, 0x30),
+        (Tag::Json, 0x38),
+        (Tag::Vector, 0x40),
+        (Tag::List, 0x48),
+        (Tag::Set, 0x50),
+        (Tag::Validity, 0x58),
+        (Tag::Interval, 0x60),
+        (Tag::Geometry, 0x68),
+    ];
+
+    /// Interval body markers (format v1): empty / range form, and
+    /// unbounded vs finite ends. Never `i64::MIN`/`i64::MAX` sentinels.
+    const IV_EMPTY: u8 = 0x01;
+    const IV_RANGE: u8 = 0x02;
+    const END_UNBOUNDED: u8 = 0x01;
+    const END_FINITE: u8 = 0x02;
+
+    /// Ascending order-preserving i64 key (format v1): sign-bit flip,
+    /// big-endian. Pinned here so the unbounded campaign can prove
+    /// unbounded ends are NOT this encoding of `i64::MIN`/`MAX`.
+    fn asc_ts_key(ts: i64) -> [u8; 8] {
+        ((ts ^ i64::MIN) as u64).to_be_bytes()
+    }
+
+    fn pinned_tag_byte(tag: Tag) -> u8 {
+        FORMAT_V1_TAGS
+            .iter()
+            .find(|(t, _)| *t == tag)
+            .map(|(_, b)| *b)
+            .expect("every Tag is in FORMAT_V1_TAGS")
+    }
+
+    /// One representative per kind — the enumerable cross-type universe.
+    fn one_per_kind() -> [(Tag, DataValue); 14] {
+        let u = UuidWrapper::new(uuid::Uuid::from_bytes([0x11; 16]));
+        [
+            (Tag::Null, DataValue::Null),
+            (Tag::Bool, DataValue::Bool(false)),
+            (Tag::Num, DataValue::Num(Num::int(0))),
+            (Tag::Str, DataValue::Str(String::new())),
+            (Tag::Bytes, DataValue::Bytes(vec![])),
+            (Tag::Uuid, DataValue::Uuid(u)),
+            (
+                Tag::Regex,
+                DataValue::Regex(
+                    RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid"),
+                ),
+            ),
+            (Tag::Json, DataValue::Json(Json::Null)),
+            (
+                Tag::Vector,
+                DataValue::Vector(Vector::try_new(vec![]).expect("empty vec")),
+            ),
+            (Tag::List, DataValue::List(vec![])),
+            (Tag::Set, DataValue::Set(BTreeSet::new())),
+            (
+                Tag::Validity,
+                DataValue::Validity(
+                    Validity::new(ValidityTs::from_raw(0), true)
+                        .expect("non-reserved")
+                        .into(),
+                ),
+            ),
+            (Tag::Interval, DataValue::Interval(Interval::EMPTY)),
+            (Tag::Geometry, DataValue::Geometry(Geometry::from_cells(0, 0))),
+        ]
+    }
+
+    /// Near-exhaustive interval universe: every start/end from a small
+    /// bound set, plus EMPTY. Canonicalization collapses empties.
+    fn interval_universe() -> Vec<Interval> {
+        let starts = [
+            Bound::Unbounded,
+            Bound::Closed(i64::MIN),
+            Bound::Closed(-1),
+            Bound::Closed(0),
+            Bound::Closed(1),
+            Bound::Closed(i64::MAX),
+            Bound::Open(i64::MIN),
+            Bound::Open(-1),
+            Bound::Open(0),
+        ];
+        let ends = [
+            Bound::Unbounded,
+            Bound::Closed(i64::MIN),
+            Bound::Closed(-1),
+            Bound::Closed(0),
+            Bound::Closed(1),
+            Bound::Closed(i64::MAX),
+            Bound::Open(1),
+            Bound::Open(i64::MAX),
+        ];
+        let mut out = vec![Interval::EMPTY];
+        for &s in &starts {
+            for &e in &ends {
+                let iv = Interval::new(s, e);
+                if !out.contains(&iv) {
+                    out.push(iv);
+                }
+            }
+        }
+        // Explicit range forms that pin Unbounded vs finite extremes.
+        for iv in [
+            Interval::range(Lo::NegUnbounded, Hi::PosUnbounded),
+            Interval::range(Lo::NegUnbounded, Hi::At(i64::MAX)),
+            Interval::range(Lo::At(i64::MIN), Hi::PosUnbounded),
+            Interval::range(Lo::At(i64::MIN), Hi::At(i64::MAX)),
+            Interval::range(Lo::At(i64::MAX), Hi::At(i64::MAX)),
+            Interval::range(Lo::At(i64::MIN), Hi::At(i64::MIN)),
+        ] {
+            if !out.contains(&iv) {
+                out.push(iv);
+            }
+        }
+        out
+    }
 
     #[test]
     fn relation_id_lawful_mint_and_refusal() {
@@ -200,8 +350,267 @@ mod tests {
     fn canonical_bytes_only_mint_is_encode() {
         // The ONLY way to obtain CanonicalBytes is to encode a value; the
         // bytes then carry the format law by construction.
-        let a = super::super::encode_owned(&super::super::DataValue::from(1i64));
-        let b = super::super::encode_owned(&super::super::DataValue::from(1i64));
+        let a = encode_owned(&DataValue::from(1i64));
+        let b = encode_owned(&DataValue::from(1i64));
         assert_eq!(a, b);
+    }
+
+    /// Tag prefixes: every kind's encoding opens with the pinned format
+    /// v1 tag byte — not structural `0x00`/`0x01`, not a reserved gap.
+    #[test]
+    fn near_exhaustive_tag_prefix_matches_format_v1() {
+        for (tag, pinned) in FORMAT_V1_TAGS {
+            assert_eq!(tag.byte(), pinned, "Tag::{tag:?} drifted from format v1");
+            assert_eq!(Tag::from_byte(pinned), Some(tag));
+        }
+        assert_eq!(Tag::from_byte(STRUCT_STRING), None);
+        assert_eq!(Tag::from_byte(STRUCT_SEQ_END), None);
+
+        for (tag, value) in one_per_kind() {
+            let enc = encode_owned(&value);
+            let bytes = enc.as_bytes();
+            assert!(
+                !bytes.is_empty(),
+                "empty encoding for {tag:?}"
+            );
+            let expected = pinned_tag_byte(tag);
+            assert_eq!(
+                bytes[0], expected,
+                "encode({tag:?}) prefix {:#04x} != format v1 {expected:#04x}",
+                bytes[0]
+            );
+            assert_eq!(value.tag(), tag);
+            assert!(
+                bytes[0] >= 0x05,
+                "tag prefix below structural floor: {:#04x}",
+                bytes[0]
+            );
+        }
+
+        // Exhaustive over every byte: only the 14 pinned tags decode.
+        let mut seen = 0u32;
+        for b in 0u8..=255 {
+            match Tag::from_byte(b) {
+                Some(t) => {
+                    assert_eq!(pinned_tag_byte(t), b);
+                    seen += 1;
+                }
+                None => {
+                    assert!(
+                        FORMAT_V1_TAGS.iter().all(|(_, p)| *p != b),
+                        "pinned tag {b:#04x} failed from_byte"
+                    );
+                }
+            }
+        }
+        assert_eq!(seen, 14);
+    }
+
+    /// Cross-type total order over the 14-kind universe: byte order of
+    /// encodings equals pinned tag-byte order when kinds differ, and
+    /// equals `DataValue::Ord` on every pair (totality, no holes).
+    #[test]
+    fn near_exhaustive_cross_type_total_order() {
+        let universe = one_per_kind();
+        let encoded: Vec<_> = universe
+            .iter()
+            .map(|(tag, v)| {
+                let enc = encode_owned(v);
+                assert_eq!(enc.as_bytes()[0], pinned_tag_byte(*tag));
+                enc
+            })
+            .collect();
+
+        for i in 0..universe.len() {
+            for j in 0..universe.len() {
+                let (ti, vi) = &universe[i];
+                let (tj, vj) = &universe[j];
+                let byte = encoded[i].as_bytes().cmp(encoded[j].as_bytes());
+                let structural = vi.cmp(vj);
+                let pinned = pinned_tag_byte(*ti).cmp(&pinned_tag_byte(*tj));
+
+                assert_eq!(
+                    byte, structural,
+                    "byte != Ord: {ti:?} vs {tj:?}"
+                );
+                if ti != tj {
+                    assert_eq!(
+                        byte, pinned,
+                        "cross-type byte order left format v1: {ti:?} vs {tj:?}"
+                    );
+                    assert_eq!(
+                        structural, pinned,
+                        "cross-type Ord left format v1: {ti:?} vs {tj:?}"
+                    );
+                }
+                assert!(
+                    vi.partial_cmp(vj).is_some(),
+                    "PartialOrd hole: {ti:?} vs {tj:?}"
+                );
+            }
+        }
+
+        // Transitivity over the sorted-by-pinned-tag universe.
+        let mut order: Vec<usize> = (0..universe.len()).collect();
+        order.sort_by(|&a, &b| {
+            pinned_tag_byte(universe[a].0).cmp(&pinned_tag_byte(universe[b].0))
+        });
+        for w in order.windows(2) {
+            assert!(
+                encoded[w[0]].as_bytes() < encoded[w[1]].as_bytes(),
+                "tag order not embedded: {:?} !< {:?}",
+                universe[w[0]].0,
+                universe[w[1]].0
+            );
+        }
+    }
+
+    /// Sentinel-free unbounded: every enumerable interval encodes
+    /// unbounded ends as the `0x01` marker, never as the finite key of
+    /// `i64::MIN`/`i64::MAX`, and those forms stay byte-distinct.
+    #[test]
+    fn near_exhaustive_sentinel_free_unbounded_encodings() {
+        let universe = interval_universe();
+        assert!(
+            universe.len() >= 20,
+            "interval universe too small: {}",
+            universe.len()
+        );
+
+        let mut encoded = Vec::with_capacity(universe.len());
+        for iv in &universe {
+            let v = DataValue::Interval(*iv);
+            let enc = encode_owned(&v);
+            assert_eq!(
+                enc.as_bytes()[0],
+                pinned_tag_byte(Tag::Interval),
+                "Interval tag prefix"
+            );
+            let body = &enc.as_bytes()[1..];
+            match iv.ends() {
+                None => {
+                    assert_eq!(body, &[IV_EMPTY], "EMPTY must be single 0x01 marker");
+                }
+                Some((lo, hi)) => {
+                    assert_eq!(body[0], IV_RANGE, "non-empty form marker");
+                    let mut at = 1usize;
+                    match lo {
+                        Lo::NegUnbounded => {
+                            assert_eq!(body[at], END_UNBOUNDED, "lo unbounded marker");
+                            at += 1;
+                        }
+                        Lo::At(t) => {
+                            assert_eq!(body[at], END_FINITE, "lo finite marker");
+                            at += 1;
+                            assert_eq!(&body[at..at + 8], &asc_ts_key(t));
+                            at += 8;
+                        }
+                    }
+                    match hi {
+                        Hi::PosUnbounded => {
+                            assert_eq!(body[at], END_UNBOUNDED, "hi unbounded marker");
+                            at += 1;
+                        }
+                        Hi::At(t) => {
+                            assert_eq!(body[at], END_FINITE, "hi finite marker");
+                            at += 1;
+                            assert_eq!(&body[at..at + 8], &asc_ts_key(t));
+                            at += 8;
+                        }
+                    }
+                    assert_eq!(at, body.len(), "trailing junk in interval body");
+                }
+            }
+            let back = decode(enc.as_bytes()).expect("lawful encode must decode");
+            assert_eq!(back, v, "round-trip changed {iv:?}");
+            encoded.push(enc);
+        }
+
+        // Unbounded ≠ finite extreme, bytewise and as values.
+        let neg_unb = DataValue::Interval(Interval::range(Lo::NegUnbounded, Hi::At(0)));
+        let min_lo = DataValue::Interval(Interval::range(Lo::At(i64::MIN), Hi::At(0)));
+        let pos_unb = DataValue::Interval(Interval::range(Lo::At(0), Hi::PosUnbounded));
+        let max_hi = DataValue::Interval(Interval::range(Lo::At(0), Hi::At(i64::MAX)));
+        assert_ne!(encode_owned(&neg_unb), encode_owned(&min_lo));
+        assert_ne!(encode_owned(&pos_unb), encode_owned(&max_hi));
+        assert_ne!(neg_unb, min_lo);
+        assert_ne!(pos_unb, max_hi);
+        // Marker 0x01 sorts before any finite end (0x02 + key).
+        assert!(encode_owned(&neg_unb) < encode_owned(&min_lo));
+        assert!(encode_owned(&pos_unb) < encode_owned(&max_hi));
+
+        // Pairwise: byte order == Ord over the enumerable universe.
+        for i in 0..universe.len() {
+            for j in 0..universe.len() {
+                let a = DataValue::Interval(universe[i]);
+                let b = DataValue::Interval(universe[j]);
+                assert_eq!(
+                    encoded[i].as_bytes().cmp(encoded[j].as_bytes()),
+                    a.cmp(&b),
+                    "interval order embedding: {:?} vs {:?}",
+                    universe[i],
+                    universe[j]
+                );
+            }
+        }
+    }
+
+    /// Small within-kind domains (bool × bool, tiny nums) — enumerable
+    /// order embedding against pinned tag prefixes.
+    #[test]
+    fn near_exhaustive_small_scalar_domains() {
+        let bools = [DataValue::Bool(false), DataValue::Bool(true)];
+        for a in &bools {
+            for b in &bools {
+                let ea = encode_owned(a);
+                let eb = encode_owned(b);
+                assert_eq!(ea.as_bytes()[0], pinned_tag_byte(Tag::Bool));
+                assert_eq!(
+                    ea.as_bytes().cmp(eb.as_bytes()),
+                    a.cmp(b),
+                    "bool order embedding"
+                );
+            }
+        }
+        // Bool payload is 0x00/0x01 — total over the two-value domain.
+        assert_eq!(encode_owned(&bools[0]).as_bytes(), &[0x08, 0x00]);
+        assert_eq!(encode_owned(&bools[1]).as_bytes(), &[0x08, 0x01]);
+        assert!(encode_owned(&bools[0]) < encode_owned(&bools[1]));
+
+        let nums = [
+            DataValue::Num(Num::int(i64::MIN)),
+            DataValue::Num(Num::int(-1)),
+            DataValue::Num(Num::int(0)),
+            DataValue::Num(Num::int(1)),
+            DataValue::Num(Num::int(i64::MAX)),
+            DataValue::Num(Num::float(-1.0)),
+            DataValue::Num(Num::float(0.0)),
+            DataValue::Num(Num::float(1.0)),
+        ];
+        let enc: Vec<_> = nums.iter().map(encode_owned).collect();
+        for i in 0..nums.len() {
+            assert_eq!(enc[i].as_bytes()[0], pinned_tag_byte(Tag::Num));
+            for j in 0..nums.len() {
+                assert_eq!(
+                    enc[i].as_bytes().cmp(enc[j].as_bytes()),
+                    nums[i].cmp(&nums[j]),
+                    "num order embedding: {:?} vs {:?}",
+                    nums[i],
+                    nums[j]
+                );
+            }
+        }
+
+        // List terminator is structural 0x01 — sorts below any tag prefix
+        // continuation (prefix law), pinned without going through Ord.
+        let empty = encode_owned(&DataValue::List(vec![]));
+        let with_null = encode_owned(&DataValue::List(vec![DataValue::Null]));
+        assert_eq!(empty.as_bytes(), &[pinned_tag_byte(Tag::List), STRUCT_SEQ_END]);
+        assert_eq!(
+            with_null.as_bytes()[1],
+            pinned_tag_byte(Tag::Null),
+            "list element must open with a tag, not the terminator"
+        );
+        assert!(empty.as_bytes() < with_null.as_bytes());
     }
 }
