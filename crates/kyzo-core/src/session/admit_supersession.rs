@@ -528,6 +528,62 @@ mod tests {
         );
     }
 
+    /// GUARDIAN HUNT (#3 as-of/supersession): the CANONICAL bitemporal
+    /// correction -- same valid-time, corrected value. The existing test uses
+    /// distinct valid-times (a schedule of values, not a correction). Here the
+    /// original and the correction share valid-time 100; the correction carries
+    /// a later dense system-time (commit ordinal). As-of latest knowledge must
+    /// return the CORRECTED value: the correction supersedes the stale original
+    /// at the same valid-time. If as-of replays the stale value (or returns both
+    /// rows for a single-valued key), history is being read wrong.
+    #[test]
+    fn as_of_same_valid_time_correction_supersedes_stale_value() {
+        let db = open_engine(SimStorage::new(0x2680_0006));
+        db.run_script(
+            "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
+            no_params(),
+        )
+        .expect("create original @100");
+
+        let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let (prior_record, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::from_raw(100),
+        );
+        let prior = prior_record.record_id();
+
+        let mut tx = db.store.write_tx().expect("correction tx");
+        let handle = get_relation(&tx, "quote").expect("quote");
+        let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
+        // SAME valid-time (100) as the original: the canonical correction.
+        append_corrected_fact(
+            &seats,
+            &handle,
+            &mut tx,
+            prior,
+            &corrected,
+            ValidityTs::from_raw(100),
+            SourceSpan::default(),
+        )
+        .expect("append same-valid correction");
+        tx.commit().expect("commit correction");
+
+        // As-of valid 150 (latest knowledge): the correction at valid 100 must
+        // win over the original at valid 100 (later system-time supersedes).
+        let at_150 = db
+            .run_script("?[price] := *quote{id, price @ 150}", no_params())
+            .expect("as-of 150");
+        assert_eq!(
+            at_150.rows(),
+            &[Tuple::from_vec(vec![DataValue::from(150i64)])],
+            "same-valid-time correction must supersede the stale value in as-of"
+        );
+    }
+
     #[test]
     fn prior_committed_bytes_survive_correction_append() {
         let db = open_engine(SimStorage::new(0x2680_0005));
