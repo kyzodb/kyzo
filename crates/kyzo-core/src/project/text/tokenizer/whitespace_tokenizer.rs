@@ -32,31 +32,11 @@ impl Tokenizer for WhitespaceTokenizer {
     }
 }
 
-impl<'a> WhitespaceTokenStream<'a> {
-    // search for the end of the current token.
-    fn search_token_end(&mut self) -> usize {
-        (&mut self.chars)
-            .filter(|(_, c)| c.is_ascii_whitespace())
-            .map(|(offset, _)| offset)
-            .next()
-            .unwrap_or(self.text.len())
-    }
-}
-
 impl<'a> TokenStream for WhitespaceTokenStream<'a> {
     fn advance(&mut self) -> bool {
-        self.token.text.clear();
-        // INVARIANT(token_position): tokenizer position is a modular counter; wrap is intentional.
-        self.token.position = self.token.position.wrapping_add(1);
-        while let Some((offset_from, c)) = self.chars.next() {
-            if !c.is_ascii_whitespace() {
-                let offset_to = self.search_token_end();
-                let _ = self.token.set_offsets(offset_from, offset_to);
-                self.token.text.push_str(&self.text[offset_from..offset_to]);
-                return true;
-            }
-        }
-        false
+        super::advance_char_indices_token(self.text, &mut self.chars, &mut self.token, |c| {
+            !c.is_ascii_whitespace()
+        })
     }
 
     fn token(&self) -> &Token {

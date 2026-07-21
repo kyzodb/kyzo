@@ -128,6 +128,30 @@ pub struct InputRelationHandle {
     pub span: SourceSpan,
 }
 
+impl InputRelationHandle {
+    /// Bind each schema column name as a zero-span symbol — the one harness
+    /// door for metadata→handle minting (hostile/filter index tests).
+    pub fn from_metadata(name: &str, metadata: StoredRelationMetadata) -> Self {
+        let key_bindings = metadata
+            .keys
+            .iter()
+            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
+            .collect();
+        let dep_bindings = metadata
+            .non_keys
+            .iter()
+            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
+            .collect();
+        Self {
+            name: Symbol::new(name, SourceSpan(0, 0)),
+            metadata,
+            key_bindings,
+            dep_bindings,
+            span: SourceSpan(0, 0),
+        }
+    }
+}
+
 /// The `:option`s of a query: limit/offset, timeout, ordering, the output
 /// relation (if the query writes one), and assertions.
 ///

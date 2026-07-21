@@ -19,12 +19,26 @@ pub(crate) fn op_chars(args: &[DataValue]) -> Result<DataValue> {
     ))
 }
 
-pub(crate) fn op_ends_with(args: &[DataValue]) -> Result<DataValue> {
+fn affix_op(
+    op: &'static str,
+    args: &[DataValue],
+    on_str: impl FnOnce(&str, &str) -> bool,
+    on_bytes: impl FnOnce(&[u8], &[u8]) -> bool,
+) -> Result<DataValue> {
     match (&args[0], &args[1]) {
-        (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.ends_with(r.as_str()))),
-        (DataValue::Bytes(l), DataValue::Bytes(r)) => Ok(DataValue::from(l.ends_with(r))),
-        _ => bail!("'ends_with' requires strings or bytes"),
+        (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(on_str(l, r))),
+        (DataValue::Bytes(l), DataValue::Bytes(r)) => Ok(DataValue::from(on_bytes(l, r))),
+        _ => bail!("'{op}' requires strings or bytes"),
     }
+}
+
+pub(crate) fn op_ends_with(args: &[DataValue]) -> Result<DataValue> {
+    affix_op(
+        "ends_with",
+        args,
+        |l, r| l.ends_with(r),
+        |l, r| l.ends_with(r),
+    )
 }
 
 pub(crate) fn op_from_substrings(args: &[DataValue]) -> Result<DataValue> {
@@ -143,11 +157,12 @@ pub(crate) fn op_slice_string(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {
-    match (&args[0], &args[1]) {
-        (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.starts_with(r.as_str()))),
-        (DataValue::Bytes(l), DataValue::Bytes(r)) => Ok(DataValue::from(l.starts_with(r))),
-        _ => bail!("'starts_with' requires strings or bytes"),
-    }
+    affix_op(
+        "starts_with",
+        args,
+        |l, r| l.starts_with(r),
+        |l, r| l.starts_with(r),
+    )
 }
 
 pub(crate) fn op_str_includes(args: &[DataValue]) -> Result<DataValue> {

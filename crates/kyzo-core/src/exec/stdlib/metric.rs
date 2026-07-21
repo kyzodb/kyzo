@@ -30,40 +30,36 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-pub(crate) fn op_ip_dist(args: &[DataValue]) -> Result<DataValue> {
-    let a = &args[0];
-    let b = &args[1];
-    match (a, b) {
+fn vec_pair_dist(
+    op: &'static str,
+    args: &[DataValue],
+    reduce: impl FnOnce(&[f64], &[f64]) -> f64,
+) -> Result<DataValue> {
+    match (&args[0], &args[1]) {
         (DataValue::Vector(a), DataValue::Vector(b)) => {
             if a.len() != b.len() {
-                bail!("'ip_dist' requires two vectors of the same length");
+                bail!("'{op}' requires two vectors of the same length");
             }
             let (sa, sb) = (a.to_f64s(), b.to_f64s());
-            let dot: f64 = sa.iter().zip(sb.iter()).map(|(x, y)| *x * *y).sum();
-            Ok(DataValue::from(1. - dot))
+            Ok(DataValue::from(reduce(&sa, &sb)))
         }
-        _ => bail!("'ip_dist' requires two vectors"),
+        _ => bail!("'{op}' requires two vectors"),
     }
 }
 
+pub(crate) fn op_ip_dist(args: &[DataValue]) -> Result<DataValue> {
+    vec_pair_dist("ip_dist", args, |sa, sb| {
+        1. - sa.iter().zip(sb.iter()).map(|(x, y)| *x * *y).sum::<f64>()
+    })
+}
+
 pub(crate) fn op_l2_dist(args: &[DataValue]) -> Result<DataValue> {
-    let a = &args[0];
-    let b = &args[1];
-    match (a, b) {
-        (DataValue::Vector(a), DataValue::Vector(b)) => {
-            if a.len() != b.len() {
-                bail!("'l2_dist' requires two vectors of the same length");
-            }
-            let (sa, sb) = (a.to_f64s(), b.to_f64s());
-            let d: f64 = sa
-                .iter()
-                .zip(sb.iter())
-                .map(|(x, y)| (*x - *y) * (*x - *y))
-                .sum();
-            Ok(DataValue::from(d))
-        }
-        _ => bail!("'l2_dist' requires two vectors"),
-    }
+    vec_pair_dist("l2_dist", args, |sa, sb| {
+        sa.iter()
+            .zip(sb.iter())
+            .map(|(x, y)| (*x - *y) * (*x - *y))
+            .sum()
+    })
 }
 
 pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {

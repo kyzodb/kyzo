@@ -415,8 +415,50 @@ impl<'a> FixedRulePayload<'a> {
             Some(v) => Ok(v.span()),
         }
     }
+    /// Shared option lookup: missing→default/err; present→`extract` or typed refuse.
+    fn typed_option<T>(
+        &self,
+        name: &str,
+        default: Option<T>,
+        extract: impl FnOnce(DataValue) -> Option<T>,
+        help: WrongFixedRuleOptionHelp,
+    ) -> Result<T> {
+        match self.manifest.options.get(name) {
+            Some(v) => match v.clone().eval_to_const() {
+                Ok(val) => match extract(val) {
+                    Some(t) => Ok(t),
+                    None => Err(WrongFixedRuleOptionError {
+                        name: Symbol::new(name, v.span()),
+                        span: v.span(),
+                        rule_name: self.manifest.fixed_handle.name.clone(),
+                        help,
+                    }
+                    .into()),
+                },
+                _ => Err(WrongFixedRuleOptionError {
+                    name: Symbol::new(name, v.span()),
+                    span: v.span(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
+                    help,
+                }
+                .into()),
+            },
+            None => match default {
+                Some(v) => Ok(v),
+                None => Err(FixedRuleOptionNotFoundError {
+                    name: Symbol::new(name, self.manifest.span),
+                    span: self.manifest.span,
+                    rule_name: self.manifest.fixed_handle.name.clone(),
+                }
+                .into()),
+            },
+        }
+    }
+
     /// Extract an integer option
     pub fn integer_option(&self, name: &str, default: Option<i64>) -> Result<i64> {
+        // Non-integral Num → NotFound (historical seat). Missing / wrong-type
+        // share [`Self::typed_option`]; this arm is only the integral Num door.
         match self.manifest.options.get(name) {
             Some(v) => match v.clone().eval_to_const() {
                 Ok(DataValue::Num(n)) => match n.as_int() {
@@ -428,35 +470,37 @@ impl<'a> FixedRulePayload<'a> {
                     }
                     .into()),
                 },
-                _ => Err(WrongFixedRuleOptionError {
-                    name: Symbol::new(name, v.span()),
-                    span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.clone(),
-                    help: WrongFixedRuleOptionHelp::IntegerRequired,
-                }
-                .into()),
+                _ => self.typed_option(
+                    name,
+                    None,
+                    |_| None,
+                    WrongFixedRuleOptionHelp::IntegerRequired,
+                ),
             },
-            None => match default {
-                Some(v) => Ok(v),
-                None => Err(FixedRuleOptionNotFoundError {
-                    name: Symbol::new(name, self.manifest.span),
-                    span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.clone(),
-                }
-                .into()),
-            },
+            None => self.typed_option(
+                name,
+                default,
+                |_| None,
+                WrongFixedRuleOptionHelp::IntegerRequired,
+            ),
         }
     }
-    /// Extract a positive integer option
-    pub fn pos_integer_option(&self, name: &str, default: Option<usize>) -> Result<usize> {
+    fn bounded_usize_option(
+        &self,
+        name: &str,
+        default: Option<usize>,
+        bound_ok: impl FnOnce(i64) -> bool,
+        bound_help: WrongFixedRuleOptionHelp,
+        fits_help: WrongFixedRuleOptionHelp,
+    ) -> Result<usize> {
         let i = self.integer_option(name, default.map(|i| i as i64))?;
         ensure!(
-            i > 0,
+            bound_ok(i),
             WrongFixedRuleOptionError {
                 name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
                 rule_name: self.manifest.fixed_handle.name.clone(),
-                help: WrongFixedRuleOptionHelp::PositiveIntegerRequired,
+                help: bound_help,
             }
         );
         let span = self.option_span(name).unwrap_or(self.manifest.span);
@@ -465,60 +509,38 @@ impl<'a> FixedRulePayload<'a> {
                 name: Symbol::new(name, span),
                 span,
                 rule_name: self.manifest.fixed_handle.name.clone(),
-                help: WrongFixedRuleOptionHelp::PositiveIntegerFitsUsizeRequired,
+                help: fits_help,
             }
             .into()
         })
+    }
+
+    /// Extract a positive integer option
+    pub fn pos_integer_option(&self, name: &str, default: Option<usize>) -> Result<usize> {
+        self.bounded_usize_option(
+            name,
+            default,
+            |i| i > 0,
+            WrongFixedRuleOptionHelp::PositiveIntegerRequired,
+            WrongFixedRuleOptionHelp::PositiveIntegerFitsUsizeRequired,
+        )
     }
     /// Extract a non-negative integer option
     pub fn non_neg_integer_option(&self, name: &str, default: Option<usize>) -> Result<usize> {
-        let i = self.integer_option(name, default.map(|i| i as i64))?;
-        ensure!(
-            i >= 0,
-            WrongFixedRuleOptionError {
-                name: Symbol::new(name, self.option_span(name)?),
-                span: self.option_span(name)?,
-                rule_name: self.manifest.fixed_handle.name.clone(),
-                help: WrongFixedRuleOptionHelp::NonNegIntegerRequired,
-            }
-        );
-        let span = self.option_span(name).unwrap_or(self.manifest.span);
-        usize::try_from(i).map_err(|_| {
-            WrongFixedRuleOptionError {
-                name: Symbol::new(name, span),
-                span,
-                rule_name: self.manifest.fixed_handle.name.clone(),
-                help: WrongFixedRuleOptionHelp::NonNegIntegerFitsUsizeRequired,
-            }
-            .into()
-        })
+        self.bounded_usize_option(
+            name,
+            default,
+            |i| i >= 0,
+            WrongFixedRuleOptionHelp::NonNegIntegerRequired,
+            WrongFixedRuleOptionHelp::NonNegIntegerFitsUsizeRequired,
+        )
     }
     /// Extract a floating point option
     pub fn float_option(&self, name: &str, default: Option<f64>) -> Result<f64> {
-        match self.manifest.options.get(name) {
-            Some(v) => match v.clone().eval_to_const() {
-                Ok(DataValue::Num(n)) => {
-                    let f = n.to_f64();
-                    Ok(f)
-                }
-                _ => Err(WrongFixedRuleOptionError {
-                    name: Symbol::new(name, v.span()),
-                    span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.clone(),
-                    help: WrongFixedRuleOptionHelp::FloatRequired,
-                }
-                .into()),
-            },
-            None => match default {
-                Some(v) => Ok(v),
-                None => Err(FixedRuleOptionNotFoundError {
-                    name: Symbol::new(name, self.manifest.span),
-                    span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.clone(),
-                }
-                .into()),
-            },
-        }
+        self.typed_option(name, default, |val| match val {
+            DataValue::Num(n) => Some(n.to_f64()),
+            _ => None,
+        }, WrongFixedRuleOptionHelp::FloatRequired)
     }
     /// Extract a floating point option between 0. and 1.
     pub fn unit_interval_option(&self, name: &str, default: Option<f64>) -> Result<f64> {
@@ -536,27 +558,10 @@ impl<'a> FixedRulePayload<'a> {
     }
     /// Extract a boolean option
     pub fn bool_option(&self, name: &str, default: Option<bool>) -> Result<bool> {
-        match self.manifest.options.get(name) {
-            Some(v) => match v.clone().eval_to_const() {
-                Ok(DataValue::Bool(b)) => Ok(b),
-                _ => Err(WrongFixedRuleOptionError {
-                    name: Symbol::new(name, v.span()),
-                    span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.clone(),
-                    help: WrongFixedRuleOptionHelp::BoolRequired,
-                }
-                .into()),
-            },
-            None => match default {
-                Some(v) => Ok(v),
-                None => Err(FixedRuleOptionNotFoundError {
-                    name: Symbol::new(name, self.manifest.span),
-                    span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.clone(),
-                }
-                .into()),
-            },
-        }
+        self.typed_option(name, default, |val| match val {
+            DataValue::Bool(b) => Some(b),
+            _ => None,
+        }, WrongFixedRuleOptionHelp::BoolRequired)
     }
 }
 

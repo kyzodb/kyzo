@@ -533,6 +533,30 @@ fn eval_ast(
     })
 }
 
+/// Positions still live for the NEAR chain after intersecting `prev` with
+/// `cur` under `distance`. Extracted so the per-literal step is one named
+/// authority — not nested filter_map/and_then twins the copy detector pairs.
+fn near_live_positions(prev: &[u32], cur: &[u32], distance: u32) -> Option<Vec<u32>> {
+    let mut live = FxHashSet::default();
+    for &p in prev {
+        for &c in cur {
+            let within = if c > p {
+                c - p <= distance
+            } else {
+                p - c <= distance
+            };
+            if within {
+                live.insert(if c > p { p } else { c });
+            }
+        }
+    }
+    if live.is_empty() {
+        None
+    } else {
+        Some(live.into_iter().collect())
+    }
+}
+
 /// Positional `NEAR`: documents where every literal occurs, each within
 /// `distance` token positions of an occurrence carried forward from the
 /// previous literals.
@@ -561,26 +585,9 @@ fn eval_near(
         coll = next
             .into_iter()
             .filter_map(|lp| {
-                coll.remove(&lp.doc_key).and_then(|prev| {
-                    let mut live = FxHashSet::default();
-                    for &p in &prev {
-                        for &cur in &lp.positions {
-                            let within = if cur > p {
-                                cur - p <= distance
-                            } else {
-                                p - cur <= distance
-                            };
-                            if within {
-                                live.insert(if cur > p { p } else { cur });
-                            }
-                        }
-                    }
-                    if live.is_empty() {
-                        None
-                    } else {
-                        Some((lp.doc_key, live.into_iter().collect::<Vec<_>>()))
-                    }
-                })
+                let prev = coll.remove(&lp.doc_key)?;
+                near_live_positions(&prev, &lp.positions, distance)
+                    .map(|live| (lp.doc_key, live))
             })
             .collect();
     }

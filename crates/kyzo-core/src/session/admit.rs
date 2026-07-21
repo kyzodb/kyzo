@@ -935,17 +935,18 @@ fn digest_sugar_row(relation: &str, row: &[DataValue]) -> RecordContentDigest {
     RecordContentDigest::from_digest(h.finalize().into())
 }
 
-/// Relational sugar assert (:put / :insert / :update / put_fact) — mints
-/// through [`admit_record`] under the real open [`StoreId`] and live
-/// certificate authority. None-surface binds [`StatementSource::Unbound`]
-/// (no relation-name-hash source).
-pub(crate) fn admit_sugar_relation_row(
+/// One relation-row door into [`admit_record`]: statement construction +
+/// [`RecordCore`] mint. Sugar assert and Seat-34 correction both enter here —
+/// digest binding is the caller's independence (`kyzo.sugar.row.v1` vs
+/// `kyzo.sugar.correction.v1`+prior); this is not a second admission authority.
+pub(crate) fn admit_relation_row_through_record(
     store_id: StoreId,
     live: &LiveCertificateInputs,
     relation_name: &str,
     row: &[DataValue],
     keys_len: usize,
     valid: ValidityTs,
+    digest: RecordContentDigest,
 ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
     let keys_len = keys_len.min(row.len());
     let subject = StatementSubject::new(DataValue::List(row[..keys_len].to_vec()));
@@ -960,7 +961,6 @@ pub(crate) fn admit_sugar_relation_row(
         StatementContext::Unscoped,
         StatementSource::unbound(),
     );
-    let digest = digest_sugar_row(relation_name, row);
     let core = RecordCore::new(
         store_id,
         digest,
@@ -976,6 +976,29 @@ pub(crate) fn admit_sugar_relation_row(
         IngestShape::Record,
         live.clone(),
     ))
+}
+
+/// Relational sugar assert (:put / :insert / :update / put_fact) — mints
+/// through [`admit_relation_row_through_record`] / [`admit_record`] under the
+/// real open [`StoreId`] and live certificate authority. None-surface binds
+/// [`StatementSource::Unbound`] (no relation-name-hash source).
+pub(crate) fn admit_sugar_relation_row(
+    store_id: StoreId,
+    live: &LiveCertificateInputs,
+    relation_name: &str,
+    row: &[DataValue],
+    keys_len: usize,
+    valid: ValidityTs,
+) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+    admit_relation_row_through_record(
+        store_id,
+        live,
+        relation_name,
+        row,
+        keys_len,
+        valid,
+        digest_sugar_row(relation_name, row),
+    )
 }
 
 /// Seat 34 — correction as supersession without overwrite.

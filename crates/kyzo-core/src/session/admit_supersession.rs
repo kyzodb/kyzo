@@ -23,8 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::data::digest::RecordContentDigest;
 use crate::data::statement::{
-    StatementContext, StatementPredicate, StatementSource, StatementSubject, StatementValue,
-    ValidityTime,
+    StatementContext, StatementSource, StatementSubject, StatementValue, ValidityTime,
 };
 use crate::session::catalog::RelationHandle;
 use crate::session::generation::{CatalogGeneration, RelationGeneration};
@@ -190,35 +189,18 @@ pub(crate) fn admit_correction(
     keys_len: usize,
     valid: ValidityTs,
 ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-    let keys_len = keys_len.min(corrected_row.len());
-    let subject = StatementSubject::new(DataValue::List(corrected_row[..keys_len].to_vec()));
-    let predicate =
-        StatementPredicate::new(relation_name).map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
-    let value = StatementValue::new(DataValue::List(corrected_row[keys_len..].to_vec()));
-    let (kind, statement) = crate::data::statement::construct::relation(
-        subject,
-        predicate,
-        value,
-        ValidityTime::instant(valid.raw()),
-        StatementContext::Unscoped,
-        StatementSource::unbound(),
-    );
-    let digest = digest_correction(prior, relation_name, corrected_row);
-    let core = RecordCore::new(
+    // One-door: same [`super::admit_relation_row_through_record`] seam as
+    // sugar assert. Independence is the correction digest (binds `prior`)
+    // plus the successor≠prior refuse — not a parallel admission path.
+    let (record, cert) = super::admit_relation_row_through_record(
         store_id,
-        digest,
-        SemanticSurface::None,
-        None,
-        kind,
-        statement,
-    );
-    let (record, cert) = admit_record(super::AdmitRecordParts::new(
-        core,
-        Placement::Unrestricted,
-        None,
-        IngestShape::Record,
-        live.clone(),
-    ))?;
+        live,
+        relation_name,
+        corrected_row,
+        keys_len,
+        valid,
+        digest_correction(prior, relation_name, corrected_row),
+    )?;
     if record.record_id() == prior {
         return Err(AdmitRefuse::SugarStatementRefuse);
     }

@@ -30,34 +30,35 @@ pub(crate) fn op_append(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-pub(crate) fn op_chunks(args: &[DataValue]) -> Result<DataValue> {
+fn list_window_op(
+    op: &'static str,
+    args: &[DataValue],
+    windows: impl FnOnce(&[DataValue], usize) -> Vec<DataValue>,
+) -> Result<DataValue> {
     let arg = args[0]
         .get_slice()
-        .ok_or_else(|| miette!("first argument of 'chunks' must be a list"))?;
+        .ok_or_else(|| miette!("first argument of '{op}' must be a list"))?;
     let n = args[1]
         .get_int()
-        .ok_or_else(|| miette!("second argument of 'chunks' must be an integer"))?;
-    ensure!(n > 0, "second argument to 'chunks' must be positive");
-    let res = arg
-        .chunks(n as usize)
-        .map(|el| DataValue::List(el.to_vec()))
-        .collect_vec();
-    Ok(DataValue::List(res))
+        .ok_or_else(|| miette!("second argument of '{op}' must be an integer"))?;
+    ensure!(n > 0, "second argument to '{op}' must be positive");
+    Ok(DataValue::List(windows(arg, n as usize)))
+}
+
+pub(crate) fn op_chunks(args: &[DataValue]) -> Result<DataValue> {
+    list_window_op("chunks", args, |arg, n| {
+        arg.chunks(n)
+            .map(|el| DataValue::List(el.to_vec()))
+            .collect_vec()
+    })
 }
 
 pub(crate) fn op_chunks_exact(args: &[DataValue]) -> Result<DataValue> {
-    let arg = args[0]
-        .get_slice()
-        .ok_or_else(|| miette!("first argument of 'chunks_exact' must be a list"))?;
-    let n = args[1]
-        .get_int()
-        .ok_or_else(|| miette!("second argument of 'chunks_exact' must be an integer"))?;
-    ensure!(n > 0, "second argument to 'chunks_exact' must be positive");
-    let res = arg
-        .chunks_exact(n as usize)
-        .map(|el| DataValue::List(el.to_vec()))
-        .collect_vec();
-    Ok(DataValue::List(res))
+    list_window_op("chunks_exact", args, |arg, n| {
+        arg.chunks_exact(n)
+            .map(|el| DataValue::List(el.to_vec()))
+            .collect_vec()
+    })
 }
 
 pub(crate) fn op_concat(args: &[DataValue]) -> Result<DataValue> {
@@ -406,18 +407,11 @@ pub(crate) fn op_union(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_windows(args: &[DataValue]) -> Result<DataValue> {
-    let arg = args[0]
-        .get_slice()
-        .ok_or_else(|| miette!("first argument of 'windows' must be a list"))?;
-    let n = args[1]
-        .get_int()
-        .ok_or_else(|| miette!("second argument of 'windows' must be an integer"))?;
-    ensure!(n > 0, "second argument to 'windows' must be positive");
-    let res = arg
-        .windows(n as usize)
-        .map(|el| DataValue::List(el.to_vec()))
-        .collect_vec();
-    Ok(DataValue::List(res))
+    list_window_op("windows", args, |arg, n| {
+        arg.windows(n)
+            .map(|el| DataValue::List(el.to_vec()))
+            .collect_vec()
+    })
 }
 
 /// A path step into a JSON array, proven non-negative and machine-sized.

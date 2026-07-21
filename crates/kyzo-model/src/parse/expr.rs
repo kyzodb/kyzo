@@ -454,13 +454,22 @@ struct InvalidUtf8Error(u32, #[label] SourceSpan);
 #[diagnostic(code(parser::invalid_escape_seq))]
 struct InvalidEscapeSeqError(String, #[label] SourceSpan);
 
-fn parse_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
+/// One escape-decode loop for double- and single-quoted string literals.
+/// Quote-escape token (`\"` vs `\'`) is the independence; the scaffold is shared.
+fn parse_quoted_string_inner(
+    pair: Pair<'_>,
+    quote_escape: &str,
+    quote_char: char,
+) -> Result<SmartString<LazyCompact>> {
     let pairs = pair.into_inner().next().unwrap().into_inner();
     let mut ret = SmartString::new();
     for pair in pairs {
         let s = pair.as_str();
+        if s == quote_escape {
+            ret.push(quote_char);
+            continue;
+        }
         match s {
-            r#"\""# => ret.push('"'),
             r"\\" => ret.push('\\'),
             r"\/" => ret.push('/'),
             r"\b" => ret.push('\x08'),
@@ -484,34 +493,12 @@ fn parse_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
     Ok(ret)
 }
 
+fn parse_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
+    parse_quoted_string_inner(pair, r#"\""#, '"')
+}
+
 fn parse_s_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
-    let pairs = pair.into_inner().next().unwrap().into_inner();
-    let mut ret = SmartString::new();
-    for pair in pairs {
-        let s = pair.as_str();
-        match s {
-            r#"\'"# => ret.push('\''),
-            r"\\" => ret.push('\\'),
-            r"\/" => ret.push('/'),
-            r"\b" => ret.push('\x08'),
-            r"\f" => ret.push('\x0c'),
-            r"\n" => ret.push('\n'),
-            r"\r" => ret.push('\r'),
-            r"\t" => ret.push('\t'),
-            s if s.starts_with(r"\u") => {
-                let esc_span = pair.extract_span();
-                let code = parse_int(s, 16, esc_span)? as u32;
-                let ch = char::from_u32(code)
-                    .ok_or_else(|| InvalidUtf8Error(code, esc_span))?;
-                ret.push(ch);
-            }
-            s if s.starts_with('\\') => {
-                bail!(InvalidEscapeSeqError(s.to_string(), pair.extract_span()))
-            }
-            s => ret.push_str(s),
-        }
-    }
-    Ok(ret)
+    parse_quoted_string_inner(pair, r#"\'"#, '\'')
 }
 
 fn parse_raw_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {

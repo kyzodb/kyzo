@@ -11,127 +11,166 @@ use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, VecOpEmptyArgs, no_nan, no_nan_vec, vec_value,
 };
 
-pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
+/// Unary f64/vector scaffold: Num→f64→`f`, Vector→elementwise `f`.
+fn unary_f64_op(
+    op: &'static str,
+    args: &[DataValue],
+    f: impl Fn(f64) -> f64,
+) -> Result<DataValue> {
+    match &args[0] {
+        DataValue::Num(n) => Ok(DataValue::Num(Num::float(f(n.to_f64())))),
+        DataValue::Vector(v) => Ok(DataValue::Vector(vec_value(
+            v.to_f64s().iter().map(|x| f(*x)).collect(),
+        )?)),
+        data_value_any!() => bail!("'{op}' requires numbers"),
+    }
+}
+
+/// Unary f64/vector scaffold with a domain gate; out-of-domain → DomainError,
+/// in-domain NaN → refused via [`no_nan`] / [`no_nan_vec`].
+fn unary_f64_domain(
+    op: &'static str,
+    args: &[DataValue],
+    in_domain: impl Fn(f64) -> bool,
+    f: impl Fn(f64) -> f64,
+) -> Result<DataValue> {
+    match &args[0] {
+        DataValue::Num(n) => {
+            let a = n.to_f64();
+            if !in_domain(a) {
+                bail!(DomainError { op: op.into() });
+            }
+            no_nan(op, f(a))
+        }
+        DataValue::Vector(v) => {
+            if v.to_f64s().iter().any(|x| !in_domain(*x)) {
+                bail!(DomainError { op: op.into() });
+            }
+            no_nan_vec(op, v.to_f64s().iter().map(|x| f(*x)).collect())
+        }
+        data_value_any!() => bail!("'{op}' requires numbers"),
+    }
+}
+
+/// Bytes pairwise bit-op scaffold (same-length check + zip-mutate).
+fn bit_bytes_binop(
+    op: &'static str,
+    args: &[DataValue],
+    combine: impl Fn(u8, u8) -> u8,
+) -> Result<DataValue> {
+    match (&args[0], &args[1]) {
+        (DataValue::Bytes(left), DataValue::Bytes(right)) => {
+            ensure!(
+                left.len() == right.len(),
+                "operands of '{op}' must have the same lengths"
+            );
+            let mut ret = left.clone();
+            for (l, r) in ret.iter_mut().zip(right.iter()) {
+                *l = combine(*l, *r);
+            }
+            Ok(DataValue::Bytes(ret))
+        }
+        _ => bail!("'{op}' requires bytes"),
+    }
+}
+
+/// Unary Num/Vector scaffold for checked-int + float + elementwise vector ops.
+fn unary_num_vec(
+    op: &'static str,
+    args: &[DataValue],
+    on_int: impl FnOnce(i64) -> Result<i64>,
+    on_float: impl FnOnce(f64) -> f64,
+    on_vec: impl Fn(f64) -> f64,
+) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => match i.checked_abs() {
-                Some(v) => DataValue::Num(Num::int(v)),
-                None => bail!(IntegerOverflow { op: "abs" }),
-            },
-            NumRepr::Float(f) => DataValue::Num(Num::float(f.abs())),
+            NumRepr::Int(i) => DataValue::Num(Num::int(on_int(i)?)),
+            NumRepr::Float(f) => DataValue::Num(Num::float(on_float(f))),
         },
         DataValue::Vector(v) => {
-            DataValue::Vector(vec_value(v.to_f64s().iter().map(|x| x.abs()).collect())?)
+            DataValue::Vector(vec_value(v.to_f64s().iter().map(|x| on_vec(*x)).collect())?)
         }
-        data_value_any!() => bail!("'abs' requires numbers"),
+        data_value_any!() => bail!("'{op}' requires numbers"),
     })
 }
 
+pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
+    unary_num_vec(
+        "abs",
+        args,
+        |i| i.checked_abs().ok_or_else(|| IntegerOverflow { op: "abs" }.into()),
+        f64::abs,
+        f64::abs,
+    )
+}
+
 pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| !(-1.0..=1.0).contains(x)) {
-                bail!(DomainError { op: "acos".into() });
-            }
-            return no_nan_vec("acos", v.to_f64s().iter().map(|x| x.acos()).collect());
-        }
-        data_value_any!() => bail!("'acos' requires numbers"),
-    };
-    // `acos` is defined only on [-1, 1]; outside it the raw `f64` method
-    // returns `NaN`.
-    if !(-1.0..=1.0).contains(&a) {
-        bail!(DomainError { op: "acos".into() });
-    }
-    no_nan("acos", a.acos())
+    // Defined only on [-1, 1]; outside, raw f64 returns NaN.
+    unary_f64_domain("acos", args, |a| (-1.0..=1.0).contains(&a), f64::acos)
 }
 
 pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| *x < 1.0) {
-                bail!(DomainError { op: "acosh".into() });
-            }
-            return no_nan_vec("acosh", v.to_f64s().iter().map(|x| x.acosh()).collect());
-        }
-        data_value_any!() => bail!("'acosh' requires numbers"),
-    };
-    // `acosh` is defined only on [1, +inf); below 1 the raw `f64` method
-    // returns `NaN`.
-    if a < 1.0 {
-        bail!(DomainError { op: "acosh".into() });
-    }
-    no_nan("acosh", a.acosh())
+    // Defined only on [1, +inf).
+    unary_f64_domain("acosh", args, |a| a >= 1.0, f64::acosh)
 }
 
-pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
-    let mut i_accum = 0i64;
-    let mut f_accum = 0.0f64;
+fn fold_num_args(
+    op: &'static str,
+    args: &[DataValue],
+    i_init: i64,
+    f_init: f64,
+    on_int: impl Fn(i64, i64) -> Result<i64>,
+    on_float: impl Fn(f64, f64) -> f64,
+    combine_final: impl Fn(i64, f64) -> DataValue,
+    vecs: impl FnOnce(&[DataValue]) -> Result<DataValue>,
+    require_msg: &'static str,
+) -> Result<DataValue> {
+    let mut i_accum = i_init;
+    let mut f_accum = f_init;
     for arg in args {
         match arg {
             DataValue::Num(n) => match n.repr() {
-                NumRepr::Int(i) => {
-                    i_accum = i_accum
-                        .checked_add(i)
-                        .ok_or(IntegerOverflow { op: "add" })?;
-                }
-                NumRepr::Float(f) => f_accum += f,
+                NumRepr::Int(i) => i_accum = on_int(i_accum, i)?,
+                NumRepr::Float(f) => f_accum = on_float(f_accum, f),
             },
-            DataValue::Vector(_) => return add_vecs(args),
-            data_value_any!() => bail!("addition requires numbers"),
+            DataValue::Vector(_) => return vecs(args),
+            data_value_any!() => bail!("{require_msg}"),
         }
     }
-    if f_accum == 0.0f64 {
-        Ok(DataValue::Num(Num::int(i_accum)))
-    } else {
-        Ok(DataValue::Num(Num::float(i_accum as f64 + f_accum)))
-    }
+    let _ = op;
+    Ok(combine_final(i_accum, f_accum))
+}
+
+pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
+    fold_num_args(
+        "add",
+        args,
+        0,
+        0.0,
+        |a, b| a.checked_add(b).ok_or(IntegerOverflow { op: "add" }.into()),
+        |a, b| a + b,
+        |i, f| {
+            if f == 0.0 {
+                DataValue::Num(Num::int(i))
+            } else {
+                DataValue::Num(Num::float(i as f64 + f))
+            }
+        },
+        add_vecs,
+        "addition requires numbers",
+    )
 }
 
 pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| !(-1.0..=1.0).contains(x)) {
-                bail!(DomainError { op: "asin".into() });
-            }
-            return no_nan_vec("asin", v.to_f64s().iter().map(|x| x.asin()).collect());
-        }
-        data_value_any!() => bail!("'asin' requires numbers"),
-    };
-    // `asin` is defined only on [-1, 1]; outside it the raw `f64` method
-    // returns `NaN`.
-    if !(-1.0..=1.0).contains(&a) {
-        bail!(DomainError { op: "asin".into() });
-    }
-    no_nan("asin", a.asin())
+    unary_f64_domain("asin", args, |a| (-1.0..=1.0).contains(&a), f64::asin)
 }
 
 pub(crate) fn op_asinh(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.asinh()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'asinh' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.asinh())))
+    unary_f64_op("asinh", args, f64::asinh)
 }
 
 pub(crate) fn op_atan(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.atan()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'atan' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.atan())))
+    unary_f64_op("atan", args, f64::atan)
 }
 
 pub(crate) fn op_atan2(args: &[DataValue]) -> Result<DataValue> {
@@ -148,40 +187,12 @@ pub(crate) fn op_atan2(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| x.abs() >= 1.0) {
-                bail!(DomainError { op: "atanh".into() });
-            }
-            return no_nan_vec("atanh", v.to_f64s().iter().map(|x| x.atanh()).collect());
-        }
-        data_value_any!() => bail!("'atanh' requires numbers"),
-    };
-    // `atanh` is defined only on the open interval (-1, 1): outside it the
-    // raw `f64` method returns `NaN`, and at either endpoint it diverges to
-    // an infinity — just as much a silent poison value.
-    if a.abs() >= 1.0 {
-        bail!(DomainError { op: "atanh".into() });
-    }
-    no_nan("atanh", a.atanh())
+    // Open interval (-1, 1): endpoints diverge; outside → NaN.
+    unary_f64_domain("atanh", args, |a| a.abs() < 1.0, f64::atanh)
 }
 
 pub(crate) fn op_bit_and(args: &[DataValue]) -> Result<DataValue> {
-    match (&args[0], &args[1]) {
-        (DataValue::Bytes(left), DataValue::Bytes(right)) => {
-            ensure!(
-                left.len() == right.len(),
-                "operands of 'bit_and' must have the same lengths"
-            );
-            let mut ret = left.clone();
-            for (l, r) in ret.iter_mut().zip(right.iter()) {
-                *l &= *r;
-            }
-            Ok(DataValue::Bytes(ret))
-        }
-        _ => bail!("'bit_and' requires bytes"),
-    }
+    bit_bytes_binop("bit_and", args, |l, r| l & r)
 }
 
 pub(crate) fn op_bit_not(args: &[DataValue]) -> Result<DataValue> {
@@ -198,37 +209,11 @@ pub(crate) fn op_bit_not(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_bit_or(args: &[DataValue]) -> Result<DataValue> {
-    match (&args[0], &args[1]) {
-        (DataValue::Bytes(left), DataValue::Bytes(right)) => {
-            ensure!(
-                left.len() == right.len(),
-                "operands of 'bit_or' must have the same lengths",
-            );
-            let mut ret = left.clone();
-            for (l, r) in ret.iter_mut().zip(right.iter()) {
-                *l |= *r;
-            }
-            Ok(DataValue::Bytes(ret))
-        }
-        _ => bail!("'bit_or' requires bytes"),
-    }
+    bit_bytes_binop("bit_or", args, |l, r| l | r)
 }
 
 pub(crate) fn op_bit_xor(args: &[DataValue]) -> Result<DataValue> {
-    match (&args[0], &args[1]) {
-        (DataValue::Bytes(left), DataValue::Bytes(right)) => {
-            ensure!(
-                left.len() == right.len(),
-                "operands of 'bit_xor' must have the same lengths"
-            );
-            let mut ret = left.clone();
-            for (l, r) in ret.iter_mut().zip(right.iter()) {
-                *l ^= *r;
-            }
-            Ok(DataValue::Bytes(ret))
-        }
-        _ => bail!("'bit_xor' requires bytes"),
-    }
+    bit_bytes_binop("bit_xor", args, |l, r| l ^ r)
 }
 
 pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
@@ -242,29 +227,11 @@ pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_cos(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.cos()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'cos' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.cos())))
+    unary_f64_op("cos", args, f64::cos)
 }
 
 pub(crate) fn op_cosh(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.cosh()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'cosh' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.cosh())))
+    unary_f64_op("cosh", args, f64::cosh)
 }
 
 pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
@@ -308,29 +275,11 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_exp(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.exp()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'exp' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.exp())))
+    unary_f64_op("exp", args, f64::exp)
 }
 
 pub(crate) fn op_exp2(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.exp2()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'exp2' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.exp2())))
+    unary_f64_op("exp2", args, f64::exp2)
 }
 
 pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
@@ -344,119 +293,70 @@ pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "ln".into() });
-            }
-            return no_nan_vec("ln", v.to_f64s().iter().map(|x| x.ln()).collect());
-        }
-        data_value_any!() => bail!("'ln' requires numbers"),
-    };
-    // `ln` is defined only for positive reals: zero diverges to `-inf` and a
-    // negative argument has no real logarithm (`NaN`) — both are silent
-    // poison values, refused up front rather than returned.
-    if a <= 0.0 {
-        bail!(DomainError { op: "ln".into() });
-    }
-    no_nan("ln", a.ln())
+    // Positive reals only: zero → -inf, negative → NaN.
+    unary_f64_domain("ln", args, |a| a > 0.0, f64::ln)
 }
 
 pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "log10".into() });
-            }
-            return no_nan_vec("log10", v.to_f64s().iter().map(|x| x.log10()).collect());
-        }
-        data_value_any!() => bail!("'log10' requires numbers"),
-    };
-    // Same domain as `ln`: only positive reals have a base-10 logarithm.
-    if a <= 0.0 {
-        bail!(DomainError { op: "log10".into() });
-    }
-    no_nan("log10", a.log10())
+    unary_f64_domain("log10", args, |a| a > 0.0, f64::log10)
 }
 
 pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "log2".into() });
-            }
-            return no_nan_vec("log2", v.to_f64s().iter().map(|x| x.log2()).collect());
-        }
-        data_value_any!() => bail!("'log2' requires numbers"),
-    };
-    // Same domain as `ln`: only positive reals have a base-2 logarithm.
-    if a <= 0.0 {
-        bail!(DomainError { op: "log2".into() });
-    }
-    no_nan("log2", a.log2())
+    unary_f64_domain("log2", args, |a| a > 0.0, f64::log2)
 }
 
-pub(crate) fn op_max(args: &[DataValue]) -> Result<DataValue> {
+fn fold_minmax(
+    op: &'static str,
+    args: &[DataValue],
+    prefer_b: impl Fn(Num, Num) -> bool,
+    empty: f64,
+) -> Result<DataValue> {
     let res = args
         .iter()
         .try_fold(None, |accum, nxt| match (accum, nxt) {
             (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
             (Some(DataValue::Num(a)), DataValue::Num(b)) => {
                 // Ties keep `a` — deterministic and accumulation-friendly.
-                let chosen = if NumericOrd::of(a) < NumericOrd::of(*b) {
-                    *b
-                } else {
-                    a
-                };
+                let chosen = if prefer_b(a, *b) { *b } else { a };
                 Ok(Some(DataValue::Num(chosen)))
             }
-            _ => bail!("'max can only be applied to numbers'"),
+            _ => bail!("'{op}' can only be applied to numbers"),
         })?;
     match res {
-        None => Ok(DataValue::Num(Num::float(f64::NEG_INFINITY))),
+        None => Ok(DataValue::Num(Num::float(empty))),
         Some(v) => Ok(v),
     }
+}
+
+pub(crate) fn op_max(args: &[DataValue]) -> Result<DataValue> {
+    fold_minmax(
+        "max",
+        args,
+        |a, b| NumericOrd::of(a) < NumericOrd::of(b),
+        f64::NEG_INFINITY,
+    )
 }
 
 pub(crate) fn op_min(args: &[DataValue]) -> Result<DataValue> {
-    let res = args
-        .iter()
-        .try_fold(None, |accum, nxt| match (accum, nxt) {
-            (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
-            (Some(DataValue::Num(a)), DataValue::Num(b)) => {
-                // Ties keep `a`.
-                let chosen = if NumericOrd::of(a) > NumericOrd::of(*b) {
-                    *b
-                } else {
-                    a
-                };
-                Ok(Some(DataValue::Num(chosen)))
-            }
-            _ => bail!("'min' can only be applied to numbers"),
-        })?;
-    match res {
-        None => Ok(DataValue::Num(Num::float(f64::INFINITY))),
-        Some(v) => Ok(v),
-    }
+    fold_minmax(
+        "min",
+        args,
+        |a, b| NumericOrd::of(a) > NumericOrd::of(b),
+        f64::INFINITY,
+    )
 }
 
 pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
-    Ok(match &args[0] {
-        DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => match i.checked_neg() {
-                Some(v) => DataValue::Num(Num::int(v)),
-                None => bail!(IntegerOverflow { op: "minus" }),
-            },
-            NumRepr::Float(f) => DataValue::Num(Num::float(-f)),
+    unary_num_vec(
+        "minus",
+        args,
+        |i| {
+            i.checked_neg()
+                .ok_or_else(|| IntegerOverflow { op: "minus" }.into())
         },
-        DataValue::Vector(v) => {
-            DataValue::Vector(vec_value(v.to_f64s().iter().map(|x| -*x).collect())?)
-        }
-        data_value_any!() => bail!("minus can only be applied to numbers"),
-    })
+        |f| -f,
+        |x| -x,
+    )
 }
 
 pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
@@ -491,27 +391,23 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
-    let mut i_accum = 1i64;
-    let mut f_accum = 1.0f64;
-    for arg in args {
-        match arg {
-            DataValue::Num(n) => match n.repr() {
-                NumRepr::Int(i) => {
-                    i_accum = i_accum
-                        .checked_mul(i)
-                        .ok_or(IntegerOverflow { op: "mul" })?;
-                }
-                NumRepr::Float(f) => f_accum *= f,
-            },
-            DataValue::Vector(_) => return mul_vecs(args),
-            data_value_any!() => bail!("multiplication requires numbers"),
-        }
-    }
-    if f_accum == 1.0f64 {
-        Ok(DataValue::Num(Num::int(i_accum)))
-    } else {
-        Ok(DataValue::Num(Num::float(i_accum as f64 * f_accum)))
-    }
+    fold_num_args(
+        "mul",
+        args,
+        1,
+        1.0,
+        |a, b| a.checked_mul(b).ok_or(IntegerOverflow { op: "mul" }.into()),
+        |a, b| a * b,
+        |i, f| {
+            if f == 1.0 {
+                DataValue::Num(Num::int(i))
+            } else {
+                DataValue::Num(Num::float(i as f64 * f))
+            }
+        },
+        mul_vecs,
+        "multiplication requires numbers",
+    )
 }
 
 pub(crate) fn op_negate(args: &[DataValue]) -> Result<DataValue> {
@@ -614,48 +510,15 @@ pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_sin(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.sin()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'sin' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.sin())))
+    unary_f64_op("sin", args, f64::sin)
 }
 
 pub(crate) fn op_sinh(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.sinh()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'sinh' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.sinh())))
+    unary_f64_op("sinh", args, f64::sinh)
 }
 
 pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            if v.to_f64s().iter().any(|x| *x < 0.0) {
-                bail!(DomainError { op: "sqrt".into() });
-            }
-            return no_nan_vec("sqrt", v.to_f64s().iter().map(|x| x.sqrt()).collect());
-        }
-        data_value_any!() => bail!("'sqrt' requires numbers"),
-    };
-    // `sqrt` is defined only for non-negative reals; a negative argument has
-    // no real square root and the raw `f64` method returns `NaN`.
-    if a < 0.0 {
-        bail!(DomainError { op: "sqrt".into() });
-    }
-    no_nan("sqrt", a.sqrt())
+    unary_f64_domain("sqrt", args, |a| a >= 0.0, f64::sqrt)
 }
 
 pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
@@ -698,29 +561,11 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_tan(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.tan()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'tan' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.tan())))
+    unary_f64_op("tan", args, f64::tan)
 }
 
 pub(crate) fn op_tanh(args: &[DataValue]) -> Result<DataValue> {
-    let a = match &args[0] {
-        DataValue::Num(n) => n.to_f64(),
-        DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(vec_value(
-                v.to_f64s().iter().map(|x| x.tanh()).collect(),
-            )?));
-        }
-        data_value_any!() => bail!("'tanh' requires numbers"),
-    };
-    Ok(DataValue::Num(Num::float(a.tanh())))
+    unary_f64_op("tanh", args, f64::tanh)
 }
 
 pub(crate) fn op_unpack_bits(args: &[DataValue]) -> Result<DataValue> {
@@ -744,93 +589,73 @@ pub(crate) fn op_unpack_bits(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
+/// Fold vector±scalar args under a pairwise f64 combine (add / mul).
+fn fold_vecs(
+    op: &'static str,
+    args: &[DataValue],
+    same_len_msg: &'static str,
+    scalar_msg: &'static str,
+    scalar_requires: &'static str,
+    combine: impl Fn(f64, f64) -> f64 + Copy,
+) -> Result<DataValue> {
     if args.len() == 1 {
         return Ok(args[0].clone());
     }
-    // Non-empty: only called from `op_add`/`op_mul` after a `Vec` argument
-    // was seen (so len >= 1), and the len == 1 case returned above.
     let Some((last, first)) = args.split_last() else {
-        bail!(VecOpEmptyArgs { op: "add" });
+        bail!(VecOpEmptyArgs { op });
     };
-    let first = add_vecs(first)?;
+    let first = fold_vecs(op, first, same_len_msg, scalar_msg, scalar_requires, combine)?;
     match (first, last) {
         (DataValue::Vector(a), DataValue::Vector(b)) => {
             if a.len() != b.len() {
-                bail!("can only add vectors of the same length");
+                bail!("{same_len_msg}");
             }
             Ok(DataValue::Vector(vec_value(
                 a.to_f64s()
                     .iter()
                     .zip(b.to_f64s().iter())
-                    .map(|(x, y)| x + y)
+                    .map(|(x, y)| combine(*x, *y))
                     .collect(),
             )?))
         }
         (DataValue::Vector(a), b) => {
-            let f = b
-                .get_float()
-                .ok_or_else(|| miette!("can only add numbers to vectors"))?;
+            let f = b.get_float().ok_or_else(|| miette!("{scalar_msg}"))?;
             Ok(DataValue::Vector(vec_value(
-                a.to_f64s().iter().map(|x| x + f).collect(),
+                a.to_f64s().iter().map(|x| combine(*x, f)).collect(),
             )?))
         }
         (a, DataValue::Vector(b)) => {
-            let f = a
-                .get_float()
-                .ok_or_else(|| miette!("can only add numbers to vectors"))?;
+            let f = a.get_float().ok_or_else(|| miette!("{scalar_msg}"))?;
             Ok(DataValue::Vector(vec_value(
-                b.to_f64s().iter().map(|x| x + f).collect(),
+                b.to_f64s().iter().map(|x| combine(f, *x)).collect(),
             )?))
         }
-        _ => bail!("addition requires numbers"),
+        _ => bail!("{scalar_requires}"),
     }
 }
 
+fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
+    fold_vecs(
+        "add",
+        args,
+        "can only add vectors of the same length",
+        "can only add numbers to vectors",
+        "addition requires numbers",
+        |x, y| x + y,
+    )
+}
+
 fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
-    if args.len() == 1 {
-        return Ok(args[0].clone());
-    }
-    // Non-empty: see `add_vecs`.
-    let Some((last, first)) = args.split_last() else {
-        bail!(VecOpEmptyArgs { op: "mul" });
-    };
-    // The CozoDB original recursed into `add_vecs` here, so multiplying
-    // three or more vector arguments *added* the prefix before multiplying
-    // by the last: `v1 * v2 * v3` computed `(v1 + v2) * v3`. Fixed to
-    // recurse into multiplication; flagged as a deliberate deviation.
-    let first = mul_vecs(first)?;
-    match (first, last) {
-        (DataValue::Vector(a), DataValue::Vector(b)) => {
-            if a.len() != b.len() {
-                bail!("can only multiply vectors of the same length");
-            }
-            Ok(DataValue::Vector(vec_value(
-                a.to_f64s()
-                    .iter()
-                    .zip(b.to_f64s().iter())
-                    .map(|(x, y)| *x * *y)
-                    .collect(),
-            )?))
-        }
-        (DataValue::Vector(a), b) => {
-            let f = b
-                .get_float()
-                .ok_or_else(|| miette!("can only multiply vectors by numbers"))?;
-            Ok(DataValue::Vector(vec_value(
-                a.to_f64s().iter().map(|x| x * f).collect(),
-            )?))
-        }
-        (a, DataValue::Vector(b)) => {
-            let f = a
-                .get_float()
-                .ok_or_else(|| miette!("can only multiply vectors by numbers"))?;
-            Ok(DataValue::Vector(vec_value(
-                b.to_f64s().iter().map(|x| x * f).collect(),
-            )?))
-        }
-        _ => bail!("multiplication requires numbers"),
-    }
+    // CozoDB originally recursed into `add_vecs` here (`v1*v2*v3` → `(v1+v2)*v3`).
+    // Fixed to recurse into multiplication; deliberate deviation.
+    fold_vecs(
+        "mul",
+        args,
+        "can only multiply vectors of the same length",
+        "can only multiply vectors by numbers",
+        "multiplication requires numbers",
+        |x, y| x * y,
+    )
 }
 
 /// `a.powf(b)` is partial in two ways: a negative base raised to a

@@ -1419,6 +1419,26 @@ fn frost_try_aggregate_below_threshold(
         .map(|sig| sig.serialize().expect("serialize"))
 }
 
+/// Test-only: one ed25519 signer scaffold; domain label is the independence.
+#[cfg(test)]
+pub(crate) fn sign_domain_label(
+    domain: &[u8],
+    seed: [u8; 32],
+    store_id: StoreId,
+    payload_digest: &[u8; 32],
+) -> ([u8; 32], [u8; 64]) {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let signing = SigningKey::from_bytes(&seed);
+    let verifying = signing.verifying_key().to_bytes();
+    let mut message = Vec::with_capacity(domain.len() + 32 + 32);
+    message.extend_from_slice(domain);
+    message.extend_from_slice(store_id.as_bytes());
+    message.extend_from_slice(payload_digest);
+    let sig = signing.sign(message.as_slice()).to_bytes();
+    (verifying, sig)
+}
+
 /// Test-only: ed25519 predecessor consent sign over the fork-consent domain.
 /// Path-wired dst callers use this so positive fork paths still compile.
 #[cfg(test)]
@@ -1427,17 +1447,12 @@ pub(crate) fn sign_fork_consent(
     predecessor_store: StoreId,
     payload_digest: &[u8; 32],
 ) -> ([u8; 32], [u8; 64]) {
-    use ed25519_dalek::{Signer, SigningKey};
-
-    let signing = SigningKey::from_bytes(&seed);
-    let verifying = signing.verifying_key().to_bytes();
-    let mut message =
-        Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
-    message.extend_from_slice(FORK_CONSENT_DOMAIN);
-    message.extend_from_slice(predecessor_store.as_bytes());
-    message.extend_from_slice(payload_digest);
-    let sig = signing.sign(message.as_slice()).to_bytes();
-    (verifying, sig)
+    sign_domain_label(
+        FORK_CONSENT_DOMAIN,
+        seed,
+        predecessor_store,
+        payload_digest,
+    )
 }
 
 /// Test-only: ed25519 ancestor-entitlement sign over the entitlement domain.
@@ -1447,17 +1462,12 @@ pub(crate) fn sign_ancestor_entitlement(
     store_id: StoreId,
     payload_digest: &[u8; 32],
 ) -> ([u8; 32], [u8; 64]) {
-    use ed25519_dalek::{Signer, SigningKey};
-
-    let signing = SigningKey::from_bytes(&seed);
-    let verifying = signing.verifying_key().to_bytes();
-    let mut message =
-        Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
-    message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
-    message.extend_from_slice(store_id.as_bytes());
-    message.extend_from_slice(payload_digest);
-    let sig = signing.sign(message.as_slice()).to_bytes();
-    (verifying, sig)
+    sign_domain_label(
+        ANCESTOR_ENTITLEMENT_DOMAIN,
+        seed,
+        store_id,
+        payload_digest,
+    )
 }
 
 #[cfg(test)]

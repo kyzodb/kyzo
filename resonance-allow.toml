@@ -54,7 +54,7 @@ members = [
   "crates/kyzo-core/src/exec/fold/aggr.rs::get",
   "crates/kyzo-core/src/exec/fold/aggr.rs::init_val",
 ]
-citation = "Story #301 T5 sealed-enum dispatch: NormalAggr::get and MeetAggr::init_val are thin exhaustively-matched arms that forward to the same per-variant methods. Same intentional-dispatch-boilerplate category as data/functions.rs's per-operator table (already waived above) -- collapsing would need a macro over two different return types (DataValue vs MeetAccum), a design choice outside the T5 seal. Not accidental copy-paste."
+citation = "Story #301 T5 sealed-enum dispatch: NormalAggr::get and MeetAggr::init_val are thin exhaustively-matched arms that forward to the same per-variant methods. Same intentional-dispatch-boilerplate category as stdlib's per-operator table (now consolidated via higher-order helpers under WAIVER-PURITY) -- collapsing these two would need a macro over different return types (DataValue vs MeetAccum). Not accidental copy-paste."
 
 [[copy_detector]]
 members = [
@@ -73,4 +73,109 @@ members = [
   "crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token",
 ]
 citation = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
+
+# ---------------------------------------------------------------------------
+# WAIVER-PURITY (#376): per-pair independence rulings after grab-bag split.
+# Boilerplate (*_option, parse_quoted_*, tokenizer advance, stdlib scaffolds,
+# admit sugar/correction, grants sign_*, put/retract, eval_near, plain-eval
+# ingest) consolidated into helpers — those waivers deleted, not re-cited.
+# ---------------------------------------------------------------------------
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/stdlib/tests/compare.rs::test_eq_neq",
+  "crates/kyzo-core/src/exec/stdlib/tests/compare.rs::test_comparators",
+]
+citation = "Stdlib compare suite: test_eq_neq drives ==/!=; test_comparators drives </<=/>/>=. Deliberate parallel test shape — each family is an independent adversarial corpus against its operators; sharing would collapse two refuse/accept surfaces into one tautology."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_floor_ceil",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_round",
+]
+citation = "Stdlib numeric suite: floor/ceil vs round are separate operator families with distinct edge tables (half-up / ties). Mirrored test harness by design, not a second implementation of either operator."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_floor_ceil",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_signum",
+]
+citation = "Stdlib numeric suite: floor/ceil vs signum — independent operator probes sharing only the arrange/act/assert skeleton of the numeric test module."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_round",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_signum",
+]
+citation = "Stdlib numeric suite: round vs signum — independent operator probes; same module test scaffold, different edge tables."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_abs",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_minus",
+]
+citation = "Stdlib numeric suite: abs vs unary minus — independent operators (overflow seats differ: i64::MIN abs vs neg). Parallel test shape is intentional."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_add",
+  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_mul",
+]
+citation = "Stdlib numeric suite: add vs mul — independent n-ary folds with different identities (0 vs 1) and overflow axes. Parallel test shape is intentional."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/project/dedup/lsh.rs::lsh_index_metadata",
+  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_index_metadata",
+]
+citation = "Per-engine index metadata twins (LSH vs sparse): each index owns its StoredRelationMetadata shape under the shared projection architecture (.claude/rules/engines.md). Collapsing would erase per-engine schema seats; independence is the column layout, not the constructor scaffold."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-model/src/program/expr.rs::collect_bindings",
+  "crates/kyzo-model/src/program/expr.rs::do_get_variables",
+]
+citation = "Expr walkers: collect_bindings gathers binding sites; do_get_variables gathers free variables. Same recursive descent shape because they walk one Expr sum; the visit payload (what is collected) is the independence. Not a second parser."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-model/src/program/expr.rs::collect_bindings",
+  "crates/kyzo-model/src/program/expr.rs::do_binding_indices",
+]
+citation = "Expr walkers: collect_bindings vs do_binding_indices — one collects names, the other assigns dense indices. Shared walk shape; distinct outputs. Collapsing needs a visitor trait — deferred only with a story; kept as deliberate parallel walkers."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@449",
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@453",
+]
+citation = "stratified_magic_compile: nested map closures over strata then (symbol, body) — Rules vs Fixed arms of MagicRulesOrFixed. Line-adjacent closures of one compile pass, not two compilers. Detector pairs the map layers; independence is the Rules/Fixed dispatch inside."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/session/normalize_tests.rs::helper_via_relation_bound_var_inside_self_join_survives_correctly",
+  "crates/kyzo-core/src/session/normalize_tests.rs::mutual_recursion_bf_and_ff_stays_correctly_reachable",
+]
+citation = "Normalize test helpers: self-join bound-var survival vs mutual-recursion BF/FF reachability. Deliberate parallel arrange/normalize/assert probes of two distinct normalization seats."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::ranged",
+  "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::prefix_iter_projected",
+]
+citation = "Temp-store iterators: ranged (key range) vs prefix_iter_projected (projected prefix). Owned-vs-projected scan variant at the delta-store surface — same category as catalog scan_bounded_prefix / scan_bounded_prefix_projected (waived above). Collapsing needs a projection parameter; kept as the two currency doors."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/rules/algo/bfs.rs::run",
+  "crates/kyzo-core/src/rules/algo/dfs.rs::run",
+]
+citation = "Fixed-rule graph algos: BFS vs DFS are independently authored traversals (queue vs stack / different visit order). Shared FixedRule::run scaffold is the trait contract; the walk algorithms must remain separate so each can be falsified alone."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/op/join.rs::next",
+  "crates/kyzo-core/src/exec/op/delta.rs::next",
+]
+citation = "RA operators: Join::next vs Delta::next — distinct operators (binary join vs delta-probe) sharing batch-advance control flow by the RA iterator contract. Independence is the match/probe law each implements; not accidental copy-paste of one join."
 

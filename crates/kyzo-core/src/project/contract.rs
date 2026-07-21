@@ -115,7 +115,6 @@ pub(crate) enum IndexCorruptReason {
     FtsPositionsNotList,
     FtsPositionNotInt,
 
-    #[allow(dead_code)] // [OPEN] rules::gazetteer query host
     GazetteerSurfacesNotList,
     GazetteerSurfaceNotString,
 

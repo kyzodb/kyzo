@@ -158,6 +158,7 @@ pub(crate) use self::stop_word_filter::StopWordFilter;
 // pub(crate) use self::tokenized_string::{PreTokenizedStream, PreTokenizedString};
 pub(crate) use self::tokenizer_impl::{
     BoxTokenFilter, BoxTokenStream, TextAnalyzer, Token, TokenFilter, TokenStream, Tokenizer,
+    advance_char_indices_token,
 };
 pub(crate) use self::whitespace_tokenizer::WhitespaceTokenizer;
 

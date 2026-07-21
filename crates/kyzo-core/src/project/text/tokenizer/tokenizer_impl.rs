@@ -15,6 +15,7 @@ use smartstring::{LazyCompact, SmartString};
 use std::borrow::{Borrow, BorrowMut};
 use std::iter;
 use std::ops::{Deref, DerefMut};
+use std::str::CharIndices;
 
 use crate::project::text::tokenizer::empty_tokenizer::EmptyTokenizer;
 
@@ -332,6 +333,33 @@ impl<T: TokenFilter> From<T> for BoxTokenFilter {
 ///     assert_eq!(token.position, 1);
 /// }
 /// ```
+/// Shared char-indices advance for simple/whitespace tokenizers: skip until
+/// `is_token_char`, then consume while it holds. Predicate is the independence;
+/// the scaffold is one authority.
+pub(crate) fn advance_char_indices_token<'a>(
+    text: &'a str,
+    chars: &mut CharIndices<'a>,
+    token: &mut Token,
+    is_token_char: impl Fn(char) -> bool,
+) -> bool {
+    token.text.clear();
+    // INVARIANT(token_position): tokenizer position is a modular counter; wrap is intentional.
+    token.position = token.position.wrapping_add(1);
+    while let Some((offset_from, c)) = chars.next() {
+        if is_token_char(c) {
+            let offset_to = chars
+                .by_ref()
+                .find(|(_, ch)| !is_token_char(*ch))
+                .map(|(offset, _)| offset)
+                .unwrap_or(text.len());
+            let _ = token.set_offsets(offset_from, offset_to);
+            token.text.push_str(&text[offset_from..offset_to]);
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) trait TokenStream {
     /// Advance to the next token
     ///

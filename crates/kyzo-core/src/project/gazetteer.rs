@@ -143,7 +143,6 @@ pub(crate) struct GazetteerConfig {
     "every surface form must be a non-empty string; an empty form would match \
      at every position and has no truthful span"
 ))]
-#[allow(dead_code)] // [OPEN] rules::gazetteer query host
 pub(crate) struct GazetteerEmptySurface {
     pub(crate) entity: String,
 }

@@ -1285,6 +1285,47 @@ pub(crate) fn project_positions(row: &[DataValue], positions: &[HeadPos]) -> Tup
     positions.iter().map(|p| row[p.get()].clone()).collect()
 }
 
+/// Shared ingest for one plain-rule derivation: dedup → optional provenance
+/// note → limiter put. Used by both epoch-0 and semi-naive epochs; the
+/// epochs differ in *which* derivations are offered (full body vs delta
+/// occurrence), not in how a new row is admitted to `out`.
+fn ingest_plain_derivation(
+    out: &mut RegularTempStore,
+    pending: &mut PendingWitnesses,
+    limiter: &QueryLimiter,
+    should_check_limit: bool,
+    recording: bool,
+    rule_n: usize,
+    item: Cow<'_, [DataValue]>,
+    premises: &Premises<'_>,
+    hit_limit: &mut bool,
+) -> Result<ControlFlow<()>> {
+    if should_check_limit {
+        if !out.exists(&item) {
+            let item = Tuple::from_vec(item.into_owned());
+            if recording {
+                note_pending(pending, item.clone(), rule_n, premises);
+            }
+            if limiter.should_skip_next() {
+                out.put_with_skip(item);
+            } else {
+                out.put(item);
+            }
+            if limiter.incr_and_should_stop() {
+                *hit_limit = true;
+                return Ok(ControlFlow::Break(()));
+            }
+        }
+    } else if !out.exists(&item) {
+        let item = Tuple::from_vec(item.into_owned());
+        if recording {
+            note_pending(pending, item.clone(), rule_n, premises);
+        }
+        out.put(item);
+    }
+    Ok(ControlFlow::Continue(()))
+}
+
 /// Epoch 0 for a plain (non-aggregating) rule set. Returns
 /// `(engaged_limiter, out, pending)`; `engaged_limiter` is true whenever
 /// this evaluation applied the limiter (limit set and rule is the entry),
@@ -1306,36 +1347,17 @@ fn initial_plain_eval<R: RuleBody>(
         let mut hit_limit = false;
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
             ticker.tick(out.len())?;
-            if should_check_limit {
-                // Dedup on the slice; ownership is materialized only for
-                // rows that are genuinely new (the slice-consuming seam).
-                if !out.exists(&item) {
-                    let item = Tuple::from_vec(item.into_owned());
-                    if recording {
-                        note_pending(&mut pending, item.clone(), rule_n, &premises);
-                    }
-                    if limiter.should_skip_next() {
-                        out.put_with_skip(item);
-                    } else {
-                        out.put(item);
-                    }
-                    if limiter.incr_and_should_stop() {
-                        hit_limit = true;
-                        return Ok(ControlFlow::Break(()));
-                    }
-                }
-            } else if !out.exists(&item) {
-                // Same dedup-before-mint; `note_pending` is first-writer-wins
-                // (`or_insert_with`), so skipping re-derivations changes no
-                // witness. A re-inserted key would only rewrite `false` over
-                // `false` — nothing observable.
-                let item = Tuple::from_vec(item.into_owned());
-                if recording {
-                    note_pending(&mut pending, item.clone(), rule_n, &premises);
-                }
-                out.put(item);
-            }
-            Ok(ControlFlow::Continue(()))
+            ingest_plain_derivation(
+                &mut out,
+                &mut pending,
+                limiter,
+                should_check_limit,
+                recording,
+                rule_n,
+                item,
+                &premises,
+                &mut hit_limit,
+            )
         })?;
         if hit_limit {
             return Ok((true, out.wrap(), pending));
@@ -1380,35 +1402,22 @@ fn incremental_plain_eval<R: RuleBody>(
                     // runs on the slice, so this dominant case mints nothing.
                     return Ok(ControlFlow::Continue(()));
                 }
-                if should_check_limit {
-                    // Deviations D1/D2: dedup within the epoch before counting,
-                    // and record skip flags only here, on the entry rule.
-                    if !out.exists(&item) {
-                        let item = Tuple::from_vec(item.into_owned());
-                        if recording {
-                            note_pending(&mut pending, item.clone(), rule_n, &premises);
-                        }
-                        if limiter.should_skip_next() {
-                            out.put_with_skip(item);
-                        } else {
-                            out.put(item);
-                        }
-                        if limiter.incr_and_should_stop() {
-                            hit_limit.set(true);
-                            return Ok(ControlFlow::Break(()));
-                        }
-                    }
-                } else if !out.exists(&item) {
-                    // Same dedup-before-mint as the initial epoch: first-writer
-                    // `note_pending` and a `false`-over-`false` re-insert make
-                    // skipping intra-epoch re-derivations unobservable.
-                    let item = Tuple::from_vec(item.into_owned());
-                    if recording {
-                        note_pending(&mut pending, item.clone(), rule_n, &premises);
-                    }
-                    out.put(item);
+                let mut hit = false;
+                let flow = ingest_plain_derivation(
+                    &mut out,
+                    &mut pending,
+                    limiter,
+                    should_check_limit,
+                    recording,
+                    rule_n,
+                    item,
+                    &premises,
+                    &mut hit,
+                )?;
+                if hit {
+                    hit_limit.set(true);
                 }
-                Ok(ControlFlow::Continue(()))
+                Ok(flow)
             };
 
         for (occurrence, store_name) in body.contained_rules() {

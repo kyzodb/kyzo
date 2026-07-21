@@ -810,6 +810,40 @@ impl RelationHandle {
     /// Test / harness fact-write door. Production mutation goes through
     /// [`crate::session::admit`]; this path genesis-mints live seats and is
     /// exercised by in-crate index/operator tests.
+    /// Test/harness fact write: genesis-mint seats → sugar admit → bitemporal put.
+    /// Assert and retract share this scaffold; polarity + admit door differ.
+    #[cfg(any(test, feature = "bench-internals"))]
+    fn put_admitted_fact_row(
+        &self,
+        tx: &mut impl WriteTx,
+        row: &[DataValue],
+        valid: ValidityTs,
+        span: SourceSpan,
+        polarity: ClaimPolarity,
+        admit: impl FnOnce(
+            crate::store::StoreId,
+            &crate::session::admit::LiveCertificateInputs,
+        ) -> std::result::Result<
+            (
+                crate::session::admit::KyzoRecord,
+                crate::store::replica::AdmissionCertificate,
+            ),
+            crate::session::admit::AdmitRefuse,
+        >,
+    ) -> Result<()> {
+        use crate::session::admit::LiveAdmissionSeats;
+        use crate::session::generation::{CatalogGeneration, RelationGeneration};
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(0),
+        ));
+        let (record, _cert) = admit(seats.store_id(), &live)?;
+        let _permit = record.durable_write_permit();
+        let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
+        let val = self.encode_bitemporal_val_for_store(row, polarity, span)?;
+        tx.put(&key, &val)
+    }
+
     #[cfg(any(test, feature = "bench-internals"))]
     pub fn put_fact(
         &self,
@@ -818,24 +852,24 @@ impl RelationHandle {
         valid: ValidityTs,
         span: SourceSpan,
     ) -> Result<()> {
-        use crate::session::admit::{LiveAdmissionSeats, admit_sugar_relation_row};
-        use crate::session::generation::{CatalogGeneration, RelationGeneration};
-        let seats = LiveAdmissionSeats::mint_genesis();
-        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
-            RelationGeneration::witness(0),
-        ));
-        let (record, _cert) = admit_sugar_relation_row(
-            seats.store_id(),
-            &live,
-            self.name.as_str(),
+        use crate::session::admit::admit_sugar_relation_row;
+        self.put_admitted_fact_row(
+            tx,
             row,
-            self.metadata.keys.len(),
             valid,
-        )?;
-        let _permit = record.durable_write_permit();
-        let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
-        let val = self.encode_bitemporal_val_for_store(row, ClaimPolarity::Assert, span)?;
-        tx.put(&key, &val)
+            span,
+            ClaimPolarity::Assert,
+            |store_id, live| {
+                admit_sugar_relation_row(
+                    store_id,
+                    live,
+                    self.name.as_str(),
+                    row,
+                    self.metadata.keys.len(),
+                    valid,
+                )
+            },
+        )
     }
 
     /// Write the fact's Retract row at the valid coordinate — revision,
@@ -853,23 +887,17 @@ impl RelationHandle {
         valid: ValidityTs,
         span: SourceSpan,
     ) -> Result<()> {
-        use crate::session::admit::{LiveAdmissionSeats, admit_sugar_retract};
-        use crate::session::generation::{CatalogGeneration, RelationGeneration};
-        let seats = LiveAdmissionSeats::mint_genesis();
-        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
-            RelationGeneration::witness(0),
-        ));
-        let (record, _cert) = admit_sugar_retract(
-            seats.store_id(),
-            &live,
-            self.name.as_str(),
+        use crate::session::admit::admit_sugar_retract;
+        self.put_admitted_fact_row(
+            tx,
             key_cols,
             valid,
-        )?;
-        let _permit = record.durable_write_permit();
-        let key = self.encode_bitemporal_key_for_store(key_cols, valid, tx.system_stamp(), span)?;
-        let val = self.encode_bitemporal_val_for_store(key_cols, ClaimPolarity::Retract, span)?;
-        tx.put(&key, &val)
+            span,
+            ClaimPolarity::Retract,
+            |store_id, live| {
+                admit_sugar_retract(store_id, live, self.name.as_str(), key_cols, valid)
+            },
+        )
     }
 
     /// Encode a bitemporal row's stored value: the relation-id header, the

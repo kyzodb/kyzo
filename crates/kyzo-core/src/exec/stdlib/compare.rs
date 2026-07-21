@@ -24,24 +24,23 @@ pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-pub(crate) fn op_ge(args: &[DataValue]) -> Result<DataValue> {
+fn cmp_op(
+    args: &[DataValue],
+    pred: impl Fn(std::cmp::Ordering) -> bool,
+) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) != std::cmp::Ordering::Less
-        }
-        (a, b) => a.cmp(b) != std::cmp::Ordering::Less,
+        (DataValue::Num(a), DataValue::Num(b)) => pred(NumericOrd::of(*a).cmp(&NumericOrd::of(*b))),
+        (a, b) => pred(a.cmp(b)),
     }))
 }
 
+pub(crate) fn op_ge(args: &[DataValue]) -> Result<DataValue> {
+    cmp_op(args, |o| o != std::cmp::Ordering::Less)
+}
+
 pub(crate) fn op_gt(args: &[DataValue]) -> Result<DataValue> {
-    ensure_same_value_type(&args[0], &args[1])?;
-    Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) == std::cmp::Ordering::Greater
-        }
-        (a, b) => a.cmp(b) == std::cmp::Ordering::Greater,
-    }))
+    cmp_op(args, |o| o == std::cmp::Ordering::Greater)
 }
 
 pub(crate) fn op_is_bytes(args: &[DataValue]) -> Result<DataValue> {
@@ -122,23 +121,11 @@ pub(crate) fn op_is_vec(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_le(args: &[DataValue]) -> Result<DataValue> {
-    ensure_same_value_type(&args[0], &args[1])?;
-    Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) != std::cmp::Ordering::Greater
-        }
-        (a, b) => a.cmp(b) != std::cmp::Ordering::Greater,
-    }))
+    cmp_op(args, |o| o != std::cmp::Ordering::Greater)
 }
 
 pub(crate) fn op_lt(args: &[DataValue]) -> Result<DataValue> {
-    ensure_same_value_type(&args[0], &args[1])?;
-    Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) == std::cmp::Ordering::Less
-        }
-        (a, b) => a.cmp(b) == std::cmp::Ordering::Less,
-    }))
+    cmp_op(args, |o| o == std::cmp::Ordering::Less)
 }
 
 pub(crate) fn op_neq(args: &[DataValue]) -> Result<DataValue> {
