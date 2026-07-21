@@ -33,3 +33,4 @@ __pycache__/
 .claude/agents/kyzo-plan-*.md
 .claude/skills/kyzo-plan-*/
 crates/xtask/resonance.log*
+/kyzo
