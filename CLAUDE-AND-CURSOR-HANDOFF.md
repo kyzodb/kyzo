@@ -67,3 +67,38 @@ through the one `CanonicalTranscript`, pin goldens to production, and install a 
 that makes a new `Sha256::new()` on the sealed surface impossible. Do not consider it done
 until the grep gate is green and a test asserts production == golden for every
 `SealedArtifactKind`.
+
+## Gate hardening added after the catastrophe (resonance verb)
+
+The catastrophe proved the gate mechanically enforced ~8 narrow syntactic ratchets
+while the ontology's core law (one authority per meaning) went unchecked exactly where
+it mattered. Three new checks now close the holes the disaster fell through — each is
+**pass-proven** (green on the real tree) and **bite-proven** (a real injected violation
+detonates it, then reverts):
+
+- **`serializer_authority`** (seat 59, the catastrophe-lock): a byte-literal hasher
+  update (`h.update(b"kyzo.<kind>.v1")`) on the `store/` surface outside the one
+  `transcript.rs` constructor is the fingerprint of a hand-rolled sealed serializer.
+  Baseline-ratchet — the count may never rise. An injected forged `CheckpointSeal`
+  digester detonates it. This is the mechanical guarantee the disaster cannot recur.
+- **`peer_dial_ban`** (seats 18/92): the engine crates (`kyzo-core`/`kyzo-model`) may
+  hold no raw socket — the "second nervous system" those seats delete. Host adapter
+  (`kyzo-bin`) client sockets are out of scope by design.
+- **`determinism_ban`** (seats 25/45/83/84): the `store/` commit/sealed/pace surface may
+  hold no wall-clock (`Instant`/`SystemTime`) or unseeded RNG — commit time is
+  `CommitOrdinal`, the entropy arm lives in `session/admit.rs`.
+
+Plus: CI now runs the fast gates on **all branches** (`ci.yml`) — the epic branch had
+**zero** CI the entire time this rot accumulated, which is how the resonance gate stayed
+blind to it.
+
+**Correction to my own earlier claim:** I said `authority_graph` was a "dead guardrail."
+That was wrong — it is wired via the `Gate` verb (`gate.rs` → `verbs::authority()`) and
+its own `Authority` verb; it just isn't part of the `resonance` verb. I based the claim on
+the resonance runner alone. Verify before asserting — the same discipline this whole
+document is about.
+
+**Still missing from the gate** (named honestly, not silently dropped): a golden-vectors-
+pin-production check; `panic_lint` is scoped to decode surfaces only, not every
+caller-reachable path; string-typed names past the parse boundary; test-bypass doors.
+These are harder (semantic, not syntactic) and were not faked with shallow name-bans.
