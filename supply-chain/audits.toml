@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.const-crc32-nostd]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.3.1"
+notes = "CI-GREEN-SWEEP #376 lane 5: new transitive of frost-core. Manually read the entire crate (src/lib.rs, 185 lines including tests). Pure `#![no_std]` const-fn CRC-32 (table generated at const-eval time via table_fn/get_table; crc32/crc32_seed fold bytes through the table). Zero unsafe, zero I/O/env/fs/net, no build.rs, no proc-macros. Tests cross-check against crc32fast on random buffers."
+
 [[audits.endian-type]]
 who = "Kyle Tobin <tobin.kyle@gmail.com>"
 criteria = "safe-to-deploy"
@@ -49,6 +55,18 @@ criteria = "safe-to-deploy"
 version = "0.1.2"
 notes = "Manually read the entire crate (344 lines across lib.rs + double_exponential/mod.rs + clenshaw_curtis/mod.rs, plus constants.rs data tables). Pure numerical-integration algorithms (ports of a public-domain C++ implementation by John D. Cook), zero unsafe, zero dependencies, no I/O/env/fs/net access, all loops bounded by fixed-size weight tables (hard 350/257 evaluation caps documented and enforced structurally). Author Eh2406 (Jacob Finkelman) is a well-known rust-lang cargo team member."
 
+[[audits.stable_deref_trait]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.2.1"
+notes = """CI-GREEN-SWEEP #376 lane 5: heapless transitive bump 1.2.0 -> 1.2.1. Manually read the full crate and the version delta. src/lib.rs is an unsafe-marker-trait crate (StableDeref / CloneStableDeref) with empty unsafe impls for std/alloc pointer-stable containers. The 1.2.1 delta vs 1.2.0 is: license string normalization, Arc impls gated on target_has_atomic = "ptr", and new StableDeref impls for Cow<'_, str|/ [T]|Path|CStr|OsStr> plus Path/CStr/OsStr borrow forms — still marker-only, no executable unsafe bodies, no I/O, no build.rs."""
+
+[[audits.target-triple]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-run"
+version = "1.0.0"
+notes = "CI-GREEN-SWEEP #376 lane 5: new trybuild transitive (dev/test-only). Manually read the entire crate (build.rs + src/lib.rs, ~80 lines). build.rs reads TARGET/HOST/OUT_DIR from the cargo env, escape_debug-encodes them into a generated macros.rs defining target!/host! macro_rules that expand to string literals; fs::write of that one generated file only; process::exit on missing/non-UTF8 env (build-script failure, not runtime). lib.rs is two pub const &str bindings via those macros. Zero unsafe, no network. Publisher dtolnay already trusted elsewhere in this file."
+
 [[audits.winapi-i686-pc-windows-gnu]]
 who = "Kyle Tobin <tobin.kyle@gmail.com>"
 criteria = "safe-to-deploy"
@@ -60,6 +78,12 @@ who = "Kyle Tobin <tobin.kyle@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.4.0"
 notes = "Manually inspected: build.rs only adds a rustc-link-search path when TARGET matches this crate's own arch/windows-gnu triple (inert on our Linux CI); src/lib.rs is a single #![no_std] marker line; the payload is ~1387 tiny MinGW dlltool-generated .a import-stub archives (standard doncb*.o trampoline objects, auto-generated non-executable linker metadata for Windows system DLLs), unchanged since 2018. This is the well-known winapi-rs bundled-import-library mechanism (retep998, already trusted above as winapi's maintainer); nothing here executes at build or link time outside the windows-gnu target."
+
+[[audits.zeroize_derive]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.5.0"
+notes = "CI-GREEN-SWEEP #376 lane 5: zeroize/frost-core bump to 1.5.0. Manually read the entire crate (src/lib.rs, 870 lines). Proc-macro derive for Zeroize / ZeroizeOnDrop; crate root is #![forbid(unsafe_code)]. Parses #[zeroize(drop|bound|skip)] attributes via syn, generates field-wise zeroize()/zeroize_or_on_drop() calls and optional Drop impls; unions panic at derive time; no I/O/env/fs/net at expansion beyond the invoking crate's token stream. RustCrypto/utils publisher already trusted for sibling utils crates in this file."
 
 [[trusted.aead]]
 criteria = "safe-to-deploy"
@@ -108,6 +132,13 @@ criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
 start = "2019-08-16"
 end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.aes-gcm-siv]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-16"
+end = "2027-07-21"
 notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
 
 [[trusted.aho-corasick]]

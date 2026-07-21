@@ -109,6 +109,11 @@ version = "2.0.0"
 criteria = "safe-to-deploy"
 notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by arrow-cast. Full audit deferred to the standing supply-chain audit campaign."
 
+[[exemptions.atomic-polyfill]]
+version = "1.0.3"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new heapless 0.7.17 transitive (via postcard). Unaudited-but-tracked; ~1.1K lines. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.backtrace]]
 version = "0.3.76"
 criteria = "safe-to-deploy"
@@ -172,6 +177,11 @@ notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not par
 version = "0.8.2"
 criteria = "safe-to-run"
 
+[[exemptions.critical-section]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new atomic-polyfill/heapless transitive. Unaudited-but-tracked; ~1.5K lines. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.darling]]
 version = "0.20.11"
 criteria = "safe-to-deploy"
@@ -187,6 +197,11 @@ criteria = "safe-to-deploy"
 [[exemptions.dashmap]]
 version = "6.2.1"
 criteria = "safe-to-deploy"
+
+[[exemptions.derive-getters]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new frost-core / frost-rerandomized transitive. Unaudited-but-tracked; ~2.7K lines. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.derive_builder]]
 version = "0.20.2"
@@ -230,6 +245,21 @@ notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not par
 version = "0.12.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.frost-core]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new direct dependency via frost-ed25519 3.0.0 (ZcashFoundation FROST, RFC 9591). Unaudited-but-tracked; ~9.9K lines. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.frost-ed25519]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new direct kyzo-core dependency (threshold signatures). Unaudited-but-tracked; ~4.5K lines. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.frost-rerandomized]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new frost-ed25519 transitive. Unaudited-but-tracked; ~900 lines. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.fs_extra]]
 version = "1.3.0"
 criteria = "safe-to-run"
@@ -248,9 +278,19 @@ version = "2.7.1"
 criteria = "safe-to-deploy"
 notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Criteria raised from safe-to-run to safe-to-deploy: still the same 2.7.1 already in the tree, but arrow-row/arrow-cast and others now require the stricter criteria. Full audit deferred to the standing supply-chain audit campaign."
 
+[[exemptions.hash32]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new heapless 0.7.17 transitive. Unaudited-but-tracked; ~1.0K lines. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.hashbrown]]
 version = "0.14.5"
 criteria = "safe-to-deploy"
+
+[[exemptions.heapless]]
+version = "0.7.17"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: new postcard transitive. Unaudited-but-tracked; ~13K lines. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.hybrid-array]]
 version = "0.4.13"
@@ -272,6 +312,11 @@ criteria = "safe-to-deploy"
 [[exemptions.is_ci]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.itertools]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: frost-core pulls itertools 0.14.0 alongside the pre-existing 0.15.0 exemption. Unaudited-but-tracked for this version pin. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.itertools]]
 version = "0.15.0"
@@ -323,6 +368,11 @@ criteria = "safe-to-deploy"
 version = "0.2.16"
 criteria = "safe-to-deploy"
 notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by num-traits. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.litrs]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: document-features transitive bump (0.4.1 -> 1.0.0). Unaudited-but-tracked; ~28-file delta / ~1K net lines. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.lock_api]]
 version = "0.4.14"
@@ -526,8 +576,9 @@ version = "1.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.spin]]
-version = "0.9.8"
+version = "0.9.9"
 criteria = "safe-to-deploy"
+notes = "CI-GREEN-SWEEP #376 lane 5: lock bumped 0.9.8 -> 0.9.9 (heapless/spin path). Unaudited-but-tracked version pin update; full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.strum]]
 version = "0.28.0"
@@ -579,10 +630,20 @@ notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not par
 version = "1.11.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.toml_writer]]
+version = "1.1.2+spec-1.1.0"
+criteria = "safe-to-run"
+notes = "CI-GREEN-SWEEP #376 lane 5: toml transitive bump (dev/build graph). Unaudited-but-tracked; #![forbid(unsafe_code)], publisher epage already trusted for sibling clap/toml crates. Full content audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.tracing-subscriber]]
 version = "0.3.23"
 criteria = "safe-to-run"
 notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by test-log. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.trybuild]]
+version = "1.0.118"
+criteria = "safe-to-run"
+notes = "CI-GREEN-SWEEP #376 lane 5: new kyzo-core dev-dependency. Unaudited-but-tracked; ~5K lines, safe-to-run only. Publisher dtolnay already trusted elsewhere. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.twox-hash]]
 version = "2.1.2"
