@@ -10,16 +10,19 @@
 //! Grants are seeds; [`materialize`] is pure (decisions.md §2, §68).
 //!
 //! Owns: [`ForkGrant`], [`RecoveryGrant`], [`GrantId`], [`materialize`],
-//! [`AncestorReadGrant`], [`RecoveryQuorumProof`], [`PredecessorConsentProof`],
-//! [`PredecessorConsentTable`], [`PriorRecoveryTable`],
-//! [`MaterializeRefuse::QuorumEquivocationPoison`].
+//! [`AncestorReadGrant`], [`AncestorEntitlementProof`],
+//! [`AncestorEntitlementTable`], [`RecoveryQuorumProof`],
+//! [`PredecessorConsentProof`], [`PredecessorConsentTable`],
+//! [`PriorRecoveryTable`], [`MaterializeRefuse::QuorumEquivocationPoison`].
 //!
 //! Bans: discovery-time identity entropy outside the grant seed; grant-time
 //! kill of the original token; post-grant shared-confidentiality Rotate;
 //! in-place WriteAuthority reissue for the same epoch; signatureless recovery
 //! mint of [`WriteAuthority`]; signatureless fork mint of [`WriteAuthority`];
 //! caller-supplied consent verifying keys as the trust root (self-issued consent);
-//! a second RecoveryGrant lineage for one predecessor epoch (quorum equivocation).
+//! a second RecoveryGrant lineage for one predecessor epoch (quorum equivocation);
+//! signatureless / caller-supplied entitlement for [`AncestorReadGrant`]
+//! (self-issued decrypt-scope forge).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +43,10 @@ const RECOVERY_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.recovery_grant.payload.v1";
 const FORK_CONSENT_DOMAIN: &[u8] = b"kyzo.fork_consent.v1";
 /// Domain-separated prefix for ForkGrant payload digests.
 const FORK_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.fork_grant.payload.v1";
+/// Domain-separated prefix for ancestor-entitlement signatures.
+const ANCESTOR_ENTITLEMENT_DOMAIN: &[u8] = b"kyzo.ancestor_entitlement.v1";
+/// Domain-separated prefix for AncestorReadGrant payload digests.
+const ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.ancestor_read_grant.payload.v1";
 
 /// Stable grant identity bound into the signed payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -923,16 +930,144 @@ fn derive_recovery_write_token(recovery: &RecoveryGrant) -> super::authority::Wr
     super::authority::WriteTokenId::from_digest(h.finalize().into())
 }
 
+/// Sealed registry of ancestor-decrypt entitlement verifying keys keyed by [`StoreId`].
+///
+/// Register at genesis/seal time. [`AncestorEntitlementProof::verify`] and
+/// [`AncestorReadGrant::new`] resolve the trust root by StoreId lookup — never a
+/// caller-supplied verifying key (self-issued decrypt-scope is Unconstructible).
+#[derive(Debug, Default, Clone)]
+pub struct AncestorEntitlementTable {
+    /// store_id bytes → ed25519 verifying key bytes (32).
+    keys: BTreeMap<[u8; 32], [u8; 32]>,
+}
+
+impl AncestorEntitlementTable {
+    /// Empty sealed entitlement-key registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register the entitlement verifying key for a StoreId (genesis/seal door).
+    ///
+    /// Invalid ed25519 material refuses. Overwrites a prior key for the same
+    /// StoreId (seal construction is single-writer).
+    pub fn insert(
+        &mut self,
+        store_id: StoreId,
+        verifying_key: [u8; 32],
+    ) -> Result<(), AncestorReadRefuse> {
+        VerifyingKey::from_bytes(&verifying_key)
+            .map_err(|_| AncestorReadRefuse::EntitlementUnverified)?;
+        self.keys.insert(*store_id.as_bytes(), verifying_key);
+        Ok(())
+    }
+
+    /// Lookup the sealed entitlement verifying key for `store_id`, if registered.
+    pub fn get(&self, store_id: StoreId) -> Option<&[u8; 32]> {
+        self.keys.get(store_id.as_bytes())
+    }
+}
+
+/// Digest of an entitlement verifying key (bound into [`AncestorEntitlementProof`]).
+fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
+    let mut key_h = Sha256::new();
+    key_h.update(b"kyzo.ancestor_entitlement.key_id.v1");
+    key_h.update(verifying_key);
+    key_h.finalize().into()
+}
+
+/// Opaque sealed evidence that a sealed entitlement key authorized ancestor decrypt-scope.
+///
+/// No public free constructor — mint only via [`AncestorEntitlementProof::verify`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AncestorEntitlementProof {
+    store_id: StoreId,
+    payload_digest: [u8; 32],
+    key_id_digest: [u8; 32],
+    _priv: (),
+}
+
+impl AncestorEntitlementProof {
+    /// Verify an ed25519 entitlement signature against the sealed table and seal the proof.
+    ///
+    /// Resolves the verifying key from `entitlement_table` for `store_id` — never
+    /// accepts a caller-supplied verifying key as the trust root.
+    /// Message: `kyzo.ancestor_entitlement.v1 || store_id || payload_digest`.
+    pub fn verify(
+        entitlement_table: &AncestorEntitlementTable,
+        store_id: StoreId,
+        payload_digest: &[u8; 32],
+        signature: &[u8; 64],
+    ) -> Result<Self, AncestorReadRefuse> {
+        let Some(entitlement_verifying_key) = entitlement_table.get(store_id) else {
+            return Err(AncestorReadRefuse::EntitlementKeyUnknown);
+        };
+        let Ok(verifying) = VerifyingKey::from_bytes(entitlement_verifying_key) else {
+            return Err(AncestorReadRefuse::EntitlementUnverified);
+        };
+        let Ok(sig) = Signature::try_from(signature.as_slice()) else {
+            return Err(AncestorReadRefuse::EntitlementUnverified);
+        };
+        let mut message =
+            Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
+        message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
+        message.extend_from_slice(store_id.as_bytes());
+        message.extend_from_slice(payload_digest);
+        if verifying.verify(message.as_slice(), &sig).is_err() {
+            return Err(AncestorReadRefuse::EntitlementUnverified);
+        }
+        Ok(Self {
+            store_id,
+            payload_digest: *payload_digest,
+            key_id_digest: entitlement_key_id_digest(entitlement_verifying_key),
+            _priv: (),
+        })
+    }
+
+    /// StoreId sealed into this proof.
+    pub fn store_id(&self) -> StoreId {
+        self.store_id
+    }
+
+    /// Payload digest the entitlement key authorized.
+    pub fn payload_digest(&self) -> &[u8; 32] {
+        &self.payload_digest
+    }
+
+    /// Digest of the entitlement verifying key sealed into this proof.
+    pub fn key_id_digest(&self) -> &[u8; 32] {
+        &self.key_id_digest
+    }
+}
+
+/// Payload digest an entitlement key must sign for an ancestor-read grant's sealed fields.
+pub fn ancestor_read_grant_payload_digest(
+    store_id: StoreId,
+    from_epoch: FenceEpoch,
+    to_epoch: FenceEpoch,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN);
+    h.update(store_id.as_bytes());
+    h.update(u64::to_be_bytes(from_epoch.get()));
+    h.update(from_epoch.store_id().as_bytes());
+    h.update(u64::to_be_bytes(to_epoch.get()));
+    h.update(to_epoch.store_id().as_bytes());
+    h.finalize().into()
+}
+
 /// Ancestor-epoch plaintext read grant — O(epochs) rewrap.
 ///
 /// Cross-fork foreign-CryptoDomain plaintext is Unconstructible.
 /// AuditKey ≠ AncestorReadGrant ≠ decrypt ≠ WriteAuthority.
+/// Carries a verified [`AncestorEntitlementProof`] — signatureless mint is Unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AncestorReadGrant {
     store_id: StoreId,
     /// Inclusive epoch range this grant may rewrap under the holding KEK.
     from_epoch: FenceEpoch,
     to_epoch: FenceEpoch,
+    entitlement_proof: AncestorEntitlementProof,
 }
 
 /// Typed refuse constructing / using [`AncestorReadGrant`].
@@ -944,22 +1079,68 @@ pub enum AncestorReadRefuse {
     #[error("AncestorReadGrant: epoch range inverted or empty")]
     #[diagnostic(code(store::grants::ancestor_range))]
     InvalidEpochRange,
+    /// No sealed entitlement verifying key is registered for the StoreId.
+    #[error(
+        "EntitlementKeyUnknown: no sealed ancestor-entitlement verifying key for the named StoreId"
+    )]
+    #[diagnostic(code(store::grants::entitlement_key_unknown))]
+    EntitlementKeyUnknown,
+    /// Ancestor entitlement signature failed verification against the sealed key.
+    #[error("EntitlementUnverified: ancestor entitlement signature does not verify")]
+    #[diagnostic(code(store::grants::entitlement_unverified))]
+    EntitlementUnverified,
+    /// Entitlement proof does not name the grant's StoreId.
+    #[error("EntitlementMismatch: entitlement proof store does not match the ancestor-read grant")]
+    #[diagnostic(code(store::grants::entitlement_mismatch))]
+    EntitlementMismatch,
 }
 
 impl AncestorReadGrant {
-    /// Seal an O(epochs) rewrap grant for one Store's ancestor domains.
+    /// Seal an O(epochs) rewrap grant bound to verified sealed entitlement evidence.
+    ///
+    /// Resolves the trust root from `entitlement_table` for `store_id` — never a
+    /// caller-supplied verifying key. The proof's store and payload digest must
+    /// match this grant's sealed fields; signatureless construction is Unconstructible.
     pub fn new(
+        entitlement_table: &AncestorEntitlementTable,
         store_id: StoreId,
         from_epoch: FenceEpoch,
         to_epoch: FenceEpoch,
+        entitlement_proof: AncestorEntitlementProof,
     ) -> Result<Self, AncestorReadRefuse> {
+        assert_eq!(
+            from_epoch.store_id(),
+            store_id,
+            "INVARIANT(AncestorReadGrant): from_epoch must bind StoreId"
+        );
+        assert_eq!(
+            to_epoch.store_id(),
+            store_id,
+            "INVARIANT(AncestorReadGrant): to_epoch must bind StoreId"
+        );
         if from_epoch > to_epoch {
             return Err(AncestorReadRefuse::InvalidEpochRange);
+        }
+        if entitlement_proof.store_id() != store_id {
+            return Err(AncestorReadRefuse::EntitlementMismatch);
+        }
+        let expected = ancestor_read_grant_payload_digest(store_id, from_epoch, to_epoch);
+        if entitlement_proof.payload_digest() != &expected {
+            return Err(AncestorReadRefuse::EntitlementUnverified);
+        }
+        let Some(sealed_key) = entitlement_table.get(store_id) else {
+            return Err(AncestorReadRefuse::EntitlementKeyUnknown);
+        };
+        // Sealed entitlement is trusted only when it still binds the sealed table
+        // key for this store (not an attacker-chosen key from a private table).
+        if entitlement_proof.key_id_digest() != &entitlement_key_id_digest(sealed_key) {
+            return Err(AncestorReadRefuse::EntitlementUnverified);
         }
         Ok(Self {
             store_id,
             from_epoch,
             to_epoch,
+            entitlement_proof,
         })
     }
 
@@ -978,6 +1159,11 @@ impl AncestorReadGrant {
     /// Last covered epoch.
     pub fn to_epoch(&self) -> FenceEpoch {
         self.to_epoch
+    }
+
+    /// Verified ancestor-entitlement evidence bound into this grant.
+    pub fn entitlement_proof(&self) -> &AncestorEntitlementProof {
+        &self.entitlement_proof
     }
 
     /// Authorize rewrap for a domain — foreign StoreId refuses.
@@ -1027,6 +1213,26 @@ pub(crate) fn sign_fork_consent(
         Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
     message.extend_from_slice(FORK_CONSENT_DOMAIN);
     message.extend_from_slice(predecessor_store.as_bytes());
+    message.extend_from_slice(payload_digest);
+    let sig = signing.sign(message.as_slice()).to_bytes();
+    (verifying, sig)
+}
+
+/// Test-only: ed25519 ancestor-entitlement sign over the entitlement domain.
+#[cfg(test)]
+pub(crate) fn sign_ancestor_entitlement(
+    seed: [u8; 32],
+    store_id: StoreId,
+    payload_digest: &[u8; 32],
+) -> ([u8; 32], [u8; 64]) {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let signing = SigningKey::from_bytes(&seed);
+    let verifying = signing.verifying_key().to_bytes();
+    let mut message =
+        Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
+    message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
+    message.extend_from_slice(store_id.as_bytes());
     message.extend_from_slice(payload_digest);
     let sig = signing.sign(message.as_slice()).to_bytes();
     (verifying, sig)
@@ -1493,5 +1699,114 @@ mod tests {
             message.extend_from_slice(payload_digest);
             self.signing.sign(message.as_slice()).to_bytes()
         }
+    }
+
+    /// Test-only ancestor-entitlement signing key.
+    struct EntitlementSigningKey {
+        signing: SigningKey,
+        verifying: [u8; 32],
+    }
+
+    impl EntitlementSigningKey {
+        fn from_seed(seed: [u8; 32]) -> Self {
+            let signing = SigningKey::from_bytes(&seed);
+            let verifying = signing.verifying_key().to_bytes();
+            Self { signing, verifying }
+        }
+
+        fn verifying_key(&self) -> &[u8; 32] {
+            &self.verifying
+        }
+
+        fn sign_entitlement(&self, store_id: StoreId, payload_digest: &[u8; 32]) -> [u8; 64] {
+            let mut message =
+                Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
+            message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
+            message.extend_from_slice(store_id.as_bytes());
+            message.extend_from_slice(payload_digest);
+            self.signing.sign(message.as_slice()).to_bytes()
+        }
+    }
+
+    #[test]
+    fn ancestor_read_grant_registered_entitlement_succeeds() {
+        let store_id = StoreId::from_digest([0x81; 32]);
+        let from_epoch = FenceEpoch::genesis(store_id);
+        let to_epoch = from_epoch.successor().expect("successor epoch");
+        let payload = ancestor_read_grant_payload_digest(store_id, from_epoch, to_epoch);
+
+        let entitlement = EntitlementSigningKey::from_seed([0xE1; 32]);
+        let mut table = AncestorEntitlementTable::new();
+        table
+            .insert(store_id, *entitlement.verifying_key())
+            .expect("register sealed entitlement key");
+
+        let sig = entitlement.sign_entitlement(store_id, &payload);
+        let proof = AncestorEntitlementProof::verify(&table, store_id, &payload, &sig)
+            .expect("registered entitlement must verify");
+        let grant = AncestorReadGrant::new(&table, store_id, from_epoch, to_epoch, proof)
+            .expect("registered entitlement must mint grant");
+
+        assert_eq!(grant.store_id(), store_id);
+        assert_eq!(grant.from_epoch(), from_epoch);
+        assert_eq!(grant.to_epoch(), to_epoch);
+
+        let domain = CryptoDomain::new(store_id, from_epoch);
+        grant.authorize(domain).expect("in-range domain must authorize");
+    }
+
+    /// Nasty: entitlement signed by an attacker key NOT bound in the sealed
+    /// registry for store_id must refuse — closes self-issued decrypt-scope forge.
+    #[test]
+    fn ancestor_read_grant_attacker_own_key_not_bound_in_registry_refuses() {
+        let victim = StoreId::from_digest([0x82; 32]);
+        let from_epoch = FenceEpoch::genesis(victim);
+        let to_epoch = from_epoch.successor().expect("successor epoch");
+        let payload = ancestor_read_grant_payload_digest(victim, from_epoch, to_epoch);
+
+        let legitimate = EntitlementSigningKey::from_seed([0xE2; 32]);
+        let attacker = EntitlementSigningKey::from_seed([0xE3; 32]);
+
+        // Sealed store authority: only the legitimate key is registered.
+        let mut sealed_table = AncestorEntitlementTable::new();
+        sealed_table
+            .insert(victim, *legitimate.verifying_key())
+            .expect("register legitimate entitlement key");
+
+        // Attacker signs with their own keypair — must not verify against sealed table.
+        let attacker_sig = attacker.sign_entitlement(victim, &payload);
+        assert_eq!(
+            AncestorEntitlementProof::verify(&sealed_table, victim, &payload, &attacker_sig),
+            Err(AncestorReadRefuse::EntitlementUnverified)
+        );
+
+        // Unknown store (no sealed key) → EntitlementKeyUnknown, even with a
+        // cryptographically valid signature under some key.
+        let empty = AncestorEntitlementTable::new();
+        assert_eq!(
+            AncestorEntitlementProof::verify(&empty, victim, &payload, &attacker_sig),
+            Err(AncestorReadRefuse::EntitlementKeyUnknown)
+        );
+
+        // Cross-stream: attacker seals a proof against a *private* table that
+        // binds their own key to the victim StoreId, then constructs against
+        // the real sealed store table — key_id mismatch must refuse.
+        let mut attacker_table = AncestorEntitlementTable::new();
+        attacker_table
+            .insert(victim, *attacker.verifying_key())
+            .expect("attacker private table");
+        let forged_proof =
+            AncestorEntitlementProof::verify(&attacker_table, victim, &payload, &attacker_sig)
+                .expect("verifies only against attacker's private table");
+        assert_eq!(
+            AncestorReadGrant::new(&sealed_table, victim, from_epoch, to_epoch, forged_proof),
+            Err(AncestorReadRefuse::EntitlementUnverified)
+        );
+
+        // Forged signature bytes under the registered key — still refuse.
+        assert_eq!(
+            AncestorEntitlementProof::verify(&sealed_table, victim, &payload, &[0xFFu8; 64]),
+            Err(AncestorReadRefuse::EntitlementUnverified)
+        );
     }
 }
