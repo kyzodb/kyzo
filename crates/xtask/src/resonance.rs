@@ -151,6 +151,9 @@ pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
     if run_later_ratchets && !run_peer_dial_ban(&files) {
         failing_checks.push("peer_dial_ban");
     }
+    if run_later_ratchets && !run_serializer_authority(&files) {
+        failing_checks.push("serializer_authority");
+    }
     if run_later_ratchets {
         match run_unchecked_arith(&files, &root) {
             Ok(true) => {}
@@ -319,6 +322,36 @@ fn run_peer_dial_ban(files: &[fsutil::SourceFile]) -> bool {
         violations.len()
     );
     ok
+}
+
+fn run_serializer_authority(files: &[fsutil::SourceFile]) -> bool {
+    println!("== check: sealed-serializer authority ratchet (seat 59 — one CanonicalTranscript) ==");
+    let sites = checks::serializer_authority::check(files);
+    let n = sites.len();
+    let baseline = checks::serializer_authority::BASELINE;
+    if n > baseline {
+        for s in &sites {
+            println!("  hand-rolled-layout site {}:{}", s.file, s.line);
+        }
+        eprintln!(
+            "FAIL sealed-serializer authority: {n} hand-rolled-layout site(s) exceeds baseline \
+             {baseline} — a new byte-literal hasher on the sealed surface. Route sealed artifacts \
+             through the ONE CanonicalTranscript encoder; if this is a genuine internal digest, \
+             raise serializer_authority::BASELINE in a reviewed commit."
+        );
+        println!("check: sealed-serializer authority FAIL ({n} sites, baseline {baseline})");
+        return false;
+    }
+    if n < baseline {
+        eprintln!(
+            "RATCHET IMPROVED sealed-serializer authority: {n} < baseline {baseline} — tighten \
+             serializer_authority::BASELINE to {n}"
+        );
+        println!("check: sealed-serializer authority FAIL (baseline stale: {n} < {baseline})");
+        return false;
+    }
+    println!("check: sealed-serializer authority PASS ({n} internal-digest site(s); baseline {baseline})");
+    true
 }
 
 fn run_unchecked_arith(

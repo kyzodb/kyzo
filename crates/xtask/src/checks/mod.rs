@@ -18,5 +18,6 @@ pub mod derive_bypass;
 pub mod panic_lint;
 pub mod peer_dial_ban;
 pub mod pure_rust;
+pub mod serializer_authority;
 pub mod unchecked_arith;
 pub mod unsafe_check;
