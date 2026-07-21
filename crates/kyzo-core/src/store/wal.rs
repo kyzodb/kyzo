@@ -98,6 +98,29 @@ impl WalRecord {
     pub fn record_hash(&self) -> WalHash {
         self.record_hash
     }
+
+    /// Adversarial durable tear: truncate a Commit body's bytes after seal
+    /// without resealing. Models a power-cut mid-record write (byte-torn WAL
+    /// tail). `record_hash` still covers the pre-tear body, so [`replay`] must
+    /// typed-refuse [`WalRefuse::RecordHashMismatch`] — never apply the torn
+    /// payload as history. Production paths never call this.
+    pub(crate) fn adversarial_tear_commit_body(
+        &mut self,
+        keep_prefix: usize,
+    ) -> Result<(), WalRefuse> {
+        match &mut self.payload {
+            WalPayload::Commit { body, .. }
+                if keep_prefix > 0 && keep_prefix < body.len() =>
+            {
+                body.truncate(keep_prefix);
+                Ok(())
+            }
+            WalPayload::Commit { .. } => Err(WalRefuse::RecordHashMismatch),
+            WalPayload::NonceFloor { .. } | WalPayload::IncarnationSealed { .. } => {
+                Err(WalRefuse::RecordHashMismatch)
+            }
+        }
+    }
 }
 
 /// Closed payload kinds carried in the WAL.
@@ -184,6 +207,24 @@ impl WalSegment {
         }
         self.records.push(record);
         Ok(())
+    }
+
+    /// Append the first record of a segment that continues a prior segment's
+    /// tip. Empty-segment [`append`] only accepts [`GENESIS_PREDECESSOR`];
+    /// cross-segment heads use this door so in-memory corpora can build 3+
+    /// segment suffixes that [`replay`] validates. Non-empty segments delegate
+    /// to [`append`]. Production durable writers never call this — they open
+    /// segments under adapter currency with the inherited tip already bound.
+    pub(crate) fn append_continuing_head(
+        &mut self,
+        record: WalRecord,
+    ) -> Result<(), WalRefuse> {
+        if self.records.is_empty() {
+            self.records.push(record);
+            Ok(())
+        } else {
+            self.append(record)
+        }
     }
 }
 

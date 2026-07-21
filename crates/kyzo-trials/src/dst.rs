@@ -1403,7 +1403,7 @@ use crate::store::open::{
     StoreId, genesis,
 };
 use crate::store::scratch::TempTx;
-use crate::store::wal::{replay, WalPayload, WalRecord, WalSegment};
+use crate::store::wal::{replay, WalPayload, WalRecord, WalRefuse, WalSegment};
 
 fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
     let key = OperationKey::single_store(b"kyzo.sweep.dst", op, store_id, b"s0");
@@ -1418,6 +1418,10 @@ const CORPUS_SEEDS: u64 = 1000;
 /// Per-record structural recovery work units (hash verify + floor apply).
 /// Not calibrated milliseconds — bound-shape checks only (§86 / §87).
 const STRUCTURAL_PER_RECORD_WORK: u64 = 1;
+
+/// Clean lane / block sizes that alone are insufficient (TigerBeetle shape) —
+/// same roster the storage-campaign torn-write generator prefers off-of.
+const CRASH_INSTANT_TORN_LANE_BOUNDARIES: &[usize] = &[64, 512, 4096];
 
 fn open_live_door(
     identity_seed: [u8; 32],
@@ -1461,6 +1465,10 @@ struct CrashInstantSample {
     bytes_since_last_flush: u64,
     /// Structural recovery work units (not wall-clock ms).
     structural_recovery_work: u64,
+    /// WAL segments in the retained suffix (flushed* + unflushed).
+    segment_count: usize,
+    /// Whether this seed tore the unflushed tail record mid-body.
+    torn_tail: bool,
 }
 
 fn commit_body(seed: u64, ordinal: u64, body_len: usize) -> Vec<u8> {
@@ -1500,9 +1508,48 @@ fn measure_bytes_since_last_flush(unflushed: &WalSegment) -> u64 {
         .sum()
 }
 
+/// Interior tear offset in `1..body_len`, preferring offsets off every clean
+/// lane boundary (same shape as `storage_campaign_torn_write_arbitrary_offset_generator`).
+fn torn_tail_split_at(seed: u64, body_len: usize) -> usize {
+    assert!(body_len >= 2, "torn tail needs a multi-byte body");
+    let mut split_at = 1 + ((seed as usize).wrapping_mul(31).wrapping_add(7) % (body_len - 1));
+    for &block in CRASH_INSTANT_TORN_LANE_BOUNDARIES {
+        if split_at % block == 0 {
+            split_at = if split_at + 1 < body_len {
+                split_at + 1
+            } else {
+                split_at - 1
+            };
+            if split_at == 0 {
+                split_at = 1;
+            }
+        }
+    }
+    split_at
+}
+
+/// Seed → segment count: base 2 (flushed+unflushed), with forced 3+ on a
+/// dense arm so the corpus is not pair-only theater.
+fn crash_instant_segment_count(seed: u64) -> usize {
+    // Force 3+ on seed%5==0 (200/1000) and seed==2 (pin).
+    if seed == 2 || seed % 5 == 0 {
+        3 + (seed as usize % 2) // 3 or 4
+    } else {
+        2 + (seed as usize % 2) // 2 or 3 — still allows some natural 3s
+    }
+}
+
+/// Seed → whether to byte-tear the unflushed tail record.
+fn crash_instant_torn_tail(seed: u64) -> bool {
+    // Force torn on seed%3==0 (~333/1000) and seed==1 (pin).
+    seed == 1 || seed % 3 == 0
+}
+
 /// Build one adversarial crash-instant: mint Committed through the door, bind
-/// those ordinals into a WAL suffix after a flush watermark, then measure
-/// structural recovery over the unflushed bytes alone (the dirty tail `f` bounds).
+/// those ordinals across 2–4 WAL segments (last = unflushed dirty tail), optionally
+/// byte-tear the tail record, then measure structural recovery over the unflushed
+/// bytes alone (the dirty tail `f` bounds). Replay recovers the clean durable
+/// prefix or typed-refuses — never silent wrong ordinals.
 fn sample_crash_instant(seed: u64) -> CrashInstantSample {
     let mut identity = [0u8; 32];
     identity[..8].copy_from_slice(&seed.to_le_bytes());
@@ -1515,6 +1562,9 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
 
     let n_commits = 1 + (seed % 8) as usize;
     let body_len = 64usize.saturating_mul(1 + (seed as usize % 16));
+    let n_segments = crash_instant_segment_count(seed);
+    let torn_tail = crash_instant_torn_tail(seed);
+    assert!(n_segments >= 2, "seed {seed}: need flushed + unflushed");
 
     let mut committed = Vec::with_capacity(n_commits);
     for i in 0..n_commits {
@@ -1536,62 +1586,239 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
         committed.push(proof.commit_ordinal());
     }
 
-    let flushed = WalSegment::open(store_id, fence_epoch, 0);
-    let mut unflushed = WalSegment::open(store_id, fence_epoch, 1);
-    let mut pred = flushed.terminal_hash();
-    for (i, ord) in committed.iter().enumerate() {
-        let payload = WalPayload::Commit {
-            commit_ordinal: *ord,
-            body: commit_body(seed, ord.get(), body_len.saturating_add(i * 8)),
-        };
-        let record = WalRecord::seal(pred, payload).expect("wal seal");
-        pred = record.record_hash();
-        unflushed.append(record).expect("unflushed WAL append");
+    // Last segment is the unflushed dirty tail; earlier segments are flushed.
+    // Keep ≥1 commit in the unflushed segment so the dirty-tail meter is live.
+    let n_unflushed_commits = 1 + (seed as usize % n_commits);
+    let n_unflushed_commits = n_unflushed_commits.min(n_commits);
+    let n_flushed_commits = n_commits - n_unflushed_commits;
+    let durable_prefix: Vec<CommitOrdinal> = committed[..n_flushed_commits].to_vec();
+    let unflushed_ordinals: Vec<CommitOrdinal> = committed[n_flushed_commits..].to_vec();
+
+    let mut segments: Vec<WalSegment> = (0..n_segments)
+        .map(|i| WalSegment::open(store_id, fence_epoch, i as u64))
+        .collect();
+    let mut pred = segments[0].terminal_hash();
+
+    // Contiguous assign flushed commits across segments[0..n-1] (empties ok;
+    // never round-robin — that would ChainBreak when revisiting an earlier tip).
+    let n_flushed_segments = n_segments - 1;
+    {
+        let mut ci = 0usize;
+        for seg_i in 0..n_flushed_segments {
+            let remaining_segs = n_flushed_segments - seg_i;
+            let remaining = n_flushed_commits - ci;
+            let take = remaining / remaining_segs;
+            for j in 0..take {
+                let ord = durable_prefix[ci];
+                let payload = WalPayload::Commit {
+                    commit_ordinal: ord,
+                    body: commit_body(seed, ord.get(), body_len.saturating_add(ci * 8)),
+                };
+                let record = WalRecord::seal(pred, payload).expect("wal seal flushed");
+                pred = record.record_hash();
+                if j == 0 {
+                    segments[seg_i]
+                        .append_continuing_head(record)
+                        .expect("flushed WAL continuing head");
+                } else {
+                    segments[seg_i]
+                        .append(record)
+                        .expect("flushed WAL append");
+                }
+                ci += 1;
+            }
+        }
+        assert_eq!(ci, n_flushed_commits, "seed {seed}: flushed commits must all land");
     }
 
-    let bytes_since_last_flush = measure_bytes_since_last_flush(&unflushed);
-    let structural_recovery_work = measure_structural_recovery_work(&unflushed);
+    let unflushed_idx = n_segments - 1;
+    // Build an intact unflushed twin for metering / clean-prefix, then the
+    // crash suffix (possibly with a torn last record).
+    let mut intact_unflushed = WalSegment::open(store_id, fence_epoch, unflushed_idx as u64);
+    let mut crash_unflushed = WalSegment::open(store_id, fence_epoch, unflushed_idx as u64);
+    let unflushed_pred = pred;
+    let mut intact_pred = unflushed_pred;
+    let mut crash_pred = unflushed_pred;
+    for (i, ord) in unflushed_ordinals.iter().enumerate() {
+        let body = commit_body(
+            seed,
+            ord.get(),
+            body_len.saturating_add((n_flushed_commits + i) * 8),
+        );
+        let intact = WalRecord::seal(
+            intact_pred,
+            WalPayload::Commit {
+                commit_ordinal: *ord,
+                body: body.clone(),
+            },
+        )
+        .expect("wal seal intact unflushed");
+        intact_pred = intact.record_hash();
+        if i == 0 {
+            intact_unflushed
+                .append_continuing_head(intact)
+                .expect("intact unflushed head");
+        } else {
+            intact_unflushed
+                .append(intact)
+                .expect("intact unflushed append");
+        }
 
-    // Power cut at the commit door: reopen from durable WAL alone.
-    let segments = [flushed, unflushed.clone()];
-    let recovered = replay(store_id, &segments).expect("recovery must converge");
-    let again = replay(store_id, &segments).expect("crash-during-recovery converges");
-    assert_eq!(
-        recovered, again,
-        "seed {seed}: crash-during-recovery must be idempotent"
-    );
+        let mut crash_rec = WalRecord::seal(
+            crash_pred,
+            WalPayload::Commit {
+                commit_ordinal: *ord,
+                body,
+            },
+        )
+        .expect("wal seal crash unflushed");
+        // Capture pre-tear hash as chain tip; tear mutates body only.
+        crash_pred = crash_rec.record_hash();
+        if torn_tail && i + 1 == unflushed_ordinals.len() {
+            let full_len = match crash_rec.payload() {
+                WalPayload::Commit { body, .. } => body.len(),
+                _ => panic!("seed {seed}: expected Commit payload"),
+            };
+            let split_at = torn_tail_split_at(seed, full_len);
+            crash_rec
+                .adversarial_tear_commit_body(split_at)
+                .expect("tear Commit body");
+            assert!(
+                split_at < full_len,
+                "seed {seed}: torn prefix must be shorter than intact body"
+            );
+        }
+        if i == 0 {
+            crash_unflushed
+                .append_continuing_head(crash_rec)
+                .expect("crash unflushed head");
+        } else {
+            crash_unflushed
+                .append(crash_rec)
+                .expect("crash unflushed append");
+        }
+    }
 
-    let recovered_ordinals: Vec<CommitOrdinal> = recovered
-        .commit_bodies
-        .iter()
-        .map(|(o, _)| *o)
-        .collect();
-    assert_eq!(
-        recovered_ordinals, committed,
-        "seed {seed}: every minted Committed must survive the power cut"
-    );
-    assert_eq!(
-        recovered.floors.highest_commit_ordinal,
-        committed.last().copied(),
-        "seed {seed}: recovered floor must match last Committed"
-    );
+    // Dirty-tail meter uses intact (pre-tear) body lengths — f bounds the
+    // intended unflushed window, not the truncated adversary bytes.
+    let bytes_since_last_flush = measure_bytes_since_last_flush(&intact_unflushed);
+    let structural_recovery_work = measure_structural_recovery_work(&intact_unflushed);
+
+    segments[unflushed_idx] = crash_unflushed;
+
+    // Clean durable prefix = flushed segments + whole unflushed records only.
+    let mut clean_prefix = segments[..unflushed_idx].to_vec();
+    if torn_tail {
+        let mut prefix_tail = WalSegment::open(store_id, fence_epoch, unflushed_idx as u64);
+        let keep = unflushed_ordinals.len().saturating_sub(1);
+        for (i, record) in intact_unflushed.records().iter().take(keep).enumerate() {
+            if i == 0 {
+                prefix_tail
+                    .append_continuing_head(record.clone())
+                    .expect("clean-prefix unflushed head");
+            } else {
+                prefix_tail
+                    .append(record.clone())
+                    .expect("clean-prefix unflushed append");
+            }
+        }
+        clean_prefix.push(prefix_tail);
+    } else {
+        clean_prefix.push(intact_unflushed);
+    }
+
+    let expected_clean: Vec<CommitOrdinal> = if torn_tail {
+        durable_prefix
+            .iter()
+            .chain(
+                unflushed_ordinals
+                    .iter()
+                    .take(unflushed_ordinals.len().saturating_sub(1)),
+            )
+            .copied()
+            .collect()
+    } else {
+        committed.clone()
+    };
+
+    match replay(store_id, &segments) {
+        Ok(recovered) => {
+            assert!(
+                !torn_tail,
+                "seed {seed}: torn tail must not silently succeed with a history"
+            );
+            let again = replay(store_id, &segments).expect("crash-during-recovery converges");
+            assert_eq!(
+                recovered, again,
+                "seed {seed}: crash-during-recovery must be idempotent"
+            );
+            let recovered_ordinals: Vec<CommitOrdinal> = recovered
+                .commit_bodies
+                .iter()
+                .map(|(o, _)| *o)
+                .collect();
+            assert_eq!(
+                recovered_ordinals, committed,
+                "seed {seed}: every minted Committed must survive the power cut"
+            );
+            assert_eq!(
+                recovered.floors.highest_commit_ordinal,
+                committed.last().copied(),
+                "seed {seed}: recovered floor must match last Committed"
+            );
+        }
+        Err(refuse) => {
+            assert!(
+                torn_tail,
+                "seed {seed}: intact whole-record suffix must replay, got {refuse:?}"
+            );
+            assert_eq!(
+                refuse,
+                WalRefuse::RecordHashMismatch,
+                "seed {seed}: torn tail must typed-refuse RecordHashMismatch, got {refuse:?}"
+            );
+            let prefix_state =
+                replay(store_id, &clean_prefix).expect("clean prefix must replay");
+            let prefix_ordinals: Vec<CommitOrdinal> = prefix_state
+                .commit_bodies
+                .iter()
+                .map(|(o, _)| *o)
+                .collect();
+            assert_eq!(
+                prefix_ordinals, expected_clean,
+                "seed {seed}: clean-prefix recovery must match durable whole records only"
+            );
+            if let Some(torn_ord) = unflushed_ordinals.last() {
+                assert!(
+                    !prefix_ordinals.contains(torn_ord),
+                    "seed {seed}: torn commit ordinal must not appear in clean prefix"
+                );
+            }
+        }
+    }
 
     // Open of a recoverable Store still succeeds — claim refusal is separate.
-    let sealed = genesis(GenesisParams {
-        identity_seed: identity,
-        recovery_matrix: None,
-        staging_ttl: StagingTtl::new(1_024),
-        size_class: SizeClass::Compact,
-        entropy_arm: EntropyArm::OsRandom,
-        stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
-            snapshot_fork: SnapshotFork::No,
-        },
-    });
-    let _ = open_with_capability(sealed.store_open()).expect("open must succeed when recoverable");
+    // Intact corpus only: torn WAL suffix is the typed-refuse arm above.
+    if !torn_tail {
+        let sealed = genesis(GenesisParams {
+            identity_seed: identity,
+            recovery_matrix: None,
+            staging_ttl: StagingTtl::new(1_024),
+            size_class: SizeClass::Compact,
+            entropy_arm: EntropyArm::OsRandom,
+            stable_commit_cap: StableCommitCapArm::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::No,
+            },
+        });
+        let _ =
+            open_with_capability(sealed.store_open()).expect("open must succeed when recoverable");
+    }
 
     CrashInstantSample {
         bytes_since_last_flush,
         structural_recovery_work,
+        segment_count: n_segments,
+        torn_tail,
     }
 }
 
@@ -1615,13 +1842,31 @@ fn structural_work_ceiling(bytes_since_last_flush: u64) -> u64 {
 }
 
 /// §29/§28/§86 — durable license + recovery correctness at the adversarial
-/// crash instant. Every Committed survives; recovery converges; sealed `f`
-/// is cited only via `recovery_time_bound_ns` (no local twin of the formula);
-/// measured structural p999 is asserted against the independent structural
-/// ceiling; claim emit refuses above f and never refuses Store open.
+/// crash instant. Intact seeds: every Committed survives and recovery
+/// converges. Torn-tail seeds: `replay` typed-refuses or clean-prefix
+/// recovers — never silent wrong ordinals. Sealed `f` is cited only via
+/// `recovery_time_bound_ns`; measured structural p999 is asserted against
+/// the independent structural ceiling; claim emit refuses above f and never
+/// refuses Store open.
 #[test]
 fn power_cut_at_commit_door_dst() {
     let samples: Vec<CrashInstantSample> = (0..CORPUS_SEEDS).map(sample_crash_instant).collect();
+
+    // Anti-vacuity: corpus must actually hit the new generator arms.
+    let torn_n = samples.iter().filter(|s| s.torn_tail).count();
+    let multi_n = samples.iter().filter(|s| s.segment_count >= 3).count();
+    assert!(
+        torn_n > 0,
+        "corpus must emit byte-torn tail records (AUDIT-CATALOG #17)"
+    );
+    assert!(
+        multi_n > 0,
+        "corpus must emit 3+ WAL segments (AUDIT-CATALOG #17)"
+    );
+    assert!(
+        samples.iter().any(|s| s.torn_tail && s.segment_count >= 3),
+        "corpus must co-emit torn-tail × 3+ segments for some seed"
+    );
 
     // Sealed coefficients are bench-lane truth — DST only consumes them.
     // Do not fiat-assert slope 1/1 or intercept 8; those are campaign-derived.
