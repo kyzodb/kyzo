@@ -1700,12 +1700,58 @@ pub mod storage_campaign_lanes {
         IntentOrdinal, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
         ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate,
         PermanenceWitness, PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant,
-        Regions, ReplicaCustody, ReplicaKey, ScopeManifestDigest, ScopeManifestStatus,
-        ScopeManifestTable, SealDigest, SealRefuse, SealedArtifactKind, SizeClass, SnapshotFork,
-        StableCommitCap, StagingToken, StagingTtl, StateRoot, Storage, StoreId, StoreRefuse,
-        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, VolatilePending, WalHash, WriteTx,
-        encode_golden_fixture, genesis, materialize, nonce, parse_golden_hex, reclaim_candidate,
+        RecoveryMatrix, RecoveryPublicKey, Regions, ReplicaCustody, ReplicaKey,
+        ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, SealDigest, SealRefuse,
+        SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingToken, StagingTtl,
+        StateRoot, Storage, StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession,
+        TranscriptRefuse, VolatilePending, WalHash, WriteTx, encode_golden_fixture, genesis,
+        materialize, nonce, parse_golden_hex, reclaim_candidate,
     };
+    use crate::store::grants::{
+        IdentitySeed, KeyMaterialCommitment, RecoveryQuorumProof, recovery_grant_payload_digest,
+        sign_recovery_quorum,
+    };
+
+    /// Mint a RecoveryGrant under a fresh 2-of-3 matrix (positive recovery paths).
+    fn recovery_grant_with_quorum(
+        grant_id: GrantId,
+        store_id: StoreId,
+        pred_epoch: FenceEpoch,
+        successor_seed: [u8; 32],
+        commitment: [u8; 32],
+        custodian_seeds: [[u8; 32]; 3],
+    ) -> (RecoveryGrant, RecoveryMatrix) {
+        let successor_seed = IdentitySeed::from_digest(successor_seed);
+        let commitment = KeyMaterialCommitment::from_digest(commitment);
+        let payload = recovery_grant_payload_digest(
+            grant_id,
+            store_id,
+            pred_epoch,
+            &successor_seed,
+            &commitment,
+        );
+        let mut keys = Vec::with_capacity(3);
+        let mut sigs: Vec<(RecoveryPublicKey, [u8; 64])> = Vec::with_capacity(2);
+        for (i, seed) in custodian_seeds.into_iter().enumerate() {
+            let (pk, sig) = sign_recovery_quorum(seed, &payload);
+            keys.push(pk);
+            if i < 2 {
+                sigs.push((pk, sig));
+            }
+        }
+        let matrix = RecoveryMatrix::new(2, keys).expect("2-of-3 recovery matrix");
+        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum proof");
+        let grant = RecoveryGrant::new(
+            grant_id,
+            store_id,
+            pred_epoch,
+            successor_seed,
+            commitment,
+            proof,
+        )
+        .expect("recovery grant");
+        (grant, matrix)
+    }
 
     /// Mint a signed AdmissionCertificate under a live authorizing key (pub(crate) door).
     fn mint_signed_admission(
@@ -2132,14 +2178,16 @@ pub mod storage_campaign_lanes {
 
         // RecoveryGrant materialize advances domain; orphan write after observed
         // recovery is AuthorityRecovered on the refuse ledger.
-        let recovery = RecoveryGrant::new(
+        let (recovery, matrix) = recovery_grant_with_quorum(
             GrantId::from_bytes([0x90; 32]),
             store_id,
             pred_epoch,
             [0xEE; 32],
             [0xEF; 32],
+            [[0x91; 32], [0x92; 32], [0x93; 32]],
         );
-        let matured = materialize(&Grant::Recovery(recovery), None).expect("recovery materialize");
+        let matured = materialize(&Grant::Recovery(recovery), None, Some(&matrix))
+            .expect("recovery materialize");
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(
             matured.crypto_domain().fence_epoch(),
@@ -2165,8 +2213,10 @@ pub mod storage_campaign_lanes {
             [0xCC; 32],
             [0xDD; 32],
         );
-        let first = materialize(&Grant::Fork(fork.clone()), None).expect("first discovery");
-        let second = materialize(&Grant::Fork(fork.clone()), None).expect("second discovery");
+        let first =
+            materialize(&Grant::Fork(fork.clone()), None, None).expect("first discovery");
+        let second =
+            materialize(&Grant::Fork(fork.clone()), None, None).expect("second discovery");
         assert_eq!(
             first.store_id(),
             second.store_id(),
@@ -2176,7 +2226,8 @@ pub mod storage_campaign_lanes {
 
         // Idempotent rediscovery with matching prior converges.
         let prior_ok = PriorMaterialization::new(fork.grant_id(), first.store_id());
-        let again = materialize(&Grant::Fork(fork.clone()), Some(prior_ok)).expect("converge");
+        let again =
+            materialize(&Grant::Fork(fork.clone()), Some(prior_ok), None).expect("converge");
         assert_eq!(again.store_id(), first.store_id());
 
         // Mismatched prior → typed GrantAlreadyMaterialized carrying existing identity.
@@ -2188,9 +2239,10 @@ pub mod storage_campaign_lanes {
             [0x03; 32],
             [0x04; 32],
         );
-        let foreign = materialize(&Grant::Fork(other), None).expect("foreign successor");
+        let foreign = materialize(&Grant::Fork(other), None, None).expect("foreign successor");
         let prior_bad = PriorMaterialization::new(fork.grant_id(), foreign.store_id());
-        let refuse = materialize(&Grant::Fork(fork), Some(prior_bad)).expect_err("must refuse");
+        let refuse =
+            materialize(&Grant::Fork(fork), Some(prior_bad), None).expect_err("must refuse");
         let msg = format!("{refuse:?}");
         assert!(
             msg.contains("GrantAlreadyMaterialized"),
@@ -2212,26 +2264,29 @@ pub mod storage_campaign_lanes {
         let store_id = sealed.store_id();
         let pred_epoch = sealed.fence_epoch();
 
-        let g1 = RecoveryGrant::new(
+        // Kept ignored until T3 — quorum wired so this compiles; equivocation refuse is T3.
+        let (g1, matrix) = recovery_grant_with_quorum(
             GrantId::from_bytes([0x71; 32]),
             store_id,
             pred_epoch,
             [0xA1; 32],
             [0xA2; 32],
+            [[0x11; 32], [0x12; 32], [0x13; 32]],
         );
-        let g2 = RecoveryGrant::new(
+        let (g2, _) = recovery_grant_with_quorum(
             GrantId::from_bytes([0x72; 32]),
             store_id,
             pred_epoch,
             [0xB1; 32],
             [0xB2; 32],
+            [[0x11; 32], [0x12; 32], [0x13; 32]],
         );
 
-        let m1 = materialize(&Grant::Recovery(g1), None).expect("first recovery");
+        let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix)).expect("first recovery");
         // When the door exists: second RecoveryGrant for one predecessor epoch
         // must refuse equivocation — never Ok with a second WriteAuthority token,
         // never a substitute UnknownInvariant lattice.
-        let refuse = materialize(&Grant::Recovery(g2), None);
+        let refuse = materialize(&Grant::Recovery(g2), None, Some(&matrix));
         assert!(
             refuse.is_err(),
             "second RecoveryGrant for one predecessor epoch must refuse equivocation (store {:?})",

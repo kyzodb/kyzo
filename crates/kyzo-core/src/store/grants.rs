@@ -10,17 +10,28 @@
 //! Grants are seeds; [`materialize`] is pure (decisions.md §2, §68).
 //!
 //! Owns: [`ForkGrant`], [`RecoveryGrant`], [`GrantId`], [`materialize`],
-//! [`AncestorReadGrant`].
+//! [`AncestorReadGrant`], [`RecoveryQuorumProof`].
 //!
 //! Bans: discovery-time identity entropy outside the grant seed; grant-time
 //! kill of the original token; post-grant shared-confidentiality Rotate;
-//! in-place WriteAuthority reissue for the same epoch.
+//! in-place WriteAuthority reissue for the same epoch; signatureless recovery
+//! mint of [`WriteAuthority`].
 
+use std::collections::BTreeSet;
+
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 
-use super::authority::WriteAuthority;
+use super::authority::{RecoveryMatrix, RecoveryPublicKey, WriteAuthority};
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
+
+/// Domain-separated prefix for recovery quorum signatures.
+const RECOVERY_QUORUM_DOMAIN: &[u8] = b"kyzo.recovery_quorum.v1";
+/// Domain-separated prefix for RecoveryMatrix digests bound into proofs.
+const RECOVERY_MATRIX_DIGEST_DOMAIN: &[u8] = b"kyzo.recovery_matrix.v1";
+/// Domain-separated prefix for RecoveryGrant payload digests.
+const RECOVERY_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.recovery_grant.payload.v1";
 
 /// Stable grant identity bound into the signed payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -192,12 +203,114 @@ impl ForkGrant {
     }
 }
 
+/// Opaque sealed evidence that a [`RecoveryMatrix`] quorum signed a payload.
+///
+/// No public free constructor — mint only via [`RecoveryQuorumProof::verify`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryQuorumProof {
+    matrix_digest: [u8; 32],
+    payload_digest: [u8; 32],
+    _priv: (),
+}
+
+impl RecoveryQuorumProof {
+    /// Verify ed25519 quorum signatures against `matrix` and seal the proof.
+    ///
+    /// Each signature is over `kyzo.recovery_quorum.v1 || payload_digest`.
+    /// Only verifying keys that appear in `matrix.keys()` count; distinct
+    /// valid signers must meet `matrix.threshold()`.
+    pub fn verify(
+        matrix: &RecoveryMatrix,
+        payload_digest: &[u8; 32],
+        signatures: &[(RecoveryPublicKey, [u8; 64])],
+    ) -> Result<Self, MaterializeRefuse> {
+        let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
+        message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
+        message.extend_from_slice(payload_digest);
+
+        let matrix_key_bytes: BTreeSet<[u8; 32]> =
+            matrix.keys().iter().map(|k| *k.as_bytes()).collect();
+        let mut distinct_valid: BTreeSet<[u8; 32]> = BTreeSet::new();
+
+        for (pk, sig_bytes) in signatures {
+            let pk_bytes = *pk.as_bytes();
+            if !matrix_key_bytes.contains(&pk_bytes) || distinct_valid.contains(&pk_bytes) {
+                continue;
+            }
+            let Ok(verifying) = VerifyingKey::from_bytes(&pk_bytes) else {
+                continue;
+            };
+            let Ok(signature) = Signature::try_from(sig_bytes.as_slice()) else {
+                continue;
+            };
+            if verifying.verify(message.as_slice(), &signature).is_ok() {
+                distinct_valid.insert(pk_bytes);
+            }
+        }
+
+        let have = distinct_valid.len() as u32;
+        let need = matrix.threshold();
+        if have < need {
+            return Err(MaterializeRefuse::QuorumInsufficient { have, need });
+        }
+
+        Ok(Self {
+            matrix_digest: recovery_matrix_digest(matrix),
+            payload_digest: *payload_digest,
+            _priv: (),
+        })
+    }
+
+    /// Matrix digest sealed into this proof.
+    pub fn matrix_digest(&self) -> &[u8; 32] {
+        &self.matrix_digest
+    }
+
+    /// Payload digest this quorum signed.
+    pub fn payload_digest(&self) -> &[u8; 32] {
+        &self.payload_digest
+    }
+}
+
+/// Canonical digest of a [`RecoveryMatrix`] (threshold + ordered key bytes).
+fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> [u8; 32] {
+    let mut ordered: Vec<[u8; 32]> = matrix.keys().iter().map(|k| *k.as_bytes()).collect();
+    ordered.sort_unstable();
+    let mut h = Sha256::new();
+    h.update(RECOVERY_MATRIX_DIGEST_DOMAIN);
+    h.update(u32::to_be_bytes(matrix.threshold()));
+    for key in &ordered {
+        h.update(key);
+    }
+    h.finalize().into()
+}
+
+/// Payload digest a recovery quorum must sign for a grant's sealed fields.
+pub fn recovery_grant_payload_digest(
+    grant_id: GrantId,
+    store_id: StoreId,
+    predecessor_epoch: FenceEpoch,
+    successor_identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(RECOVERY_GRANT_PAYLOAD_DOMAIN);
+    h.update(grant_id.as_bytes());
+    h.update(store_id.as_bytes());
+    h.update(u64::to_be_bytes(predecessor_epoch.get()));
+    h.update(predecessor_epoch.store_id().as_bytes());
+    h.update(successor_identity_seed.as_bytes());
+    h.update(key_material_commitment.as_bytes());
+    h.finalize().into()
+}
+
 /// Same-principal recovery seed — one-shot quorum under RecoveryMatrix.
 ///
 /// Predecessor FenceEpoch in the signed payload. A second valid grant for
 /// one predecessor epoch is quorum equivocation → poison for the signing
 /// set's authority, never a second lineage. Recovery keys are a distinct
 /// custodian class. Obeys the same seed / [`materialize`] law as ForkGrant.
+/// Carries a verified [`RecoveryQuorumProof`] — signatureless mint is Unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryGrant {
     grant_id: GrantId,
@@ -205,29 +318,47 @@ pub struct RecoveryGrant {
     predecessor_epoch: FenceEpoch,
     successor_identity_seed: IdentitySeed,
     key_material_commitment: KeyMaterialCommitment,
+    quorum_proof: RecoveryQuorumProof,
 }
 
 impl RecoveryGrant {
-    /// Construct a recovery grant seed from its sealed payload fields.
+    /// Construct a recovery grant seed bound to a verified quorum proof.
+    ///
+    /// The proof's payload digest must match this grant's sealed fields;
+    /// signatureless construction that mints power is condemned.
     pub fn new(
         grant_id: GrantId,
         store_id: StoreId,
         predecessor_epoch: FenceEpoch,
         successor_identity_seed: impl Into<IdentitySeed>,
         key_material_commitment: impl Into<KeyMaterialCommitment>,
-    ) -> Self {
+        quorum_proof: RecoveryQuorumProof,
+    ) -> Result<Self, MaterializeRefuse> {
         assert_eq!(
             predecessor_epoch.store_id(),
             store_id,
             "INVARIANT(RecoveryGrant): predecessor FenceEpoch must bind StoreId"
         );
-        Self {
+        let successor_identity_seed = successor_identity_seed.into();
+        let key_material_commitment = key_material_commitment.into();
+        let expected = recovery_grant_payload_digest(
             grant_id,
             store_id,
             predecessor_epoch,
-            successor_identity_seed: successor_identity_seed.into(),
-            key_material_commitment: key_material_commitment.into(),
+            &successor_identity_seed,
+            &key_material_commitment,
+        );
+        if quorum_proof.payload_digest() != &expected {
+            return Err(MaterializeRefuse::QuorumUnverified);
         }
+        Ok(Self {
+            grant_id,
+            store_id,
+            predecessor_epoch,
+            successor_identity_seed,
+            key_material_commitment,
+            quorum_proof,
+        })
     }
 
     /// Grant identity.
@@ -253,6 +384,11 @@ impl RecoveryGrant {
     /// Key-material commitment.
     pub fn key_material_commitment(&self) -> &KeyMaterialCommitment {
         &self.key_material_commitment
+    }
+
+    /// Verified quorum-signature evidence bound into this grant.
+    pub fn quorum_proof(&self) -> &RecoveryQuorumProof {
+        &self.quorum_proof
     }
 }
 
@@ -325,6 +461,20 @@ pub enum MaterializeRefuse {
     #[error("INVARIANT(FenceEpoch): epoch space exhausted at u64::MAX during recovery materialize")]
     #[diagnostic(code(store::grants::epoch_exhausted))]
     EpochSpaceExhausted,
+    /// Recovery quorum signatures / matrix binding failed verification.
+    #[error("QuorumUnverified: recovery quorum proof does not bind the store RecoveryMatrix")]
+    #[diagnostic(code(store::grants::quorum_unverified))]
+    QuorumUnverified,
+    /// Distinct valid matrix signers below the RecoveryMatrix threshold.
+    #[error(
+        "QuorumInsufficient: recovery quorum has {have} distinct valid signatures, need {need}"
+    )]
+    #[diagnostic(code(store::grants::quorum_insufficient))]
+    QuorumInsufficient { have: u32, need: u32 },
+    /// Recovery materialize requires the store's sealed RecoveryMatrix.
+    #[error("RecoveryMatrixAbsent: recovery materialize requires the store RecoveryMatrix")]
+    #[diagnostic(code(store::grants::recovery_matrix_absent))]
+    RecoveryMatrixAbsent,
 }
 
 /// Optional prior materialization witness for idempotent rediscovery.
@@ -365,14 +515,16 @@ impl PriorMaterialization {
 ///
 /// Original lineage continues untouched (ForkGrant). Recovery mints a new
 /// WriteAuthority for the same StoreId under a new CryptoDomain — never
-/// in-place reissue for the same epoch.
+/// in-place reissue for the same epoch — and only when `recovery_matrix`
+/// matches the grant's sealed [`RecoveryQuorumProof`].
 pub fn materialize(
     grant: &Grant,
     prior: Option<PriorMaterialization>,
+    recovery_matrix: Option<&RecoveryMatrix>,
 ) -> Result<MaterializedGrant, MaterializeRefuse> {
     let computed = match grant {
         Grant::Fork(fork) => materialize_fork(fork),
-        Grant::Recovery(recovery) => materialize_recovery(recovery)?,
+        Grant::Recovery(recovery) => materialize_recovery(recovery, recovery_matrix)?,
     };
     if let Some(prior) = prior
         && prior.grant_id() == computed.grant_id()
@@ -402,7 +554,15 @@ fn materialize_fork(fork: &ForkGrant) -> MaterializedGrant {
     }
 }
 
-fn materialize_recovery(recovery: &RecoveryGrant) -> Result<MaterializedGrant, MaterializeRefuse> {
+fn materialize_recovery(
+    recovery: &RecoveryGrant,
+    recovery_matrix: Option<&RecoveryMatrix>,
+) -> Result<MaterializedGrant, MaterializeRefuse> {
+    let matrix = recovery_matrix.ok_or(MaterializeRefuse::RecoveryMatrixAbsent)?;
+    // Sealed proof is trusted only when its matrix_digest matches THIS store matrix.
+    if recovery.quorum_proof().matrix_digest() != &recovery_matrix_digest(matrix) {
+        return Err(MaterializeRefuse::QuorumUnverified);
+    }
     // Same StoreId; new CryptoDomain at successor epoch; new WriteAuthority.
     let store_id = recovery.store_id();
     let next_epoch = recovery
@@ -522,5 +682,178 @@ impl AncestorReadGrant {
             return Err(AncestorReadRefuse::InvalidEpochRange);
         }
         Ok(())
+    }
+}
+
+/// Test-only: ed25519 recovery-custodian sign over the quorum domain.
+/// Path-wired dst callers use this so positive recovery paths still compile.
+#[cfg(test)]
+pub(crate) fn sign_recovery_quorum(
+    seed: [u8; 32],
+    payload_digest: &[u8; 32],
+) -> (RecoveryPublicKey, [u8; 64]) {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let signing = SigningKey::from_bytes(&seed);
+    let public = RecoveryPublicKey::from_bytes(signing.verifying_key().to_bytes());
+    let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
+    message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
+    message.extend_from_slice(payload_digest);
+    let sig = signing.sign(message.as_slice()).to_bytes();
+    (public, sig)
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    use super::*;
+    use crate::store::authority::RecoveryMatrix;
+
+    /// Test-only recovery custodian signing key (ed25519 seed → verifying bytes).
+    struct RecoverySigningKey {
+        signing: SigningKey,
+        public: RecoveryPublicKey,
+    }
+
+    impl RecoverySigningKey {
+        fn from_seed(seed: [u8; 32]) -> Self {
+            let signing = SigningKey::from_bytes(&seed);
+            let public = RecoveryPublicKey::from_bytes(signing.verifying_key().to_bytes());
+            Self { signing, public }
+        }
+
+        fn public_key(&self) -> RecoveryPublicKey {
+            self.public
+        }
+
+        fn sign_quorum(&self, payload_digest: &[u8; 32]) -> [u8; 64] {
+            let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
+            message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
+            message.extend_from_slice(payload_digest);
+            self.signing.sign(message.as_slice()).to_bytes()
+        }
+    }
+
+    fn matrix_2of3(seeds: [[u8; 32]; 3]) -> (Vec<RecoverySigningKey>, RecoveryMatrix) {
+        let keys: Vec<RecoverySigningKey> = seeds
+            .into_iter()
+            .map(RecoverySigningKey::from_seed)
+            .collect();
+        let matrix = RecoveryMatrix::new(
+            2,
+            keys.iter().map(RecoverySigningKey::public_key).collect::<Vec<_>>(),
+        )
+        .expect("2-of-3 matrix");
+        (keys, matrix)
+    }
+
+    /// Nasty: victim StoreId+epoch grant with empty/forged quorum must not mint WriteAuthority.
+    #[test]
+    fn recovery_grant_without_valid_quorum_refuses_write_authority() {
+        let victim = StoreId::from_digest([0x71; 32]);
+        let pred_epoch = FenceEpoch::genesis(victim);
+        let grant_id = GrantId::from_bytes([0x90; 32]);
+        let successor_seed = IdentitySeed::from_digest([0xEE; 32]);
+        let commitment = KeyMaterialCommitment::from_digest([0xEF; 32]);
+        let payload = recovery_grant_payload_digest(
+            grant_id,
+            victim,
+            pred_epoch,
+            &successor_seed,
+            &commitment,
+        );
+
+        let (custodians, store_matrix) =
+            matrix_2of3([[0xA1; 32], [0xA2; 32], [0xA3; 32]]);
+
+        // Empty signatures — no proof, no grant power.
+        assert_eq!(
+            RecoveryQuorumProof::verify(&store_matrix, &payload, &[]),
+            Err(MaterializeRefuse::QuorumInsufficient { have: 0, need: 2 })
+        );
+
+        // Forged signature bytes under a matrix key — still insufficient.
+        let forged = [(
+            custodians[0].public_key(),
+            [0xFFu8; 64],
+        )];
+        assert_eq!(
+            RecoveryQuorumProof::verify(&store_matrix, &payload, &forged),
+            Err(MaterializeRefuse::QuorumInsufficient { have: 0, need: 2 })
+        );
+
+        // Attacker mints a real quorum against a *different* matrix, names the victim,
+        // then tries materialize against the victim store's matrix — must refuse.
+        let (attacker_keys, attacker_matrix) =
+            matrix_2of3([[0xB1; 32], [0xB2; 32], [0xB3; 32]]);
+        let attacker_sigs = [
+            (
+                attacker_keys[0].public_key(),
+                attacker_keys[0].sign_quorum(&payload),
+            ),
+            (
+                attacker_keys[1].public_key(),
+                attacker_keys[1].sign_quorum(&payload),
+            ),
+        ];
+        let forged_proof = RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sigs)
+            .expect("attacker quorum against their own matrix");
+        let grant = RecoveryGrant::new(
+            grant_id,
+            victim,
+            pred_epoch,
+            successor_seed,
+            commitment,
+            forged_proof,
+        )
+        .expect("payload binds; proof is sealed against wrong matrix");
+
+        // Absent store matrix → refuse (no WriteAuthority).
+        let absent = materialize(&Grant::Recovery(grant.clone()), None, None);
+        assert_eq!(absent, Err(MaterializeRefuse::RecoveryMatrixAbsent));
+
+        // Wrong store matrix → QuorumUnverified (no WriteAuthority).
+        let wrong = materialize(
+            &Grant::Recovery(grant),
+            None,
+            Some(&store_matrix),
+        );
+        assert_eq!(wrong, Err(MaterializeRefuse::QuorumUnverified));
+    }
+
+    #[test]
+    fn recovery_grant_valid_quorum_materializes() {
+        let store_id = StoreId::from_digest([0xC0; 32]);
+        let pred_epoch = FenceEpoch::genesis(store_id);
+        let grant_id = GrantId::from_bytes([0x91; 32]);
+        let successor_seed = IdentitySeed::from_digest([0xD1; 32]);
+        let commitment = KeyMaterialCommitment::from_digest([0xD2; 32]);
+        let payload = recovery_grant_payload_digest(
+            grant_id,
+            store_id,
+            pred_epoch,
+            &successor_seed,
+            &commitment,
+        );
+        let (keys, matrix) = matrix_2of3([[0xC1; 32], [0xC2; 32], [0xC3; 32]]);
+        let sigs = [
+            (keys[0].public_key(), keys[0].sign_quorum(&payload)),
+            (keys[1].public_key(), keys[1].sign_quorum(&payload)),
+        ];
+        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum");
+        let grant = RecoveryGrant::new(
+            grant_id,
+            store_id,
+            pred_epoch,
+            successor_seed,
+            commitment,
+            proof,
+        )
+        .expect("grant");
+        let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix))
+            .expect("valid quorum must mint");
+        assert_eq!(matured.store_id(), store_id);
+        assert_ne!(matured.crypto_domain().fence_epoch(), pred_epoch);
     }
 }
