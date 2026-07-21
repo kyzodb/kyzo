@@ -23,6 +23,8 @@
 //! migration epochs anchor upgrades via [`FormatVersion`].
 
 use super::contract::FormatVersion;
+use super::epoch::{CryptoDomain, FenceEpoch};
+use super::open::StoreId;
 
 /// Wire magic for sealed transcript bytes.
 const MAGIC: &[u8; 4] = b"KTX1";
@@ -57,6 +59,8 @@ pub enum SealedArtifactKind {
     AuditKeyLeaf = 6,
     /// WAL segment / record header (§21).
     WalHeader = 7,
+    /// AEAD key-commitment (CMT-1) input — domain-label + key-id + CryptoDomain (§59).
+    KeyCommit = 8,
 }
 
 impl SealedArtifactKind {
@@ -85,6 +89,8 @@ impl FieldId {
     pub const AEAD_NONCE: FieldId = FieldId(6);
     /// Ordered map of typed bindings.
     pub const BINDINGS_MAP: FieldId = FieldId(7);
+    /// FenceEpoch counter half of [`CryptoDomain`] (key-commitment / domain bind).
+    pub const FENCE_EPOCH: FieldId = FieldId(8);
 
     /// Construct a field id from its wire value (decode / fixture sites).
     pub const fn from_raw(raw: u16) -> Self {
@@ -483,14 +489,58 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
     Ok(())
 }
 
+/// Domain label for CMT-1 key-commitment transcripts (seat 59 / confidentiality).
+pub const KEY_COMMIT_DOMAIN_LABEL: &[u8] = b"KEY_COMMIT";
+
+/// Golden vector authority for [`SealedArtifactKind::KeyCommit`] (seat 59).
+///
+/// Embedded here because the production constructor is
+/// [`encode_key_commitment`]; the hex payload must match that encoder for the
+/// normative fixture key-id + CryptoDomain — never a second serialization path.
+pub const KEY_COMMIT_GOLDEN_VEC: &str = r#"
+# FormatVersion: 6
+# Kind: KeyCommit
+# Decision: initial — CMT-1 key-commitment CanonicalTranscript (seat 59 / confidentiality)
+4b5458310136000000060001010000000000000008000202000000013600030308018b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a800040308028c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a90005020000000a4b45595f434f4d4d49540008010000000000000000
+"#;
+
+/// Mint the CMT-1 key-commitment transcript: domain-label + key-id + CryptoDomain.
+///
+/// This is the ONE sealed-byte constructor for AEAD key-commitment (seat 59).
+/// A hand-rolled `KEY_COMMIT_DOMAIN_v1 ‖ key ‖ …` layout is Unconstructible.
+pub fn encode_key_commitment(
+    key_id: &[u8; 32],
+    crypto_domain: CryptoDomain,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
+    b.append_u64(
+        FieldId::ARTIFACT_KIND,
+        SealedArtifactKind::KeyCommit.tag(),
+    )?;
+    b.append_bytes(FieldId::FORMAT_VERSION, &FormatVersion::CURRENT.as_bytes())?;
+    // key-id (DEK / KEK opening key) — PRIMARY_DIGEST field encoding.
+    b.append_digest32(FieldId::PRIMARY_DIGEST, key_id)?;
+    // CryptoDomain.store_id
+    b.append_digest32(FieldId::SECONDARY_DIGEST, crypto_domain.store_id().as_bytes())?;
+    b.append_bytes(FieldId::DOMAIN_LABEL, KEY_COMMIT_DOMAIN_LABEL)?;
+    b.append_u64(FieldId::FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
+    Ok(b.seal())
+}
+
 /// Encode the normative fixture transcript for a sealed artifact kind.
 ///
-/// Golden vectors under `store/golden/` are the authority; this encoder must
-/// match them. Changing fixture bytes requires a FormatVersion decision in the
-/// vector file header (§81) — never a silent test-fix commit.
+/// Golden vectors under `store/golden/` (and [`KEY_COMMIT_GOLDEN_VEC`]) are the
+/// authority; this encoder must match them. Changing fixture bytes requires a
+/// FormatVersion decision in the vector header (§81) — never a silent test-fix commit.
 pub fn encode_golden_fixture(
     kind: SealedArtifactKind,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    if kind == SealedArtifactKind::KeyCommit {
+        let key_id = fixture_digest(kind, 1);
+        let store_id = StoreId::from_digest(fixture_digest(kind, 2));
+        let domain = CryptoDomain::new(store_id, FenceEpoch::genesis(store_id));
+        return encode_key_commitment(&key_id, domain);
+    }
     let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
     b.append_u64(FieldId::ARTIFACT_KIND, kind.tag())?;
     b.append_bytes(FieldId::FORMAT_VERSION, &FormatVersion::CURRENT.as_bytes())?;
@@ -511,6 +561,7 @@ fn kind_domain_label(kind: SealedArtifactKind) -> &'static [u8] {
         SealedArtifactKind::MergeProofHeader => b"merge-proof-header",
         SealedArtifactKind::AuditKeyLeaf => b"audit-key-leaf",
         SealedArtifactKind::WalHeader => b"wal-header",
+        SealedArtifactKind::KeyCommit => KEY_COMMIT_DOMAIN_LABEL,
     }
 }
 
@@ -612,6 +663,7 @@ mod pins {
             SealedArtifactKind::WalHeader,
             include_str!("golden/wal_header.vec"),
         );
+        assert_matches_golden(SealedArtifactKind::KeyCommit, KEY_COMMIT_GOLDEN_VEC);
     }
 
     #[test]

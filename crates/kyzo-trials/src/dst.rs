@@ -2957,6 +2957,10 @@ pub mod storage_campaign_lanes {
                 SealedArtifactKind::WalHeader,
                 include_str!("../../kyzo-core/src/store/golden/wal_header.vec"),
             ),
+            (
+                SealedArtifactKind::KeyCommit,
+                crate::store::transcript::KEY_COMMIT_GOLDEN_VEC,
+            ),
         ];
 
         for &(kind, golden_file) in GOLDENS {

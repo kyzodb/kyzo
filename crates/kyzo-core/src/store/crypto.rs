@@ -29,7 +29,7 @@ use std::collections::HashSet;
 use sha2::{Digest, Sha256};
 
 use super::epoch::CryptoDomain;
-use super::transcript::CanonicalTranscript;
+use super::transcript::{encode_key_commitment, CanonicalTranscript};
 
 /// Per-segment counter separating DEK space under one CryptoDomain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -97,17 +97,31 @@ impl Kek {
 }
 
 /// Data-encryption key derived under the sealed hierarchy — never unstructured.
+///
+/// Carries the [`CryptoDomain`] it was derived under so CMT-1 key-commitment
+/// (seat 67a) can bind key-id + domain without a second encrypt-door argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dek([u8; 32]);
+pub struct Dek {
+    bytes: [u8; 32],
+    crypto_domain: CryptoDomain,
+}
 
 impl Dek {
-    fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    fn from_derived(bytes: [u8; 32], crypto_domain: CryptoDomain) -> Self {
+        Self {
+            bytes,
+            crypto_domain,
+        }
     }
 
     /// Borrow DEK bytes for the encrypt door.
     pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+        &self.bytes
+    }
+
+    /// CryptoDomain this DEK was derived under (CMT-1 bind).
+    pub fn crypto_domain(&self) -> CryptoDomain {
+        self.crypto_domain
     }
 }
 
@@ -221,26 +235,24 @@ pub enum CryptoRefuse {
     DecompressFailed,
 }
 
-/// Domain separation for the CTX/CMTD key-commitment (Chan-Rogaway).
-const KEY_COMMIT_DOMAIN_V1: &[u8] = b"KEY_COMMIT_DOMAIN_v1";
 /// Poly1305 / GCM-SIV authentication tag length (both arms).
 const AEAD_TAG_LEN: usize = 16;
 /// SHA-256 key-commitment length appended after ciphertext ‖ tag.
 const KEY_COMMIT_LEN: usize = 32;
 
-/// `C = SHA-256(KEY_COMMIT_DOMAIN_v1 || key || nonce || len‖aad || tag)`.
-fn key_commitment(key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], tag: &[u8]) -> [u8; 32] {
+/// CMT-1 key-commitment: `C = H_canonical(KEY_COMMIT domain-label, key-id, CryptoDomain)`.
+///
+/// Minted through the ONE [`encode_key_commitment`] CanonicalTranscript constructor
+/// (seat 59). The AEAD tag already binds nonce+aad+message; C adds only key-binding.
+fn key_commitment(key: &[u8; 32], crypto_domain: CryptoDomain) -> Result<[u8; 32], CryptoRefuse> {
+    let transcript =
+        encode_key_commitment(key, crypto_domain).map_err(|_| CryptoRefuse::AeadFailed)?;
     let mut h = Sha256::new();
-    h.update(KEY_COMMIT_DOMAIN_V1);
-    h.update(key);
-    h.update(nonce);
-    h.update(u32::to_be_bytes(aad.len() as u32));
-    h.update(aad);
-    h.update(tag);
+    h.update(transcript.as_bytes());
     let dig = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&dig);
-    out
+    Ok(out)
 }
 
 /// Constant-time equality over a 32-byte commitment.
@@ -395,23 +407,24 @@ fn open_aead_arm(
     }
 }
 
-/// Committing-AEAD seal: base arm then append `C` (CTX/CMTD).
+/// Committing-AEAD seal: base arm then append CMT-1 `C`.
 ///
 /// Sealed bytes = ciphertext ‖ tag ‖ C, with
-/// `C = SHA-256(KEY_COMMIT_DOMAIN_v1 ‖ key ‖ nonce ‖ len‖aad ‖ tag)`.
+/// `C = H_canonical(KEY_COMMIT domain-label, key-id, CryptoDomain)`.
+/// KeyCommitment posture is on for all AEAD sites (seat 27 pattern).
 fn seal_arm(
     arm: AeadArm,
     key: &[u8; 32],
     nonce: &[u8; 12],
     aad: &[u8],
     plaintext: &[u8],
+    crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
     let mut sealed = seal_aead_arm(arm, key, nonce, aad, plaintext)?;
     if sealed.len() < AEAD_TAG_LEN {
         return Err(CryptoRefuse::AeadFailed);
     }
-    let tag_start = sealed.len() - AEAD_TAG_LEN;
-    let c = key_commitment(key, nonce, aad, &sealed[tag_start..]);
+    let c = key_commitment(key, crypto_domain)?;
     sealed.extend_from_slice(&c);
     Ok(sealed)
 }
@@ -426,6 +439,7 @@ fn open_arm(
     nonce: &[u8; 12],
     aad: &[u8],
     sealed: &[u8],
+    crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
     if sealed.len() < AEAD_TAG_LEN + KEY_COMMIT_LEN {
         return Err(CryptoRefuse::AeadFailed);
@@ -433,12 +447,7 @@ fn open_arm(
     let split = sealed.len() - KEY_COMMIT_LEN;
     let (aead_body, presented_c) = sealed.split_at(split);
     let plaintext = open_aead_arm(arm, key, nonce, aad, aead_body)?;
-    if aead_body.len() < AEAD_TAG_LEN {
-        drop(plaintext);
-        return Err(CryptoRefuse::AeadFailed);
-    }
-    let tag = &aead_body[aead_body.len() - AEAD_TAG_LEN..];
-    let expected = key_commitment(key, nonce, aad, tag);
+    let expected = key_commitment(key, crypto_domain)?;
     let mut presented = [0u8; KEY_COMMIT_LEN];
     presented.copy_from_slice(presented_c);
     if !ct_eq_32(&expected, &presented) {
@@ -461,7 +470,15 @@ pub fn wrap_shred_salt(
 ) -> Result<WrappedShredSalt, CryptoRefuse> {
     let nonce = wrap_nonce(crypto_domain, segment);
     let aad = wrap_aad(crypto_domain, segment);
-    let body = aes_gcm_siv_seal(cap.kek().as_bytes(), &nonce, &aad, salt.as_bytes())?;
+    // KeyCommitment posture on for all AEAD sites — wrap uses SIV + CMT-1.
+    let body = seal_arm(
+        AeadArm::Siv,
+        cap.kek().as_bytes(),
+        &nonce,
+        &aad,
+        salt.as_bytes(),
+        crypto_domain,
+    )?;
     Ok(WrappedShredSalt {
         ciphertext: body,
         segment,
@@ -483,8 +500,20 @@ pub fn unwrap_shred_salt(
     }
     let nonce = wrap_nonce(wrapped.crypto_domain, wrapped.segment);
     let aad = wrap_aad(wrapped.crypto_domain, wrapped.segment);
-    let pt = aes_gcm_siv_open(cap.kek().as_bytes(), &nonce, &aad, &wrapped.ciphertext)
-        .map_err(|_| CryptoRefuse::UnwrapFailed)?;
+    let pt = match open_arm(
+        AeadArm::Siv,
+        cap.kek().as_bytes(),
+        &nonce,
+        &aad,
+        &wrapped.ciphertext,
+        wrapped.crypto_domain,
+    ) {
+        Ok(pt) => pt,
+        Err(CryptoRefuse::KeyCommitmentMismatch) => {
+            return Err(CryptoRefuse::KeyCommitmentMismatch);
+        }
+        Err(_) => return Err(CryptoRefuse::UnwrapFailed),
+    };
     if pt.len() != 32 {
         return Err(CryptoRefuse::UnwrapFailed);
     }
@@ -512,7 +541,7 @@ pub fn derive_dek(
     let dig = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&dig);
-    Dek::from_bytes(out)
+    Dek::from_derived(out, crypto_domain)
 }
 
 /// Compressed plaintext — the only input the encrypt door accepts.
@@ -582,6 +611,7 @@ pub fn encrypt(
         &nonce,
         aad.as_bytes(),
         compressed.as_bytes(),
+        dek.crypto_domain(),
     )?;
     Ok(Ciphertext { arm, nonce, body })
 }
@@ -598,6 +628,7 @@ pub fn decrypt(
         &ciphertext.nonce,
         aad.as_bytes(),
         &ciphertext.body,
+        dek.crypto_domain(),
     )?;
     Ok(CompressedBytes(pt))
 }
@@ -716,19 +747,21 @@ mod pins {
     use crate::store::open::StoreId;
     use crate::store::transcript::{CanonicalTranscriptBuilder, FieldId, SealedArtifactKind};
 
-    /// GUARDIAN GATE (#376 T2) — committing-AEAD contract over the Gcm collision.
+    /// GUARDIAN GATE (#376 T2) — CMT-1 key-commitment over the Gcm collision.
     /// Empirically constructed (invisible-salamanders / Partitioning Oracle Attacks): ONE
     /// (ciphertext ‖ tag) that the base ChaCha20-Poly1305 AEAD accepts under TWO distinct
     /// keys, using our exact `wrap_aad` framing. The collision block was solved over
-    /// GF(2^130-5) so both keys' Poly1305 tags coincide. With the CTX/CMTD transform,
-    /// C is bound to the opening key: present (ct‖tag‖C_K1) → opens under K1 and refuses
-    /// under K2 with [`CryptoRefuse::KeyCommitmentMismatch`] (K2 recomputes C_K2 ≠ C_K1).
-    /// Exercises two-key rejection through production [`open_arm`], not a short-input refuse.
+    /// GF(2^130-5) so both keys' Poly1305 tags coincide. With CMT-1 via CanonicalTranscript,
+    /// C binds only the opening key (+ CryptoDomain): present (ct‖tag‖C_K1) → opens under K1
+    /// and refuses under K2 with [`CryptoRefuse::KeyCommitmentMismatch`]
+    /// (K2 recomputes C_K2 ≠ C_K1). Exercises two-key rejection through production
+    /// [`open_arm`], not a short-input refuse.
     #[test]
     fn gcm_arm_is_not_key_committing() {
         let k1 = [0x11u8; 32];
         let k2 = [0x22u8; 32];
         let nonce = [0x24u8; 12];
+        let domain = test_domain();
         // production wrap_aad framing: "WSS1" || store_id || epoch_be || segment_be.
         let mut aad = Vec::new();
         aad.extend_from_slice(b"WSS1");
@@ -753,12 +786,12 @@ mod pins {
                 && open_aead_arm(AeadArm::Gcm, &k2, &nonce, &aad, &aead_body).is_ok(),
             "fixture must still be a two-key Poly1305 collision under the base Gcm arm"
         );
-        // Commit under K1; present (ct‖tag‖C_K1) to production open_arm.
-        let c_k1 = key_commitment(&k1, &nonce, &aad, &tag);
+        // Commit under K1 via CanonicalTranscript CMT-1; present (ct‖tag‖C_K1).
+        let c_k1 = key_commitment(&k1, domain).expect("mint C_K1");
         let mut msg = aead_body;
         msg.extend_from_slice(&c_k1);
-        let o1 = open_arm(AeadArm::Gcm, &k1, &nonce, &aad, &msg);
-        let o2 = open_arm(AeadArm::Gcm, &k2, &nonce, &aad, &msg);
+        let o1 = open_arm(AeadArm::Gcm, &k1, &nonce, &aad, &msg, domain);
+        let o2 = open_arm(AeadArm::Gcm, &k2, &nonce, &aad, &msg, domain);
         assert!(
             o1.is_ok(),
             "committed ciphertext must open under the committing key K1"
