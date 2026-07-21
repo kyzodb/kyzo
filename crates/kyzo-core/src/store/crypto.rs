@@ -580,10 +580,31 @@ fn open_aead_arm_kek(
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Committing-AEAD seal under a DEK: base arm then append CMT-1 `C`.
+/// ONE committing-AEAD seal body — RustCrypto / `.as_bytes()` edge only.
 ///
 /// Sealed bytes = ciphertext ‖ tag ‖ C, with
 /// `C = H_canonical(KEY_COMMIT domain-label, key-id, CryptoDomain)`.
+/// Callers must pass [`Dek::as_bytes`] or [`Kek::as_bytes`]; typed doors stay split.
+fn seal_arm_committed(
+    arm: AeadArm,
+    key: &[u8; 32],
+    nonce: &Nonce,
+    aad: &[u8],
+    plaintext: &[u8],
+    crypto_domain: CryptoDomain,
+) -> Result<Vec<u8>, CryptoRefuse> {
+    let mut sealed = seal_aead_arm_bytes(arm, key, nonce, aad, plaintext)?;
+    if sealed.len() < AEAD_TAG_LEN {
+        return Err(CryptoRefuse::AeadFailed);
+    }
+    let c = key_commitment_bytes(key, crypto_domain)?;
+    sealed.extend_from_slice(c.as_bytes());
+    Ok(sealed)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Committing-AEAD seal under a DEK: thin typed door over [`seal_arm_committed`].
+///
 /// KeyCommitment posture is on for all AEAD sites (seat 27 pattern).
 /// A [`Kek`] is type-stopped here — DEK↔KEK swap is unconstructable.
 fn seal_arm(
@@ -594,13 +615,7 @@ fn seal_arm(
     plaintext: &[u8],
     crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    let mut sealed = seal_aead_arm(arm, key, nonce, aad, plaintext)?;
-    if sealed.len() < AEAD_TAG_LEN {
-        return Err(CryptoRefuse::AeadFailed);
-    }
-    let c = key_commitment(key, crypto_domain)?;
-    sealed.extend_from_slice(c.as_bytes());
-    Ok(sealed)
+    seal_arm_committed(arm, key.as_bytes(), nonce, aad, plaintext, crypto_domain)
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -613,23 +628,19 @@ fn seal_arm_kek(
     plaintext: &[u8],
     crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    let mut sealed = seal_aead_arm_kek(arm, key, nonce, aad, plaintext)?;
-    if sealed.len() < AEAD_TAG_LEN {
-        return Err(CryptoRefuse::AeadFailed);
-    }
-    let c = key_commitment_kek(key, crypto_domain)?;
-    sealed.extend_from_slice(c.as_bytes());
-    Ok(sealed)
+    seal_arm_committed(arm, key.as_bytes(), nonce, aad, plaintext, crypto_domain)
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Committing-AEAD open under a DEK: base arm, then constant-time key-commitment check.
+/// ONE committing-AEAD open body — RustCrypto / `.as_bytes()` edge only.
 ///
+/// Base arm open, then constant-time CMT-1 key-commitment check.
 /// On commitment mismatch returns [`CryptoRefuse::KeyCommitmentMismatch`] and
-/// does not release the AEAD plaintext. A [`Kek`] is type-stopped here.
-fn open_arm(
+/// does not release the AEAD plaintext.
+/// Callers must pass [`Dek::as_bytes`] or [`Kek::as_bytes`]; typed doors stay split.
+fn open_arm_committed(
     arm: AeadArm,
-    key: &Dek,
+    key: &[u8; 32],
     nonce: &Nonce,
     aad: &[u8],
     sealed: &[u8],
@@ -640,8 +651,8 @@ fn open_arm(
     }
     let split = sealed.len() - KEY_COMMIT_LEN;
     let (aead_body, presented_c) = sealed.split_at(split);
-    let plaintext = open_aead_arm(arm, key, nonce, aad, aead_body)?;
-    let expected = key_commitment(key, crypto_domain)?;
+    let plaintext = open_aead_arm_bytes(arm, key, nonce, aad, aead_body)?;
+    let expected = key_commitment_bytes(key, crypto_domain)?;
     let mut presented = [0u8; KEY_COMMIT_LEN];
     presented.copy_from_slice(presented_c);
     if !ct_eq_digest(&expected, &Digest::from_bytes(presented)) {
@@ -650,6 +661,21 @@ fn open_arm(
         return Err(CryptoRefuse::KeyCommitmentMismatch);
     }
     Ok(plaintext)
+}
+
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
+/// Committing-AEAD open under a DEK: thin typed door over [`open_arm_committed`].
+///
+/// A [`Kek`] is type-stopped here.
+fn open_arm(
+    arm: AeadArm,
+    key: &Dek,
+    nonce: &Nonce,
+    aad: &[u8],
+    sealed: &[u8],
+    crypto_domain: CryptoDomain,
+) -> Result<Vec<u8>, CryptoRefuse> {
+    open_arm_committed(arm, key.as_bytes(), nonce, aad, sealed, crypto_domain)
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -662,20 +688,7 @@ fn open_arm_kek(
     sealed: &[u8],
     crypto_domain: CryptoDomain,
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    if sealed.len() < AEAD_TAG_LEN + KEY_COMMIT_LEN {
-        return Err(CryptoRefuse::AeadFailed);
-    }
-    let split = sealed.len() - KEY_COMMIT_LEN;
-    let (aead_body, presented_c) = sealed.split_at(split);
-    let plaintext = open_aead_arm_kek(arm, key, nonce, aad, aead_body)?;
-    let expected = key_commitment_kek(key, crypto_domain)?;
-    let mut presented = [0u8; KEY_COMMIT_LEN];
-    presented.copy_from_slice(presented_c);
-    if !ct_eq_digest(&expected, &Digest::from_bytes(presented)) {
-        drop(plaintext);
-        return Err(CryptoRefuse::KeyCommitmentMismatch);
-    }
-    Ok(plaintext)
+    open_arm_committed(arm, key.as_bytes(), nonce, aad, sealed, crypto_domain)
 }
 
 #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
@@ -1306,6 +1319,40 @@ mod pins {
                 && crypto_prod.contains("fn open_arm_kek("),
             "wrap-path commitment/seal/open doors must take &Kek"
         );
+        // ONE committed body each; typed doors stay thin wrappers (copy_detector).
+        assert!(
+            crypto_prod.contains("fn open_arm_committed(")
+                && crypto_prod.contains("fn seal_arm_committed(")
+                && crypto_prod.contains("key: &[u8; 32],"),
+            "shared open_arm_committed / seal_arm_committed must own commit logic at the bytes edge"
+        );
+        assert!(
+            crypto_prod.contains("open_arm_committed(arm, key.as_bytes(),")
+                && crypto_prod.contains("seal_arm_committed(arm, key.as_bytes(),"),
+            "open_arm/open_arm_kek and seal_arm/seal_arm_kek must delegate to the shared bodies"
+        );
+        // Wrapper bodies must not re-implement the CMT-1 check / append loop.
+        for (door, needle) in [
+            ("fn open_arm(", "KEY_COMMIT_LEN"),
+            ("fn open_arm_kek(", "KEY_COMMIT_LEN"),
+            ("fn seal_arm(", "key_commitment("),
+            ("fn seal_arm_kek(", "key_commitment_kek("),
+        ] {
+            let start = crypto_prod
+                .find(door)
+                .unwrap_or_else(|| panic!("missing door {door}"));
+            let body = &crypto_prod[start..];
+            let end = body
+                .find("\nfn ")
+                .or_else(|| body.find("\npub fn "))
+                .unwrap_or(body.len())
+                .min(400);
+            let wrapper = &body[..end];
+            assert!(
+                !wrapper.contains(needle),
+                "{door} must not re-implement commit logic ({needle}): {wrapper}"
+            );
+        }
         assert!(
             crypto_prod.contains("pub fn encrypt(")
                 && crypto_prod.contains("dek: &Dek,")
