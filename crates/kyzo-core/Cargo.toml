@@ -58,7 +58,11 @@ ed25519-dalek = "3.0.0-rc.1"
 # signatures (RFC 9591) via ZcashFoundation frost-ed25519 — the RFC reference
 # impl. Real threshold crypto only; NEVER home-rolled aggregate/quorum crypto.
 # Pure Rust (curve25519-dalek); no *-sys / C.
-frost-ed25519 = "3.0.0"
+# default-features = false: frost's default `serialization` pulls postcard →
+# heapless 0.7 → unmaintained atomic-polyfill (RUSTSEC-2023-0089). We only need
+# VerifyingKey/Signature byte (de)serialize + dealer/sign/aggregate — those
+# APIs are not behind the postcard feature.
+frost-ed25519 = { version = "3.0.0", default-features = false }
 # Store AEAD pipeline (story #350 T11): RustCrypto pure-Rust misuse-resistant
 # AES-GCM-SIV for AeadArm::Siv (SnapshotFork=yes), ChaCha20-Poly1305 for
 # AeadArm::Gcm. No *-sys / C in either tree. lz4_flex is the same pure-Rust
