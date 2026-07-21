@@ -118,6 +118,14 @@ pub(crate) enum FjallRefuse {
     #[error("fjall read")]
     #[diagnostic(code(storage::fjall::read))]
     Read(#[source] fjall::Error),
+
+    /// Caller asked for a journal budget below fjall's hard floor (64 MiB).
+    /// Refused here so the vendor `assert!` never panics on our open path.
+    #[error(
+        "max_journaling_size_bytes {requested} is below the {floor}-byte floor (64 MiB)"
+    )]
+    #[diagnostic(code(storage::fjall::journaling_size_below_floor))]
+    JournalingSizeBelowFloor { requested: u64, floor: u64 },
 }
 
 const KEYSPACE_NAME: &str = "kyzo";
@@ -154,6 +162,11 @@ pub struct StorageOptions {
     /// Per-keyspace compacted table target size, in bytes. `None` keeps
     /// the tuned policy's own choice. See `max_memtable_size_bytes`.
     pub table_target_size_bytes: Option<u64>,
+    /// Maximum size of all journals combined, in bytes. `None` keeps
+    /// fjall's documented default (512 MiB). Values below 64 MiB refuse
+    /// at this boundary as [`FjallRefuse::JournalingSizeBelowFloor`] —
+    /// never the vendor builder panic.
+    pub max_journaling_size_bytes: Option<u64>,
 }
 
 /// Point-in-time observability counters, straight from the storage engine.
@@ -367,6 +380,11 @@ pub(crate) fn quarter_system_ram_bytes() -> Option<u64> {
     Some((kib * 1_024) / 4)
 }
 
+/// Vendor floor for [`StorageOptions::max_journaling_size_bytes`] — matches
+/// `fjall::Config::max_journaling_size`'s panic threshold. Validated here
+/// so our open path never reaches that assert.
+const MIN_JOURNALING_SIZE_BYTES: u64 = 64 * 1_024 * 1_024;
+
 /// Open (or create) a fjall-backed storage with explicit resource options.
 pub fn new_fjall_storage_with(
     path: impl AsRef<Path>,
@@ -381,6 +399,16 @@ pub fn new_fjall_storage_with(
     }
     if let Some(n) = opts.worker_threads {
         builder = builder.worker_threads(n);
+    }
+    if let Some(bytes) = opts.max_journaling_size_bytes {
+        if bytes < MIN_JOURNALING_SIZE_BYTES {
+            return Err(FjallRefuse::JournalingSizeBelowFloor {
+                requested: bytes,
+                floor: MIN_JOURNALING_SIZE_BYTES,
+            }
+            .into());
+        }
+        builder = builder.max_journaling_size(bytes);
     }
     let db = builder.open().map_err(FjallRefuse::OpenDatabase)?;
     let meta = db
@@ -1014,7 +1042,10 @@ mod pins {
         AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
     };
 
-    use crate::store::fjall::new_fjall_storage;
+    use crate::store::fjall::{
+        FjallRefuse, MIN_JOURNALING_SIZE_BYTES, StorageOptions, new_fjall_storage,
+        new_fjall_storage_with,
+    };
     use crate::store::time::ClaimPolarity;
     use crate::store::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 
@@ -1333,6 +1364,48 @@ mod pins {
                 && msg.contains(&found)
                 && msg.contains(&expected),
             "mismatch Err must name both versions (store={found}, build={expected}), got: {msg}"
+        );
+    }
+
+    #[test]
+    fn max_journaling_size_at_floor_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage_with(
+            dir.path(),
+            StorageOptions {
+                max_journaling_size_bytes: Some(MIN_JOURNALING_SIZE_BYTES),
+                ..StorageOptions::default()
+            },
+        )
+        .expect("exactly 64 MiB must clear our boundary and open");
+        drop(db);
+    }
+
+    #[test]
+    fn max_journaling_size_below_floor_refuses_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = match new_fjall_storage_with(
+            dir.path(),
+            StorageOptions {
+                max_journaling_size_bytes: Some(MIN_JOURNALING_SIZE_BYTES - 1),
+                ..StorageOptions::default()
+            },
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("one byte under the vendor floor must refuse at our boundary"),
+        };
+        let refuse = err
+            .downcast_ref::<FjallRefuse>()
+            .expect("open refuse must be FjallRefuse, not a stringly miette");
+        assert!(
+            matches!(
+                refuse,
+                FjallRefuse::JournalingSizeBelowFloor {
+                    requested,
+                    floor: MIN_JOURNALING_SIZE_BYTES,
+                } if *requested == MIN_JOURNALING_SIZE_BYTES - 1
+            ),
+            "expected JournalingSizeBelowFloor, got {refuse:?}"
         );
     }
 }

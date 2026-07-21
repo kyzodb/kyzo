@@ -53,6 +53,7 @@ impl From<StorageArgs> for StorageOptions {
             // policy's own choice, exactly as before these fields existed.
             max_memtable_size_bytes: None,
             table_target_size_bytes: None,
+            max_journaling_size_bytes: None,
         }
     }
 }
