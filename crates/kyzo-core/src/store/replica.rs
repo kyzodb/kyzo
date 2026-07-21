@@ -1661,6 +1661,36 @@ pub fn anchor_pending(
 mod authorizing_key_ed25519_tests {
     use super::*;
 
+    /// GUARDIAN RED GATE (#376 T1) -- empirically confirmed against the pinned
+    /// ed25519-dalek 3.0.0-rc.1. `verify_signature` uses the PERMISSIVE `.verify()`,
+    /// which accepts a TOTAL forgery under a small-order (identity) authorizing key
+    /// over ANY body: the verify equation [S]B = R + [H]*A degenerates to [S]B = R
+    /// when A is the identity, so (R = identity, S = 0) verifies for every message.
+    /// A hostile peer who lands a weak authorizing key (e.g. via an ungated
+    /// registration door, #375 T3) thereby forges any certificate signature.
+    /// RED until every hostile-peer site swaps `.verify` -> `verify_strict`
+    /// (Taming the Many EdDSAs; ed25519-dalek's `verify_strict` rejects weak keys).
+    #[test]
+    fn permissive_verify_accepts_weak_key_forgery() {
+        // identity point (0, 1): y = 1 little-endian, sign bit 0.
+        let mut identity_key = [0u8; 32];
+        identity_key[0] = 1;
+        // forged signature: R = identity, S = 0 (probe-confirmed permissive-accepted).
+        let mut forged_sig = [0u8; 64];
+        forged_sig[0] = 1;
+        let weak = AuthorizingKey::mint_verifying(
+            AuthorizingKeyId::from_digest([0xAA; 32]),
+            identity_key,
+        )
+        .expect("ed25519-dalek from_bytes accepts the small-order key (probe-confirmed)");
+        assert!(
+            !weak.verify_signature(&[0x99u8; 32], &forged_sig),
+            "FORGERY ACCEPTED: verify_signature admits a signature under a small-order \
+             (identity) authorizing key over an arbitrary body -- the permissive \
+             .verify() must become verify_strict"
+        );
+    }
+
     /// RFC 8032 ed25519 test vector 1 (empty message) — public verify golden.
     ///
     /// Public key + signature bytes are the RFC §7.1 TEST 1 constants. Origin
