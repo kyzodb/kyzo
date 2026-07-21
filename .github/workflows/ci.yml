@@ -23,7 +23,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 
 permissions:
@@ -103,7 +103,7 @@ jobs:
     name: Build + test (whole workspace, never core-only)
     runs-on: ubuntu-latest
     needs: detect
-    if: needs.detect.outputs.has_workspace == 'true'
+    if: needs.detect.outputs.has_workspace == 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -312,7 +312,7 @@ jobs:
     name: Release-checked test (overflow-checks + debug-assertions live, story #300 T3)
     runs-on: ubuntu-latest
     needs: detect
-    if: needs.detect.outputs.has_workspace == 'true'
+    if: needs.detect.outputs.has_workspace == 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

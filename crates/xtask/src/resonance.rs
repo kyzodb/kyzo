@@ -148,6 +148,9 @@ pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
     if run_later_ratchets && !run_boundary_closure(&files) {
         failing_checks.push("boundary_closure");
     }
+    if run_later_ratchets && !run_peer_dial_ban(&files) {
+        failing_checks.push("peer_dial_ban");
+    }
     if run_later_ratchets {
         match run_unchecked_arith(&files, &root) {
             Ok(true) => {}
@@ -293,6 +296,25 @@ fn run_boundary_closure(files: &[fsutil::SourceFile]) -> bool {
     let ok = violations.is_empty();
     println!(
         "check: boundary-closure {} ({} condemned-shape site(s))",
+        if ok { "PASS" } else { "FAIL" },
+        violations.len()
+    );
+    ok
+}
+
+fn run_peer_dial_ban(files: &[fsutil::SourceFile]) -> bool {
+    println!("== check: peer-dial ban (seats 18/92 — NATS is the only nervous system) ==");
+    let violations = checks::peer_dial_ban::check(files);
+    for v in &violations {
+        println!(
+            "FAIL {}:{}: `{}` — a raw peer/transport socket in the engine is a second \
+             nervous system; fabric-down is `Refuse(FabricUnavailable)`, never a dial",
+            v.file, v.line, v.symbol
+        );
+    }
+    let ok = violations.is_empty();
+    println!(
+        "check: peer-dial ban {} ({} raw-socket site(s))",
         if ok { "PASS" } else { "FAIL" },
         violations.len()
     );
