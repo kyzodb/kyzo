@@ -15,12 +15,14 @@
 //!
 //! Bans: WA / KEK / plaintext salt / AuditKey / MintCap in packs; packs
 //! omitting [`WrappedShredSalt`] or [`IncarnationId`] history; green
-//! incomplete restore.
+//! incomplete restore (a crash-interrupted [`restore_storage`] leaves a
+//! durable in-progress mark; [`admit_complete_store`] / [`open_complete_store`]
+//! refuse rather than presenting a partial prefix as a smaller complete store).
 //!
 //! Dump format: 8-byte magic `KYZODMP2`, then for each pair a u64-BE key
 //! length, the key bytes, a u64-BE value length, the value bytes. Pairs appear
-//! in ascending key order (`total_scan` order), which is exactly what
-//! [`Storage::batch_put`](crate::Storage::batch_put) requires on restore.
+//! in ascending key order (`total_scan` order). Restore applies them under a
+//! durable in-progress mark (cleared only after the final sync).
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -40,11 +42,38 @@ use crate::store::merkle::{
 use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::system_stamp_of_key;
+use crate::store::fjall::FjallStorage;
+use crate::store::fjall::new_fjall_storage;
+use crate::store::tx::WriteTx;
 use crate::store::{FormatVersion, ReadTx, Storage};
 use kyzo_model::value::ValidityTs;
 use kyzo_model::value::{RelationId, StorageKey};
 
 const MAGIC: &[u8; 8] = b"KYZODMP2";
+
+/// Durable in-progress mark written before any dump pairs land, cleared only
+/// after the final [`Storage::sync`] of a successful restore (seat 26 / #374 T11).
+///
+/// Non-empty reserved key (fjall/lsm-tree reject empty keys). The leading NUL
+/// plus `kyzo.` namespace keeps it outside normal relation-prefixed dump pairs
+/// (8-byte relation id prefix) so it never collides with restored data.
+const RESTORE_IN_PROGRESS_KEY: &[u8] = b"\0kyzo.restore.in_progress.v1";
+const RESTORE_IN_PROGRESS_VAL: &[u8] = b"kyzo.restore.in_progress.v1";
+
+/// Typed refuse when a store still carries a restore-in-progress mark —
+/// crash-interrupted or not yet cleared after the final sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
+#[error(
+    "IncompleteRestore: restore in progress or crash-interrupted; refusing to present as a complete store"
+)]
+#[diagnostic(code(store::backup::incomplete_restore))]
+pub struct IncompleteRestore;
+
+/// Chunk size for restore pair applies after the in-progress mark is durable.
+/// Kept modest so a poisoned iterator in tests can interrupt mid-import without
+/// buffering tens of thousands of pairs (batch_put cannot run once the mark
+/// occupies the target).
+const RESTORE_PUT_CHUNK: usize = 64;
 
 /// A dumped fact row's system stamp exceeds the clock floor this dump
 /// itself recorded — the exact shape of the historical lost-update bug
@@ -144,6 +173,9 @@ fn verify_stamp_within_floor(id: RelationId, key: &[u8], floor: ValidityTs) -> R
 
 /// Dump every key-value pair of the storage to the file at `path`.
 pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
+    // An in-progress / interrupted restore is not a complete store — refuse
+    // to costume it as dump source material.
+    admit_complete_store(db)?;
     let file = File::create(path).into_diagnostic()?;
     let mut w = BufWriter::new(file);
     w.write_all(MAGIC).into_diagnostic()?;
@@ -168,6 +200,10 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     let kinds = relation_kinds(&tx)?;
     for pair in tx.total_scan() {
         let (k, v) = pair?;
+        // Never emit the restore-in-progress mark into a dump.
+        if &*k == RESTORE_IN_PROGRESS_KEY {
+            continue;
+        }
         if let Some(id) = relation_prefix(&k)
             && kinds.get(&id) == Some(&KeyspaceKind::Facts)
         {
@@ -184,6 +220,71 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+/// Refuse when `db` still carries a restore-in-progress mark.
+///
+/// This is the completeness gate: a crash-interrupted restore reopened by a
+/// plain admit/open must not be presented as a smaller complete store.
+pub fn admit_complete_store<S: Storage>(db: &S) -> Result<()> {
+    let tx = db.read_tx()?;
+    if tx.exists(RESTORE_IN_PROGRESS_KEY)? {
+        return Err(IncompleteRestore.into());
+    }
+    Ok(())
+}
+
+/// Open a fjall store and refuse if a restore-in-progress mark is present.
+///
+/// Prefer this over bare [`new_fjall_storage`] when admitting a path that may
+/// have been a restore target — bare open alone cannot see the mark's meaning.
+pub fn open_complete_store(path: impl AsRef<Path>) -> Result<FjallStorage> {
+    let db = new_fjall_storage(path)?;
+    admit_complete_store(&db)?;
+    Ok(db)
+}
+
+fn mark_restore_in_progress<S: Storage>(db: &S) -> Result<()> {
+    let mut tx = db.write_tx()?;
+    tx.put(RESTORE_IN_PROGRESS_KEY, RESTORE_IN_PROGRESS_VAL)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn clear_restore_in_progress<S: Storage>(db: &S) -> Result<()> {
+    let mut tx = db.write_tx()?;
+    tx.del(RESTORE_IN_PROGRESS_KEY)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Apply dump pairs after the in-progress mark is already durable.
+///
+/// Not [`Storage::batch_put`]: that door refuses non-empty targets, and the
+/// mark must land *before* any pair so a mid-import crash stays distinguishable.
+fn put_restore_pairs<'a, S: Storage>(
+    db: &'a S,
+    data: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>,
+) -> Result<()> {
+    let mut data = data.peekable();
+    while data.peek().is_some() {
+        let mut tx = db.write_tx()?;
+        for pair in data.by_ref().take(RESTORE_PUT_CHUNK) {
+            let (k, v) = match pair {
+                Ok(kv) => kv,
+                Err(e) => {
+                    let _ = tx.abort();
+                    return Err(e);
+                }
+            };
+            if let Err(e) = tx.put(&k, &v) {
+                let _ = tx.abort();
+                return Err(e);
+            }
+        }
+        tx.commit()?;
+    }
+    Ok(())
+}
+
 /// Restore a dump produced by [`dump_storage`] into the storage.
 ///
 /// This door restores a **KYZODMP2** portable dump only. Foreign leave-is-free
@@ -191,15 +292,19 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
 /// [`ImportCapability`] + chain/root verify (seat 80 / #359). Blind leave-is-free
 /// import without the ceremony is Unconstructible on this door.
 ///
-/// The target must be **empty** and must not be accessed concurrently: an
-/// interrupted restore leaves a clean prefix of the dump (see
-/// [`Storage::batch_put`]), and requiring an empty target means recovery is
-/// always "discard and re-run" — a partial restore can never be mistaken for
-/// a complete store, and never merges into existing data. The restored data
-/// is fsynced before this returns.
+/// The target must be **empty** and must not be accessed concurrently. Before
+/// any dump pair is applied, a durable in-progress mark is synced; that mark
+/// is cleared only after the restored pairs are synced. A crash-interrupted
+/// restore therefore reopens as incomplete ([`IncompleteRestore`] via
+/// [`admit_complete_store`] / [`open_complete_store`]) — never as a silent
+/// smaller complete store. Recovery is discard-and-re-run; a partial restore
+/// never merges into existing data.
 pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     {
         let tx = db.read_tx()?;
+        if tx.exists(RESTORE_IN_PROGRESS_KEY)? {
+            return Err(IncompleteRestore.into());
+        }
         if tx.total_scan().next().is_some() {
             bail!("restore target is not empty: restore only into a fresh store");
         }
@@ -230,8 +335,41 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     db.raise_clock_floor(kyzo_model::value::ValidityTs::from_raw(i64::from_be_bytes(
         floor_bytes,
     )))?;
+    // Mark durable *before* any dump pair — crash after this point leaves a
+    // store that admit_complete_store refuses, not a costume-complete prefix.
+    mark_restore_in_progress(db)?;
+    db.sync()?;
     let iter = std::iter::from_fn(move || read_pair(&mut r).transpose());
-    db.batch_put(Box::new(iter))?;
+    put_restore_pairs(db, Box::new(iter))?;
+    // Pairs applied; sync before clearing the mark so a crash between apply
+    // and clear still reopens as incomplete (conservative; discard-and-re-run).
+    db.sync()?;
+    clear_restore_in_progress(db)?;
+    db.sync()
+}
+
+/// Test / harness door: restore from an already-decoded pair iterator with the
+/// same in-progress mark law as [`restore_storage`]. Used to inject a mid-put
+/// interrupt without corrupting a dump file.
+#[cfg(test)]
+fn restore_pairs_for_test<'a, S: Storage>(
+    db: &'a S,
+    data: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>,
+) -> Result<()> {
+    {
+        let tx = db.read_tx()?;
+        if tx.exists(RESTORE_IN_PROGRESS_KEY)? {
+            return Err(IncompleteRestore.into());
+        }
+        if tx.total_scan().next().is_some() {
+            bail!("restore target is not empty: restore only into a fresh store");
+        }
+    }
+    mark_restore_in_progress(db)?;
+    db.sync()?;
+    put_restore_pairs(db, data)?;
+    db.sync()?;
+    clear_restore_in_progress(db)?;
     db.sync()
 }
 
@@ -1060,5 +1198,111 @@ mod import_verify {
             store_tag.contains("ForeignHistoryUnverified"),
             "store refuse must name ForeignHistoryUnverified: {store_tag}"
         );
+    }
+}
+
+/// Seat 26 / #374 T11 — partial restore distinguishable from a complete store.
+#[cfg(test)]
+mod restore_integrity {
+    use super::{
+        IncompleteRestore, admit_complete_store, dump_storage, open_complete_store,
+        restore_pairs_for_test, restore_storage,
+    };
+    use crate::store::fjall::new_fjall_storage;
+    use crate::store::{ReadTx, Storage, WriteTx};
+    use miette::miette;
+
+    /// NASTY (#374 T11): interrupt mid-pair put after the in-progress mark is
+    /// durable; reopen via plain complete-store open and assert typed refuse —
+    /// never a silent smaller complete store.
+    #[test]
+    fn interrupted_restore_reopen_refuses_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let tgt_path = dir.path().join("restore_tgt");
+        let db = new_fjall_storage(&tgt_path).unwrap();
+
+        // More than one restore chunk so the poison fires after at least one
+        // committed apply of dump pairs (mark already durable from phase 1).
+        let n_pairs = super::RESTORE_PUT_CHUNK + 8;
+        let mut yielded = 0usize;
+        let poison = (0..n_pairs).map(move |i| {
+            yielded += 1;
+            // Fail on the first pair of the second chunk — mid-import.
+            if yielded > super::RESTORE_PUT_CHUNK {
+                return Err(miette!("injected interrupt mid-batch_put"));
+            }
+            let mut key = 1u64.to_be_bytes().to_vec();
+            key.extend_from_slice(&(i as u64).to_be_bytes());
+            Ok((key, vec![0xAB]))
+        });
+
+        let err = restore_pairs_for_test(&db, Box::new(poison)).unwrap_err();
+        assert!(
+            err.to_string().contains("injected interrupt"),
+            "control: restore must fail from the injected interrupt, got: {err}"
+        );
+        drop(db);
+
+        // Bare fjall open still binds the directory (bytes are there) —
+        // completeness is the admit door, not substrate open.
+        let bare = new_fjall_storage(&tgt_path).unwrap();
+        {
+            let tx = bare.read_tx().unwrap();
+            assert!(
+                tx.exists(super::RESTORE_IN_PROGRESS_KEY).unwrap(),
+                "in-progress mark must survive the interrupt"
+            );
+            assert!(
+                tx.total_scan().next().is_some(),
+                "control: partial pairs landed — without the mark this would costume as a smaller complete store"
+            );
+        }
+        let admit_err = admit_complete_store(&bare).unwrap_err();
+        assert!(
+            admit_err.downcast_ref::<IncompleteRestore>().is_some(),
+            "admit_complete_store must typed-refuse IncompleteRestore, got: {admit_err}"
+        );
+        drop(bare);
+
+        // Plain reopen-as-complete refuses.
+        // match (not unwrap_err): Ok(FjallStorage) is not Debug.
+        let reopen_err = match open_complete_store(&tgt_path) {
+            Err(e) => e,
+            Ok(_) => panic!("open_complete_store must refuse a partial restore"),
+        };
+        assert!(
+            reopen_err.downcast_ref::<IncompleteRestore>().is_some(),
+            "open_complete_store must typed-refuse IncompleteRestore, got: {reopen_err}"
+        );
+    }
+
+    #[test]
+    fn successful_restore_clears_mark_and_admits() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = new_fjall_storage(dir.path().join("src")).unwrap();
+        {
+            let mut tx = src.write_tx().unwrap();
+            let mut key = 1u64.to_be_bytes().to_vec();
+            key.extend_from_slice(&0u64.to_be_bytes());
+            tx.put(&key, b"v").unwrap();
+            tx.commit().unwrap();
+        }
+        let dump = dir.path().join("d.kyzo");
+        dump_storage(&src, &dump).unwrap();
+
+        let tgt_path = dir.path().join("tgt");
+        let tgt = new_fjall_storage(&tgt_path).unwrap();
+        restore_storage(&tgt, &dump).unwrap();
+        admit_complete_store(&tgt).expect("complete restore must admit");
+        assert!(
+            !tgt
+                .read_tx()
+                .unwrap()
+                .exists(super::RESTORE_IN_PROGRESS_KEY)
+                .unwrap(),
+            "in-progress mark must be cleared after successful restore"
+        );
+        drop(tgt);
+        open_complete_store(&tgt_path).expect("reopen after complete restore must admit");
     }
 }
