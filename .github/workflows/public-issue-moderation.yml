@@ -51,6 +51,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COMMENT_NODE_ID: ${{ github.event.comment.node_id }}
         run: |
+          # shellcheck disable=SC2016  # $id is a GraphQL variable, not a shell var — single quotes are intentional
           gh api graphql \
             -f query='mutation($id: ID!) { minimizeComment(input: { classifier: OFF_TOPIC, subjectId: $id }) { minimizedComment { isMinimized } } }' \
             -f id="$COMMENT_NODE_ID"

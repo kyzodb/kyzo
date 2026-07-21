@@ -298,14 +298,14 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          for f in *.tar.gz *.zip *.cdx.json *.provenance.json SHA256SUMS-*; do
+          for f in ./*.tar.gz ./*.zip ./*.cdx.json ./*.provenance.json ./SHA256SUMS-*; do
             [ -e "$f" ] || continue
             cosign sign-blob --yes \
               --output-signature "${f}.sig" \
               --output-certificate "${f}.pem" \
               "$f"
           done
-          ls -la *.sig *.pem
+          ls -la ./*.sig ./*.pem
       - uses: actions/upload-artifact@v7
         with:
           name: release-artifacts-${{ matrix.target }}
@@ -393,7 +393,7 @@ jobs:
           gh release create "$tag" \
             --title "$tag" \
             --notes-file notes.md \
-            dist/*.tar.gz dist/*.zip dist/SHA256SUMS-* dist/*.cdx.json dist/*.provenance.json dist/*.sig dist/*.pem
+            ./dist/*.tar.gz ./dist/*.zip ./dist/SHA256SUMS-* ./dist/*.cdx.json ./dist/*.provenance.json ./dist/*.sig ./dist/*.pem
 
   # ---------- crates.io ----------
 

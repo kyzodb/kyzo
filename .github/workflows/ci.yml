@@ -327,15 +327,27 @@ jobs:
 
   # ---------- No silent skips ----------
 
+  actionlint:
+    name: actionlint (workflow static lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Static-checks every .github/workflows/*.yml: invalid runner labels,
+      # broken needs:/matrix refs, shell quoting, expression typos — the
+      # class of release.yml bug a hand review and `yaml.safe_load` cannot
+      # catch. Tag-pinned image (digest-pin is the hardening follow-up).
+      - name: Run actionlint
+        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.7 -color
+
   gate-summary:
     name: Gate summary (no silent skips)
     runs-on: ubuntu-latest
-    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate, release-checked-test]
+    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate, release-checked-test, actionlint]
     if: always()
     steps:
       - name: Print every gate's outcome; fail if any gate failed
         run: |
-          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }} release-checked-test:${{ needs.release-checked-test.result }}"
+          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }} release-checked-test:${{ needs.release-checked-test.result }} actionlint:${{ needs.actionlint.result }}"
           echo "$summary" | tr ' ' '\n'
           echo "'skipped' = activation-gated on repo state, displayed here on purpose. Never hidden."
           case "$summary" in
