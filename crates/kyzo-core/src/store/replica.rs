@@ -15,8 +15,12 @@
 //! [`AuthorizingKey`] / [`AuthorizingKeyTable`], [`ScopeManifestTable`],
 //! [`OriginContinuity`], full crossing-contract validation before lowering
 //! ([`validate_crossing_before_lower`], [`CrossingEnvelope`], [`CrossingValidated`]),
-//! schema-preserving [`PromotionMeaning`] replay equality, and
-//! [`GraphBoundKey`] key-never-crosses-graph-boundary enforcement (#270 T3).
+//! schema-preserving [`PromotionMeaning`] replay equality,
+//! [`GraphBoundKey`] key-never-crosses-graph-boundary enforcement (#270 T3),
+//! and the enforced signed-state-root-head (STH) gossip obligation
+//! ([`SthGossipObligation`], [`SignedStateRootHead`], [`enforce_sth_gossip`])
+//! so split-view equivocation is **Detected-on-gossip** (seats 2/56/58/69)
+//! over NATS JetStream fabric carriage — never a peer-dial (seat 92).
 //!
 //! Bans: reshape/re-author of certified meaning; in-place local reinterpretation
 //! under a local Catalog cut; strict-contiguous-only or head-attested catch-up;
@@ -29,7 +33,8 @@
 //! into RetentionDeclined; silent drop of missing declared evidence;
 //! identity that lets distinct origins collapse into one (content-only id);
 //! promotion that diverges identity/time/provenance/schema; a storage key
-//! authorizing outside its [`GraphBoundary`].
+//! authorizing outside its [`GraphBoundary`]; peer-dial STH transport;
+//! leaving federation non-equivocation Unexposed-until-chains-meet.
 //!
 //! Authoring mints at `session/admit.rs` through [`mint_admission_certificate`];
 //! replicas verify + mint custody — never re-author.
@@ -42,6 +47,9 @@ use sha2::{Digest, Sha256};
 
 use super::contract::FormatVersion;
 use super::epoch::FenceEpoch;
+use super::merkle::{
+    ConsistencyProof, GossipConsistency, MerkleChainRefuse, StateRootHead, check_sth_gossip,
+};
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
 use super::transcript::{
@@ -760,6 +768,14 @@ pub enum ReplicaRefuse {
     #[error("ScopeDenied: scope manifest denied")]
     #[diagnostic(code(store::replica::scope_denied))]
     ScopeDenied,
+    /// Split-view / equivocation detected on STH gossip (Detected-on-gossip).
+    #[error("SplitViewDetected: divergent STH gossip before chains meet")]
+    #[diagnostic(code(store::replica::split_view_detected))]
+    SplitViewDetected,
+    /// STH gossip consistency proof required but absent.
+    #[error("SthConsistencyProofRequired: unequal STH ordinals need a proof")]
+    #[diagnostic(code(store::replica::sth_consistency_proof_required))]
+    SthConsistencyProofRequired,
 }
 
 /// Inputs required to mint an AdmissionCertificate (admission door only).
@@ -1657,6 +1673,159 @@ pub fn anchor_pending(
     }
 }
 
+// ── STH gossip obligation (CT non-equivocation; seats 2/56/58/69/92) ───────
+
+/// JetStream subject that carries compact STH digests for one Store.
+///
+/// Gossip rides the NATS fabric (seat 92) — cadence publish + designated
+/// peer/auditor pull. A peer-dial endpoint type is Unconstructible here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SthGossipSubject {
+    store_id: StoreId,
+}
+
+impl SthGossipSubject {
+    /// Subject for one Store identity.
+    pub fn for_store(store_id: StoreId) -> Self {
+        Self { store_id }
+    }
+
+    /// Store this subject names.
+    pub fn store_id(self) -> StoreId {
+        self.store_id
+    }
+
+    /// Canonical JetStream subject string for compact root-digest gossip.
+    pub fn jetstream_subject(self) -> String {
+        let mut hex = String::with_capacity(64);
+        for b in self.store_id.as_bytes() {
+            hex.push(char::from_digit((b >> 4) as u32, 16).expect("nibble"));
+            hex.push(char::from_digit((b & 0x0f) as u32, 16).expect("nibble"));
+        }
+        format!("kyzo.sth.{hex}")
+    }
+}
+
+/// Closed STH gossip carriage — JetStream fabric only (seat 92).
+///
+/// No peer-dial variant exists; fabric-down is host/`Refuse(FabricUnavailable)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SthGossipCarriage {
+    /// Compact STH digest on a JetStream subject (cadence publish + auditor pull).
+    JetStream(SthGossipSubject),
+}
+
+/// Enforced signed-state-root-head gossip obligation for one Store.
+///
+/// Origin publishes signed compact heads on [`SthGossipCarriage::JetStream`];
+/// designated peers/auditors pull and cross-check via [`enforce_sth_gossip`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SthGossipObligation {
+    carriage: SthGossipCarriage,
+}
+
+impl SthGossipObligation {
+    /// Seat the obligation on the NATS JetStream subject for `store_id`.
+    pub fn on_jetstream(store_id: StoreId) -> Self {
+        Self {
+            carriage: SthGossipCarriage::JetStream(SthGossipSubject::for_store(store_id)),
+        }
+    }
+
+    /// Fabric carriage (JetStream only).
+    pub fn carriage(self) -> SthGossipCarriage {
+        self.carriage
+    }
+
+    /// JetStream subject when carriage is JetStream.
+    pub fn subject(self) -> SthGossipSubject {
+        match self.carriage {
+            SthGossipCarriage::JetStream(s) => s,
+        }
+    }
+}
+
+/// Signed state-root head — CT STH analogue under the origin authorizing key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SignedStateRootHead {
+    head: StateRootHead,
+    authorizing_key_id: AuthorizingKeyId,
+    signature: [u8; 64],
+}
+
+impl SignedStateRootHead {
+    /// Sign a compact head under an origin authorizing key.
+    pub(crate) fn sign(
+        head: StateRootHead,
+        key: &AuthorizingKey,
+    ) -> Result<Self, ReplicaRefuse> {
+        let body = head.compact_digest();
+        let signature = key.sign(&body)?;
+        Ok(Self {
+            head,
+            authorizing_key_id: key.id(),
+            signature,
+        })
+    }
+
+    /// Unsigned head meaning.
+    pub fn head(&self) -> StateRootHead {
+        self.head
+    }
+
+    /// Authorizing key id bound into the signature.
+    pub fn authorizing_key_id(&self) -> AuthorizingKeyId {
+        self.authorizing_key_id
+    }
+
+    /// ed25519 signature bytes.
+    pub fn signature(&self) -> &[u8; 64] {
+        &self.signature
+    }
+
+    /// Verify signature against a trusted key table.
+    pub fn verify_authenticity(&self, keys: &AuthorizingKeyTable) -> Result<(), ReplicaRefuse> {
+        let key = keys
+            .lookup(&self.authorizing_key_id)
+            .ok_or(ReplicaRefuse::AuthenticityFailed)?;
+        let body = self.head.compact_digest();
+        if key.verify_signature(&body, &self.signature) {
+            Ok(())
+        } else {
+            Err(ReplicaRefuse::AuthenticityFailed)
+        }
+    }
+}
+
+/// Enforce STH gossip non-equivocation between two fabric-observed signed heads.
+///
+/// Verifies both signatures, then runs [`check_sth_gossip`]. Split-view is
+/// [`ReplicaRefuse::SplitViewDetected`] — Detected-on-gossip, before chains meet.
+pub fn enforce_sth_gossip(
+    obligation: &SthGossipObligation,
+    observed_a: &SignedStateRootHead,
+    observed_b: &SignedStateRootHead,
+    proof: Option<&ConsistencyProof>,
+    keys: &AuthorizingKeyTable,
+) -> Result<GossipConsistency, ReplicaRefuse> {
+    let subject_store = obligation.subject().store_id();
+    if observed_a.head().store_id() != subject_store || observed_b.head().store_id() != subject_store
+    {
+        return Err(ReplicaRefuse::AuthenticityFailed);
+    }
+    observed_a.verify_authenticity(keys)?;
+    observed_b.verify_authenticity(keys)?;
+    match check_sth_gossip(&observed_a.head(), &observed_b.head(), proof) {
+        Ok(c) => Ok(c),
+        Err(MerkleChainRefuse::SplitViewDetected) => Err(ReplicaRefuse::SplitViewDetected),
+        Err(MerkleChainRefuse::ConsistencyProofRequired) => {
+            Err(ReplicaRefuse::SthConsistencyProofRequired)
+        }
+        Err(MerkleChainRefuse::SthStoreMismatch) => Err(ReplicaRefuse::AuthenticityFailed),
+        Err(_) => Err(ReplicaRefuse::SplitViewDetected),
+    }
+}
+
 #[cfg(test)]
 mod authorizing_key_ed25519_tests {
     use super::*;
@@ -2504,6 +2673,130 @@ mod promotion {
         assert_eq!(
             foreign_bound.authorize(home),
             Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
+        );
+    }
+}
+
+#[cfg(test)]
+mod sth_gossip_obligation_tests {
+    use super::*;
+    use crate::store::merkle::{
+        ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, GossipConsistency, RootChain, StateRoot,
+        StateRootHead, build_consistency_proof,
+    };
+
+    /// Fabric carriage is JetStream-only — subject names the Store; no peer-dial.
+    #[test]
+    fn sth_gossip_obligation_seats_on_jetstream_not_peer_dial() {
+        let store = StoreId::from_digest([0x92; 32]);
+        let obligation = SthGossipObligation::on_jetstream(store);
+        assert!(matches!(
+            obligation.carriage(),
+            SthGossipCarriage::JetStream(_)
+        ));
+        let subject = obligation.subject().jetstream_subject();
+        assert!(subject.starts_with("kyzo.sth."));
+        assert_eq!(subject.len(), "kyzo.sth.".len() + 64);
+    }
+
+    /// Signed STH gossip detects split-view before chains meet.
+    #[test]
+    fn enforce_sth_gossip_detects_equivocating_signed_heads() {
+        let store = StoreId::from_digest([0x69; 32]);
+        let fence = FenceEpoch::genesis(store);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let key = AuthorizingKey::mint_with_verifying_id([0x51; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+
+        let content_a = StateRoot::from_digest([0xA1; 32]);
+        let content_b = StateRoot::from_digest([0xB2; 32]);
+        let mut chain_a = RootChain::empty();
+        chain_a
+            .append(ChainedStateRoot::mint(
+                store,
+                fence,
+                o1,
+                content_a,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        let mut chain_b = RootChain::empty();
+        chain_b
+            .append(ChainedStateRoot::mint(
+                store,
+                fence,
+                o1,
+                content_b,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+
+        let signed_a =
+            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_a).unwrap(), &key)
+                .unwrap();
+        let signed_b =
+            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_b).unwrap(), &key)
+                .unwrap();
+        assert_ne!(signed_a.head().root(), signed_b.head().root());
+
+        let obligation = SthGossipObligation::on_jetstream(store);
+        assert_eq!(
+            enforce_sth_gossip(&obligation, &signed_a, &signed_b, None, &keys),
+            Err(ReplicaRefuse::SplitViewDetected)
+        );
+
+        // Honest identical observations pass.
+        assert_eq!(
+            enforce_sth_gossip(&obligation, &signed_a, &signed_a, None, &keys),
+            Ok(GossipConsistency::Identical)
+        );
+    }
+
+    /// Honest extension under consistency proof is Detected-consistent on gossip.
+    #[test]
+    fn enforce_sth_gossip_honest_extension_with_proof() {
+        let store = StoreId::from_digest([0x58; 32]);
+        let fence = FenceEpoch::genesis(store);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let key = AuthorizingKey::mint_with_verifying_id([0x58; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+
+        let mut chain = RootChain::empty();
+        chain
+            .append(ChainedStateRoot::mint(
+                store,
+                fence,
+                o1,
+                StateRoot::from_digest([0x01; 32]),
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        chain
+            .append(ChainedStateRoot::mint(
+                store,
+                fence,
+                o2,
+                StateRoot::from_digest([0x02; 32]),
+                chain.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+
+        let older = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1).unwrap(), &key)
+            .unwrap();
+        let newer = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2).unwrap(), &key)
+            .unwrap();
+        let proof = build_consistency_proof(&chain, o1, o2).unwrap();
+        let obligation = SthGossipObligation::on_jetstream(store);
+        assert_eq!(
+            enforce_sth_gossip(&obligation, &older, &newer, Some(&proof), &keys),
+            Ok(GossipConsistency::ConsistentExtension)
         );
     }
 }

@@ -11,10 +11,18 @@
 //!
 //! Owns (07 Spec spine): per-commit chained state root, [`as_of_root`],
 //! typed recovery/fork chain links, fork-equivalence via [`fork_point`],
-//! recompute-and-compare replica equivalence via [`replica_equivalence_at_cut`].
+//! recompute-and-compare replica equivalence via [`replica_equivalence_at_cut`],
+//! signed-state-root-head (STH) bodies, RFC-6962-style
+//! [`ConsistencyProof`] checking, and split-view detection on gossip
+//! ([`check_sth_gossip`]) so an equivocating Store is
+//! **Detected-on-gossip** before chains meet (Certificate Transparency model;
+//! seats 2/56/58/69). Fabric carriage of compact STHs seats in `replica`
+//! (NATS JetStream subject — never peer-dial, seat 92).
 //!
 //! Bans: current-only roots as the sole digest; roots over ciphertext;
-//! path/URL equivalence claims; trusting a peer-delivered root as equivalence.
+//! path/URL equivalence claims; trusting a peer-delivered root as equivalence;
+//! leaving split-view Unexposed-until-chains-meet when two gossiped STHs
+//! disagree without a consistency proof.
 //!
 //! Also: a **cold, deterministic Merkle state root** over the ordered
 //! keyspace — plaintext-canonical, cipher-invariant leaf commitment the
@@ -534,6 +542,23 @@ impl RootChain {
     pub fn prior_root(&self) -> StateRoot {
         self.links.last().map(|l| l.root()).unwrap_or(GENESIS_ROOT)
     }
+
+    /// Contiguous segment for STH consistency proofs — first link may sit
+    /// mid-lineage (predecessor need not be [`GENESIS_ROOT`]); every later
+    /// link must cover the prior tip.
+    pub(crate) fn from_contiguous_segment(
+        links: &[ChainedStateRoot],
+    ) -> Result<Self, MerkleChainRefuse> {
+        let mut chain = Self::empty();
+        for (i, link) in links.iter().enumerate() {
+            if i == 0 {
+                chain.links.push(*link);
+            } else {
+                chain.append(*link)?;
+            }
+        }
+        Ok(chain)
+    }
 }
 
 /// Chain link covering `cut` — the mint whose root [`as_of_root`] returns.
@@ -678,7 +703,7 @@ pub fn refuse_path_url_sameness(_claim: PathUrlSamenessClaim) -> MerkleChainRefu
     MerkleChainRefuse::PathUrlSameness
 }
 
-/// Typed refusals on the chain / as-of / replica-equivalence path.
+/// Typed refusals on the chain / as-of / replica-equivalence / STH path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum MerkleChainRefuse {
     /// Append whose predecessor does not cover the chain terminal.
@@ -693,6 +718,240 @@ pub enum MerkleChainRefuse {
     #[error("merkle chain: path/URL sameness is not store equivalence")]
     #[diagnostic(code(store::merkle::path_url_sameness))]
     PathUrlSameness,
+    /// Consistency proof does not bind the two state-root heads.
+    #[error("merkle chain: consistency proof failed for state-root heads")]
+    #[diagnostic(code(store::merkle::consistency_proof_failed))]
+    ConsistencyProofFailed,
+    /// Gossiped STHs for one Store disagree without a consistency extension
+    /// — split-view / equivocation **Detected-on-gossip** (CT model).
+    #[error("merkle chain: split-view detected on STH gossip before chains meet")]
+    #[diagnostic(code(store::merkle::split_view_detected))]
+    SplitViewDetected,
+    /// Consistency proof required between unequal ordinals was absent.
+    #[error("merkle chain: consistency proof required for STH gossip check")]
+    #[diagnostic(code(store::merkle::consistency_proof_required))]
+    ConsistencyProofRequired,
+    /// Gossip pair names distinct Store identities — not a same-Store check.
+    #[error("merkle chain: STH gossip pair spans distinct Store identities")]
+    #[diagnostic(code(store::merkle::sth_store_mismatch))]
+    SthStoreMismatch,
+}
+
+// ── STH gossip / consistency (CT non-equivocation; seats 2/56/58/69) ──────
+
+/// Compact unsigned state-root head — the digest payload an STH carries.
+///
+/// Signed and carried on the NATS JetStream fabric by the replica gossip
+/// obligation ([`crate::store::replica`]); this type is the Merkle meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StateRootHead {
+    store_id: StoreId,
+    fence_epoch: FenceEpoch,
+    commit_ordinal: CommitOrdinal,
+    root: StateRoot,
+}
+
+impl StateRootHead {
+    /// Mint a head from a chain tip link.
+    pub fn from_chain_tip(chain: &RootChain) -> Result<Self, MerkleChainRefuse> {
+        let tip = chain.links().last().ok_or(MerkleChainRefuse::CutBeforeGenesis)?;
+        Ok(Self {
+            store_id: tip.store_id(),
+            fence_epoch: tip.fence_epoch(),
+            commit_ordinal: tip.commit_ordinal(),
+            root: tip.root(),
+        })
+    }
+
+    /// Mint a head at a committed cut (as-of).
+    pub fn from_cut(chain: &RootChain, cut: CommitOrdinal) -> Result<Self, MerkleChainRefuse> {
+        let link = link_at_cut(chain, cut)?;
+        Ok(Self {
+            store_id: link.store_id(),
+            fence_epoch: link.fence_epoch(),
+            commit_ordinal: link.commit_ordinal(),
+            root: link.root(),
+        })
+    }
+
+    /// Store identity this head commits.
+    pub fn store_id(self) -> StoreId {
+        self.store_id
+    }
+
+    /// Fence epoch of this head.
+    pub fn fence_epoch(self) -> FenceEpoch {
+        self.fence_epoch
+    }
+
+    /// Commit ordinal (tree size analogue) of this head.
+    pub fn commit_ordinal(self) -> CommitOrdinal {
+        self.commit_ordinal
+    }
+
+    /// Chained state root at this head.
+    pub fn root(self) -> StateRoot {
+        self.root
+    }
+
+    /// Domain-separated compact digest for fabric carriage / signing body.
+    pub fn compact_digest(self) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"kyzo.state_root_head.v1");
+        h.update(self.store_id.as_bytes());
+        h.update(u64::to_be_bytes(self.fence_epoch.get()));
+        h.update(u64::to_be_bytes(self.commit_ordinal.get()));
+        h.update(self.root.as_bytes());
+        h.finalize().into()
+    }
+}
+
+/// Contiguous RootChain subsegment proving a newer head extends an older one.
+///
+/// Analogue of RFC 6962 consistency proofs over the Spec chained-root spine:
+/// recomputing [`as_of_root`] at both cuts on the proof chain must reproduce
+/// both heads. A split-view cannot forge a proof that binds divergent tips.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsistencyProof {
+    links: Vec<ChainedStateRoot>,
+}
+
+impl ConsistencyProof {
+    /// Links in commit order covering the older-through-newer segment.
+    pub fn links(&self) -> &[ChainedStateRoot] {
+        &self.links
+    }
+}
+
+/// Build a consistency proof from an honest [`RootChain`] between two cuts.
+pub fn build_consistency_proof(
+    chain: &RootChain,
+    older: CommitOrdinal,
+    newer: CommitOrdinal,
+) -> Result<ConsistencyProof, MerkleChainRefuse> {
+    if older.get() > newer.get() {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    // Cover every link with ordinal in [older, newer] so as-of at both cuts works.
+    let links: Vec<ChainedStateRoot> = chain
+        .links()
+        .iter()
+        .copied()
+        .filter(|l| l.commit_ordinal().get() >= older.get() && l.commit_ordinal().get() <= newer.get())
+        .collect();
+    if links.is_empty() {
+        return Err(MerkleChainRefuse::CutBeforeGenesis);
+    }
+    // First link must be exactly at `older` (or the segment cannot name it).
+    if links[0].commit_ordinal() != older {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    if links.last().map(|l| l.commit_ordinal()) != Some(newer) {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    Ok(ConsistencyProof { links })
+}
+
+/// Verify that `newer` is a consistent extension of `older` under `proof`.
+pub fn verify_consistency_proof(
+    older: &StateRootHead,
+    newer: &StateRootHead,
+    proof: &ConsistencyProof,
+) -> Result<(), MerkleChainRefuse> {
+    if older.store_id() != newer.store_id() {
+        return Err(MerkleChainRefuse::SthStoreMismatch);
+    }
+    if older.fence_epoch() != newer.fence_epoch() {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    if older.commit_ordinal().get() > newer.commit_ordinal().get() {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    if older.commit_ordinal() == newer.commit_ordinal() {
+        return if older.root() == newer.root() {
+            Ok(())
+        } else {
+            Err(MerkleChainRefuse::SplitViewDetected)
+        };
+    }
+
+    // First link must match `older` exactly; segment may sit mid-lineage.
+    let first = proof.links().first().ok_or(MerkleChainRefuse::ConsistencyProofFailed)?;
+    if first.store_id() != older.store_id()
+        || first.fence_epoch() != older.fence_epoch()
+        || first.commit_ordinal() != older.commit_ordinal()
+        || first.root() != older.root()
+    {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    for link in proof.links() {
+        if link.store_id() != older.store_id() || link.fence_epoch() != older.fence_epoch() {
+            return Err(MerkleChainRefuse::ConsistencyProofFailed);
+        }
+    }
+
+    let rebuilt = RootChain::from_contiguous_segment(proof.links())?;
+    let as_older = as_of_root(&rebuilt, older.commit_ordinal())?;
+    let as_newer = as_of_root(&rebuilt, newer.commit_ordinal())?;
+    if as_older != older.root() || as_newer != newer.root() {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    let tip = rebuilt.links().last().ok_or(MerkleChainRefuse::ConsistencyProofFailed)?;
+    if tip.commit_ordinal() != newer.commit_ordinal() || tip.root() != newer.root() {
+        return Err(MerkleChainRefuse::ConsistencyProofFailed);
+    }
+    Ok(())
+}
+
+/// Outcome of a same-Store STH gossip consistency check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GossipConsistency {
+    /// Both peers observed the identical head.
+    Identical,
+    /// Newer head extends older under a valid consistency proof.
+    ConsistentExtension,
+}
+
+/// Cross-check two gossiped state-root heads (Certificate Transparency gossip).
+///
+/// Same ordinal + divergent roots → [`MerkleChainRefuse::SplitViewDetected`].
+/// Unequal ordinals without a proof → [`MerkleChainRefuse::ConsistencyProofRequired`].
+/// Unequal ordinals with a failing proof → [`MerkleChainRefuse::SplitViewDetected`].
+/// Detection happens **before chains meet** — Detected-on-gossip, not
+/// Unexposed-until-chains-meet.
+pub fn check_sth_gossip(
+    observed_a: &StateRootHead,
+    observed_b: &StateRootHead,
+    proof: Option<&ConsistencyProof>,
+) -> Result<GossipConsistency, MerkleChainRefuse> {
+    if observed_a.store_id() != observed_b.store_id() {
+        return Err(MerkleChainRefuse::SthStoreMismatch);
+    }
+    let (older, newer) = if observed_a.commit_ordinal().get() <= observed_b.commit_ordinal().get()
+    {
+        (observed_a, observed_b)
+    } else {
+        (observed_b, observed_a)
+    };
+
+    if older.commit_ordinal() == newer.commit_ordinal() {
+        if older.fence_epoch() == newer.fence_epoch() && older.root() == newer.root() {
+            return Ok(GossipConsistency::Identical);
+        }
+        return Err(MerkleChainRefuse::SplitViewDetected);
+    }
+
+    let Some(proof) = proof else {
+        return Err(MerkleChainRefuse::ConsistencyProofRequired);
+    };
+    match verify_consistency_proof(older, newer, proof) {
+        Ok(()) => Ok(GossipConsistency::ConsistentExtension),
+        Err(MerkleChainRefuse::SplitViewDetected) => Err(MerkleChainRefuse::SplitViewDetected),
+        Err(MerkleChainRefuse::ConsistencyProofFailed)
+        | Err(MerkleChainRefuse::PredecessorMismatch)
+        | Err(MerkleChainRefuse::CutBeforeGenesis) => Err(MerkleChainRefuse::SplitViewDetected),
+        Err(other) => Err(other),
+    }
 }
 
 fn chain_bind(
@@ -740,6 +999,11 @@ mod tests {
     //! - **replica-equivalence** (§58): two instances replaying the same ordered
     //!   facts match by independent recompute-and-compare; a delivered root is
     //!   not the comparison basis; path/URL "same store" is refused;
+    //! - **STH gossip non-equivocation** (§2/56/58/69): an equivocating Store
+    //!   showing divergent histories to two peers is
+    //!   [`MerkleChainRefuse::SplitViewDetected`] via [`check_sth_gossip`]
+    //!   before chains meet; honest extension verifies under
+    //!   [`ConsistencyProof`];
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
 
@@ -1793,6 +2057,285 @@ mod tests {
             honest.composed(),
             wal_broken.composed(),
             "real compose covers wal_final_hash — WAL tip break changes composed"
+        );
+    }
+
+    // ── STH gossip non-equivocation (CT; seats 2/56/58/69) ────────────────
+
+    fn sth_demo_chain() -> (
+        crate::store::open::StoreId,
+        crate::store::epoch::FenceEpoch,
+        super::RootChain,
+        crate::store::sweep::CommitOrdinal,
+        crate::store::sweep::CommitOrdinal,
+        crate::store::sweep::CommitOrdinal,
+    ) {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain};
+
+        let store_id = StoreId::from_digest([0xC7; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let o3 = o2.successor().unwrap();
+
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"a".to_vec(), b"1".to_vec())]));
+        let c2 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"a".to_vec(), b"1".to_vec()),
+            (b"b".to_vec(), b"2".to_vec()),
+        ]));
+        let c3 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"a".to_vec(), b"1".to_vec()),
+            (b"b".to_vec(), b"2".to_vec()),
+            (b"c".to_vec(), b"3".to_vec()),
+        ]));
+
+        let mut chain = RootChain::empty();
+        chain
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o1,
+                c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        chain
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o2,
+                c2,
+                chain.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        chain
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o3,
+                c3,
+                chain.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        (store_id, fence, chain, o1, o2, o3)
+    }
+
+    /// Nasty: equivocating Store shows divergent histories to two peers —
+    /// same ordinal, different roots → Detected-on-gossip before chains meet.
+    #[test]
+    fn sth_gossip_split_view_detected_before_chains_meet() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, GossipConsistency, MerkleChainRefuse,
+            RootChain, StateRootHead, check_sth_gossip,
+        };
+
+        let store_id = StoreId::from_digest([0xE1; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+
+        // Peer A observes honest chain tip at o2.
+        let mut honest = RootChain::empty();
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+        let c2 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"k".to_vec(), b"v".to_vec()),
+            (b"m".to_vec(), b"n".to_vec()),
+        ]));
+        honest
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o1,
+                c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        honest
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o2,
+                c2,
+                honest.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        let head_a = StateRootHead::from_chain_tip(&honest).unwrap();
+
+        // Peer B observes an equivocating fork: same StoreId/epoch/ordinal,
+        // divergent content under o2 (split-view).
+        let mut evil = RootChain::empty();
+        let evil_c1 = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+        let evil_c2 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"k".to_vec(), b"v".to_vec()),
+            (b"m".to_vec(), b"EVIL".to_vec()),
+        ]));
+        evil
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o1,
+                evil_c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        evil
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o2,
+                evil_c2,
+                evil.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        let head_b = StateRootHead::from_chain_tip(&evil).unwrap();
+
+        assert_eq!(head_a.store_id(), head_b.store_id());
+        assert_eq!(head_a.commit_ordinal(), head_b.commit_ordinal());
+        assert_ne!(
+            head_a.root(),
+            head_b.root(),
+            "equivocating Store produced divergent tips at the same cut"
+        );
+
+        // Detection BEFORE the two chains are ever merged/compared as full
+        // histories — gossip of compact heads alone is enough.
+        assert_eq!(
+            check_sth_gossip(&head_a, &head_b, None),
+            Err(MerkleChainRefuse::SplitViewDetected),
+            "split-view must be Detected-on-gossip, not Unexposed-until-chains-meet"
+        );
+
+        // Control: identical observations are consistent.
+        assert_eq!(
+            check_sth_gossip(&head_a, &head_a, None),
+            Ok(GossipConsistency::Identical)
+        );
+    }
+
+    /// Honest extension: older→newer STH verifies under a consistency proof.
+    #[test]
+    fn sth_consistency_proof_honest_extension_verifies() {
+        use super::{
+            GossipConsistency, StateRootHead, build_consistency_proof, check_sth_gossip,
+            verify_consistency_proof,
+        };
+
+        let (_store, _fence, chain, o1, _o2, o3) = sth_demo_chain();
+        let older = StateRootHead::from_cut(&chain, o1).unwrap();
+        let newer = StateRootHead::from_cut(&chain, o3).unwrap();
+        let proof = build_consistency_proof(&chain, o1, o3).unwrap();
+        assert!(verify_consistency_proof(&older, &newer, &proof).is_ok());
+        assert_eq!(
+            check_sth_gossip(&older, &newer, Some(&proof)),
+            Ok(GossipConsistency::ConsistentExtension)
+        );
+        // Missing proof between unequal ordinals refuses (does not soft-pass).
+        assert!(matches!(
+            check_sth_gossip(&older, &newer, None),
+            Err(super::MerkleChainRefuse::ConsistencyProofRequired)
+        ));
+    }
+
+    /// Divergent histories cannot forge a consistency proof that binds both heads.
+    #[test]
+    fn sth_consistency_proof_rejects_equivocating_extension() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, MerkleChainRefuse, RootChain,
+            StateRootHead, build_consistency_proof, check_sth_gossip, verify_consistency_proof,
+        };
+
+        let store_id = StoreId::from_digest([0xE2; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+
+        let mut honest = RootChain::empty();
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())]));
+        let c2 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"x".to_vec(), b"1".to_vec()),
+            (b"y".to_vec(), b"2".to_vec()),
+        ]));
+        honest
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o1,
+                c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        honest
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o2,
+                c2,
+                honest.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+
+        let older = StateRootHead::from_cut(&honest, o1).unwrap();
+        // Equivocating "newer" tip: same ordinal family but forged root bytes
+        // presented as a head without a binding proof from the honest chain.
+        let forged_newer = {
+            // Build evil chain that shares o1 content then diverges.
+            let mut evil = RootChain::empty();
+            evil.append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o1,
+                c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+            let evil_c2 = StateRoot::from_merkle(root_of_pairs(&[
+                (b"x".to_vec(), b"1".to_vec()),
+                (b"y".to_vec(), b"FORGED".to_vec()),
+            ]));
+            evil.append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o2,
+                evil_c2,
+                evil.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+            StateRootHead::from_chain_tip(&evil).unwrap()
+        };
+
+        // Honest proof cannot bind the forged newer head.
+        let honest_proof = build_consistency_proof(&honest, o1, o2).unwrap();
+        assert!(matches!(
+            verify_consistency_proof(&older, &forged_newer, &honest_proof),
+            Err(MerkleChainRefuse::ConsistencyProofFailed)
+        ));
+        assert_eq!(
+            check_sth_gossip(&older, &forged_newer, Some(&honest_proof)),
+            Err(MerkleChainRefuse::SplitViewDetected),
+            "forged extension must surface as split-view on gossip"
         );
     }
 }
