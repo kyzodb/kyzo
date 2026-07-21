@@ -12,25 +12,20 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
-# Being a separate workspace root means the PARENT workspace's own
-# `[patch.crates-io]` (root `Cargo.toml`) never applies here: kyzo-core's
-# plain `fjall = "3.1.5"` dependency would otherwise resolve to the real,
-# unpatched crates.io release, which has none of `storage/fjall.rs`'s
-# `SeekIter`/`TrackedSeekIter`/`seek_range` additions (story #118) — kyzo
-# itself would fail to compile in this workspace at all, for every target,
-# not just the four this story adds. `lsm-tree` needs the same patch for
-# fjall's OWN internal `lsm-tree = "~3.1.5"` edge (`vendor/fjall`'s
-# `SeekableRangeIter`/`create_seekable_range` calls only exist on our
-# fork); the direct `[dependencies.lsm-tree]` path dependency below is a
-# separate edge from this crate and unifies with this patched one, so
-# there is exactly one compiled `lsm-tree`. Mirrors the root's own patch
-# table (`Cargo.toml`) for exactly the same reason.
-[patch.crates-io]
-fjall = { path = "../vendor/fjall" }
-lsm-tree = { path = "../vendor/lsm-tree" }
+# No `[patch.crates-io]` is needed. kyzo-core depends on our fork directly by
+# path — `fjall = { package = "kyzo-fjall", path = "../../vendor/fjall" }` — so
+# building `kyzo` here (via the `../crates/kyzo-core` path dep) pulls the fork,
+# not the crates.io release, with all of `store/fjall.rs`'s SeekIter additions.
+# fjall's own internal `lsm-tree` edge is likewise a path dep on
+# `vendor/lsm-tree` (package `kyzo-lsm-tree`). The direct `[dependencies.lsm-tree]`
+# below points at the SAME path, so cargo unifies them to one compiled
+# `kyzo-lsm-tree` — the reason the old patch existed, now achieved by the rename.
 
 [dependencies]
 libfuzzer-sys = "0.4"
+# kyzoscript_parser: fork+SIGKILL budget around pest parse so a backtrack
+# hang cannot stall fuzz-smoke (libFuzzer max_total_time is between-input).
+libc = "0.2"
 # Structured input generation for both targets: the memcmp target builds
 # arbitrary `DataValue` trees: kyzoscript_parser builds an arbitrary `&str`
 # via `arbitrary::Unstructured`'s raw-byte access, no derive needed there.
@@ -67,6 +62,12 @@ tempfile = "3"
 [dependencies.kyzo]
 path = "../crates/kyzo-core"
 
+# Public language + codec seats (`parse::parse_script`, `value::decode_values_all`)
+# live in kyzo-model. Fuzz targets speak those doors directly — the old
+# `kyzo::fuzz_api` façade was cut (sealed-door demolition); do not restore it.
+[dependencies.kyzo-model]
+path = "../crates/kyzo-model"
+
 # The vendored fjall-rs/lsm-tree fork itself (story #118: we own this LSM
 # now), referenced directly by path rather than through kyzo-core's
 # re-exports: `compare_prefixed_slice`/`DataBlock`/`IndexBlock`/`Table` are
@@ -75,6 +76,7 @@ path = "../crates/kyzo-core"
 # tree `vendor/lsm-tree` compiles into the main workspace (a fix landed
 # here is a fix landed there — no separate copy to drift).
 [dependencies.lsm-tree]
+package = "kyzo-lsm-tree"
 path = "../vendor/lsm-tree"
 
 [[bin]]
