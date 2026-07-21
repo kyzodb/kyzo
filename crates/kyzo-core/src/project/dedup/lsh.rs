@@ -1138,6 +1138,7 @@ mod tests {
         for t in 0..trials {
             let (a, bset, s) = jaccard_pair(n, inter, (t as i64) * 10_000);
             s_sum += s;
+            // INVARIANT(trial_seed_mix): trial index mixes into seed0 by modular add; wrap is intentional diffusion.
             let perms = HashPermutations::new(num_perm, seed0.wrapping_add(t as u64));
             let ha = HashValues::new(int_bytes(&a).into_iter(), &perms);
             let hb = HashValues::new(int_bytes(&bset).into_iter(), &perms);
