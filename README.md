@@ -118,15 +118,13 @@ by an independent checker that imports nothing from the evaluator:
 
 ## The record is accountable
 
-A stored fact isn’t a row you trust because it’s in the database — it’s a **KyzoRecord**, admitted
-through one private door and named by the 32-byte digest of its own canonical bytes. There is no
-second way for bytes to become a record. Those canonical bytes come from a single sealed serializer,
-so a record’s identity *is* its audit trail: `::verify` re-derives the committed state root and
-catches any tamper, every cross-store signature is checked with ed25519 `verify_strict` (refusing the
-malleability forgeries a permissive verify accepts), and a crypto-shredded key is proven unrecoverable
-by an adversarial reachability sweep. Threshold recovery (FROST, RFC 9591) and key-committing
-encryption seat on the same transcript as they land. Accountability is an engine property here — not a
-bolt-on log you hope nobody edited.
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/accountability.svg" width="920" alt="A fact admitted through one door becomes a KyzoRecord whose SHA-256 content digest is its identity; that digest folds into a domain-separated RFC-6962 Merkle StateRoot sealed in the RootChain. Verification recomputes the root cold and compares — equal is intact, one flipped byte is caught, reproducibly."></p>
+
+A stored fact isn’t a row you trust because it’s in the table — it’s a **KyzoRecord**, admitted through
+one door and named by the SHA-256 of its own canonical bytes, from a single sealed serializer. That
+digest folds into a domain-separated Merkle root sealed in an append-only chain, so change one byte
+anywhere and the root recomputed from the store no longer matches the sealed tip. Accountability is a
+property of the engine, not a log you hope nobody edited.
 
 ## Architecture
 
@@ -163,17 +161,12 @@ path. When a security-classed defect is fixed it ships with a dated entry in
 
 ## Origins
 
-KyzoDB began as a hard fork of [CozoDB](https://github.com/cozodb/cozo) by Ziyang Hu and the Cozo
-Project Authors. Cozo’s insight — one memcomparable, transactional substrate serving relational,
-graph, vector, text, and time under a single Datalog dialect — is rare and original, and it is theirs.
-We forked because that design deserved to keep going: upstream has had no release since December 2023.
-Carrying it forward under adversarial review, mutation testing, and deterministic fault injection, we
-found and fixed roughly forty documented security and correctness defects in the inherited engine —
-from unbounded-allocation and exponential-time decode paths reachable from hostile bytes to a value
-whose byte order diverged from its semantic order — and mechanically eliminated thirty-plus
-type-soundness violations, each now held to zero by a gate rather than a promise. That hardening is our
-contribution on top of their foundation, not a criticism of it. Full story and attribution:
-[FORK.md](FORK.md).
+KyzoDB stands on the shoulders of [CozoDB](https://github.com/cozodb/cozo) by Ziyang Hu and the Cozo
+Project Authors — a rare and original piece of database design: one memcomparable, transactional
+substrate serving relational, graph, vector, text, and time under a single Datalog dialect. That idea
+is the seed of everything above, and it deserved to be carried forward and built into something
+larger — held to a standard of proof at every layer. That is the work KyzoDB set out to do, with
+gratitude for the foundation it began from. Full story and attribution: [FORK.md](FORK.md).
 
 ## Links
 

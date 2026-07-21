@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 452" width="920" height="452" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A stored fact is admitted through one door as a KyzoRecord whose 32-byte content digest is its identity; that digest becomes a domain-separated RFC-6962 Merkle leaf, folded to a StateRoot sealed in the RootChain. Verification recomputes the root cold and compares: equal means intact, one flipped byte diverges and tamper is caught.">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3f6b50"/>
+    </marker>
+    <marker id="arRed" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9c5342"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="918" height="450" rx="3" fill="#0f1713" stroke="#26362d"/>
+  <rect x="1" y="1" width="918" height="34" rx="3" fill="#161d18"/>
+  <rect x="1" y="30" width="918" height="5" fill="#161d18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
+  <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
+  <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
+  <text x="460" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · a record is accountable by construction — not a log you hope nobody edited</text>
+
+  <!-- ============ BAND 1: MINT — the fact becomes its own name ============ -->
+  <text x="30" y="62" font-size="10.5" fill="#5a6d61" letter-spacing="1.5">MINT · one door, one serializer, identity = digest</text>
+
+  <!-- fact -->
+  <rect x="30" y="74" width="96" height="46" rx="6" fill="#131e18" stroke="#2c4636"/>
+  <text x="78" y="95" font-size="12" fill="#c9d6cc" text-anchor="middle">fact</text>
+  <text x="78" y="110" font-size="9" fill="#5a6d61" text-anchor="middle">a claim to store</text>
+
+  <line x1="126" y1="97" x2="176" y2="97" stroke="#3f6b50" stroke-width="1.4" marker-end="url(#ar)"/>
+  <text x="151" y="90" font-size="8.5" fill="#6d8074" text-anchor="middle">admit</text>
+
+  <!-- admission door -->
+  <rect x="178" y="74" width="150" height="46" rx="6" fill="#131e18" stroke="#2c4636"/>
+  <text x="253" y="94" font-size="12" fill="#5fc492" text-anchor="middle">the one door</text>
+  <text x="253" y="110" font-size="9" fill="#7fa6bf" text-anchor="middle">session/admit.rs · admit_record</text>
+
+  <line x1="328" y1="97" x2="378" y2="97" stroke="#3f6b50" stroke-width="1.4" marker-end="url(#ar)"/>
+  <text x="353" y="90" font-size="8.5" fill="#6d8074" text-anchor="middle">seal bytes</text>
+
+  <!-- KyzoRecord -->
+  <rect x="380" y="70" width="200" height="54" rx="6" fill="#14231b" stroke="#3f6b50"/>
+  <text x="480" y="90" font-size="12.5" fill="#c9d6cc" text-anchor="middle">KyzoRecord</text>
+  <text x="480" y="105" font-size="9.5" fill="#5fc492" text-anchor="middle">identity = SHA-256(canonical bytes)</text>
+  <text x="480" y="118" font-size="8.5" fill="#5a6d61" text-anchor="middle">store/transcript.rs · one sealed serializer (seat 59)</text>
+
+  <!-- the record IS its bytes -->
+  <text x="632" y="88" font-size="9.5" fill="#6d8074">no second way</text>
+  <text x="632" y="101" font-size="9.5" fill="#6d8074">for bytes to</text>
+  <text x="632" y="114" font-size="9.5" fill="#6d8074">become a record</text>
+
+  <!-- ============ BAND 2: SPINE — the name chains into a tamper-evident root ============ -->
+  <text x="30" y="168" font-size="10.5" fill="#5a6d61" letter-spacing="1.5">SPINE · store/merkle.rs — domain-separated, RFC-6962 Merkle Tree Hash</text>
+
+  <!-- leaf -->
+  <rect x="30" y="180" width="252" height="52" rx="6" fill="#131e18" stroke="#2c4636"/>
+  <text x="156" y="200" font-size="11" fill="#c9d6cc" text-anchor="middle">audit leaf</text>
+  <text x="156" y="216" font-size="9.5" fill="#7fa6bf" text-anchor="middle">SHA-256(0x00 ‖ u64(key.len) ‖ key ‖ value)</text>
+  <text x="156" y="227" font-size="8.5" fill="#5a6d61" text-anchor="middle">0x00/0x01/0x02 tags — leaf can never collide with a node</text>
+
+  <line x1="282" y1="206" x2="330" y2="206" stroke="#3f6b50" stroke-width="1.4" marker-end="url(#ar)"/>
+  <text x="306" y="199" font-size="8.5" fill="#6d8074" text-anchor="middle">MTH</text>
+
+  <!-- merkle fold -->
+  <rect x="332" y="180" width="168" height="52" rx="6" fill="#131e18" stroke="#2c4636"/>
+  <text x="416" y="200" font-size="11" fill="#c9d6cc" text-anchor="middle">Merkle fold</text>
+  <text x="416" y="216" font-size="9.5" fill="#7fa6bf" text-anchor="middle">node(l, r) over key order</text>
+  <text x="416" y="227" font-size="8.5" fill="#5a6d61" text-anchor="middle">leaf MAC is a typed Mac, not a Digest</text>
+
+  <line x1="500" y1="206" x2="548" y2="206" stroke="#3f6b50" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <!-- state root -->
+  <rect x="550" y="180" width="150" height="52" rx="6" fill="#14231b" stroke="#3f6b50"/>
+  <text x="625" y="200" font-size="11.5" fill="#5fc492" text-anchor="middle">StateRoot</text>
+  <text x="625" y="216" font-size="9.5" fill="#c9d6cc" text-anchor="middle">32 bytes</text>
+  <text x="625" y="227" font-size="8.5" fill="#5a6d61" text-anchor="middle">the whole store, one hash</text>
+
+  <line x1="700" y1="206" x2="748" y2="206" stroke="#3f6b50" stroke-width="1.4" marker-end="url(#ar)"/>
+  <text x="724" y="199" font-size="8.5" fill="#6d8074" text-anchor="middle">seal</text>
+
+  <!-- root chain -->
+  <rect x="750" y="180" width="140" height="52" rx="6" fill="#131e18" stroke="#2c4636"/>
+  <text x="820" y="200" font-size="11" fill="#c9d6cc" text-anchor="middle">RootChain tip</text>
+  <text x="820" y="216" font-size="9.5" fill="#7fa6bf" text-anchor="middle">ordered · signed</text>
+  <text x="820" y="227" font-size="8.5" fill="#5a6d61" text-anchor="middle">append-only</text>
+
+  <!-- ============ BAND 3: VERDICT — recompute cold and compare ============ -->
+  <text x="30" y="280" font-size="10.5" fill="#5a6d61" letter-spacing="1.5">VERDICT · session/verify.rs — state root recomputed COLD, never caller-supplied (#289)</text>
+
+  <rect x="30" y="292" width="860" height="118" rx="6" fill="#101913" stroke="#26362d"/>
+
+  <!-- intact path -->
+  <text x="52" y="322" font-size="11.5" fill="#c9d6cc">recompute the root from store contents</text>
+  <line x1="360" y1="318" x2="470" y2="318" stroke="#3f6b50" stroke-width="1.4" marker-end="url(#ar)"/>
+  <text x="415" y="311" font-size="8.5" fill="#6d8074" text-anchor="middle">compare to sealed tip</text>
+  <text x="486" y="322" font-size="12" fill="#5fc492">observed == sealed</text>
+  <text x="640" y="322" font-size="12" fill="#5fc492">✓ intact</text>
+
+  <line x1="52" y1="342" x2="868" y2="342" stroke="#22302a" stroke-width="1"/>
+
+  <!-- tamper path -->
+  <text x="52" y="372" font-size="11.5" fill="#c9d6cc">flip one stored byte, recompute</text>
+  <line x1="360" y1="368" x2="470" y2="368" stroke="#9c5342" stroke-width="1.4" marker-end="url(#arRed)"/>
+  <text x="415" y="361" font-size="8.5" fill="#a9705f" text-anchor="middle">compare to sealed tip</text>
+  <text x="486" y="372" font-size="12" fill="#d6906f">observed ≠ sealed</text>
+  <text x="640" y="372" font-size="12" fill="#d6906f">✗ tamper caught</text>
+  <text x="742" y="372" font-size="10" fill="#6d8074">— reproducible</text>
+
+  <text x="52" y="398" font-size="9.5" fill="#5a6d61">the expected digest is always the chain; the observed digest is always a cold rescan — a tamper cannot supply its own answer.</text>
+
+  <!-- footer -->
+  <text x="460" y="436" font-size="10" fill="#6d8074" text-anchor="middle">every node maps to a module you can read · ed25519 verify_strict rejects the malleable cross-store signatures a permissive verify would accept</text>
+</svg>
