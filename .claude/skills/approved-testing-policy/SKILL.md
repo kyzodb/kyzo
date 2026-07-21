@@ -1,5 +1,5 @@
 ---
-name: falsification-first-testing
+name: approved-testing-policy
 description: Governs how you write tests. Use whenever you are about to write, add, or modify a test, assertion, property check, golden/fixture, or any verification of a claim or invariant. Trigger the moment you write a test function, an assert, a golden comparison, or set out to "verify", "check", "confirm", or "prove" that something works — and any time you are about to accept a claim as passing.
 ---
 
