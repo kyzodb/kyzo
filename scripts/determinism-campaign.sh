@@ -7,11 +7,11 @@
 # RAYON_NUM_THREADS sweep, and — the remaining gap issue #30 named — CPU
 # architecture, by diffing digests recorded on two different runners.
 #
-# It drives crates/kyzo-core/examples/determinism_digest.rs, a single-shot probe
-# that runs a seeded mutation+time-travel+query workload through the public
-# `Db` API and prints one `COMBINED` hex digest (query answers, in returned
-# row order, plus the `::merkle_root` cold on-disk state hash — see the
-# example's module doc).
+# It drives crates/kyzo-trials/src/bin/determinism_digest.rs, a single-shot
+# probe that runs a seeded mutation+time-travel+query workload through the
+# public `Engine` API and prints one `COMBINED` hex digest (query answers,
+# in returned row order — see the binary's module doc). Remade at the
+# trials seat after museum cut 8ba3975.
 #
 # Usage: scripts/determinism-campaign.sh [digest-out] [digest-to-compare]
 #   digest-out         where to write this run's agreed digest (default:
@@ -30,7 +30,7 @@ OUT="${1:-determinism-digest.txt}"
 COMPARE="${2:-}"
 
 probe() {
-  RAYON_NUM_THREADS="$1" cargo run -p kyzo --release --example determinism_digest 2>&1
+  RAYON_NUM_THREADS="$1" cargo run -p kyzo-trials --release --bin determinism_digest 2>&1
 }
 
 extract_digest() {
@@ -39,7 +39,7 @@ extract_digest() {
 }
 
 echo "determinism campaign: building the probe once..."
-cargo build -p kyzo --release --example determinism_digest >/dev/null
+cargo build -p kyzo-trials --release --bin determinism_digest >/dev/null
 
 digests=()
 labels=()

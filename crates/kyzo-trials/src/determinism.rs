@@ -10,12 +10,16 @@
 //! Thread-count determinism lane (campaigns_proposed).
 //!
 //! Capability 1's `determinism_campaign` / `run_seed` in [`crate::gauntlet`]
-//! is the living campaign: generated programs at 1/2/4/8 rayon threads with
-//! byte-identical answers, witness tables, and refusals.
+//! is the living in-process campaign: generated programs at 1/2/4/8 rayon
+//! threads with byte-identical answers, witness tables, and refusals.
 //!
-//! This module is the named seat for that lane — points at Cap1 so board /
-//! architecture references to `kyzo-trials/determinism.rs` resolve without
-//! a second corpus.
+//! The cross-process / cross-architecture axis (story #30) is the
+//! `determinism_digest` binary in this crate, driven by
+//! `scripts/determinism-campaign.sh`.
+//!
+//! This module is the named seat for Cap1's lane — points at gauntlet so
+//! board / architecture references to `kyzo-trials/determinism.rs` resolve
+//! without a second corpus.
 
 #![cfg(test)]
 
