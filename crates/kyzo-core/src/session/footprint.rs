@@ -11,18 +11,38 @@
 //!
 //! Owns: [`AskShape`], [`Footprint`], [`Frontier`], [`EdgePredicate`],
 //! accelerator contract, `(FenceEpoch, IncarnationId)` footprint index,
-//! fence-pressure operator feed, overlap adjudication, Envelope soundness.
+//! fence-pressure operator feed, overlap adjudication, Envelope soundness,
+//! [`FootprintClearEvidence`] (sole mint via [`LiveFootprintTable::prove_epoch_clear`]).
 //!
 //! Bans: Underivable inside Fenced; under-approximating footprints;
 //! accelerator-as-admission-authority; caller-asserted accelerator
-//! confirmation; durable lock organs, expiry timers, abandonment ceremonies.
+//! confirmation; durable lock organs, expiry timers, abandonment ceremonies;
+//! contentless self-attestation of epoch clear (bare args, no live-table proof).
 //!
 //! Live footprints exist only while the owning incarnation's write session
 //! is live (session-memory). Prior-epoch / prior-incarnation footprints are
 //! not live locks. Overlapping Fenced footprints refuse at the door.
 
 use crate::store::authority::IncarnationId;
-use crate::store::epoch::FenceEpoch;
+use crate::store::epoch::{EpochAdvanceRefuse, FenceEpoch};
+
+/// Opaque evidence that no live Fenced footprints remain in a [`FenceEpoch`].
+///
+/// Minted only by [`LiveFootprintTable::prove_epoch_clear`]. Caller-forged
+/// clear (bare epoch args, self-attestation) is Unconstructible — the type
+/// has no public free constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FootprintClearEvidence {
+    fence_epoch: FenceEpoch,
+    _priv: (),
+}
+
+impl FootprintClearEvidence {
+    /// Epoch this evidence proves clear of live Fenced footprints.
+    pub fn fence_epoch(self) -> FenceEpoch {
+        self.fence_epoch
+    }
+}
 
 /// Sealed ask shape at admission (§36).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,6 +404,24 @@ impl LiveFootprintTable {
         self.live
             .iter()
             .any(|(k, s)| k.fence_epoch == epoch && matches!(s, AskShape::Fenced(_)))
+    }
+
+    /// Prove no live Fenced footprints remain in `fence_epoch`.
+    ///
+    /// Sole mint of [`FootprintClearEvidence`]. Live Fenced →
+    /// [`EpochAdvanceRefuse::EpochAdvanceBlocked`] — contentless self-attestation
+    /// of clear is Unconstructible.
+    pub fn prove_epoch_clear(
+        &self,
+        fence_epoch: FenceEpoch,
+    ) -> Result<FootprintClearEvidence, EpochAdvanceRefuse> {
+        if self.has_live_fenced_in_epoch(fence_epoch) {
+            return Err(EpochAdvanceRefuse::EpochAdvanceBlocked);
+        }
+        Ok(FootprintClearEvidence {
+            fence_epoch,
+            _priv: (),
+        })
     }
 }
 

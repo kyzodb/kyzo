@@ -13,10 +13,12 @@
 //! advance [`EpochAdvanceCommitted`] event.
 //!
 //! Bans: fabric-minted write continuity; epoch advance under live
-//! current-epoch footprints without [`IntentClear`] (RecoveryGrant exempt).
+//! current-epoch footprints without footprint-proven [`IntentClear`]
+//! (RecoveryGrant exempt); bare-arg [`IntentClear`] self-attestation.
 
 use super::authority::WriteAuthority;
 use super::open::StoreId;
+use crate::session::footprint::{FootprintClearEvidence, LiveFootprintTable};
 
 /// Store-local fence epoch. Genesis is sealed into the genesis digest /
 /// [`CryptoDomain`] as a verification fact — fabric never mints write continuity.
@@ -151,12 +153,14 @@ pub struct IntentClear {
 impl IntentClear {
     /// Attest that no live current-epoch Fenced footprints remain.
     ///
-    /// Session/footprint seat (T12) is the sole honest caller; the type is
-    /// public so the advance door is reachable without a forge path through
-    /// fabric.
-    pub fn attest(store_id: StoreId, fence_epoch: FenceEpoch) -> Self {
+    /// Consumes [`FootprintClearEvidence`] minted by
+    /// [`LiveFootprintTable::prove_epoch_clear`] — bare `(StoreId, FenceEpoch)`
+    /// self-attestation is Unconstructible. Store identity is taken from the
+    /// evidence's bound [`FenceEpoch`].
+    pub fn attest(evidence: FootprintClearEvidence) -> Self {
+        let fence_epoch = evidence.fence_epoch();
         Self {
-            store_id,
+            store_id: fence_epoch.store_id(),
             fence_epoch,
         }
     }
@@ -241,13 +245,16 @@ pub enum EpochAdvanceRefuse {
 /// Same-principal live-token advance: new CryptoDomain, same KEK, new IncarnationId
 /// at the next open — WriteAuthority remains the immutable signing capability.
 ///
-/// Requires [`IntentClear`]. Consumes the predecessor epoch counter into the
-/// [`EpochAdvanceCommitted`] event (the advance *is* a Committed event).
+/// Requires [`IntentClear`] (footprint-proven) and a live footprint table with
+/// no current-epoch Fenced rows — [`EpochAdvanceRefuse::EpochAdvanceBlocked`]
+/// when live Fenced footprints remain. Consumes the predecessor epoch counter
+/// into the [`EpochAdvanceCommitted`] event (the advance *is* a Committed event).
 pub fn advance(
     current: CryptoDomain,
     grant: EpochGrant,
     intent_clear: IntentClear,
     authority: &WriteAuthority,
+    footprints: &LiveFootprintTable,
 ) -> Result<EpochAdvanceCommitted, EpochAdvanceRefuse> {
     if authority.store_id() != current.store_id() || grant.store_id() != current.store_id() {
         return Err(EpochAdvanceRefuse::GrantStoreMismatch);
@@ -258,6 +265,10 @@ pub fn advance(
     if intent_clear.store_id() != current.store_id()
         || intent_clear.fence_epoch() != current.fence_epoch()
     {
+        return Err(EpochAdvanceRefuse::EpochAdvanceBlocked);
+    }
+    // Fresh check: IntentClear proves a prior clear; live Fenced still block.
+    if footprints.has_live_fenced_in_epoch(current.fence_epoch()) {
         return Err(EpochAdvanceRefuse::EpochAdvanceBlocked);
     }
     let next_epoch = current.fence_epoch().successor()?;
@@ -286,4 +297,67 @@ pub fn advance_recovery(
         successor,
         recovery_link: Some(RecoveryEpochLink::new(predecessor_epoch)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::footprint::{
+        AskShape, ByteRange, FencedFootprint, Footprint, FootprintIndexKey, LiveFootprintTable,
+    };
+    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
+
+    /// Nasty: attest clear (via empty-table evidence) then insert a live Fenced
+    /// footprint — ordinary advance must refuse EpochAdvanceBlocked. Contentless
+    /// bare-arg attest is Unconstructible; the forge path is TOCTOU after attest.
+    #[test]
+    fn intent_clear_attest_while_live_fenced_blocks_epoch_advance() {
+        let store_id = StoreId::from_digest([0xE6; 32]);
+        let fence_epoch = FenceEpoch::genesis(store_id);
+        let current = CryptoDomain::new(store_id, fence_epoch);
+        let grant = EpochGrant::new(store_id, fence_epoch);
+        let authority = WriteAuthority::mint(store_id, [0xA7; 32]);
+
+        // Attest clear against an empty live table (honest at attest time).
+        let mut footprints = LiveFootprintTable::new();
+        let evidence = footprints
+            .prove_epoch_clear(fence_epoch)
+            .expect("empty table is clear");
+        let intent_clear = IntentClear::attest(evidence);
+
+        // Live Fenced footprint appears after attest — advance must still refuse.
+        let incarnation = authority
+            .incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes([0xF6; 32]))
+            .expect("incarnation");
+        let fenced = FencedFootprint::seal(
+            Footprint::Exact(vec![ByteRange {
+                start: b"a".to_vec(),
+                end: b"z".to_vec(),
+            }]),
+            0,
+        )
+        .expect("FencedFootprint seal");
+        footprints
+            .insert(
+                FootprintIndexKey {
+                    fence_epoch,
+                    incarnation_id: incarnation,
+                },
+                AskShape::Fenced(fenced),
+            )
+            .expect("live Fenced insert");
+        assert!(footprints.has_live_fenced_in_epoch(fence_epoch));
+
+        assert_eq!(
+            advance(current, grant, intent_clear, &authority, &footprints),
+            Err(EpochAdvanceRefuse::EpochAdvanceBlocked)
+        );
+
+        // Prove door itself refuses while the live Fenced remains.
+        assert_eq!(
+            footprints.prove_epoch_clear(fence_epoch),
+            Err(EpochAdvanceRefuse::EpochAdvanceBlocked)
+        );
+    }
 }
