@@ -13,11 +13,28 @@
 
 //! Joins: the column joiner, prefix/point storage-probe joins
 //! (batch-native), and the sorted-merge materialized fallback.
+//!
+//! ## Free-Join / WCOJ target (seat 99)
+//!
+//! The ruled evaluator shape is **Free-Join-class** (unifies binary join
+//! with worst-case-optimal join; pure WCOJ alone regresses acyclic plans).
+//! CozoDB's binary-join tree remains the provisional executor here and is
+//! asymptotically suboptimal on cyclic queries (AGM triangle). First
+//! milestone — live Store `seek` + Leapfrog Triejoin over 3 relations —
+//! lives at [`crate::store::skip_walk::leapfrog_intersect_3`] (metered
+//! under `store::`). This module re-exports that primitive; it does **not**
+//! yet replace the binary-join planner. AGM-triangle optimality is not a
+//! CI theorem until the Free-Join planner lands (`[research-open]`).
 // ─────────────────────────────────────────────────────────────────────────
 // Shared plumbing
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
+
+/// Free-Join first-cut primitive (LFTJ over 3 ordered relations via live
+/// `SkipCursor::seek`). Seat 99 milestone — not planner replacement.
+#[allow(unused_imports)] // re-export for exec consumers / seat wiring
+pub(crate) use crate::store::skip_walk::leapfrog_intersect_3;
 use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter};

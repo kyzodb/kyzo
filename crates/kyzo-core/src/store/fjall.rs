@@ -28,6 +28,12 @@
 //!   read.
 //! - **Read-your-own-writes** — the write transaction overlays its write set
 //!   over a consistent snapshot taken at creation.
+//! - **Live `seek(key)` (Store law, seat 99)** — fjall already exposes
+//!   `SeekIter` / `TrackedSeekIter::seek`; [`FjallSkipCursor`] is the
+//!   production door that wires those into [`SkipCursor::seek`](crate::store::skip_walk::SkipCursor).
+//!   One positioned cursor, re-seeked forward — never drop+rebuild a
+//!   fixed-bound range as the only advance. Bitemporal skip walks and the
+//!   LFTJ first cut (`leapfrog_intersect_3`) both consume this door.
 //! - **Bitemporal as-of scans** — a seek loop over ONE positioned cursor
 //!   (a read tx's `fjall::SeekIter`, or a write tx's SSI-conflict-tracking
 //!   `fjall::TrackedSeekIter`; opened once and re-seeked forward per step,
@@ -803,6 +809,9 @@ impl FjallSeekStep for fjall::TrackedSeekIter<'_> {
     }
 }
 
+/// Production live-seek door: forward `seek` on the held fjall iterator —
+/// not a fresh `seek_range` per step. Free-Join / LFTJ (seat 99) and
+/// [`SkipWalk`] both require this shape.
 impl<S: FjallSeekStep> SkipCursor for FjallSkipCursor<S> {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
         match self {

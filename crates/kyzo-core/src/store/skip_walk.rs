@@ -61,6 +61,16 @@
 //! calling `seek` when `next_bound >= upper`, so `open_skip_cursor` and
 //! `seek` are free to assume a well-formed, non-empty range.
 //!
+//! ## Live `seek` is Store law (Free-Join / LFTJ substrate)
+//!
+//! [`SkipCursor::seek`] is the production seek door — one positioned cursor,
+//! advanced forward by key, never "drop the range and rebuild from
+//! `open_skip_cursor`" as the only advance. On fjall that door is
+//! `FjallSkipCursor` → `fjall::SeekIter` / `TrackedSeekIter::seek` (see
+//! `store/fjall.rs`). Bitemporal skip walks and the Leapfrog Triejoin
+//! first cut ([`leapfrog_intersect_3`]) both consume this seam. Drop+rebuild
+//! as the sole join/scan advance is deleted law (decisions.md seat 99).
+//!
 //! ## The walk (`SkipWalk`)
 //!
 //! `SkipWalk<C: SkipCursor>` OWNS the opened cursor (built once, by the
@@ -145,9 +155,16 @@ use kyzo_model::value::Tuple;
 /// rather than rebuilt. `target` is always non-decreasing across calls on
 /// the same cursor (the walk only ever moves forward); a cursor may
 /// assume this and is never asked to seek backward.
+///
+/// This is the Store live-seek primitive the Free-Join / LFTJ evaluator
+/// path consumes (seat 99). Production fjall wiring:
+/// [`crate::store::fjall::FjallSkipCursor`].
 #[cfg(test)]
 use kyzo_model::data_value_any;
 pub(crate) trait SkipCursor {
+    /// Reposition to the first key at or after `target` on this same cursor.
+    /// `None` = exhausted. Must not reopen a fresh range as the only legal
+    /// advance (fjall: `SeekIter::seek` / `TrackedSeekIter::seek`).
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>>;
 }
 
@@ -213,6 +230,97 @@ fn advance_past(examined: &[u8], candidate_bound: Vec<u8>) -> Vec<u8> {
         let mut succ = examined.to_vec();
         succ.push(0);
         succ
+    }
+}
+
+/// Leapfrog Triejoin first cut: intersect three ordered unary relations
+/// by live [`SkipCursor::seek`] (Ngo/Veldhuizen LFTJ leapfrog on one
+/// variable). Emits keys present in all three, in memcmp order.
+///
+/// This is the executable Free-Join milestone (seat 99) — not a planner
+/// replacement, not an AGM-triangle CI theorem. Full Free-Join (binary +
+/// WCOJ unification) remains `[research-open]`.
+pub(crate) fn leapfrog_intersect_3<C0, C1, C2>(
+    mut a: C0,
+    mut b: C1,
+    mut c: C2,
+) -> Result<Vec<Vec<u8>>>
+where
+    C0: SkipCursor,
+    C1: SkipCursor,
+    C2: SkipCursor,
+{
+    let mut out = Vec::new();
+    let Some(mut ka) = leapfrog_seek_key(&mut a, &[])? else {
+        return Ok(out);
+    };
+    let Some(mut kb) = leapfrog_seek_key(&mut b, &[])? else {
+        return Ok(out);
+    };
+    let Some(mut kc) = leapfrog_seek_key(&mut c, &[])? else {
+        return Ok(out);
+    };
+
+    loop {
+        let mut max = ka.as_slice();
+        if kb.as_slice() > max {
+            max = kb.as_slice();
+        }
+        if kc.as_slice() > max {
+            max = kc.as_slice();
+        }
+        let max = max.to_vec();
+
+        if ka.as_slice() != max.as_slice() {
+            match leapfrog_seek_key(&mut a, &max)? {
+                None => return Ok(out),
+                Some(k) => ka = k,
+            }
+        }
+        if kb.as_slice() != max.as_slice() {
+            match leapfrog_seek_key(&mut b, &max)? {
+                None => return Ok(out),
+                Some(k) => kb = k,
+            }
+        }
+        if kc.as_slice() != max.as_slice() {
+            match leapfrog_seek_key(&mut c, &max)? {
+                None => return Ok(out),
+                Some(k) => kc = k,
+            }
+        }
+
+        if ka.as_slice() == max.as_slice()
+            && kb.as_slice() == max.as_slice()
+            && kc.as_slice() == max.as_slice()
+        {
+            out.push(max.clone());
+            let succ = {
+                let mut s = max;
+                s.push(0);
+                s
+            };
+            match leapfrog_seek_key(&mut a, &succ)? {
+                None => return Ok(out),
+                Some(k) => ka = k,
+            }
+            match leapfrog_seek_key(&mut b, &succ)? {
+                None => return Ok(out),
+                Some(k) => kb = k,
+            }
+            match leapfrog_seek_key(&mut c, &succ)? {
+                None => return Ok(out),
+                Some(k) => kc = k,
+            }
+        }
+    }
+}
+
+fn leapfrog_seek_key(cursor: &mut impl SkipCursor, target: &[u8]) -> Result<Option<Vec<u8>>> {
+    match cursor.seek(target) {
+        None => Ok(None),
+        Some(Err(e)) => Err(e),
+        Some(Ok((k, _))) => Ok(Some(k)),
     }
 }
 
@@ -613,5 +721,88 @@ mod tests {
             1,
             "the walk drove ONE cursor across all 100 facts' version steps, never reopened"
         );
+    }
+
+    /// Counting wrapper: pins that LFTJ advances by [`SkipCursor::seek`],
+    /// not by drop+rebuild of the opened cursor (opens stay at 1 per
+    /// relation; seeks are many).
+    struct CountSeekCursor<'a> {
+        inner: MapSeekCursor<'a>,
+        seeks: &'a Cell<usize>,
+    }
+
+    impl SkipCursor for CountSeekCursor<'_> {
+        fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+            self.seeks.set(self.seeks.get() + 1);
+            self.inner.seek(target)
+        }
+    }
+
+    fn unary_store(keys: &[&[u8]]) -> MapSeek {
+        let mut store = MapSeek::default();
+        for k in keys {
+            store.map.insert(k.to_vec(), vec![1]);
+        }
+        store
+    }
+
+    /// Seat 99 first milestone: Leapfrog Triejoin over 3 ordered unary
+    /// relations via live `seek`. Intersection is `{b, c}`; each relation
+    /// opens exactly one cursor; seeks fire (not nested-scan costume).
+    #[test]
+    fn leapfrog_intersect_3_relations_via_live_seek() {
+        let r = unary_store(&[b"a", b"b", b"c", b"d"]);
+        let s = unary_store(&[b"b", b"c", b"e"]);
+        let t = unary_store(&[b"a", b"b", b"c", b"f"]);
+        let upper = vec![0xff];
+        let seeks_r = Cell::new(0);
+        let seeks_s = Cell::new(0);
+        let seeks_t = Cell::new(0);
+
+        let got = leapfrog_intersect_3(
+            CountSeekCursor {
+                inner: r.open_skip_cursor(&[], &upper),
+                seeks: &seeks_r,
+            },
+            CountSeekCursor {
+                inner: s.open_skip_cursor(&[], &upper),
+                seeks: &seeks_s,
+            },
+            CountSeekCursor {
+                inner: t.open_skip_cursor(&[], &upper),
+                seeks: &seeks_t,
+            },
+        )
+        .expect("LFTJ over honest keys");
+
+        assert_eq!(got, vec![b"b".to_vec(), b"c".to_vec()]);
+        assert_eq!(r.opens.get(), 1, "R: one cursor, seek-advanced");
+        assert_eq!(s.opens.get(), 1, "S: one cursor, seek-advanced");
+        assert_eq!(t.opens.get(), 1, "T: one cursor, seek-advanced");
+        assert!(
+            seeks_r.get() >= 2 && seeks_s.get() >= 2 && seeks_t.get() >= 2,
+            "leapfrog must call seek on every cursor (got r={} s={} t={})",
+            seeks_r.get(),
+            seeks_s.get(),
+            seeks_t.get()
+        );
+    }
+
+    /// Empty intersection / exhausted relation: LFTJ returns empty without
+    /// inventing keys — the RED pin when a binary-join costume would still
+    /// emit a cartesian ghost.
+    #[test]
+    fn leapfrog_intersect_3_empty_when_one_relation_misses() {
+        let r = unary_store(&[b"a", b"b"]);
+        let s = unary_store(&[b"x", b"y"]);
+        let t = unary_store(&[b"a", b"b", b"x"]);
+        let upper = vec![0xff];
+        let got = leapfrog_intersect_3(
+            r.open_skip_cursor(&[], &upper),
+            s.open_skip_cursor(&[], &upper),
+            t.open_skip_cursor(&[], &upper),
+        )
+        .expect("LFTJ");
+        assert!(got.is_empty(), "no common key across R∩S∩T");
     }
 }
