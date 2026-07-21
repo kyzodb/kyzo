@@ -1691,6 +1691,40 @@ mod authorizing_key_ed25519_tests {
         );
     }
 
+    /// GUARDIAN RED GATE (#376 T1) -- weak-key forged RECOVERY QUORUM = write-authority theft.
+    /// The same identity-key forgery (empirically confirmed vs ed25519-dalek 3.0.0-rc.1) is
+    /// accepted by `RecoveryQuorumProof::verify`'s permissive `.verify()`: a small-order key in
+    /// the matrix + (R = identity, S = 0) mints a VERIFIED quorum proof under a key nobody
+    /// controls, and materialize would then hand out a WriteAuthority. RED until grants.rs's
+    /// recovery/consent/entitlement `.verify` become `verify_strict`.
+    #[test]
+    fn permissive_verify_accepts_weak_key_forged_recovery_quorum() {
+        use crate::store::authority::{RecoveryMatrix, RecoveryPublicKey};
+        use crate::store::grants::{
+            GrantId, IdentitySeed, KeyMaterialCommitment, RecoveryQuorumProof,
+            recovery_grant_payload_digest,
+        };
+        let store = StoreId::from_digest([0x71; 32]);
+        let payload = recovery_grant_payload_digest(
+            GrantId::from_bytes([0x90; 32]),
+            store,
+            FenceEpoch::genesis(store),
+            &IdentitySeed::from_digest([0xEE; 32]),
+            &KeyMaterialCommitment::from_digest([0xEF; 32]),
+        );
+        let mut weak = [0u8; 32];
+        weak[0] = 1; // identity point encoding
+        let weak_pk = RecoveryPublicKey::from_bytes(weak);
+        let matrix = RecoveryMatrix::new(1, vec![weak_pk]).expect("1-of-1 matrix");
+        let mut forged = [0u8; 64];
+        forged[0] = 1; // R = identity, S = 0
+        assert!(
+            RecoveryQuorumProof::verify(&matrix, &payload, &[(weak_pk, forged)]).is_err(),
+            "FORGED QUORUM: a small-order recovery key + weak-key forgery mints a verified \
+             RecoveryQuorumProof (write-authority theft) -- grants.rs .verify() must become verify_strict"
+        );
+    }
+
     /// RFC 8032 ed25519 test vector 1 (empty message) — public verify golden.
     ///
     /// Public key + signature bytes are the RFC §7.1 TEST 1 constants. Origin
