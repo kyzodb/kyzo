@@ -1337,3 +1337,68 @@ fn parse_read_validity_clause(
         _ => bail!(UnexpectedRule(clause.extract_span())),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse::{Script, parse_script};
+    use crate::program::rule::InputInlineRulesOrFixed;
+    use crate::value::ValidityTs;
+    use std::collections::BTreeMap;
+
+    fn parse_q(src: &str) -> InputProgram {
+        let cur = ValidityTs::from_raw(0);
+        match parse_script(src, &BTreeMap::new(), cur).unwrap() {
+            Script::Query(p) => p,
+            other => panic!("expected Query script, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_query_const_entry_is_fixed_constant_with_head_arity_two() {
+        // `<- [[…]]` lifts as the Constant fixed rule, not inline Rules.
+        let prog = parse_q(r#"?[a, b] <- [[1, 2]]"#);
+        assert_eq!(prog.entry_name().to_string(), "?");
+        match prog.entry() {
+            InputInlineRulesOrFixed::Fixed { fixed } => {
+                assert_eq!(fixed.head.len(), 2);
+                assert_eq!(fixed.head[0].to_string(), "a");
+                assert_eq!(fixed.head[1].to_string(), "b");
+                assert_eq!(fixed.arity().unwrap(), 2);
+                assert_eq!(fixed.fixed_handle.name.to_string(), "Constant");
+            }
+            InputInlineRulesOrFixed::Rules { .. } => {
+                panic!("const `<-` entry must be Fixed(Constant), got Rules")
+            }
+        }
+    }
+
+    #[test]
+    fn parse_query_refuses_empty_and_no_entry() {
+        let cur = ValidityTs::from_raw(0);
+        assert!(parse_script("", &BTreeMap::new(), cur).is_err());
+        // A rule without `?` entry cannot become an InputProgram.
+        let err = parse_script(r#"r[x] := *s[x]"#, &BTreeMap::new(), cur).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("entry") || msg.contains("Entry") || msg.contains("?"),
+            "no-entry query must refuse, got {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_query_relation_apply_atom_lifts() {
+        let prog = parse_q(r#"?[x] := *r[x]"#);
+        match prog.entry() {
+            InputInlineRulesOrFixed::Rules { rules } => {
+                assert_eq!(rules.len(), 1);
+                assert_eq!(rules[0].head.len(), 1);
+                assert!(
+                    !rules[0].body.is_empty(),
+                    "body must carry the relation apply atom"
+                );
+            }
+            InputInlineRulesOrFixed::Fixed { .. } => panic!("expected Rules entry"),
+        }
+    }
+}

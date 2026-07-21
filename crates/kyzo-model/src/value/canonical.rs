@@ -1908,4 +1908,30 @@ mod tests {
         hostile.pop();
         assert_eq!(decode(&hostile), Err(DecodeError::Truncated));
     }
+
+    /// Deliberate construction of refusal variants that the random totality
+    /// battery can miss (exact match, not merely `is_err`).
+    #[test]
+    fn decode_refusal_variants_deliberately_constructed() {
+        // TrailingBytes: a complete Null plus one extra byte.
+        assert_eq!(
+            decode(&[Tag::Null.byte(), 0x00]),
+            Err(DecodeError::TrailingBytes)
+        );
+        assert_eq!(decode(&[0xFF]), Err(DecodeError::BadTag(0xFF)));
+        assert_eq!(
+            decode(&[Tag::Bool.byte(), 0x02]),
+            Err(DecodeError::BadBool)
+        );
+        // Str body: `0x00 0x01` is not a lawful escape (only 0x00/0xFF after NUL).
+        assert_eq!(
+            decode(&[Tag::Str.byte(), 0x00, 0x01]),
+            Err(DecodeError::BadEscape)
+        );
+        // Num payload that is Truncated wraps as DecodeError::Num.
+        assert_eq!(
+            decode(&[Tag::Num.byte()]),
+            Err(DecodeError::Num(NumDecodeError::Truncated))
+        );
+    }
 }

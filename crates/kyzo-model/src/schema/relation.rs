@@ -109,3 +109,65 @@ impl StoredRelationMetadata {
         bail!(ColumnNotFound(col.name.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::column::{ColType, ColumnDef, NullableColType};
+    use smartstring::SmartString;
+
+    fn col(name: &str, ty: ColType) -> ColumnDef {
+        ColumnDef {
+            name: SmartString::from(name),
+            typing: NullableColType::required(ty),
+            default_gen: None,
+        }
+    }
+
+    #[test]
+    fn put_requires_keys_and_non_keys_remove_only_keys() {
+        let stored = StoredRelationMetadata {
+            keys: vec![col("k", ColType::Int)],
+            non_keys: vec![col("v", ColType::String)],
+        };
+        let full = StoredRelationMetadata {
+            keys: vec![col("k", ColType::Int)],
+            non_keys: vec![col("v", ColType::String)],
+        };
+        assert!(
+            CompatibleInputSchema::prove(&stored, &full, RelationWriteShape::Put).is_ok()
+        );
+        let keys_only = StoredRelationMetadata {
+            keys: vec![col("k", ColType::Int)],
+            non_keys: vec![],
+        };
+        assert!(
+            CompatibleInputSchema::prove(&stored, &keys_only, RelationWriteShape::Put).is_err(),
+            "Put without non-key must refuse"
+        );
+        assert!(
+            CompatibleInputSchema::prove(
+                &stored,
+                &keys_only,
+                RelationWriteShape::RemoveOrUpdate
+            )
+            .is_ok(),
+            "RemoveOrUpdate needs only keys"
+        );
+    }
+
+    #[test]
+    fn type_mismatch_refuses_compatible_column() {
+        let stored = StoredRelationMetadata {
+            keys: vec![col("k", ColType::Int)],
+            non_keys: vec![],
+        };
+        let wrong = StoredRelationMetadata {
+            keys: vec![col("k", ColType::String)],
+            non_keys: vec![],
+        };
+        assert!(
+            CompatibleInputSchema::prove(&stored, &wrong, RelationWriteShape::Put).is_err()
+        );
+    }
+}

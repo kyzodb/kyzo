@@ -176,3 +176,51 @@ impl From<Denial> for MaterializeError {
         MaterializeError::Denial(d)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::DataValue;
+
+    #[test]
+    fn admit_decoded_empty_is_empty_hits() {
+        let hits = SearchHits::admit_decoded(std::iter::empty()).unwrap();
+        assert!(hits.is_empty());
+        assert_eq!(hits.len(), 0);
+        assert!(hits.materialize_all().unwrap().is_empty());
+    }
+
+    #[test]
+    fn admit_decoded_refuses_arity_mismatch() {
+        let err = SearchHits::admit_decoded([
+            Tuple::from_vec(vec![DataValue::from(1)]),
+            Tuple::from_vec(vec![DataValue::from(1), DataValue::from(2)]),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            err,
+            Denial::ArityMismatch {
+                expected: 1,
+                got: 2
+            }
+        );
+    }
+
+    #[test]
+    fn admit_decoded_round_trips_materialize() {
+        let row = Tuple::from_vec(vec![DataValue::from(7), DataValue::from("x")]);
+        let hits = SearchHits::admit_decoded([row.clone()]).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.materialize_all_tuples().unwrap(), vec![row]);
+    }
+
+    #[test]
+    fn materialize_hit_refuses_out_of_range() {
+        let hits = SearchHits::empty();
+        let err = hits.materialize_hit(0).unwrap_err();
+        assert_eq!(
+            err,
+            MaterializeError::RowOutOfRange { index: 0, len: 0 }
+        );
+    }
+}

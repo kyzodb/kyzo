@@ -708,4 +708,46 @@ mod tests {
         )])])]);
         assert_eq!(e.flatten(), lit("x"));
     }
+
+    /// Drive the nesting ceiling through the sole non-test constructor
+    /// ([`parse_fts_query`]), not a hand-built tree — the parser is what
+    /// the depth invariant on [`FtsExpr`] relies on.
+    #[test]
+    fn parse_fts_query_refuses_nesting_over_ceiling() {
+        // Nested `w NOT (…)`: each NOT raises the weight passed into the
+        // grouped child (see `parse_fts_expr` / `build_term`).
+        let mut q = String::from("w");
+        for _ in 0..FTS_NESTING_CEILING {
+            q = format!("w NOT ({q})");
+        }
+        let err = parse_fts_query(&q).expect_err("must refuse over nesting ceiling");
+        assert!(
+            err.downcast_ref::<FtsNestingTooDeep>().is_some(),
+            "expected FtsNestingTooDeep, got {err:?}"
+        );
+        // Weight grows by ~2 per nested NOT; 16 NOTs stays well under the ceiling.
+        let mut ok = String::from("w");
+        for _ in 0..16 {
+            ok = format!("w NOT ({ok})");
+        }
+        assert!(
+            parse_fts_query(&ok).is_ok(),
+            "16 nested NOTs must still admit"
+        );
+    }
+
+    #[test]
+    fn parse_fts_query_refuses_ops_over_ceiling() {
+        let terms: Vec<&str> = std::iter::repeat("w")
+            .take(FTS_OPS_CEILING + 2)
+            .collect();
+        let q = terms.join(" AND ");
+        let err = parse_fts_query(&q).expect_err("must refuse over ops ceiling");
+        assert!(
+            err.downcast_ref::<FtsTooManyOps>().is_some(),
+            "expected FtsTooManyOps, got {err:?}"
+        );
+        let ok_terms: Vec<&str> = std::iter::repeat("w").take(8).collect();
+        assert!(parse_fts_query(&ok_terms.join(" AND ")).is_ok());
+    }
 }

@@ -1049,4 +1049,47 @@ mod tests {
             );
         }
     }
+
+    /// Every [`NumDecodeError`] variant is reachable through
+    /// [`Num::decode_key`] — not merely "is_err" against random bytes.
+    #[test]
+    fn num_decode_error_variants_deliberately_constructed() {
+        assert_eq!(Num::decode_key(&[]), Err(NumDecodeError::Truncated));
+        assert_eq!(Num::decode_key(&[0x02]), Err(NumDecodeError::Truncated));
+        assert_eq!(Num::decode_key(&[0x00]), Err(NumDecodeError::BadClass));
+        assert_eq!(Num::decode_key(&[0x02, 0x7F]), Err(NumDecodeError::BadRepr));
+        assert_eq!(Num::decode_key(&[0x04, 0x00]), Err(NumDecodeError::BadRepr));
+
+        // POS + INF exp + wrong fraction → BadInfinity
+        let mut bad_inf = vec![0x03, 0xFF, 0xFF];
+        bad_inf.extend_from_slice(&[0x00; 9]); // frac not all-ones
+        bad_inf.push(0x01); // float repr
+        assert_eq!(Num::decode_key(&bad_inf), Err(NumDecodeError::BadInfinity));
+
+        // POS + finite exp + leading bit clear → Denormalized
+        let mut denorm = vec![0x03, 0x04, 0x38]; // exp for ~0.5 range
+        denorm.extend_from_slice(&[0x00; 9]); // leading 1 missing
+        denorm.push(0x01);
+        assert_eq!(Num::decode_key(&denorm), Err(NumDecodeError::Denormalized));
+
+        // Int labeled with e=0 (out of 1..=64) → IntRange via rebuild after
+        // setting a leading-1 fraction at an illegal exponent.
+        // Use a lawful float key and flip the repr byte to Int with an
+        // exponent that floats use but ints refuse (e.g. e for 0.5 → e=0
+        // after offset decode is negative / out of int range).
+        let mut half = key(Num::float(0.5));
+        let last = half.len() - 1;
+        half[last] = 0x00; // force Int repr on a fractional magnitude
+        assert_eq!(Num::decode_key(&half), Err(NumDecodeError::IntRange));
+
+        // Float with e > 1024 (beyond finite): take INF exp with float
+        // repr but truncate fraction so BadInfinity already covers INF;
+        // FloatRange: subnormal path with bl out of 1..=52.
+        // Craft: POS, exp = 0 (stored) → e = -1080, subnormal bl = -6 → FloatRange.
+        let mut far = vec![0x03, 0x00, 0x00];
+        far.push(0x80); // leading 1 at bit 71
+        far.extend_from_slice(&[0x00; 8]);
+        far.push(0x01);
+        assert_eq!(Num::decode_key(&far), Err(NumDecodeError::FloatRange));
+    }
 }
