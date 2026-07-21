@@ -1377,13 +1377,20 @@ use super::{
 };
 use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
 use crate::store::merkle::{GENESIS_ROOT, StateRoot};
 use crate::store::open::{
     open_with_capability, EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl,
-    genesis,
+    StoreId, genesis,
 };
 use crate::store::scratch::TempTx;
 use crate::store::wal::{replay, WalPayload, WalRecord, WalSegment};
+
+fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
+    let key = OperationKey::single_store(b"kyzo.sweep.dst", op, store_id, b"s0");
+    let digest = IdempotencyMemo::digest_request(op);
+    (key, digest)
+}
 
 /// Adversarial crash-instant corpus size — large enough that the 99.9th
 /// percentile is a real sample, not a hand-picked singleton.
@@ -1492,8 +1499,12 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
 
     let mut committed = Vec::with_capacity(n_commits);
     for i in 0..n_commits {
+        let mut step = [0u8; 16];
+        step[..8].copy_from_slice(&seed.to_le_bytes());
+        step[8..].copy_from_slice(&(i as u64).to_le_bytes());
+        let (key, digest) = op_key(store_id, &step);
         let intent = door
-            .admit(incarnation, &session)
+            .admit(incarnation, &session, key, digest)
             .expect("admit before power-cut");
         let proof = door
             .seal_durable(
@@ -1700,7 +1711,7 @@ pub mod storage_campaign_lanes {
         IntentOrdinal, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
         ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate,
         PermanenceWitness, PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant,
-        RecoveryMatrix, RecoveryPublicKey, Regions, ReplicaCustody, ReplicaKey,
+        RecoveryMatrix, RecoveryPublicKey, Regions, ReplicaCustody, ReplicaKey, RequestDigest,
         ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, SealDigest, SealRefuse,
         SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingToken, StagingTtl,
         StateRoot, Storage, StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession,
@@ -1872,6 +1883,12 @@ pub mod storage_campaign_lanes {
         (door, incarnation, session)
     }
 
+    fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
+        let key = OperationKey::single_store(b"kyzo.sweep.dst.lanes", op, store_id, b"s0");
+        let digest = IdempotencyMemo::digest_request(op);
+        (key, digest)
+    }
+
     /// §62/§2 — IncarnationId at-rest; gates nonce/authority signature freeze.
     #[test]
     fn two_clone_at_rest() {
@@ -1989,12 +2006,22 @@ pub mod storage_campaign_lanes {
             snapshot_fork: SnapshotFork::No,
         };
         let (mut door, incarnation, session) = open_live_door([0xB2; 32], [0xB0; 32], cap);
+        let store_id = session.store_id();
+        let (key0, dig0) = op_key(store_id, b"mixed-0");
+        let (key1, dig1) = op_key(store_id, b"mixed-1");
+        let (key2, dig2) = op_key(store_id, b"mixed-2");
 
         // Three admits (IntentOrdinal 0,1,2). Seal only 0 and 2 — IntentOrdinal
         // gap among successes; CommitOrdinal must still be dense 0 then 1.
-        let i0 = door.admit(incarnation, &session).expect("admit 0");
-        let i1 = door.admit(incarnation, &session).expect("admit 1");
-        let i2 = door.admit(incarnation, &session).expect("admit 2");
+        let i0 = door
+            .admit(incarnation, &session, key0, dig0)
+            .expect("admit 0");
+        let i1 = door
+            .admit(incarnation, &session, key1, dig1)
+            .expect("admit 1");
+        let i2 = door
+            .admit(incarnation, &session, key2, dig2)
+            .expect("admit 2");
         assert_eq!(i0.intent_ordinal(), IntentOrdinal::ZERO);
         assert_eq!(i1.intent_ordinal().get(), 1);
         assert_eq!(i2.intent_ordinal().get(), 2);
@@ -2043,8 +2070,9 @@ pub mod storage_campaign_lanes {
             .mint(Entropy::from_bytes([0xFF; 32]))
             .expect("foreign incarnation");
         let before = door.highest_commit_ordinal();
+        let (key_foreign, dig_foreign) = op_key(store_id, b"mixed-foreign");
         assert_eq!(
-            door.admit(foreign, &session),
+            door.admit(foreign, &session, key_foreign, dig_foreign),
             Err(SweepRefuse::WriteSessionDead),
             "foreign incarnation must refuse WriteSessionDead"
         );
@@ -2101,7 +2129,10 @@ pub mod storage_campaign_lanes {
         };
         let (mut door, live, session) = open_live_door([0xC3; 32], [0xC0; 32], cap);
         let db = SimStorage::new(0xC3_C0_71_E1);
-        let intent = door.admit(live, &session).expect("admit before seal");
+        let (key, digest) = op_key(session.store_id(), b"pipeline-seal");
+        let intent = door
+            .admit(live, &session, key, digest)
+            .expect("admit before seal");
         let mut tx = db.write_tx().expect("sim write_tx");
         tx.put(b"pipeline.committed", b"survives-power-cut")
             .expect("put under seal");
@@ -2158,8 +2189,9 @@ pub mod storage_campaign_lanes {
             .expect("door under live session");
 
         // Pipeline boundary: admit recheck.
+        let (key_dead, dig_dead) = op_key(store_id, b"resurrection-dead");
         assert_eq!(
-            door.admit(dead, &session),
+            door.admit(dead, &session, key_dead, dig_dead),
             Err(SweepRefuse::WriteSessionDead),
             "dead incarnation admit must refuse WriteSessionDead"
         );
@@ -2405,7 +2437,9 @@ pub mod storage_campaign_lanes {
             snapshot_fork: SnapshotFork::No,
         };
         let (mut door, incarnation, session) = open_live_door([0x22; 32], [0x20; 32], cap);
-        door.admit(incarnation, &session).expect("admit under idle store");
+        let (key, digest) = op_key(store_id, b"idle-admit");
+        door.admit(incarnation, &session, key, digest)
+            .expect("admit under idle store");
         assert_eq!(
             door.highest_commit_ordinal(),
             CommitOrdinal::ZERO,

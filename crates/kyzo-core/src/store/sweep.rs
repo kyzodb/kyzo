@@ -44,11 +44,13 @@
 //! [`Applied`] (process-crash) from [`SweepDoor::seal`], [`Committed`]
 //! (backing fsync) from [`SweepDoor::seal_durable`] — mint sites only here.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use super::authority::{IncarnationId, WriteAuthority};
 use super::commit_cap::StableCommitCap;
 use super::epoch::FenceEpoch;
+use super::failure::StoreRefuse;
+use super::idempotency::{IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest};
 use super::merkle::{
     ChainLinkKind, ChainedStateRoot, DurableCommitCut, MerkleChainRefuse, RootChain, StateRoot,
 };
@@ -195,7 +197,8 @@ impl Committed {
     }
 }
 
-/// An intent admitted to the IntentionQueue — carries only [`IntentOrdinal`].
+/// An intent admitted to the IntentionQueue — carries [`IntentOrdinal`] plus
+/// the [`OperationKey`] / request digest that authorized admission (§38/§39).
 ///
 /// `CommitOrdinal` construction at admission is Unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +207,8 @@ pub struct AdmittedIntent {
     store_id: StoreId,
     fence_epoch: FenceEpoch,
     incarnation_id: IncarnationId,
+    operation_key: OperationKey,
+    request_digest: RequestDigest,
 }
 
 impl AdmittedIntent {
@@ -225,6 +230,16 @@ impl AdmittedIntent {
     /// Session incarnation presented at admission.
     pub fn incarnation_id(&self) -> IncarnationId {
         self.incarnation_id
+    }
+
+    /// OperationKey consumed at admission (§38/§39).
+    pub fn operation_key(&self) -> OperationKey {
+        self.operation_key
+    }
+
+    /// Request digest bound to the OperationKey at admission.
+    pub fn request_digest(&self) -> RequestDigest {
+        self.request_digest
     }
 }
 
@@ -387,6 +402,10 @@ pub struct SweepDoor {
     overlap_cohort: Vec<AdmittedIntent>,
     /// Last completed overlap-only barrier membership (proof observation).
     last_overlap_batch: Option<OverlapBatch>,
+    /// Store-scoped OperationKey memo consulted on every admit (§38/§39).
+    idempotency: IdempotencyMemo,
+    /// First AdmittedIntent under each OperationKey (replay carriage — no second mint).
+    op_intents: BTreeMap<[u8; 32], AdmittedIntent>,
 }
 
 impl SweepDoor {
@@ -424,6 +443,8 @@ impl SweepDoor {
             fsync_window: FsyncWindow::Closed,
             overlap_cohort: Vec::new(),
             last_overlap_batch: None,
+            idempotency: IdempotencyMemo::new(),
+            op_intents: BTreeMap::new(),
         })
     }
 
@@ -487,20 +508,55 @@ impl SweepDoor {
         self.last_overlap_batch.as_ref()
     }
 
-    /// Admit an intent: mint Store-monotonic IntentOrdinal (may gap later).
+    /// Store-scoped idempotency memo consulted on the real admit path (§38/§39).
+    pub fn idempotency(&self) -> &IdempotencyMemo {
+        &self.idempotency
+    }
+
+    /// Admit an intent under an [`OperationKey`]: mint Store-monotonic
+    /// [`IntentOrdinal`] (may gap later), or replay a prior admission for the
+    /// same key + request digest without minting a second ordinal.
     ///
     /// `current` is the Store's live session authority — not the open-time
     /// snapshot alone. A superseded live session → [`SweepRefuse::WriteSessionDead`].
+    /// Same key + changed request digest → [`SweepRefuse::OperationKeyReuse`].
     ///
-    /// While a fsync window is open, the arrival **overlaps** the in-flight
-    /// barrier and joins that cohort. After the window closes, admits land on
-    /// the IntentionQueue for a later barrier — never the prior overlap batch.
+    /// While a fsync window is open, a **fresh** arrival **overlaps** the
+    /// in-flight barrier and joins that cohort. After the window closes, fresh
+    /// admits land on the IntentionQueue for a later barrier — never the prior
+    /// overlap batch. Replays never re-queue.
     pub fn admit(
         &mut self,
         incarnation_id: IncarnationId,
         current: &SweepSession,
+        key: OperationKey,
+        request_digest: RequestDigest,
     ) -> Result<AdmittedIntent, SweepRefuse> {
         self.recheck_session(incarnation_id, current)?;
+
+        // Real path consults the idempotency organ before minting (§38/§39).
+        match self.idempotency.consult(&key, request_digest) {
+            Err(StoreRefuse::OperationKeyReuse) => {
+                return Err(SweepRefuse::OperationKeyReuse);
+            }
+            Err(_) => return Err(SweepRefuse::OperationKeyReuse),
+            Ok(Some(_)) => {
+                // Sealed terminal under this key+digest — replay prior intent.
+                return self.op_intents.get(key.as_bytes()).cloned().ok_or(
+                    SweepRefuse::OperationKeyReuse,
+                );
+            }
+            Ok(None) => {}
+        }
+
+        // Admitted but not yet sealed under this key — replay or refuse reuse.
+        if let Some(prior) = self.op_intents.get(key.as_bytes()) {
+            if prior.request_digest() != request_digest {
+                return Err(SweepRefuse::OperationKeyReuse);
+            }
+            return Ok(prior.clone());
+        }
+
         let intent_ordinal = self.next_intent;
         self.next_intent = intent_ordinal.successor()?;
         let intent = AdmittedIntent {
@@ -508,7 +564,11 @@ impl SweepDoor {
             store_id: self.store_id,
             fence_epoch: current.fence_epoch(),
             incarnation_id,
+            operation_key: key,
+            request_digest,
         };
+        self.op_intents
+            .insert(*key.as_bytes(), intent.clone());
         match self.fsync_window {
             FsyncWindow::Open => self.overlap_cohort.push(intent.clone()),
             FsyncWindow::Closed => self.queue.push(intent.clone()),
@@ -593,6 +653,7 @@ impl SweepDoor {
         let mut committed = Vec::with_capacity(cohort.len());
         for (intent, content_root) in cohort.into_iter().zip(content_roots) {
             let proof = self.mint_committed_after_barrier(intent.intent_ordinal(), content_root)?;
+            self.remember_terminal(&intent)?;
             members.push(intent.intent_ordinal());
             commit_ordinals.push(proof.commit_ordinal());
             committed.push(proof);
@@ -644,6 +705,7 @@ impl SweepDoor {
         }
 
         let committed = self.mint_committed_after_barrier(intent.intent_ordinal(), content_root)?;
+        self.remember_terminal(&intent)?;
         self.last_overlap_batch = Some(OverlapBatch::from_sealed(
             vec![intent.intent_ordinal()],
             vec![committed.commit_ordinal()],
@@ -668,6 +730,7 @@ impl SweepDoor {
         tx.commit().map_err(SweepSealFailure::Apply)?;
 
         self.note_sealed_intent(intent.intent_ordinal());
+        self.remember_terminal(&intent)?;
         Ok(Applied::mint(
             self.store_id,
             self.fence_epoch,
@@ -728,6 +791,26 @@ impl SweepDoor {
 
     fn note_sealed_intent(&mut self, intent_ordinal: IntentOrdinal) {
         self.last_sealed_intent = Some(intent_ordinal);
+    }
+
+    /// Record a terminal OperationOutcome for the intent's OperationKey (§38).
+    fn remember_terminal(&mut self, intent: &AdmittedIntent) -> Result<(), SweepSealFailure> {
+        let digest = intent.request_digest();
+        self.idempotency
+            .remember(
+                intent.operation_key(),
+                digest,
+                OperationOutcome::Committed {
+                    request_digest: digest,
+                },
+            )
+            .map_err(|e| match e {
+                StoreRefuse::OperationKeyReuse => {
+                    SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse)
+                }
+                _ => SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse),
+            })?;
+        Ok(())
     }
 
     /// Post-barrier sole [`Committed`] mint: RootChain + WAL byte chain +
@@ -817,6 +900,10 @@ pub enum SweepRefuse {
     #[error("EmptyOverlapCohort: cannot seal an empty overlap batch")]
     #[diagnostic(code(store::sweep::empty_overlap_cohort))]
     EmptyOverlapCohort,
+    /// Same OperationKey with a changed request digest (§38).
+    #[error("OperationKeyReuse: same key with a changed request digest")]
+    #[diagnostic(code(store::sweep::operation_key_reuse))]
+    OperationKeyReuse,
 }
 
 /// Seal path refusal: SweepDoor law or physical apply failure.
@@ -940,9 +1027,10 @@ mod composition_tests {
     use super::*;
     use crate::store::authority::{Entropy, OpenOrdinal};
     use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+    use crate::store::idempotency::{IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest};
     use crate::store::merkle::{DurableCommitCut, GENESIS_ROOT, cuts_equal};
     use crate::store::open::{
-        EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, genesis,
+        EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
     };
     use crate::store::scratch::TempTx;
     use crate::store::wal::{GENESIS_PREDECESSOR, WalPayload, WalRecord, replay};
@@ -980,6 +1068,12 @@ mod composition_tests {
         StateRoot::from_digest(bytes)
     }
 
+    fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
+        let key = OperationKey::single_store(b"kyzo.sweep.test", op, store_id, b"s0");
+        let digest = IdempotencyMemo::digest_request(op);
+        (key, digest)
+    }
+
     /// Load-bearing at the door: seal_durable advances both chains and seals
     /// a composed cut. Breaking the WAL tip bind (or the meaning tip) at the
     /// boundary breaks cut equality against the door's last durable cut.
@@ -988,7 +1082,10 @@ mod composition_tests {
         let (mut door, incarnation, session) = open_live_door();
         let store_id = session.store_id();
 
-        let intent = door.admit(incarnation, &session).expect("admit");
+        let (key1, dig1) = op_key(store_id, b"compose-1");
+        let intent = door
+            .admit(incarnation, &session, key1, dig1)
+            .expect("admit");
         let proof = door
             .seal_durable(intent, TempTx::default(), content_root(0xA1), &session)
             .expect("durable seal");
@@ -1064,7 +1161,10 @@ mod composition_tests {
         );
 
         // Second durable seal advances both chains again (cross-commit chain).
-        let intent2 = door.admit(incarnation, &session).expect("admit 2");
+        let (key2, dig2) = op_key(store_id, b"compose-2");
+        let intent2 = door
+            .admit(incarnation, &session, key2, dig2)
+            .expect("admit 2");
         let _ = door
             .seal_durable(intent2, TempTx::default(), content_root(0xC3), &session)
             .expect("second durable seal");
@@ -1075,6 +1175,95 @@ mod composition_tests {
             .expect("replay after second seal");
         assert_eq!(recovered2.final_hash, door.wal_final_hash());
         assert_eq!(recovered2.commit_bodies.len(), 2);
+    }
+
+    /// §38/§39 — two admits with the same OperationKey through the real
+    /// SweepDoor mint exactly one IntentOrdinal and one durable Commit effect.
+    #[test]
+    fn operation_key_retry_admits_once_through_real_door() {
+        let (mut door, incarnation, session) = open_live_door();
+        let store_id = session.store_id();
+        let (key, digest) = op_key(store_id, b"retry-once");
+
+        let first = door
+            .admit(incarnation, &session, key, digest)
+            .expect("first admit");
+        assert_eq!(first.intent_ordinal(), IntentOrdinal::ZERO);
+
+        let replayed = door
+            .admit(incarnation, &session, key, digest)
+            .expect("retry admit same key+digest");
+        assert_eq!(
+            replayed.intent_ordinal(),
+            first.intent_ordinal(),
+            "retry must not mint a second IntentOrdinal"
+        );
+        assert_eq!(replayed, first);
+        assert_eq!(
+            door.queue().len(),
+            1,
+            "replay must not re-queue a second intent"
+        );
+
+        let proof = door
+            .seal_durable(first, TempTx::default(), content_root(0xD1), &session)
+            .expect("one durable seal");
+        assert_eq!(proof.commit_ordinal().get(), 1);
+        assert_eq!(door.highest_commit_ordinal().get(), 1);
+
+        // Post-seal retry: same key+digest replays; reseal cannot advance cut.
+        let after_seal = door
+            .admit(incarnation, &session, key, digest)
+            .expect("post-seal retry admit");
+        assert_eq!(after_seal.intent_ordinal(), IntentOrdinal::ZERO);
+        assert!(matches!(
+            door.idempotency().lookup(&key),
+            OperationOutcome::Committed { .. }
+        ));
+        let reseal = door.seal_durable(
+            after_seal,
+            TempTx::default(),
+            content_root(0xD2),
+            &session,
+        );
+        assert!(
+            matches!(
+                reseal,
+                Err(SweepSealFailure::Sweep(SweepRefuse::IntentOrderRegression))
+            ),
+            "resealing a replayed intent must not mint a second CommitOrdinal"
+        );
+        assert_eq!(
+            door.highest_commit_ordinal().get(),
+            1,
+            "exactly one committed effect after two admits with the same operation identity"
+        );
+        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))
+            .expect("WAL replay");
+        assert_eq!(
+            recovered.commit_bodies.len(),
+            1,
+            "WAL must carry exactly one Commit record"
+        );
+    }
+
+    /// §38 — same OperationKey with a changed request digest refuses reuse.
+    #[test]
+    fn operation_key_reuse_changed_digest_through_real_door() {
+        let (mut door, incarnation, session) = open_live_door();
+        let store_id = session.store_id();
+        let key = OperationKey::single_store(b"kyzo.sweep.test", b"reuse", store_id, b"s0");
+        let dig_a = IdempotencyMemo::digest_request(b"envelope-A");
+        let dig_b = IdempotencyMemo::digest_request(b"envelope-B");
+        assert_ne!(dig_a, dig_b);
+
+        door.admit(incarnation, &session, key, dig_a)
+            .expect("first digest admits");
+        assert_eq!(
+            door.admit(incarnation, &session, key, dig_b),
+            Err(SweepRefuse::OperationKeyReuse),
+            "same key + changed digest must return typed OperationKeyReuse"
+        );
     }
 }
 

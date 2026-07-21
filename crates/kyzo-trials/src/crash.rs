@@ -22,11 +22,18 @@ use super::{
 };
 use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
 use crate::store::merkle::{GENESIS_ROOT, StateRoot};
 use crate::store::open::{
-    EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, genesis,
+    EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
 };
 use crate::store::scratch::TempTx;
+
+fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
+    let key = OperationKey::single_store(b"kyzo.sweep.crash", op, store_id, b"s0");
+    let digest = IdempotencyMemo::digest_request(op);
+    (key, digest)
+}
 
 fn open_live_door(identity_seed: [u8; 32], entropy: [u8; 32]) -> (SweepDoor, crate::store::IncarnationId, SweepSession) {
     let sealed = genesis(GenesisParams {
@@ -74,10 +81,14 @@ fn content_root(tag: u8) -> StateRoot {
 #[test]
 fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
     let (mut door, incarnation, session) = open_live_door([0x21; 32], [0xC0; 32]);
+    let store_id = session.store_id();
+    let (key_a, dig_a) = op_key(store_id, b"overlap-A");
+    let (key_b, dig_b) = op_key(store_id, b"overlap-B");
+    let (key_c, dig_c) = op_key(store_id, b"overlap-C");
 
     // A arrives before the barrier — queued, then pulled into the overlap cohort.
     let intent_a = door
-        .admit(incarnation, &session)
+        .admit(incarnation, &session, key_a, dig_a)
         .expect("admit A before fsync window");
     door.begin_fsync_window(incarnation, &session)
         .expect("begin in-flight fsync window");
@@ -88,7 +99,7 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
 
     // B arrives while the fsync is in flight → overlaps that barrier.
     let intent_b = door
-        .admit(incarnation, &session)
+        .admit(incarnation, &session, key_b, dig_b)
         .expect("admit B overlapping in-flight fsync");
     let cohort: Vec<IntentOrdinal> = door.overlap_cohort_ordinals().collect();
     assert_eq!(
@@ -128,7 +139,7 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
 
     // C arrives after the window closed — non-overlapping with that in-flight fsync.
     let intent_c = door
-        .admit(incarnation, &session)
+        .admit(incarnation, &session, key_c, dig_c)
         .expect("admit C after fsync window closed");
     assert!(
         !batch_ab.contains_overlap_member(intent_c.intent_ordinal()),

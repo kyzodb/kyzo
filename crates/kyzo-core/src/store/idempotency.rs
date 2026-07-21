@@ -165,6 +165,24 @@ impl IdempotencyMemo {
             .unwrap_or(OperationOutcome::Absent)
     }
 
+    /// Consult the memo for a safe-retry door (admit / commit).
+    ///
+    /// - No entry → [`Ok`]`(None)` (fresh).
+    /// - Same key + digest → [`Ok`]`(Some(entry))` (replay).
+    /// - Same key + different digest → [`StoreRefuse::OperationKeyReuse`].
+    pub fn consult(
+        &self,
+        key: &OperationKey,
+        request_digest: impl Into<RequestDigest>,
+    ) -> Result<Option<&IdempotencyEntry>, StoreRefuse> {
+        let request_digest = request_digest.into();
+        match self.entries.get(key.as_bytes()) {
+            None => Ok(None),
+            Some(existing) if existing.request_digest == request_digest => Ok(Some(existing)),
+            Some(_) => Err(StoreRefuse::OperationKeyReuse),
+        }
+    }
+
     /// Replay or record a terminal outcome.
     ///
     /// Same key + digest → replay prior outcome. Same key + different digest →
@@ -184,19 +202,18 @@ impl IdempotencyMemo {
             OperationOutcome::Committed { .. }
             | OperationOutcome::DeterministicTerminalRefuse { .. } => {}
         }
-        if let Some(existing) = self.entries.get(key.as_bytes()) {
-            if existing.request_digest != request_digest {
-                return Err(StoreRefuse::OperationKeyReuse);
+        match self.consult(&key, request_digest)? {
+            Some(existing) => Ok(existing.outcome.clone()),
+            None => {
+                let entry = IdempotencyEntry {
+                    key,
+                    request_digest,
+                    outcome: outcome.clone(),
+                };
+                self.entries.insert(*key.as_bytes(), entry);
+                Ok(outcome)
             }
-            return Ok(existing.outcome.clone());
         }
-        let entry = IdempotencyEntry {
-            key,
-            request_digest,
-            outcome: outcome.clone(),
-        };
-        self.entries.insert(*key.as_bytes(), entry);
-        Ok(outcome)
     }
 
     /// Safe-retry door: require a key, then lookup/replay.
