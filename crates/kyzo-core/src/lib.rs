@@ -315,7 +315,10 @@ pub use kyzo_model::value::{
     Arity, AsOf, DataValue, Num, RegexSource, RelationId, StorageKey, Tuple, TupleKey, TupleT,
     UuidWrapper, Validity, ValiditySlot, ValidityTs, Vector, decode_tuple_from_key,
 };
-pub use store::backup::{dump_storage, restore_storage};
+pub use store::backup::{
+    IncompleteRestore, admit_complete_store, dump_storage, open_complete_store,
+    open_complete_store_with, restore_storage,
+};
 pub use store::fjall::{
     FjallReadTx, FjallStorage, FjallWriteTx, StorageOptions, StorageStats, new_fjall_storage,
     new_fjall_storage_with,

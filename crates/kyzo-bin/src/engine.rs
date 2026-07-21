@@ -79,16 +79,24 @@ pub struct DbHandle {
 /// `engine` is `"mem"` or `"fjall"`; any other value is a refusal, not a
 /// silent fallback — the CozoDB original's `DbInstance::new` had the same
 /// posture toward an unrecognized engine name.
+///
+/// Persistent (`fjall`) opens go through the restore-completeness gate: a
+/// store still carrying the in-progress mark refuses IncompleteRestore
+/// rather than presenting a partial restore as a smaller complete store
+/// (seat 26 / #375 T2).
 pub fn open(engine: &str, path: impl AsRef<Path>, opts: StorageArgs) -> Result<DbHandle> {
     let storage_opts: StorageOptions = opts.into();
     let (storage, ephemeral_dir) = match engine {
         "mem" => {
             let dir = tempfile::tempdir().into_diagnostic()?;
+            // Ephemeral path: still admit (empty store is complete) so mem and
+            // fjall share one completeness law.
             let storage = new_fjall_storage_with(dir.path(), storage_opts)?;
+            kyzo::admit_complete_store!(storage)?;
             (storage, Some(dir))
         }
         "fjall" => {
-            let storage = new_fjall_storage_with(path, storage_opts)?;
+            let storage = kyzo::open_complete_store_with!(path, storage_opts)?;
             (storage, None)
         }
         other => {
@@ -106,4 +114,62 @@ pub fn open(engine: &str, path: impl AsRef<Path>, opts: StorageArgs) -> Result<D
         storage,
         _ephemeral_dir: ephemeral_dir,
     })
+}
+
+#[cfg(test)]
+mod restore_completeness {
+    use super::{StorageArgs, open};
+    use kyzo::{Storage, WriteTx, dump_storage, new_fjall_storage, restore_storage};
+
+    /// NASTY (#375 T2): interrupt a restore mid-pair put, then reopen via the
+    /// production host door [`super::open`] — not `open_complete_store` alone —
+    /// and assert typed IncompleteRestore (bare open never saw the mark).
+    #[test]
+    fn interrupted_restore_production_open_refuses_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = new_fjall_storage(dir.path().join("src")).unwrap();
+        {
+            let mut tx = src.write_tx().unwrap();
+            // Enough pairs that a mid-file truncate lands after the dump header
+            // and through at least one restore chunk of applied pairs.
+            for i in 0..256u64 {
+                let mut key = 1u64.to_be_bytes().to_vec();
+                key.extend_from_slice(&i.to_be_bytes());
+                tx.put(&key, &[0xAB]).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let dump = dir.path().join("d.kyzo");
+        dump_storage(&src, &dump).unwrap();
+
+        // Truncate mid-file so restore marks, applies a prefix, then fails on
+        // a torn length-prefixed pair — the durable in-progress shape.
+        let full_len = std::fs::metadata(&dump).unwrap().len();
+        assert!(full_len > 64, "control: dump must be large enough to truncate");
+        let keep = full_len / 2;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&dump)
+            .unwrap();
+        file.set_len(keep).unwrap();
+
+        let tgt_path = dir.path().join("tgt");
+        let tgt = new_fjall_storage(&tgt_path).unwrap();
+        let restore_err = restore_storage(&tgt, &dump).unwrap_err();
+        assert!(
+            !restore_err.to_string().is_empty(),
+            "control: restore must fail from the truncated dump"
+        );
+        drop(tgt);
+
+        // PRODUCTION entry point — not open_complete_store / admit alone.
+        let open_err = match open("fjall", &tgt_path, StorageArgs::default()) {
+            Err(e) => e,
+            Ok(_) => panic!("kyzo_bin::engine::open must refuse a partial restore"),
+        };
+        assert!(
+            kyzo::is_incomplete_restore!(open_err),
+            "production open must typed-refuse IncompleteRestore, got: {open_err}"
+        );
+    }
 }

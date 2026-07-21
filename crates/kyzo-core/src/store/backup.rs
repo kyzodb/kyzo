@@ -43,7 +43,7 @@ use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::system_stamp_of_key;
 use crate::store::fjall::FjallStorage;
-use crate::store::fjall::new_fjall_storage;
+use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
 use crate::store::tx::WriteTx;
 use crate::store::{FormatVersion, ReadTx, Storage};
 use kyzo_model::value::ValidityTs;
@@ -237,9 +237,50 @@ pub fn admit_complete_store<S: Storage>(db: &S) -> Result<()> {
 /// Prefer this over bare [`new_fjall_storage`] when admitting a path that may
 /// have been a restore target — bare open alone cannot see the mark's meaning.
 pub fn open_complete_store(path: impl AsRef<Path>) -> Result<FjallStorage> {
-    let db = new_fjall_storage(path)?;
+    open_complete_store_with(path, StorageOptions::default())
+}
+
+/// Open a fjall store with resource options and refuse if a restore-in-progress
+/// mark is present — the production host open door (kyzo-bin `engine::open`).
+pub fn open_complete_store_with(
+    path: impl AsRef<Path>,
+    opts: StorageOptions,
+) -> Result<FjallStorage> {
+    let db = new_fjall_storage_with(path, opts)?;
     admit_complete_store(&db)?;
     Ok(db)
+}
+
+/// Host open sites: expand to the crate-root [`admit_complete_store`] re-export
+/// so production callers outside this `pub(crate)` module share the completeness
+/// gate (seat 26 / #375 T2). Macros must not name `$crate::store::…` — `store`
+/// is `pub(crate)` and is invisible at expansion sites in kyzo-bin.
+///
+/// `$crate` resolves inside kyzo-core, so the gate stays one function — not a
+/// duplicated mark-key check in the binary.
+#[macro_export]
+macro_rules! admit_complete_store {
+    ($storage:expr) => {
+        $crate::admit_complete_store(&$storage)
+    };
+}
+
+/// Host open sites: expand to the crate-root [`open_complete_store_with`] re-export.
+#[macro_export]
+macro_rules! open_complete_store_with {
+    ($path:expr, $opts:expr) => {
+        $crate::open_complete_store_with($path, $opts)
+    };
+}
+
+/// Typed IncompleteRestore probe for host nasty tests (crate-root path law).
+#[macro_export]
+macro_rules! is_incomplete_restore {
+    ($err:expr) => {
+        ($err)
+            .downcast_ref::<$crate::IncompleteRestore>()
+            .is_some()
+    };
 }
 
 fn mark_restore_in_progress<S: Storage>(db: &S) -> Result<()> {
