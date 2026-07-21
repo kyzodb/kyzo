@@ -244,12 +244,9 @@ impl OpponentPin {
 
     /// Evidence-construction only — [`BenchAdmit::admit`] refuses any value
     /// other than [`Self::sealed`].
+    #[allow(dead_code)] // honesty-chain fixture door (tests construct non-sealed pins)
     pub fn from_raw(s: impl Into<String>) -> Self {
         Self(s.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 
@@ -413,6 +410,7 @@ impl BenchCaps {
     }
 
     /// Construct caps only when both axes are present and positive.
+    #[allow(dead_code)] // honesty-chain fixture door (incomplete-axis refuse tests)
     pub fn try_from_parts(
         memory_kib: Option<u64>,
         time_secs: Option<u64>,
@@ -668,6 +666,7 @@ pub enum DatasetRefuse {
     /// Manifest JSON did not parse.
     ManifestParse(String),
     /// Named graph has no manifest entry.
+    #[allow(dead_code)] // armed by verify_graph_bytes when the graph is absent from the manifest
     UnknownGraph(GraphName),
     /// Computed SHA-256 of bytes ≠ sealed manifest hash (tamper / wrong mirror).
     Sha256Mismatch {
@@ -738,6 +737,7 @@ pub fn verify_sha256(
 }
 
 /// Verify uncompressed graph bytes against a manifest entry (by name).
+#[allow(dead_code)] // honesty-chain fixture door (manifest SHA-256 integrity tests)
 pub fn verify_graph_bytes(
     manifest: &DatasetManifest,
     graph: &GraphName,
@@ -820,6 +820,7 @@ fn download_gunzip(url: &str) -> Result<Vec<u8>, DatasetRefuse> {
 }
 
 /// SHA-256 hex digest (lowercase). Pure in-process — the manifest meter.
+#[allow(dead_code)] // honesty-chain fixture door (NIST / tamper SHA-256 tests)
 pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::hash(data).to_hex()
 }

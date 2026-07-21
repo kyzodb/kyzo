@@ -13,6 +13,10 @@
 //! joins the seal on day one instead of living only in a separate CI job.
 //! `RESONANCE_ROOT` still overrides the scanned root, which is what the
 //! bite-proof harness uses against a throwaway rsync copy.
+//!
+//! Default output is quiet (GATE-OUTPUT): one GREEN line, or fail-only RED
+//! lines plus the summary. `--verbose` restores per-check headers and PASS
+//! chatter.
 
 use std::fmt;
 
@@ -66,7 +70,7 @@ pub enum ResonanceError {
         source: anyhow::Error,
     },
     /// One or more checks found unwaived violations or stale waivers; each
-    /// has already printed its own findings to stdout as it ran.
+    /// failing check's violation lines were already printed.
     ViolationsFound { failing_checks: Vec<&'static str> },
 }
 
@@ -94,10 +98,69 @@ impl fmt::Display for ResonanceError {
 
 impl std::error::Error for ResonanceError {}
 
+/// Per-check output buffer: quiet mode holds violation lines until fail;
+/// verbose mode streams the historical chatty headers/PASS/FAIL shape.
+struct CheckOut {
+    verbose: bool,
+    lines: Vec<String>,
+}
+
+impl CheckOut {
+    fn new(verbose: bool) -> Self {
+        Self {
+            verbose,
+            lines: Vec::new(),
+        }
+    }
+
+    fn header(&self, msg: &str) {
+        if self.verbose {
+            println!("{msg}");
+        }
+    }
+
+    /// Record one violation. Verbose prints immediately with a `FAIL` prefix;
+    /// quiet buffers the `file:line — reason` line for emit-on-fail.
+    fn violation(&mut self, line: impl Into<String>) {
+        let line = line.into();
+        if self.verbose {
+            println!("FAIL {line}");
+        }
+        self.lines.push(line);
+    }
+
+    /// Verbose-only chatter (PASS summaries, counts). Never emitted in quiet.
+    fn note(&self, msg: impl AsRef<str>) {
+        if self.verbose {
+            println!("{}", msg.as_ref());
+        }
+    }
+
+    /// Verbose-only stderr note (baseline ratchet messages).
+    fn note_err(&self, msg: impl AsRef<str>) {
+        if self.verbose {
+            eprintln!("{}", msg.as_ref());
+        }
+    }
+
+    /// Emit buffered violation lines when the check failed (quiet path).
+    /// Returns whether the check passed (`lines` empty).
+    fn finish_ok(&self) -> bool {
+        let ok = self.lines.is_empty();
+        if !ok && !self.verbose {
+            for line in &self.lines {
+                println!("{line}");
+            }
+        }
+        ok
+    }
+}
+
 /// Run the resonance gate. `only`, if given, runs a single story #81 check.
 /// When `only` is `None`, all five plus the later ratchets
 /// (`allocation_admission`, `boundary_closure`, `unchecked_arith`) run.
-pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
+/// Default output is quiet; `verbose` restores per-check chatter.
+pub fn run(only: Option<ResonanceCheck>, verbose: bool) -> Result<(), ResonanceError> {
     let root = fsutil::repo_root().map_err(ResonanceError::RepoRoot)?;
     let files = fsutil::walk_engine_sources(&root).map_err(ResonanceError::SourceScan)?;
     if files.is_empty() {
@@ -106,14 +169,19 @@ pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
     let allow = allowlist::load(&root).map_err(ResonanceError::AllowlistLoad)?;
 
     let mut failing_checks: Vec<&'static str> = Vec::new();
+    let mut checks_run: usize = 0;
     let want = |check: ResonanceCheck| only.map(|o| o == check).unwrap_or(true);
     let run_later_ratchets = only.is_none();
 
-    if want(ResonanceCheck::DeriveBypass) && !run_derive_bypass(&files, &allow) {
-        failing_checks.push(ResonanceCheck::DeriveBypass.as_meter_name());
+    if want(ResonanceCheck::DeriveBypass) {
+        checks_run += 1;
+        if !run_derive_bypass(&files, &allow, verbose) {
+            failing_checks.push(ResonanceCheck::DeriveBypass.as_meter_name());
+        }
     }
     if want(ResonanceCheck::PanicLint) {
-        match run_panic_lint(&files, &allow, &root) {
+        checks_run += 1;
+        match run_panic_lint(&files, &allow, &root, verbose) {
             Ok(true) => {}
             Ok(false) => failing_checks.push(ResonanceCheck::PanicLint.as_meter_name()),
             Err(source) => {
@@ -124,14 +192,21 @@ pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
             }
         }
     }
-    if want(ResonanceCheck::CopyDetector) && !run_copy_detector(&files, &allow) {
-        failing_checks.push(ResonanceCheck::CopyDetector.as_meter_name());
+    if want(ResonanceCheck::CopyDetector) {
+        checks_run += 1;
+        if !run_copy_detector(&files, &allow, verbose) {
+            failing_checks.push(ResonanceCheck::CopyDetector.as_meter_name());
+        }
     }
-    if want(ResonanceCheck::DeadCodeRatchet) && !run_dead_code_ratchet(&files, &allow) {
-        failing_checks.push(ResonanceCheck::DeadCodeRatchet.as_meter_name());
+    if want(ResonanceCheck::DeadCodeRatchet) {
+        checks_run += 1;
+        if !run_dead_code_ratchet(&files, &allow, verbose) {
+            failing_checks.push(ResonanceCheck::DeadCodeRatchet.as_meter_name());
+        }
     }
     if want(ResonanceCheck::AgreementRegistry) {
-        match run_agreement_registry(&files, &root) {
+        checks_run += 1;
+        match run_agreement_registry(&files, &root, verbose) {
             Ok(true) => {}
             Ok(false) => failing_checks.push(ResonanceCheck::AgreementRegistry.as_meter_name()),
             Err(source) => {
@@ -142,23 +217,29 @@ pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
             }
         }
     }
-    if run_later_ratchets && !run_allocation_admission(&files) {
-        failing_checks.push("allocation_admission");
-    }
-    if run_later_ratchets && !run_boundary_closure(&files) {
-        failing_checks.push("boundary_closure");
-    }
-    if run_later_ratchets && !run_peer_dial_ban(&files) {
-        failing_checks.push("peer_dial_ban");
-    }
-    if run_later_ratchets && !run_serializer_authority(&files) {
-        failing_checks.push("serializer_authority");
-    }
-    if run_later_ratchets && !run_determinism_ban(&files) {
-        failing_checks.push("determinism_ban");
-    }
     if run_later_ratchets {
-        match run_unchecked_arith(&files, &root) {
+        checks_run += 1;
+        if !run_allocation_admission(&files, verbose) {
+            failing_checks.push("allocation_admission");
+        }
+        checks_run += 1;
+        if !run_boundary_closure(&files, verbose) {
+            failing_checks.push("boundary_closure");
+        }
+        checks_run += 1;
+        if !run_peer_dial_ban(&files, verbose) {
+            failing_checks.push("peer_dial_ban");
+        }
+        checks_run += 1;
+        if !run_serializer_authority(&files, verbose) {
+            failing_checks.push("serializer_authority");
+        }
+        checks_run += 1;
+        if !run_determinism_ban(&files, verbose) {
+            failing_checks.push("determinism_ban");
+        }
+        checks_run += 1;
+        match run_unchecked_arith(&files, &root, verbose) {
             Ok(true) => {}
             Ok(false) => failing_checks.push("unchecked_arith"),
             Err(source) => {
@@ -171,36 +252,50 @@ pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
     }
 
     if failing_checks.is_empty() {
-        println!(
-            "resonance gate: ALL CHECKS PASSED ({} source files scanned)",
-            files.len()
-        );
+        if verbose {
+            println!(
+                "resonance gate: ALL CHECKS PASSED ({} source files scanned)",
+                files.len()
+            );
+        } else {
+            println!(
+                "resonance gate clears ({checks_run} checks, {} files)",
+                files.len()
+            );
+        }
         Ok(())
     } else {
-        eprintln!("FAIL: resonance gate found violations (see above).");
+        if verbose {
+            eprintln!("FAIL: resonance gate found violations (see above).");
+        }
         Err(ResonanceError::ViolationsFound { failing_checks })
     }
 }
 
-fn run_derive_bypass(files: &[fsutil::SourceFile], allow: &allowlist::Allowlist) -> bool {
-    println!("== check 1: derive-bypass detector ==");
+fn run_derive_bypass(
+    files: &[fsutil::SourceFile],
+    allow: &allowlist::Allowlist,
+    verbose: bool,
+) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check 1: derive-bypass detector ==");
     let (violations, stale) = checks::derive_bypass::check(files, allow);
     for v in &violations {
-        println!(
-            "FAIL {}:{}: `{}` derives {:?} but also has a fallible `{}` (line {}) — the derive bypasses the constructor's invariant",
+        out.violation(format!(
+            "{}:{} — `{}` derives {:?} but also has a fallible `{}` (line {}) — the derive bypasses the constructor's invariant",
             v.file, v.def_line, v.type_name, v.derives, v.ctor_name, v.ctor_line
-        );
+        ));
     }
     for s in &stale {
-        println!("FAIL (stale allowlist) {s}");
+        out.violation(format!("allowlist:0 — stale allowlist: {s}"));
     }
-    let ok = violations.is_empty() && stale.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check 1: {} ({} violation(s), {} stale waiver(s))",
         if ok { "PASS" } else { "FAIL" },
         violations.len(),
         stale.len()
-    );
+    ));
     ok
 }
 
@@ -208,231 +303,300 @@ fn run_panic_lint(
     files: &[fsutil::SourceFile],
     allow: &allowlist::Allowlist,
     root: &std::path::Path,
+    verbose: bool,
 ) -> Result<bool, anyhow::Error> {
-    println!("== check 2: panic-on-hostile-bytes lint ==");
+    let mut out = CheckOut::new(verbose);
+    out.header("== check 2: panic-on-hostile-bytes lint ==");
     let surfaces = checks::panic_lint::load_config(root)?;
     let (occurrences, missing) = checks::panic_lint::check(files, &surfaces, allow);
     for m in &missing {
-        println!("FAIL {m}");
+        out.violation(format!("config:0 — {m}"));
     }
     for o in &occurrences {
-        println!(
-            "FAIL {}:{} in `{}`: {}(...) reachable from a declared decode surface",
+        out.violation(format!(
+            "{}:{} — in `{}`: {}(...) reachable from a declared decode surface",
             o.file, o.line, o.function, o.kind
-        );
+        ));
     }
-    let ok = occurrences.is_empty() && missing.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check 2: {} ({} occurrence(s), {} config problem(s))",
         if ok { "PASS" } else { "FAIL" },
         occurrences.len(),
         missing.len()
-    );
+    ));
     Ok(ok)
 }
 
-fn run_copy_detector(files: &[fsutil::SourceFile], allow: &allowlist::Allowlist) -> bool {
-    println!("== check 3: copy-detector ==");
+fn run_copy_detector(
+    files: &[fsutil::SourceFile],
+    allow: &allowlist::Allowlist,
+    verbose: bool,
+) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check 3: copy-detector ==");
     let (violations, _pairs, units, stale) = checks::copy_detector::check(files, allow);
     for v in &violations {
-        println!(
-            "FAIL near-identical bodies (similarity {:.2}): {}:{} `{}`  <->  {}:{} `{}`",
-            v.similarity, v.file_a, v.line_a, v.label_a, v.file_b, v.line_b, v.label_b
-        );
+        out.violation(format!(
+            "{}:{} — near-identical bodies (similarity {:.2}): `{}`  <->  {}:{} `{}`",
+            v.file_a, v.line_a, v.similarity, v.label_a, v.file_b, v.line_b, v.label_b
+        ));
     }
     for s in &stale {
-        println!("FAIL (stale allowlist) {s}");
+        out.violation(format!("allowlist:0 — stale allowlist: {s}"));
     }
-    let ok = violations.is_empty() && stale.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check 3: {} ({} unwaived near-duplicate pair(s), {} stale waiver member(s), {} comparison units >= {} tokens)",
         if ok { "PASS" } else { "FAIL" },
         violations.len(),
         stale.len(),
         units.len(),
         checks::copy_detector::MIN_TOKENS
-    );
+    ));
     ok
 }
 
-fn run_dead_code_ratchet(files: &[fsutil::SourceFile], allow: &allowlist::Allowlist) -> bool {
-    println!("== check 4: dead-concept ratchet ==");
+fn run_dead_code_ratchet(
+    files: &[fsutil::SourceFile],
+    allow: &allowlist::Allowlist,
+    verbose: bool,
+) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check 4: dead-concept ratchet ==");
     let (violations, stale) = checks::dead_code_ratchet::check(files, allow);
     for v in &violations {
-        println!("FAIL {}:{}: uncited `{}`", v.file, v.line, v.attr_text);
+        out.violation(format!(
+            "{}:{} — uncited `{}`",
+            v.file, v.line, v.attr_text
+        ));
     }
     for s in &stale {
-        println!("FAIL (stale allowlist) {s}");
+        out.violation(format!("allowlist:0 — stale allowlist: {s}"));
     }
-    let ok = violations.is_empty() && stale.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check 4: {} ({} uncited, {} stale waiver(s))",
         if ok { "PASS" } else { "FAIL" },
         violations.len(),
         stale.len()
-    );
+    ));
     ok
 }
 
-fn run_allocation_admission(files: &[fsutil::SourceFile]) -> bool {
-    println!("== check: allocation-admission ratchet ==");
+fn run_allocation_admission(files: &[fsutil::SourceFile], verbose: bool) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check: allocation-admission ratchet ==");
     let violations = checks::allocation_admission::check(files);
     for v in &violations {
-        println!(
-            "FAIL {}:{}: `{}` caps its size inline with `.min(...)` — route the \
+        out.violation(format!(
+            "{}:{} — `{}` caps its size inline with `.min(...)` — route the \
              caller-declared size through `crate::capacity::admit(declared, available)` instead",
             v.file, v.line, v.call
-        );
+        ));
     }
-    let ok = violations.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check: allocation-admission {} ({} inline-cap site(s))",
         if ok { "PASS" } else { "FAIL" },
         violations.len()
-    );
+    ));
     ok
 }
 
-fn run_boundary_closure(files: &[fsutil::SourceFile]) -> bool {
-    println!("== check: boundary-closure ratchet ==");
+fn run_boundary_closure(files: &[fsutil::SourceFile], verbose: bool) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check: boundary-closure ratchet ==");
     let violations = checks::boundary_closure::check(files);
     for v in &violations {
-        println!("FAIL {}:{} [{}]: {}", v.file, v.line, v.shape, v.detail);
+        out.violation(format!(
+            "{}:{} — [{}]: {}",
+            v.file, v.line, v.shape, v.detail
+        ));
     }
-    let ok = violations.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check: boundary-closure {} ({} condemned-shape site(s))",
         if ok { "PASS" } else { "FAIL" },
         violations.len()
-    );
+    ));
     ok
 }
 
-fn run_peer_dial_ban(files: &[fsutil::SourceFile]) -> bool {
-    println!("== check: peer-dial ban (seats 18/92 — NATS is the only nervous system) ==");
+fn run_peer_dial_ban(files: &[fsutil::SourceFile], verbose: bool) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check: peer-dial ban (seats 18/92 — NATS is the only nervous system) ==");
     let violations = checks::peer_dial_ban::check(files);
     for v in &violations {
-        println!(
-            "FAIL {}:{}: `{}` — a raw peer/transport socket in the engine is a second \
+        out.violation(format!(
+            "{}:{} — `{}` — a raw peer/transport socket in the engine is a second \
              nervous system; fabric-down is `Refuse(FabricUnavailable)`, never a dial",
             v.file, v.line, v.symbol
-        );
+        ));
     }
-    let ok = violations.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check: peer-dial ban {} ({} raw-socket site(s))",
         if ok { "PASS" } else { "FAIL" },
         violations.len()
-    );
+    ));
     ok
 }
 
-fn run_determinism_ban(files: &[fsutil::SourceFile]) -> bool {
-    println!("== check: determinism ban (seats 25/45/83/84 — sealed surface is clock/rng-free) ==");
+fn run_determinism_ban(files: &[fsutil::SourceFile], verbose: bool) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check: determinism ban (seats 25/45/83/84 — sealed surface is clock/rng-free) ==");
     let violations = checks::determinism_ban::check(files);
     for v in &violations {
-        println!(
-            "FAIL {}:{}: `{}` — wall-clock/unseeded randomness on the sealed/commit surface; \
+        out.violation(format!(
+            "{}:{} — `{}` — wall-clock/unseeded randomness on the sealed/commit surface; \
              commit time is CommitOrdinal, the entropy arm lives in session/admit.rs",
             v.file, v.line, v.symbol
-        );
+        ));
     }
-    let ok = violations.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check: determinism ban {} ({} nondeterminism site(s) on the sealed surface)",
         if ok { "PASS" } else { "FAIL" },
         violations.len()
-    );
+    ));
     ok
 }
 
-fn run_serializer_authority(files: &[fsutil::SourceFile]) -> bool {
-    println!("== check: sealed-serializer authority ratchet (seat 59 — one CanonicalTranscript) ==");
+fn run_serializer_authority(files: &[fsutil::SourceFile], verbose: bool) -> bool {
+    let mut out = CheckOut::new(verbose);
+    out.header("== check: sealed-serializer authority ratchet (seat 59 — one CanonicalTranscript) ==");
     let sites = checks::serializer_authority::check(files);
     let n = sites.len();
     let baseline = checks::serializer_authority::BASELINE;
     if n > baseline {
         for s in &sites {
-            println!("  hand-rolled-layout site {}:{}", s.file, s.line);
+            out.violation(format!(
+                "{}:{} — hand-rolled-layout site (sealed-serializer authority)",
+                s.file, s.line
+            ));
         }
-        eprintln!(
+        out.violation(format!(
+            "serializer_authority:0 — {n} hand-rolled-layout site(s) exceeds baseline {baseline}"
+        ));
+        let ok = out.finish_ok();
+        out.note_err(format!(
             "FAIL sealed-serializer authority: {n} hand-rolled-layout site(s) exceeds baseline \
              {baseline} — a new byte-literal hasher on the sealed surface. Route sealed artifacts \
              through the ONE CanonicalTranscript encoder; if this is a genuine internal digest, \
              raise serializer_authority::BASELINE in a reviewed commit."
-        );
-        println!("check: sealed-serializer authority FAIL ({n} sites, baseline {baseline})");
-        return false;
+        ));
+        out.note(format!(
+            "check: sealed-serializer authority FAIL ({n} sites, baseline {baseline})"
+        ));
+        return ok;
     }
     if n < baseline {
-        eprintln!(
+        out.violation(format!(
+            "serializer_authority:0 — baseline stale: {n} < {baseline} — tighten BASELINE to {n}"
+        ));
+        let ok = out.finish_ok();
+        out.note_err(format!(
             "RATCHET IMPROVED sealed-serializer authority: {n} < baseline {baseline} — tighten \
              serializer_authority::BASELINE to {n}"
-        );
-        println!("check: sealed-serializer authority FAIL (baseline stale: {n} < {baseline})");
-        return false;
+        ));
+        out.note(format!(
+            "check: sealed-serializer authority FAIL (baseline stale: {n} < {baseline})"
+        ));
+        return ok;
     }
-    println!("check: sealed-serializer authority PASS ({n} internal-digest site(s); baseline {baseline})");
+    // At baseline: sites are expected internal digests, not violations.
+    out.note(format!(
+        "check: sealed-serializer authority PASS ({n} internal-digest site(s); baseline {baseline})"
+    ));
     true
 }
 
 fn run_unchecked_arith(
     files: &[fsutil::SourceFile],
     root: &std::path::Path,
+    verbose: bool,
 ) -> Result<bool, anyhow::Error> {
-    println!("== check: unchecked-arith named-invariant ratchet ==");
+    let mut out = CheckOut::new(verbose);
+    out.header("== check: unchecked-arith named-invariant ratchet ==");
     let baseline = checks::unchecked_arith::load_baseline(root).map_err(|e| anyhow::anyhow!(e))?;
     let examples = checks::unchecked_arith::walk_examples(root)?;
     let mut violations = checks::unchecked_arith::check(files);
     violations.extend(checks::unchecked_arith::check(&examples));
     violations.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
-    for v in &violations {
-        println!(
-            "FAIL {}:{}: `{}` lacks an adjacent `// INVARIANT(Name): …` proof \
-             (unchecked arithmetic requires a named invariant at the same rung as unsafe)",
-            v.file, v.line, v.method
-        );
-    }
     let n = violations.len();
     if n > baseline {
-        eprintln!(
+        for v in &violations {
+            out.violation(format!(
+                "{}:{} — `{}` lacks an adjacent `// INVARIANT(Name): …` proof \
+                 (unchecked arithmetic requires a named invariant at the same rung as unsafe)",
+                v.file, v.line, v.method
+            ));
+        }
+        out.violation(format!(
+            "unchecked_arith:0 — {n} uncommented site(s) exceeds baseline {baseline}"
+        ));
+        let ok = out.finish_ok();
+        out.note_err(format!(
             "FAIL unchecked-arith: {n} uncommented site(s) exceeds baseline {baseline} \
              (crates/xtask/unchecked-arith-baseline.json)"
-        );
-        println!("check: unchecked-arith FAIL ({n} uncommented, baseline {baseline})");
-        return Ok(false);
+        ));
+        out.note(format!(
+            "check: unchecked-arith FAIL ({n} uncommented, baseline {baseline})"
+        ));
+        return Ok(ok);
     }
     if n < baseline {
-        eprintln!(
+        out.violation(format!(
+            "unchecked_arith:0 — baseline stale: {n} < {baseline} — tighten baseline to {n}"
+        ));
+        let ok = out.finish_ok();
+        out.note_err(format!(
             "RATCHET IMPROVED unchecked-arith: {n} < baseline {baseline} — tighten \
              crates/xtask/unchecked-arith-baseline.json to {n}"
-        );
-        println!("check: unchecked-arith FAIL (baseline stale: {n} < {baseline})");
-        return Ok(false);
+        ));
+        out.note(format!(
+            "check: unchecked-arith FAIL (baseline stale: {n} < {baseline})"
+        ));
+        return Ok(ok);
     }
-    println!("check: unchecked-arith PASS ({n} uncommented; baseline {baseline})");
+    // At baseline: uncommented sites are ratcheted debt, not new violations.
+    if verbose {
+        for v in &violations {
+            println!(
+                "FAIL {}:{}: `{}` lacks an adjacent `// INVARIANT(Name): …` proof \
+                 (unchecked arithmetic requires a named invariant at the same rung as unsafe)",
+                v.file, v.line, v.method
+            );
+        }
+    }
+    out.note(format!(
+        "check: unchecked-arith PASS ({n} uncommented; baseline {baseline})"
+    ));
     Ok(true)
 }
 
 fn run_agreement_registry(
     files: &[fsutil::SourceFile],
     root: &std::path::Path,
+    verbose: bool,
 ) -> Result<bool, anyhow::Error> {
-    println!("== check 5: agreement-law registry ==");
+    let mut out = CheckOut::new(verbose);
+    out.header("== check 5: agreement-law registry ==");
     let registry = checks::agreement_registry::load(root)?;
     let violations = checks::agreement_registry::check(files, &registry, root);
     for v in &violations {
-        println!(
-            "FAIL registry entry \"{}\" ({}::{}): {}",
-            v.name, v.file, v.test_fn, v.reason
-        );
+        out.violation(format!(
+            "{}:0 — registry entry \"{}\" ({}): {}",
+            v.file, v.name, v.test_fn, v.reason
+        ));
     }
-    let ok = violations.is_empty();
-    println!(
+    let ok = out.finish_ok();
+    out.note(format!(
         "check 5: {} ({} law(s) registered, {} missing)",
         if ok { "PASS" } else { "FAIL" },
         registry.len(),
         violations.len()
-    );
+    ));
     Ok(ok)
 }

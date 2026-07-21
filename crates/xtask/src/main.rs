@@ -143,6 +143,9 @@ enum Verb {
         /// Run a single named check instead of all five (+ later ratchets).
         #[arg(long, value_enum)]
         only: Option<ResonanceCheck>,
+        /// Restore per-check headers and PASS chatter (default is quiet).
+        #[arg(long)]
+        verbose: bool,
     },
     /// The full first-party test suite.
     Test,
@@ -212,7 +215,9 @@ fn main() -> ExitCode {
                 verbs::authority_update_baseline().map_err(XtaskError::Authority)
             }
         },
-        Verb::Resonance { only } => resonance::run(only).map_err(XtaskError::Resonance),
+        Verb::Resonance { only, verbose } => {
+            resonance::run(only, verbose).map_err(XtaskError::Resonance)
+        }
         Verb::Test => verbs::test().map_err(XtaskError::Process),
         Verb::TestReleaseChecked => verbs::test_release_checked().map_err(XtaskError::Process),
         Verb::Run { args } => verbs::run_bin(&args).map_err(XtaskError::Process),

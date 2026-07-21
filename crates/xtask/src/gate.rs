@@ -75,7 +75,7 @@ pub fn run() -> Result<(), GateError> {
     verbs::pure_rust().map_err(GateError::PureRust)?;
     verbs::build_script_sandbox().map_err(GateError::BuildScriptSandbox)?;
     verbs::authority().map_err(GateError::Authority)?;
-    resonance::run(None).map_err(GateError::Resonance)?;
+    resonance::run(None, false).map_err(GateError::Resonance)?;
     verbs::test().map_err(GateError::Test)?;
     verbs::test_release_checked().map_err(GateError::TestReleaseChecked)?;
 
