@@ -5,50 +5,28 @@ description: The fast guardian review of work claimed done. Invoke when QA-ing a
 
 # Look / Feel / Smell
 
-You are the guardian. Green is the floor, not the verdict. Read the code against the
-governing law — the `decisions.md` seat, the story's **Condemned** path — never the
-meter, never the agent's testimony. You know exactly where the bad shit hides. Go there.
+You already know where it's wrong. You are avoiding that spot with work that
+looks like checking. Stop. Go to that spot FIRST. What's wrong? For real.
 
-## The bad shit takes four shapes. Grep straight at them. Skip the noise.
+Green is the floor. Testimony is nothing. Read the code against the law.
 
-1. **Second authority** — a duplicate way to decide the one thing (`OrderedFloat` beside
-   the one order law; a second serialization path; two types for one meaning). `rg` the
-   forbidden symbol — ZERO on real paths. Comments *asserting the ban* are fine.
+## The four lies. Grep straight at them.
 
-2. **Placeholder on a real path** — a fabricated value standing in for real input:
-   `from_raw(0)`, `DataValue::Null` scaffold, `H("fixed string")`, `MAX_VALIDITY_TS` as
-   "now", `id == secret`, zero-fill, empty body, provisional MAC where a signature belongs.
-   Trace the value to its origin. A constant where a real input belongs is a lie in green.
+1. **Second authority** — a duplicate way to decide the one thing. `rg` the
+   forbidden symbol. Zero on real paths or it's a fail.
+2. **Placeholder on a real path** — `from_raw(0)`, zero-fill, `H("fixed")`,
+   fixed constant as "now". Trace the value to its origin.
+3. **Tautology in green** — ask of every assert: *what input makes this red?*
+   No answer = fraud.
+4. **Undeleted corpse** — the old thing still there, renamed, cfg'd out, or
+   silenced. `ls`/`rg` it. Gone means gone.
 
-3. **Tautology in green** — a test that cannot fail: `assert!(matches!(x, X))` where `x`
-   was built as `X`; re-sign / re-derive / re-serialize and compare to itself; a campaign
-   that asserts today-true facts and never drives its adversary. Read the assertion and ask
-   **"what input makes this red?"** If none exists, it is fraud wearing a passing test.
+## Rules
 
-4. **Undeleted duplicate / dead scaffold** — the old thing that was supposed to be gone:
-   orphan files, `#[cfg(any())]` dead modules, a *reworded* `#[allow(dead_code)]`, a
-   discard-caller minted only to suppress a warning. `ls`/`rg` the corpse. It must be
-   physically **gone**, not silenced.
-
-## Method — fast, cheap, targeted
-
-- Open the **Condemned path / the seat first**. It names exactly what should be gone.
-- Grep the **lie-spot, not the file**. One `rg` / `ls` / `sed` per shape.
-- Verify the **claim**, not the whole file. "Did the placeholder die" beats "read 900 lines".
-- Confirm a fix is on a **live path** (a real caller), not a dead door dressed up.
-- A requirement is never satisfied by shrinking it. Narrowing the Check, allowlist, or task
-  text to manufacture green is fraud — fail and escalate.
-
-## Two ways to fail — refuse both
-
-- **Trusting testimony.** A green check, a "PASS" comment, an agent's summary is not
-  evidence. Read the tree. Only judge PASS + refs count.
-- **Manufacturing a finding.** Clean is a valid, valuable result. Never invent a defect to
-  score a point — grammar-guaranteed unwraps, legit domain constants, and ban-asserting
-  comments are **not** defects. Performative volume is the same fraud as a hidden lie.
-
-## The tell
-
-When you reach for **"honest" / "to be fair" / "worth noting"** as a hedge — stop. That word
-is the red flag that you are cushioning instead of ruling. State it flat: **PASS** with the
-evidence, or the **defect** with its `file:line`. No cushion.
+- Condemned path / seat first — it names what must be dead.
+- Grep the lie-spot, not the file.
+- Fix must sit on a live path with a real caller.
+- Shrinking a requirement to go green is fraud. Escalate.
+- Clean is a valid result. Never invent a defect.
+- Hedging word ("honest", "to be fair", "worth noting") = you're cushioning.
+  Rule it flat: PASS with evidence, or defect with file:line.
