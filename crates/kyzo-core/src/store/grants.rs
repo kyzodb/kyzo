@@ -10,12 +10,12 @@
 //! Grants are seeds; [`materialize`] is pure (decisions.md §2, §68).
 //!
 //! Owns: [`ForkGrant`], [`RecoveryGrant`], [`GrantId`], [`materialize`],
-//! [`AncestorReadGrant`], [`RecoveryQuorumProof`].
+//! [`AncestorReadGrant`], [`RecoveryQuorumProof`], [`PredecessorConsentProof`].
 //!
 //! Bans: discovery-time identity entropy outside the grant seed; grant-time
 //! kill of the original token; post-grant shared-confidentiality Rotate;
 //! in-place WriteAuthority reissue for the same epoch; signatureless recovery
-//! mint of [`WriteAuthority`].
+//! mint of [`WriteAuthority`]; signatureless fork mint of [`WriteAuthority`].
 
 use std::collections::BTreeSet;
 
@@ -32,6 +32,10 @@ const RECOVERY_QUORUM_DOMAIN: &[u8] = b"kyzo.recovery_quorum.v1";
 const RECOVERY_MATRIX_DIGEST_DOMAIN: &[u8] = b"kyzo.recovery_matrix.v1";
 /// Domain-separated prefix for RecoveryGrant payload digests.
 const RECOVERY_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.recovery_grant.payload.v1";
+/// Domain-separated prefix for predecessor fork-consent signatures.
+const FORK_CONSENT_DOMAIN: &[u8] = b"kyzo.fork_consent.v1";
+/// Domain-separated prefix for ForkGrant payload digests.
+const FORK_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.fork_grant.payload.v1";
 
 /// Stable grant identity bound into the signed payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -137,11 +141,94 @@ impl From<[u8; 32]> for KeyMaterialCommitment {
     }
 }
 
+/// Opaque sealed evidence that a predecessor consented to a fork payload.
+///
+/// No public free constructor — mint only via [`PredecessorConsentProof::verify`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PredecessorConsentProof {
+    predecessor_store: StoreId,
+    payload_digest: [u8; 32],
+    key_id_digest: [u8; 32],
+    _priv: (),
+}
+
+impl PredecessorConsentProof {
+    /// Verify an ed25519 consent signature and seal the proof.
+    ///
+    /// Message: `kyzo.fork_consent.v1 || predecessor_store || payload_digest`.
+    pub fn verify(
+        predecessor_store: StoreId,
+        consent_verifying_key: &[u8; 32],
+        payload_digest: &[u8; 32],
+        signature: &[u8; 64],
+    ) -> Result<Self, MaterializeRefuse> {
+        let Ok(verifying) = VerifyingKey::from_bytes(consent_verifying_key) else {
+            return Err(MaterializeRefuse::ConsentUnverified);
+        };
+        let Ok(sig) = Signature::try_from(signature.as_slice()) else {
+            return Err(MaterializeRefuse::ConsentUnverified);
+        };
+        let mut message =
+            Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
+        message.extend_from_slice(FORK_CONSENT_DOMAIN);
+        message.extend_from_slice(predecessor_store.as_bytes());
+        message.extend_from_slice(payload_digest);
+        if verifying.verify(message.as_slice(), &sig).is_err() {
+            return Err(MaterializeRefuse::ConsentUnverified);
+        }
+        let mut key_h = Sha256::new();
+        key_h.update(b"kyzo.fork_consent.key_id.v1");
+        key_h.update(consent_verifying_key);
+        Ok(Self {
+            predecessor_store,
+            payload_digest: *payload_digest,
+            key_id_digest: key_h.finalize().into(),
+            _priv: (),
+        })
+    }
+
+    /// Predecessor StoreId sealed into this proof.
+    pub fn predecessor_store(&self) -> StoreId {
+        self.predecessor_store
+    }
+
+    /// Payload digest the predecessor consented to.
+    pub fn payload_digest(&self) -> &[u8; 32] {
+        &self.payload_digest
+    }
+
+    /// Digest of the consent verifying key sealed into this proof.
+    pub fn key_id_digest(&self) -> &[u8; 32] {
+        &self.key_id_digest
+    }
+}
+
+/// Payload digest a predecessor must consent to for a fork grant's sealed fields.
+pub fn fork_grant_payload_digest(
+    grant_id: GrantId,
+    predecessor_store: StoreId,
+    fork_point_root: &ForkPointRoot,
+    successor_principal: &SuccessorPrincipal,
+    identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(FORK_GRANT_PAYLOAD_DOMAIN);
+    h.update(grant_id.as_bytes());
+    h.update(predecessor_store.as_bytes());
+    h.update(fork_point_root.as_bytes());
+    h.update(successor_principal.as_bytes());
+    h.update(identity_seed.as_bytes());
+    h.update(key_material_commitment.as_bytes());
+    h.finalize().into()
+}
+
 /// Different-principal fork seed — not an event.
 ///
 /// Binds GrantId, predecessor StoreId, fork-point root, successor principal,
 /// identity seed, and key-material commitment. Changes nothing about the
 /// original lineage. Materialization is at discovery via [`materialize`].
+/// Carries a verified [`PredecessorConsentProof`] — signatureless mint is Unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForkGrant {
     grant_id: GrantId,
@@ -150,10 +237,14 @@ pub struct ForkGrant {
     successor_principal: SuccessorPrincipal,
     identity_seed: IdentitySeed,
     key_material_commitment: KeyMaterialCommitment,
+    consent_proof: PredecessorConsentProof,
 }
 
 impl ForkGrant {
-    /// Construct a fork grant seed from its sealed payload fields.
+    /// Construct a fork grant seed bound to a verified predecessor consent proof.
+    ///
+    /// The proof's predecessor and payload digest must match this grant's sealed
+    /// fields; signatureless construction that mints power is condemned.
     pub fn new(
         grant_id: GrantId,
         predecessor_store: StoreId,
@@ -161,15 +252,35 @@ impl ForkGrant {
         successor_principal: impl Into<SuccessorPrincipal>,
         identity_seed: impl Into<IdentitySeed>,
         key_material_commitment: impl Into<KeyMaterialCommitment>,
-    ) -> Self {
-        Self {
+        consent_proof: PredecessorConsentProof,
+    ) -> Result<Self, MaterializeRefuse> {
+        let fork_point_root = fork_point_root.into();
+        let successor_principal = successor_principal.into();
+        let identity_seed = identity_seed.into();
+        let key_material_commitment = key_material_commitment.into();
+        if consent_proof.predecessor_store() != predecessor_store {
+            return Err(MaterializeRefuse::ConsentMismatch);
+        }
+        let expected = fork_grant_payload_digest(
             grant_id,
             predecessor_store,
-            fork_point_root: fork_point_root.into(),
-            successor_principal: successor_principal.into(),
-            identity_seed: identity_seed.into(),
-            key_material_commitment: key_material_commitment.into(),
+            &fork_point_root,
+            &successor_principal,
+            &identity_seed,
+            &key_material_commitment,
+        );
+        if consent_proof.payload_digest() != &expected {
+            return Err(MaterializeRefuse::ConsentUnverified);
         }
+        Ok(Self {
+            grant_id,
+            predecessor_store,
+            fork_point_root,
+            successor_principal,
+            identity_seed,
+            key_material_commitment,
+            consent_proof,
+        })
     }
 
     /// Grant identity.
@@ -200,6 +311,11 @@ impl ForkGrant {
     /// Key-material commitment.
     pub fn key_material_commitment(&self) -> &KeyMaterialCommitment {
         &self.key_material_commitment
+    }
+
+    /// Verified predecessor-consent evidence bound into this grant.
+    pub fn consent_proof(&self) -> &PredecessorConsentProof {
+        &self.consent_proof
     }
 }
 
@@ -475,6 +591,14 @@ pub enum MaterializeRefuse {
     #[error("RecoveryMatrixAbsent: recovery materialize requires the store RecoveryMatrix")]
     #[diagnostic(code(store::grants::recovery_matrix_absent))]
     RecoveryMatrixAbsent,
+    /// Predecessor consent signature failed verification.
+    #[error("ConsentUnverified: predecessor consent signature does not verify")]
+    #[diagnostic(code(store::grants::consent_unverified))]
+    ConsentUnverified,
+    /// Consent proof does not name the grant's predecessor StoreId.
+    #[error("ConsentMismatch: consent proof predecessor does not match the fork grant")]
+    #[diagnostic(code(store::grants::consent_mismatch))]
+    ConsentMismatch,
 }
 
 /// Optional prior materialization witness for idempotent rediscovery.
@@ -513,17 +637,18 @@ impl PriorMaterialization {
 /// - matching successor → converge (return the same materialization again);
 /// - mismatched successor → [`MaterializeRefuse::GrantAlreadyMaterialized`].
 ///
-/// Original lineage continues untouched (ForkGrant). Recovery mints a new
-/// WriteAuthority for the same StoreId under a new CryptoDomain — never
-/// in-place reissue for the same epoch — and only when `recovery_matrix`
-/// matches the grant's sealed [`RecoveryQuorumProof`].
+/// Original lineage continues untouched (ForkGrant) and only when the grant
+/// carries a verified [`PredecessorConsentProof`] for the named predecessor.
+/// Recovery mints a new WriteAuthority for the same StoreId under a new
+/// CryptoDomain — never in-place reissue for the same epoch — and only when
+/// `recovery_matrix` matches the grant's sealed [`RecoveryQuorumProof`].
 pub fn materialize(
     grant: &Grant,
     prior: Option<PriorMaterialization>,
     recovery_matrix: Option<&RecoveryMatrix>,
 ) -> Result<MaterializedGrant, MaterializeRefuse> {
     let computed = match grant {
-        Grant::Fork(fork) => materialize_fork(fork),
+        Grant::Fork(fork) => materialize_fork(fork)?,
         Grant::Recovery(recovery) => materialize_recovery(recovery, recovery_matrix)?,
     };
     if let Some(prior) = prior
@@ -539,19 +664,34 @@ pub fn materialize(
     Ok(computed)
 }
 
-fn materialize_fork(fork: &ForkGrant) -> MaterializedGrant {
+fn materialize_fork(fork: &ForkGrant) -> Result<MaterializedGrant, MaterializeRefuse> {
+    // Sealed consent is trusted only when it still binds THIS grant's fields.
+    if fork.consent_proof().predecessor_store() != fork.predecessor_store() {
+        return Err(MaterializeRefuse::ConsentMismatch);
+    }
+    let expected = fork_grant_payload_digest(
+        fork.grant_id(),
+        fork.predecessor_store(),
+        fork.fork_point_root(),
+        fork.successor_principal(),
+        fork.identity_seed(),
+        fork.key_material_commitment(),
+    );
+    if fork.consent_proof().payload_digest() != &expected {
+        return Err(MaterializeRefuse::ConsentUnverified);
+    }
     let store_id = derive_fork_store_id(fork);
     let fence_epoch = FenceEpoch::genesis(store_id);
     let crypto_domain = CryptoDomain::new(store_id, fence_epoch);
     let token_id = derive_fork_write_token(fork, store_id);
     let write_authority = WriteAuthority::mint(store_id, token_id);
-    MaterializedGrant {
+    Ok(MaterializedGrant {
         grant_id: fork.grant_id(),
         store_id,
         crypto_domain,
         write_authority,
         key_material_commitment: *fork.key_material_commitment(),
-    }
+    })
 }
 
 fn materialize_recovery(
@@ -701,6 +841,27 @@ pub(crate) fn sign_recovery_quorum(
     message.extend_from_slice(payload_digest);
     let sig = signing.sign(message.as_slice()).to_bytes();
     (public, sig)
+}
+
+/// Test-only: ed25519 predecessor consent sign over the fork-consent domain.
+/// Path-wired dst callers use this so positive fork paths still compile.
+#[cfg(test)]
+pub(crate) fn sign_fork_consent(
+    seed: [u8; 32],
+    predecessor_store: StoreId,
+    payload_digest: &[u8; 32],
+) -> ([u8; 32], [u8; 64]) {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let signing = SigningKey::from_bytes(&seed);
+    let verifying = signing.verifying_key().to_bytes();
+    let mut message =
+        Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
+    message.extend_from_slice(FORK_CONSENT_DOMAIN);
+    message.extend_from_slice(predecessor_store.as_bytes());
+    message.extend_from_slice(payload_digest);
+    let sig = signing.sign(message.as_slice()).to_bytes();
+    (verifying, sig)
 }
 
 #[cfg(test)]
@@ -855,5 +1016,166 @@ mod tests {
             .expect("valid quorum must mint");
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(matured.crypto_domain().fence_epoch(), pred_epoch);
+    }
+
+    /// Nasty: ForkGrant naming a real predecessor without valid consent must not mint.
+    #[test]
+    fn fork_grant_without_valid_consent_refuses_write_authority() {
+        let victim = StoreId::from_digest([0x72; 32]);
+        let grant_id = GrantId::from_bytes([0xA0; 32]);
+        let fork_point = ForkPointRoot::from_digest([0xAA; 32]);
+        let successor = SuccessorPrincipal::from_digest([0xBB; 32]);
+        let identity = IdentitySeed::from_digest([0xCC; 32]);
+        let commitment = KeyMaterialCommitment::from_digest([0xDD; 32]);
+        let payload = fork_grant_payload_digest(
+            grant_id,
+            victim,
+            &fork_point,
+            &successor,
+            &identity,
+            &commitment,
+        );
+
+        let consent = ConsentSigningKey::from_seed([0xF1; 32]);
+
+        // Forged signature bytes — no proof, no grant power.
+        assert_eq!(
+            PredecessorConsentProof::verify(
+                victim,
+                consent.verifying_key(),
+                &payload,
+                &[0xFFu8; 64],
+            ),
+            Err(MaterializeRefuse::ConsentUnverified)
+        );
+
+        // Valid consent for a *different* store, then name the victim — ConsentMismatch.
+        let other = StoreId::from_digest([0x73; 32]);
+        let other_payload = fork_grant_payload_digest(
+            grant_id,
+            other,
+            &fork_point,
+            &successor,
+            &identity,
+            &commitment,
+        );
+        let other_sig = consent.sign_consent(other, &other_payload);
+        let wrong_store_proof = PredecessorConsentProof::verify(
+            other,
+            consent.verifying_key(),
+            &other_payload,
+            &other_sig,
+        )
+        .expect("consent for other store");
+        assert_eq!(
+            ForkGrant::new(
+                grant_id,
+                victim,
+                fork_point,
+                successor,
+                identity,
+                commitment,
+                wrong_store_proof,
+            ),
+            Err(MaterializeRefuse::ConsentMismatch)
+        );
+
+        // Cross-stream: attacker signs a real consent for the victim under a
+        // *different* payload (forged lineage fields), then tries to attach it
+        // to the victim-named grant — construction and materialize refuse.
+        let forged_lineage_payload = fork_grant_payload_digest(
+            GrantId::from_bytes([0xA1; 32]),
+            victim,
+            &fork_point,
+            &successor,
+            &identity,
+            &commitment,
+        );
+        let forged_sig = consent.sign_consent(victim, &forged_lineage_payload);
+        let forged_lineage_proof = PredecessorConsentProof::verify(
+            victim,
+            consent.verifying_key(),
+            &forged_lineage_payload,
+            &forged_sig,
+        )
+        .expect("consent verifies for forged lineage payload");
+        assert_eq!(
+            ForkGrant::new(
+                grant_id,
+                victim,
+                fork_point,
+                successor,
+                identity,
+                commitment,
+                forged_lineage_proof,
+            ),
+            Err(MaterializeRefuse::ConsentUnverified)
+        );
+    }
+
+    #[test]
+    fn fork_grant_valid_consent_materializes() {
+        let predecessor = StoreId::from_digest([0x74; 32]);
+        let grant_id = GrantId::from_bytes([0xA2; 32]);
+        let fork_point = ForkPointRoot::from_digest([0x11; 32]);
+        let successor = SuccessorPrincipal::from_digest([0x22; 32]);
+        let identity = IdentitySeed::from_digest([0x33; 32]);
+        let commitment = KeyMaterialCommitment::from_digest([0x44; 32]);
+        let payload = fork_grant_payload_digest(
+            grant_id,
+            predecessor,
+            &fork_point,
+            &successor,
+            &identity,
+            &commitment,
+        );
+        let consent = ConsentSigningKey::from_seed([0xF2; 32]);
+        let sig = consent.sign_consent(predecessor, &payload);
+        let proof = PredecessorConsentProof::verify(
+            predecessor,
+            consent.verifying_key(),
+            &payload,
+            &sig,
+        )
+        .expect("consent");
+        let grant = ForkGrant::new(
+            grant_id,
+            predecessor,
+            fork_point,
+            successor,
+            identity,
+            commitment,
+            proof,
+        )
+        .expect("grant");
+        let matured = materialize(&Grant::Fork(grant), None, None).expect("valid consent must mint");
+        assert_ne!(matured.store_id(), predecessor);
+    }
+
+    /// Test-only predecessor consent signing key.
+    struct ConsentSigningKey {
+        signing: SigningKey,
+        verifying: [u8; 32],
+    }
+
+    impl ConsentSigningKey {
+        fn from_seed(seed: [u8; 32]) -> Self {
+            let signing = SigningKey::from_bytes(&seed);
+            let verifying = signing.verifying_key().to_bytes();
+            Self { signing, verifying }
+        }
+
+        fn verifying_key(&self) -> &[u8; 32] {
+            &self.verifying
+        }
+
+        fn sign_consent(&self, predecessor_store: StoreId, payload_digest: &[u8; 32]) -> [u8; 64] {
+            let mut message =
+                Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
+            message.extend_from_slice(FORK_CONSENT_DOMAIN);
+            message.extend_from_slice(predecessor_store.as_bytes());
+            message.extend_from_slice(payload_digest);
+            self.signing.sign(message.as_slice()).to_bytes()
+        }
     }
 }

@@ -1708,8 +1708,9 @@ pub mod storage_campaign_lanes {
         materialize, nonce, parse_golden_hex, reclaim_candidate,
     };
     use crate::store::grants::{
-        IdentitySeed, KeyMaterialCommitment, RecoveryQuorumProof, recovery_grant_payload_digest,
-        sign_recovery_quorum,
+        ForkPointRoot, IdentitySeed, KeyMaterialCommitment, PredecessorConsentProof,
+        RecoveryQuorumProof, SuccessorPrincipal, fork_grant_payload_digest,
+        recovery_grant_payload_digest, sign_fork_consent, sign_recovery_quorum,
     };
 
     /// Mint a RecoveryGrant under a fresh 2-of-3 matrix (positive recovery paths).
@@ -1751,6 +1752,43 @@ pub mod storage_campaign_lanes {
         )
         .expect("recovery grant");
         (grant, matrix)
+    }
+
+    /// Mint a ForkGrant under a predecessor consent signature (positive fork paths).
+    fn fork_grant_with_consent(
+        grant_id: GrantId,
+        predecessor: StoreId,
+        fork_point: [u8; 32],
+        successor_principal: [u8; 32],
+        identity_seed: [u8; 32],
+        commitment: [u8; 32],
+        consent_seed: [u8; 32],
+    ) -> ForkGrant {
+        let fork_point = ForkPointRoot::from_digest(fork_point);
+        let successor_principal = SuccessorPrincipal::from_digest(successor_principal);
+        let identity_seed = IdentitySeed::from_digest(identity_seed);
+        let commitment = KeyMaterialCommitment::from_digest(commitment);
+        let payload = fork_grant_payload_digest(
+            grant_id,
+            predecessor,
+            &fork_point,
+            &successor_principal,
+            &identity_seed,
+            &commitment,
+        );
+        let (vk, sig) = sign_fork_consent(consent_seed, predecessor, &payload);
+        let proof = PredecessorConsentProof::verify(predecessor, &vk, &payload, &sig)
+            .expect("predecessor consent");
+        ForkGrant::new(
+            grant_id,
+            predecessor,
+            fork_point,
+            successor_principal,
+            identity_seed,
+            commitment,
+            proof,
+        )
+        .expect("fork grant")
     }
 
     /// Mint a signed AdmissionCertificate under a live authorizing key (pub(crate) door).
@@ -2205,13 +2243,14 @@ pub mod storage_campaign_lanes {
         let sealed = genesis(genesis_params([0xF6; 32], SnapshotFork::No));
         let predecessor = sealed.store_id();
 
-        let fork = ForkGrant::new(
+        let fork = fork_grant_with_consent(
             GrantId::from_bytes([0xF0; 32]),
             predecessor,
             [0xAA; 32],
             [0xBB; 32],
             [0xCC; 32],
             [0xDD; 32],
+            [0xC0; 32],
         );
         let first =
             materialize(&Grant::Fork(fork.clone()), None, None).expect("first discovery");
@@ -2231,13 +2270,14 @@ pub mod storage_campaign_lanes {
         assert_eq!(again.store_id(), first.store_id());
 
         // Mismatched prior → typed GrantAlreadyMaterialized carrying existing identity.
-        let other = ForkGrant::new(
+        let other = fork_grant_with_consent(
             GrantId::from_bytes([0xF1; 32]),
             predecessor,
             [0x01; 32],
             [0x02; 32],
             [0x03; 32],
             [0x04; 32],
+            [0xC1; 32],
         );
         let foreign = materialize(&Grant::Fork(other), None, None).expect("foreign successor");
         let prior_bad = PriorMaterialization::new(fork.grant_id(), foreign.store_id());
