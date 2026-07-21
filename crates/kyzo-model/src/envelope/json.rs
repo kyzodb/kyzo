@@ -1,6 +1,9 @@
 /*
  * Copyright 2022, The Cozo Project Authors. / Copyright 2026, The KyzoDB Authors.
- * MPL-2.0. DataValue <-> JSON wire conversions (no NamedRows — that stays in kyzo-core).
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
 //! JSON wire conversions for [`DataValue`]: serde bridge, plane Json, and
