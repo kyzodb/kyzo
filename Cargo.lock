@@ -1573,24 +1573,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
-name = "fjall"
-version = "3.1.5"
-dependencies = [
- "byteorder-lite",
- "byteview",
- "dashmap",
- "flume",
- "log",
- "lsm-tree",
- "lz4_flex",
- "nanoid",
- "rand 0.10.2",
- "tempfile",
- "test-log",
- "xxhash-rust",
-]
-
-[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2259,13 +2241,13 @@ dependencies = [
  "csv",
  "ed25519-dalek",
  "fast2s",
- "fjall",
  "flatbuffers",
  "frost-ed25519",
  "itertools 0.15.0",
  "jieba-rs",
  "jiff",
  "kyzo-crashfs",
+ "kyzo-fjall",
  "kyzo-model",
  "lz4_flex",
  "miette",
@@ -2346,6 +2328,51 @@ dependencies = [
  "fuser",
  "libc",
  "tempfile",
+]
+
+[[package]]
+name = "kyzo-fjall"
+version = "3.1.5"
+dependencies = [
+ "byteorder-lite",
+ "byteview",
+ "dashmap",
+ "flume",
+ "kyzo-lsm-tree",
+ "log",
+ "lz4_flex",
+ "nanoid",
+ "rand 0.10.2",
+ "tempfile",
+ "test-log",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "kyzo-lsm-tree"
+version = "3.1.5"
+dependencies = [
+ "byteorder-lite",
+ "bytes",
+ "byteview",
+ "criterion",
+ "crossbeam-skiplist",
+ "enum_dispatch",
+ "fs_extra",
+ "interval-heap",
+ "log",
+ "lz4_flex",
+ "nanoid",
+ "quick_cache",
+ "rand 0.9.4",
+ "rustc-hash",
+ "self_cell",
+ "sfa",
+ "strum",
+ "tempfile",
+ "test-log",
+ "varint-rs",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -2514,33 +2541,6 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
-
-[[package]]
-name = "lsm-tree"
-version = "3.1.5"
-dependencies = [
- "byteorder-lite",
- "bytes",
- "byteview",
- "criterion",
- "crossbeam-skiplist",
- "enum_dispatch",
- "fs_extra",
- "interval-heap",
- "log",
- "lz4_flex",
- "nanoid",
- "quick_cache",
- "rand 0.9.4",
- "rustc-hash",
- "self_cell",
- "sfa",
- "strum",
- "tempfile",
- "test-log",
- "varint-rs",
- "xxhash-rust",
-]
 
 [[package]]
 name = "lsp-types"

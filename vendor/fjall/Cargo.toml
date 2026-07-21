@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 rust-version = "1.90.0"
-name = "fjall"
+name = "kyzo-fjall"
 version = "3.1.5"
 build = false
 include = [
@@ -80,6 +80,8 @@ version = "0.4.27"
 
 [dependencies.lsm-tree]
 version = "~3.1.5"
+package = "kyzo-lsm-tree"
+path = "../lsm-tree"
 features = []
 default-features = false
 

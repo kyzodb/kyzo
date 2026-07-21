@@ -12,7 +12,7 @@ categories.workspace = true
 description = "KyzoDB storage engine core: a pure-Rust fork of CozoDB"
 
 [dependencies]
-kyzo-model = { path = "../kyzo-model" }
+kyzo-model = { path = "../kyzo-model", version = "0.8.2" }
 # Index-operator tier (both pure Rust). twox-hash: XxHash32 for MinHash-LSH
 # signatures (2.x re-exports XxHash32 with the with_seed/Hasher API; already
 # in-tree transitively via fjall). quadrature: numeric integration for the
@@ -70,7 +70,7 @@ frost-ed25519 = { version = "3.0.0", default-features = false }
 aes-gcm-siv = "0.11.1"
 chacha20poly1305 = "0.11"
 lz4_flex = "0.13"
-fjall = "3.1.5"
+fjall = { package = "kyzo-fjall", version = "3.1.5", path = "../../vendor/fjall" }
 # Fixed-rule tier (both pure Rust end-to-end):
 # csv → csv-core/itoa/ryu/serde; priority-queue → indexmap/equivalent/hashbrown.
 csv = "1.3"
@@ -108,7 +108,7 @@ flatbuffers = { version = "25.12.19", default-features = false, features = ["std
 rayon = "1"
 
 [dev-dependencies]
-kyzo-model = { path = "../kyzo-model" }
+kyzo-model = { path = "../kyzo-model", version = "0.8.2" }
 tempfile = "3"
 proptest = "1"
 criterion = "0.8.2"

@@ -83,11 +83,42 @@ If any of these is false, the workflow's `verify-provenance` or `gate` job fails
 
 ## crates.io publication
 
-`publish-crates` runs `cargo publish -p kyzo` gated on the `crates-io` GitHub Environment (manual
-approval required — see the last-mile checklist in the story #83 PR for the one-time environment
-and secret setup). If `CARGO_REGISTRY_TOKEN` is not configured, the job no-ops with a clear message
-instead of failing red: publication readiness and the tag/Release pipeline are independent — a
-missing crates.io credential never blocks a GitHub Release.
+Everything below lives in this one repo — publishing to crates.io creates **no** separate
+repository. `cargo publish -p <crate>` uploads that crate's source from wherever it sits in the
+tree (e.g. `vendor/fjall/`); the registry is a package index, not a repo mirror.
+
+### Why the forked storage crates are published under our own names
+
+`kyzo` depends on our fork of `fjall`/`lsm-tree` (`vendor/`), which carries engine edits upstream
+does not have. Two hard cargo facts shape how this publishes:
+
+- **The upstream names are taken.** crates.io has one `fjall` and one `lsm-tree` (the real
+  upstream crates). We cannot publish a second crate under either name. So our fork is published
+  under **`kyzo-fjall`** / **`kyzo-lsm-tree`** — its `[package] name`. The `[lib] name` stays
+  `fjall`/`lsm-tree`, and dependents use the dependency `package =` rename key, so every
+  `use fjall::…` in the engine is unchanged.
+- **`[patch.crates-io]` can never publish.** A patch is a build-time redirect that `cargo publish`
+  strips — a published crate resolves its deps from the registry, so a patched `kyzo` would silently
+  bind *upstream* `fjall` (missing our edits) and fail to compile for anyone who installs it. There
+  is therefore **no `[patch]`**: `kyzo-core` depends on the fork directly by `path` + `version`.
+
+Nothing about this is a code change or a feature removal — it is purely how a crate that forks a
+dependency is published in Rust.
+
+### Publish order (bottom-up)
+
+A crate cannot publish until the crates it depends on are already on the index. `publish-crates`
+publishes strictly in dependency order, each step blocking until the index shows the new version:
+
+```
+kyzo-lsm-tree  →  kyzo-fjall  →  kyzo-model  →  kyzo
+```
+
+The job is gated on the `crates-io` GitHub Environment (manual approval — see the last-mile
+checklist in the story #83 PR for the one-time environment and secret setup). If
+`CARGO_REGISTRY_TOKEN` is not configured, the job no-ops with a clear message instead of failing
+red: publication readiness and the tag/Release pipeline are independent — a missing crates.io
+credential never blocks a GitHub Release.
 
 ## Security-classed fixes
 

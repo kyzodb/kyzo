@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 rust-version = "1.90"
-name = "lsm-tree"
+name = "kyzo-lsm-tree"
 version = "3.1.5"
 build = false
 include = [

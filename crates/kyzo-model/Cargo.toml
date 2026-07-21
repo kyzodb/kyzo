@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-publish = false
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "KyzoDB shared vocabulary: DataValue, program atoms, envelopes, validity coerce"
 
 [dependencies]

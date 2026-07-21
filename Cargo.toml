@@ -7,10 +7,13 @@ resolver = "3"
 # syn/quote/proc-macro2 and kyzo-arrow-interop's real `arrow` dependency never
 # reach the purity gate.
 # vendor/fjall and vendor/lsm-tree (story #118): the upstream fjall-rs/fjall and
-# fjall-rs/lsm-tree 3.1.5 sources, vendored verbatim (MIT/Apache-2.0 headers
-# preserved) as workspace members. [patch.crates-io] below routes every consumer
-# (kyzo-core's `fjall` dep and fjall's own internal `lsm-tree` edge) onto this
-# tree. This is the fork the story owns; the engine edits land here.
+# fjall-rs/lsm-tree 3.1.5 sources, forked as first-party workspace members
+# (MIT/Apache-2.0 headers preserved). They are PUBLISHED under our own package
+# names — `kyzo-fjall` / `kyzo-lsm-tree` — so a published `kyzo` binds our fork,
+# not upstream (which lacks our engine edits). The `[lib] name` stays
+# `fjall`/`lsm-tree`, so consumers `use fjall::` unchanged via the dependency
+# `package =` rename key. No `[patch.crates-io]` — that trick could never
+# publish (cargo strips it; a published crate would bind upstream fjall).
 members = [
     "crates/kyzo-core",
     "crates/kyzo-bin",
@@ -36,12 +39,6 @@ readme = "README.md"
 keywords = ["database", "datalog", "graph", "vector-search", "embedded"]
 categories = ["database-implementations", "algorithms", "data-structures"]
 
-# Routes every consumer of these crates.io names onto the vendored fork above,
-# including fjall's own internal `lsm-tree` dependency edge.
-[patch.crates-io]
-fjall = { path = "vendor/fjall" }
-lsm-tree = { path = "vendor/lsm-tree" }
-
 [profile.release]
 lto = "thin"
 
@@ -64,3 +61,10 @@ debug-assertions = true
 # refusal/kind arms. Packages opt in with `[lints] workspace = true`.
 [workspace.lints.clippy]
 wildcard_enum_match_arm = "deny"
+
+# miette::bail!/ensure! still expand with a trailing `;` (unfixed upstream as of
+# 7.6.0). Nightly denies `semicolon_in_expressions_from_macros` (rust#144369),
+# which breaks `cargo +nightly fuzz` / fuzz-smoke on expression-position uses
+# (`_ => bail!(...)`). Allow until miette drops the trailing semicolon.
+[workspace.lints.rust]
+semicolon_in_expressions_from_macros = "allow"
