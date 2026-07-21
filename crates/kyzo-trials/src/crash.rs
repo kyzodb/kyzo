@@ -206,7 +206,7 @@ mod fuse_crash_matrix {
     use kyzo_crashfs::harness::{mount, require_live_mount, wait_for_mount};
     use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
-    use crate::store::fjall::new_fjall_storage;
+    use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
     use crate::store::sim::SimStorage;
     use crate::store::{ReadTx, Slice, Storage, WriteTx};
 
@@ -301,9 +301,9 @@ mod fuse_crash_matrix {
     /// Each barrier is crossed with ClearCache (exact SimStorage power-cut
     /// oracle) AND with TornSeq/TornOp on the barrier's last journal write
     /// (open-or-typed-refuse; never durable past the torn round; never
-    /// wrong bytes). Multi-segment (≥2 `.jnl`) variants use
-    /// `StorageOptions::max_journaling_size_bytes` (floor-validated) as a
-    /// slow-tier follow-on — this class stays single-segment hard-pinned.
+    /// wrong bytes). Multi-segment (≥2 `.jnl`) lives in
+    /// [`multi_journal_segment_crash_matrix_at_journaling_floor`] — this
+    /// class stays single-segment hard-pinned.
     #[test]
     fn commit_boundary_crash_matrix_matches_the_powercut_oracle() {
         require_live_mount();
@@ -464,6 +464,196 @@ mod fuse_crash_matrix {
         }
     }
 
+    /// Vendor / [`StorageOptions::max_journaling_size_bytes`] floor — 64 MiB.
+    /// Below this our open path refuses typed; fjall's worker rotates a journal
+    /// segment when the active writer position exceeds ~64_000_000 bytes
+    /// (hardcoded in the vendor — no production door rotates earlier).
+    const JOURNALING_SIZE_FLOOR_BYTES: u64 = 64 * 1_024 * 1_024;
+
+    /// Payload sizing so cumulative *compressed* journal bytes cross the
+    /// vendor rotate threshold (`pos > 64_000_000` on Flush). Values must be
+    /// incompressible — fjall's default journal codec is LZ4, and a repeating
+    /// fill never fills the active segment.
+    const MULTI_JNL_VALUE_LEN: usize = 256 * 1_024;
+    const MULTI_JNL_KEYS_PER_ROUND: u32 = 8;
+    const MULTI_JNL_MAX_ROUNDS: u32 = 80;
+
+    fn multi_jnl_storage_opts() -> StorageOptions {
+        StorageOptions {
+            max_journaling_size_bytes: Some(JOURNALING_SIZE_FLOOR_BYTES),
+            // More frequent Flush worker ticks so the journal-rotate check
+            // runs once the active writer has actually filled past 64e6 —
+            // stock 64 MiB memtable also rotates, just later.
+            max_memtable_size_bytes: Some(16 * 1_024 * 1_024),
+            ..StorageOptions::default()
+        }
+    }
+
+    /// Deterministic high-entropy value — LZ4 must not collapse the journal
+    /// write below the rotate threshold.
+    fn multi_jnl_kv(round: u32, i: u32) -> (Vec<u8>, Vec<u8>) {
+        let key = format!("mj{round:04}-k{i:04}").into_bytes();
+        let mut state = (round as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(i as u64)
+            .wrapping_add(0xA5A5_A5A5_5A5A_5A5A);
+        let mut val = Vec::with_capacity(MULTI_JNL_VALUE_LEN);
+        while val.len() < MULTI_JNL_VALUE_LEN {
+            state = state
+                .wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                .wrapping_add(0x94D0_49BB_1331_11EB);
+            val.extend_from_slice(&state.to_le_bytes());
+        }
+        val.truncate(MULTI_JNL_VALUE_LEN);
+        (key, val)
+    }
+
+    /// Multi-journal-segment class (AUDIT-crash-multiseg-v2): open at the
+    /// 64 MiB journaling floor, write past one journal segment so ≥2 `.jnl`
+    /// files see fsync activity, then ClearCache-crash parameterized over
+    /// every recorded journal segment. Vendor rotation has no sub-64 MiB
+    /// production door — this is necessarily a slow write campaign.
+    ///
+    /// Run (kyzo-dev, needs `/dev/fuse`):
+    /// `cargo test -p kyzo --lib \
+    ///   store::sweep::crash::fuse_crash_matrix::multi_journal_segment_crash_matrix_at_journaling_floor \
+    ///   -- --ignored --nocapture`
+    #[test]
+    #[ignore = "slow: multi-jnl — writes past one 64 MiB journal segment"]
+    fn multi_journal_segment_crash_matrix_at_journaling_floor() {
+        require_live_mount();
+
+        // Pass 1: fault-free recorder at the journaling floor. Drive durable
+        // rounds until ≥2 distinct `.jnl` basenames have recorded fsyncs —
+        // sealed segments may vanish after flush under the floor, so accumulate
+        // every basename's fsync frontier while it lives.
+        let backing_a = tempfile::tempdir().unwrap();
+        let mnt_a = tempfile::tempdir().unwrap();
+        let fs_a = PassthroughFs::new(backing_a.path(), FaultPlan::new(1));
+        let counters = fs_a.shared_counters();
+        let session_a = mount(fs_a, mnt_a.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+        wait_for_mount(mnt_a.path());
+
+        let mut rounds_driven = 0u32;
+        let mut segment_fsync_frontier: std::collections::BTreeMap<String, u64> =
+            std::collections::BTreeMap::new();
+        {
+            let db = new_fjall_storage_with(mnt_a.path(), multi_jnl_storage_opts())
+                .expect("journaling floor must open");
+            for round in 0..MULTI_JNL_MAX_ROUNDS {
+                let mut tx = db.write_tx().unwrap();
+                for i in 0..MULTI_JNL_KEYS_PER_ROUND {
+                    let (k, v) = multi_jnl_kv(round, i);
+                    tx.put(&k, &v).unwrap();
+                }
+                tx.commit_durable().unwrap();
+                rounds_driven = round + 1;
+
+                // Let the flush worker run the journal-rotate check (it only
+                // evaluates `pos > 64_000_000` on Flush messages).
+                let _ = db.sync();
+                if round > 0 && round % 4 == 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+
+                for name in journal_segment_basenames(backing_a.path()) {
+                    let n = counters.fsync_count(&name);
+                    if n > 0 {
+                        segment_fsync_frontier.insert(name, n);
+                    }
+                }
+                if segment_fsync_frontier.len() >= 2 {
+                    break;
+                }
+            }
+        }
+        assert!(
+            segment_fsync_frontier.len() >= 2,
+            "at journaling floor, writing past one segment must yield ≥2 journal \
+             basenames with fsync activity; after {rounds_driven} rounds (~{} MiB \
+             payload) saw {:?}",
+            (rounds_driven as usize
+                * MULTI_JNL_KEYS_PER_ROUND as usize
+                * MULTI_JNL_VALUE_LEN)
+                / (1024 * 1024),
+            segment_fsync_frontier.keys().collect::<Vec<_>>()
+        );
+        drop(session_a);
+
+        // Pass 2: one ClearCache campaign per recorded journal segment —
+        // trigger path is the segment basename; occurrence is the frontier
+        // observed while that segment lived. Exact surviving-key oracle is
+        // not asserted (flush/eviction under the floor races); the invariant
+        // that holds: open clean or typed refuse, and every present key holds
+        // exactly the bytes written.
+        for (segment, &fsync_at) in &segment_fsync_frontier {
+            assert!(
+                fsync_at >= 1,
+                "segment {segment} frontier must be a real fsync occurrence"
+            );
+            let backing_b = tempfile::tempdir().unwrap();
+            let mnt_b = tempfile::tempdir().unwrap();
+            let plan = FaultPlan::new(1).with_trigger(Trigger::new(
+                segment.clone(),
+                OpKind::Fsync,
+                fsync_at,
+                Fault::ClearCache,
+            ));
+            let fs_b = PassthroughFs::new(backing_b.path(), plan);
+            let session_b =
+                mount(fs_b, mnt_b.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+            wait_for_mount(mnt_b.path());
+            {
+                let db = new_fjall_storage_with(mnt_b.path(), multi_jnl_storage_opts())
+                    .expect("journaling floor must open");
+                for round in 0..rounds_driven {
+                    let Ok(mut tx) = db.write_tx() else { break };
+                    let mut put_ok = true;
+                    for i in 0..MULTI_JNL_KEYS_PER_ROUND {
+                        let (k, v) = multi_jnl_kv(round, i);
+                        if tx.put(&k, &v).is_err() {
+                            put_ok = false;
+                            break;
+                        }
+                    }
+                    if !put_ok || tx.commit_durable().is_err() {
+                        // ClearCache may poison the mount at the armed fsync.
+                        break;
+                    }
+                }
+            }
+            drop(session_b);
+
+            let segment = segment.clone();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || -> miette::Result<()> {
+                    let reopened =
+                        new_fjall_storage_with(backing_b.path(), multi_jnl_storage_opts())?;
+                    let tx = reopened.read_tx()?;
+                    for round in 0..rounds_driven {
+                        for i in 0..MULTI_JNL_KEYS_PER_ROUND {
+                            let (k, expected) = multi_jnl_kv(round, i);
+                            if let Some(v) = tx.get(&k)? {
+                                assert_eq!(
+                                    v,
+                                    expected,
+                                    "segment {segment} @fsync {fsync_at}: key present \
+                                     after crash but with WRONG bytes"
+                                );
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            ));
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(_typed_refusal)) => {}
+                Err(panic_payload) => std::panic::resume_unwind(panic_payload),
+            }
+        }
+    }
+
     const FLOOD_ROWS: u32 = 3_000;
     const FLOOD_VALUE_LEN: usize = 30_000;
     const SEEDS: u64 = 6;
@@ -553,15 +743,17 @@ mod fuse_crash_matrix {
                         [Fault::TornSeq, Fault::TornOp, Fault::ClearCache][(seed % 3) as usize];
                     let backing = tempfile::tempdir().unwrap();
                     let mnt = tempfile::tempdir().unwrap();
-                    // The FIRST fsync any segment file sees, torn one way or
-                    // the other — every distinct path matching the glob gets
-                    // its OWN independent occurrence counter, so this fires
-                    // once per segment file actually created, never a
-                    // sustained rate over the whole flood.
+                    // Catalog #13: occurrence was hard-coded `1` (first fsync
+                    // only). Seed-derive so the campaign also arms the 2nd/3rd
+                    // fsync on each matching segment path — a real crash can
+                    // land on any fsync, not only the first. Every distinct
+                    // path matching the glob keeps its OWN independent
+                    // occurrence counter (never a sustained rate).
+                    let at_count = 1 + (seed % 3);
                     let plan = FaultPlan::new(seed).with_trigger(Trigger::new(
                         SEGMENT_GLOB,
                         OpKind::Fsync,
-                        1,
+                        at_count,
                         fault,
                     ));
                     let fs = PassthroughFs::new(backing.path(), plan);
