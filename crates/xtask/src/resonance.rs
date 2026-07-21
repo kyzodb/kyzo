@@ -154,6 +154,9 @@ pub fn run(only: Option<ResonanceCheck>) -> Result<(), ResonanceError> {
     if run_later_ratchets && !run_serializer_authority(&files) {
         failing_checks.push("serializer_authority");
     }
+    if run_later_ratchets && !run_determinism_ban(&files) {
+        failing_checks.push("determinism_ban");
+    }
     if run_later_ratchets {
         match run_unchecked_arith(&files, &root) {
             Ok(true) => {}
@@ -318,6 +321,25 @@ fn run_peer_dial_ban(files: &[fsutil::SourceFile]) -> bool {
     let ok = violations.is_empty();
     println!(
         "check: peer-dial ban {} ({} raw-socket site(s))",
+        if ok { "PASS" } else { "FAIL" },
+        violations.len()
+    );
+    ok
+}
+
+fn run_determinism_ban(files: &[fsutil::SourceFile]) -> bool {
+    println!("== check: determinism ban (seats 25/45/83/84 — sealed surface is clock/rng-free) ==");
+    let violations = checks::determinism_ban::check(files);
+    for v in &violations {
+        println!(
+            "FAIL {}:{}: `{}` — wall-clock/unseeded randomness on the sealed/commit surface; \
+             commit time is CommitOrdinal, the entropy arm lives in session/admit.rs",
+            v.file, v.line, v.symbol
+        );
+    }
+    let ok = violations.is_empty();
+    println!(
+        "check: determinism ban {} ({} nondeterminism site(s) on the sealed surface)",
         if ok { "PASS" } else { "FAIL" },
         violations.len()
     );

@@ -32,13 +32,11 @@
 //! over the banned std/tokio socket primitives, skipping `#[cfg(test)]`
 //! scopes — a fixture may bind a loopback to prove a refuse.
 
-use syn::visit::{self, Visit};
-
-use crate::fsutil::{span_line, SourceFile};
-use crate::synutil::mod_is_test_scope;
+use crate::checks::banned_path::scan_banned_idents;
+use crate::fsutil::SourceFile;
 
 /// Banned socket primitives — a raw peer/transport connection the fabric law
-/// forbids. Matched on the final path segment so `std::net::TcpStream`,
+/// forbids. Matched on any path segment so `std::net::TcpStream`,
 /// `tokio::net::TcpStream`, and a bare `TcpStream` all trip alike.
 const BANNED_SOCKET_TYPES: &[&str] = &[
     "TcpStream",
@@ -55,33 +53,6 @@ pub struct Violation {
     pub symbol: String,
 }
 
-struct Scanner {
-    hits: Vec<(usize, String)>,
-}
-
-impl<'ast> Visit<'ast> for Scanner {
-    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
-        // A fixture proving `Refuse(FabricUnavailable)` may bind a loopback.
-        if mod_is_test_scope(&node.ident, &node.attrs) {
-            return;
-        }
-        visit::visit_item_mod(self, node);
-    }
-
-    fn visit_path(&mut self, node: &'ast syn::Path) {
-        // Scan EVERY segment, not just the last: in `std::net::TcpStream::connect`
-        // the banned type is the second-to-last segment, and the call's final
-        // segment (`connect`) is innocent. Last-segment-only silently misses it.
-        for seg in &node.segments {
-            let ident = seg.ident.to_string();
-            if BANNED_SOCKET_TYPES.contains(&ident.as_str()) {
-                self.hits.push((span_line(&seg.ident.span()), ident));
-            }
-        }
-        visit::visit_path(self, node);
-    }
-}
-
 /// True for the pure engine crates the ban governs (`kyzo-core`, `kyzo-model`).
 /// The host adapter (`kyzo-bin`) legitimately owns client-facing sockets and
 /// is out of scope (see module docs).
@@ -96,13 +67,11 @@ pub fn check(files: &[SourceFile]) -> Vec<Violation> {
         if !is_engine_scope(&f.rel_path) {
             continue;
         }
-        let mut s = Scanner { hits: vec![] };
-        s.visit_file(&f.ast);
-        for (line, symbol) in s.hits {
+        for hit in scan_banned_idents(f, BANNED_SOCKET_TYPES) {
             violations.push(Violation {
                 file: f.rel_path.clone(),
-                line,
-                symbol,
+                line: hit.line,
+                symbol: hit.ident,
             });
         }
     }
