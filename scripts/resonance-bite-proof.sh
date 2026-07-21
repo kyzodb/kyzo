@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Story #81: bite-proof every resonance-gate check against its historical bug.
 # Each proof works in a throwaway rsync copy (never the real tree): copies
-# just the files a check reads (crates/kyzo-core/src, crates/kyzo-bin/src,
-# resonance-allow.toml, crates/xtask/*.toml), reintroduces the bug's exact shape,
-# and shows the relevant check alone (`--only <check>`) going RED against
-# the mutated copy — then, where relevant, GREEN again once the mutation is
-# reverted or an allowlist citation is added, proving the allowlist
-# mechanism itself (not just the detector) works.
+# just the files a check reads (crates/kyzo-core/src, crates/kyzo-model/src,
+# crates/kyzo-bin/src, resonance-allow.toml, crates/xtask/*.toml), reintroduces
+# the bug's exact shape, and shows the relevant check alone (`--only <check>`)
+# going RED against the mutated copy — then, where relevant, GREEN again once
+# the mutation is reverted or an allowlist citation is added, proving the
+# allowlist mechanism itself (not just the detector) works.
 #
 # Runnable: scripts/resonance-bite-proof.sh [check-name ...]
 # With no arguments, runs all five.
@@ -31,6 +31,7 @@ fresh_copy() {
   mkdir -p "$dst"
   mkdir -p "$dst/crates"
   rsync -a --exclude target "$ROOT/crates/kyzo-core" "$dst/crates/"
+  rsync -a --exclude target "$ROOT/crates/kyzo-model" "$dst/crates/"
   rsync -a --exclude target "$ROOT/crates/kyzo-bin" "$dst/crates/"
   cp "$ROOT/resonance-allow.toml" "$dst/resonance-allow.toml"
   mkdir -p "$dst/crates/xtask"
@@ -72,16 +73,20 @@ bite_derive_bypass() {
   local copy="$WORK/derive_bypass"
   fresh_copy "$copy"
   # Reintroduce exactly the fork-base bug shape on RelationId in
-  # data/value/row.rs: derive Deserialize on RelationId instead of the
-  # hand-written impl. This is the literal shape issue #62's hostile
-  # review found — a derived Deserialize builds the raw u64 by direct
-  # field assignment, bypassing RelationId::new's under-CAP law.
-  python3 - "$copy/crates/kyzo-core/src/data/value/row.rs" <<'PY'
-import sys, re
+  # kyzo-model value/row.rs (post peel seat): derive Deserialize on
+  # RelationId instead of the hand-written impl. This is the literal shape
+  # issue #62's hostile review found — a derived Deserialize builds the
+  # raw u64 by direct field assignment, bypassing RelationId::new's under-CAP law.
+  python3 - "$copy/crates/kyzo-model/src/value/row.rs" <<'PY'
+import sys
 path = sys.argv[1]
 text = open(path).read()
-old = "#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]\npub struct RelationId(u64);"
-new = "#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde_derive::Deserialize)]\npub struct RelationId(u64);"
+old = ("#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]\n"
+       "#[repr(transparent)]\n"
+       "pub struct RelationId(u64);")
+new = ("#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde_derive::Deserialize)]\n"
+       "#[repr(transparent)]\n"
+       "pub struct RelationId(u64);")
 assert old in text, "RelationId derive line not found — has row.rs changed shape?"
 text = text.replace(old, new, 1)
 open(path, "w").write(text)
@@ -94,15 +99,15 @@ bite_panic_lint() {
   local copy="$WORK/panic_lint"
   fresh_copy "$copy"
   # Reintroduce the assert! into RelationId::raw_decode in
-  # data/value/row.rs, a declared decode surface in
+  # kyzo-model value/row.rs, a declared decode surface in
   # crates/xtask/decode-surfaces.toml, instead of the typed refusal it
   # currently is.
-  python3 - "$copy/crates/kyzo-core/src/data/value/row.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-model/src/value/row.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-old = "        let id = u64::from_be_bytes(head.try_into().expect(\"8 bytes\"));"
-new = ("        let id = u64::from_be_bytes(head.try_into().expect(\"8 bytes\"));\n"
+old = "        let id = u64::from_be_bytes(arr);"
+new = ("        let id = u64::from_be_bytes(arr);\n"
        "        assert!(id < RelationId::CAP, \"corrupt key: relation id out of range\");")
 assert old in text, "raw_decode body line not found — has row.rs changed shape?"
 text = text.replace(old, new, 1)
@@ -138,7 +143,7 @@ bite_dead_code_ratchet() {
   # silently fixing, per its disjointness boundary — see the report).
   # Prove the ratchet catches a BRAND NEW uncited one instead, added to a
   # function that starts out with no attribute at all.
-  python3 - "$copy/crates/kyzo-core/src/data/value/row.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-model/src/value/row.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
@@ -155,7 +160,7 @@ bite_agreement_registry() {
   echo "=== bite-proof: check 5 (agreement-law registry) — a law quietly deleted ==="
   local copy="$WORK/agreement_registry"
   fresh_copy "$copy"
-  python3 - "$copy/crates/kyzo-core/src/query/stratify.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-core/src/exec/plan/stratify.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
