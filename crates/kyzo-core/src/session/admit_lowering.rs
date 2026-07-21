@@ -756,8 +756,8 @@ mod tests {
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
             CrossingEvidenceDemand, CrossingStatus, GraphBoundary, KeyBoundaryRefuse,
             OriginContinuity, PostStateRoot, ScopeManifestDigest, ScopeManifestStatus,
-            ScopeManifestTable, TenantId, mint_admission_certificate, prove_promotion_replay,
-            sign_admission_parts, validate_crossing_before_lower,
+            ScopeManifestTable, TenantId, mint_admission_certificate, sign_admission_parts,
+            validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
 
@@ -826,14 +826,8 @@ mod tests {
         assert_eq!(sealed.replay_digest(), again.replay_digest());
         assert_eq!(sealed, again);
 
-        // Promotion: identity/time/provenance/schema replay-equal across "host move".
-        let tenant = TenantId::from_digest([0x7E; 32]);
-        let before = record.promotion_meaning(&cert, tenant);
-        let after = record.promotion_meaning(&cert, tenant);
-        assert_eq!(prove_promotion_replay(&before, &after), Ok(()));
-        assert_eq!(before.schema_cut(), cert.schema_cut());
-
         // Key confinement: custody key authorizes only in its graph.
+        let tenant = TenantId::from_digest([0x7E; 32]);
         let home = GraphBoundary::from_tenant(tenant);
         let foreign = GraphBoundary::from_tenant(TenantId::from_digest([0x7F; 32]));
         let bound = sealed.confine_to_graph(home);
@@ -842,6 +836,112 @@ mod tests {
             bound.authorize(foreign),
             Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
         );
+    }
+
+    /// Adversarial (#374 T9): `PromotionMeaning` binds `local_id` to the record
+    /// content digest — different content diverges; same content replays equal.
+    /// Not the tautological before==after on identical inputs.
+    #[test]
+    fn promotion_meaning_binds_local_id_to_content_digest() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::replica::{
+            AdmissionCertificateParts, AuthorizingKey, PostStateRoot, PromotionRefuse,
+            ScopeManifestDigest, TenantId, mint_admission_certificate, prove_promotion_replay,
+            sign_admission_parts,
+        };
+        use crate::store::sweep::CommitOrdinal;
+
+        let tenant = TenantId::from_digest([0x7E; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id([0x27; 32]);
+        let scope = ScopeManifestDigest::from_digest([0x51; 32]);
+        let schema_cut = [0x51; 32];
+
+        let record_a = admit_claim_record();
+        assert_eq!(
+            record_a.record_id().as_bytes(),
+            record_a.digest().as_digest(),
+            "admission law: RecordId is a view of content digest"
+        );
+        let mut parts_a = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store: record_a.store_id(),
+            origin_epoch: FenceEpoch::genesis(record_a.store_id()),
+            origin_commit: CommitOrdinal::ZERO,
+            schema_cut,
+            record_digest: *record_a.digest().as_digest(),
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts_a.signature = sign_admission_parts(&parts_a, &key).expect("sign A");
+        let cert_a = mint_admission_certificate(parts_a).expect("mint A");
+
+        // B: different claim content → distinct content digest / local_id.
+        let record_b = admit_kind(construct::claim(
+            StatementSubject::new(DataValue::from("intruder")),
+            crate::data::statement::StatementPredicate::new("part_of").expect("pred"),
+            StatementValue::new(DataValue::from("forged_assembly")),
+            ValidityTime::instant(1_700_000_000_000_001),
+            StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
+            StatementSource::unbound(),
+        ));
+        assert_ne!(
+            record_a.digest().as_digest(),
+            record_b.digest().as_digest(),
+            "adversarial pair must differ in content digest"
+        );
+        let mut parts_b = AdmissionCertificateParts {
+            protocol_version: *b"kyzo.v01",
+            origin_store: record_b.store_id(),
+            origin_epoch: FenceEpoch::genesis(record_b.store_id()),
+            origin_commit: CommitOrdinal::ZERO,
+            schema_cut,
+            record_digest: *record_b.digest().as_digest(),
+            predecessor_history_digest: [0x52; 32],
+            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            authorizing_key_id: key.id(),
+            scope_manifest_digest: scope,
+            operation_key: None,
+            signature: [0u8; 64],
+        };
+        parts_b.signature = sign_admission_parts(&parts_b, &key).expect("sign B");
+        let cert_b = mint_admission_certificate(parts_b).expect("mint B");
+
+        let meaning_a = record_a.promotion_meaning(&cert_a, tenant);
+        let meaning_b = record_b.promotion_meaning(&cert_b, tenant);
+
+        assert_eq!(
+            meaning_a.identity().local_id(),
+            record_a.digest().as_digest(),
+            "local_id must equal content digest for A"
+        );
+        assert_eq!(
+            meaning_b.identity().local_id(),
+            record_b.digest().as_digest(),
+            "local_id must equal content digest for B"
+        );
+        assert_ne!(
+            meaning_a.identity().local_id(),
+            meaning_b.identity().local_id(),
+            "distinct content digests must produce distinct local_id seats"
+        );
+        assert_eq!(
+            prove_promotion_replay(&meaning_a, &meaning_b),
+            Err(PromotionRefuse::MeaningDiverged),
+            "different content must make PromotionMeaning diverge"
+        );
+
+        // Same-content replay: re-bind from identical record+cert → equal.
+        let meaning_a_again = record_a.promotion_meaning(&cert_a, tenant);
+        assert_eq!(
+            prove_promotion_replay(&meaning_a, &meaning_a_again),
+            Ok(()),
+            "same-content record must replay-equal PromotionMeaning"
+        );
+        assert_eq!(meaning_a.schema_cut(), &schema_cut);
     }
 
     /// NASTY (guardian, seat 69): a `CrossingValidated` minted for record A must
