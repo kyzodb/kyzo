@@ -26,8 +26,8 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "A K.I.S.S. implementation of log-structured merge trees (LSM-trees/LSMTs)"
-homepage = "https://github.com/fjall-rs/lsm-tree"
+description = "KyzoDB's fork of lsm-tree (fjall-rs/lsm-tree): log-structured merge tree with engine edits for the KyzoDB store"
+homepage = "https://github.com/kyzodb/kyzo"
 readme = "README.md"
 keywords = [
     "lsmt",
@@ -42,7 +42,7 @@ categories = [
     "algorithms",
 ]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/fjall-rs/lsm-tree"
+repository = "https://github.com/kyzodb/kyzo"
 
 [package.metadata.cargo-all-features]
 denylist = []

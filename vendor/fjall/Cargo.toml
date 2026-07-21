@@ -26,8 +26,8 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "Log-structured, embeddable key-value storage engine"
-homepage = "https://github.com/fjall-rs/fjall"
+description = "KyzoDB's fork of fjall (fjall-rs/fjall): log-structured embeddable key-value storage with engine edits for the KyzoDB store"
+homepage = "https://github.com/kyzodb/kyzo"
 readme = "README.md"
 keywords = [
     "database",
@@ -42,7 +42,7 @@ categories = [
     "algorithms",
 ]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/fjall-rs/fjall"
+repository = "https://github.com/kyzodb/kyzo"
 
 [package.metadata.cargo-all-features]
 denylist = ["__internal_whitebox"]
