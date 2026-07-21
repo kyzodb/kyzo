@@ -1659,10 +1659,11 @@ fn power_cut_at_commit_door_dst() {
     let _: u64 = bytes_since_last_flush;
 }
 
-/// #374 T10 — live KyzoScript write ack through
-/// [`SweepDoor::ack_native_fsync_barrier`] must survive a power cut.
-/// Path-wired beside SweepDoor so the session ack barrier stays linked to
-/// the same DurableCommit corpus as `power_cut_at_commit_door_dst`.
+/// #374 T10 — live KyzoScript write ack through the production
+/// [`SessionTx::commit_write`] OperationKey / StableCommitCap path must
+/// survive a power cut. Path-wired beside SweepDoor so the session ack
+/// barrier stays linked to the same DurableCommit corpus as
+/// `power_cut_at_commit_door_dst`.
 #[test]
 fn live_script_write_ack_survives_power_cut_dst() {
     use crate::session::catalog::Catalog;
@@ -1690,6 +1691,146 @@ fn live_script_write_ack_survives_power_cut_dst() {
         got,
         vec![99],
         "SessionTx::commit_write NativeFsyncProof barrier must fsync before ack"
+    );
+}
+
+/// #375 T1 nasty — PRODUCTION [`SessionTx::commit_write`] twice with the same
+/// OperationKey identity: exactly one SweepDoor CommitOrdinal / WAL Commit.
+#[test]
+fn operation_key_production_commit_write_dedupes_same_process() {
+    use crate::session::catalog::Catalog;
+    use crate::session::db::{Engine, ScriptOptions, SessionTx};
+    use crate::store::wal::replay;
+
+    let store = SimStorage::new(0x3750_0001);
+    let db = Engine::compose(store, Catalog::new()).expect("compose");
+    let opts = ScriptOptions {
+        client_operation_id: Some(b"dst-op-key-same-proc".to_vec()),
+        sweep: Some(db.sweep.clone()),
+        ..ScriptOptions::default()
+    };
+
+    let tx1 = SessionTx::new_write(
+        db.store.write_tx().expect("write tx 1"),
+        opts.clone(),
+    );
+    tx1.commit_write().expect("first production commit_write");
+    let commits_after_first = db.sweep.with_mut(|door, _, _| door.highest_commit_ordinal().get());
+    assert_eq!(commits_after_first, 1, "first commit_write must seal via SweepDoor");
+
+    let tx2 = SessionTx::new_write(
+        db.store.write_tx().expect("write tx 2"),
+        opts,
+    );
+    tx2.commit_write()
+        .expect("retry commit_write with same operation identity");
+    let (commits, wal_len, store_id, segment) = db.sweep.with_mut(|door, _, _| {
+        (
+            door.highest_commit_ordinal().get(),
+            door.wal_segment().records().len(),
+            door.wal_segment().store_id(),
+            door.wal_segment().clone(),
+        )
+    });
+    assert_eq!(
+        commits, 1,
+        "production commit_write retry must not mint a second CommitOrdinal"
+    );
+    assert_eq!(wal_len, 1, "exactly one WAL Commit after two production acks");
+    let recovered = replay(store_id, std::slice::from_ref(&segment)).expect("replay");
+    assert_eq!(recovered.commit_bodies.len(), 1);
+}
+
+/// #375 T1 nasty — PRODUCTION [`SessionTx::commit_write`], then crash + WAL
+/// replay rebuilds IdempotencyMemo; retry through `commit_write` again with
+/// the same operation identity has zero new effect.
+#[test]
+fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
+    use crate::session::catalog::Catalog;
+    use crate::session::db::{Engine, ScriptOptions, SessionTx};
+    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
+    use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
+    use crate::store::idempotency::OperationOutcome;
+    use crate::store::sweep::{
+        LiveSweepHandle, SweepDoor, SweepSession, decode_commit_body, install_live_sweep,
+    };
+    use crate::store::wal::replay;
+
+    let store = SimStorage::new(0x3750_0002);
+    let db = Engine::compose(store, Catalog::new()).expect("compose");
+    let client_op = b"dst-op-key-crash".to_vec();
+    let opts = ScriptOptions {
+        client_operation_id: Some(client_op.clone()),
+        sweep: Some(db.sweep.clone()),
+        ..ScriptOptions::default()
+    };
+
+    SessionTx::new_write(db.store.write_tx().expect("write tx"), opts.clone())
+        .commit_write()
+        .expect("production commit_write before crash");
+
+    let (store_id, segment, fence) = db.sweep.with_mut(|door, session, _| {
+        (
+            door.wal_segment().store_id(),
+            door.wal_segment().clone(),
+            session.fence_epoch(),
+        )
+    });
+    let recovered = replay(store_id, std::slice::from_ref(&segment)).expect("WAL replay");
+    assert_eq!(recovered.commit_bodies.len(), 1);
+    let decoded =
+        decode_commit_body(&recovered.commit_bodies[0].1).expect("OperationKey commit body");
+    assert!(
+        decoded.preimage.is_some(),
+        "production path must WAL-carry OperationKey preimage"
+    );
+
+    // Fresh door + restore memo (simulated reopen after crash).
+    let auth = WriteAuthority::mint(store_id, [0x37; 32]);
+    let incarnation = auth
+        .incarnation_mint_cap(OpenOrdinal::ZERO)
+        .mint(Entropy::from_bytes([0x50; 32]))
+        .expect("incarnation");
+    let session = SweepSession::new(store_id, fence, incarnation);
+    let cap = StableCommitCap::NativeFsyncProof {
+        snapshot_fork: SnapshotFork::No,
+    };
+    let mut reopened = SweepDoor::open(store_id, fence, session, auth, cap).expect("reopen");
+    reopened.restore_from_wal_replay(&recovered);
+    let preimage_key = decoded
+        .preimage
+        .as_ref()
+        .expect("preimage")
+        .derive_key(store_id);
+    assert!(matches!(
+        reopened.idempotency().lookup(&preimage_key),
+        OperationOutcome::Committed { .. }
+    ));
+
+    let restored_handle = LiveSweepHandle::from_restored(reopened, session, incarnation);
+    install_live_sweep(restored_handle.clone());
+    let retry_opts = ScriptOptions {
+        client_operation_id: Some(client_op),
+        sweep: Some(restored_handle.clone()),
+        ..ScriptOptions::default()
+    };
+    SessionTx::new_write(db.store.write_tx().expect("retry write tx"), retry_opts)
+        .commit_write()
+        .expect("post-crash production commit_write retry");
+
+    let (commits, wal_len) = restored_handle.with_mut(|door, _, _| {
+        (
+            door.highest_commit_ordinal().get(),
+            door.wal_segment().records().len(),
+        )
+    });
+    assert_eq!(
+        commits, 1,
+        "crash+WAL replay + commit_write retry must leave exactly one committed effect"
+    );
+    assert_eq!(
+        wal_len, 0,
+        "post-crash commit_write retry must not append another WAL Commit"
     );
 }
 

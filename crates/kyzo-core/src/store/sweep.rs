@@ -45,8 +45,11 @@
 //! (backing fsync) from [`SweepDoor::seal_durable`] — mint sites only here.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
-use super::authority::{IncarnationId, WriteAuthority};
+use sha2::{Digest, Sha256};
+
+use super::authority::{Entropy, IncarnationId, OpenOrdinal, WriteAuthority};
 use super::commit_cap::{SnapshotFork, StableCommitCap};
 use super::epoch::FenceEpoch;
 use super::failure::StoreRefuse;
@@ -57,8 +60,255 @@ use super::merkle::{
 use super::open::StoreId;
 use super::tx::{CommitFailure, WriteTx};
 use super::wal::{
-    GENESIS_PREDECESSOR, WalHash, WalPayload, WalRecord, WalRefuse, WalSegment,
+    GENESIS_PREDECESSOR, WalHash, WalPayload, WalRecord, WalRefuse, WalReplayState, WalSegment,
 };
+
+/// Domain tag for crash-durable WAL Commit bodies that carry OperationKey memo.
+const COMMIT_BODY_V1: &[u8] = b"kyzo.wal.commit_body.v1";
+
+/// Single-store OperationKey preimage — WAL carriage so replay can re-derive
+/// the key without a raw digest constructor on [`OperationKey`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SingleStoreKeyPreimage {
+    /// Domain label bytes passed to [`OperationKey::single_store`].
+    pub domain_label: Vec<u8>,
+    /// Client-durable operation identity.
+    pub client_operation_id: Vec<u8>,
+    /// Step identity bytes.
+    pub step_id: Vec<u8>,
+}
+
+impl SingleStoreKeyPreimage {
+    /// Derive the OperationKey under `store_id`.
+    pub fn derive_key(&self, store_id: StoreId) -> OperationKey {
+        OperationKey::single_store(
+            &self.domain_label,
+            &self.client_operation_id,
+            store_id,
+            &self.step_id,
+        )
+    }
+}
+
+/// Decode a crash-durable Commit body into memo coordinates + meaning tip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedCommitBody {
+    /// OperationKey digest bytes sealed into the WAL.
+    pub key_bytes: [u8; 32],
+    /// Request digest sealed into the WAL.
+    pub request_digest: RequestDigest,
+    /// Meaning-layer tip bound at the durable event.
+    pub meaning_root: StateRoot,
+    /// Preimage when the seal carried single-store derivation inputs.
+    pub preimage: Option<SingleStoreKeyPreimage>,
+}
+
+fn encode_commit_body(
+    key: OperationKey,
+    request_digest: RequestDigest,
+    meaning_root: StateRoot,
+    preimage: Option<&SingleStoreKeyPreimage>,
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(COMMIT_BODY_V1);
+    body.extend_from_slice(key.as_bytes());
+    body.extend_from_slice(request_digest.as_bytes());
+    body.push(1); // terminal outcome: Committed
+    body.extend_from_slice(meaning_root.as_bytes());
+    match preimage {
+        None => body.push(0),
+        Some(p) => {
+            body.push(1);
+            push_len_bytes(&mut body, &p.domain_label);
+            push_len_bytes(&mut body, &p.client_operation_id);
+            push_len_bytes(&mut body, &p.step_id);
+        }
+    }
+    body
+}
+
+fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn take_len_bytes(input: &mut &[u8]) -> Option<Vec<u8>> {
+    if input.len() < 4 {
+        return None;
+    }
+    let n = u32::from_be_bytes(input[..4].try_into().ok()?) as usize;
+    *input = &input[4..];
+    if input.len() < n {
+        return None;
+    }
+    let v = input[..n].to_vec();
+    *input = &input[n..];
+    Some(v)
+}
+
+/// Parse a Commit body produced by [`encode_commit_body`].
+pub fn decode_commit_body(body: &[u8]) -> Option<DecodedCommitBody> {
+    if body.len() < COMMIT_BODY_V1.len() + 32 + 32 + 1 + 32 + 1 {
+        return None;
+    }
+    if !body.starts_with(COMMIT_BODY_V1) {
+        return None;
+    }
+    let mut rest = &body[COMMIT_BODY_V1.len()..];
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(rest[..32].try_into().ok()?);
+    rest = &rest[32..];
+    let mut digest_bytes = [0u8; 32];
+    digest_bytes.copy_from_slice(rest[..32].try_into().ok()?);
+    rest = &rest[32..];
+    let outcome = *rest.first()?;
+    rest = &rest[1..];
+    if outcome != 1 {
+        return None;
+    }
+    let mut meaning = [0u8; 32];
+    meaning.copy_from_slice(rest[..32].try_into().ok()?);
+    rest = &rest[32..];
+    let has_preimage = *rest.first()?;
+    rest = &rest[1..];
+    let preimage = if has_preimage == 1 {
+        Some(SingleStoreKeyPreimage {
+            domain_label: take_len_bytes(&mut rest)?,
+            client_operation_id: take_len_bytes(&mut rest)?,
+            step_id: take_len_bytes(&mut rest)?,
+        })
+    } else if has_preimage == 0 {
+        None
+    } else {
+        return None;
+    };
+    Some(DecodedCommitBody {
+        key_bytes,
+        request_digest: RequestDigest::from_digest(digest_bytes),
+        meaning_root: StateRoot::from_digest(meaning),
+        preimage,
+    })
+}
+
+/// Engine-held live SweepDoor (one per Store) — shared across Engine clones.
+#[derive(Clone)]
+pub struct LiveSweepHandle {
+    inner: Arc<Mutex<LiveSweepState>>,
+}
+
+impl std::fmt::Debug for LiveSweepHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveSweepHandle")
+            .field("store_id", &self.store_id())
+            .finish()
+    }
+}
+
+struct LiveSweepState {
+    door: SweepDoor,
+    session: SweepSession,
+    incarnation: IncarnationId,
+    anon_seq: u64,
+}
+
+/// Process-local current live door — fallback when [`ScriptOptions`] carries none
+/// (constraint / sys paths that build `ScriptOptions::default()`).
+static LIVE_SWEEP_CURRENT: Mutex<Option<LiveSweepHandle>> = Mutex::new(None);
+
+/// Install the Engine's live SweepDoor as the process-current door.
+pub fn install_live_sweep(handle: LiveSweepHandle) {
+    *LIVE_SWEEP_CURRENT
+        .lock()
+        .expect("live sweep registry") = Some(handle);
+}
+
+/// Current process-local live SweepDoor, if any Engine has installed one.
+pub fn current_live_sweep() -> Option<LiveSweepHandle> {
+    LIVE_SWEEP_CURRENT
+        .lock()
+        .expect("live sweep registry")
+        .clone()
+}
+
+impl LiveSweepHandle {
+    /// Open the one live SweepDoor for `store_id` under NativeFsyncProof{No}.
+    pub fn open_for_store(store_id: StoreId) -> Result<Self, SweepRefuse> {
+        let fence_epoch = FenceEpoch::genesis(store_id);
+        let token: [u8; 32] = {
+            let mut h = Sha256::new();
+            h.update(b"kyzo.live_sweep.write_token.v1");
+            h.update(store_id.as_bytes());
+            h.finalize().into()
+        };
+        let auth = WriteAuthority::mint(store_id, token);
+        let entropy: [u8; 32] = {
+            let mut h = Sha256::new();
+            h.update(b"kyzo.live_sweep.incarnation_entropy.v1");
+            h.update(store_id.as_bytes());
+            h.finalize().into()
+        };
+        let incarnation = auth
+            .incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes(entropy))
+            .map_err(|_| SweepRefuse::WriteSessionDead)?;
+        let session = SweepSession::new(store_id, fence_epoch, incarnation);
+        let cap = StableCommitCap::NativeFsyncProof {
+            snapshot_fork: SnapshotFork::No,
+        };
+        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(LiveSweepState {
+                door,
+                session,
+                incarnation,
+                anon_seq: 0,
+            })),
+        })
+    }
+
+    /// Wrap an already-opened (possibly WAL-restored) door as the live handle.
+    pub fn from_restored(
+        door: SweepDoor,
+        session: SweepSession,
+        incarnation: IncarnationId,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(LiveSweepState {
+                door,
+                session,
+                incarnation,
+                anon_seq: 0,
+            })),
+        }
+    }
+
+    /// Store identity this live door is bound to.
+    pub fn store_id(&self) -> StoreId {
+        self.inner
+            .lock()
+            .expect("live sweep")
+            .session
+            .store_id()
+    }
+
+    /// Allocate a unique anonymous client-operation id (non-retry path).
+    pub fn next_anon_operation_id(&self) -> Vec<u8> {
+        let mut g = self.inner.lock().expect("live sweep");
+        let n = g.anon_seq;
+        g.anon_seq = g.anon_seq.saturating_add(1);
+        let mut out = b"kyzo.anon.".to_vec();
+        out.extend_from_slice(&n.to_be_bytes());
+        out
+    }
+
+    /// Borrow the live door for one production ack / test inspection.
+    pub fn with_mut<R>(&self, f: impl FnOnce(&mut SweepDoor, &SweepSession, IncarnationId) -> R) -> R {
+        let mut g = self.inner.lock().expect("live sweep");
+        let session = g.session;
+        let incarnation = g.incarnation;
+        f(&mut g.door, &session, incarnation)
+    }
+}
 
 /// Store-monotonic contention ordinal. Minted at admission; may gap freely
 /// (conflicts, capacity refuses, cancels). Never sealed history.
@@ -209,6 +459,9 @@ pub struct AdmittedIntent {
     incarnation_id: IncarnationId,
     operation_key: OperationKey,
     request_digest: RequestDigest,
+    /// Single-store preimage when admitted on the production ack path — WAL
+    /// memo rebuild carriage. Unit-test admits may leave this `None`.
+    single_store_preimage: Option<SingleStoreKeyPreimage>,
 }
 
 impl AdmittedIntent {
@@ -240,6 +493,11 @@ impl AdmittedIntent {
     /// Request digest bound to the OperationKey at admission.
     pub fn request_digest(&self) -> RequestDigest {
         self.request_digest
+    }
+
+    /// Single-store preimage for crash-durable memo rebuild, if carried.
+    pub fn single_store_preimage(&self) -> Option<&SingleStoreKeyPreimage> {
+        self.single_store_preimage.as_ref()
     }
 }
 
@@ -406,6 +664,10 @@ pub struct SweepDoor {
     idempotency: IdempotencyMemo,
     /// First AdmittedIntent under each OperationKey (replay carriage — no second mint).
     op_intents: BTreeMap<[u8; 32], AdmittedIntent>,
+    /// Key-digest → request digest restored from WAL bodies that lacked a
+    /// single-store preimage (cannot rehydrate [`IdempotencyMemo`] without
+    /// `OperationKey::from_digest`). Production ack always carries preimage.
+    wal_restored_digests: BTreeMap<[u8; 32], RequestDigest>,
 }
 
 impl SweepDoor {
@@ -417,11 +679,9 @@ impl SweepDoor {
     /// [`Self::seal_durable`] uses for that arm — never bare
     /// [`WriteTx::commit`].
     ///
-    /// Does **not** mint [`Committed`] / [`CommitOrdinal`] / WAL / RootChain
-    /// (full door ceremony re-homed when Engine carries a live door). Until
-    /// then this is the durability binding: ack returns only after the
-    /// NativeFsyncProof barrier, or loud-refuses (#359) when the presented
-    /// arm is not the ruled one.
+    /// Production KyzoScript ack routes through [`Self::ack_write`] (OperationKey
+    /// admit → barrier → memo). This key-less barrier remains for arm-refusal
+    /// unit proofs only — not the live commit door.
     pub fn ack_native_fsync_barrier<W: WriteTx>(
         cap: StableCommitCap,
         tx: W,
@@ -438,6 +698,108 @@ impl SweepDoor {
                 Err(SweepSealFailure::Sweep(
                     SweepRefuse::NativeFsyncAckArmRequired,
                 ))
+            }
+        }
+    }
+
+    /// Production write ack: [`Self::admit`] under OperationKey → StableCommitCap
+    /// barrier → terminal memo. Same key+digest retry returns Ok without a
+    /// second physical apply or CommitOrdinal advance (§38/§39).
+    pub fn ack_write<W: WriteTx>(
+        &mut self,
+        incarnation_id: IncarnationId,
+        current: &SweepSession,
+        key: OperationKey,
+        request_digest: RequestDigest,
+        preimage: SingleStoreKeyPreimage,
+        tx: W,
+    ) -> Result<(), SweepSealFailure> {
+        // Crash-restored digest map (bodies without preimage).
+        if let Some(prior) = self.wal_restored_digests.get(key.as_bytes()) {
+            if *prior != request_digest {
+                let _ = tx.abort();
+                return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
+            }
+            let _ = tx.abort();
+            return Ok(());
+        }
+        // Live / preimage-restored IdempotencyMemo.
+        match self.idempotency.consult(&key, request_digest) {
+            Err(StoreRefuse::OperationKeyReuse) => {
+                let _ = tx.abort();
+                return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
+            }
+            Err(_) => {
+                let _ = tx.abort();
+                return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
+            }
+            Ok(Some(entry)) => {
+                if matches!(
+                    entry.outcome(),
+                    OperationOutcome::Committed { .. }
+                ) {
+                    let _ = tx.abort();
+                    return Ok(());
+                }
+            }
+            Ok(None) => {}
+        }
+
+        let intent = self
+            .admit_with_preimage(
+                incarnation_id,
+                current,
+                key,
+                request_digest,
+                Some(preimage),
+            )
+            .map_err(SweepSealFailure::Sweep)?;
+
+        // Post-seal retry: admit replays the prior intent; do not reseal.
+        if matches!(
+            self.idempotency.lookup(&key),
+            OperationOutcome::Committed { .. }
+        ) {
+            let _ = tx.abort();
+            return Ok(());
+        }
+
+        let content_root = {
+            let mut h = Sha256::new();
+            h.update(b"kyzo.commit_write.content.v1");
+            h.update(key.as_bytes());
+            h.update(request_digest.as_bytes());
+            StateRoot::from_digest(h.finalize().into())
+        };
+        let _committed = self.seal_durable(intent, tx, content_root, current)?;
+        Ok(())
+    }
+
+    /// Rebuild [`IdempotencyMemo`] (and ordinal/WAL tips) from a WAL replay
+    /// so reopen dedupes the same OperationKey across crash (§38 T1b).
+    pub fn restore_from_wal_replay(&mut self, replayed: &WalReplayState) {
+        self.wal_tip = replayed.final_hash;
+        if let Some(highest) = replayed.floors.highest_commit_ordinal {
+            self.highest_commit = highest;
+        }
+        for (_ordinal, body) in &replayed.commit_bodies {
+            let Some(decoded) = decode_commit_body(body) else {
+                continue;
+            };
+            if let Some(preimage) = &decoded.preimage {
+                let key = preimage.derive_key(self.store_id);
+                debug_assert_eq!(*key.as_bytes(), decoded.key_bytes);
+                let digest = decoded.request_digest;
+                let _ = self.idempotency.remember(
+                    key,
+                    digest,
+                    OperationOutcome::Committed {
+                        request_digest: digest,
+                    },
+                );
+            } else {
+                self.wal_restored_digests
+                    .insert(decoded.key_bytes, decoded.request_digest);
             }
         }
     }
@@ -478,6 +840,7 @@ impl SweepDoor {
             last_overlap_batch: None,
             idempotency: IdempotencyMemo::new(),
             op_intents: BTreeMap::new(),
+            wal_restored_digests: BTreeMap::new(),
         })
     }
 
@@ -565,6 +928,18 @@ impl SweepDoor {
         key: OperationKey,
         request_digest: RequestDigest,
     ) -> Result<AdmittedIntent, SweepRefuse> {
+        self.admit_with_preimage(incarnation_id, current, key, request_digest, None)
+    }
+
+    /// [`Self::admit`] carrying an optional single-store preimage for WAL memo.
+    pub fn admit_with_preimage(
+        &mut self,
+        incarnation_id: IncarnationId,
+        current: &SweepSession,
+        key: OperationKey,
+        request_digest: RequestDigest,
+        preimage: Option<SingleStoreKeyPreimage>,
+    ) -> Result<AdmittedIntent, SweepRefuse> {
         self.recheck_session(incarnation_id, current)?;
 
         // Real path consults the idempotency organ before minting (§38/§39).
@@ -599,6 +974,7 @@ impl SweepDoor {
             incarnation_id,
             operation_key: key,
             request_digest,
+            single_store_preimage: preimage,
         };
         self.op_intents
             .insert(*key.as_bytes(), intent.clone());
@@ -685,7 +1061,7 @@ impl SweepDoor {
         let mut commit_ordinals = Vec::with_capacity(cohort.len());
         let mut committed = Vec::with_capacity(cohort.len());
         for (intent, content_root) in cohort.into_iter().zip(content_roots) {
-            let proof = self.mint_committed_after_barrier(intent.intent_ordinal(), content_root)?;
+            let proof = self.mint_committed_after_barrier(&intent, content_root)?;
             self.remember_terminal(&intent)?;
             members.push(intent.intent_ordinal());
             commit_ordinals.push(proof.commit_ordinal());
@@ -737,7 +1113,7 @@ impl SweepDoor {
             }
         }
 
-        let committed = self.mint_committed_after_barrier(intent.intent_ordinal(), content_root)?;
+        let committed = self.mint_committed_after_barrier(&intent, content_root)?;
         self.remember_terminal(&intent)?;
         self.last_overlap_batch = Some(OverlapBatch::from_sealed(
             vec![intent.intent_ordinal()],
@@ -848,12 +1224,15 @@ impl SweepDoor {
 
     /// Post-barrier sole [`Committed`] mint: RootChain + WAL byte chain +
     /// composed [`DurableCommitCut`] at one durable boundary (§24 / §25 / §56).
+    ///
+    /// WAL Commit body carries OperationKey + RequestDigest (+ optional
+    /// single-store preimage) so reopen can rebuild [`IdempotencyMemo`].
     fn mint_committed_after_barrier(
         &mut self,
-        intent_ordinal: IntentOrdinal,
+        intent: &AdmittedIntent,
         content_root: StateRoot,
     ) -> Result<Committed, SweepSealFailure> {
-        self.note_sealed_intent(intent_ordinal);
+        self.note_sealed_intent(intent.intent_ordinal());
         let commit_ordinal = self
             .highest_commit
             .successor()
@@ -873,13 +1252,19 @@ impl SweepDoor {
             .append(chained)
             .map_err(SweepSealFailure::MerkleChain)?;
 
-        // WAL byte chain (seat 24): Commit body binds the meaning tip so the
-        // byte chain covers the RootChain digest at this ordinal.
+        // WAL byte chain (seat 24): Commit body binds meaning tip + OperationKey
+        // memo coordinates for crash-durable idempotency rebuild (§38 T1b).
+        let body = encode_commit_body(
+            intent.operation_key(),
+            intent.request_digest(),
+            chained.root(),
+            intent.single_store_preimage(),
+        );
         let record = WalRecord::seal(
             self.wal_tip,
             WalPayload::Commit {
                 commit_ordinal,
-                body: chained.root().as_bytes().to_vec(),
+                body,
             },
         );
         self.wal_segment
@@ -1065,7 +1450,7 @@ mod composition_tests {
     //! Prove RootChain × WAL byte-chain meet at [`SweepDoor::seal_durable`].
 
     use super::*;
-    use crate::store::authority::{Entropy, OpenOrdinal};
+    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
     use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
     use crate::store::idempotency::{IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest};
     use crate::store::merkle::{DurableCommitCut, GENESIS_ROOT, cuts_equal};
@@ -1190,11 +1575,15 @@ mod composition_tests {
             1,
             "one Commit record at the durable boundary"
         );
+        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)
+            .expect("WAL Commit body is OperationKey memo format");
         assert_eq!(
-            recovered.commit_bodies[0].1.as_slice(),
-            cut.meaning_root().as_bytes(),
+            decoded.meaning_root,
+            cut.meaning_root(),
             "WAL Commit body binds the meaning tip"
         );
+        assert_eq!(decoded.key_bytes, *key1.as_bytes());
+        assert_eq!(decoded.request_digest, dig1);
 
         // Recompose from observed tips — equals the door's cut.
         let meaning = door.root_chain().links().last().copied().expect("link");
@@ -1340,6 +1729,96 @@ mod composition_tests {
             door.admit(incarnation, &session, key, dig_b),
             Err(SweepRefuse::OperationKeyReuse),
             "same key + changed digest must return typed OperationKeyReuse"
+        );
+    }
+
+    /// #375 T1 — production `ack_write` path: same OperationKey twice → one
+    /// CommitOrdinal / one WAL Commit; crash + WAL replay rebuilds memo and
+    /// still dedupes (no second effect).
+    #[test]
+    fn operation_key_ack_write_dedupes_across_wal_replay() {
+        let (mut door, incarnation, session) = open_live_door();
+        let store_id = session.store_id();
+        let preimage = SingleStoreKeyPreimage {
+            domain_label: b"kyzo.sweep.test".to_vec(),
+            client_operation_id: b"ack-crash-1".to_vec(),
+            step_id: b"s0".to_vec(),
+        };
+        let key = preimage.derive_key(store_id);
+        let digest = IdempotencyMemo::digest_request(b"ack-crash-1");
+
+        door.ack_write(
+            incarnation,
+            &session,
+            key,
+            digest,
+            preimage.clone(),
+            TempTx::default(),
+        )
+        .expect("first production ack_write");
+        assert_eq!(door.highest_commit_ordinal().get(), 1);
+
+        door.ack_write(
+            incarnation,
+            &session,
+            key,
+            digest,
+            preimage.clone(),
+            TempTx::default(),
+        )
+        .expect("same-process retry ack_write");
+        assert_eq!(
+            door.highest_commit_ordinal().get(),
+            1,
+            "same-process retry must not mint a second CommitOrdinal"
+        );
+
+        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))
+            .expect("WAL replay");
+        assert_eq!(recovered.commit_bodies.len(), 1);
+        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)
+            .expect("commit body carries OperationKey memo");
+        assert_eq!(decoded.key_bytes, *key.as_bytes());
+        assert_eq!(decoded.request_digest, digest);
+        assert_eq!(decoded.preimage.as_ref(), Some(&preimage));
+
+        // Simulated crash: fresh door under the same StoreId + restore memo.
+        let fence = session.fence_epoch();
+        let auth = WriteAuthority::mint(store_id, [0xAC; 32]);
+        let incarnation2 = auth
+            .incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes([0xAD; 32]))
+            .expect("incarnation");
+        let session2 = SweepSession::new(store_id, fence, incarnation2);
+        let cap = StableCommitCap::NativeFsyncProof {
+            snapshot_fork: SnapshotFork::No,
+        };
+        let mut reopened =
+            SweepDoor::open(store_id, fence, session2, auth, cap).expect("reopen door");
+        reopened.restore_from_wal_replay(&recovered);
+        assert!(matches!(
+            reopened.idempotency().lookup(&key),
+            OperationOutcome::Committed { .. }
+        ));
+        reopened
+            .ack_write(
+                incarnation2,
+                &session2,
+                key,
+                digest,
+                preimage,
+                TempTx::default(),
+            )
+            .expect("post-crash retry through restored memo");
+        assert_eq!(
+            reopened.highest_commit_ordinal().get(),
+            1,
+            "WAL-restored memo must prevent a second committed effect"
+        );
+        assert_eq!(
+            reopened.wal_segment().records().len(),
+            0,
+            "post-crash retry must not append a second WAL Commit"
         );
     }
 }

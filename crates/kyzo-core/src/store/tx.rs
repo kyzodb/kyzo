@@ -21,8 +21,10 @@
 //! vs [`Committed`](super::sweep::Committed)).
 //!
 //! Live KyzoScript ack ([`crate::session::db::SessionTx::commit_write`]) routes
-//! through [`super::sweep::SweepDoor::ack_native_fsync_barrier`] — NativeFsyncProof
-//! fsync barrier, never bare non-fsync [`WriteTx::commit`].
+//! through the Engine's live [`super::sweep::SweepDoor::ack_write`] — OperationKey
+//! admit → NativeFsyncProof StableCommitCap barrier → IdempotencyMemo — never
+//! key-less [`super::sweep::SweepDoor::ack_native_fsync_barrier`] alone, never
+//! bare non-fsync [`WriteTx::commit`].
 
 use std::fmt;
 

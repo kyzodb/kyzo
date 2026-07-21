@@ -102,9 +102,12 @@ pub(crate) use crate::session::normalize::SessionNormalizer;
 use crate::session::observe::{CallbackCollector, EventCallbackRegistry};
 use crate::store::retry::RetryError;
 use crate::store::scratch::TempTx;
+use crate::store::idempotency::IdempotencyMemo;
+use crate::store::sweep::{
+    LiveSweepHandle, SingleStoreKeyPreimage, current_live_sweep, install_live_sweep,
+};
 use crate::store::{
-    CommitFailure, CommitIo, ReadTx, SnapshotFork, StableCommitCap, Storage, SweepDoor,
-    SweepRefuse, SweepSealFailure, WriteTx,
+    CommitFailure, CommitIo, ReadTx, Storage, SweepRefuse, SweepSealFailure, WriteTx,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
@@ -247,7 +250,7 @@ pub(crate) const DEFAULT_DERIVED_TUPLE_CEILING: u64 = 50_000_000;
 /// the deterministic epoch and derived-tuple ceilings, no deadline". These
 /// are the knobs that turn a budget into a refusal; they are deterministic
 /// (epoch/derived-tuple ceilings) except the wall-clock `timeout`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ScriptOptions {
     /// Override the epoch (semi-naive iteration) ceiling. `None` uses
     /// [`DEFAULT_EPOCH_CEILING`].
@@ -260,6 +263,28 @@ pub struct ScriptOptions {
     /// A wall-clock deadline in seconds. `None` is no deadline. The query's
     /// own `:timeout` option, if smaller, wins.
     pub timeout_secs: Option<f64>,
+    /// Client-durable operation identity for safe-retry (§38). When set,
+    /// [`SessionTx::commit_write`] admits under this key; retries with the
+    /// same bytes dedupe to one committed effect.
+    pub client_operation_id: Option<Vec<u8>>,
+    /// Live SweepDoor for this Engine. Default pulls the process-current door
+    /// installed at [`Engine::compose`] so constraint/sys paths that build
+    /// `ScriptOptions::default()` still hit the OperationKey ack path.
+    /// `pub` so out-of-crate FRU (`..ScriptOptions::default()`) can construct
+    /// overrides without naming every field.
+    pub sweep: Option<LiveSweepHandle>,
+}
+
+impl Default for ScriptOptions {
+    fn default() -> Self {
+        Self {
+            epoch_ceiling: None,
+            derived_tuple_ceiling: None,
+            timeout_secs: None,
+            client_operation_id: None,
+            sweep: current_live_sweep(),
+        }
+    }
 }
 
 /// Engine: sole Record admission + evaluation + projection orchestration.
@@ -281,6 +306,8 @@ pub struct Engine<S> {
     pub(crate) callback_count: Arc<AtomicU32>,
     /// Live StoreId / WriteAuthority token / RootChain for admission mint.
     pub(crate) admission: crate::session::admit::LiveAdmissionSeats,
+    /// One live SweepDoor per Store (IdempotencyMemo) — opened at compose.
+    pub(crate) sweep: LiveSweepHandle,
 }
 
 impl<S: Clone> Clone for Engine<S> {
@@ -293,6 +320,7 @@ impl<S: Clone> Clone for Engine<S> {
             event_callbacks: self.event_callbacks.clone(),
             callback_count: self.callback_count.clone(),
             admission: self.admission.clone(),
+            sweep: self.sweep.clone(),
         }
     }
 }
@@ -303,9 +331,15 @@ impl<S: Storage> Engine<S> {
     /// Not `new(storage)`: that fused constructor is deleted. Engine never
     /// mints Catalog from Store alone — both capabilities are required.
     /// Live admission seats are genesis-minted here so Stored sugar can
-    /// mint certificates without placeholders.
+    /// mint certificates without placeholders. Opens the one live
+    /// [`LiveSweepHandle`] for this Store's OperationKey ack path.
     pub fn compose(store: S, catalog: Catalog) -> Result<Self> {
         let fixed_rules = DEFAULT_FIXED_RULES.clone();
+        let admission = crate::session::admit::LiveAdmissionSeats::mint_genesis();
+        let sweep = LiveSweepHandle::open_for_store(admission.store_id()).map_err(|e| {
+            miette::miette!("live SweepDoor open refused at Engine::compose: {e}")
+        })?;
+        install_live_sweep(sweep.clone());
         Ok(Self {
             store,
             catalog,
@@ -313,8 +347,15 @@ impl<S: Storage> Engine<S> {
             fixed_rules: Arc::new(RwLock::new(fixed_rules)),
             event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::default())),
             callback_count: Arc::new(AtomicU32::new(0)),
-            admission: crate::session::admit::LiveAdmissionSeats::mint_genesis(),
+            admission,
+            sweep,
         })
+    }
+
+    /// Bind this Engine's live SweepDoor (+ optional client op id) onto options.
+    pub(crate) fn bind_write_options(&self, mut options: ScriptOptions) -> ScriptOptions {
+        options.sweep = Some(self.sweep.clone());
+        options
     }
 
     /// Open Store identity sealed into this Engine's live admission seats.
@@ -430,6 +471,7 @@ impl<S: Storage> Engine<S> {
         params: BTreeMap<String, DataValue>,
         options: ScriptOptions,
     ) -> Result<NamedRows> {
+        let options = self.bind_write_options(options);
         let cur_vld = current_validity()?;
         match parse_script(payload, &params, cur_vld)? {
             Script::Query(prog) => self.execute_single(prog, cur_vld, &options),
@@ -486,7 +528,7 @@ impl<S: Storage> Engine<S> {
                 let mut collector = CallbackCollector::default();
                 let mut tx = SessionTx::new_write(
                     crate::store::retry::write_tx_attempt(&self.store)?,
-                    options.clone(),
+                    self.bind_write_options(options.clone()),
                 );
                 let rows = match self.run_query(
                     &mut tx,
@@ -828,7 +870,7 @@ impl<S: Storage> Engine<S> {
         crate::store::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
                 crate::store::retry::write_tx_attempt(&self.store)?,
-                ScriptOptions::default(),
+                self.bind_write_options(ScriptOptions::default()),
             );
             let out = match f(&mut tx) {
                 Ok(out) => out,
@@ -1034,39 +1076,62 @@ impl<T: WriteTx> SessionTx<T> {
     /// Commit the persistent write tx and spend the session scratch Open.
     /// Consumes `self` so Drop cannot bomb either side.
     ///
-    /// Seat 25 / #374 T10: acknowledgement returns only after the ruled
-    /// [`StableCommitCap::NativeFsyncProof`] `{ SnapshotFork::No }` barrier
-    /// ([`SweepDoor::ack_native_fsync_barrier`]) — never bare non-fsync
-    /// [`WriteTx::commit`]. A path that cannot present that arm loud-refuses
-    /// (#359); it never silently acks a volatile apply.
+    /// #375 T1 / seat 25: routes through the Engine's live
+    /// [`LiveSweepHandle`] — `admit(OperationKey, RequestDigest)` →
+    /// StableCommitCap NativeFsyncProof barrier → terminal IdempotencyMemo —
+    /// never key-less [`SweepDoor::ack_native_fsync_barrier`] alone, never bare
+    /// non-fsync [`WriteTx::commit`]. Same client operation identity retries
+    /// dedupe to one committed effect (incl. after WAL memo restore).
     pub(crate) fn commit_write(self) -> std::result::Result<(), CommitFailure> {
         let SessionTx {
-            store, mut temp, ..
+            store,
+            mut temp,
+            options,
+            ..
         } = self;
-        // ARM = NativeFsyncProof with SnapshotFork::No (single-process native).
-        let cap = StableCommitCap::NativeFsyncProof {
-            snapshot_fork: SnapshotFork::No,
+        let sweep = options
+            .sweep
+            .clone()
+            .or_else(current_live_sweep)
+            .ok_or(CommitFailure::Io(CommitIo::DurableAckArmRefused))?;
+        let store_id = sweep.store_id();
+        let client_op = options
+            .client_operation_id
+            .clone()
+            .unwrap_or_else(|| sweep.next_anon_operation_id());
+        let preimage = SingleStoreKeyPreimage {
+            domain_label: b"kyzo.script.write".to_vec(),
+            client_operation_id: client_op.clone(),
+            step_id: b"commit_write".to_vec(),
         };
-        let sealed = SweepDoor::ack_native_fsync_barrier(cap, store);
+        let key = preimage.derive_key(store_id);
+        let request_digest = IdempotencyMemo::digest_request(&client_op);
+        let sealed = sweep.with_mut(|door, session, incarnation| {
+            door.ack_write(
+                incarnation,
+                session,
+                key,
+                request_digest,
+                preimage,
+                store,
+            )
+        });
         temp.discard();
         match sealed {
             Ok(()) => Ok(()),
             Err(SweepSealFailure::Apply(f)) => Err(f),
-            Err(SweepSealFailure::Sweep(SweepRefuse::NativeFsyncAckArmRequired)) => {
+            Err(SweepSealFailure::Sweep(SweepRefuse::NativeFsyncAckArmRequired))
+            | Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse)) => {
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
             }
             Err(SweepSealFailure::Sweep(other)) => {
                 debug_assert!(
                     false,
-                    "ack_native_fsync_barrier returned unexpected SweepRefuse: {other:?}"
+                    "ack_write returned unexpected SweepRefuse: {other:?}"
                 );
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
             }
             Err(SweepSealFailure::MerkleChain(_)) | Err(SweepSealFailure::Wal(_)) => {
-                debug_assert!(
-                    false,
-                    "ack_native_fsync_barrier must not mint chain/WAL effects"
-                );
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
             }
         }
@@ -1799,7 +1864,7 @@ mod db_battery {
 
     use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
-    use crate::session::db::{Engine, ScriptOptions};
+    use crate::session::db::{Engine, ScriptOptions, SessionTx};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
@@ -2008,6 +2073,32 @@ mod db_battery {
         // The refusal really was a refusal: nothing half-created.
         db.run_script("?[a] := *_scratch[a]", no_params())
             .expect_err("the temp relation must not exist after the refusal");
+    }
+
+    /// #375 T1 nasty: PRODUCTION [`SessionTx::commit_write`] twice with the
+    /// same client operation identity — exactly one SweepDoor CommitOrdinal.
+    #[test]
+    fn operation_key_commit_write_dedupes_same_operation_identity() {
+        let db = open_engine(SimStorage::new(0x3750_00db));
+        let opts = ScriptOptions {
+            client_operation_id: Some(b"db-op-key-dedupe".to_vec()),
+            sweep: Some(db.sweep.clone()),
+            ..ScriptOptions::default()
+        };
+        SessionTx::new_write(db.store.write_tx().expect("tx1"), opts.clone())
+            .commit_write()
+            .expect("first commit_write");
+        SessionTx::new_write(db.store.write_tx().expect("tx2"), opts)
+            .commit_write()
+            .expect("retry commit_write");
+        let commits = db
+            .sweep
+            .with_mut(|door, _, _| door.highest_commit_ordinal().get());
+        assert_eq!(
+            commits, 1,
+            "two production commit_write calls with the same OperationKey \
+             must mint exactly one committed effect"
+        );
     }
 
     /// #374 T10 nasty: acknowledge a live KyzoScript write, inject a
