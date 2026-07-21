@@ -116,6 +116,18 @@ by an independent checker that imports nothing from the evaluator:
 
 <p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_provenance.svg" width="860" alt="Provenance proof: must_clear derived from ground facts, checker Ok."></p>
 
+## The record is accountable
+
+A stored fact isn’t a row you trust because it’s in the database — it’s a **KyzoRecord**, admitted
+through one private door and named by the 32-byte digest of its own canonical bytes. There is no
+second way for bytes to become a record. Those canonical bytes come from a single sealed serializer,
+so a record’s identity *is* its audit trail: `::verify` re-derives the committed state root and
+catches any tamper, every cross-store signature is checked with ed25519 `verify_strict` (refusing the
+malleability forgeries a permissive verify accepts), and a crypto-shredded key is proven unrecoverable
+by an adversarial reachability sweep. Threshold recovery (FROST, RFC 9591) and key-committing
+encryption seat on the same transcript as they land. Accountability is an engine property here — not a
+bolt-on log you hope nobody edited.
+
 ## Architecture
 
 <p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/architecture.svg" width="560" alt="KyzoScript → relational algebra → relational/graph/HNSW/FTS/as-of → memcomparable → fjall."></p>
@@ -131,15 +143,37 @@ place.
 
 ## Status
 
-Feature-complete for its scope and correctness-proven (serializable transactions, crash recovery,
-oracle-verified query semantics, shipped `::verify`). Still pre-1.0: expect API churn; empty
-scoreboards do not belong on this page. See [VERSIONING.md](VERSIONING.md). The
-[board](https://github.com/orgs/kyzodb/projects/1) is live status.
+The storage kernel and query engine are complete and correctness-proven — serializable transactions,
+crash recovery on a real filesystem, oracle-verified query semantics, and a shipped `::verify`. The
+accountability and security surface is landing on top of that proven core, in the open. Still pre-1.0:
+expect API churn, and we publish no latency or throughput numbers until they’re measured with
+methodology and losing runs. See [VERSIONING.md](VERSIONING.md); the
+[board](https://github.com/orgs/kyzodb/projects/1) is live status, commit by commit.
+
+### Security posture — read before you deploy
+
+Pre-1.0 means the authority model is still being built, and we’d rather tell you than let you find out.
+**Today, authorization is a bind-address heuristic: the default binds `127.0.0.1` and skips
+authentication, so do not expose a KyzoDB instance to an untrusted network.** Capability-based
+authority — an unforgeable, proof-carrying value you must hold, not an ambient role inferred from where
+you connected — is the next wave, tracked as [#190](https://github.com/kyzodb/kyzo/issues/190).
+Encryption, threshold recovery, and the audit spine are proven primitives being wired to every live
+path. When a security-classed defect is fixed it ships with a dated entry in
+[`advisories/`](advisories/README.md) — never a quiet changelog line.
 
 ## Origins
 
-KyzoDB began as a fork of [CozoDB](https://github.com/cozodb/cozo) by Ziyang Hu and the Cozo Project
-Authors. Full story and attribution: [FORK.md](FORK.md).
+KyzoDB began as a hard fork of [CozoDB](https://github.com/cozodb/cozo) by Ziyang Hu and the Cozo
+Project Authors. Cozo’s insight — one memcomparable, transactional substrate serving relational,
+graph, vector, text, and time under a single Datalog dialect — is rare and original, and it is theirs.
+We forked because that design deserved to keep going: upstream has had no release since December 2023.
+Carrying it forward under adversarial review, mutation testing, and deterministic fault injection, we
+found and fixed roughly forty documented security and correctness defects in the inherited engine —
+from unbounded-allocation and exponential-time decode paths reachable from hostile bytes to a value
+whose byte order diverged from its semantic order — and mechanically eliminated thirty-plus
+type-soundness violations, each now held to zero by a gate rather than a promise. That hardening is our
+contribution on top of their foundation, not a criticism of it. Full story and attribution:
+[FORK.md](FORK.md).
 
 ## Links
 
