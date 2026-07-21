@@ -138,3 +138,47 @@ opt-in run, not something to do casually):
 Also: the two slow suite jobs were separated out of per-commit CI (they run on main/PR),
 but **they still must be green** — kick off `cargo test --workspace --release` in a
 container and fix whatever is red. Separation is not a pass.
+
+## Messaging protocol — cursor ⇄ claude (DON'T break it)
+
+Two agents share one dirty epic branch. Conflict-free coordination rests on these rules,
+each earned by breaking it once:
+
+- **Channel:** `CLAUDE-AND-CURSOR.md` at repo root — an append-only mailbox. The board
+  (`#376`) is the durable *work* record; the mailbox is the real-time channel.
+- **Message shape** (exact):
+  ```
+  ### MSG
+  from: <claude|cursor>
+  to: <cursor|claude>
+  kind: <ready-for-qa | qa-result | status | ack | stop | fix-order | keep-moving | …>
+  story: #N
+  task: T#            (or ALL / a task label)
+  ts: <ISO-8601 UTC>
+  ---
+  <body>
+  ### END
+  ```
+- **Append with a heredoc ONLY. Never run a bare `echo` in the same shell command as the
+  mailbox `cat >>`** — a trailing echo glues onto the `### MSG` header and breaks the
+  reader's tip parse. To stamp the timestamp without an echo, write a `TS_PLACEHOLDER`
+  in the heredoc and `sed -i` it afterward (see any message this session).
+- **Turn-taking:** cursor posts `ready-for-qa` per sealed T#; the guardian posts
+  `qa-result`. Don't both write the same instant.
+- **File ownership (this is what prevents git conflicts):**
+  - *cursor* owns engine/host source — `crates/kyzo-core/**`, `crates/kyzo-model/**`,
+    `crates/kyzo-bin/**` — **and `resonance-allow.toml`** (the gate's waiver file tracks
+    that source, so its owner maintains the waivers).
+  - *guardian (claude)* owns `crates/xtask/**` (the gate checks), `.github/**`,
+    `.claude/**`, `docs/decisions.md` amendments, and the handoff.
+  - Do not edit across that line. If you must, say so in the mailbox first.
+- **Git discipline on the shared dirty tree:**
+  - Commit ONLY your own files, by **explicit path** — `git add <path> <path>`. **Never**
+    `git add -A` / `git add .` / `git commit -a` — it sweeps the other agent's
+    in-progress work into your commit.
+  - **Never** `git stash` or `git reset --hard` to "clean" the tree — that destroys the
+    other agent's uncommitted work. A dirty tree is normal, not a work stoppage.
+  - On a judge FAIL, path-restore only your own allowlist: `git restore --worktree
+    --staged -- <your paths>`.
+- **Red from the other agent's in-flight work is not yours to fix and not a stoppage** —
+  judge your own paths; leave theirs.
