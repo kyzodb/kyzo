@@ -1314,10 +1314,10 @@ impl RaBitQRotation {
         }
         // A few attempts: rare near-singular Gaussian draws refuse and retry.
         for attempt in 0..8u64 {
-            // INVARIANT: seed mix is a pure bit mixer for deterministic
-            // rotation identity — wraparound is the intended mix, not a
-            // counted quantity; saturating/checked mul would change the
-            // seeded orthogonal family.
+            // INVARIANT(seeded_mix): wraparound is the intended mix — pure
+            // bit mixer for deterministic rotation identity, not a counted
+            // quantity; saturating/checked mul would change the seeded
+            // orthogonal family.
             let attempt_seed = seed
                 ^ (dim as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 ^ attempt.wrapping_mul(0xD1B5_4A32_D192_ED03);
