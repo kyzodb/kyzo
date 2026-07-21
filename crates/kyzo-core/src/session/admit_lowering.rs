@@ -381,8 +381,8 @@ mod tests {
     use super::*;
     use crate::data::digest::RecordContentDigest;
     use crate::data::statement::{
-        ContextId, StatementBody, StatementContext, StatementSource,
-        StatementSubject, StatementValue, ValidityTime, construct,
+        ContextId, StatementBody, StatementContext, StatementSource, StatementSubject,
+        StatementValue, ValidityTime, construct,
     };
     use crate::session::admit::{
         AdmitRecordParts, IngestShape, LiveCertificateInputs, Placement, RecordCore,

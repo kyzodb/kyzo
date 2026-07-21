@@ -2204,15 +2204,16 @@ pub mod storage_campaign_lanes {
         BackendContract, CanonicalTranscript, CheckpointSealParts, CommitOrdinal, ConfirmedCopies,
         ConsistencyClass, ContentHash, CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm,
         FailureDomains, FailureLattice, FenceEpoch, ForkGrant, FormatVersion, GENESIS_PRIOR_SEAL,
-        GenesisParams, Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
-        ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate,
-        PermanenceWitness, PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant,
-        RecoveryMatrix, Regions, ReplicaCustody, ReplicaKey, RequestDigest, ScopeManifestDigest,
-        ScopeManifestStatus, ScopeManifestTable, SealDigest, SealRefuse, SealedArtifactKind,
-        SizeClass, SnapshotFork, StableCommitCap, StagingToken, StagingTtl, StateRoot, Storage,
-        StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse,
-        VolatilePending, WalHash, WriteTx, encode_normative_production_transcript, genesis,
-        materialize, nonce, parse_golden_hex, reclaim_candidate,
+        GenesisParams, Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification,
+        MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef, ObjectRefuse,
+        OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate, PermanenceWitness,
+        PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant, RecoveryMatrix, Regions,
+        ReplicaCustody, ReplicaKey, RequestDigest, ScopeManifestDigest, ScopeManifestStatus,
+        ScopeManifestTable, SealDigest, SealRefuse, SealedArtifactKind, SizeClass, SnapshotFork,
+        StableCommitCap, StagingToken, StagingTtl, StateRoot, Storage, StoreId, StoreRefuse,
+        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, VolatilePending, WalHash, WriteTx,
+        encode_normative_production_transcript, genesis, materialize, nonce, parse_golden_hex,
+        reclaim_candidate,
     };
 
     /// Mint a RecoveryGrant under a fresh FROST 2-of-3 matrix (positive recovery paths).
@@ -2996,10 +2997,7 @@ pub mod storage_campaign_lanes {
         assert_eq!(
             refuse,
             Err(MaterializeRefuse::quorum_equivocation_poison(
-                store_id,
-                pred_epoch,
-                g1_id,
-                g2_id,
+                store_id, pred_epoch, g1_id, g2_id,
             )),
             "second RecoveryGrant for one predecessor epoch must be QuorumEquivocationPoison"
         );

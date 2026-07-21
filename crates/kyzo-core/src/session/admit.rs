@@ -719,9 +719,7 @@ impl KyzoRecord {
 #[path = "admit_lowering.rs"]
 pub(crate) mod lowering;
 
-pub(crate) use lowering::{
-    crossing_envelope_from_record, lower_after_crossing,
-};
+pub(crate) use lowering::{crossing_envelope_from_record, lower_after_crossing};
 
 /// Validate the full crossing contract then lower (#270 T1/T3).
 ///

@@ -58,7 +58,12 @@ fn hash_named_rows(rows: &NamedRows) -> u64 {
     h.finish()
 }
 
-fn run(db: &Engine<FjallStorage>, script: &str, tag: &str, combined: &mut impl Hasher) -> NamedRows {
+fn run(
+    db: &Engine<FjallStorage>,
+    script: &str,
+    tag: &str,
+    combined: &mut impl Hasher,
+) -> NamedRows {
     let rows = db.run_script(script, no_params()).unwrap_or_else(|e| {
         panic!("determinism probe script failed ({tag}): {e}\nscript: {script}")
     });

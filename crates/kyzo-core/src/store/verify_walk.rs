@@ -815,7 +815,9 @@ fn rederive_lsh(
                 });
                 HashValues::new(bytes, &perms)
             }
-            other @ (kyzo_model::data_value_any!()) => bail!("lsh deep-verify: unsupported extractor value {other:?}"),
+            other @ (kyzo_model::data_value_any!()) => {
+                bail!("lsh deep-verify: unsupported extractor value {other:?}")
+            }
         };
         let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
         expected_inv.insert(digest_tuple_cols(inv_key));

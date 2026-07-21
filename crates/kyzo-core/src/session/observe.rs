@@ -1200,8 +1200,7 @@ mod deep_verify_schedule {
             other @ (DeepVerifyStaleness::NeverRun
             | DeepVerifyStaleness::Fresh { .. }
             | DeepVerifyStaleness::Stale {
-                last_result: None,
-                ..
+                last_result: None, ..
             }) => panic!("expected Stale with prior result, got {other:?}"),
         }
         assert!(db.run_scheduled_deep_verify().unwrap().is_some());
