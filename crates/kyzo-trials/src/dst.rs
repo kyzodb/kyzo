@@ -2134,59 +2134,81 @@ pub mod storage_campaign_lanes {
         (key, digest)
     }
 
+    /// Seed-tagged 32-byte identity / entropy material for campaign sweeps.
+    fn seed_bytes(tag: u8, seed: u64) -> [u8; 32] {
+        let mut s = [tag; 32];
+        s[0] = tag;
+        s[1] = seed as u8;
+        s[2] = (seed >> 8) as u8;
+        s[3] = (seed >> 16) as u8;
+        s[4] = (seed >> 24) as u8;
+        s
+    }
+
     /// §62/§2 — IncarnationId at-rest; gates nonce/authority signature freeze.
+    ///
+    /// Count knob: DomainCounter walk length is seed-derived (was fixed `32`).
     #[test]
     fn two_clone_at_rest() {
-        let sealed = genesis(genesis_params([0xA1; 32], SnapshotFork::No));
-        assert_eq!(
-            sealed.entropy_arm(),
-            EntropyArm::OsRandom,
-            "approved entropy arm must be OsRandom"
-        );
-        let store_id = sealed.store_id();
-        let domain = CryptoDomain::new(store_id, FenceEpoch::genesis(store_id));
-        let (_view, auth) = sealed.take_write_authority();
-
-        // Two clones: equal OpenOrdinals, differing Entropy under the approved arm.
-        let clone_a = auth
-            .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0x11; 32]))
-            .expect("clone A");
-        let clone_b = auth
-            .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0x22; 32]))
-            .expect("clone B");
-        assert_eq!(
-            clone_a.open_ordinal(),
-            clone_b.open_ordinal(),
-            "two-clone at-rest: OpenOrdinals must be equal"
-        );
-        assert_ne!(
-            clone_a.entropy(),
-            clone_b.entropy(),
-            "two-clone at-rest: Entropy must differ"
-        );
-
-        // Zero (key, nonce) collisions: same MintDomain×DomainCounter×CryptoDomain
-        // must never yield a shared nonce across distinct clone Entropy.
-        let mut seen: BTreeSet<([u8; 12], u8)> = BTreeSet::new();
-        let mut counter = DomainCounter::ZERO;
-        for step in 0u8..32 {
-            for (tag, incarnation) in [(0u8, clone_a), (1u8, clone_b)] {
-                let n = nonce(MintDomain::Commit, counter, domain, incarnation);
-                assert!(
-                    seen.insert((n, tag)),
-                    "clone-tag collision at counter step {step}"
-                );
-            }
-            let n_a = nonce(MintDomain::Commit, counter, domain, clone_a);
-            let n_b = nonce(MintDomain::Commit, counter, domain, clone_b);
-            assert_ne!(
-                n_a, n_b,
-                "cross-clone (key,nonce) collision at DomainCounter step {step}"
+        let mut step_counts = BTreeSet::new();
+        for seed in 0..8u64 {
+            let steps = 8 + (seed % 25) as u8; // 8..=32
+            step_counts.insert(steps);
+            let sealed = genesis(genesis_params(seed_bytes(0xA1, seed), SnapshotFork::No));
+            assert_eq!(
+                sealed.entropy_arm(),
+                EntropyArm::OsRandom,
+                "seed {seed}: approved entropy arm must be OsRandom"
             );
-            counter = counter.successor().expect("domain counter space");
+            let store_id = sealed.store_id();
+            let domain = CryptoDomain::new(store_id, FenceEpoch::genesis(store_id));
+            let (_view, auth) = sealed.take_write_authority();
+
+            // Two clones: equal OpenOrdinals, differing Entropy under the approved arm.
+            let clone_a = auth
+                .incarnation_mint_cap(OpenOrdinal::ZERO)
+                .mint(Entropy::from_bytes(seed_bytes(0x11, seed)))
+                .expect("clone A");
+            let clone_b = auth
+                .incarnation_mint_cap(OpenOrdinal::ZERO)
+                .mint(Entropy::from_bytes(seed_bytes(0x22, seed)))
+                .expect("clone B");
+            assert_eq!(
+                clone_a.open_ordinal(),
+                clone_b.open_ordinal(),
+                "seed {seed}: two-clone at-rest: OpenOrdinals must be equal"
+            );
+            assert_ne!(
+                clone_a.entropy(),
+                clone_b.entropy(),
+                "seed {seed}: two-clone at-rest: Entropy must differ"
+            );
+
+            // Zero (key, nonce) collisions: same MintDomain×DomainCounter×CryptoDomain
+            // must never yield a shared nonce across distinct clone Entropy.
+            let mut seen: BTreeSet<([u8; 12], u8)> = BTreeSet::new();
+            let mut counter = DomainCounter::ZERO;
+            for step in 0u8..steps {
+                for (tag, incarnation) in [(0u8, clone_a), (1u8, clone_b)] {
+                    let n = nonce(MintDomain::Commit, counter, domain, incarnation);
+                    assert!(
+                        seen.insert((n, tag)),
+                        "seed {seed}: clone-tag collision at counter step {step}"
+                    );
+                }
+                let n_a = nonce(MintDomain::Commit, counter, domain, clone_a);
+                let n_b = nonce(MintDomain::Commit, counter, domain, clone_b);
+                assert_ne!(
+                    n_a, n_b,
+                    "seed {seed}: cross-clone (key,nonce) collision at DomainCounter step {step}"
+                );
+                counter = counter.successor().expect("domain counter space");
+            }
         }
+        assert!(
+            step_counts.len() > 1,
+            "clone nonce walk must explore more than one step-count"
+        );
     }
 
     /// §27/§62 — live-fork; gates SIV arm and signature freeze.
@@ -2245,165 +2267,235 @@ pub mod storage_campaign_lanes {
 
     /// §25 — SweepDoor ordinals.
     /// IntentOrdinal gaps free; CommitOrdinal dense in intent order among successes.
+    ///
+    /// Pattern knob: admit count + which intents seal (was fixed admit-3 / seal-0+2).
     #[test]
     fn mixed_load_ordinals() {
-        let cap = StableCommitCap::NativeFsyncProof {
-            snapshot_fork: SnapshotFork::No,
-        };
-        let (mut door, incarnation, session) = open_live_door([0xB2; 32], [0xB0; 32], cap);
-        let store_id = session.store_id();
-        let (key0, dig0) = op_key(store_id, b"mixed-0");
-        let (key1, dig1) = op_key(store_id, b"mixed-1");
-        let (key2, dig2) = op_key(store_id, b"mixed-2");
+        let mut patterns = BTreeSet::new();
+        let mut saw_gap = false;
+        let mut saw_multi_seal = false;
+        for seed in 0..32u64 {
+            let admit_n = 3 + (seed % 4) as usize; // 3..=6
+            let width_mask = (1usize << admit_n) - 1;
+            let mut seal_mask = ((seed >> 2) as usize) & width_mask;
+            // ≥2 seals so dense CommitOrdinal among successes is exercised.
+            if seal_mask.count_ones() < 2 {
+                seal_mask |= 0b01 | (1 << (admit_n - 1));
+            }
+            // Prefer a gap: if every admit seals, clear the middle bit.
+            if seal_mask.count_ones() as usize == admit_n {
+                seal_mask &= !(1 << (admit_n / 2));
+            }
+            seal_mask &= width_mask;
+            patterns.insert((admit_n as u8, seal_mask as u16));
+            if (seal_mask.count_ones() as usize) < admit_n {
+                saw_gap = true;
+            }
+            if seal_mask.count_ones() >= 2 {
+                saw_multi_seal = true;
+            }
 
-        // Three admits (IntentOrdinal 0,1,2). Seal only 0 and 2 — IntentOrdinal
-        // gap among successes; CommitOrdinal must still be dense 0 then 1.
-        let i0 = door
-            .admit(incarnation, &session, key0, dig0)
-            .expect("admit 0");
-        let i1 = door
-            .admit(incarnation, &session, key1, dig1)
-            .expect("admit 1");
-        let i2 = door
-            .admit(incarnation, &session, key2, dig2)
-            .expect("admit 2");
-        assert_eq!(i0.intent_ordinal(), IntentOrdinal::ZERO);
-        assert_eq!(i1.intent_ordinal().get(), 1);
-        assert_eq!(i2.intent_ordinal().get(), 2);
+            let cap = StableCommitCap::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::No,
+            };
+            let (mut door, incarnation, session) =
+                open_live_door(seed_bytes(0xB2, seed), seed_bytes(0xB0, seed), cap);
+            let store_id = session.store_id();
 
-        let c0 = door
-            .seal_durable(
-                i0,
-                TempTx::default(),
-                campaign_content_root(0xB0),
-                &session,
-            )
-            .expect("seal intent 0");
-        let c0_ord = c0.commit_ordinal();
-        // CommitOrdinal advances from ZERO via successor — first seal is 1.
-        assert_eq!(c0_ord.get(), 1);
-        assert_eq!(door.highest_commit_ordinal().get(), 1);
+            let mut intents = Vec::with_capacity(admit_n);
+            for i in 0..admit_n {
+                let op = format!("mixed-{seed}-{i}");
+                let (key, dig) = op_key(store_id, op.as_bytes());
+                let intent = door
+                    .admit(incarnation, &session, key, dig)
+                    .unwrap_or_else(|e| panic!("seed {seed}: admit {i}: {e:?}"));
+                assert_eq!(
+                    intent.intent_ordinal().get(),
+                    i as u64,
+                    "seed {seed}: IntentOrdinal must advance on admit"
+                );
+                intents.push(intent);
+            }
 
-        // Skip sealing i1 — IntentOrdinal gap among successes.
-        let _gap = i1;
+            let mut expected_commit = 0u64;
+            let mut prev_commit = None;
+            for (i, intent) in intents.into_iter().enumerate() {
+                if seal_mask & (1 << i) == 0 {
+                    // IntentOrdinal gap among successes — leave unsealed.
+                    continue;
+                }
+                expected_commit += 1;
+                let committed = door
+                    .seal_durable(
+                        intent,
+                        TempTx::default(),
+                        campaign_content_root(0xB0 ^ (seed as u8).wrapping_add(i as u8)),
+                        &session,
+                    )
+                    .unwrap_or_else(|e| panic!("seed {seed}: seal intent {i}: {e:?}"));
+                let c_ord = committed.commit_ordinal().get();
+                assert_eq!(
+                    c_ord, expected_commit,
+                    "seed {seed}: CommitOrdinal must be dense among successes \
+                     (gap in IntentOrdinal free); seal #{expected_commit}"
+                );
+                if let Some(prev) = prev_commit {
+                    assert!(
+                        prev < c_ord,
+                        "seed {seed}: dense CommitOrdinals must preserve IntentOrdinal success order"
+                    );
+                }
+                prev_commit = Some(c_ord);
+            }
+            assert_eq!(
+                door.highest_commit_ordinal().get(),
+                expected_commit,
+                "seed {seed}: door cut must equal sealed success count"
+            );
 
-        let c2 = door
-            .seal_durable(
-                i2,
-                TempTx::default(),
-                campaign_content_root(0xB2),
-                &session,
-            )
-            .expect("seal intent 2 across gap");
-        let c2_ord = c2.commit_ordinal();
-        assert_eq!(
-            c2_ord.get(),
-            2,
-            "CommitOrdinal must be dense among successes (gap in IntentOrdinal free)"
-        );
-        assert_eq!(door.highest_commit_ordinal().get(), 2);
+            // Refuse advance no cut: dead-session admit leaves CommitOrdinal unmoved.
+            let sealed = genesis(genesis_params(seed_bytes(0xB2, seed), SnapshotFork::No));
+            let (_view, auth) = sealed.take_write_authority();
+            let foreign = auth
+                .incarnation_mint_cap(OpenOrdinal::ZERO)
+                .mint(Entropy::from_bytes(seed_bytes(0xFF, seed)))
+                .expect("foreign incarnation");
+            let before = door.highest_commit_ordinal();
+            let (key_foreign, dig_foreign) =
+                op_key(store_id, format!("mixed-foreign-{seed}").as_bytes());
+            assert_eq!(
+                door.admit(foreign, &session, key_foreign, dig_foreign),
+                Err(SweepRefuse::WriteSessionDead),
+                "seed {seed}: foreign incarnation must refuse WriteSessionDead"
+            );
+            assert_eq!(
+                door.highest_commit_ordinal(),
+                before,
+                "seed {seed}: refuse must not advance CommitOrdinal (no cut)"
+            );
+        }
+        assert!(saw_gap, "admit/seal campaign must emit at least one IntentOrdinal gap");
         assert!(
-            c0_ord.get() < c2_ord.get(),
-            "dense CommitOrdinals must preserve IntentOrdinal success order"
+            saw_multi_seal,
+            "admit/seal campaign must seal ≥2 intents on some seed"
         );
-
-        // Refuse advance no cut: dead-session admit leaves CommitOrdinal unmoved.
-        let sealed = genesis(genesis_params([0xB2; 32], SnapshotFork::No));
-        let (_view, auth) = sealed.take_write_authority();
-        let foreign = auth
-            .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xFF; 32]))
-            .expect("foreign incarnation");
-        let before = door.highest_commit_ordinal();
-        let (key_foreign, dig_foreign) = op_key(store_id, b"mixed-foreign");
-        assert_eq!(
-            door.admit(foreign, &session, key_foreign, dig_foreign),
-            Err(SweepRefuse::WriteSessionDead),
-            "foreign incarnation must refuse WriteSessionDead"
-        );
-        assert_eq!(
-            door.highest_commit_ordinal(),
-            before,
-            "refuse must not advance CommitOrdinal (no cut)"
+        assert!(
+            patterns.len() > 1,
+            "admit/seal campaign must explore more than one (admit_n, seal_mask) pattern"
         );
     }
 
     /// §25 — pipelined NonceLease / commit-door survival.
     /// Every minted Committed survives a power cut at every pipeline barrier.
+    ///
+    /// Count knobs: reserve-block length + durable seal count (were fixed `8` / `1`).
     #[test]
     fn pipeline_power_cut() {
-        let sealed = genesis(genesis_params([0xC3; 32], SnapshotFork::No));
-        let domain = sealed.crypto_domain();
-        let (_view, auth) = sealed.take_write_authority();
-        let incarnation = auth
-            .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xC0; 32]))
-            .expect("incarnation");
+        let mut reserve_lens = BTreeSet::new();
+        let mut seal_counts = BTreeSet::new();
+        for seed in 0..16u64 {
+            let reserve = 4 + (seed % 8); // 4..=11
+            let seal_n = 1 + (seed % 3) as usize; // 1..=3
+            reserve_lens.insert(reserve);
+            seal_counts.insert(seal_n as u8);
 
-        // Reserve-before-encrypt: DomainCounter is an input to nonce — encrypt
-        // cannot invent a counter; the reserved block is known before AEAD.
-        let floor = DomainCounter::ZERO;
-        let mut cursor = floor;
-        for _ in 0..8 {
-            cursor = cursor.successor().expect("reserve block");
-        }
-        let ceiling = cursor; // exclusive ceiling of reserved [floor, ceiling)
-        let mut c = floor;
-        while c.get() < ceiling.get() {
-            let _nonce = nonce(MintDomain::Commit, c, domain, incarnation);
-            c = c.successor().expect("within lease");
-        }
-        let resume_floor = ceiling;
-        let resume_nonce = nonce(MintDomain::Commit, resume_floor, domain, incarnation);
-        let last_in_block = {
-            let mut last = floor;
-            while last.successor().expect("x").get() < ceiling.get() {
-                last = last.successor().expect("x");
+            let sealed = genesis(genesis_params(seed_bytes(0xC3, seed), SnapshotFork::No));
+            let domain = sealed.crypto_domain();
+            let (_view, auth) = sealed.take_write_authority();
+            let incarnation = auth
+                .incarnation_mint_cap(OpenOrdinal::ZERO)
+                .mint(Entropy::from_bytes(seed_bytes(0xC0, seed)))
+                .expect("incarnation");
+
+            // Reserve-before-encrypt: DomainCounter is an input to nonce — encrypt
+            // cannot invent a counter; the reserved block is known before AEAD.
+            let floor = DomainCounter::ZERO;
+            let mut cursor = floor;
+            for _ in 0..reserve {
+                cursor = cursor.successor().expect("reserve block");
             }
-            nonce(MintDomain::Commit, last, domain, incarnation)
-        };
-        assert_ne!(
-            resume_nonce, last_in_block,
-            "resume above durable ceiling must not reuse an in-block nonce"
-        );
+            let ceiling = cursor; // exclusive ceiling of reserved [floor, ceiling)
+            let mut c = floor;
+            while c.get() < ceiling.get() {
+                let _nonce = nonce(MintDomain::Commit, c, domain, incarnation);
+                c = c.successor().expect("within lease");
+            }
+            let resume_floor = ceiling;
+            let resume_nonce = nonce(MintDomain::Commit, resume_floor, domain, incarnation);
+            let last_in_block = {
+                let mut last = floor;
+                while last.successor().expect("x").get() < ceiling.get() {
+                    last = last.successor().expect("x");
+                }
+                nonce(MintDomain::Commit, last, domain, incarnation)
+            };
+            assert_ne!(
+                resume_nonce, last_in_block,
+                "seed {seed}: resume above durable ceiling must not reuse an in-block nonce"
+            );
 
-        // Seal real Committed through SweepDoor + SimStorage durable apply,
-        // then power-cut: fsynced bytes survive; Committed ordinal stays sealed.
-        let cap = StableCommitCap::NativeFsyncProof {
-            snapshot_fork: SnapshotFork::No,
-        };
-        let (mut door, live, session) = open_live_door([0xC3; 32], [0xC0; 32], cap);
-        let db = SimStorage::new(0xC3_C0_71_E1);
-        let (key, digest) = op_key(session.store_id(), b"pipeline-seal");
-        let intent = door
-            .admit(live, &session, key, digest)
-            .expect("admit before seal");
-        let mut tx = db.write_tx().expect("sim write_tx");
-        tx.put(b"pipeline.committed", b"survives-power-cut")
-            .expect("put under seal");
-        let committed = door
-            .seal_durable(intent, tx, campaign_content_root(0xC3), &session)
-            .expect("mint Committed at commit door");
-        let sealed_ordinal = committed.commit_ordinal();
-        // First durable seal is ZERO.successor() — ordinal 1, not the floor.
-        assert_eq!(sealed_ordinal.get(), 1);
-        assert_eq!(door.highest_commit_ordinal().get(), 1);
+            // Seal real Committed through SweepDoor + SimStorage durable apply,
+            // then power-cut: fsynced bytes survive; Committed ordinal stays sealed.
+            let cap = StableCommitCap::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::No,
+            };
+            let (mut door, live, session) =
+                open_live_door(seed_bytes(0xC3, seed), seed_bytes(0xC0, seed), cap);
+            let db = SimStorage::new(0xC3_C0_71_E1 ^ seed);
+            let mut last_ordinal = CommitOrdinal::ZERO;
+            for i in 0..seal_n {
+                let op = format!("pipeline-seal-{seed}-{i}");
+                let (key, digest) = op_key(session.store_id(), op.as_bytes());
+                let intent = door
+                    .admit(live, &session, key, digest)
+                    .unwrap_or_else(|e| panic!("seed {seed}: admit {i}: {e:?}"));
+                let mut tx = db.write_tx().expect("sim write_tx");
+                let k = format!("pipeline.committed.{seed}.{i}");
+                let v = format!("survives-power-cut-{seed}-{i}");
+                tx.put(k.as_bytes(), v.as_bytes())
+                    .expect("put under seal");
+                let committed = door
+                    .seal_durable(
+                        intent,
+                        tx,
+                        campaign_content_root(0xC3 ^ (seed as u8).wrapping_add(i as u8)),
+                        &session,
+                    )
+                    .unwrap_or_else(|e| panic!("seed {seed}: seal {i}: {e:?}"));
+                last_ordinal = committed.commit_ordinal();
+                assert_eq!(
+                    last_ordinal.get(),
+                    (i as u64) + 1,
+                    "seed {seed}: durable seals mint dense CommitOrdinal from 1"
+                );
+            }
+            assert_eq!(door.highest_commit_ordinal().get(), seal_n as u64);
 
-        let after_cut = db.sim_powercut();
-        let got = after_cut
-            .read_tx()
-            .expect("post-cut read_tx")
-            .get(b"pipeline.committed")
-            .expect("post-cut get");
-        assert_eq!(
-            got,
-            Some(crate::store::Slice::from(b"survives-power-cut")),
-            "Committed durable apply must survive SimStorage::sim_powercut"
+            let after_cut = db.sim_powercut();
+            let read = after_cut.read_tx().expect("post-cut read_tx");
+            for i in 0..seal_n {
+                let k = format!("pipeline.committed.{seed}.{i}");
+                let v = format!("survives-power-cut-{seed}-{i}");
+                let got = read.get(k.as_bytes()).expect("post-cut get");
+                assert_eq!(
+                    got,
+                    Some(crate::store::Slice::from(v.as_bytes())),
+                    "seed {seed}: Committed durable apply {i} must survive SimStorage::sim_powercut"
+                );
+            }
+            assert_eq!(
+                door.highest_commit_ordinal(),
+                last_ordinal,
+                "seed {seed}: minted Committed ordinal must remain after power-cut of durable bytes"
+            );
+        }
+        assert!(
+            reserve_lens.len() > 1,
+            "pipeline reserve length must explore more than one block size"
         );
-        assert_eq!(
-            door.highest_commit_ordinal(),
-            sealed_ordinal,
-            "minted Committed ordinal must remain after power-cut of durable bytes"
+        assert!(
+            seal_counts.len() > 1,
+            "pipeline seal count must explore more than one durable-seal cardinality"
         );
     }
 
@@ -2671,51 +2763,72 @@ pub mod storage_campaign_lanes {
 
     /// §22/§23 — staging + idle law.
     /// No cut advance → unresolved Pending is not Decayed; reclaim always lawful.
+    ///
+    /// Count knob: idle admit count without seal (was fixed single admit).
     #[test]
     fn idle_staging_ttl() {
-        let sealed = genesis(genesis_params([0x22; 32], SnapshotFork::No));
-        let ttl = sealed.staging_ttl();
-        assert!(ttl.ordinals() > 0, "genesis seals a positive StagingTTL ordinal count");
-        let store_id = sealed.store_id();
+        let mut admit_counts = BTreeSet::new();
+        for seed in 0..8u64 {
+            let admit_n = 1 + (seed % 4) as usize; // 1..=4
+            admit_counts.insert(admit_n as u8);
+            let sealed = genesis(genesis_params(seed_bytes(0x22, seed), SnapshotFork::No));
+            let ttl = sealed.staging_ttl();
+            assert!(
+                ttl.ordinals() > 0,
+                "seed {seed}: genesis seals a positive StagingTTL ordinal count"
+            );
+            let store_id = sealed.store_id();
 
-        let cap = StableCommitCap::NativeFsyncProof {
-            snapshot_fork: SnapshotFork::No,
-        };
-        let (mut door, incarnation, session) = open_live_door([0x22; 32], [0x20; 32], cap);
-        let (key, digest) = op_key(store_id, b"idle-admit");
-        door.admit(incarnation, &session, key, digest)
-            .expect("admit under idle store");
-        assert_eq!(
-            door.highest_commit_ordinal(),
-            CommitOrdinal::ZERO,
-            "idle: no cut advance — CommitOrdinal stays ZERO"
-        );
+            let cap = StableCommitCap::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::No,
+            };
+            let (mut door, incarnation, session) =
+                open_live_door(seed_bytes(0x22, seed), seed_bytes(0x20, seed), cap);
+            for i in 0..admit_n {
+                let op = format!("idle-admit-{seed}-{i}");
+                let (key, digest) = op_key(store_id, op.as_bytes());
+                door.admit(incarnation, &session, key, digest)
+                    .unwrap_or_else(|e| panic!("seed {seed}: idle admit {i}: {e:?}"));
+            }
+            assert_eq!(
+                door.highest_commit_ordinal(),
+                CommitOrdinal::ZERO,
+                "seed {seed}: idle: no cut advance — CommitOrdinal stays ZERO after {admit_n} admits"
+            );
 
-        // Real stage at cut ZERO: expires_at = 0 + TTL; idle cut never reaches it.
-        let token = StagingToken::mint(store_id, ObjectId::from_digest([0x22; 32]));
-        let hash = ContentHash::from_digest([0xAD; 32]);
-        let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
-            .expect("stage under idle cut");
-        let candidate = PermanenceCandidate::from_volatile(pending);
+            // Real stage at cut ZERO: expires_at = 0 + TTL; idle cut never reaches it.
+            let token =
+                StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x22, seed)));
+            let hash = ContentHash::from_digest(seed_bytes(0xAD, seed));
+            let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
+                .expect("stage under idle cut");
+            let candidate = PermanenceCandidate::from_volatile(pending);
+            assert!(
+                candidate.may_confirm(door.highest_commit_ordinal()),
+                "seed {seed}: idle cut must leave Pending confirm-licensed (not Decayed)"
+            );
+            let class = ObjectDurabilityClass::new(
+                ConfirmedCopies::One,
+                FailureDomains::Single,
+                Regions::Single,
+                ConsistencyClass::Eventual,
+                IntegrityVerification::ContentHash,
+                BackendContract::from_digest([0xBC; 32]),
+            );
+            let witness =
+                PermanenceWitness::mint(&candidate, door.highest_commit_ordinal(), class)
+                    .expect("unresolved Pending on idle store must not Decayed");
+            assert_eq!(witness.content_hash(), hash);
+
+            // Reclaim always lawful idle — matching certificate.
+            let reclaim =
+                ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
+            reclaim_candidate(candidate, &reclaim).expect("idle reclaim must be lawful");
+        }
         assert!(
-            candidate.may_confirm(door.highest_commit_ordinal()),
-            "idle cut must leave Pending confirm-licensed (not Decayed)"
+            admit_counts.len() > 1,
+            "idle admit campaign must explore more than one admit count"
         );
-        let class = ObjectDurabilityClass::new(
-            ConfirmedCopies::One,
-            FailureDomains::Single,
-            Regions::Single,
-            ConsistencyClass::Eventual,
-            IntegrityVerification::ContentHash,
-            BackendContract::from_digest([0xBC; 32]),
-        );
-        let witness = PermanenceWitness::mint(&candidate, door.highest_commit_ordinal(), class)
-            .expect("unresolved Pending on idle store must not Decayed");
-        assert_eq!(witness.content_hash(), hash);
-
-        // Reclaim always lawful idle — matching certificate.
-        let reclaim = ReclaimCertificate::mint(store_id, token.object_id(), [0xCE; 32]);
-        reclaim_candidate(candidate, &reclaim).expect("idle reclaim must be lawful");
     }
 
     /// §22 — durability dominance product (never a total-order ladder).
@@ -2845,150 +2958,180 @@ pub mod storage_campaign_lanes {
 
     /// §22/§23 — PermanenceCandidate stall / strip-before-confirm ban.
     /// Past cut → reclaim only (confirm refuses Decayed).
+    ///
+    /// Count knob: StagingTtl ordinals (was fixed `2`).
     #[test]
     fn permanence_candidate_stall() {
-        let sealed = genesis(genesis_params([0x23; 32], SnapshotFork::No));
-        let store_id = sealed.store_id();
-        // Short TTL so the cut walk is the meter.
-        let ttl = StagingTtl::new(2);
-        let token = StagingToken::mint(store_id, ObjectId::from_digest([0x23; 32]));
-        let hash = ContentHash::from_digest([0xCA; 32]);
-        let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
-            .expect("stage PermanenceCandidate precursor");
-        let candidate = PermanenceCandidate::from_volatile(pending);
-        assert_eq!(candidate.expires_at().get(), 2);
+        let mut ttl_values = BTreeSet::new();
+        for seed in 0..8u64 {
+            let ttl_n = 1 + (seed % 5); // 1..=5
+            ttl_values.insert(ttl_n);
+            let sealed = genesis(genesis_params(seed_bytes(0x23, seed), SnapshotFork::No));
+            let store_id = sealed.store_id();
+            let ttl = StagingTtl::new(ttl_n);
+            let token =
+                StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x23, seed)));
+            let hash = ContentHash::from_digest(seed_bytes(0xCA, seed));
+            let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
+                .expect("stage PermanenceCandidate precursor");
+            let candidate = PermanenceCandidate::from_volatile(pending);
+            assert_eq!(
+                candidate.expires_at().get(),
+                ttl_n,
+                "seed {seed}: expires_at must equal StagingTtl ordinals"
+            );
 
-        let class = ObjectDurabilityClass::new(
-            ConfirmedCopies::One,
-            FailureDomains::Single,
-            Regions::Single,
-            ConsistencyClass::Eventual,
-            IntegrityVerification::ContentHash,
-            BackendContract::from_digest([0xBC; 32]),
-        );
+            let class = ObjectDurabilityClass::new(
+                ConfirmedCopies::One,
+                FailureDomains::Single,
+                Regions::Single,
+                ConsistencyClass::Eventual,
+                IntegrityVerification::ContentHash,
+                BackendContract::from_digest([0xBC; 32]),
+            );
 
-        // Before cut: confirm still licensed.
-        assert!(candidate.may_confirm(CommitOrdinal::ZERO));
-        PermanenceWitness::mint(&candidate, CommitOrdinal::ZERO, class)
-            .expect("confirm before expires_at");
+            // Before cut: confirm still licensed.
+            assert!(
+                candidate.may_confirm(CommitOrdinal::ZERO),
+                "seed {seed}: confirm before expires_at must be licensed"
+            );
+            PermanenceWitness::mint(&candidate, CommitOrdinal::ZERO, class)
+                .expect("confirm before expires_at");
 
-        // Past cut (cut ≥ expires_at): confirm → Decayed.
-        let past = CommitOrdinal::ZERO
-            .successor()
-            .expect("1")
-            .successor()
-            .expect("2");
-        assert_eq!(past.get(), 2);
-        assert!(!candidate.may_confirm(past));
-        assert_eq!(
-            PermanenceWitness::mint(&candidate, past, class),
-            Err(ObjectRefuse::Decayed),
-            "confirm past cut must refuse Decayed"
-        );
+            // Past cut (cut ≥ expires_at): confirm → Decayed.
+            let mut past = CommitOrdinal::ZERO;
+            for _ in 0..ttl_n {
+                past = past.successor().expect("cut walk");
+            }
+            assert_eq!(past.get(), ttl_n);
+            assert!(
+                !candidate.may_confirm(past),
+                "seed {seed}: cut ≥ expires_at must revoke confirm license"
+            );
+            assert_eq!(
+                PermanenceWitness::mint(&candidate, past, class),
+                Err(ObjectRefuse::Decayed),
+                "seed {seed}: confirm past cut must refuse Decayed"
+            );
 
-        // Reclaim with mismatched object id → ReclaimMismatch.
-        let mismatch = ReclaimCertificate::mint(
-            store_id,
-            ObjectId::from_digest([0xFF; 32]),
-            [0xBD; 32],
+            // Reclaim with mismatched object id → ReclaimMismatch.
+            let mismatch = ReclaimCertificate::mint(
+                store_id,
+                ObjectId::from_digest(seed_bytes(0xFF, seed)),
+                seed_bytes(0xBD, seed),
+            );
+            assert_eq!(
+                reclaim_candidate(candidate.clone(), &mismatch),
+                Err(ObjectRefuse::ReclaimMismatch),
+                "seed {seed}: reclaim under foreign object id must refuse ReclaimMismatch"
+            );
+            let ok_cert =
+                ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
+            reclaim_candidate(candidate, &ok_cert).expect("matching reclaim after stall");
+        }
+        assert!(
+            ttl_values.len() > 1,
+            "staging TTL campaign must explore more than one TTL ordinal count"
         );
-        assert_eq!(
-            reclaim_candidate(candidate.clone(), &mismatch),
-            Err(ObjectRefuse::ReclaimMismatch),
-            "reclaim under foreign object id must refuse ReclaimMismatch"
-        );
-        let ok_cert = ReclaimCertificate::mint(store_id, token.object_id(), [0xCE; 32]);
-        reclaim_candidate(candidate, &ok_cert).expect("matching reclaim after stall");
     }
 
     /// §26 — CheckpointSeal restore/open.
     /// Missing or corrupting any bound digest (incl. ReplicaCustody) → SealMismatch.
+    ///
+    /// Pattern knob: which whole binding(s) flip (was a fixed four-arm + dual).
     #[test]
     fn checkpoint_seal_mismatch() {
-        let sealed = genesis(genesis_params([0x26; 32], SnapshotFork::No));
-        let store_id = sealed.store_id();
-        let crypto_domain = sealed.crypto_domain();
-        let fence_epoch = sealed.fence_epoch();
-        let (_view, auth) = sealed.take_write_authority();
-        let incarnation = auth
-            .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0x26; 32]))
-            .expect("incarnation boundary");
+        let mut binding_arms = BTreeSet::new();
+        for seed in 0..16u64 {
+            let sealed = genesis(genesis_params(seed_bytes(0x26, seed), SnapshotFork::No));
+            let store_id = sealed.store_id();
+            let crypto_domain = sealed.crypto_domain();
+            let fence_epoch = sealed.fence_epoch();
+            let (_view, auth) = sealed.take_write_authority();
+            let incarnation = auth
+                .incarnation_mint_cap(OpenOrdinal::ZERO)
+                .mint(Entropy::from_bytes(seed_bytes(0x26, seed)))
+                .expect("incarnation boundary");
 
-        let intact = CheckpointSealParts {
-            store_id,
-            crypto_domain,
-            fence_epoch,
-            cut: CommitOrdinal::ZERO,
-            state_root: SealDigest::from_digest([0x01; 32]),
-            final_wal_hash: WalHash::from_digest([0x02; 32]),
-            checkpoint_manifest: SealDigest::from_digest([0x03; 32]),
-            format_version: FormatVersion::CURRENT,
-            catalog_generation: CommitOrdinal::ZERO,
-            retained_object_manifest: SealDigest::from_digest([0x04; 32]),
-            permanence_candidate_manifest: SealDigest::from_digest([0x05; 32]),
-            replica_custody_manifest: SealDigest::from_digest([0x06; 32]),
-            nonce_floors: NonceLeaseFloors::genesis(),
-            incarnation_boundary: incarnation,
-            prior_seal_digest: GENESIS_PRIOR_SEAL,
-            retention_certificate_digest: SealDigest::from_digest([0x07; 32]),
-        };
+            let intact = CheckpointSealParts {
+                store_id,
+                crypto_domain,
+                fence_epoch,
+                cut: CommitOrdinal::ZERO,
+                state_root: SealDigest::from_digest(seed_bytes(0x01, seed)),
+                final_wal_hash: WalHash::from_digest(seed_bytes(0x02, seed)),
+                checkpoint_manifest: SealDigest::from_digest(seed_bytes(0x03, seed)),
+                format_version: FormatVersion::CURRENT,
+                catalog_generation: CommitOrdinal::ZERO,
+                retained_object_manifest: SealDigest::from_digest(seed_bytes(0x04, seed)),
+                permanence_candidate_manifest: SealDigest::from_digest(seed_bytes(0x05, seed)),
+                replica_custody_manifest: SealDigest::from_digest(seed_bytes(0x06, seed)),
+                nonce_floors: NonceLeaseFloors::genesis(),
+                incarnation_boundary: incarnation,
+                prior_seal_digest: GENESIS_PRIOR_SEAL,
+                retention_certificate_digest: SealDigest::from_digest(seed_bytes(0x07, seed)),
+            };
 
-        // Each bound digest independently corrupted → observed ≠ intact.
-        // ReplicaCustody manifest is a first-class binding (never silent prefer-dump).
-        let mut corrupt_custody = intact.clone();
-        corrupt_custody.replica_custody_manifest = SealDigest::from_digest([0xFF; 32]);
-        assert_ne!(
-            intact.replica_custody_manifest, corrupt_custody.replica_custody_manifest,
-            "ReplicaCustody digest must be an independent seal binding"
-        );
-        let mut corrupt_state = intact.clone();
-        corrupt_state.state_root = SealDigest::from_digest([0xEE; 32]);
-        assert_ne!(intact.state_root, corrupt_state.state_root);
-        let mut corrupt_retained = intact.clone();
-        corrupt_retained.retained_object_manifest = SealDigest::from_digest([0xDD; 32]);
-        assert_ne!(
-            intact.retained_object_manifest,
-            corrupt_retained.retained_object_manifest
-        );
-        let mut corrupt_candidate = intact.clone();
-        corrupt_candidate.permanence_candidate_manifest = SealDigest::from_digest([0xCC; 32]);
-        assert_ne!(
-            intact.permanence_candidate_manifest,
-            corrupt_candidate.permanence_candidate_manifest
-        );
+            let seal = CheckpointSeal::mint(intact.clone()).expect("mint intact seal");
+            assert!(
+                seal.verify(&intact).is_ok(),
+                "seed {seed}: intact parts must verify"
+            );
 
-        // Restore/open adversary: flip each bound digest independently → SealMismatch.
-        let seal = CheckpointSeal::mint(intact.clone()).expect("mint intact seal");
-        assert!(seal.verify(&intact).is_ok(), "intact parts must verify");
-        assert_eq!(
-            seal.verify(&corrupt_custody),
-            Err(SealRefuse::SealMismatch),
-            "ReplicaCustody digest flip must SealMismatch"
-        );
-        assert_eq!(
-            seal.verify(&corrupt_state),
-            Err(SealRefuse::SealMismatch),
-            "state_root flip must SealMismatch"
-        );
-        assert_eq!(
-            seal.verify(&corrupt_retained),
-            Err(SealRefuse::SealMismatch),
-            "retained_object_manifest flip must SealMismatch"
-        );
-        assert_eq!(
-            seal.verify(&corrupt_candidate),
-            Err(SealRefuse::SealMismatch),
-            "permanence_candidate_manifest flip must SealMismatch"
-        );
-        // Dual corruption: two bindings flipped still SealMismatch (never prefer-dump).
-        let mut dual = intact.clone();
-        dual.replica_custody_manifest = SealDigest::from_digest([0xFF; 32]);
-        dual.state_root = SealDigest::from_digest([0xEE; 32]);
-        assert_eq!(
-            seal.verify(&dual),
-            Err(SealRefuse::SealMismatch),
-            "dual binding corruption must still SealMismatch"
+            // Seed picks a primary binding + optional second for dual corruption.
+            let primary = (seed % 4) as u8; // 0 custody, 1 state, 2 retained, 3 candidate
+            let dual = seed % 3 == 0;
+            binding_arms.insert((primary, dual));
+
+            let mut corrupt = intact.clone();
+            match primary {
+                0 => {
+                    corrupt.replica_custody_manifest =
+                        SealDigest::from_digest(seed_bytes(0xFF, seed));
+                    assert_ne!(
+                        intact.replica_custody_manifest, corrupt.replica_custody_manifest,
+                        "seed {seed}: ReplicaCustody digest must be an independent seal binding"
+                    );
+                }
+                1 => {
+                    corrupt.state_root = SealDigest::from_digest(seed_bytes(0xEE, seed));
+                    assert_ne!(intact.state_root, corrupt.state_root);
+                }
+                2 => {
+                    corrupt.retained_object_manifest =
+                        SealDigest::from_digest(seed_bytes(0xDD, seed));
+                    assert_ne!(
+                        intact.retained_object_manifest,
+                        corrupt.retained_object_manifest
+                    );
+                }
+                _ => {
+                    corrupt.permanence_candidate_manifest =
+                        SealDigest::from_digest(seed_bytes(0xCC, seed));
+                    assert_ne!(
+                        intact.permanence_candidate_manifest,
+                        corrupt.permanence_candidate_manifest
+                    );
+                }
+            }
+            if dual {
+                // Second binding distinct from primary — never prefer-dump.
+                if primary != 0 {
+                    corrupt.replica_custody_manifest =
+                        SealDigest::from_digest(seed_bytes(0xFE, seed));
+                } else {
+                    corrupt.state_root = SealDigest::from_digest(seed_bytes(0xED, seed));
+                }
+            }
+            assert_eq!(
+                seal.verify(&corrupt),
+                Err(SealRefuse::SealMismatch),
+                "seed {seed}: binding corruption (primary={primary}, dual={dual}) must SealMismatch"
+            );
+        }
+        assert!(
+            binding_arms.len() > 1,
+            "checkpoint seal campaign must explore more than one binding-corruption arm"
         );
     }
 
@@ -3078,42 +3221,62 @@ pub mod storage_campaign_lanes {
             Err(TranscriptRefuse::UnknownVersion)
         );
 
-        // Mutation campaign: corrupt golden bits → refuse / mismatch vs authority.
+        // Mutation campaign: corrupt golden bits at seed-derived offsets →
+        // refuse / mismatch vs authority (was a single mid-vector flip).
         let golden = parse_golden_hex(GOLDENS[0].1).expect("checkpoint golden");
-        let mut flipped = golden.clone();
-        let idx = flipped.len() / 2;
-        flipped[idx] ^= 0xFF;
-        assert_ne!(
-            flipped.as_slice(),
-            golden.as_slice(),
-            "mutated vector must diverge from golden authority"
-        );
-        assert_ne!(
-            flipped.as_slice(),
-            encode_normative_production_transcript(SealedArtifactKind::CheckpointSeal)
-                .expect("production checkpoint seal")
-                .as_bytes(),
-            "mutated vector must fail verify against encoder (authority mismatch)"
-        );
-        match CanonicalTranscript::parse(&flipped) {
-            Err(
-                TranscriptRefuse::Corrupt
-                | TranscriptRefuse::UnknownVersion
-                | TranscriptRefuse::FieldOrderViolated
-                | TranscriptRefuse::LengthBoundExceeded
-                | TranscriptRefuse::FieldBoundExceeded
-                | TranscriptRefuse::DuplicateMapKey
-                | TranscriptRefuse::MapOrderViolated
-                | TranscriptRefuse::RecursionLimitExceeded,
-            ) => {}
-            Ok(parsed) => {
-                assert_ne!(
-                    parsed.as_bytes(),
-                    golden.as_slice(),
-                    "structurally-valid mutation must still mismatch golden authority"
-                );
+        assert!(golden.len() >= 2, "checkpoint golden too short for offset sweep");
+        let production = encode_normative_production_transcript(SealedArtifactKind::CheckpointSeal)
+            .expect("production checkpoint seal");
+        let mut offsets = BTreeSet::new();
+        let mut saw_non_mid = false;
+        let mid = golden.len() / 2;
+        for seed in 0..golden.len().min(64) {
+            let idx = (seed.wrapping_mul(13) + 7) % golden.len();
+            offsets.insert(idx);
+            if idx != mid {
+                saw_non_mid = true;
+            }
+            let mut flipped = golden.clone();
+            let mask = [0x01u8, 0x80, 0xFF][seed % 3];
+            flipped[idx] ^= mask;
+            assert_ne!(
+                flipped.as_slice(),
+                golden.as_slice(),
+                "seed {seed}: mutated vector must diverge from golden authority at offset {idx}"
+            );
+            assert_ne!(
+                flipped.as_slice(),
+                production.as_bytes(),
+                "seed {seed}: mutated vector must fail verify against encoder (authority mismatch)"
+            );
+            match CanonicalTranscript::parse(&flipped) {
+                Err(
+                    TranscriptRefuse::Corrupt
+                    | TranscriptRefuse::UnknownVersion
+                    | TranscriptRefuse::FieldOrderViolated
+                    | TranscriptRefuse::LengthBoundExceeded
+                    | TranscriptRefuse::FieldBoundExceeded
+                    | TranscriptRefuse::DuplicateMapKey
+                    | TranscriptRefuse::MapOrderViolated
+                    | TranscriptRefuse::RecursionLimitExceeded,
+                ) => {}
+                Ok(parsed) => {
+                    assert_ne!(
+                        parsed.as_bytes(),
+                        golden.as_slice(),
+                        "seed {seed}: structurally-valid mutation must still mismatch golden authority"
+                    );
+                }
             }
         }
+        assert!(
+            offsets.len() > 1,
+            "transcript mutation must explore more than one byte offset"
+        );
+        assert!(
+            saw_non_mid,
+            "transcript mutation must not only hit the mid-vector offset"
+        );
 
         let mut magic_corrupt = golden.clone();
         magic_corrupt[0] ^= 0x01;
@@ -3126,84 +3289,103 @@ pub mod storage_campaign_lanes {
 
     /// §69/§70 — five-delivery custody.
     /// ReplicaKey idempotent across re-delivery; one custody Committed.
+    ///
+    /// Count knob: at-least-once delivery count (was fixed `5`).
     #[test]
     fn five_delivery_custody() {
-        let origin = genesis(genesis_params([0x69; 32], SnapshotFork::No));
-        let local = genesis(genesis_params([0x70; 32], SnapshotFork::No));
-        let origin_store = origin.store_id();
-        let origin_epoch = origin.fence_epoch();
-        let origin_commit = CommitOrdinal::ZERO;
-        let record_digest = [0xE1; 32];
-        let local_store = local.store_id();
-        let local_commit = CommitOrdinal::ZERO;
+        let mut delivery_counts = BTreeSet::new();
+        for seed in 0..16u64 {
+            let deliveries = 2 + (seed % 7) as usize; // 2..=8
+            delivery_counts.insert(deliveries as u8);
+            let origin = genesis(genesis_params(seed_bytes(0x69, seed), SnapshotFork::No));
+            let local = genesis(genesis_params(seed_bytes(0x70, seed), SnapshotFork::No));
+            let origin_store = origin.store_id();
+            let origin_epoch = origin.fence_epoch();
+            let origin_commit = CommitOrdinal::ZERO;
+            let record_digest = seed_bytes(0xE1, seed);
+            let local_store = local.store_id();
+            let local_commit = CommitOrdinal::ZERO;
 
-        let key = AuthorizingKey::mint_with_verifying_id([0x69; 32]);
-        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
-        let mut keys = AuthorizingKeyTable::new();
-        keys.insert(key.clone());
-        let mut scopes = ScopeManifestTable::new();
-        scopes.set(scope, ScopeManifestStatus::Verified);
-        let continuity = OriginContinuity::mint();
+            let key = AuthorizingKey::mint_with_verifying_id(seed_bytes(0x69, seed));
+            let scope = ScopeManifestDigest::from_digest(seed_bytes(0x5C, seed));
+            let mut keys = AuthorizingKeyTable::new();
+            keys.insert(key.clone());
+            let mut scopes = ScopeManifestTable::new();
+            scopes.set(scope, ScopeManifestStatus::Verified);
+            let continuity = OriginContinuity::mint();
 
-        let cert = mint_signed_admission(
-            origin_store,
-            origin_epoch,
-            origin_commit,
-            record_digest,
-            scope,
-            &key,
-        );
-        let expected_key = ReplicaKey::derive(
-            origin_store,
-            origin_epoch,
-            origin_commit,
-            &record_digest,
-        );
+            let cert = mint_signed_admission(
+                origin_store,
+                origin_epoch,
+                origin_commit,
+                record_digest,
+                scope,
+                &key,
+            );
+            let expected_key = ReplicaKey::derive(
+                origin_store,
+                origin_epoch,
+                origin_commit,
+                &record_digest,
+            );
 
-        // Five at-least-once deliveries through verify_replica → one Queryable custody.
-        let mut first: Option<ReplicaCustody> = None;
-        for delivery in 0..5 {
-            let custody = verify_replica(
-                &cert,
-                local_store,
-                local_commit,
-                &keys,
-                &scopes,
-                Some(&continuity),
-            )
-            .unwrap_or_else(|e| panic!("delivery {delivery}: verify_replica {e:?}"));
-            match &custody {
-                ReplicaCustody::Queryable {
-                    key: held,
-                    local_store: held_store,
-                    local_commit: held_commit,
-                } => {
-                    assert_eq!(*held, expected_key, "delivery {delivery}: ReplicaKey");
-                    assert_eq!(*held_store, local_store);
-                    assert_eq!(*held_commit, local_commit);
+            // At-least-once deliveries through verify_replica → one Queryable custody.
+            let mut first: Option<ReplicaCustody> = None;
+            for delivery in 0..deliveries {
+                let custody = verify_replica(
+                    &cert,
+                    local_store,
+                    local_commit,
+                    &keys,
+                    &scopes,
+                    Some(&continuity),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("seed {seed} delivery {delivery}: verify_replica {e:?}")
+                });
+                match &custody {
+                    ReplicaCustody::Queryable {
+                        key: held,
+                        local_store: held_store,
+                        local_commit: held_commit,
+                    } => {
+                        assert_eq!(
+                            *held, expected_key,
+                            "seed {seed} delivery {delivery}: ReplicaKey"
+                        );
+                        assert_eq!(*held_store, local_store);
+                        assert_eq!(*held_commit, local_commit);
+                    }
+                    ReplicaCustody::PendingAnchor { .. } => {
+                        panic!("seed {seed} delivery {delivery}: continuity must seal Queryable")
+                    }
                 }
-                ReplicaCustody::PendingAnchor { .. } => {
-                    panic!("delivery {delivery}: continuity must seal Queryable")
+                match &first {
+                    None => first = Some(custody),
+                    Some(prior) => assert_eq!(
+                        prior, &custody,
+                        "seed {seed} delivery {delivery}: ReplicaKey-idempotent single custody"
+                    ),
                 }
             }
-            match &first {
-                None => first = Some(custody),
-                Some(prior) => assert_eq!(
-                    prior, &custody,
-                    "delivery {delivery}: ReplicaKey-idempotent single custody"
-                ),
-            }
+            assert!(first.is_some());
+
+            // Distinct record digest → distinct key (no silent custody merge).
+            let other = ReplicaKey::derive(
+                origin_store,
+                origin_epoch,
+                origin_commit,
+                &seed_bytes(0xE2, seed),
+            );
+            assert_ne!(
+                expected_key, other,
+                "seed {seed}: distinct record digest must not share custody key"
+            );
         }
-        assert!(first.is_some());
-
-        // Distinct record digest → distinct key (no silent custody merge).
-        let other = ReplicaKey::derive(
-            origin_store,
-            origin_epoch,
-            origin_commit,
-            &[0xE2; 32],
+        assert!(
+            delivery_counts.len() > 1,
+            "delivery campaign must explore more than one at-least-once delivery count"
         );
-        assert_ne!(expected_key, other);
     }
 
     /// §69 — forged / reversed / gapped / accept-then-revoke manifests.
@@ -3277,93 +3459,106 @@ pub mod storage_campaign_lanes {
 
     /// §38/§39 — CompositionId crash-before-return + replay.
     /// Same client intent re-derives CompositionId; zero duplicate effects.
+    ///
+    /// Count knob: distinct composition step count under one memo (was fixed one step).
     #[test]
     fn composition_crash_replay() {
-        let sealed = genesis(genesis_params([0x38; 32], SnapshotFork::No));
-        let store_id = sealed.store_id();
-        // Caller-durable CompositionId digest (session owns the type; Store
-        // sees sealed bytes). Crash-before-return: client re-derives from the
-        // same durable intent — Engine never mints.
-        // Client-durable CompositionId digest bytes (session::CompositionId::derive
-        // is pub(crate) behind session — Store sees sealed [u8;32] only).
-        // Both halves are exactly 16 bytes (a 17-byte literal panics in copy_from_slice).
-        let composition_id: [u8; 32] = {
-            let mut dig = [0u8; 32];
-            dig[..16].copy_from_slice(b"client-op-crash1");
-            dig[16..].copy_from_slice(b"comp-digest-fixe");
-            dig
-        };
-        let domain = b"kyzo.composition";
-        let step = b"step-0";
+        let mut step_counts = BTreeSet::new();
+        for seed in 0..8u64 {
+            let step_n = 1 + (seed % 4) as usize; // 1..=4
+            step_counts.insert(step_n as u8);
+            let sealed = genesis(genesis_params(seed_bytes(0x38, seed), SnapshotFork::No));
+            let store_id = sealed.store_id();
+            // Caller-durable CompositionId digest (session owns the type; Store
+            // sees sealed bytes). Crash-before-return: client re-derives from the
+            // same durable intent — Engine never mints.
+            let composition_id = seed_bytes(0x38, seed);
+            let domain = b"kyzo.composition";
 
-        let key_pre = OperationKey::derive(domain, &composition_id, store_id, step);
-        // Process dies before returning CompositionId — retry with same intent.
-        let key_post = OperationKey::derive(domain, &composition_id, store_id, step);
-        assert_eq!(
-            key_pre, key_post,
-            "CompositionId re-derive must converge OperationKey after crash"
-        );
+            let mut memo = IdempotencyMemo::new();
+            for i in 0..step_n {
+                let step = format!("step-{seed}-{i}");
+                let key_pre =
+                    OperationKey::derive(domain, &composition_id, store_id, step.as_bytes());
+                // Process dies before returning CompositionId — retry with same intent.
+                let key_post =
+                    OperationKey::derive(domain, &composition_id, store_id, step.as_bytes());
+                assert_eq!(
+                    key_pre, key_post,
+                    "seed {seed} step {i}: CompositionId re-derive must converge OperationKey after crash"
+                );
 
-        // Degenerate single-store organ: same client_operation_id → same key.
-        let single_a =
-            OperationKey::single_store(domain, b"client-op-crash1", store_id, step);
-        let single_b =
-            OperationKey::single_store(domain, b"client-op-crash1", store_id, step);
-        assert_eq!(single_a, single_b);
+                let request_digest = IdempotencyMemo::digest_request(
+                    format!("envelope+schema+authority-{seed}-{i}").as_bytes(),
+                );
+                let first = memo
+                    .remember(
+                        key_pre,
+                        request_digest,
+                        OperationOutcome::Committed { request_digest },
+                    )
+                    .expect("first terminal commit");
+                let replay = memo
+                    .remember(
+                        key_post,
+                        request_digest,
+                        OperationOutcome::Committed { request_digest },
+                    )
+                    .expect("replay after crash");
+                assert_eq!(first, replay);
+                // Zero duplicate effects: second remember replays the same terminal.
+                assert_eq!(
+                    memo.lookup(&key_post),
+                    OperationOutcome::Committed { request_digest }
+                );
+            }
 
-        let mut memo = IdempotencyMemo::new();
-        let request_digest = IdempotencyMemo::digest_request(b"envelope+schema+authority");
-        let first = memo
-            .remember(
-                key_pre,
-                request_digest,
-                OperationOutcome::Committed {
+            // Degenerate single-store organ: same client_operation_id → same key.
+            let client_op = format!("client-op-crash-{seed}");
+            let single_a = OperationKey::single_store(
+                domain,
+                client_op.as_bytes(),
+                store_id,
+                b"step-0",
+            );
+            let single_b = OperationKey::single_store(
+                domain,
+                client_op.as_bytes(),
+                store_id,
+                b"step-0",
+            );
+            assert_eq!(single_a, single_b);
+
+            // Absent adversary: never memoizes as terminal — a later Committed for
+            // the same key must still land (no phantom terminal blocking reuse).
+            let read_key =
+                OperationKey::derive(domain, &composition_id, store_id, b"read-at");
+            let request_digest =
+                IdempotencyMemo::digest_request(format!("read-{seed}").as_bytes());
+            assert_eq!(
+                memo.remember(read_key, request_digest, OperationOutcome::Absent),
+                Ok(OperationOutcome::Absent),
+                "seed {seed}: Absent must return without storing a terminal"
+            );
+            assert_eq!(
+                memo.lookup(&read_key),
+                OperationOutcome::Absent,
+                "seed {seed}: Absent must leave the key unmemoized"
+            );
+            assert_eq!(
+                memo.remember(
+                    read_key,
                     request_digest,
-                },
-            )
-            .expect("first terminal commit");
-        let replay = memo
-            .remember(
-                key_post,
-                request_digest,
-                OperationOutcome::Committed {
-                    request_digest,
-                },
-            )
-            .expect("replay after crash");
-        assert_eq!(first, replay);
-        // Zero duplicate effects: second remember replays the same terminal.
-        assert_eq!(
-            memo.lookup(&key_post),
-            OperationOutcome::Committed { request_digest }
-        );
-        assert_eq!(
-            memo.lookup(&key_pre),
-            OperationOutcome::Committed { request_digest }
-        );
-
-        // Absent adversary: never memoizes as terminal — a later Committed for
-        // the same key must still land (no phantom terminal blocking reuse).
-        let read_key = OperationKey::derive(domain, &composition_id, store_id, b"read-at");
-        assert_eq!(
-            memo.remember(read_key, request_digest, OperationOutcome::Absent),
-            Ok(OperationOutcome::Absent),
-            "Absent must return without storing a terminal"
-        );
-        assert_eq!(
-            memo.lookup(&read_key),
-            OperationOutcome::Absent,
-            "Absent must leave the key unmemoized"
-        );
-        assert_eq!(
-            memo.remember(
-                read_key,
-                request_digest,
+                    OperationOutcome::Committed { request_digest },
+                )
+                .expect("Absent must not block terminal commit"),
                 OperationOutcome::Committed { request_digest },
-            )
-            .expect("Absent must not block terminal commit"),
-            OperationOutcome::Committed { request_digest },
-            "post-Absent Committed must seal as the first terminal"
+                "seed {seed}: post-Absent Committed must seal as the first terminal"
+            );
+        }
+        assert!(
+            step_counts.len() > 1,
+            "composition crash-replay must explore more than one step count"
         );
         // Gap: session::CompositionId::derive is pub(crate) behind session —
         // lane drives Store-visible composition_id bytes + OperationKey organ.
@@ -3433,75 +3628,94 @@ pub mod storage_campaign_lanes {
 
     /// §69 — Catalog-advance origin interpretation.
     /// AcceptedReplica origin-cut unchanged; LocalProjection rebuilds.
+    ///
+    /// Count/pattern knobs: schema-cut advance count + cut tags (were a fixed list).
     #[test]
     fn catalog_advance_origin() {
-        let sealed = genesis(genesis_params([0xCA; 32], SnapshotFork::No));
-        let origin_store = sealed.store_id();
-        let origin_epoch = sealed.fence_epoch();
-        let origin_commit = CommitOrdinal::ZERO;
-        let record_digest = [0xAD; 32];
+        let mut cut_counts = BTreeSet::new();
+        for seed in 0..12u64 {
+            let n_cuts = 2 + (seed % 6) as usize; // 2..=7
+            cut_counts.insert(n_cuts as u8);
+            let sealed = genesis(genesis_params(seed_bytes(0xCA, seed), SnapshotFork::No));
+            let origin_store = sealed.store_id();
+            let origin_epoch = sealed.fence_epoch();
+            let origin_commit = CommitOrdinal::ZERO;
+            let record_digest = seed_bytes(0xAD, seed);
 
-        let key = AuthorizingKey::mint_with_verifying_id([0xCA; 32]);
-        let scope = ScopeManifestDigest::from_digest([0xCA; 32]);
-        let cert = mint_signed_admission(
-            origin_store,
-            origin_epoch,
-            origin_commit,
-            record_digest,
-            scope,
-            &key,
-        );
-        let origin_key = ReplicaKey::derive(
-            cert.origin_store(),
-            cert.origin_epoch(),
-            cert.origin_commit(),
-            cert.record_digest(),
-        );
+            let key = AuthorizingKey::mint_with_verifying_id(seed_bytes(0xCA, seed));
+            let scope = ScopeManifestDigest::from_digest(seed_bytes(0xCA, seed));
+            let cert = mint_signed_admission(
+                origin_store,
+                origin_epoch,
+                origin_commit,
+                record_digest,
+                scope,
+                &key,
+            );
+            let origin_key = ReplicaKey::derive(
+                cert.origin_store(),
+                cert.origin_epoch(),
+                cert.origin_commit(),
+                cert.record_digest(),
+            );
 
-        // Feed advancing local_schema_cut digests into LocalProjection; origin
-        // binding (AcceptedReplica / ReplicaKey) must stay unchanged across rebuilds.
-        let mut prior_origin = None;
-        for cut_tag in [0u8, 1, 2, 7, 99] {
-            let local_schema_cut = [cut_tag; 32];
-            let projection =
-                LocalProjection::from_certificate(cert.clone(), local_schema_cut);
-            assert_eq!(
-                projection.local_schema_cut(),
-                &local_schema_cut,
-                "LocalProjection rebuilds under advancing local_schema_cut"
-            );
-            assert_eq!(
-                projection.origin(),
-                &cert,
-                "local_schema_cut={cut_tag}: AcceptedReplica origin unchanged"
-            );
-            let again = ReplicaKey::derive(
-                projection.origin().origin_store(),
-                projection.origin().origin_epoch(),
-                projection.origin().origin_commit(),
-                projection.origin().record_digest(),
-            );
-            assert_eq!(
-                origin_key, again,
-                "local_schema_cut={cut_tag}: ReplicaKey interpretation unchanged"
-            );
-            match &prior_origin {
-                None => prior_origin = Some(projection.origin().clone()),
-                Some(prev) => assert_eq!(
-                    prev,
+            // Feed advancing local_schema_cut digests into LocalProjection; origin
+            // binding (AcceptedReplica / ReplicaKey) must stay unchanged across rebuilds.
+            let mut prior_origin = None;
+            for i in 0..n_cuts {
+                let cut_tag = (seed as u8)
+                    .wrapping_mul(17)
+                    .wrapping_add(i as u8)
+                    .wrapping_mul(3);
+                let local_schema_cut = [cut_tag; 32];
+                let projection =
+                    LocalProjection::from_certificate(cert.clone(), local_schema_cut);
+                assert_eq!(
+                    projection.local_schema_cut(),
+                    &local_schema_cut,
+                    "seed {seed}: LocalProjection rebuilds under advancing local_schema_cut"
+                );
+                assert_eq!(
                     projection.origin(),
-                    "origin certificate identity stable across schema-cut advance"
-                ),
+                    &cert,
+                    "seed {seed} local_schema_cut={cut_tag}: AcceptedReplica origin unchanged"
+                );
+                let again = ReplicaKey::derive(
+                    projection.origin().origin_store(),
+                    projection.origin().origin_epoch(),
+                    projection.origin().origin_commit(),
+                    projection.origin().record_digest(),
+                );
+                assert_eq!(
+                    origin_key, again,
+                    "seed {seed} local_schema_cut={cut_tag}: ReplicaKey interpretation unchanged"
+                );
+                match &prior_origin {
+                    None => prior_origin = Some(projection.origin().clone()),
+                    Some(prev) => assert_eq!(
+                        prev,
+                        projection.origin(),
+                        "seed {seed}: origin certificate identity stable across schema-cut advance"
+                    ),
+                }
             }
-        }
 
-        // In-place reinterpretation Unconstructible: a different schema-cut
-        // reading is a different origin digest — never the same ReplicaKey.
-        let other_cut =
-            ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &[0xBE; 32]);
-        assert_ne!(
-            origin_key, other_cut,
-            "distinct origin digest must not share AcceptedReplica custody key"
+            // In-place reinterpretation Unconstructible: a different origin digest
+            // reading is a different key — never the same ReplicaKey.
+            let other_cut = ReplicaKey::derive(
+                origin_store,
+                origin_epoch,
+                origin_commit,
+                &seed_bytes(0xBE, seed),
+            );
+            assert_ne!(
+                origin_key, other_cut,
+                "seed {seed}: distinct origin digest must not share AcceptedReplica custody key"
+            );
+        }
+        assert!(
+            cut_counts.len() > 1,
+            "catalog-advance campaign must explore more than one schema-cut count"
         );
     }
 
@@ -3568,37 +3782,58 @@ pub mod storage_campaign_lanes {
     }
 
     /// §66/§84 — MergeProof determinism: sealed identity over plaintext; empty merge refuses.
+    ///
+    /// Count knob: input_content_hashes arity (was fixed two hashes).
     #[test]
     fn merge_proof_dst() {
-        let parts = MergeProofParts {
-            input_content_hashes: vec![
-                PacketContentHash::from_digest([0x01; 32]),
-                PacketContentHash::from_digest([0x02; 32]),
-            ],
-            lineage_hash: LineageHash::from_digest([0x11; 32]),
-            state_root: StateRoot::from_digest([0x22; 32]),
-            compact_counter: DomainCounter::ZERO,
-            output_content_hash: PacketContentHash::from_digest([0x33; 32]),
-        };
-        let (proof_a, packet_a) = MergeProof::mint(parts.clone()).expect("mint a");
-        let (proof_b, packet_b) = MergeProof::mint(parts.clone()).expect("mint b replay");
-        assert_eq!(
-            proof_a.sealed_identity(),
-            proof_b.sealed_identity(),
-            "identical plaintext inputs must seal identical MergeProof identity"
-        );
-        assert_eq!(packet_a.sealed_identity(), packet_b.sealed_identity());
-        assert_eq!(
-            proof_a.sealed_identity(),
-            packet_a.sealed_identity(),
-            "MergedPacket identity tracks MergeProof sealed identity"
-        );
+        let mut arities = BTreeSet::new();
+        for seed in 0..8u64 {
+            let n = 1 + (seed % 4) as usize; // 1..=4
+            arities.insert(n as u8);
+            let inputs: Vec<_> = (0..n)
+                .map(|i| {
+                    PacketContentHash::from_digest(seed_bytes(
+                        0x01u8.wrapping_add(i as u8),
+                        seed,
+                    ))
+                })
+                .collect();
+            let parts = MergeProofParts {
+                input_content_hashes: inputs,
+                lineage_hash: LineageHash::from_digest(seed_bytes(0x11, seed)),
+                state_root: StateRoot::from_digest(seed_bytes(0x22, seed)),
+                compact_counter: DomainCounter::ZERO,
+                output_content_hash: PacketContentHash::from_digest(seed_bytes(0x33, seed)),
+            };
+            let (proof_a, packet_a) = MergeProof::mint(parts.clone()).expect("mint a");
+            let (proof_b, packet_b) = MergeProof::mint(parts.clone()).expect("mint b replay");
+            assert_eq!(
+                proof_a.sealed_identity(),
+                proof_b.sealed_identity(),
+                "seed {seed}: identical plaintext inputs must seal identical MergeProof identity"
+            );
+            assert_eq!(packet_a.sealed_identity(), packet_b.sealed_identity());
+            assert_eq!(
+                proof_a.sealed_identity(),
+                packet_a.sealed_identity(),
+                "seed {seed}: MergedPacket identity tracks MergeProof sealed identity"
+            );
 
-        // Distinct plaintext → distinct sealed identity (cipher-invariant: no ciphertext in identity).
-        let mut other = parts;
-        other.output_content_hash = PacketContentHash::from_digest([0x44; 32]);
-        let (proof_c, _) = MergeProof::mint(other).expect("mint c");
-        assert_ne!(proof_a.sealed_identity(), proof_c.sealed_identity());
+            // Distinct plaintext → distinct sealed identity (cipher-invariant: no ciphertext in identity).
+            let mut other = parts;
+            other.output_content_hash =
+                PacketContentHash::from_digest(seed_bytes(0x44, seed));
+            let (proof_c, _) = MergeProof::mint(other).expect("mint c");
+            assert_ne!(
+                proof_a.sealed_identity(),
+                proof_c.sealed_identity(),
+                "seed {seed}: distinct plaintext must diverge sealed identity"
+            );
+        }
+        assert!(
+            arities.len() > 1,
+            "merge-proof campaign must explore more than one input arity"
+        );
 
         assert_eq!(
             MergeProof::mint(MergeProofParts {
@@ -3743,7 +3978,7 @@ pub mod storage_campaign_lanes {
         use crate::store::{CommitOrdinal, FenceEpoch, StoreId};
         use sha2::{Digest, Sha256};
 
-        fn content_root(pairs: &[(&[u8], &[u8])]) -> StateRoot {
+        fn content_root(pairs: &[(Vec<u8>, Vec<u8>)]) -> StateRoot {
             // Domain-separated leaf fold matching merkle leaf law — independent
             // of a peer-delivered digest. Two instances fold the same facts.
             let mut acc = Sha256::new();
@@ -3757,50 +3992,68 @@ pub mod storage_campaign_lanes {
             StateRoot::from_digest(acc.finalize().into())
         }
 
-        let store_id = StoreId::from_digest([0x58; 32]);
-        let fence = FenceEpoch::genesis(store_id);
-        let cut = CommitOrdinal::ZERO.successor().expect("ordinal");
+        let mut fact_arities = BTreeSet::new();
+        for seed in 0..12u64 {
+            let n = 2 + (seed % 5) as usize; // 2..=6
+            fact_arities.insert(n as u8);
+            let store_id = StoreId::from_digest(seed_bytes(0x58, seed));
+            let fence = FenceEpoch::genesis(store_id);
+            let cut = CommitOrdinal::ZERO.successor().expect("ordinal");
 
-        let facts: &[(&[u8], &[u8])] = &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")];
-        let left = ReplicaCutRecompute::from_local(
-            store_id,
-            fence,
-            cut,
-            content_root(facts),
-            GENESIS_ROOT,
-            ChainLinkKind::Ordinary,
-        );
-        let right = ReplicaCutRecompute::from_local(
-            store_id,
-            fence,
-            cut,
-            content_root(facts),
-            GENESIS_ROOT,
-            ChainLinkKind::Ordinary,
-        );
-        assert!(
-            replica_equivalence_at_cut(left, right),
-            "two-instance recompute-and-compare: same ordered facts match"
-        );
-        assert!(roots_equal_at_cut(left.recompute(), right.recompute()));
+            let facts: Vec<(Vec<u8>, Vec<u8>)> = (0..n)
+                .map(|i| {
+                    (
+                        format!("k{seed}-{i}").into_bytes(),
+                        format!("v{seed}-{i}").into_bytes(),
+                    )
+                })
+                .collect();
+            let left = ReplicaCutRecompute::from_local(
+                store_id,
+                fence,
+                cut,
+                content_root(&facts),
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            );
+            let right = ReplicaCutRecompute::from_local(
+                store_id,
+                fence,
+                cut,
+                content_root(&facts),
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            );
+            assert!(
+                replica_equivalence_at_cut(left, right),
+                "seed {seed}: two-instance recompute-and-compare: same ordered facts match"
+            );
+            assert!(roots_equal_at_cut(left.recompute(), right.recompute()));
 
-        let divergent: &[(&[u8], &[u8])] = &[(b"a", b"1"), (b"b", b"X"), (b"c", b"3")];
-        let right_divergent = ReplicaCutRecompute::from_local(
-            store_id,
-            fence,
-            cut,
-            content_root(divergent),
-            GENESIS_ROOT,
-            ChainLinkKind::Ordinary,
-        );
-        let delivered = left.recompute();
+            let mut divergent = facts.clone();
+            let flip_i = (seed as usize) % n;
+            divergent[flip_i].1 = format!("X{seed}").into_bytes();
+            let right_divergent = ReplicaCutRecompute::from_local(
+                store_id,
+                fence,
+                cut,
+                content_root(&divergent),
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            );
+            let delivered = left.recompute();
+            assert!(
+                roots_equal_at_cut(delivered, delivered),
+                "seed {seed}: control: trusting a received root against itself would pass"
+            );
+            assert!(
+                !replica_equivalence_at_cut(left, right_divergent),
+                "seed {seed}: recompute-and-compare: delivered root is not the comparison basis"
+            );
+        }
         assert!(
-            roots_equal_at_cut(delivered, delivered),
-            "control: trusting a received root against itself would pass"
-        );
-        assert!(
-            !replica_equivalence_at_cut(left, right_divergent),
-            "recompute-and-compare: delivered root is not the comparison basis"
+            fact_arities.len() > 1,
+            "replica fact-fold campaign must explore more than one fact arity"
         );
 
         assert_eq!(
@@ -3841,6 +4094,53 @@ pub mod storage_campaign_lanes {
         "torn_write_arbitrary_byte_offset",
     ];
 
+    /// AUDIT-CATALOG #15 — count/pattern knobs formerly hard-coded as single-shot
+    /// constants inside lane tests; now seed-swept so the campaign explores the
+    /// pattern space (delivery count, admit/seal mask, mutation offset, …).
+    const STORAGE_CAMPAIGN_SEEDED_COUNT_PATTERN_DIMENSIONS: &[&str] = &[
+        "clone_nonce_step_count",           // two_clone_at_rest
+        "admit_seal_gap_pattern",           // mixed_load_ordinals
+        "nonce_reserve_block_len",          // pipeline_power_cut
+        "pipeline_durable_seal_count",      // pipeline_power_cut
+        "idle_admit_count_no_seal",         // idle_staging_ttl
+        "staging_ttl_ordinals",             // permanence_candidate_stall
+        "checkpoint_binding_corruption_arm", // checkpoint_seal_mismatch
+        "mutation_byte_offset",             // transcript_mutation
+        "delivery_count",                   // five_delivery_custody
+        "composition_step_count",           // composition_crash_replay
+        "local_schema_cut_advance_count",   // catalog_advance_origin
+        "merge_proof_input_arity",          // merge_proof_dst
+        "replica_fact_fold_arity",          // replica_equivalence_…
+    ];
+
+    /// Lanes left single-shot: structural binary / refuse-arm laws without a
+    /// meaningful count/pattern parameter space.
+    ///
+    /// - `live_fork_siv` (`dst.rs:2217`) — SnapshotFork Yes/No AEAD arm (binary)
+    /// - `old_session_resurrection` (`dst.rs:2505`) — WriteSessionDead refuse
+    /// - `partitioned_writer_through_recovery` (`dst.rs:2557`) — lattice + RecoveryGrant
+    /// - `fork_grant_double_discovery` (`dst.rs:2628`) — idempotent ForkGrant materialize
+    /// - `recovery_grant_equivocation` (`dst.rs:2709`) — QuorumEquivocationPoison
+    /// - `durability_dominance` (`dst.rs:2837`) — finite product-order lattice cases
+    /// - `forged_manifest` (`dst.rs:3394`) — ScopeRevoked / AuthenticityFailed arms
+    /// - `operation_key_reuse` (`dst.rs:3570`) — digest-mismatch OperationKeyReuse
+    /// - `footprint_crash_holder_dst` (`dst.rs:3724`) — crash-holder lock death
+    /// - `shred_salt_leave_is_free_dst` (`dst.rs:3853`) — shred × leave-is-free refuse
+    /// - `dual_corruption_dst` (`dst.rs:3922`) — quarantine+poison dual-meet
+    const STORAGE_CAMPAIGN_FIXED_STRUCTURAL_LANES: &[&str] = &[
+        "live_fork_siv",
+        "old_session_resurrection",
+        "partitioned_writer_through_recovery",
+        "fork_grant_double_discovery",
+        "recovery_grant_equivocation",
+        "durability_dominance",
+        "forged_manifest",
+        "operation_key_reuse",
+        "footprint_crash_holder_dst",
+        "shred_salt_leave_is_free_dst",
+        "dual_corruption_dst",
+    ];
+
     /// Clean lane / block sizes that alone are insufficient (TigerBeetle shape).
     const TORN_LANE_BLOCK_BOUNDARIES: &[usize] = &[64, 512, 4096];
 
@@ -3874,6 +4174,36 @@ pub mod storage_campaign_lanes {
             STORAGE_CAMPAIGN_HOLE_DIMENSIONS_CLOSED_T4.len() == 3,
             "three hole dimensions → three generators"
         );
+
+        // AUDIT-CATALOG #15 — count/pattern seeding closes the single-shot hole.
+        assert_eq!(
+            STORAGE_CAMPAIGN_SEEDED_COUNT_PATTERN_DIMENSIONS.len(),
+            13,
+            "thirteen count/pattern knobs must stay seeded across lane tests"
+        );
+        assert!(
+            STORAGE_CAMPAIGN_SEEDED_COUNT_PATTERN_DIMENSIONS.contains(&"delivery_count"),
+            "delivery count must be a seeded dimension"
+        );
+        assert!(
+            STORAGE_CAMPAIGN_SEEDED_COUNT_PATTERN_DIMENSIONS.contains(&"admit_seal_gap_pattern"),
+            "admit/seal pattern must be a seeded dimension"
+        );
+        assert!(
+            STORAGE_CAMPAIGN_SEEDED_COUNT_PATTERN_DIMENSIONS.contains(&"mutation_byte_offset"),
+            "mutation byte offset must be a seeded dimension"
+        );
+        assert_eq!(
+            STORAGE_CAMPAIGN_FIXED_STRUCTURAL_LANES.len(),
+            11,
+            "structural refuse/binary lanes remain fixed (no vacuous count sweep)"
+        );
+        for dim in STORAGE_CAMPAIGN_SEEDED_COUNT_PATTERN_DIMENSIONS {
+            assert!(
+                !STORAGE_CAMPAIGN_FIXED_STRUCTURAL_LANES.contains(dim),
+                "seeded dimension {dim} must not be listed as fixed-structural"
+            );
+        }
     }
 
     /// Seed → graph edges + Vector embeddings + Geometry loci; one query joins
