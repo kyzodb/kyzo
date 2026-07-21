@@ -726,21 +726,35 @@ impl PriorRecoveryTable {
         Self::default()
     }
 
-    /// Record that `grant_id` already materialized recovery for
-    /// `(store_id, predecessor_epoch)`.
+    /// Record that recovery already materialized for `predecessor_epoch`.
+    ///
+    /// Requires a [`MaterializedGrant`] witness — proof recovery actually
+    /// materialized. A bare fabricated [`GrantId`] cannot occupy the one-shot
+    /// slot (closes pre-squat grief via [`MaterializeRefuse::QuorumEquivocationPoison`]).
     ///
     /// Idempotent for the same grant. A distinct grant for the same predecessor
     /// epoch refuses [`MaterializeRefuse::QuorumEquivocationPoison`].
     pub fn record(
         &mut self,
-        store_id: StoreId,
+        materialized: &MaterializedGrant,
         predecessor_epoch: FenceEpoch,
-        grant_id: GrantId,
     ) -> Result<(), MaterializeRefuse> {
+        let store_id = materialized.store_id();
+        let grant_id = materialized.grant_id();
         assert_eq!(
             predecessor_epoch.store_id(),
             store_id,
             "INVARIANT(PriorRecoveryTable): predecessor FenceEpoch must bind StoreId"
+        );
+        // Witness must be recovery materialization for this predecessor epoch
+        // (successor CryptoDomain epoch), not a ForkGrant or other grant shape.
+        let expected_successor = predecessor_epoch
+            .successor()
+            .expect("INVARIANT(PriorRecoveryTable): predecessor epoch space exhausted");
+        assert_eq!(
+            materialized.crypto_domain().fence_epoch(),
+            expected_successor,
+            "INVARIANT(PriorRecoveryTable): MaterializedGrant must be recovery for predecessor epoch"
         );
         match self.shots.get(&predecessor_epoch) {
             None => {
@@ -1436,8 +1450,8 @@ mod tests {
 
         let mut prior = PriorRecoveryTable::new();
         prior
-            .record(store_id, pred_epoch, g1.grant_id())
-            .expect("record first shot");
+            .record(&first, pred_epoch)
+            .expect("record first shot from MaterializedGrant witness");
 
         // Same grant rediscovery with prior shot → still ok (idempotent).
         let again = materialize(
@@ -1465,6 +1479,77 @@ mod tests {
                 first_grant: g1.grant_id(),
                 second_grant: g2.grant_id(),
             })
+        );
+    }
+
+    /// Nasty: fabricated GrantId cannot pre-squat the predecessor-epoch one-shot
+    /// and grief legitimate quorum-materialized recovery via QuorumEquivocationPoison.
+    ///
+    /// `PriorRecoveryTable::record` is witness-bound ([`MaterializedGrant`]); a
+    /// bare fabricated id has no path into the ledger, so the legitimate recovery
+    /// still materializes.
+    #[test]
+    fn prior_recovery_fabricated_grant_id_cannot_presquat_legitimate_recovery() {
+        let store_id = StoreId::from_digest([0xF0; 32]);
+        let pred_epoch = FenceEpoch::genesis(store_id);
+        let (keys, matrix) = matrix_2of3([[0xF1; 32], [0xF2; 32], [0xF3; 32]]);
+
+        let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
+            let successor_seed = IdentitySeed::from_digest(seed);
+            let commitment = KeyMaterialCommitment::from_digest(commit);
+            let payload = recovery_grant_payload_digest(
+                grant_id,
+                store_id,
+                pred_epoch,
+                &successor_seed,
+                &commitment,
+            );
+            let sigs = [
+                (keys[0].public_key(), keys[0].sign_quorum(&payload)),
+                (keys[1].public_key(), keys[1].sign_quorum(&payload)),
+            ];
+            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum");
+            RecoveryGrant::new(
+                grant_id,
+                store_id,
+                pred_epoch,
+                successor_seed,
+                commitment,
+                proof,
+            )
+            .expect("grant")
+        };
+
+        let legit = mint(GrantId::from_bytes([0x11; 32]), [0xA1; 32], [0xA2; 32]);
+
+        // Attack closed at the type boundary: record takes &MaterializedGrant, not
+        // a bare GrantId (e.g. GrantId::from_bytes([0xDE; 32])). Without a real
+        // materialization witness the one-shot is empty — fabricated pre-squat
+        // cannot poison the slot.
+        let mut prior = PriorRecoveryTable::new();
+        assert!(
+            prior.shot_for(store_id, pred_epoch).is_none(),
+            "fabricated grant_id must not occupy the one-shot without materialization"
+        );
+
+        let matured = materialize(
+            &Grant::Recovery(legit.clone()),
+            None,
+            Some(&matrix),
+            None,
+            Some(&prior),
+        )
+        .expect("legitimate quorum recovery must not be griefed by fabricated pre-squat");
+        assert_eq!(matured.grant_id(), legit.grant_id());
+        assert_eq!(matured.store_id(), store_id);
+
+        prior
+            .record(&matured, pred_epoch)
+            .expect("only MaterializedGrant witness may take the one-shot");
+        assert_eq!(
+            prior.shot_for(store_id, pred_epoch),
+            Some(legit.grant_id()),
+            "one-shot must bind the legitimate materialized grant, not a fabricated id"
         );
     }
 

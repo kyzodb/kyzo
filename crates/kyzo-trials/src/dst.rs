@@ -2574,7 +2574,7 @@ pub mod storage_campaign_lanes {
 
         let mut prior_recovery = PriorRecoveryTable::new();
         prior_recovery
-            .record(store_id, pred_epoch, g1_id)
+            .record(&m1, pred_epoch)
             .expect("record first recovery shot");
 
         // Second RecoveryGrant for one predecessor epoch must refuse typed
