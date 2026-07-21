@@ -103,7 +103,8 @@ impl WalRecord {
     /// without resealing. Models a power-cut mid-record write (byte-torn WAL
     /// tail). `record_hash` still covers the pre-tear body, so [`replay`] must
     /// typed-refuse [`WalRefuse::RecordHashMismatch`] — never apply the torn
-    /// payload as history. Production paths never call this.
+    /// payload as history. Test corpus only — compile-gated off production.
+    #[cfg(test)]
     pub(crate) fn adversarial_tear_commit_body(
         &mut self,
         keep_prefix: usize,
@@ -213,8 +214,8 @@ impl WalSegment {
     /// tip. Empty-segment [`append`] only accepts [`GENESIS_PREDECESSOR`];
     /// cross-segment heads use this door so in-memory corpora can build 3+
     /// segment suffixes that [`replay`] validates. Non-empty segments delegate
-    /// to [`append`]. Production durable writers never call this — they open
-    /// segments under adapter currency with the inherited tip already bound.
+    /// to [`append`]. Test corpus only — compile-gated off production.
+    #[cfg(test)]
     pub(crate) fn append_continuing_head(
         &mut self,
         record: WalRecord,
