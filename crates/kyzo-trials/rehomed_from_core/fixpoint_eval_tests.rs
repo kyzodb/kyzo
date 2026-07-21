@@ -17,17 +17,15 @@ use proptest::prelude::*;
 
 use kyzo::oracle_harness::{
     AtomOccurrence, Budget, BudgetDimension, EpochStore, EvalDefinition, EvalProgram, EvalRuleSet,
-    EvalStratum, FixedRuleEval, HeadAggrKind, HeadPos, INTERRUPT_STRIDE, LimitExceeded, MagicSymbol,
-    Premises, RegularTempStore, RowLimit, RuleBody, RuleSetShapeError, Sealed, StoreLifetimes,
-    Witness, WitnessTable, collect_materialized, stratified_evaluate,
+    EvalStratum, FixedRuleEval, HeadAggrKind, HeadPos, INTERRUPT_STRIDE, LimitExceeded,
+    MagicSymbol, Premises, RegularTempStore, RowLimit, RuleBody, RuleSetShapeError, Sealed,
+    StoreLifetimes, Witness, WitnessTable, collect_materialized, stratified_evaluate,
 };
 use kyzo_model::SourceSpan;
 use kyzo_model::program::aggregate::parse_aggr;
 use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::value::{DataValue, Tuple};
-use kyzo_oracle::{
-    FixedRule, HeadAggr, Program, Rel, Rule, Term, check_stratifiable, naive_eval,
-};
+use kyzo_oracle::{FixedRule, HeadAggr, Program, Rel, Rule, Term, check_stratifiable, naive_eval};
 
 use crate::gauntlet::{
     self, ModelBody, compile_for, fixed_arities_of, generous_budget, lit, model_arities, muggle,
@@ -92,10 +90,10 @@ fn assert_matches_oracle(model: &Program) {
     }
 }
 
-
 fn edge_facts(edges: &[(i64, i64)]) -> BTreeMap<Rel, BTreeSet<Tuple>> {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
-    facts.insert("edge".into(),
+    facts.insert(
+        "edge".into(),
         edges
             .iter()
             .map(|(a, b)| vec![v(*a), v(*b)])
@@ -214,7 +212,8 @@ fn differential_self_join_many_multiplicity() {
 #[test]
 fn differential_stratified_negation() {
     let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-    facts.insert("node".into(),
+    facts.insert(
+        "node".into(),
         (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
     );
     let mut rules = transitive_closure();
@@ -270,7 +269,8 @@ fn differential_normal_aggregation_empty_fold() {
 #[test]
 fn differential_meet_recursion_min_on_cycle() {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1), (3, 4)]);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [(1, 5), (4, 1)]
             .iter()
             .map(|(k, l)| vec![v(*k), v(*l)])
@@ -293,7 +293,8 @@ fn differential_meet_recursion_min_on_cycle() {
 fn differential_and_or_propagation_end_to_end() {
     for (name, seed_of) in [("or", [true, false, false]), ("and", [false, true, true])] {
         let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-        facts.insert("seed".into(),
+        facts.insert(
+            "seed".into(),
             (1..=3)
                 .map(|k| vec![v(k), DataValue::from(seed_of[(k - 1) as usize])])
                 .map(Tuple::from_vec)
@@ -324,7 +325,8 @@ fn differential_and_or_propagation_end_to_end() {
 #[test]
 fn differential_meet_pos0_recursion_min_on_cycle() {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1), (3, 4)]);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [(1, 5), (4, 1)]
             .iter()
             .map(|(k, l)| vec![v(*k), v(*l)])
@@ -347,7 +349,8 @@ fn differential_meet_pos0_recursion_min_on_cycle() {
 fn differential_and_or_pos0_propagation_end_to_end() {
     for (name, seed_of) in [("or", [true, false, false]), ("and", [false, true, true])] {
         let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-        facts.insert("seed".into(),
+        facts.insert(
+            "seed".into(),
             (1..=3)
                 .map(|k| vec![v(k), DataValue::from(seed_of[(k - 1) as usize])])
                 .map(Tuple::from_vec)
@@ -377,7 +380,8 @@ fn differential_and_or_pos0_propagation_end_to_end() {
 #[test]
 fn differential_meet_interleaved_split_columns() {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("obs".into(),
+    facts.insert(
+        "obs".into(),
         [(1, 5), (1, 2), (1, 8), (2, 4), (2, 7), (3, 3)]
             .iter()
             .map(|(k, val)| vec![v(*k), v(*val)])
@@ -387,9 +391,17 @@ fn differential_meet_interleaved_split_columns() {
     // g[min(V), K, max(V)] :- obs[K, V].
     let rules = vec![Rule::aggregated(
         "g",
-        vec![Term::Var("V".into()), Term::Var("K".into()), Term::Var("V".into())],
+        vec![
+            Term::Var("V".into()),
+            Term::Var("K".into()),
+            Term::Var("V".into()),
+        ],
         vec![named("min"), HeadAggr::Plain, named("max")],
-        vec![lit("obs", vec![Term::Var("K".into()), Term::Var("V".into())], false)],
+        vec![lit(
+            "obs",
+            vec![Term::Var("K".into()), Term::Var("V".into())],
+            false,
+        )],
     )];
     assert_matches_oracle(&Program {
         rules,
@@ -404,7 +416,8 @@ fn differential_meet_interleaved_split_columns() {
 #[test]
 fn differential_meet_interleaved_recursion() {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [(1, 5, 5), (2, 1, 1)]
             .iter()
             .map(|(k, lo, hi)| vec![v(*k), v(*lo), v(*hi)])
@@ -416,23 +429,43 @@ fn differential_meet_interleaved_recursion() {
     let rules = vec![
         Rule::aggregated(
             "m",
-            vec![Term::Var("Lo".into()), Term::Var("K".into()), Term::Var("Hi".into())],
+            vec![
+                Term::Var("Lo".into()),
+                Term::Var("K".into()),
+                Term::Var("Hi".into()),
+            ],
             vec![named("min"), HeadAggr::Plain, named("max")],
             vec![lit(
                 "seed",
-                vec![Term::Var("K".into()), Term::Var("Lo".into()), Term::Var("Hi".into())],
+                vec![
+                    Term::Var("K".into()),
+                    Term::Var("Lo".into()),
+                    Term::Var("Hi".into()),
+                ],
                 false,
             )],
         ),
         Rule::aggregated(
             "m",
-            vec![Term::Var("Lo".into()), Term::Var("T".into()), Term::Var("Hi".into())],
+            vec![
+                Term::Var("Lo".into()),
+                Term::Var("T".into()),
+                Term::Var("Hi".into()),
+            ],
             vec![named("min"), HeadAggr::Plain, named("max")],
             vec![
-                lit("edge", vec![Term::Var("S".into()), Term::Var("T".into())], false),
+                lit(
+                    "edge",
+                    vec![Term::Var("S".into()), Term::Var("T".into())],
+                    false,
+                ),
                 lit(
                     "m",
-                    vec![Term::Var("Lo".into()), Term::Var("S".into()), Term::Var("Hi".into())],
+                    vec![
+                        Term::Var("Lo".into()),
+                        Term::Var("S".into()),
+                        Term::Var("Hi".into()),
+                    ],
                     false,
                 ),
             ],
@@ -450,7 +483,8 @@ fn differential_meet_identity_row_feeds_recursion() {
     // No seeds: the identity `false` matches edge(false, true) and the
     // recursion derives true (laws::meet_identity_row_feeds_recursion).
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("edge".into(),
+    facts.insert(
+        "edge".into(),
         [vec![DataValue::from(false), DataValue::from(true)]]
             .into_iter()
             .map(Tuple::from_vec)
@@ -484,13 +518,15 @@ fn differential_meet_identity_row_feeds_recursion() {
 #[test]
 fn differential_negation_reads_completed_meet_relation() {
     let mut facts = edge_facts(&[(1, 2)]);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [vec![v(1), DataValue::from(true)]]
             .into_iter()
             .map(Tuple::from_vec)
             .collect(),
     );
-    facts.insert("node".into(),
+    facts.insert(
+        "node".into(),
         (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
     );
     let mut rules = meet_reach_rules("or");
@@ -562,7 +598,8 @@ fn differential_fixed_rules_on_stratum_boundaries() {
 #[test]
 fn differential_mutual_recursion() {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 4)]);
-    facts.insert("edge2".into(),
+    facts.insert(
+        "edge2".into(),
         [(2, 5), (5, 3), (4, 1)]
             .iter()
             .map(|(a, b)| vec![v(*a), v(*b)])
@@ -606,7 +643,8 @@ fn differential_mutual_recursion() {
 #[test]
 fn differential_two_delta_carrying_deps_in_one_body() {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 4)]);
-    facts.insert("edge2".into(),
+    facts.insert(
+        "edge2".into(),
         [(4, 5), (5, 6), (6, 7)]
             .iter()
             .map(|(a, b)| vec![v(*a), v(*b)])
@@ -659,7 +697,8 @@ fn differential_two_delta_carrying_deps_in_one_body() {
 #[test]
 fn differential_meet_self_join_many_multiplicity() {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [(1, 5), (2, 7), (3, 9)]
             .iter()
             .map(|(k, l)| vec![v(*k), v(*l)])
@@ -714,13 +753,15 @@ fn differential_meet_self_join_many_multiplicity() {
 #[test]
 fn differential_two_recursions_converge_independently() {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("long_edge".into(),
+    facts.insert(
+        "long_edge".into(),
         (0..8i64)
             .map(|i| vec![v(i), v(i + 1)])
             .map(Tuple::from_vec)
             .collect(),
     );
-    facts.insert("short_edge".into(),
+    facts.insert(
+        "short_edge".into(),
         [(100, 101), (101, 102)]
             .iter()
             .map(|(a, b)| vec![v(*a), v(*b)])
@@ -836,21 +877,24 @@ fn arb_case() -> BoxedStrategy<GenCase> {
 
 fn build_case(case: &GenCase) -> Program {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("edge".into(),
+    facts.insert(
+        "edge".into(),
         case.edges
             .iter()
             .map(|(a, b)| vec![v(*a), v(*b)])
             .map(Tuple::from_vec)
             .collect(),
     );
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         case.seeds
             .iter()
             .map(|(k, val)| vec![v(*k), val.clone()])
             .map(Tuple::from_vec)
             .collect(),
     );
-    facts.insert("node".into(),
+    facts.insert(
+        "node".into(),
         (0..case.n)
             .map(|i| vec![v(i)])
             .map(Tuple::from_vec)
@@ -955,7 +999,8 @@ proptest! {
 fn determinism_case() -> Program {
     let edges: Vec<(i64, i64)> = (0..12).map(|i| (i, (i * 7 + 3) % 12)).collect();
     let mut facts = edge_facts(&edges);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [(0, 9), (5, 2), (11, 4)]
             .iter()
             .map(|(k, l)| vec![v(*k), v(*l)])
@@ -1003,10 +1048,11 @@ fn determinism_results_and_witnesses_across_thread_counts() {
                 Some(&mut table),
             )
             .expect("evaluates");
-            let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter().expect("iter"))
-                .expect("mat")
-                .into_iter()
-                .collect();
+            let rows: BTreeSet<Tuple> =
+                collect_materialized(outcome.store.all_iter().expect("iter"))
+                    .expect("mat")
+                    .into_iter()
+                    .collect();
             let witnesses = table
                 .entries()
                 .iter()
@@ -1037,7 +1083,8 @@ fn determinism_results_and_witnesses_across_thread_counts() {
 fn determinism_nonsuffix_meet_across_thread_counts() {
     let edges: Vec<(i64, i64)> = (0..12).map(|i| (i, (i * 7 + 3) % 12)).collect();
     let mut facts = edge_facts(&edges);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [(0, 9), (5, 2), (11, 4)]
             .iter()
             .map(|(k, l)| vec![v(*k), v(*l)])
@@ -1061,10 +1108,11 @@ fn determinism_nonsuffix_meet_across_thread_counts() {
                 Some(&mut table),
             )
             .expect("evaluates");
-            let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter().expect("iter"))
-                .expect("mat")
-                .into_iter()
-                .collect();
+            let rows: BTreeSet<Tuple> =
+                collect_materialized(outcome.store.all_iter().expect("iter"))
+                    .expect("mat")
+                    .into_iter()
+                    .collect();
             let witnesses = table
                 .entries()
                 .iter()
@@ -1106,8 +1154,7 @@ fn determinism_budget_refusal_is_byte_identical_across_thread_counts() {
                 None,
             )
             .expect_err("must refuse");
-            let refusal: &LimitExceeded =
-                err.downcast_ref().expect("typed LimitExceeded refusal");
+            let refusal: &LimitExceeded = err.downcast_ref().expect("typed LimitExceeded refusal");
             (
                 err.to_string(),
                 refusal.dimension,
@@ -1231,7 +1278,11 @@ fn cross_product_program(
     emitted: Arc<AtomicUsize>,
 ) -> EvalProgram<CrossProduct, NoFixed> {
     let body = CrossProduct::new(a, b, emitted);
-    let rule_set = EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]), vec![body]).unwrap();
+    let rule_set = EvalRuleSet::new(
+        engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+        vec![body],
+    )
+    .unwrap();
     let mut stratum: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
     stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
     EvalProgram::from_execution_order(vec![stratum]).unwrap()
@@ -1263,7 +1314,13 @@ fn mid_epoch_in_flight_ceiling_refuses_before_barrier() {
     assert_eq!(refusal.dimension, BudgetDimension::InFlightDerivations);
     assert_eq!(refusal.ceiling, CEILING);
     // The refusal names the offending rule and labels its span.
-    assert_eq!(refusal.rule.as_ref().map(|s| s.as_plain_symbol().name.as_str()), Some("?"));
+    assert_eq!(
+        refusal
+            .rule
+            .as_ref()
+            .map(|s| s.as_plain_symbol().name.as_str()),
+        Some("?")
+    );
     assert_eq!(refusal.span, Some(SourceSpan(0, 0)));
     // Spend crossed the ceiling but only within one stride of slack.
     assert!(refusal.spent > CEILING, "spent {} > ceiling", refusal.spent);
@@ -1350,7 +1407,8 @@ fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
         s0.defs.insert(
             muggle("aaa"),
             EvalDefinition::Rules(
-                EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+                EvalRuleSet::new(
+                    engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
                     vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -1359,7 +1417,8 @@ fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
         s0.defs.insert(
             muggle("bbb"),
             EvalDefinition::Rules(
-                EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+                EvalRuleSet::new(
+                    engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
                     vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -1371,7 +1430,8 @@ fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
         s1.defs.insert(
             entry_symbol(),
             EvalDefinition::Rules(
-                EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+                EvalRuleSet::new(
+                    engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
                     vec![CrossProduct::new(0, 0, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -1424,13 +1484,15 @@ fn mid_epoch_refusal_names_canonically_first_tripping_rule() {
 /// `== 0`. This is the reviewer's `hostile_probe_meet_tightslack_low`.
 fn equal_seed_cycle_facts(n: i64, seed_val: i64) -> BTreeMap<Rel, BTreeSet<Tuple>> {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("edge".into(),
+    facts.insert(
+        "edge".into(),
         (0..n)
             .map(|i| vec![v(i), v((i + 1) % n)])
             .map(Tuple::from_vec)
             .collect(),
     );
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         (0..n)
             .map(|i| vec![v(i), v(seed_val)])
             .map(Tuple::from_vec)
@@ -1571,7 +1633,11 @@ impl RuleBody for DistinctThenDup {
 }
 
 fn single_stratum_program<B: RuleBody>(symb: MagicSymbol, body: B) -> EvalProgram<B, NoFixed> {
-    let rule_set = EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]), vec![body]).unwrap();
+    let rule_set = EvalRuleSet::new(
+        engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+        vec![body],
+    )
+    .unwrap();
     let mut stratum: EvalStratum<B, NoFixed> = EvalStratum::default();
     stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
     EvalProgram::from_execution_order(vec![stratum]).unwrap()
@@ -1612,7 +1678,8 @@ fn exact_at_ceiling_completes_not_refused() {
 #[test]
 fn stride_pinned_at_64_bounds_materialization() {
     assert_eq!(
-        INTERRUPT_STRIDE.get(), 64,
+        INTERRUPT_STRIDE.get(),
+        64,
         "the boundedness bound is O(ceiling + STRIDE); changing STRIDE is a \
          data-safety change — re-derive the bound and this pin deliberately"
     );
@@ -1652,7 +1719,8 @@ fn nonzero_baseline_mid_epoch_refusal_counts_baseline() {
     s0.defs.insert(
         muggle("s0"),
         EvalDefinition::Rules(
-            EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+            EvalRuleSet::new(
+                engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
                 vec![CrossProduct::new(100, 1, Arc::new(AtomicUsize::new(0)))],
             )
             .unwrap(),
@@ -1664,7 +1732,8 @@ fn nonzero_baseline_mid_epoch_refusal_counts_baseline() {
     s1.defs.insert(
         entry_symbol(),
         EvalDefinition::Rules(
-            EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+            EvalRuleSet::new(
+                engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
                 vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
             )
             .unwrap(),
@@ -1740,7 +1809,8 @@ fn fixed_rule_budget_counts_global_baseline() {
         s0.defs.insert(
             muggle("s0"),
             EvalDefinition::Rules(
-                EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
+                EvalRuleSet::new(
+                    engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]),
                     vec![CrossProduct::new(100, 1, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -1779,9 +1849,8 @@ fn fixed_rule_budget_counts_global_baseline() {
     // Completes: a ceiling that accommodates the true total (100 + 400)
     // must not refuse.
     let (prog, budget) = program(1000);
-    let outcome =
-        stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
-            .expect("a ceiling covering the true total must not refuse");
+    let outcome = stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
+        .expect("a ceiling covering the true total must not refuse");
     assert_eq!(outcome.store.all_iter().unwrap().count(), 400);
 }
 
@@ -1797,10 +1866,12 @@ fn fixed_rule_budget_counts_global_baseline() {
 fn harness_killer_cross_product_streams_through_the_guard() {
     let n = 10_000i64;
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("a".into(),
+    facts.insert(
+        "a".into(),
         (0..n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
     );
-    facts.insert("b".into(),
+    facts.insert(
+        "b".into(),
         (0..n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
     );
     let model = Program {
@@ -1955,9 +2026,11 @@ fn limiter_early_returns_take_minus_skip_rows() {
     )
     .expect("evaluates");
     assert!(outcome.limited, "the limiter engaged");
-    let returned: Vec<Tuple> = collect_materialized(outcome.store.early_returned_iter().expect("iter")).expect("mat");
+    let returned: Vec<Tuple> =
+        collect_materialized(outcome.store.early_returned_iter().expect("iter")).expect("mat");
     assert_eq!(returned.len(), 2, "limit rows, offset excluded");
-    let taken: Vec<Tuple> = collect_materialized(outcome.store.all_iter().expect("iter")).expect("mat");
+    let taken: Vec<Tuple> =
+        collect_materialized(outcome.store.all_iter().expect("iter")).expect("mat");
     assert_eq!(taken.len(), 3, "take = limit + offset rows produced");
     for row in taken {
         assert!(
@@ -2008,7 +2081,8 @@ fn limiter_incremental_entry_recursion_dedups_and_overshoots() {
     let oracle_closure = naive_eval(&oracle_model).unwrap().remove("?").unwrap();
 
     let facts = Arc::new(edge_facts(&edges));
-    let idb: Arc<BTreeSet<Rel>> = Arc::new(["?"].into_iter().map(Rel::from).collect::<BTreeSet<_>>());
+    let idb: Arc<BTreeSet<Rel>> =
+        Arc::new(["?"].into_iter().map(Rel::from).collect::<BTreeSet<_>>());
     let bodies: Vec<ModelBody> = rules
         .iter()
         .map(|r| {
@@ -2020,7 +2094,8 @@ fn limiter_incremental_entry_recursion_dedups_and_overshoots() {
             )
         })
         .collect();
-    let rule_set = EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]), bodies).unwrap();
+    let rule_set =
+        EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain, HeadAggr::Plain]), bodies).unwrap();
     let mut stratum: EvalStratum<ModelBody, NoFixed> = EvalStratum::default();
     stratum
         .defs
@@ -2040,7 +2115,8 @@ fn limiter_incremental_entry_recursion_dedups_and_overshoots() {
     )
     .expect("evaluates");
     assert!(outcome.limited, "the limiter engaged");
-    let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter().expect("iter")).expect("mat")
+    let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter().expect("iter"))
+        .expect("mat")
         .into_iter()
         .collect();
     for row in &rows {
@@ -2203,8 +2279,8 @@ fn non_suffix_meet_head_constructs_with_positional_grouping() {
     );
     // Meet at position 0, grouping at position 1 — the exact shape D3
     // used to reject.
-    let rule_set =
-        EvalRuleSet::new(engine_aggrs(&[named("min"), HeadAggr::Plain]), vec![body]).expect("no longer refused");
+    let rule_set = EvalRuleSet::new(engine_aggrs(&[named("min"), HeadAggr::Plain]), vec![body])
+        .expect("no longer refused");
     assert_eq!(
         rule_set.kind,
         HeadAggrKind::Meet {
@@ -2221,7 +2297,8 @@ fn non_suffix_meet_head_constructs_with_positional_grouping() {
 #[test]
 fn non_suffix_meet_head_answers_matching_oracle() {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("obs".into(),
+    facts.insert(
+        "obs".into(),
         [(1, 5), (1, 3), (2, 9)]
             .iter()
             .map(|(k, val)| vec![v(*k), v(*val)])
@@ -2255,7 +2332,8 @@ fn non_suffix_meet_head_answers_matching_oracle() {
 #[test]
 fn rev_differential_meet_pos0_nulls_in_group_and_value() {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("obs".into(),
+    facts.insert(
+        "obs".into(),
         vec![
             vec![DataValue::Null, v(5)],
             vec![DataValue::Null, v(2)],
@@ -2286,7 +2364,8 @@ fn rev_differential_meet_pos0_nulls_in_group_and_value() {
 #[test]
 fn rev_differential_meet_var_shared_by_key_and_val() {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("obs".into(),
+    facts.insert(
+        "obs".into(),
         [(1, 5), (1, 3), (2, 3), (2, 9)]
             .iter()
             .map(|(k, val)| vec![v(*k), v(*val)])
@@ -2312,7 +2391,8 @@ fn rev_differential_meet_var_shared_by_key_and_val() {
 #[test]
 fn rev_differential_meet_all_aggregated_recursive() {
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 5), (5, 1)]);
-    facts.insert("start".into(),
+    facts.insert(
+        "start".into(),
         [vec![v(3), v(3)]]
             .into_iter()
             .map(Tuple::from_vec)
@@ -2356,10 +2436,12 @@ fn rev_determinism_nonsuffix_meet_negation_below() {
         .flat_map(|i| vec![(i, (i * 5 + 7) % 24), (i, (i * 11 + 3) % 24)])
         .collect();
     let mut facts = edge_facts(&edges);
-    facts.insert("node".into(),
+    facts.insert(
+        "node".into(),
         (0..24).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
     );
-    facts.insert("special".into(),
+    facts.insert(
+        "special".into(),
         [0i64, 7, 13, 21]
             .iter()
             .map(|i| vec![v(*i)])
@@ -2415,10 +2497,11 @@ fn rev_determinism_nonsuffix_meet_negation_below() {
                 Some(&mut table),
             )
             .expect("evaluates");
-            let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter().expect("iter"))
-                .expect("mat")
-                .into_iter()
-                .collect();
+            let rows: BTreeSet<Tuple> =
+                collect_materialized(outcome.store.all_iter().expect("iter"))
+                    .expect("mat")
+                    .into_iter()
+                    .collect();
             let witnesses = table
                 .entries()
                 .iter()
@@ -2443,7 +2526,8 @@ fn rev_determinism_nonsuffix_meet_negation_below() {
 #[test]
 fn rev_nonsuffix_meet_witness_binds_derivation() {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("obs".into(),
+    facts.insert(
+        "obs".into(),
         [(1, 5), (1, 3), (2, 9)]
             .iter()
             .map(|(k, val)| vec![v(*k), v(*val)])
@@ -2505,7 +2589,8 @@ fn rev_nonsuffix_meet_witness_binds_derivation() {
 #[test]
 fn rev_nonsuffix_meet_witness_premises_are_per_group() {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("obs".into(),
+    facts.insert(
+        "obs".into(),
         [(1, 3), (1, 5), (2, 3)]
             .iter()
             .map(|(k, val)| vec![v(*k), v(*val)])
@@ -2603,7 +2688,11 @@ fn missing_store_is_a_typed_error_not_a_panic() {
     }
     let mut contained = BTreeMap::new();
     contained.insert(AtomOccurrence(0), muggle("ghost"));
-    let rule_set = EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain]), vec![GhostBody { contained }]).unwrap();
+    let rule_set = EvalRuleSet::new(
+        engine_aggrs(&[HeadAggr::Plain]),
+        vec![GhostBody { contained }],
+    )
+    .unwrap();
     let mut stratum: EvalStratum<GhostBody, NoFixed> = EvalStratum::default();
     stratum
         .defs
@@ -2628,7 +2717,9 @@ fn entry_less_program_is_refused_at_construction() {
     let body = ModelBody::new(vec![x()], vec![lit("d", vec![x()], false)], facts, idb);
     stratum.defs.insert(
         muggle("r"),
-        EvalDefinition::Rules(EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain]), vec![body]).unwrap()),
+        EvalDefinition::Rules(
+            EvalRuleSet::new(engine_aggrs(&[HeadAggr::Plain]), vec![body]).unwrap(),
+        ),
     );
     let err = EvalProgram::from_execution_order(vec![stratum]).expect_err("no entry");
     assert!(err.to_string().contains("no entry"), "got: {err}");
@@ -2646,7 +2737,10 @@ fn epoch_ceiling_of_one_refuses_any_deriving_program() {
         )],
         facts: {
             let mut f: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-            f.insert("d".into(), [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
+            f.insert(
+                "d".into(),
+                [vec![v(1)]].into_iter().map(Tuple::from_vec).collect(),
+            );
             f
         },
         ..Program::default()

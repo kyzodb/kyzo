@@ -581,8 +581,7 @@ impl Table {
                         "Loading and pinning filter block, with filter_ptr={filter_handle:?}"
                     );
 
-                    let identity =
-                        BlockIdentity::new(metadata.id, level, filter_handle.offset());
+                    let identity = BlockIdentity::new(metadata.id, level, filter_handle.offset());
                     let block = Block::from_file(
                         &file,
                         filter_handle,

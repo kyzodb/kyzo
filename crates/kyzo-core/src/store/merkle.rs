@@ -436,10 +436,8 @@ impl ForkPoint {
 #[repr(transparent)]
 pub struct DurableCutDigest([u8; 32]);
 
-const _: () =
-    assert!(std::mem::size_of::<DurableCutDigest>() == std::mem::size_of::<[u8; 32]>());
-const _: () =
-    assert!(std::mem::align_of::<DurableCutDigest>() == std::mem::align_of::<[u8; 32]>());
+const _: () = assert!(std::mem::size_of::<DurableCutDigest>() == std::mem::size_of::<[u8; 32]>());
+const _: () = assert!(std::mem::align_of::<DurableCutDigest>() == std::mem::align_of::<[u8; 32]>());
 
 impl DurableCutDigest {
     /// Borrow the digest bytes.
@@ -674,10 +672,7 @@ impl ReplicaCutRecompute {
 /// Each side independently recomputes via [`ReplicaCutRecompute::recompute`];
 /// comparison is [`roots_equal_at_cut`] over those digests. Neither argument
 /// is a received/delivered root — a trust-the-peer costume cannot enter.
-pub fn replica_equivalence_at_cut(
-    left: ReplicaCutRecompute,
-    right: ReplicaCutRecompute,
-) -> bool {
+pub fn replica_equivalence_at_cut(left: ReplicaCutRecompute, right: ReplicaCutRecompute) -> bool {
     roots_equal_at_cut(left.recompute(), right.recompute())
 }
 
@@ -766,7 +761,10 @@ pub struct StateRootHead {
 impl StateRootHead {
     /// Mint a head from a chain tip link.
     pub fn from_chain_tip(chain: &RootChain) -> Result<Self, MerkleChainRefuse> {
-        let tip = chain.links().last().ok_or(MerkleChainRefuse::CutBeforeGenesis)?;
+        let tip = chain
+            .links()
+            .last()
+            .ok_or(MerkleChainRefuse::CutBeforeGenesis)?;
         Ok(Self {
             store_id: tip.store_id(),
             fence_epoch: tip.fence_epoch(),
@@ -856,7 +854,9 @@ pub fn build_consistency_proof(
         .links()
         .iter()
         .copied()
-        .filter(|l| l.commit_ordinal().get() >= older.get() && l.commit_ordinal().get() <= newer.get())
+        .filter(|l| {
+            l.commit_ordinal().get() >= older.get() && l.commit_ordinal().get() <= newer.get()
+        })
         .collect();
     if links.is_empty() {
         return Err(MerkleChainRefuse::CutBeforeGenesis);
@@ -895,7 +895,10 @@ pub fn verify_consistency_proof(
     }
 
     // First link must match `older` exactly; segment may sit mid-lineage.
-    let first = proof.links().first().ok_or(MerkleChainRefuse::ConsistencyProofFailed)?;
+    let first = proof
+        .links()
+        .first()
+        .ok_or(MerkleChainRefuse::ConsistencyProofFailed)?;
     if first.store_id() != older.store_id()
         || first.fence_epoch() != older.fence_epoch()
         || first.commit_ordinal() != older.commit_ordinal()
@@ -915,7 +918,10 @@ pub fn verify_consistency_proof(
     if as_older != older.root() || as_newer != newer.root() {
         return Err(MerkleChainRefuse::ConsistencyProofFailed);
     }
-    let tip = rebuilt.links().last().ok_or(MerkleChainRefuse::ConsistencyProofFailed)?;
+    let tip = rebuilt
+        .links()
+        .last()
+        .ok_or(MerkleChainRefuse::ConsistencyProofFailed)?;
     if tip.commit_ordinal() != newer.commit_ordinal() || tip.root() != newer.root() {
         return Err(MerkleChainRefuse::ConsistencyProofFailed);
     }
@@ -946,8 +952,7 @@ pub fn check_sth_gossip(
     if observed_a.store_id() != observed_b.store_id() {
         return Err(MerkleChainRefuse::SthStoreMismatch);
     }
-    let (older, newer) = if observed_a.commit_ordinal().get() <= observed_b.commit_ordinal().get()
-    {
+    let (older, newer) = if observed_a.commit_ordinal().get() <= observed_b.commit_ordinal().get() {
         (observed_a, observed_b)
     } else {
         (observed_b, observed_a)
@@ -1450,9 +1455,8 @@ mod tests {
             tx.put(b"k00", b"v0").unwrap();
             tx.put(b"k01", b"v1").unwrap();
             tx.commit().unwrap();
-            let content = StateRoot::from_merkle(
-                state_root(&db.read_tx().unwrap(), big_budget()).unwrap(),
-            );
+            let content =
+                StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap());
             drop(db);
             content
         };
@@ -1466,17 +1470,15 @@ mod tests {
                 tx.put(b"k02", b"v2").unwrap();
                 tx.commit().unwrap();
             }
-            let content_v2 = StateRoot::from_merkle(
-                state_root(&db.read_tx().unwrap(), big_budget()).unwrap(),
-            );
+            let content_v2 =
+                StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap());
             {
                 let mut tx = db.write_tx().unwrap();
                 tx.put(b"k03", b"v3").unwrap();
                 tx.commit().unwrap();
             }
-            let content_v3 = StateRoot::from_merkle(
-                state_root(&db.read_tx().unwrap(), big_budget()).unwrap(),
-            );
+            let content_v3 =
+                StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap());
             assert_ne!(content_v1, content_v2);
             assert_ne!(content_v2, content_v3);
 
@@ -2239,10 +2241,8 @@ mod tests {
         );
 
         // Path/URL "same store" must refuse — location is not equivalence.
-        let path_claim = PathUrlSamenessClaim::claim(
-            "/var/lib/kyzo/replica-a",
-            "/var/lib/kyzo/replica-a",
-        );
+        let path_claim =
+            PathUrlSamenessClaim::claim("/var/lib/kyzo/replica-a", "/var/lib/kyzo/replica-a");
         assert_eq!(path_claim.left_location(), path_claim.right_location());
         assert_eq!(
             refuse_path_url_sameness(path_claim),
@@ -2264,9 +2264,7 @@ mod tests {
         use crate::store::sweep::CommitOrdinal;
         use crate::store::wal::{GENESIS_PREDECESSOR, WalPayload, WalRecord};
 
-        use super::{
-            ChainLinkKind, ChainedStateRoot, DurableCommitCut, GENESIS_ROOT, cuts_equal,
-        };
+        use super::{ChainLinkKind, ChainedStateRoot, DurableCommitCut, GENESIS_ROOT, cuts_equal};
 
         let store_id = StoreId::from_digest([0x24; 32]);
         let fence = FenceEpoch::genesis(store_id);
@@ -2295,7 +2293,10 @@ mod tests {
         let honest = DurableCommitCut::compose(&meaning, honest_wal);
         assert_eq!(honest.wal_final_hash(), honest_wal);
         assert_eq!(honest.meaning_root(), meaning.root());
-        assert!(cuts_equal(honest, DurableCommitCut::compose(&meaning, honest_wal)));
+        assert!(cuts_equal(
+            honest,
+            DurableCommitCut::compose(&meaning, honest_wal)
+        ));
 
         // Break meaning bind (different content → different chained root).
         let other_content =
@@ -2488,26 +2489,24 @@ mod tests {
             (b"k".to_vec(), b"v".to_vec()),
             (b"m".to_vec(), b"EVIL".to_vec()),
         ]));
-        evil
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o1,
-                evil_c1,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
-        evil
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o2,
-                evil_c2,
-                evil.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+        evil.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            evil_c1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))
+        .unwrap();
+        evil.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            evil_c2,
+            evil.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))
+        .unwrap();
         let head_b = StateRootHead::from_chain_tip(&evil).unwrap();
 
         assert_eq!(head_a.store_id(), head_b.store_id());

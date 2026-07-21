@@ -180,8 +180,7 @@ mod tests {
         let ci = DataValue::Regex(
             RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).unwrap(),
         );
-        let cs =
-            DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap());
+        let cs = DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap());
         assert_ne!(
             to_json(&ci),
             to_json(&cs),

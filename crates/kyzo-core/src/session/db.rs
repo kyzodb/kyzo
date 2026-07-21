@@ -100,9 +100,9 @@ use crate::session::catalog::{
 use crate::session::current_validity;
 pub(crate) use crate::session::normalize::SessionNormalizer;
 use crate::session::observe::{CallbackCollector, EventCallbackRegistry};
+use crate::store::idempotency::IdempotencyMemo;
 use crate::store::retry::RetryError;
 use crate::store::scratch::TempTx;
-use crate::store::idempotency::IdempotencyMemo;
 use crate::store::sweep::{
     LiveSweepHandle, SingleStoreKeyPreimage, current_live_sweep, install_live_sweep,
 };
@@ -336,9 +336,8 @@ impl<S: Storage> Engine<S> {
     pub fn compose(store: S, catalog: Catalog) -> Result<Self> {
         let fixed_rules = DEFAULT_FIXED_RULES.clone();
         let admission = crate::session::admit::LiveAdmissionSeats::mint_genesis();
-        let sweep = LiveSweepHandle::open_for_store(admission.store_id()).map_err(|e| {
-            miette::miette!("live SweepDoor open refused at Engine::compose: {e}")
-        })?;
+        let sweep = LiveSweepHandle::open_for_store(admission.store_id())
+            .map_err(|e| miette::miette!("live SweepDoor open refused at Engine::compose: {e}"))?;
         install_live_sweep(sweep.clone());
         Ok(Self {
             store,
@@ -480,11 +479,8 @@ impl<S: Storage> Engine<S> {
             // index configs and admitting tokenizers — before dispatch. The
             // whole payload is the sys script, so it re-parses cleanly.
             Script::Sys(_) => {
-                let op = crate::parse::sys::lift(crate::parse::parse_sys(
-                    payload,
-                    &params,
-                    cur_vld,
-                )?)?;
+                let op =
+                    crate::parse::sys::lift(crate::parse::parse_sys(payload, &params, cur_vld)?)?;
                 self.run_sys_op(op, cur_vld, &options)
             }
             Script::Imperative(_) => bail!(EngineRefuse::ImperativeNotWired),
@@ -1107,14 +1103,7 @@ impl<T: WriteTx> SessionTx<T> {
         let key = preimage.derive_key(store_id);
         let request_digest = IdempotencyMemo::digest_request(&client_op);
         let sealed = sweep.with_mut(|door, session, incarnation| {
-            door.ack_write(
-                incarnation,
-                session,
-                key,
-                request_digest,
-                preimage,
-                store,
-            )
+            door.ack_write(incarnation, session, key, request_digest, preimage, store)
         });
         temp.discard();
         match sealed {
@@ -1211,7 +1200,6 @@ impl<T: WriteTx> SessionTx<T> {
             Residency::Stored => self.store.put(key, val),
         }
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────

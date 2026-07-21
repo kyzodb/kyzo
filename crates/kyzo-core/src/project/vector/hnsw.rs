@@ -215,8 +215,8 @@ pub(crate) mod probe {
     }
 }
 
-use miette::{Diagnostic, Result, bail, miette};
 use crate::project::contract::RankScore;
+use miette::{Diagnostic, Result, bail, miette};
 use priority_queue::PriorityQueue;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Deserializer};
@@ -3232,8 +3232,7 @@ fn graph_search_layer0(
             // Routing: expand every neighbour that could still improve the beam
             // (or unconditionally while the beam is under-full) — full-graph
             // routing, so connectivity is the unfiltered graph's.
-            let promising =
-                results.len() < ef2 || results.peek().is_none_or(|w| nd < w.dist.get());
+            let promising = results.len() < ef2 || results.peek().is_none_or(|w| nd < w.dist.get());
             if promising {
                 candidates.push(neighbour.clone(), Reverse(Beam::of(nd, &neighbour)));
             }
@@ -4723,8 +4722,7 @@ mod tests {
         // ⟨ō,o⟩ ≈ 0.8 (paper concentration), D = 100, ε₀ = 1.9.
         let ip = 0.8f64;
         let dim = 100usize;
-        let expected =
-            ((1.0 - ip * ip).sqrt() / ip) * RABITQ_EPSILON_0 / ((dim - 1) as f64).sqrt();
+        let expected = ((1.0 - ip * ip).sqrt() / ip) * RABITQ_EPSILON_0 / ((dim - 1) as f64).sqrt();
         assert_eq!(
             rabitq_error_bound(ip, dim, RABITQ_EPSILON_0).to_bits(),
             expected.to_bits(),
@@ -4803,8 +4801,7 @@ mod tests {
 
             // Same Eq-(14) formula; ε linear — scale production bound, or
             // equivalently `rabitq_error_bound(..., RABITQ_EPSILON_HARD)`.
-            let bound_hard =
-                bound_eps0 * (RABITQ_EPSILON_HARD / RABITQ_EPSILON_0);
+            let bound_hard = bound_eps0 * (RABITQ_EPSILON_HARD / RABITQ_EPSILON_0);
             let ratio_hard = err / bound_hard.max(1e-18);
             if ratio_hard > max_ratio_hard {
                 max_ratio_hard = ratio_hard;
@@ -4853,10 +4850,10 @@ mod tests {
     fn rabitq_is_accelerator_exact_float_remains_authority() {
         let dim = 32usize;
         let rot = RaBitQRotation::from_seed(dim, 0x0AB1_A07B).expect("rotation");
-        let o = normalize_unit(&(0..dim).map(|i| (i as f64 + 1.0).sin()).collect::<Vec<_>>())
-            .unwrap();
-        let q = normalize_unit(&(0..dim).map(|i| (i as f64 + 2.0).cos()).collect::<Vec<_>>())
-            .unwrap();
+        let o =
+            normalize_unit(&(0..dim).map(|i| (i as f64 + 1.0).sin()).collect::<Vec<_>>()).unwrap();
+        let q =
+            normalize_unit(&(0..dim).map(|i| (i as f64 + 2.0).cos()).collect::<Vec<_>>()).unwrap();
         let code = RaBitQCode::encode(&o, &rot).expect("encode");
         let est = code.estimate_inner_product(&q, &rot).unwrap();
         let truth = exact_inner_product(&o, &q);

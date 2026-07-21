@@ -24,10 +24,7 @@ pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
     }))
 }
 
-fn cmp_op(
-    args: &[DataValue],
-    pred: impl Fn(std::cmp::Ordering) -> bool,
-) -> Result<DataValue> {
+fn cmp_op(args: &[DataValue], pred: impl Fn(std::cmp::Ordering) -> bool) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
         (DataValue::Num(a), DataValue::Num(b)) => pred(NumericOrd::of(*a).cmp(&NumericOrd::of(*b))),

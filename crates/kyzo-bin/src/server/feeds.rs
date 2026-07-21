@@ -54,11 +54,7 @@ pub(super) async fn observe_changes(
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            info!(
-                "dropping changes SSE {}: {}",
-                self.relation,
-                self.id.get()
-            );
+            info!("dropping changes SSE {}: {}", self.relation, self.id.get());
             self.db.unregister_callback(self.id);
         }
     }

@@ -277,7 +277,10 @@ fn allowlisted(allow: &Allowlist, key_a: &str, key_b: &str) -> bool {
     })
 }
 
-pub fn check(files: &[SourceFile], allow: &Allowlist) -> (Vec<Violation>, Vec<Pair>, Vec<Unit>, Vec<String>) {
+pub fn check(
+    files: &[SourceFile],
+    allow: &Allowlist,
+) -> (Vec<Violation>, Vec<Pair>, Vec<Unit>, Vec<String>) {
     let units = collect_units(files);
     let pairs = find_similar_pairs(&units, THRESHOLD);
     let mut violations = Vec::new();
@@ -304,7 +307,9 @@ pub fn check(files: &[SourceFile], allow: &Allowlist) -> (Vec<Violation>, Vec<Pa
     let mut stale = Vec::new();
     for e in &allow.copy_detector {
         for member in &e.members {
-            let still_present = units.iter().any(|u| member_key(u).ends_with(member.as_str()));
+            let still_present = units
+                .iter()
+                .any(|u| member_key(u).ends_with(member.as_str()));
             if !still_present {
                 stale.push(format!(
                     "copy_detector allowlist member `{member}` no longer matches any \
@@ -344,4 +349,3 @@ mod tests {
         assert!(stale.iter().all(|s| s.contains("no longer matches")));
     }
 }
-

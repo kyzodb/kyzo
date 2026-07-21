@@ -591,7 +591,6 @@ impl<'de> serde::Deserialize<'de> for SearchModalityOptionDecl {
     }
 }
 
-
 /// Closed opcode table — every `OP_*` decl. The round-trip pin below locks
 /// `resolve_decl` + serde against silent drift between the table and the
 /// match arms.

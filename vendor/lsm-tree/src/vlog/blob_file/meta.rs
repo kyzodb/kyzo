@@ -93,7 +93,8 @@ impl Metadata {
         let buf = DataBlock::encode_into_vec(&meta_items, 1, 0.0)?;
 
         // Meta block sits immediately after the magic prefix.
-        let identity = BlockIdentity::meta(self.id, BlockOffset(METADATA_HEADER_MAGIC.len() as u64));
+        let identity =
+            BlockIdentity::meta(self.id, BlockOffset(METADATA_HEADER_MAGIC.len() as u64));
         Block::write_into(
             writer,
             &buf,

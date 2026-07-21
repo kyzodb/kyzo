@@ -288,8 +288,7 @@ impl AuthorizingKeyTable {
 
     /// Install a trusted authorizing **public** key (signing seed discarded).
     pub(crate) fn insert(&mut self, key: AuthorizingKey) {
-        self.keys
-            .insert(*key.id.as_bytes(), key.verifying_bytes());
+        self.keys.insert(*key.id.as_bytes(), key.verifying_bytes());
     }
 
     /// Lookup trusted public verifying material for `id`, if installed.
@@ -1340,9 +1339,7 @@ pub enum CrossingRefuse {
     #[diagnostic(code(store::replica::crossing_kind_mismatch))]
     KindMismatch,
     /// Record content digest ≠ digest sealed on [`CrossingValidated`] (seat 69).
-    #[error(
-        "RecordIdentityMismatch: record digest disagreed with CrossingValidated record digest"
-    )]
+    #[error("RecordIdentityMismatch: record digest disagreed with CrossingValidated record digest")]
     #[diagnostic(code(store::replica::crossing_record_identity))]
     RecordIdentityMismatch,
     /// Envelope schema version ≠ certificate protocol_version.
@@ -1762,10 +1759,7 @@ impl SignedStateRootHead {
     ///
     /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
     /// head fields.
-    pub(crate) fn sign(
-        head: StateRootHead,
-        key: &AuthorizingKey,
-    ) -> Result<Self, ReplicaRefuse> {
+    pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
         let body = head.compact_digest();
         let signature = key.sign(&body)?;
         Ok(Self {
@@ -1819,7 +1813,8 @@ pub fn enforce_sth_gossip(
     keys: &AuthorizingKeyTable,
 ) -> Result<GossipConsistency, ReplicaRefuse> {
     let subject_store = obligation.subject().store_id();
-    if observed_a.head().store_id() != subject_store || observed_b.head().store_id() != subject_store
+    if observed_a.head().store_id() != subject_store
+        || observed_b.head().store_id() != subject_store
     {
         return Err(ReplicaRefuse::AuthenticityFailed);
     }
@@ -1857,11 +1852,9 @@ mod authorizing_key_ed25519_tests {
         // forged signature: R = identity, S = 0 (probe-confirmed permissive-accepted).
         let mut forged_sig = [0u8; 64];
         forged_sig[0] = 1;
-        let weak = AuthorizingKey::mint_verifying(
-            AuthorizingKeyId::from_digest([0xAA; 32]),
-            identity_key,
-        )
-        .expect("ed25519-dalek from_bytes accepts the small-order key (probe-confirmed)");
+        let weak =
+            AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xAA; 32]), identity_key)
+                .expect("ed25519-dalek from_bytes accepts the small-order key (probe-confirmed)");
         assert!(
             !weak.verify_signature(&[0x99u8; 32], &forged_sig),
             "FORGERY ACCEPTED: verify_signature admits a signature under a small-order \
@@ -1908,7 +1901,10 @@ mod authorizing_key_ed25519_tests {
             AuthorizingKey::mint_verifying([0xA1; 32], expect_pk).expect("public key installs");
         assert!(!receiver.can_sign());
         assert!(
-            matches!(receiver.sign(&[0u8; 32]), Err(ReplicaRefuse::AuthenticityFailed)),
+            matches!(
+                receiver.sign(&[0u8; 32]),
+                Err(ReplicaRefuse::AuthenticityFailed)
+            ),
             "public-only key cannot forge"
         );
 
@@ -1970,7 +1966,10 @@ mod authorizing_key_ed25519_tests {
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
         let looked = table.lookup(&id).expect("public key installed");
-        assert!(!looked.can_sign(), "table must not reconstitute signing seed");
+        assert!(
+            !looked.can_sign(),
+            "table must not reconstitute signing seed"
+        );
         assert_eq!(looked.verifying_bytes(), origin.verifying_bytes());
         assert!(
             looked.verify_signature(&body, &sig),
@@ -2160,7 +2159,10 @@ mod crossing_contract_tests {
             ReplicaRefuse::ScopeUnknown,
             ReplicaRefuse::RetentionDeclined
         );
-        assert_ne!(ReplicaRefuse::ScopeRevoked, ReplicaRefuse::RetentionDeclined);
+        assert_ne!(
+            ReplicaRefuse::ScopeRevoked,
+            ReplicaRefuse::RetentionDeclined
+        );
         assert_ne!(ReplicaRefuse::ScopeDenied, ReplicaRefuse::RetentionDeclined);
         assert_ne!(
             CrossingRefuse::DeclaredEvidenceMissing,
@@ -2343,7 +2345,10 @@ mod crossing_contract_tests {
             Err(CrossingRefuse::AuthorityMismatch)
         );
 
-        assert_eq!(CrossingKind::from_wire(99), Err(CrossingRefuse::KindInvalid));
+        assert_eq!(
+            CrossingKind::from_wire(99),
+            Err(CrossingRefuse::KindInvalid)
+        );
         assert_eq!(
             CrossingContext::from_wire(2, None),
             Err(CrossingRefuse::ContextInvalid)
@@ -2430,7 +2435,10 @@ mod identity {
         let a = NamespacedRecordIdentity::bind([0x01; 32], auth, tenant, content);
         let b = NamespacedRecordIdentity::bind([0x02; 32], auth, tenant, content);
 
-        assert_ne!(a, b, "distinct local ids must not collapse into one identity");
+        assert_ne!(
+            a, b,
+            "distinct local ids must not collapse into one identity"
+        );
         assert_ne!(a.digest(), b.digest());
     }
 
@@ -2524,8 +2532,7 @@ mod identity {
         );
         let expected = ReplicaKey::derive(origin, origin_epoch, origin_commit, &record_digest);
         let tenant = TenantId::from_digest([0x7E; 32]);
-        let namespaced =
-            NamespacedRecordIdentity::from_certificate(record_digest, &cert, tenant);
+        let namespaced = NamespacedRecordIdentity::from_certificate(record_digest, &cert, tenant);
         assert_eq!(
             namespaced.custody_key(origin, origin_epoch, origin_commit),
             expected
@@ -2658,7 +2665,10 @@ mod promotion {
         parts.signature = sign_admission_parts(&parts, &key).expect("sign");
         let cert = mint_admission_certificate(parts).expect("mint");
         let projection = LocalProjection::from_certificate(cert, [0x99; 32]);
-        assert_ne!(projection.local_schema_cut(), projection.origin().schema_cut());
+        assert_ne!(
+            projection.local_schema_cut(),
+            projection.origin().schema_cut()
+        );
     }
 
     #[test]
@@ -2798,10 +2808,10 @@ mod sth_gossip_obligation_tests {
             ))
             .unwrap();
 
-        let older = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1).unwrap(), &key)
-            .unwrap();
-        let newer = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2).unwrap(), &key)
-            .unwrap();
+        let older =
+            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1).unwrap(), &key).unwrap();
+        let newer =
+            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2).unwrap(), &key).unwrap();
         let proof = build_consistency_proof(&chain, o1, o2).unwrap();
         let obligation = SthGossipObligation::on_jetstream(store);
         assert_eq!(

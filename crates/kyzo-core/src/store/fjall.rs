@@ -121,9 +121,7 @@ pub(crate) enum FjallRefuse {
 
     /// Caller asked for a journal budget below fjall's hard floor (64 MiB).
     /// Refused here so the vendor `assert!` never panics on our open path.
-    #[error(
-        "max_journaling_size_bytes {requested} is below the {floor}-byte floor (64 MiB)"
-    )]
+    #[error("max_journaling_size_bytes {requested} is below the {floor}-byte floor (64 MiB)")]
     #[diagnostic(code(storage::fjall::journaling_size_below_floor))]
     JournalingSizeBelowFloor { requested: u64, floor: u64 },
 }

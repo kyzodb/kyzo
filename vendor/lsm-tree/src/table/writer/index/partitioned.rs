@@ -63,8 +63,11 @@ impl PartitionedIndexWriter {
         let mut bytes = vec![];
         IndexBlock::encode_into(&mut bytes, &self.data_block_handles)?;
 
-        let identity =
-            BlockIdentity::new(self.table_id, self.level, BlockOffset(self.relative_file_pos));
+        let identity = BlockIdentity::new(
+            self.table_id,
+            self.level,
+            BlockOffset(self.relative_file_pos),
+        );
         let header = Block::write_into(
             &mut self.block_buffer,
             &bytes,

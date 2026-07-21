@@ -217,9 +217,7 @@ static LIVE_SWEEP_CURRENT: Mutex<Option<LiveSweepHandle>> = Mutex::new(None);
 
 /// Install the Engine's live SweepDoor as the process-current door.
 pub fn install_live_sweep(handle: LiveSweepHandle) {
-    *LIVE_SWEEP_CURRENT
-        .lock()
-        .expect("live sweep registry") = Some(handle);
+    *LIVE_SWEEP_CURRENT.lock().expect("live sweep registry") = Some(handle);
 }
 
 /// Current process-local live SweepDoor, if any Engine has installed one.
@@ -284,11 +282,7 @@ impl LiveSweepHandle {
 
     /// Store identity this live door is bound to.
     pub fn store_id(&self) -> StoreId {
-        self.inner
-            .lock()
-            .expect("live sweep")
-            .session
-            .store_id()
+        self.inner.lock().expect("live sweep").session.store_id()
     }
 
     /// Allocate a unique anonymous client-operation id (non-retry path).
@@ -302,7 +296,10 @@ impl LiveSweepHandle {
     }
 
     /// Borrow the live door for one production ack / test inspection.
-    pub fn with_mut<R>(&self, f: impl FnOnce(&mut SweepDoor, &SweepSession, IncarnationId) -> R) -> R {
+    pub fn with_mut<R>(
+        &self,
+        f: impl FnOnce(&mut SweepDoor, &SweepSession, IncarnationId) -> R,
+    ) -> R {
         let mut g = self.inner.lock().expect("live sweep");
         let session = g.session;
         let incarnation = g.incarnation;
@@ -734,10 +731,7 @@ impl SweepDoor {
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
             }
             Ok(Some(entry)) => {
-                if matches!(
-                    entry.outcome(),
-                    OperationOutcome::Committed { .. }
-                ) {
+                if matches!(entry.outcome(), OperationOutcome::Committed { .. }) {
                     let _ = tx.abort();
                     return Ok(());
                 }
@@ -746,13 +740,7 @@ impl SweepDoor {
         }
 
         let intent = self
-            .admit_with_preimage(
-                incarnation_id,
-                current,
-                key,
-                request_digest,
-                Some(preimage),
-            )
+            .admit_with_preimage(incarnation_id, current, key, request_digest, Some(preimage))
             .map_err(SweepSealFailure::Sweep)?;
 
         // Post-seal retry: admit replays the prior intent; do not reseal.
@@ -896,7 +884,9 @@ impl SweepDoor {
 
     /// IntentOrdinals in the current in-flight overlap cohort (empty when closed).
     pub fn overlap_cohort_ordinals(&self) -> impl Iterator<Item = IntentOrdinal> + '_ {
-        self.overlap_cohort.iter().map(AdmittedIntent::intent_ordinal)
+        self.overlap_cohort
+            .iter()
+            .map(AdmittedIntent::intent_ordinal)
     }
 
     /// Last completed overlap-only barrier membership, if any.
@@ -950,9 +940,11 @@ impl SweepDoor {
             Err(_) => return Err(SweepRefuse::OperationKeyReuse),
             Ok(Some(_)) => {
                 // Sealed terminal under this key+digest — replay prior intent.
-                return self.op_intents.get(key.as_bytes()).cloned().ok_or(
-                    SweepRefuse::OperationKeyReuse,
-                );
+                return self
+                    .op_intents
+                    .get(key.as_bytes())
+                    .cloned()
+                    .ok_or(SweepRefuse::OperationKeyReuse);
             }
             Ok(None) => {}
         }
@@ -976,8 +968,7 @@ impl SweepDoor {
             request_digest,
             single_store_preimage: preimage,
         };
-        self.op_intents
-            .insert(*key.as_bytes(), intent.clone());
+        self.op_intents.insert(*key.as_bytes(), intent.clone());
         match self.fsync_window {
             FsyncWindow::Open => self.overlap_cohort.push(intent.clone()),
             FsyncWindow::Closed => self.queue.push(intent.clone()),
@@ -1452,7 +1443,9 @@ mod composition_tests {
     use super::*;
     use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
     use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
-    use crate::store::idempotency::{IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest};
+    use crate::store::idempotency::{
+        IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest,
+    };
     use crate::store::merkle::{DurableCommitCut, GENESIS_ROOT, cuts_equal};
     use crate::store::open::{
         EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
@@ -1482,8 +1475,8 @@ mod composition_tests {
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
-        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
-            .expect("live SweepDoor");
+        let door =
+            SweepDoor::open(store_id, fence_epoch, session, auth, cap).expect("live SweepDoor");
         (door, incarnation, session)
     }
 
@@ -1564,10 +1557,11 @@ mod composition_tests {
         );
 
         // Replay of the door's WAL segment reproduces final_hash.
-        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))
-            .expect("WAL replay");
+        let recovered =
+            replay(store_id, std::slice::from_ref(door.wal_segment())).expect("WAL replay");
         assert_eq!(
-            recovered.final_hash, door.wal_final_hash(),
+            recovered.final_hash,
+            door.wal_final_hash(),
             "replay final_hash must equal door WAL tip"
         );
         assert_eq!(
@@ -1620,8 +1614,7 @@ mod composition_tests {
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         );
-        let meaning_broken =
-            DurableCommitCut::compose(&forged_meaning, door.wal_final_hash());
+        let meaning_broken = DurableCommitCut::compose(&forged_meaning, door.wal_final_hash());
         assert!(
             !cuts_equal(cut, meaning_broken),
             "breaking meaning bind at the boundary must break composed cut equality"
@@ -1687,12 +1680,7 @@ mod composition_tests {
             door.idempotency().lookup(&key),
             OperationOutcome::Committed { .. }
         ));
-        let reseal = door.seal_durable(
-            after_seal,
-            TempTx::default(),
-            content_root(0xD2),
-            &session,
-        );
+        let reseal = door.seal_durable(after_seal, TempTx::default(), content_root(0xD2), &session);
         assert!(
             matches!(
                 reseal,
@@ -1705,8 +1693,8 @@ mod composition_tests {
             1,
             "exactly one committed effect after two admits with the same operation identity"
         );
-        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))
-            .expect("WAL replay");
+        let recovered =
+            replay(store_id, std::slice::from_ref(door.wal_segment())).expect("WAL replay");
         assert_eq!(
             recovered.commit_bodies.len(),
             1,
@@ -1774,8 +1762,8 @@ mod composition_tests {
             "same-process retry must not mint a second CommitOrdinal"
         );
 
-        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))
-            .expect("WAL replay");
+        let recovered =
+            replay(store_id, std::slice::from_ref(door.wal_segment())).expect("WAL replay");
         assert_eq!(recovered.commit_bodies.len(), 1);
         let decoded = decode_commit_body(&recovered.commit_bodies[0].1)
             .expect("commit body carries OperationKey memo");

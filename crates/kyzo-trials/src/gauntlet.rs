@@ -595,11 +595,8 @@ pub(crate) enum PayloadKind {
     Geometry,
 }
 
-const PAYLOAD_KINDS: [PayloadKind; 3] = [
-    PayloadKind::Int,
-    PayloadKind::Vector,
-    PayloadKind::Geometry,
-];
+const PAYLOAD_KINDS: [PayloadKind; 3] =
+    [PayloadKind::Int, PayloadKind::Vector, PayloadKind::Geometry];
 
 pub(crate) fn choose_payload_kind(rng: &mut Rng) -> PayloadKind {
     rng.one_of(&PAYLOAD_KINDS)
@@ -710,8 +707,9 @@ pub(crate) fn generate(seed: u64) -> Generated {
     // Payload kind from an independent stream so Cap1's structural/sizing
     // draws (and the substantial-EDB law) stay seed-stable; kind still
     // varies across seeds and is what Cap1 actually materializes.
-    let payload_kind =
-        choose_payload_kind(&mut Rng::new(seed.wrapping_mul(0xA24B_AED4_96E9_F2D9).wrapping_add(1)));
+    let payload_kind = choose_payload_kind(&mut Rng::new(
+        seed.wrapping_mul(0xA24B_AED4_96E9_F2D9).wrapping_add(1),
+    ));
     let mut rng = Rng::new(seed);
     let p = gen_params(&mut rng, payload_kind);
     let n = p.n_nodes;
@@ -1007,10 +1005,7 @@ pub(crate) fn generate_in_flight_probe(seed: u64) -> Generated {
     let rules = vec![Rule::plain(
         "prod",
         vec![x(), y()],
-        vec![
-            lit("a", vec![x()], false),
-            lit("b", vec![y()], false),
-        ],
+        vec![lit("a", vec![x()], false), lit("b", vec![y()], false)],
     )];
     Generated {
         program: Program::untimed(rules, vec![], facts),
@@ -1298,7 +1293,10 @@ fn generator_emits_vector_and_geometry_payloads_for_some_seeds() {
             break;
         }
     }
-    assert!(saw_int, "Int payload kind never appeared in edge/node facts");
+    assert!(
+        saw_int,
+        "Int payload kind never appeared in edge/node facts"
+    );
     assert!(
         saw_vector,
         "Vector payload kind never appeared in edge/node facts (chooser unused?)"
@@ -1318,7 +1316,8 @@ fn in_flight_probe_refuses_in_flight_derivations() {
     let mut saw_vector = false;
     let mut saw_geometry = false;
     for i in 0..48u64 {
-        let seed = Rng::new(0x1F_u64.wrapping_add(i).wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+        let seed =
+            Rng::new(0x1F_u64.wrapping_add(i).wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         let g = generate_in_flight_probe(seed);
         saw_vector |= fact_has_kind(&g, |v| matches!(v, DataValue::Vector(_)));
         saw_geometry |= fact_has_kind(&g, |v| matches!(v, DataValue::Geometry(_)));

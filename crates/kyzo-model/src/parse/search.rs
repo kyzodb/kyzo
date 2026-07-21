@@ -738,9 +738,7 @@ mod tests {
 
     #[test]
     fn parse_fts_query_refuses_ops_over_ceiling() {
-        let terms: Vec<&str> = std::iter::repeat("w")
-            .take(FTS_OPS_CEILING + 2)
-            .collect();
+        let terms: Vec<&str> = std::iter::repeat("w").take(FTS_OPS_CEILING + 2).collect();
         let q = terms.join(" AND ");
         let err = parse_fts_query(&q).expect_err("must refuse over ops ceiling");
         assert!(

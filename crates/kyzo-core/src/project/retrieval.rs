@@ -78,12 +78,12 @@ mod tests {
     use super::*;
     use crate::data::digest::RecordContentDigest;
     use crate::data::statement::{
-        construct, ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
-        ValidityTime,
+        ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
+        ValidityTime, construct,
     };
     use crate::session::admit::{
-        admit_record, AdmitRecordParts, IngestShape, LiveCertificateInputs, Placement, RecordCore,
-        SemanticSurface,
+        AdmitRecordParts, IngestShape, LiveCertificateInputs, Placement, RecordCore,
+        SemanticSurface, admit_record,
     };
     use crate::session::generation::{CatalogGeneration, RelationGeneration};
     use crate::store::authority::WriteAuthority;
@@ -120,14 +120,7 @@ mod tests {
         )
         .expect("registered key must open the live door");
         admit_record(AdmitRecordParts::new(
-            RecordCore::new(
-                store,
-                digest,
-                SemanticSurface::None,
-                None,
-                kind,
-                statement,
-            ),
+            RecordCore::new(store, digest, SemanticSurface::None, None, kind, statement),
             Placement::Unrestricted,
             None,
             IngestShape::Record,

@@ -12,11 +12,7 @@ use crate::exec::stdlib::errors::{
 };
 
 /// Unary f64/vector scaffold: Num→f64→`f`, Vector→elementwise `f`.
-fn unary_f64_op(
-    op: &'static str,
-    args: &[DataValue],
-    f: impl Fn(f64) -> f64,
-) -> Result<DataValue> {
+fn unary_f64_op(op: &'static str, args: &[DataValue], f: impl Fn(f64) -> f64) -> Result<DataValue> {
     match &args[0] {
         DataValue::Num(n) => Ok(DataValue::Num(Num::float(f(n.to_f64())))),
         DataValue::Vector(v) => Ok(DataValue::Vector(vec_value(
@@ -98,7 +94,10 @@ pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
     unary_num_vec(
         "abs",
         args,
-        |i| i.checked_abs().ok_or_else(|| IntegerOverflow { op: "abs" }.into()),
+        |i| {
+            i.checked_abs()
+                .ok_or_else(|| IntegerOverflow { op: "abs" }.into())
+        },
         f64::abs,
         f64::abs,
     )
@@ -604,7 +603,14 @@ fn fold_vecs(
     let Some((last, first)) = args.split_last() else {
         bail!(VecOpEmptyArgs { op });
     };
-    let first = fold_vecs(op, first, same_len_msg, scalar_msg, scalar_requires, combine)?;
+    let first = fold_vecs(
+        op,
+        first,
+        same_len_msg,
+        scalar_msg,
+        scalar_requires,
+        combine,
+    )?;
     match (first, last) {
         (DataValue::Vector(a), DataValue::Vector(b)) => {
             if a.len() != b.len() {

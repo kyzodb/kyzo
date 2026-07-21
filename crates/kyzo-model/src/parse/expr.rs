@@ -480,8 +480,7 @@ fn parse_quoted_string_inner(
             s if s.starts_with(r"\u") => {
                 let esc_span = pair.extract_span();
                 let code = parse_int(s, 16, esc_span)? as u32;
-                let ch = char::from_u32(code)
-                    .ok_or_else(|| InvalidUtf8Error(code, esc_span))?;
+                let ch = char::from_u32(code).ok_or_else(|| InvalidUtf8Error(code, esc_span))?;
                 ret.push(ch);
             }
             s if s.starts_with('\\') => {

@@ -146,12 +146,12 @@ mod restore_completeness {
         // Truncate mid-file so restore marks, applies a prefix, then fails on
         // a torn length-prefixed pair — the durable in-progress shape.
         let full_len = std::fs::metadata(&dump).unwrap().len();
-        assert!(full_len > 64, "control: dump must be large enough to truncate");
+        assert!(
+            full_len > 64,
+            "control: dump must be large enough to truncate"
+        );
         let keep = full_len / 2;
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&dump)
-            .unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&dump).unwrap();
         file.set_len(keep).unwrap();
 
         let tgt_path = dir.path().join("tgt");

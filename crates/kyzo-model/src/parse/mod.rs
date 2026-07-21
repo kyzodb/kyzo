@@ -185,18 +185,19 @@ fn pest_to_parse_error(err: pest::error::Error<Rule>) -> ParseError {
 
 /// Top-level pest match produced no root pair — grammar/consumer drift.
 #[derive(Debug, Error, Diagnostic)]
-#[error("parse-tree shape violates the grammar: top-level parse produced no root pair ({expected})")]
+#[error(
+    "parse-tree shape violates the grammar: top-level parse produced no root pair ({expected})"
+)]
 #[diagnostic(code(parser::grammar_shape))]
 #[diagnostic(help("This is a bug: grammar.pest and its consumer disagree. Please report it."))]
 struct EmptyParseRoot {
     expected: &'static str,
 }
 
-fn expect_root_pair<'a>(
-    mut pairs: Pairs<'a>,
-    expected: &'static str,
-) -> Result<Pair<'a>> {
-    pairs.next().ok_or_else(|| EmptyParseRoot { expected }.into())
+fn expect_root_pair<'a>(mut pairs: Pairs<'a>, expected: &'static str) -> Result<Pair<'a>> {
+    pairs
+        .next()
+        .ok_or_else(|| EmptyParseRoot { expected }.into())
 }
 
 /// Public language door: source text + param pool + session stamp → typed

@@ -768,10 +768,7 @@ mod durability_dominance_tests {
             CommitOrdinal::ZERO,
         );
         match PermanenceWitness::repair(&witness, hash, more_domains, None) {
-            Err(ObjectRefuse::IncomparableClasses {
-                original,
-                proposed,
-            }) => {
+            Err(ObjectRefuse::IncomparableClasses { original, proposed }) => {
                 assert_eq!(original, more_copies);
                 assert_eq!(proposed, more_domains);
             }

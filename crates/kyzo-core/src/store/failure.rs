@@ -486,10 +486,7 @@ impl OperatorHealthSurface {
     }
 
     /// Render reclaimable bytes from seat-44 compaction debt — or refuse.
-    pub fn render_reclaimable(
-        &self,
-        _cap: &OperatorCap,
-    ) -> Result<u64, OperatorHealthRefuse> {
+    pub fn render_reclaimable(&self, _cap: &OperatorCap) -> Result<u64, OperatorHealthRefuse> {
         self.compaction_debt_feed
             .map(|d| d.reclaimable_bytes)
             .ok_or(OperatorHealthRefuse::ReclaimableAuthorityUnbuilt)
@@ -504,10 +501,7 @@ impl OperatorHealthSurface {
     }
 
     /// Fence pressure (seat 36) — refuse until FootprintIndex feed is attached.
-    pub fn render_fence_pressure(
-        &self,
-        _cap: &OperatorCap,
-    ) -> Result<u64, OperatorHealthRefuse> {
+    pub fn render_fence_pressure(&self, _cap: &OperatorCap) -> Result<u64, OperatorHealthRefuse> {
         Err(OperatorHealthRefuse::FencePressureAuthorityUnbuilt)
     }
 
@@ -778,9 +772,8 @@ mod tests {
         assert!(lattice.admit_key(other_ks, b"b").is_ok());
 
         // Unknown-invariant alone → whole-store Poisoned; no user key serves.
-        let poisoned = FailureLattice::Healthy.report(CarriageReport::UnknownInvariant(
-            UnknownInvariantCarriage,
-        ));
+        let poisoned = FailureLattice::Healthy
+            .report(CarriageReport::UnknownInvariant(UnknownInvariantCarriage));
         assert!(matches!(
             poisoned,
             FailureLattice::Poisoned {
@@ -796,10 +789,9 @@ mod tests {
     #[test]
     fn mint_quarantine_feeds_carriage_not_poison() {
         let range = mint_quarantine(KeyspaceId::from_raw(7), b"x".to_vec(), b"y".to_vec());
-        let lattice =
-            FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
-                ScopedMismatchCarriage::from_range(range),
-            ));
+        let lattice = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
+            ScopedMismatchCarriage::from_range(range),
+        ));
         assert!(!matches!(lattice, FailureLattice::Poisoned { .. }));
         assert!(matches!(lattice, FailureLattice::Quarantined { ranges } if ranges.len() == 1));
     }

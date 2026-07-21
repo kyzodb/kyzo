@@ -94,11 +94,7 @@ pub fn can_mount() -> bool {
 /// to success is the trials-zone lie-shape this kills. Prefer this (or
 /// matching on [`MountRefuse`]) over `eprintln` + `return`.
 pub fn require_live_mount() {
-    assert!(
-        can_mount(),
-        "{}",
-        MountRefuse::CapabilityAbsent
-    );
+    assert!(can_mount(), "{}", MountRefuse::CapabilityAbsent);
 }
 
 /// Mount `fs` at `mountpoint`, returning a typed [`MountRefuse`] if this

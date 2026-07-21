@@ -342,17 +342,10 @@ pub(crate) fn append_corrected_fact(
         valid,
     )?;
     let (_permit, link) = seal_supersession(seats, prior, &record, cert)?;
-    let key = relation.encode_bitemporal_key_for_store(
-        corrected_row,
-        valid,
-        tx.system_stamp(),
-        span,
-    )?;
-    let val = relation.encode_bitemporal_val_for_store(
-        corrected_row,
-        ClaimPolarity::Assert,
-        span,
-    )?;
+    let key =
+        relation.encode_bitemporal_key_for_store(corrected_row, valid, tx.system_stamp(), span)?;
+    let val =
+        relation.encode_bitemporal_val_for_store(corrected_row, ClaimPolarity::Assert, span)?;
     // Append only: a new (valid, sys) key. Prior committed keys stay put.
     tx.put(&key, &val)?;
     Ok(link)
@@ -361,8 +354,8 @@ pub(crate) fn append_corrected_fact(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::admit::{admit_sugar_relation_row, LiveAdmissionSeats};
-    use crate::session::catalog::{get_relation, Catalog};
+    use crate::session::admit::{LiveAdmissionSeats, admit_sugar_relation_row};
+    use crate::session::catalog::{Catalog, get_relation};
     use crate::session::db::Engine;
     use crate::store::sim::SimStorage;
     use crate::store::{ReadTx, Storage};
@@ -388,16 +381,12 @@ mod tests {
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
         ));
-        let (record, cert) = admit_sugar_relation_row(
-            seats.store_id(),
-            &live,
-            relation,
-            row,
-            keys_len,
-            valid,
-        )
-        .expect("admit original");
-        seats.attach_verified(&record, cert.clone()).expect("attach");
+        let (record, cert) =
+            admit_sugar_relation_row(seats.store_id(), &live, relation, row, keys_len, valid)
+                .expect("admit original");
+        seats
+            .attach_verified(&record, cert.clone())
+            .expect("attach");
         (record, cert)
     }
 
@@ -405,13 +394,8 @@ mod tests {
     fn correction_supersedes_by_record_id_with_dense_commit_ordinal() {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (original, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::from_raw(100),
-        );
+        let (original, _) =
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -463,13 +447,8 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         // Admit the create's logical prior through the correction door's
         // identity plane, then append the correction on the real store.
-        let (prior_record, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::from_raw(100),
-        );
+        let (prior_record, _) =
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
         let prior = prior_record.record_id();
 
         let mut tx = db.store.write_tx().expect("correction tx");
@@ -529,13 +508,8 @@ mod tests {
 
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let seats = LiveAdmissionSeats::mint_genesis();
-        let (prior_record, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::from_raw(100),
-        );
+        let (prior_record, _) =
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
         let prior = prior_record.record_id();
 
         let mut tx = db.store.write_tx().expect("correction tx");
@@ -588,13 +562,8 @@ mod tests {
 
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (prior_record, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::from_raw(100),
-        );
+        let (prior_record, _) =
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
 
         let mut tx = db.store.write_tx().expect("tx");
         let handle = get_relation(&tx, "quote").expect("handle");
@@ -703,13 +672,8 @@ mod tests {
     fn semantic_deletion_supersedes_without_message_delete() {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (original, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::from_raw(100),
-        );
+        let (original, _) =
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -733,9 +697,8 @@ mod tests {
                 ValidityTs::from_raw(200 + i as i64),
             )
             .expect("admit semantic deletion");
-            let (_permit, link) =
-                seal_semantic_deletion(&seats, kind, prior, &successor, cert)
-                    .expect("seal semantic deletion");
+            let (_permit, link) = seal_semantic_deletion(&seats, kind, prior, &successor, cert)
+                .expect("seal semantic deletion");
             assert_eq!(link.prior(), prior);
             assert_eq!(link.successor(), successor.record_id());
             assert_ne!(link.prior(), link.successor());
@@ -777,13 +740,8 @@ mod tests {
 
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (prior_record, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::from_raw(100),
-        );
+        let (prior_record, _) =
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
         ));

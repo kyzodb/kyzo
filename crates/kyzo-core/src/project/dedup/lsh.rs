@@ -1198,8 +1198,14 @@ mod tests {
         // n=100: inter=62 → s≈0.449; inter=71 → s≈0.550.
         let (emp_lo, s_lo) = empirical_collision_rate(100, 62, b, r, 500, DEFAULT_PERM_SEED ^ 0x45);
         let (emp_hi, s_hi) = empirical_collision_rate(100, 71, b, r, 500, DEFAULT_PERM_SEED ^ 0x55);
-        assert!((s_lo - 0.45).abs() < 0.01, "low band must be ~0.45, got {s_lo}");
-        assert!((s_hi - 0.55).abs() < 0.01, "high band must be ~0.55, got {s_hi}");
+        assert!(
+            (s_lo - 0.45).abs() < 0.01,
+            "low band must be ~0.45, got {s_lo}"
+        );
+        assert!(
+            (s_hi - 0.55).abs() < 0.01,
+            "high band must be ~0.55, got {s_hi}"
+        );
         let pred_lo = predicted_collision_rate(s_lo, b, r);
         let pred_hi = predicted_collision_rate(s_hi, b, r);
         assert!(

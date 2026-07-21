@@ -99,8 +99,8 @@
 
 use std::cmp::Reverse;
 
-use miette::{Diagnostic, Result, bail, miette};
 use crate::project::contract::RankScore;
+use miette::{Diagnostic, Result, bail, miette};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
@@ -586,8 +586,7 @@ fn eval_near(
             .into_iter()
             .filter_map(|lp| {
                 let prev = coll.remove(&lp.doc_key)?;
-                near_live_positions(&prev, &lp.positions, distance)
-                    .map(|live| (lp.doc_key, live))
+                near_live_positions(&prev, &lp.positions, distance).map(|live| (lp.doc_key, live))
             })
             .collect();
     }

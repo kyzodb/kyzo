@@ -53,11 +53,6 @@ impl RecordId {
         tenant: TenantId,
         content: RecordContentDigest,
     ) -> NamespacedRecordIdentity {
-        NamespacedRecordIdentity::bind(
-            self.0,
-            origin_authority,
-            tenant,
-            *content.as_digest(),
-        )
+        NamespacedRecordIdentity::bind(self.0, origin_authority, tenant, *content.as_digest())
     }
 }

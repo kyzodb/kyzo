@@ -134,9 +134,7 @@ mod tests {
             keys: vec![col("k", ColType::Int)],
             non_keys: vec![col("v", ColType::String)],
         };
-        assert!(
-            CompatibleInputSchema::prove(&stored, &full, RelationWriteShape::Put).is_ok()
-        );
+        assert!(CompatibleInputSchema::prove(&stored, &full, RelationWriteShape::Put).is_ok());
         let keys_only = StoredRelationMetadata {
             keys: vec![col("k", ColType::Int)],
             non_keys: vec![],
@@ -146,12 +144,8 @@ mod tests {
             "Put without non-key must refuse"
         );
         assert!(
-            CompatibleInputSchema::prove(
-                &stored,
-                &keys_only,
-                RelationWriteShape::RemoveOrUpdate
-            )
-            .is_ok(),
+            CompatibleInputSchema::prove(&stored, &keys_only, RelationWriteShape::RemoveOrUpdate)
+                .is_ok(),
             "RemoveOrUpdate needs only keys"
         );
     }
@@ -166,8 +160,6 @@ mod tests {
             keys: vec![col("k", ColType::String)],
             non_keys: vec![],
         };
-        assert!(
-            CompatibleInputSchema::prove(&stored, &wrong, RelationWriteShape::Put).is_err()
-        );
+        assert!(CompatibleInputSchema::prove(&stored, &wrong, RelationWriteShape::Put).is_err());
     }
 }

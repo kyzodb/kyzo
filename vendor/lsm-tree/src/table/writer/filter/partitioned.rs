@@ -75,8 +75,11 @@ impl PartitionedFilterWriter {
             builder.build()
         };
 
-        let identity =
-            BlockIdentity::new(self.table_id, self.level, BlockOffset(self.relative_file_pos));
+        let identity = BlockIdentity::new(
+            self.table_id,
+            self.level,
+            BlockOffset(self.relative_file_pos),
+        );
         let header = Block::write_into(
             &mut self.final_filter_buffer,
             &filter_bytes,

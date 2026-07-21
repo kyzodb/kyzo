@@ -73,8 +73,8 @@ pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
 pub fn load_source_file(root: &Path, rel: &str) -> Result<SourceFile> {
     let rel = rel.trim_start_matches("./");
     let path = root.join(rel);
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let ast =
         syn::parse_file(&text).with_context(|| format!("parsing {} as Rust", path.display()))?;
     Ok(SourceFile {

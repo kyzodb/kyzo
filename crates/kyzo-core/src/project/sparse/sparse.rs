@@ -105,8 +105,8 @@
 
 use std::cmp::Reverse;
 
-use miette::{Diagnostic, Result, bail, miette};
 use crate::project::contract::RankScore;
+use miette::{Diagnostic, Result, bail, miette};
 use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;

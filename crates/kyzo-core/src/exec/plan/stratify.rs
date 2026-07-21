@@ -378,9 +378,7 @@ impl NormalFormProgram {
     ///
     /// Prerequisite: the program is already in disjunctive normal form
     /// (this type is proof of that).
-    pub fn into_stratified_program(
-        self,
-    ) -> Result<(StratifiedNormalFormProgram, StoreLifetimes)> {
+    pub fn into_stratified_program(self) -> Result<(StratifiedNormalFormProgram, StoreLifetimes)> {
         // 0. build the labelled dependency graph of the program, plus the
         // span of the atom establishing each poisoned edge (diagnostics)
         let (stratified_graph, poison_spans) = convert_normal_form_program_to_graph(&self);

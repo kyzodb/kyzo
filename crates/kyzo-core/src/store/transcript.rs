@@ -769,11 +769,9 @@ pub const RECOVERY_MATRIX_DOMAIN_LABEL: &[u8] = b"kyzo.recovery_matrix.v1";
 /// Domain label for fork-consent verifying-key digests.
 pub const FORK_CONSENT_KEY_ID_DOMAIN_LABEL: &[u8] = b"kyzo.fork_consent.key_id.v1";
 /// Domain label for ancestor-entitlement verifying-key digests.
-pub const ANCESTOR_ENTITLEMENT_KEY_ID_DOMAIN_LABEL: &[u8] =
-    b"kyzo.ancestor_entitlement.key_id.v1";
+pub const ANCESTOR_ENTITLEMENT_KEY_ID_DOMAIN_LABEL: &[u8] = b"kyzo.ancestor_entitlement.key_id.v1";
 /// Domain label for AncestorReadGrant payload digests.
-pub const ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN_LABEL: &[u8] =
-    b"kyzo.ancestor_read_grant.payload.v1";
+pub const ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN_LABEL: &[u8] = b"kyzo.ancestor_read_grant.payload.v1";
 /// Domain label for fork successor StoreId derivation.
 pub const FORK_STORE_ID_DOMAIN_LABEL: &[u8] = b"kyzo.store_id.fork.v1";
 /// Domain label for fork WriteAuthority token derivation.
@@ -832,15 +830,15 @@ pub fn encode_key_commitment(
     crypto_domain: CryptoDomain,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
-    b.append_u64(
-        FieldId::ARTIFACT_KIND,
-        SealedArtifactKind::KeyCommit.tag(),
-    )?;
+    b.append_u64(FieldId::ARTIFACT_KIND, SealedArtifactKind::KeyCommit.tag())?;
     b.append_bytes(FieldId::FORMAT_VERSION, &FormatVersion::CURRENT.as_bytes())?;
     // key-id (DEK / KEK opening key) — PRIMARY_DIGEST field encoding.
     b.append_digest32(FieldId::PRIMARY_DIGEST, key_id)?;
     // CryptoDomain.store_id
-    b.append_digest32(FieldId::SECONDARY_DIGEST, crypto_domain.store_id().as_bytes())?;
+    b.append_digest32(
+        FieldId::SECONDARY_DIGEST,
+        crypto_domain.store_id().as_bytes(),
+    )?;
     b.append_bytes(FieldId::DOMAIN_LABEL, KEY_COMMIT_DOMAIN_LABEL)?;
     b.append_u64(FieldId::FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
     Ok(b.seal())
@@ -1295,29 +1293,17 @@ pub fn encode_leave_is_free_pack(
         LEAVE_IS_FREE_PACK_DOMAIN_LABEL,
     )?;
     b.append_bytes(FieldId::PACK_KIND, pack_kind)?;
-    b.append_u64(
-        FieldId::WRAPPED_SALT_COUNT,
-        salts.len() as u64,
-    )?;
+    b.append_u64(FieldId::WRAPPED_SALT_COUNT, salts.len() as u64)?;
     for salt in salts {
         b.append_digest32(FieldId::SALT_STORE_ID, &salt.store_id)?;
         b.append_u64(FieldId::SALT_FENCE_EPOCH, salt.fence_epoch)?;
         b.append_u64(FieldId::SEGMENT_COUNTER, salt.segment)?;
         b.append_bytes(FieldId::CIPHERTEXT, &salt.ciphertext)?;
     }
-    b.append_u64(
-        FieldId::INCARNATION_COUNT,
-        incarnations.len() as u64,
-    )?;
+    b.append_u64(FieldId::INCARNATION_COUNT, incarnations.len() as u64)?;
     for incarnation in incarnations {
-        b.append_u64(
-            FieldId::PACK_INCARNATION_ORDINAL,
-            incarnation.open_ordinal,
-        )?;
-        b.append_digest32(
-            FieldId::PACK_INCARNATION_ENTROPY,
-            &incarnation.entropy,
-        )?;
+        b.append_u64(FieldId::PACK_INCARNATION_ORDINAL, incarnation.open_ordinal)?;
+        b.append_digest32(FieldId::PACK_INCARNATION_ENTROPY, &incarnation.entropy)?;
     }
     b.append_bytes(FieldId::PACK_PAYLOAD, payload)?;
     Ok(b.seal())
@@ -1393,14 +1379,8 @@ pub fn encode_admission_certificate(
     )?;
     b.append_digest32(FieldId::POST_STATE_ROOT, &parts.post_state_root)?;
     b.append_digest32(FieldId::AUTHORIZING_KEY_ID, &parts.authorizing_key_id)?;
-    b.append_digest32(
-        FieldId::SCOPE_MANIFEST_DIGEST,
-        &parts.scope_manifest_digest,
-    )?;
-    b.append_digest32(
-        FieldId::ORIGIN_EPOCH_STORE_ID,
-        &parts.origin_epoch_store_id,
-    )?;
+    b.append_digest32(FieldId::SCOPE_MANIFEST_DIGEST, &parts.scope_manifest_digest)?;
+    b.append_digest32(FieldId::ORIGIN_EPOCH_STORE_ID, &parts.origin_epoch_store_id)?;
     match parts.operation_key {
         Some(op) => b.append_digest32(FieldId::OPERATION_KEY, &op)?,
         None => b.append_optional_absent(FieldId::OPERATION_KEY)?,
@@ -1473,9 +1453,9 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
 /// CMT-1 KeyCommit normative key-id (matches [`KEY_COMMIT_GOLDEN_VEC`]).
 pub fn normative_key_commit_key_id() -> [u8; 32] {
     [
-        0x08u8, 0x01, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96,
-        0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4,
-        0xa5, 0xa6, 0xa7, 0xa8,
+        0x08u8, 0x01, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+        0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6,
+        0xa7, 0xa8,
     ]
 }
 
@@ -1524,12 +1504,11 @@ pub fn encode_normative_production_transcript(
                 body: b"body",
             },
         ),
-        SealedArtifactKind::KeyCommit => {
-            encode_key_commitment(&normative_key_commit_key_id(), normative_key_commit_domain())
-        }
-        SealedArtifactKind::StateRootHead => {
-            encode_state_root_head(store.as_bytes(), 0, 1, &dig)
-        }
+        SealedArtifactKind::KeyCommit => encode_key_commitment(
+            &normative_key_commit_key_id(),
+            normative_key_commit_domain(),
+        ),
+        SealedArtifactKind::StateRootHead => encode_state_root_head(store.as_bytes(), 0, 1, &dig),
         SealedArtifactKind::LeaveIsFreePack => encode_leave_is_free_pack(
             b"seal_and_suffix",
             FormatVersion::CURRENT,
@@ -1780,14 +1759,14 @@ mod pins {
             }
             SealedArtifactKind::KeyCommit => {
                 let key_id = [
-                    0x08u8, 0x01, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94,
-                    0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1,
-                    0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8,
+                    0x08u8, 0x01, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95,
+                    0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2,
+                    0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8,
                 ];
                 let key_store = [
-                    0x08u8, 0x02, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95,
-                    0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2,
-                    0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9,
+                    0x08u8, 0x02, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96,
+                    0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3,
+                    0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9,
                 ];
                 let mut w = IndepWire::new_v6();
                 w.u64(1, 8); // ARTIFACT_KIND = KeyCommit
@@ -1866,8 +1845,7 @@ mod pins {
     fn production_matches_independent_wire_goldens() {
         for &kind in SEALED_ARTIFACT_KINDS {
             let expected = independent_encode_normative(kind);
-            let production =
-                encode_normative_production_transcript(kind).expect("fixture encodes");
+            let production = encode_normative_production_transcript(kind).expect("fixture encodes");
             assert_eq!(
                 production.as_bytes(),
                 expected.as_slice(),
@@ -1999,48 +1977,56 @@ mod pins {
         assert!(encode_fork_store_id(&dig, &dig, &dig, &dig, &dig, &dig).is_ok());
         assert!(encode_fork_write_token(&dig, &dig, &dig, &dig).is_ok());
         assert!(encode_recovery_write_token(&dig, &dig, 0, &dig, &dig, &dig).is_ok());
-        assert!(encode_wal_record(
-            &dig,
-            WalRecordPayloadParts::Commit {
-                commit_ordinal: 1,
-                body: b"body",
-            },
-        )
-        .is_ok());
-        assert!(encode_wal_record(
-            &dig,
-            WalRecordPayloadParts::NonceFloor {
-                domain: 1,
-                ceiling: 2,
-            },
-        )
-        .is_ok());
-        assert!(encode_wal_record(
-            &dig,
-            WalRecordPayloadParts::IncarnationSealed {
-                open_ordinal: 0,
-                entropy: &dig,
-            },
-        )
-        .is_ok());
+        assert!(
+            encode_wal_record(
+                &dig,
+                WalRecordPayloadParts::Commit {
+                    commit_ordinal: 1,
+                    body: b"body",
+                },
+            )
+            .is_ok()
+        );
+        assert!(
+            encode_wal_record(
+                &dig,
+                WalRecordPayloadParts::NonceFloor {
+                    domain: 1,
+                    ceiling: 2,
+                },
+            )
+            .is_ok()
+        );
+        assert!(
+            encode_wal_record(
+                &dig,
+                WalRecordPayloadParts::IncarnationSealed {
+                    open_ordinal: 0,
+                    entropy: &dig,
+                },
+            )
+            .is_ok()
+        );
         assert!(encode_state_root_head(store.as_bytes(), 0, 1, &dig).is_ok());
         assert!(encode_chained_state_root(&dig, &dig, 1, 1).is_ok());
-        assert!(encode_leave_is_free_pack(
-            b"seal_and_suffix",
-            FormatVersion::CURRENT,
-            &[LeaveIsFreeSaltTranscriptPart {
-                store_id: *store.as_bytes(),
-                fence_epoch: 0,
-                segment: 0,
-                ciphertext: vec![1, 2, 3],
-            }],
-            &[LeaveIsFreeIncarnationTranscriptPart {
-                open_ordinal: 0,
-                entropy: dig,
-            }],
-            b"payload",
-        )
-        .is_ok());
+        assert!(
+            encode_leave_is_free_pack(
+                b"seal_and_suffix",
+                FormatVersion::CURRENT,
+                &[LeaveIsFreeSaltTranscriptPart {
+                    store_id: *store.as_bytes(),
+                    fence_epoch: 0,
+                    segment: 0,
+                    ciphertext: vec![1, 2, 3],
+                }],
+                &[LeaveIsFreeIncarnationTranscriptPart {
+                    open_ordinal: 0,
+                    entropy: dig,
+                }],
+                b"payload",
+            )
+            .is_ok()
+        );
         assert!(encode_audit_key_leaf(&dig, &dig).is_ok());
         assert!(encode_admission_certificate(&normative_admission_parts()).is_ok());
         assert!(encode_key_commitment(&dig, domain).is_ok());

@@ -5,22 +5,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use kyzo::oracle_harness::FixedRuleHandle;
 use kyzo::oracle_harness::{
     IncLiteral as Literal, IncPolarity as Polarity, IncRule as Rule, IncTerm as Term,
     IncrementalProgram, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicProgram,
     MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, MaintainedState,
     StratifiedMagicProgram, TranslationRejection, incremental_eval, translate,
 };
-use kyzo::{
-    EmptyNamedRowsBody, FixedRule, SignedFact, SimpleFixedRule,
-};
-use kyzo::oracle_harness::FixedRuleHandle;
+use kyzo::{EmptyNamedRowsBody, FixedRule, SignedFact, SimpleFixedRule};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Num, Tuple};
-use kyzo_oracle::eval as laws;
 use kyzo_oracle::SignedFact as OracleSignedFact;
+use kyzo_oracle::eval as laws;
 
 fn sym(name: &str) -> Symbol {
     Symbol::new(name, SourceSpan::default())
@@ -148,7 +146,6 @@ fn assert_matches_oracle(
     }
 }
 
-
 #[test]
 fn production_matches_oracle_generatively() {
     fn shape_a() -> Vec<laws::Rule> {
@@ -195,17 +192,17 @@ fn production_matches_oracle_generatively() {
     // deliberately (the hardest kind: no per-kind incremental
     // formula covers retracting the current min).
     fn shape_d() -> Vec<laws::Rule> {
-            vec![laws::Rule::aggregated(
-                "q",
+        vec![laws::Rule::aggregated(
+            "q",
+            vec![laws::Term::var("X"), laws::Term::var("Y")],
+            vec![laws::HeadAggr::Plain, laws::HeadAggr::named("min")],
+            vec![laws::Literal::pos(
+                "p",
                 vec![laws::Term::var("X"), laws::Term::var("Y")],
-                vec![laws::HeadAggr::Plain, laws::HeadAggr::named("min")],
-                vec![laws::Literal::pos(
-                    "p",
-                    vec![laws::Term::var("X"), laws::Term::var("Y")],
-                )],
-            )]
-        }
-        let shapes: [fn() -> Vec<laws::Rule>; 4] = [shape_a, shape_b, shape_c, shape_d];
+            )],
+        )]
+    }
+    let shapes: [fn() -> Vec<laws::Rule>; 4] = [shape_a, shape_b, shape_c, shape_d];
 
     let mut state: u64 = 0xFEED_FACE_C0FF_EE01;
     let mut next_u64 = move || {

@@ -666,7 +666,8 @@ pub enum DatasetRefuse {
     /// Manifest JSON did not parse.
     ManifestParse(String),
     /// Named graph has no manifest entry.
-    #[allow(dead_code)] // armed by verify_graph_bytes when the graph is absent from the manifest
+    #[allow(dead_code)]
+    // armed by verify_graph_bytes when the graph is absent from the manifest
     UnknownGraph(GraphName),
     /// Computed SHA-256 of bytes ≠ sealed manifest hash (tamper / wrong mirror).
     Sha256Mismatch {
@@ -709,11 +710,9 @@ impl std::error::Error for DatasetRefuse {}
 /// Load `bench/manifest.json` from the repo root.
 pub fn load_dataset_manifest(root: &Path) -> Result<DatasetManifest, DatasetRefuse> {
     let path = root.join(BENCH_MANIFEST_PATH);
-    let text = std::fs::read_to_string(&path).map_err(|e| {
-        DatasetRefuse::ManifestIo(format!("{}: {e}", path.display()))
-    })?;
-    serde_json::from_str(&text)
-        .map_err(|e| DatasetRefuse::ManifestParse(e.to_string()))
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| DatasetRefuse::ManifestIo(format!("{}: {e}", path.display())))?;
+    serde_json::from_str(&text).map_err(|e| DatasetRefuse::ManifestParse(e.to_string()))
 }
 
 /// Compute SHA-256 of `bytes` and compare to the sealed hex digest.
@@ -756,20 +755,17 @@ pub fn verify_graph_bytes(
 /// re-verified (tampered on-disk bytes refuse). Missing files download from
 /// the sealed URL, gunzip, verify, then write — never write unverified bytes.
 pub fn fetch_bench_data() -> Result<(), DatasetRefuse> {
-    let root = crate::fsutil::repo_root()
-        .map_err(|e| DatasetRefuse::ManifestIo(e.to_string()))?;
+    let root = crate::fsutil::repo_root().map_err(|e| DatasetRefuse::ManifestIo(e.to_string()))?;
     let manifest = load_dataset_manifest(&root)?;
     let data_dir = root.join("bench/data");
-    std::fs::create_dir_all(&data_dir).map_err(|e| {
-        DatasetRefuse::Write(format!("{}: {e}", data_dir.display()))
-    })?;
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| DatasetRefuse::Write(format!("{}: {e}", data_dir.display())))?;
 
     for entry in &manifest.graphs {
         let out = data_dir.join(format!("{}.txt", entry.name));
         if out.is_file() {
-            let bytes = std::fs::read(&out).map_err(|e| {
-                DatasetRefuse::ManifestIo(format!("{}: {e}", out.display()))
-            })?;
+            let bytes = std::fs::read(&out)
+                .map_err(|e| DatasetRefuse::ManifestIo(format!("{}: {e}", out.display())))?;
             verify_sha256(&entry.name, &bytes, &entry.sha256)?;
             println!("have  {} (sha256 ok)", out.display());
             continue;
@@ -1100,10 +1096,7 @@ mod bench_refuse_fixtures {
         e.observed_digests.clear();
         assert!(matches!(
             BenchAdmit::admit_with_sealed(&e, &sealed),
-            Err(BenchRefuse::AnswerAgreement {
-                observed: None,
-                ..
-            })
+            Err(BenchRefuse::AnswerAgreement { observed: None, .. })
         ));
     }
 
@@ -1113,10 +1106,7 @@ mod bench_refuse_fixtures {
         let e = lawful_evidence(&sealed);
         assert!(matches!(
             BenchAdmit::admit(&e),
-            Err(BenchRefuse::AnswerAgreement {
-                expected: None,
-                ..
-            })
+            Err(BenchRefuse::AnswerAgreement { expected: None, .. })
         ));
     }
 

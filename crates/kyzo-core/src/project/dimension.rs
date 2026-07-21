@@ -131,8 +131,7 @@ impl RecordLowering {
     /// Assemble from rows already ordered by dimension.
     pub(crate) fn from_ordered_rows(rows: Vec<LoweredRow>) -> Self {
         debug_assert!(
-            rows.windows(2)
-                .all(|w| w[0].dimension() < w[1].dimension()),
+            rows.windows(2).all(|w| w[0].dimension() < w[1].dimension()),
             "lowering rows must be strictly ordered by StatementDimension"
         );
         Self { rows }

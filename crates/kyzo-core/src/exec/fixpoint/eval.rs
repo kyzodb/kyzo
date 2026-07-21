@@ -408,11 +408,7 @@ impl Budget {
     /// `baseline` is the globally admitted total as of this epoch's barrier
     /// (a snapshot of `spent_derived`, deterministic and fixed for the whole
     /// epoch); `rule` names the rule for a refusal's attribution.
-    pub fn ticker<'a>(
-        &'a self,
-        baseline: u64,
-        rule: &'a MagicSymbol,
-    ) -> InterruptTicker<'a> {
+    pub fn ticker<'a>(&'a self, baseline: u64, rule: &'a MagicSymbol) -> InterruptTicker<'a> {
         InterruptTicker {
             budget: self,
             countdown: InterruptCountdown::fresh(),

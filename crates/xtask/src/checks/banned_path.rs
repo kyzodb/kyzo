@@ -18,7 +18,7 @@
 
 use syn::visit::{self, Visit};
 
-use crate::fsutil::{span_line, SourceFile};
+use crate::fsutil::{SourceFile, span_line};
 use crate::synutil::mod_is_test_scope;
 
 /// One banned-identifier occurrence: the line and the exact segment matched.

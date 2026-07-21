@@ -105,8 +105,8 @@
 
 use std::collections::BinaryHeap;
 
-use miette::{Diagnostic, Result, bail, miette};
 use crate::project::contract::RankScore;
+use miette::{Diagnostic, Result, bail, miette};
 use rustc_hash::FxHashSet;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;

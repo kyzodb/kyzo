@@ -27,7 +27,7 @@ use super::epoch::FenceEpoch;
 use super::nonce::{DomainCounter, MintDomain, NonceLease};
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
-use super::transcript::{encode_wal_record, WalRecordPayloadParts};
+use super::transcript::{WalRecordPayloadParts, encode_wal_record};
 
 /// Fixed-width predecessor / record hash (SHA-256).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -110,9 +110,7 @@ impl WalRecord {
         keep_prefix: usize,
     ) -> Result<(), WalRefuse> {
         match &mut self.payload {
-            WalPayload::Commit { body, .. }
-                if keep_prefix > 0 && keep_prefix < body.len() =>
-            {
+            WalPayload::Commit { body, .. } if keep_prefix > 0 && keep_prefix < body.len() => {
                 body.truncate(keep_prefix);
                 Ok(())
             }
@@ -216,10 +214,7 @@ impl WalSegment {
     /// segment suffixes that [`replay`] validates. Non-empty segments delegate
     /// to [`append`]. Test corpus only — compile-gated off production.
     #[cfg(test)]
-    pub(crate) fn append_continuing_head(
-        &mut self,
-        record: WalRecord,
-    ) -> Result<(), WalRefuse> {
+    pub(crate) fn append_continuing_head(&mut self, record: WalRecord) -> Result<(), WalRefuse> {
         if self.records.is_empty() {
             self.records.push(record);
             Ok(())
@@ -455,8 +450,7 @@ mod tests {
         let fence = FenceEpoch::genesis(store_id);
         let mut segment = WalSegment::open(store_id, fence, 0);
 
-        let first = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x01))
-            .expect("seal first");
+        let first = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x01)).expect("seal first");
         segment.append(first).expect("append first");
 
         let expected = segment.terminal_hash();
@@ -476,16 +470,16 @@ mod tests {
         let fence = FenceEpoch::genesis(store_id);
 
         let mut seg0 = WalSegment::open(store_id, fence, 0);
-        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x10))
-            .expect("seal seg0");
+        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x10)).expect("seal seg0");
         seg0.append(r0).expect("append seg0");
         let expected = seg0.terminal_hash();
 
         let mut seg1 = WalSegment::open(store_id, fence, 1);
         // Empty seg1 terminal is genesis — append permits a genesis-covering record.
-        let spliced = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x11))
-            .expect("seal spliced");
-        seg1.append(spliced).expect("per-segment append accepts genesis tip");
+        let spliced =
+            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x11)).expect("seal spliced");
+        seg1.append(spliced)
+            .expect("per-segment append accepts genesis tip");
 
         assert_eq!(
             replay(store_id, &[seg0, seg1]),
@@ -505,8 +499,7 @@ mod tests {
         let fence = FenceEpoch::genesis(store_id);
 
         let mut seg0 = WalSegment::open(store_id, fence, 0);
-        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x20))
-            .expect("seal seg0");
+        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x20)).expect("seal seg0");
         seg0.append(r0).expect("append seg0");
 
         let seg2 = WalSegment::open(store_id, fence, 2);
@@ -527,8 +520,8 @@ mod tests {
         let fence = FenceEpoch::genesis(foreign);
 
         let mut foreign_seg = WalSegment::open(foreign, fence, 0);
-        let record = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x30))
-            .expect("seal foreign");
+        let record =
+            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x30)).expect("seal foreign");
         foreign_seg.append(record).expect("append foreign");
 
         assert_eq!(
@@ -545,14 +538,16 @@ mod tests {
         let fence = FenceEpoch::genesis(store_id);
         let mut segment = WalSegment::open(store_id, fence, 0);
 
-        let mut record = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x40))
-            .expect("seal honest");
+        let mut record =
+            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x40)).expect("seal honest");
         // Adversarial durable corruption — flip a digest byte after seal.
         let mut digest = *record.record_hash().as_bytes();
         digest[0] ^= 0xFF;
         record.record_hash = WalHash::from_digest(digest);
 
-        segment.append(record).expect("append checks predecessor only");
+        segment
+            .append(record)
+            .expect("append checks predecessor only");
         assert_eq!(
             replay(store_id, &[segment]),
             Err(WalRefuse::RecordHashMismatch)

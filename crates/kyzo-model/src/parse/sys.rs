@@ -1084,9 +1084,7 @@ mod tests {
         };
         assert!((cfg.false_positive_weight - 0.25).abs() < 1e-12);
         assert!((cfg.false_negative_weight - 0.75).abs() < 1e-12);
-        assert!(
-            (cfg.false_positive_weight + cfg.false_negative_weight - 1.0).abs() < 1e-12
-        );
+        assert!((cfg.false_positive_weight + cfg.false_negative_weight - 1.0).abs() < 1e-12);
     }
 
     /// Two huge finites whose sum overflows to Inf must refuse at the sum gate.

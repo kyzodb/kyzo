@@ -17,9 +17,7 @@
 //! non-overlapping arrival after an in-flight fsync window closes must not
 //! share that barrier's [`OverlapBatch`] — and wake ≠ timer (no sleep coalesce).
 
-use super::{
-    IntentOrdinal, OverlapBatch, SweepDoor, SweepSession,
-};
+use super::{IntentOrdinal, OverlapBatch, SweepDoor, SweepSession};
 use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
 use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
@@ -35,7 +33,10 @@ fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
     (key, digest)
 }
 
-fn open_live_door(identity_seed: [u8; 32], entropy: [u8; 32]) -> (SweepDoor, crate::store::IncarnationId, SweepSession) {
+fn open_live_door(
+    identity_seed: [u8; 32],
+    entropy: [u8; 32],
+) -> (SweepDoor, crate::store::IncarnationId, SweepSession) {
     let sealed = genesis(GenesisParams {
         identity_seed,
         recovery_matrix: None,
@@ -57,8 +58,7 @@ fn open_live_door(identity_seed: [u8; 32], entropy: [u8; 32]) -> (SweepDoor, cra
     let cap = StableCommitCap::NativeFsyncProof {
         snapshot_fork: SnapshotFork::No,
     };
-    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
-        .expect("live SweepDoor");
+    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap).expect("live SweepDoor");
     (door, incarnation, session)
 }
 
@@ -383,12 +383,8 @@ mod fuse_crash_matrix {
                     Fault::ClearCache => (OpKind::Fsync, fsync_count),
                     Fault::TornSeq | Fault::TornOp => (OpKind::Write, write_count),
                 };
-                let plan = FaultPlan::new(1).with_trigger(Trigger::new(
-                    JOURNAL_PATH,
-                    op,
-                    at_count,
-                    fault,
-                ));
+                let plan =
+                    FaultPlan::new(1).with_trigger(Trigger::new(JOURNAL_PATH, op, at_count, fault));
                 let fs_b = PassthroughFs::new(backing_b.path(), plan);
                 let session_b =
                     mount(fs_b, mnt_b.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
@@ -413,9 +409,7 @@ mod fuse_crash_matrix {
                 match fault {
                     Fault::ClearCache => {
                         let reopened = reopen.unwrap_or_else(|e| {
-                            panic!(
-                                "ClearCache round {round_idx}: store must open clean, not: {e}"
-                            )
+                            panic!("ClearCache round {round_idx}: store must open clean, not: {e}")
                         });
                         // "Opens clean" is necessary, never sufficient (the issue's
                         // own pinned lsm-tree finding: data blocks are checksummed
@@ -572,9 +566,7 @@ mod fuse_crash_matrix {
             "at journaling floor, writing past one segment must yield ≥2 journal \
              basenames with fsync activity; after {rounds_driven} rounds (~{} MiB \
              payload) saw {:?}",
-            (rounds_driven as usize
-                * MULTI_JNL_KEYS_PER_ROUND as usize
-                * MULTI_JNL_VALUE_LEN)
+            (rounds_driven as usize * MULTI_JNL_KEYS_PER_ROUND as usize * MULTI_JNL_VALUE_LEN)
                 / (1024 * 1024),
             segment_fsync_frontier.keys().collect::<Vec<_>>()
         );
@@ -600,8 +592,7 @@ mod fuse_crash_matrix {
                 Fault::ClearCache,
             ));
             let fs_b = PassthroughFs::new(backing_b.path(), plan);
-            let session_b =
-                mount(fs_b, mnt_b.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+            let session_b = mount(fs_b, mnt_b.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
             wait_for_mount(mnt_b.path());
             {
                 let db = new_fjall_storage_with(mnt_b.path(), multi_jnl_storage_opts())
@@ -625,8 +616,8 @@ mod fuse_crash_matrix {
             drop(session_b);
 
             let segment = segment.clone();
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                || -> miette::Result<()> {
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> miette::Result<()> {
                     let reopened =
                         new_fjall_storage_with(backing_b.path(), multi_jnl_storage_opts())?;
                     let tx = reopened.read_tx()?;
@@ -635,8 +626,7 @@ mod fuse_crash_matrix {
                             let (k, expected) = multi_jnl_kv(round, i);
                             if let Some(v) = tx.get(&k)? {
                                 assert_eq!(
-                                    v,
-                                    expected,
+                                    v, expected,
                                     "segment {segment} @fsync {fsync_at}: key present \
                                      after crash but with WRONG bytes"
                                 );
@@ -644,8 +634,7 @@ mod fuse_crash_matrix {
                         }
                     }
                     Ok(())
-                },
-            ));
+                }));
             match outcome {
                 Ok(Ok(())) => {}
                 Ok(Err(_typed_refusal)) => {}
@@ -757,8 +746,7 @@ mod fuse_crash_matrix {
                         fault,
                     ));
                     let fs = PassthroughFs::new(backing.path(), plan);
-                    let session =
-                        mount(fs, mnt.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+                    let session = mount(fs, mnt.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
                     wait_for_mount(mnt.path());
                     {
                         // A store that itself hits an error mid-open/mid-write
@@ -899,12 +887,10 @@ mod fuse_crash_matrix {
 // ---------------------------------------------------------------------------
 mod crypto_shred_deep_reachability {
     use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
-    use crate::store::backup::{
-        LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse,
-    };
+    use crate::store::backup::{LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse};
     use crate::store::crypto::{
-        CryptoRefuse, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, derive_dek,
-        shred, unwrap_shred_salt, wrap_shred_salt,
+        CryptoRefuse, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, derive_dek, shred,
+        unwrap_shred_salt, wrap_shred_salt,
     };
     use crate::store::epoch::{CryptoDomain, FenceEpoch};
     use crate::store::open::StoreId;
@@ -1181,12 +1167,8 @@ mod crypto_shred_deep_reachability {
 
         // Hostile: plant shredded plaintext salt / KEK / DEK into leave-is-free
         // pack payload → production pack scrub refuses.
-        let dirty_salt_pack = sample_leave_is_free_pack(
-            store,
-            pack_wrap.clone(),
-            [0x2B; 32],
-            salt_bytes.to_vec(),
-        );
+        let dirty_salt_pack =
+            sample_leave_is_free_pack(store, pack_wrap.clone(), [0x2B; 32], salt_bytes.to_vec());
         assert_eq!(
             dirty_salt_pack.refuse_residual_secrets(&needles),
             Err(PackRefuse::ResidualSecretMaterial),

@@ -318,13 +318,7 @@ mod tests {
         let (auth, flag) = CancelAuthority::arm();
         let _ = auth.cancel();
         assert!(
-            run_fixed_rule(
-                &ShortestPathAStar,
-                sink_hub_inputs(),
-                sink_hub_opts(),
-                flag
-            )
-            .is_err(),
+            run_fixed_rule(&ShortestPathAStar, sink_hub_inputs(), sink_hub_opts(), flag).is_err(),
             "sink hub pop must poll cancel (Ok under mid-scan-only poll)"
         );
     }

@@ -6,9 +6,7 @@ use crate::{
     compaction::worker::run as run_compaction,
     flush::worker::run as run_flush,
     journal::manager::EvictionWatermark,
-    poison_dart::{
-        is_scoped_checksum_mismatch, PoisonDart, ScopedFault, ScopedFaultReason,
-    },
+    poison_dart::{is_scoped_checksum_mismatch, PoisonDart, ScopedFault, ScopedFaultReason},
     stats::Stats,
     supervisor::Supervisor,
     Keyspace,

@@ -197,9 +197,8 @@ mod tests {
         // "über" is 5 bytes (ü = C3 BC); "fahrt" is 5 ASCII bytes.
         let text = "überfahrt";
         assert_eq!("über".len(), 5);
-        let tokenizer = TextAnalyzer::from(SimpleTokenizer).filter(
-            SplitCompoundWords::from_dictionary(["über", "fahrt"]).unwrap(),
-        );
+        let tokenizer = TextAnalyzer::from(SimpleTokenizer)
+            .filter(SplitCompoundWords::from_dictionary(["über", "fahrt"]).unwrap());
         let mut stream = tokenizer.token_stream(text);
         let first = stream.next().expect("über");
         assert_eq!(first.text, "über");

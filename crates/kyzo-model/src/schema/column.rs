@@ -490,8 +490,7 @@ mod tests {
         let ci = DataValue::Regex(
             RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).unwrap(),
         );
-        let cs =
-            DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap());
+        let cs = DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap());
         let j_ci = col.coerce(ci, cur).unwrap();
         let j_cs = col.coerce(cs, cur).unwrap();
         assert_ne!(j_ci, j_cs, "Json coerce must not drop regex flags");
@@ -500,9 +499,11 @@ mod tests {
     #[test]
     fn required_null_refuses_optional_null_admits() {
         let cur = ValidityTs::from_raw(0);
-        assert!(NullableColType::required(ColType::Int)
-            .coerce(DataValue::Null, cur)
-            .is_err());
+        assert!(
+            NullableColType::required(ColType::Int)
+                .coerce(DataValue::Null, cur)
+                .is_err()
+        );
         assert_eq!(
             NullableColType::optional(ColType::Int)
                 .coerce(DataValue::Null, cur)
@@ -519,10 +520,7 @@ mod tests {
             .unwrap();
         assert_eq!(b, DataValue::Bytes(vec![1, 2, 3]));
         let u = NullableColType::required(ColType::Uuid)
-            .coerce(
-                DataValue::from("550e8400-e29b-41d4-a716-446655440000"),
-                cur,
-            )
+            .coerce(DataValue::from("550e8400-e29b-41d4-a716-446655440000"), cur)
             .unwrap();
         assert!(matches!(u, DataValue::Uuid(_)));
     }

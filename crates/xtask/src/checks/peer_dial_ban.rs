@@ -92,9 +92,7 @@ mod tests {
 
     #[test]
     fn flags_a_raw_tcp_stream_dial() {
-        let f = parse(
-            "fn dial() { let _c = std::net::TcpStream::connect(\"127.0.0.1:4222\"); }",
-        );
+        let f = parse("fn dial() { let _c = std::net::TcpStream::connect(\"127.0.0.1:4222\"); }");
         let v = check(std::slice::from_ref(&f));
         assert_eq!(v.len(), 1, "a raw TcpStream dial must be caught");
         assert_eq!(v[0].symbol, "TcpStream");

@@ -13,6 +13,7 @@
 //! The Expr golden is also compile-checked under `program/expr.rs` tests until
 //! that door opens.
 
+use crate::SourceSpan;
 use crate::program::expr::{BindingPos, Expr, LazyOp};
 use crate::program::op;
 use crate::program::symbol::Symbol;
@@ -20,7 +21,6 @@ use crate::value::{
     Bound, DataValue, Interval, Num, RegexFlags, RegexSource, UuidWrapper, ValiditySlot,
     ValidityTs, Vector, append_canonical,
 };
-use crate::SourceSpan;
 
 fn corpus() -> Vec<DataValue> {
     let mut c = vec![
@@ -60,12 +60,8 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
-        DataValue::Regex(
-            RegexSource::validated(RegexFlags::NONE, "^a.*b$".into()).unwrap(),
-        ),
-        DataValue::Regex(
-            RegexSource::validated(RegexFlags::NONE, "x+".into()).unwrap(),
-        ),
+        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "^a.*b$".into()).unwrap()),
+        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "x+".into()).unwrap()),
         DataValue::Vector(Vector::try_new(vec![0.0, -0.0, 1.0]).unwrap()),
         DataValue::Vector(Vector::try_new(vec![-1.5, 2.5]).unwrap()),
         DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(0), true)),
@@ -153,15 +149,13 @@ fn law_scalar_num_negative_zero_collapses_to_positive() {
 }
 
 /// Permanent Binding wire form — seat 59 / story #352 T1 golden vector.
-const EXPR_BINDING_GOLDEN: &str =
-    r#"{"Binding":{"var":{"name":"x"},"tuple_pos":"Unresolved"}}"#;
+const EXPR_BINDING_GOLDEN: &str = r#"{"Binding":{"var":{"name":"x"},"tuple_pos":"Unresolved"}}"#;
 
 /// Expr under one complete canonical serde codec, both directions:
 /// encode → decode identity, and the Binding golden bytes stay put.
 #[test]
 fn expr_canonical_round_trip_golden() {
-    let binding: Expr =
-        serde_json::from_str(EXPR_BINDING_GOLDEN).expect("binding golden decodes");
+    let binding: Expr = serde_json::from_str(EXPR_BINDING_GOLDEN).expect("binding golden decodes");
     assert_eq!(
         serde_json::to_string(&binding).expect("binding encodes"),
         EXPR_BINDING_GOLDEN,

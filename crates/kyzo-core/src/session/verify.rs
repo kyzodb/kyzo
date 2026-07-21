@@ -305,9 +305,7 @@ impl<S: Storage> Engine<S> {
         let cur_vld = current_validity()?;
         match parse_script(payload, &params, cur_vld)? {
             Script::Query(prog) => self.verify_input_program(prog, cur_vld, &options),
-            Script::Sys(_) | Script::Imperative(_) => {
-                Ok(VerifyUnsupported::NotSingleRead.into())
-            }
+            Script::Sys(_) | Script::Imperative(_) => Ok(VerifyUnsupported::NotSingleRead.into()),
         }
     }
 

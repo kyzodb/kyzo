@@ -3,11 +3,11 @@
 // (found in the LICENSE-* files in the repository)
 
 use super::{filter::BloomConstructionPolicy, writer::Writer};
+use crate::table::block::Level;
 use crate::{
     blob_tree::handle::BlobIndirection, table::writer::LinkedFile, value::InternalValue,
     vlog::BlobFileId, Checksum, CompressionType, HashMap, SequenceNumberCounter, TableId, UserKey,
 };
-use crate::table::block::Level;
 use std::path::PathBuf;
 
 /// Like `Writer` but will rotate to a new table, once a table grows larger than `target_size`

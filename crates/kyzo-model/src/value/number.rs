@@ -617,7 +617,11 @@ mod tests {
     /// Exact compare i64 vs (finite or infinite, non-NaN) f64.
     fn hunt_cmp_i_f(i: i64, f: f64) -> Ordering {
         if f.is_infinite() {
-            return if f > 0.0 { Ordering::Less } else { Ordering::Greater };
+            return if f > 0.0 {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
         }
         if f >= 9223372036854775808.0 {
             return Ordering::Less; // f >= 2^63 > i64::MAX
@@ -674,12 +678,12 @@ mod tests {
             HuntV::F(-1.0),
             HuntV::I(i64::MAX),
             HuntV::I(i64::MIN),
-            HuntV::F(9223372036854775808.0), // 2^63 == i64::MAX + 1
-            HuntV::F(9223372036854774784.0), // largest f64 strictly below 2^63
+            HuntV::F(9223372036854775808.0),  // 2^63 == i64::MAX + 1
+            HuntV::F(9223372036854774784.0),  // largest f64 strictly below 2^63
             HuntV::F(-9223372036854775808.0), // -2^63 == i64::MIN
-            HuntV::I(9007199254740993),      // 2^53 + 1 (not f64-representable)
-            HuntV::F(9007199254740992.0),    // 2^53
-            HuntV::F(9007199254740994.0),    // 2^53 + 2
+            HuntV::I(9007199254740993),       // 2^53 + 1 (not f64-representable)
+            HuntV::F(9007199254740992.0),     // 2^53
+            HuntV::F(9007199254740994.0),     // 2^53 + 2
             HuntV::F(f64::from_bits(1)),      // smallest positive subnormal
             HuntV::F(-f64::from_bits(1)),     // smallest negative subnormal
             HuntV::F(f64::MIN_POSITIVE),

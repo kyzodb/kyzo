@@ -39,6 +39,8 @@ use thiserror::Error;
 use crate::session::catalog::{KeyspaceKind, list_relations};
 use crate::store::authority::IncarnationId;
 use crate::store::crypto::{ShredLedger, WrappedShredSalt};
+use crate::store::fjall::FjallStorage;
+use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
 use crate::store::merkle::{
     ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot, roots_equal_at_cut,
 };
@@ -49,8 +51,6 @@ use crate::store::transcript::{
     LeaveIsFreeIncarnationTranscriptPart, LeaveIsFreeSaltTranscriptPart, TranscriptRefuse,
     encode_leave_is_free_pack, refuse_residual_secret_bytes,
 };
-use crate::store::fjall::FjallStorage;
-use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
 use crate::store::tx::WriteTx;
 use crate::store::{FormatVersion, ReadTx, Storage};
 use kyzo_model::value::ValidityTs;
@@ -284,9 +284,7 @@ macro_rules! open_complete_store_with {
 #[macro_export]
 macro_rules! is_incomplete_restore {
     ($err:expr) => {
-        ($err)
-            .downcast_ref::<$crate::IncompleteRestore>()
-            .is_some()
+        ($err).downcast_ref::<$crate::IncompleteRestore>().is_some()
     };
 }
 
@@ -521,9 +519,7 @@ pub enum PackRefuse {
     /// First registration wins. Same root re-register is idempotent Ok on
     /// [`OriginRootRegistry::insert`]. Rotation is a separate explicit verb
     /// — never silent overwrite via insert.
-    #[error(
-        "TrustRootAlreadySealed: StoreId {store_id:?} already has a sealed origin trust root"
-    )]
+    #[error("TrustRootAlreadySealed: StoreId {store_id:?} already has a sealed origin trust root")]
     #[diagnostic(code(store::backup::trust_root_already_sealed))]
     TrustRootAlreadySealed { store_id: StoreId },
 }
@@ -726,11 +722,7 @@ impl OriginRootRegistry {
     /// Seal-once per StoreId: first root wins; same root → idempotent Ok;
     /// different root → [`PackRefuse::TrustRootAlreadySealed`] (never silent
     /// overwrite). Untrusted/peer input must not reach this door unvalidated.
-    pub fn insert(
-        &mut self,
-        origin: StoreId,
-        trusted_root: StateRoot,
-    ) -> Result<(), PackRefuse> {
+    pub fn insert(&mut self, origin: StoreId, trusted_root: StateRoot) -> Result<(), PackRefuse> {
         match self.roots.get(origin.as_bytes()) {
             None => {
                 self.roots.insert(*origin.as_bytes(), trusted_root);
@@ -1107,12 +1099,7 @@ mod pins {
         let mut shredded = ShredLedger::new();
         shredded.record(tombstone);
         assert!(matches!(
-            import_verify(
-                &pack,
-                verified,
-                ObjectsCompleteness::Complete,
-                &shredded
-            ),
+            import_verify(&pack, verified, ObjectsCompleteness::Complete, &shredded),
             Err(PackRefuse::Shredded)
         ));
     }
@@ -1135,9 +1122,7 @@ mod import_verify {
         Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
     };
     use crate::store::epoch::{CryptoDomain, FenceEpoch};
-    use crate::store::merkle::{
-        ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot,
-    };
+    use crate::store::merkle::{ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot};
     use crate::store::open::StoreId;
     use crate::store::sweep::CommitOrdinal;
 
@@ -1420,7 +1405,10 @@ mod import_verify {
         // Seat 80 ledger tag must exist on the closed StoreRefuse sum and on
         // PackRefuse — same refuse name, no reshape into RetentionDeclined.
         let pack_tag = format!("{}", PackRefuse::ForeignHistoryUnverified);
-        let store_tag = format!("{}", crate::store::failure::StoreRefuse::ForeignHistoryUnverified);
+        let store_tag = format!(
+            "{}",
+            crate::store::failure::StoreRefuse::ForeignHistoryUnverified
+        );
         assert!(
             pack_tag.contains("ForeignHistoryUnverified"),
             "pack refuse must name ForeignHistoryUnverified: {pack_tag}"
@@ -1526,8 +1514,7 @@ mod restore_integrity {
         restore_storage(&tgt, &dump).unwrap();
         admit_complete_store(&tgt).expect("complete restore must admit");
         assert!(
-            !tgt
-                .read_tx()
+            !tgt.read_tx()
                 .unwrap()
                 .exists(super::RESTORE_IN_PROGRESS_KEY)
                 .unwrap(),

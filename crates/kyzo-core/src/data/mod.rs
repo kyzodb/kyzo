@@ -7,9 +7,9 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-pub(crate) mod json;
 /// Typed digest / region identities for the private record model (#268 purity).
 pub(crate) mod digest;
+pub(crate) mod json;
 /// Statement-body types + ONTOK constructions for the one private KyzoRecord.
 ///
 /// `construct::{event,state,role,concept,rule,derivation,context_record}` are

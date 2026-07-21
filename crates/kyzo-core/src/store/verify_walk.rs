@@ -54,22 +54,22 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use fjall::Slice;
-use miette::{Result, bail};
-use sha2::{Digest, Sha256};
-use smartstring::{LazyCompact, SmartString};
+use crate::project::text::tokenizer::TokenStream;
 use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle};
 use crate::store::failure::{KeyspaceId, QuarantineRange};
 use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
 use crate::store::{ReadTx, Storage};
-use crate::project::text::tokenizer::TokenStream;
+use fjall::Slice;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{
-    DataValue, RelationId, Tuple, TupleT, append_canonical, decode_tuple_from_key, encode_tuple_bare,
-    extend_tuple_from_v,
+    DataValue, RelationId, Tuple, TupleT, append_canonical, decode_tuple_from_key,
+    encode_tuple_bare, extend_tuple_from_v,
 };
+use miette::{Result, bail};
+use sha2::{Digest, Sha256};
+use smartstring::{LazyCompact, SmartString};
 
 /// Domain-separated checksum over (keyspace, block, payload).
 ///
@@ -80,9 +80,8 @@ use kyzo_model::value::{
 #[repr(transparent)]
 pub struct KeyspaceScopedChecksumDigest([u8; 32]);
 
-const _: () = assert!(
-    std::mem::size_of::<KeyspaceScopedChecksumDigest>() == std::mem::size_of::<[u8; 32]>()
-);
+const _: () =
+    assert!(std::mem::size_of::<KeyspaceScopedChecksumDigest>() == std::mem::size_of::<[u8; 32]>());
 const _: () = assert!(
     std::mem::align_of::<KeyspaceScopedChecksumDigest>() == std::mem::align_of::<[u8; 32]>()
 );
@@ -388,10 +387,8 @@ impl AsRef<str> for RelationName {
 #[repr(transparent)]
 pub struct DeepVerifyDigest([u8; 32]);
 
-const _: () =
-    assert!(std::mem::size_of::<DeepVerifyDigest>() == std::mem::size_of::<[u8; 32]>());
-const _: () =
-    assert!(std::mem::align_of::<DeepVerifyDigest>() == std::mem::align_of::<[u8; 32]>());
+const _: () = assert!(std::mem::size_of::<DeepVerifyDigest>() == std::mem::size_of::<[u8; 32]>());
+const _: () = assert!(std::mem::align_of::<DeepVerifyDigest>() == std::mem::align_of::<[u8; 32]>());
 
 impl DeepVerifyDigest {
     /// Borrow the digest bytes.
@@ -409,10 +406,8 @@ impl DeepVerifyDigest {
 #[repr(transparent)]
 pub struct IndexRowDigest([u8; 32]);
 
-const _: () =
-    assert!(std::mem::size_of::<IndexRowDigest>() == std::mem::size_of::<[u8; 32]>());
-const _: () =
-    assert!(std::mem::align_of::<IndexRowDigest>() == std::mem::align_of::<[u8; 32]>());
+const _: () = assert!(std::mem::size_of::<IndexRowDigest>() == std::mem::size_of::<[u8; 32]>());
+const _: () = assert!(std::mem::align_of::<IndexRowDigest>() == std::mem::align_of::<[u8; 32]>());
 
 impl IndexRowDigest {
     /// Borrow the digest bytes.
@@ -517,7 +512,11 @@ fn bind_extractor(base: &RelationHandle, extractor: &Expr) -> Result<Expr> {
     Ok(expr)
 }
 
-fn project_mapper_cols(mapper: &[usize], row: &[DataValue], base_name: &str) -> Result<Vec<DataValue>> {
+fn project_mapper_cols(
+    mapper: &[usize],
+    row: &[DataValue],
+    base_name: &str,
+) -> Result<Vec<DataValue>> {
     mapper
         .iter()
         .map(|&i| {
@@ -533,7 +532,10 @@ fn project_mapper_cols(mapper: &[usize], row: &[DataValue], base_name: &str) -> 
 /// Collect catalog handles keyed by relation id, plus name→id for index resolve.
 fn load_catalog_handles(
     tx: &impl ReadTx,
-) -> Result<(BTreeMap<RelationId, RelationHandle>, BTreeMap<RelationName, RelationId>)> {
+) -> Result<(
+    BTreeMap<RelationId, RelationHandle>,
+    BTreeMap<RelationName, RelationId>,
+)> {
     let mut by_id = BTreeMap::new();
     let mut by_name = BTreeMap::new();
     let lower = Tuple::default().encode_as_key(RelationId::SYSTEM);
@@ -574,11 +576,13 @@ fn rederive_plain(
         let row = row?;
         stored.insert(digest_tuple_cols(row.as_slice()));
     }
-    Ok(set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
-        index_name: idx.name.to_string(),
-        kind,
-        detail,
-    }))
+    Ok(
+        set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
+            index_name: idx.name.to_string(),
+            kind,
+            detail,
+        }),
+    )
 }
 
 fn rederive_temporal(
@@ -638,11 +642,13 @@ fn rederive_temporal(
         stored.insert(digest_bytes(&payload));
     }
 
-    Ok(set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
-        index_name: idx.name.to_string(),
-        kind,
-        detail,
-    }))
+    Ok(
+        set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
+            index_name: idx.name.to_string(),
+            kind,
+            detail,
+        }),
+    )
 }
 
 fn rederive_hnsw(
@@ -752,11 +758,13 @@ fn rederive_fts(
         stored.insert(digest_tuple_cols(&row.as_slice()[..posting_keys]));
     }
 
-    Ok(set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
-        index_name: idx.name.to_string(),
-        kind,
-        detail,
-    }))
+    Ok(
+        set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
+            index_name: idx.name.to_string(),
+            kind,
+            detail,
+        }),
+    )
 }
 
 fn rederive_lsh(
@@ -841,11 +849,13 @@ fn rederive_lsh(
             detail,
         }));
     }
-    Ok(set_diff_detail(&expected_inv, &stored_inv).map(|detail| IndexMismatch {
-        index_name: inv.name.to_string(),
-        kind,
-        detail: format!("inverse: {detail}"),
-    }))
+    Ok(
+        set_diff_detail(&expected_inv, &stored_inv).map(|detail| IndexMismatch {
+            index_name: inv.name.to_string(),
+            kind,
+            detail: format!("inverse: {detail}"),
+        }),
+    )
 }
 
 fn deep_verify_one_index(
@@ -861,8 +871,7 @@ fn deep_verify_one_index(
         return Ok(Some(IndexMismatch {
             index_name: idx_name,
             kind: index_ref.kind.clone(),
-            detail: "index backing relation absent from catalog while IndexRef is attached"
-                .into(),
+            detail: "index backing relation absent from catalog while IndexRef is attached".into(),
         }));
     };
     let Some(idx) = by_id.get(idx_id) else {
@@ -879,9 +888,7 @@ fn deep_verify_one_index(
         }
         IndexKind::Temporal => rederive_temporal(tx, base, idx, index_ref.kind.clone()),
         IndexKind::Hnsw(_) => rederive_hnsw(tx, base, idx, index_ref.kind.clone()),
-        IndexKind::Fts(manifest) => {
-            rederive_fts(tx, base, idx, manifest, index_ref.kind.clone())
-        }
+        IndexKind::Fts(manifest) => rederive_fts(tx, base, idx, manifest, index_ref.kind.clone()),
         IndexKind::Lsh { manifest, inverse } => {
             let inv_name = format!("{}:{}", base.name, inverse);
             let inv_key = RelationName::from(inv_name.as_str());
@@ -1045,8 +1052,11 @@ mod pins {
                 std::collections::BTreeMap::new(),
             )
             .unwrap();
-            db.run_script("::index create t:by_v {v}", std::collections::BTreeMap::new())
-                .unwrap();
+            db.run_script(
+                "::index create t:by_v {v}",
+                std::collections::BTreeMap::new(),
+            )
+            .unwrap();
 
             let clean = deep_verify_storage(&storage).unwrap();
             assert!(clean.is_clean(), "healthy indexed store: {clean:?}");

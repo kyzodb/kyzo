@@ -326,8 +326,7 @@ impl Writer {
             self.data_block_hash_ratio,
         )?;
 
-        let identity =
-            BlockIdentity::new(self.table_id, self.initial_level, self.meta.file_pos);
+        let identity = BlockIdentity::new(self.table_id, self.initial_level, self.meta.file_pos);
         let header = Block::write_into(
             &mut self.file_writer,
             &self.block_buffer,

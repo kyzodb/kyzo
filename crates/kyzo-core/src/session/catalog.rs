@@ -1339,7 +1339,6 @@ impl RelationHandle {
             .transpose()
             .map(|opt| opt.map(|t| Self::strip_time_slots(len, t)))
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -1522,11 +1521,7 @@ pub(crate) fn destroy_relation(tx: &mut impl WriteTx, name: &str) -> Result<()> 
 /// Set a relation's access level. Deliberately ungated (matching the
 /// original): lowering and raising the level is how relations are locked
 /// and unlocked, so gating it on itself would wedge them shut.
-pub fn set_access_level(
-    tx: &mut impl WriteTx,
-    name: &str,
-    level: AccessLevel,
-) -> Result<()> {
+pub fn set_access_level(tx: &mut impl WriteTx, name: &str, level: AccessLevel) -> Result<()> {
     let mut meta = get_relation(tx, name)?;
     meta.access_level = level;
     write_relation_row(tx, &meta)

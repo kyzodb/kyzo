@@ -449,7 +449,10 @@ fn run_boundary_closure(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::E
     out.header("== check: boundary-closure ratchet ==");
     let violations = checks::boundary_closure::check(&ctx.files);
     for v in &violations {
-        out.violation(format!("{}:{} — [{}]: {}", v.file, v.line, v.shape, v.detail));
+        out.violation(format!(
+            "{}:{} — [{}]: {}",
+            v.file, v.line, v.shape, v.detail
+        ));
     }
     let ok = out.finish_ok();
     out.note(format!(
@@ -649,7 +652,11 @@ mod tests {
     fn registry_entries_are_unique_and_seat_tagged() {
         let mut seen = std::collections::BTreeSet::new();
         for check in REGISTRY {
-            assert!(seen.insert(check.name), "duplicate check name {}", check.name);
+            assert!(
+                seen.insert(check.name),
+                "duplicate check name {}",
+                check.name
+            );
             assert!(
                 !check.seats.is_empty(),
                 "check {} has no seat/law tag",

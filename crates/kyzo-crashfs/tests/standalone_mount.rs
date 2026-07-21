@@ -124,7 +124,8 @@ fn torn_op_splits_a_write_at_the_seed_dictated_point() {
     {
         let mut f = File::create(&file_path).expect("create through mount");
         f.write_all(payload).expect("write that TornOp must split");
-        f.sync_all().expect("fsync so torn bytes reach the backing file");
+        f.sync_all()
+            .expect("fsync so torn bytes reach the backing file");
     }
     drop(session);
 

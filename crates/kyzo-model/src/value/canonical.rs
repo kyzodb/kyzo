@@ -1919,10 +1919,7 @@ mod tests {
             Err(DecodeError::TrailingBytes)
         );
         assert_eq!(decode(&[0xFF]), Err(DecodeError::BadTag(0xFF)));
-        assert_eq!(
-            decode(&[Tag::Bool.byte(), 0x02]),
-            Err(DecodeError::BadBool)
-        );
+        assert_eq!(decode(&[Tag::Bool.byte(), 0x02]), Err(DecodeError::BadBool));
         // Str body: `0x00 0x01` is not a lawful escape (only 0x00/0xFF after NUL).
         assert_eq!(
             decode(&[Tag::Str.byte(), 0x00, 0x01]),

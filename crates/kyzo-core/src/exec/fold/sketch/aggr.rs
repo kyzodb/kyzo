@@ -274,7 +274,7 @@ mod tests {
     use super::*;
     use crate::exec::fold::aggr::{meet_op, normal_op};
     use crate::exec::fold::sketch::hll::HyperLogLog;
-    use kyzo_model::program::aggregate::{parse_aggr, Aggregation};
+    use kyzo_model::program::aggregate::{Aggregation, parse_aggr};
 
     fn val(i: i64) -> DataValue {
         DataValue::from(i)

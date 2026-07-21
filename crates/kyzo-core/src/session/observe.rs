@@ -99,9 +99,7 @@ use crate::session::db::Engine;
 use crate::session::generation::IndexStatus;
 use crate::session::jobs::OperatorEphemeralRelations;
 use crate::store::Storage;
-use crate::store::failure::{
-    DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange,
-};
+use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange};
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
 
 /// One authoritative metric counter. Private field — constructed only by
@@ -271,10 +269,7 @@ impl Integrity {
     }
 
     /// Integrity relation with rendered [`DeepVerifyDigest`] when present.
-    pub fn relation_with_last_verify(
-        self,
-        last_verify: Option<DeepVerifyDigest>,
-    ) -> NamedRows {
+    pub fn relation_with_last_verify(self, last_verify: Option<DeepVerifyDigest>) -> NamedRows {
         match last_verify {
             Some(digest) => NamedRows::try_new(
                 vec!["integrity".into(), "last_verify".into()],
@@ -331,10 +326,7 @@ pub struct ObservationBudget {
 impl ObservationBudget {
     /// Fresh budget with the given ceiling and zero spend.
     pub fn with_ceiling(ceiling: u64) -> Self {
-        Self {
-            ceiling,
-            spent: 0,
-        }
+        Self { ceiling, spent: 0 }
     }
 
     /// Units spent so far.
@@ -461,7 +453,10 @@ pub enum DeepVerifyStaleness {
 impl DeepVerifyStaleness {
     /// True when the operator should run (or re-run) deep-verify.
     pub fn is_stale(&self) -> bool {
-        matches!(self, DeepVerifyStaleness::NeverRun | DeepVerifyStaleness::Stale { .. })
+        matches!(
+            self,
+            DeepVerifyStaleness::NeverRun | DeepVerifyStaleness::Stale { .. }
+        )
     }
 }
 
@@ -814,10 +809,7 @@ impl<S: Storage> Engine<S> {
     /// and index-status are **not** mirrored into ephemeral — relation doors
     /// render [`DebtLedger`] / [`IndexStatus`] directly.
     pub fn operator_health_surface(&self) -> OperatorHealthSurface {
-        let registry = self
-            .event_callbacks
-            .read()
-            .expect("registry lock poisoned");
+        let registry = self.event_callbacks.read().expect("registry lock poisoned");
         let mut surface = registry.operator_health.clone();
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         surface
@@ -883,20 +875,14 @@ impl<S: Storage> Engine<S> {
     /// Quarantine and failure topology are **unreachable** without
     /// [`OperatorCap`] — this door does not mint or accept Cap.
     pub fn operator_ephemeral_relations(&self) -> OperatorEphemeralRelations {
-        OperatorEphemeralRelations::for_tenant(
-            self.operator_health_surface(),
-            self.index_status(),
-        )
+        OperatorEphemeralRelations::for_tenant(self.operator_health_surface(), self.index_status())
     }
 
     /// Cap-present operator ephemeral relations (§82).
     ///
     /// Requires unforgeable [`OperatorCap`] (composition-root / host mint
     /// only — like `StoreOpen::mint`). Tenant doors have no path here.
-    pub fn operator_ephemeral_relations_for(
-        &self,
-        cap: OperatorCap,
-    ) -> OperatorEphemeralRelations {
+    pub fn operator_ephemeral_relations_for(&self, cap: OperatorCap) -> OperatorEphemeralRelations {
         OperatorEphemeralRelations::for_operator(
             self.operator_health_surface(),
             self.index_status(),
@@ -975,10 +961,7 @@ impl<S: Storage> Engine<S> {
 
     /// Operator integrity relation with rendered last-verify digest.
     pub fn integrity_relation(&self) -> NamedRows {
-        let registry = self
-            .event_callbacks
-            .read()
-            .expect("registry lock poisoned");
+        let registry = self.event_callbacks.read().expect("registry lock poisoned");
         registry
             .health_tiers
             .integrity
@@ -1258,10 +1241,7 @@ mod tenant_blind_operator_surface {
         let tenant = db.operator_ephemeral_relations();
         assert!(!tenant.has_operator_cap());
         assert_eq!(
-            tenant
-                .in_flight_tx_relation()
-                .unwrap()
-                .rows()[0][0]
+            tenant.in_flight_tx_relation().unwrap().rows()[0][0]
                 .get_int()
                 .unwrap(),
             0
@@ -1299,11 +1279,9 @@ mod one_counter_per_metric {
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::session::generation::{
-        CatalogGeneration, IndexGeneration, IndexStatus, IndexStaleness, RelationGeneration,
+        CatalogGeneration, IndexGeneration, IndexStaleness, IndexStatus, RelationGeneration,
     };
-    use crate::session::observe::{
-        MetricExporter, compaction_debt_counter, index_status_counter,
-    };
+    use crate::session::observe::{MetricExporter, compaction_debt_counter, index_status_counter};
     use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface};
     use crate::store::fjall::new_fjall_storage;
 
@@ -1451,7 +1429,10 @@ mod health_tiers_and_tracing {
         assert!(!db.integrity().is_passing());
 
         // Distinct relation columns — three query surfaces, not one shared name.
-        assert_eq!(db.liveness().relation().headers(), &["liveness".to_string()]);
+        assert_eq!(
+            db.liveness().relation().headers(),
+            &["liveness".to_string()]
+        );
         assert_eq!(
             db.readiness().relation().headers(),
             &["readiness".to_string()]
@@ -1519,8 +1500,7 @@ mod health_tiers_and_tracing {
         let mut emissions = Vec::new();
         for &verbosity in &verbosities {
             let mut budget = ObservationBudget::with_ceiling(ceiling);
-            let (outcome, emission) =
-                observe_probe(rows.clone(), charge, &mut budget, verbosity);
+            let (outcome, emission) = observe_probe(rows.clone(), charge, &mut budget, verbosity);
             assert_eq!(
                 outcome.budget_spent(),
                 charge,
@@ -1571,13 +1551,11 @@ mod health_tiers_and_tracing {
         // Engine door: set_tracing_verbosity up/down — same rows + budget.
         db.set_tracing_verbosity(TracingVerbosity::Silent);
         let mut budget_lo = ObservationBudget::with_ceiling(ceiling);
-        let (lo, emit_lo) =
-            db.observe_under_tracing(probe_rows(), charge, &mut budget_lo);
+        let (lo, emit_lo) = db.observe_under_tracing(probe_rows(), charge, &mut budget_lo);
 
         db.set_tracing_verbosity(TracingVerbosity::Detail);
         let mut budget_hi = ObservationBudget::with_ceiling(ceiling);
-        let (hi, emit_hi) =
-            db.observe_under_tracing(probe_rows(), charge, &mut budget_hi);
+        let (hi, emit_hi) = db.observe_under_tracing(probe_rows(), charge, &mut budget_hi);
 
         assert_eq!(
             lo.rows().headers(),

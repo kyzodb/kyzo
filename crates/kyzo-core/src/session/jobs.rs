@@ -20,9 +20,9 @@
 //! `::kill` refuses with [`JobsRefuse::KillNotLanded`] until job cancellation
 //! lands. Dispatch stays here so `session/db.rs` remains the composition root.
 
+use kyzo_model::value::{DataValue, Tuple};
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
-use kyzo_model::value::{DataValue, Tuple};
 
 use crate::data::json::NamedRows;
 use crate::session::generation::IndexStatus;
@@ -174,11 +174,10 @@ impl OperatorEphemeralRelations {
                 DataValue::Bytes(range.end().to_vec()),
             ]));
         }
-        Ok(NamedRows::try_new(
-            vec!["keyspace".into(), "start".into(), "end".into()],
-            rows,
+        Ok(
+            NamedRows::try_new(vec!["keyspace".into(), "start".into(), "end".into()], rows)
+                .expect("quarantine relation arity"),
         )
-        .expect("quarantine relation arity"))
     }
 
     /// Failure-topology probe — **Cap required**; Cap-absent refuses (§82).
@@ -242,9 +241,9 @@ mod tests {
     use super::*;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
-    use crate::store::{Storage, WriteTx};
     use crate::store::failure::{KeyspaceId, mint_quarantine};
     use crate::store::fjall::new_fjall_storage;
+    use crate::store::{Storage, WriteTx};
 
     #[test]
     fn ephemeral_relations_project_in_flight_and_storage() {
@@ -284,7 +283,8 @@ mod tests {
         ));
 
         // Cap-absent: no path to topology.
-        let tenant = OperatorEphemeralRelations::for_tenant(surface.clone(), IndexStatus::default());
+        let tenant =
+            OperatorEphemeralRelations::for_tenant(surface.clone(), IndexStatus::default());
         assert!(!tenant.has_operator_cap());
         assert!(matches!(
             tenant.quarantine_relation(),
@@ -341,7 +341,9 @@ mod tests {
         let tx = db.store.write_tx().expect("open write tx");
         db.in_flight_tx_begin();
 
-        let rows = db.list_running_jobs().expect("list_running from live registry");
+        let rows = db
+            .list_running_jobs()
+            .expect("list_running from live registry");
         assert_eq!(rows.headers(), &["in_flight_tx".to_string()]);
         assert_eq!(rows.rows().len(), 1);
         assert!(

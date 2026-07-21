@@ -207,9 +207,7 @@ mod tests {
     use crate::value::kind::validity::{Validity, ValidityTs};
     use crate::value::number::Num;
     use crate::value::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
-    use crate::value::{
-        DataValue, Geometry, UuidWrapper, Vector, decode, encode_owned,
-    };
+    use crate::value::{DataValue, Geometry, UuidWrapper, Vector, decode, encode_owned};
 
     /// Format v1 tag table — the independent oracle. A consistent-wrong
     /// retag of `Tag` + `encode` still fails here.
@@ -284,7 +282,10 @@ mod tests {
                 ),
             ),
             (Tag::Interval, DataValue::Interval(Interval::EMPTY)),
-            (Tag::Geometry, DataValue::Geometry(Geometry::from_cells(0, 0))),
+            (
+                Tag::Geometry,
+                DataValue::Geometry(Geometry::from_cells(0, 0)),
+            ),
         ]
     }
 
@@ -369,10 +370,7 @@ mod tests {
         for (tag, value) in one_per_kind() {
             let enc = encode_owned(&value);
             let bytes = enc.as_bytes();
-            assert!(
-                !bytes.is_empty(),
-                "empty encoding for {tag:?}"
-            );
+            assert!(!bytes.is_empty(), "empty encoding for {tag:?}");
             let expected = pinned_tag_byte(tag);
             assert_eq!(
                 bytes[0], expected,
@@ -429,10 +427,7 @@ mod tests {
                 let structural = vi.cmp(vj);
                 let pinned = pinned_tag_byte(*ti).cmp(&pinned_tag_byte(*tj));
 
-                assert_eq!(
-                    byte, structural,
-                    "byte != Ord: {ti:?} vs {tj:?}"
-                );
+                assert_eq!(byte, structural, "byte != Ord: {ti:?} vs {tj:?}");
                 if ti != tj {
                     assert_eq!(
                         byte, pinned,
@@ -452,9 +447,7 @@ mod tests {
 
         // Transitivity over the sorted-by-pinned-tag universe.
         let mut order: Vec<usize> = (0..universe.len()).collect();
-        order.sort_by(|&a, &b| {
-            pinned_tag_byte(universe[a].0).cmp(&pinned_tag_byte(universe[b].0))
-        });
+        order.sort_by(|&a, &b| pinned_tag_byte(universe[a].0).cmp(&pinned_tag_byte(universe[b].0)));
         for w in order.windows(2) {
             assert!(
                 encoded[w[0]].as_bytes() < encoded[w[1]].as_bytes(),
@@ -605,7 +598,10 @@ mod tests {
         // continuation (prefix law), pinned without going through Ord.
         let empty = encode_owned(&DataValue::List(vec![]));
         let with_null = encode_owned(&DataValue::List(vec![DataValue::Null]));
-        assert_eq!(empty.as_bytes(), &[pinned_tag_byte(Tag::List), STRUCT_SEQ_END]);
+        assert_eq!(
+            empty.as_bytes(),
+            &[pinned_tag_byte(Tag::List), STRUCT_SEQ_END]
+        );
         assert_eq!(
             with_null.as_bytes()[1],
             pinned_tag_byte(Tag::Null),

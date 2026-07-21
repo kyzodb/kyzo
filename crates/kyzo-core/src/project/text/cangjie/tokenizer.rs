@@ -99,13 +99,7 @@ mod tests {
 
     #[test]
     fn offset_round_trip_all_modes_including_overlapping_cuts() {
-        let samples = [
-            "南京长江大桥",
-            "中文测试abc漢字",
-            "hello世界",
-            "a",
-            "",
-        ];
+        let samples = ["南京长江大桥", "中文测试abc漢字", "hello世界", "a", ""];
         let modes = [
             TokenizerOption::Default { hmm: false },
             TokenizerOption::Default { hmm: true },

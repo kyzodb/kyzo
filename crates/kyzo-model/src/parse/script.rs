@@ -121,11 +121,8 @@ fn parse_imperative_stmt(
                 }
                 _ => return Err(unexpected("an if-condition", &condition)),
             };
-            let then_branch = parse_stmt_children(
-                inner.expect("the then-branch")?,
-                param_pool,
-                cur_vld,
-            )?;
+            let then_branch =
+                parse_stmt_children(inner.expect("the then-branch")?, param_pool, cur_vld)?;
             let else_branch = match inner.next() {
                 None => Vec::new(),
                 Some(rest) => parse_stmt_children(rest, param_pool, cur_vld)?,
@@ -177,11 +174,7 @@ fn parse_imperative_stmt(
         }
         Rule::imperative_clause => {
             let mut src = pair.children();
-            let prog = parse_query(
-                src.expect("the query")?.into_inner(),
-                param_pool,
-                cur_vld,
-            )?;
+            let prog = parse_query(src.expect("the query")?.into_inner(), param_pool, cur_vld)?;
             let store_as = src.next().map(|p| SmartString::from(p.as_str().trim()));
             ImperativeStmt::Program {
                 prog: ImperativeStmtClause { prog, store_as },
@@ -190,11 +183,7 @@ fn parse_imperative_stmt(
         Rule::ignore_error_script => {
             let pair = pair.children().expect("the guarded clause")?;
             let mut src = pair.children();
-            let prog = parse_query(
-                src.expect("the query")?.into_inner(),
-                param_pool,
-                cur_vld,
-            )?;
+            let prog = parse_query(src.expect("the query")?.into_inner(), param_pool, cur_vld)?;
             let store_as = src.next().map(|p| SmartString::from(p.as_str().trim()));
             ImperativeStmt::IgnoreErrorProgram {
                 prog: ImperativeStmtClause { prog, store_as },

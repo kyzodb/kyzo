@@ -10,16 +10,16 @@ use smartstring::SmartString;
 
 use std::ops::ControlFlow;
 
+use kyzo::oracle_harness::IndexPositionUse::{BindForLater, Ignored, Join};
 use kyzo::oracle_harness::{
     AccessLevel, AtomOccurrence, BindingPos, Budget, CompiledProgram, CompiledRuleBody,
     CompiledRuleSet, EpochStore, IndexKind, IndexPositionUse, IndexRef, InsufficientAccessLevel,
     KeyspaceKind, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
     MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, NoFixedRules, RelAlgebra, RelationHandle,
-    RelationId, RowLimit, RuleBody, RulesetHeadAggrMismatch, Segments, StoreLifetimes, StratifiedMagicProgram,
-    StoredRowTooShortError, TupleInIter, bind_for_eval, create_relation, set_access_level,
-    stratified_evaluate, stratified_magic_compile,
+    RelationId, RowLimit, RuleBody, RulesetHeadAggrMismatch, Segments, StoreLifetimes,
+    StoredRowTooShortError, StratifiedMagicProgram, TupleInIter, bind_for_eval, create_relation,
+    set_access_level, stratified_evaluate, stratified_magic_compile,
 };
-use kyzo::oracle_harness::IndexPositionUse::{BindForLater, Ignored, Join};
 use kyzo::{FjallStorage, Storage, WriteTx, new_fjall_storage};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::aggregate::parse_aggr;
@@ -31,8 +31,6 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{Literal, Program, Rel, Rule, Term, naive_eval};
-
-
 
 // ── plumbing ─────────────────────────────────────────────────────────
 
@@ -59,7 +57,9 @@ fn v(i: i64) -> DataValue {
     DataValue::from(i)
 }
 fn muggle(rel: impl AsRef<str>) -> MagicSymbol {
-    MagicSymbol::Muggle { inner: sym(rel.as_ref()) }
+    MagicSymbol::Muggle {
+        inner: sym(rel.as_ref()),
+    }
 }
 fn entry_symbol() -> MagicSymbol {
     MagicSymbol::Muggle {
@@ -395,10 +395,7 @@ fn join_types_of(ra: &RelAlgebra, out: &mut Vec<&'static str>) {
     }
 }
 
-fn compiled_entry_join_types(
-    db: &FjallStorage,
-    prog: StratifiedMagicProgram,
-) -> Vec<&'static str> {
+fn compiled_entry_join_types(db: &FjallStorage, prog: StratifiedMagicProgram) -> Vec<&'static str> {
     let rtx = db.read_tx().unwrap();
     let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
     let entry = compiled
@@ -725,10 +722,15 @@ fn strata_of(program: &Program) -> HashMap<Rel, usize> {
     {
         let mut per_head: HashMap<Rel, Vec<&Rule>> = HashMap::new();
         for rule in &program.rules {
-            per_head.entry(rule.head_rel.clone()).or_default().push(rule);
+            per_head
+                .entry(rule.head_rel.clone())
+                .or_default()
+                .push(rule);
         }
         for (rel, rules) in per_head {
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
+            let has_aggr = rules
+                .iter()
+                .any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
             let is_meet = has_aggr
                 && rules.iter().all(|r| {
                     r.aggr.iter().all(|a| match a.as_aggregated() {
@@ -840,7 +842,10 @@ fn ra_eval(model: &Program, target: Rel, target_arity: usize) -> BTreeSet<Tuple>
 
     let mut per_head: BTreeMap<Rel, Vec<&Rule>> = BTreeMap::new();
     for rule in &model.rules {
-        per_head.entry(rule.head_rel.clone()).or_default().push(rule);
+        per_head
+            .entry(rule.head_rel.clone())
+            .or_default()
+            .push(rule);
     }
     let mut const_serial = 0usize;
     for (head, rules) in per_head {
@@ -1084,7 +1089,8 @@ fn differential_stratified_negation() {
 fn differential_meet_self_join_through_ra() {
     let named = |name: &str| kyzo_oracle::HeadAggr::named(name);
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [(1, 5), (2, 7), (3, 9)]
             .iter()
             .map(|(k, l)| vec![v(*k), v(*l)])
@@ -1123,7 +1129,8 @@ fn differential_meet_self_join_through_ra() {
 fn differential_meet_aggregation_in_recursion() {
     let named = |name: &str| kyzo_oracle::HeadAggr::named(name);
     let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
-    facts.insert("seed".into(),
+    facts.insert(
+        "seed".into(),
         [vec![v(1), v(0)]]
             .into_iter()
             .map(Tuple::from_vec)
@@ -1384,7 +1391,8 @@ fn neg_join_rule_store_non_prefix_set_probe() {
 #[test]
 fn differential_recursive_right_self_join() {
     let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-    facts.insert("base".into(),
+    facts.insert(
+        "base".into(),
         [vec![v(5), v(2)]]
             .into_iter()
             .map(Tuple::from_vec)
@@ -1496,8 +1504,7 @@ fn point_lookup_join_short_row_is_typed_error() {
     )
     .unwrap_err();
     assert!(
-        err.downcast_ref::<StoredRowTooShortError>()
-            .is_some(),
+        err.downcast_ref::<StoredRowTooShortError>().is_some(),
         "expected StoredRowTooShortError, got {err:?}"
     );
 }
@@ -1539,8 +1546,7 @@ fn stored_neg_prefix_join_short_row_is_typed_error() {
     )
     .unwrap_err();
     assert!(
-        err.downcast_ref::<StoredRowTooShortError>()
-            .is_some(),
+        err.downcast_ref::<StoredRowTooShortError>().is_some(),
         "expected StoredRowTooShortError, got {err:?}"
     );
 }
@@ -1657,11 +1663,10 @@ fn batched_unification_matches_iterator() {
         let rtx = db.read_tx().expect("read tx");
         let compiled = stratified_magic_compile(&rtx, unify_prog_err()).expect("compiles");
         let lifetimes = immortal_lifetimes(&compiled);
-        let program =
-            bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
-                panic!("no fixed rules")
-            })
-            .expect("binds");
+        let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
+            panic!("no fixed rules")
+        })
+        .expect("binds");
         stratified_evaluate(
             &program,
             &lifetimes,
@@ -1867,7 +1872,8 @@ fn batched_random_program_campaign() {
             ],
             facts: {
                 let mut f: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
-                f.insert("edge".into(),
+                f.insert(
+                    "edge".into(),
                     edge_set
                         .iter()
                         .map(|(a, b)| vec![v(*a), v(*b)])
@@ -1941,7 +1947,6 @@ fn batched_stream_survivor_count_is_analytic() {
 /// [`IndexPositionUse`] (story #350 T2).
 #[test]
 fn choose_index_prefers_longest_prefix_and_survives_edges() {
-
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),

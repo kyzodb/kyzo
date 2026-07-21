@@ -270,11 +270,7 @@ pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
         })?
     } else {
         SocketAddr::from_str(&format!("{}:{}", args.bind, args.port)).map_err(|err| {
-            miette::miette!(
-                "invalid bind address '{}:{}': {err}",
-                args.bind,
-                args.port
-            )
+            miette::miette!("invalid bind address '{}:{}': {err}", args.bind, args.port)
         })?
     };
 
@@ -288,9 +284,9 @@ pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
         args.engine, addr
     );
 
-    let listener = TcpListener::bind(&addr).await.map_err(|err| {
-        miette::miette!("failed to bind TCP listener on {addr}: {err}")
-    })?;
+    let listener = TcpListener::bind(&addr)
+        .await
+        .map_err(|err| miette::miette!("failed to bind TCP listener on {addr}: {err}"))?;
     axum::serve(listener, app.into_make_service())
         .await
         .map_err(|err| miette::miette!("HTTP server failed: {err}"))?;

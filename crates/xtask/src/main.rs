@@ -92,9 +92,9 @@ impl GateMode {
             (false, false) => Self::Check,
             (true, false) => Self::Write,
             (false, true) => Self::UpdateBaseline,
-            (true, true) => unreachable!(
-                "clap authority_mode group forbids --write with --update-baseline"
-            ),
+            (true, true) => {
+                unreachable!("clap authority_mode group forbids --write with --update-baseline")
+            }
         }
     }
 }

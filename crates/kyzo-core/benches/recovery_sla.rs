@@ -35,8 +35,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use kyzo::bench_recovery::{
-    commit_ordinal, mint_store_identity, recovery_time_bound_ns, replay, WalPayload, WalRecord,
-    WalSegment, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
+    RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM, WalPayload,
+    WalRecord, WalSegment, commit_ordinal, mint_store_identity, recovery_time_bound_ns, replay,
 };
 
 /// Opponent-pin corpus identity (§87) — MB-scale dirty-tail recovery calibration.
@@ -313,9 +313,7 @@ fn main() {
     );
     // slope_num/slope_den as rationals: derived ≤ sealed.
     assert!(
-        derived
-            .slope_num
-            .saturating_mul(RECOVERY_SLA_SLOPE_DEN)
+        derived.slope_num.saturating_mul(RECOVERY_SLA_SLOPE_DEN)
             <= RECOVERY_SLA_SLOPE_NUM.saturating_mul(derived.slope_den),
         "derived slope {}/{} exceeds sealed RECOVERY_SLA_SLOPE {}/{} — \
          re-seal upward (never shrink):\n\

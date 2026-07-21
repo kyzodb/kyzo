@@ -167,10 +167,17 @@ fn decode_write_id(bytes: &[u8]) -> u64 {
 /// target a register the range already observed (G1b unrepresentable).
 #[derive(Clone, Copy, Debug)]
 enum PlannedOp {
-    Read { reg: u32 },
-    Write { reg: u32 },
+    Read {
+        reg: u32,
+    },
+    Write {
+        reg: u32,
+    },
     /// Half-open register span `[lo, hi)`, executed via [`ReadTx::range_scan`].
-    RangeRead { lo: u32, hi: u32 },
+    RangeRead {
+        lo: u32,
+        hi: u32,
+    },
 }
 
 /// One transaction's plan: 2..=4 ops over DISTINCT registers (never read
@@ -182,7 +189,9 @@ fn plan_txn(rng: &mut Rng) -> Vec<PlannedOp> {
     let mut available = [true; NUM_REGISTERS as usize];
     let mut ops = Vec::with_capacity(n_ops);
     for _ in 0..n_ops {
-        let free: Vec<u32> = (0..NUM_REGISTERS).filter(|&r| available[r as usize]).collect();
+        let free: Vec<u32> = (0..NUM_REGISTERS)
+            .filter(|&r| available[r as usize])
+            .collect();
         if free.is_empty() {
             break;
         }
@@ -218,8 +227,14 @@ fn plan_txn(rng: &mut Rng) -> Vec<PlannedOp> {
 
 #[derive(Clone, Debug)]
 enum ExecutedOp {
-    Read { reg: u32, write_id: u64 },
-    Write { reg: u32, write_id: u64 },
+    Read {
+        reg: u32,
+        write_id: u64,
+    },
+    Write {
+        reg: u32,
+        write_id: u64,
+    },
     /// Observed `(reg, write_id)` pairs inside `[lo, hi)`, in ascending reg order.
     /// A register in the span missing from `observed` is an Adya phantom /
     /// predicate non-match at read time — the checker draws a predicate rw
@@ -318,10 +333,7 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
                     let id = write_id_ctr.fetch_add(1, Ordering::SeqCst);
                     tx.put(&reg_key(reg), &encode_write_id(id))
                         .expect("write op");
-                    ops.push(ExecutedOp::Write {
-                        reg,
-                        write_id: id,
-                    });
+                    ops.push(ExecutedOp::Write { reg, write_id: id });
                 }
                 PlannedOp::RangeRead { lo, hi } => {
                     // Inclusive lower / exclusive upper over memcmp-ordered keys
@@ -331,9 +343,7 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
                     for item in tx.range_scan(&reg_key(lo), &reg_key(hi)) {
                         let (k, v) = item.expect("range_scan item");
                         let reg = u32::from_be_bytes(
-                            k.as_ref()
-                                .try_into()
-                                .expect("register key is 4 bytes"),
+                            k.as_ref().try_into().expect("register key is 4 bytes"),
                         );
                         observed.push((reg, decode_write_id(v.as_ref())));
                     }
@@ -958,18 +968,15 @@ fn elle_anomaly_detection_flags_g2_predicate_rw_via_range_read() {
         "no integrity findings expected: {:?}",
         check.integrity_findings
     );
-    let (anomaly, cycle) = check.cycle.expect(
-        "mutual phantom inserts into each other's empty range reads must form a G2 cycle",
-    );
+    let (anomaly, cycle) = check
+        .cycle
+        .expect("mutual phantom inserts into each other's empty range reads must form a G2 cycle");
     assert_eq!(
         anomaly,
         Anomaly::G2,
         "two predicate/phantom rw-edges is G2, got {anomaly:?}: {cycle:?}"
     );
-    let rw = cycle
-        .iter()
-        .filter(|(_, _, k)| *k == EdgeKind::Rw)
-        .count();
+    let rw = cycle.iter().filter(|(_, _, k)| *k == EdgeKind::Rw).count();
     assert!(
         rw >= 2,
         "predicate G2 requires ≥2 rw-edges, got {rw} in {cycle:?}"

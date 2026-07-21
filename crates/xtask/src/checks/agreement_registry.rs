@@ -99,8 +99,9 @@ pub struct ReachableSet {
 
 impl ReachableSet {
     pub fn contains(&self, root: &Path, repo_rel: &str) -> bool {
-        self.set
-            .contains(&normalize_path(&root.join(repo_rel.trim_start_matches("./"))))
+        self.set.contains(&normalize_path(
+            &root.join(repo_rel.trim_start_matches("./")),
+        ))
     }
 }
 
@@ -306,9 +307,7 @@ fn resolve_text(root: &Path, files: &[SourceFile], law_file: &str) -> Option<Str
     if let Some(f) = files.iter().find(|f| f.rel_path.ends_with(needle)) {
         return Some(f.text.clone());
     }
-    fsutil::load_source_file(root, needle)
-        .ok()
-        .map(|f| f.text)
+    fsutil::load_source_file(root, needle).ok().map(|f| f.text)
 }
 
 #[cfg(test)]
@@ -359,10 +358,8 @@ mod tests {
     }
 
     fn fixture_root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "agreement_reach_fixture_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("agreement_reach_fixture_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         build_fixture(&root);
         root

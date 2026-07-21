@@ -16,20 +16,18 @@
 
 #![cfg(feature = "bench-internals")]
 
-use crate::store::open::{
-    genesis, EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl,
-};
 use crate::store::commit_cap::SnapshotFork;
+use crate::store::open::{
+    EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, genesis,
+};
 
 pub use crate::store::epoch::FenceEpoch;
 pub use crate::store::open::StoreId;
 pub use crate::store::sweep::{
-    recovery_time_bound_ns, CommitOrdinal, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN,
-    RECOVERY_SLA_SLOPE_NUM,
+    CommitOrdinal, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
+    recovery_time_bound_ns,
 };
-pub use crate::store::wal::{
-    replay, WalPayload, WalRecord, WalRefuse, WalReplayState, WalSegment,
-};
+pub use crate::store::wal::{WalPayload, WalRecord, WalRefuse, WalReplayState, WalSegment, replay};
 
 /// Mint [`StoreId`] + genesis [`FenceEpoch`] via [`genesis`] — no SweepDoor.
 pub fn mint_store_identity(identity_seed: [u8; 32]) -> (StoreId, FenceEpoch) {

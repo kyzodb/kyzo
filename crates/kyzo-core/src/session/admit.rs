@@ -39,9 +39,7 @@ use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::digest::{
-    ContentHash, ProvenanceDigest, RecordContentDigest, RegionId,
-};
+use crate::data::digest::{ContentHash, ProvenanceDigest, RecordContentDigest, RegionId};
 use crate::data::json::NamedRows;
 use crate::data::statement::{
     OntokKind, StatementBody, StatementContext, StatementPredicate, StatementSource,
@@ -54,16 +52,15 @@ use crate::session::catalog::{IndexKind, KeyspaceKind, RelationHandle, Residency
 use crate::session::db::{Engine, SessionTx};
 use crate::session::generation::{CatalogGeneration, RelationGeneration};
 use crate::session::observe::{CallbackCollector, CallbackOp};
+use crate::store::FenceEpoch;
+use crate::store::ReadTx;
 use crate::store::authority::WriteAuthority;
-use crate::store::keys::Secret;
-use crate::store::merkle::{
-    ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, StateRoot,
-};
 use crate::store::commit_cap::SnapshotFork;
+use crate::store::keys::Secret;
+use crate::store::merkle::{ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, StateRoot};
 use crate::store::open::{
     EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
 };
-use crate::store::ReadTx;
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
     AuthorizingKeyTable, PostStateRoot, ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus,
@@ -72,10 +69,6 @@ use crate::store::replica::{
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
 use crate::store::{Storage, WriteTx};
-use crate::store::FenceEpoch;
-use rand::RngCore;
-use std::fmt;
-use std::sync::{Arc, Mutex};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::rule::FixedRuleOptions;
@@ -86,9 +79,12 @@ use kyzo_model::program::{
 };
 use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
-use kyzo_model::value::{DataValue, ValidityTs};
 use kyzo_model::value::canonical::encode_owned;
+use kyzo_model::value::{DataValue, ValidityTs};
+use rand::RngCore;
 use sha2::{Digest, Sha256};
+use std::fmt;
+use std::sync::{Arc, Mutex};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Spec admission monopoly (§8/§10–§13/§61/§77/§90) — seats beside the
@@ -564,10 +560,7 @@ impl LiveCertificateInputs {
 
 fn root_tip_digests(root_chain: &RootChain) -> ([u8; 32], [u8; 32]) {
     match root_chain.links().last() {
-        Some(link) => (
-            *link.predecessor_root().as_bytes(),
-            *link.root().as_bytes(),
-        ),
+        Some(link) => (*link.predecessor_root().as_bytes(), *link.root().as_bytes()),
         None => (*GENESIS_ROOT.as_bytes(), *GENESIS_ROOT.as_bytes()),
     }
 }
@@ -728,8 +721,8 @@ impl KyzoRecord {
 pub(crate) mod lowering;
 
 pub(crate) use lowering::{
-    crossing_envelope_from_record, lower_after_crossing, promotion_meaning_from_record,
-    OriginSealedLowering,
+    OriginSealedLowering, crossing_envelope_from_record, lower_after_crossing,
+    promotion_meaning_from_record,
 };
 
 /// Validate the full crossing contract then lower (#270 T1/T3).
@@ -950,8 +943,8 @@ pub(crate) fn admit_relation_row_through_record(
 ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
     let keys_len = keys_len.min(row.len());
     let subject = StatementSubject::new(DataValue::List(row[..keys_len].to_vec()));
-    let predicate = StatementPredicate::new(relation_name)
-        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+    let predicate =
+        StatementPredicate::new(relation_name).map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
     let value = StatementValue::new(DataValue::List(row[keys_len..].to_vec()));
     let (kind, statement) = crate::data::statement::construct::relation(
         subject,
@@ -1122,9 +1115,8 @@ pub(crate) mod admit_construct {
         evidence: Option<EvidenceCoordinates>,
         live: &LiveCertificateInputs,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::evidence(subject, value, validity_time, context, source)
-                .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        let (kind, statement) = construct::evidence(subject, value, validity_time, context, source)
+            .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
         admit_kind(store_id, digest, surface, evidence, kind, statement, live)
     }
 
@@ -1274,14 +1266,9 @@ pub(crate) mod admit_construct {
         evidence: Option<EvidenceCoordinates>,
         live: &LiveCertificateInputs,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) = construct::context_record(
-            subject,
-            value,
-            validity_time,
-            context,
-            source,
-        )
-        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        let (kind, statement) =
+            construct::context_record(subject, value, validity_time, context, source)
+                .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
         admit_kind(store_id, digest, surface, evidence, kind, statement, live)
     }
 }
@@ -2653,8 +2640,8 @@ pub(crate) fn make_const_rule(
 mod live_certificate_verifiability {
     use super::*;
     use crate::data::statement::{
-        construct, ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
-        ValidityTime,
+        ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
+        ValidityTime, construct,
     };
     use crate::session::generation::{CatalogGeneration, RelationGeneration};
     use crate::store::authority::WriteAuthority;
@@ -2685,14 +2672,7 @@ mod live_certificate_verifiability {
             StatementSource::unbound(),
         );
         AdmitRecordParts::new(
-            RecordCore::new(
-                store,
-                digest,
-                SemanticSurface::None,
-                None,
-                kind,
-                statement,
-            ),
+            RecordCore::new(store, digest, SemanticSurface::None, None, kind, statement),
             Placement::Unrestricted,
             None,
             IngestShape::Record,
@@ -2728,15 +2708,8 @@ mod live_certificate_verifiability {
         let (_record, cert) =
             admit_record(claim_parts(store, live)).expect("admit through live door");
 
-        verify_replica(
-            &cert,
-            store,
-            CommitOrdinal::ZERO,
-            &keys,
-            &scopes,
-            None,
-        )
-        .expect("receiver must verify against the store key table");
+        verify_replica(&cert, store, CommitOrdinal::ZERO, &keys, &scopes, None)
+            .expect("receiver must verify against the store key table");
     }
 
     /// Seats genesis path: certificate_inputs signs with the store-registered
@@ -2821,15 +2794,21 @@ mod live_certificate_verifiability {
         let live_a = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(10),
         ));
-        let (record_a, _cert_a) =
-            admit_record(claim_parts_with_digest(seats.store_id(), live_a, [0xA1; 32]))
-                .expect("admit record A");
+        let (record_a, _cert_a) = admit_record(claim_parts_with_digest(
+            seats.store_id(),
+            live_a,
+            [0xA1; 32],
+        ))
+        .expect("admit record A");
         let live_b = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(11),
         ));
-        let (_record_b, cert_b) =
-            admit_record(claim_parts_with_digest(seats.store_id(), live_b, [0xB2; 32]))
-                .expect("admit record B");
+        let (_record_b, cert_b) = admit_record(claim_parts_with_digest(
+            seats.store_id(),
+            live_b,
+            [0xB2; 32],
+        ))
+        .expect("admit record B");
 
         let err = seats
             .attach_verified(&record_a, cert_b)
@@ -2850,9 +2829,7 @@ mod live_certificate_verifiability {
     /// #376: flipped signature byte must fail verify_replica inside attach_verified.
     #[test]
     fn attach_verified_refuses_flipped_signature_bit() {
-        use crate::store::replica::{
-            AdmissionCertificateParts, mint_admission_certificate,
-        };
+        use crate::store::replica::{AdmissionCertificateParts, mint_admission_certificate};
 
         let seats = LiveAdmissionSeats::mint_genesis();
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
@@ -2865,8 +2842,7 @@ mod live_certificate_verifiability {
             .expect("genesis seats carry a tip link")
             .clone();
         let predecessor_history_digest = *tip.predecessor_root().as_bytes();
-        let (record, cert) =
-            admit_record(claim_parts(seats.store_id(), live)).expect("admit");
+        let (record, cert) = admit_record(claim_parts(seats.store_id(), live)).expect("admit");
 
         let mut flipped = *cert.signature();
         flipped[0] ^= 0x01;
@@ -2889,10 +2865,7 @@ mod live_certificate_verifiability {
         let err = seats
             .attach_verified(&record, bad)
             .expect_err("flipped signature must refuse");
-        assert_eq!(
-            err,
-            AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed)
-        );
+        assert_eq!(err, AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
         assert_eq!(
             seats.root_chain().links().len(),
             1,

@@ -35,11 +35,11 @@ use crate::fsutil::SourceFile;
 /// Non-deterministic sources forbidden on the sealed/commit surface: wall-clock
 /// reads and unseeded / OS randomness. Matched on any path segment.
 const BANNED_NONDET: &[&str] = &[
-    "Instant",     // std::time::Instant — wall-clock stopwatch
-    "SystemTime",  // std::time::SystemTime — wall-clock
-    "thread_rng",  // unseeded thread-local RNG
-    "OsRng",       // OS CSPRNG draw (the entropy arm lives in session/, not here)
-    "getrandom",   // raw OS entropy
+    "Instant",    // std::time::Instant — wall-clock stopwatch
+    "SystemTime", // std::time::SystemTime — wall-clock
+    "thread_rng", // unseeded thread-local RNG
+    "OsRng",      // OS CSPRNG draw (the entropy arm lives in session/, not here)
+    "getrandom",  // raw OS entropy
 ];
 
 /// One non-determinism source found on the sealed surface.

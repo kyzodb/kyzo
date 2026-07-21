@@ -49,7 +49,7 @@ pub(super) async fn export_relations(
                 StatusCode::BAD_REQUEST,
                 json!({"ok": false, "message": err.to_string()}).into(),
             ),
-        }
+        },
         Ok(Err(err)) => (
             StatusCode::BAD_REQUEST,
             json!({"ok": false, "message": err.to_string()}).into(),

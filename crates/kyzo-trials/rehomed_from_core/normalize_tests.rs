@@ -8,9 +8,7 @@ use std::collections::BTreeMap;
 use kyzo::oracle_harness::{
     SessionNormalizer, SessionTx, SessionView, current_validity, into_normalized_program,
 };
-use kyzo::{
-    CancelFlag, Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage,
-};
+use kyzo::{CancelFlag, Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage};
 use kyzo_model::parse::{Script, parse_script};
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{Program, Rel, naive_eval};
@@ -34,7 +32,6 @@ fn open_sim(_seed: u64) -> Engine<kyzo::FjallStorage> {
     std::mem::forget(dir); // keep store path alive for Engine lifetime
     open_engine(storage)
 }
-
 
 /// Result rows as sorted `i64` vectors, for order-independent assertions.
 fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
@@ -171,8 +168,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
         temp: &tx.temp,
     };
     let mut normalizer = SessionNormalizer::new(view, CancelFlag::default());
-    let (nf, _) =
-        into_normalized_program(prog, &mut normalizer).unwrap();
+    let (nf, _) = into_normalized_program(prog, &mut normalizer).unwrap();
     let (strat, _lifetimes) = nf.into_stratified_program().unwrap();
     let magic = strat.magic_sets_rewrite(&view).unwrap();
     magic
@@ -221,10 +217,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
             edges
                 .iter()
                 .map(|(a, b)| {
-                    Tuple::from_vec(vec![
-                        DataValue::from(*a as i64),
-                        DataValue::from(*b as i64),
-                    ])
+                    Tuple::from_vec(vec![DataValue::from(*a as i64), DataValue::from(*b as i64)])
                 })
                 .collect(),
         )]
@@ -563,22 +556,18 @@ mod magic_bypass_differential {
             facts: [
                 (
                     Name::from("seedp"),
-
                     [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
                 ),
                 (
                     Name::from("linkp"),
-
                     [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect(),
                 ),
                 (
                     Name::from("seedr"),
-
                     [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect(),
                 ),
                 (
                     Name::from("linkr"),
-
                     [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect(),
                 ),
             ]
@@ -672,7 +661,6 @@ mod magic_bypass_differential {
             facts: [
                 (
                     Name::from("addr_of"),
-
                     [
                         Tuple::from_vec(vec![v(1), v(2)]),
                         Tuple::from_vec(vec![v(2), v(3)]),
@@ -682,7 +670,6 @@ mod magic_bypass_differential {
                 ),
                 (
                     Name::from("assign"),
-
                     [
                         Tuple::from_vec(vec![v(2), v(3)]),
                         Tuple::from_vec(vec![v(3), v(4)]),
@@ -692,7 +679,6 @@ mod magic_bypass_differential {
                 ),
                 (
                     Name::from("blocked"),
-
                     [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
                 ),
             ]
@@ -770,7 +756,6 @@ mod magic_bypass_differential {
             facts: [
                 (
                     Name::from("baseq"),
-
                     [
                         Tuple::from_vec(vec![v(1), v(2), v(2)]),
                         Tuple::from_vec(vec![v(1), v(3), v(4)]),
@@ -778,7 +763,10 @@ mod magic_bypass_differential {
                     .into_iter()
                     .collect(),
                 ),
-                (Name::from("seedv"), [Tuple::from_vec(vec![v(1)])].into_iter().collect()),
+                (
+                    Name::from("seedv"),
+                    [Tuple::from_vec(vec![v(1)])].into_iter().collect(),
+                ),
             ]
             .into_iter()
             .collect(),
@@ -883,32 +871,26 @@ mod magic_bypass_differential {
             facts: [
                 (
                     Name::from("addr_of"),
-
                     [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
                 ),
                 (
                     Name::from("assign"),
-
                     [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect(),
                 ),
                 (
                     Name::from("load"),
-
                     [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect(),
                 ),
                 (
                     Name::from("store"),
-
                     [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect(),
                 ),
                 (
                     Name::from("baseh"),
-
                     [Tuple::from_vec(vec![v(4), v(5)])].into_iter().collect(),
                 ),
                 (
                     Name::from("linkh"),
-
                     [Tuple::from_vec(vec![v(5), v(6)])].into_iter().collect(),
                 ),
             ]

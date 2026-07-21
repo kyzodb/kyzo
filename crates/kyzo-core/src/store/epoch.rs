@@ -34,10 +34,7 @@ pub struct FenceEpoch {
 impl FenceEpoch {
     /// Epoch zero for a Store identity — sealed at genesis; binds `store_id`.
     pub fn genesis(store_id: StoreId) -> Self {
-        Self {
-            store_id,
-            epoch: 0,
-        }
+        Self { store_id, epoch: 0 }
     }
 
     /// Construct from an already-proven epoch (WAL / seal decode) under `store_id`.

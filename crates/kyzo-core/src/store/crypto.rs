@@ -29,7 +29,7 @@ use std::collections::HashSet;
 use sha2::{Digest, Sha256};
 
 use super::epoch::CryptoDomain;
-use super::transcript::{encode_key_commitment, CanonicalTranscript};
+use super::transcript::{CanonicalTranscript, encode_key_commitment};
 
 /// Per-segment counter separating DEK space under one CryptoDomain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -482,8 +482,7 @@ fn verify_mismatch_under_certificate_mutation_injector() {
             "fault {fault:?}: detail must name the typed injected rejection, got {detail}"
         );
         assert!(
-            summary_of(&rows).contains("evaluated")
-                && summary_of(&rows).contains("provenance"),
+            summary_of(&rows).contains("evaluated") && summary_of(&rows).contains("provenance"),
             "mismatch summary must name both sets, got {}",
             summary_of(&rows)
         );
@@ -512,8 +511,8 @@ fn verify_matches_filtered_edges_against_eval_count() {
 #[test]
 fn verify_directive_runs_through_run_script() {
     let db = seeded_db();
-    let via_wrap = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
-        .expect("wrap ::verify");
+    let via_wrap =
+        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default()).expect("wrap ::verify");
     let via_directive = db
         .run_script(
             "::verify { path[x, y] := *edge[x, y]
@@ -524,10 +523,7 @@ fn verify_directive_runs_through_run_script() {
         .expect("production ::verify runs");
     assert_eq!(via_directive.headers(), &["status", "summary", "detail"]);
     assert_eq!(status_of(&via_directive), status_of(&via_wrap));
-    assert_eq!(
-        match_row_count(&via_directive),
-        match_row_count(&via_wrap)
-    );
+    assert_eq!(match_row_count(&via_directive), match_row_count(&via_wrap));
     assert_eq!(match_row_count(&via_directive), SEEDED_TC_ROWS);
     assert_eq!(
         match_row_count(&via_directive),
@@ -728,19 +724,12 @@ fn verify_matches_a_point_in_time_historical_read() {
         ("?[k, v] := *hist[k, v @ 150]", 1),
         ("?[k, v] := *hist[k, v @ 50]", 0),
     ] {
-        assert_eq!(
-            eval_answer_count(&db, q),
-            expect,
-            "plain eval drift at {q}"
-        );
+        assert_eq!(eval_answer_count(&db, q), expect, "plain eval drift at {q}");
         let rows = run_verify(&db, q, ScriptOptions::default()).expect("::verify historical");
         assert_eq!(match_row_count(&rows), expect, "query {q}");
     }
     // Ghost-future check: @50 must stay empty even though @200 exists.
-    assert_eq!(
-        eval_answer_count(&db, "?[k, v] := *hist[k, v @ 50]"),
-        0
-    );
+    assert_eq!(eval_answer_count(&db, "?[k, v] := *hist[k, v @ 50]"), 0);
 }
 
 /// Negated historical: `@ 50` (empty hist) keeps both probe rows; `@ 100`
@@ -872,8 +861,14 @@ fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
     // with a wrong count). Prefer Match against eval when eval completes.
     match db.run_script_with(DENSE_SELF_JOIN_PATH, no_params(), generous.clone()) {
         Ok(eval_rows) => {
-            let verified = run_verify(&db, DENSE_SELF_JOIN_PATH, generous).expect("generous verify");
-            assert_eq!(status_of(&verified), "match", "summary={}", summary_of(&verified));
+            let verified =
+                run_verify(&db, DENSE_SELF_JOIN_PATH, generous).expect("generous verify");
+            assert_eq!(
+                status_of(&verified),
+                "match",
+                "summary={}",
+                summary_of(&verified)
+            );
             assert_eq!(match_row_count(&verified), eval_rows.rows().len());
         }
         Err(_) => {
@@ -902,10 +897,7 @@ fn verify_still_matches_under_a_generous_budget() {
         ..ScriptOptions::default()
     };
     assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, options);
-    assert_eq!(
-        eval_answer_count(&db, TRANSITIVE_CLOSURE),
-        SEEDED_TC_ROWS
-    );
+    assert_eq!(eval_answer_count(&db, TRANSITIVE_CLOSURE), SEEDED_TC_ROWS);
 }
 
 /// Default options Match the seeded TC against eval; the same dense

@@ -34,10 +34,10 @@ use super::authority::{RecoveryMatrix, WriteAuthority, WriteTokenId};
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
 use super::transcript::{
-    encode_ancestor_entitlement_key_id, encode_ancestor_read_grant_payload,
+    CanonicalTranscript, encode_ancestor_entitlement_key_id, encode_ancestor_read_grant_payload,
     encode_fork_consent_key_id, encode_fork_grant_payload, encode_fork_store_id,
     encode_fork_write_token, encode_recovery_grant_payload, encode_recovery_matrix,
-    encode_recovery_write_token, CanonicalTranscript,
+    encode_recovery_write_token,
 };
 
 /// Domain-separated prefix for recovery quorum signatures.
@@ -235,8 +235,7 @@ impl PredecessorConsentProof {
         let Ok(sig) = Signature::try_from(signature.as_slice()) else {
             return Err(MaterializeRefuse::ConsentUnverified);
         };
-        let mut message =
-            Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
+        let mut message = Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
         message.extend_from_slice(FORK_CONSENT_DOMAIN);
         message.extend_from_slice(predecessor_store.as_bytes());
         message.extend_from_slice(payload_digest);
@@ -391,9 +390,9 @@ impl RecoveryQuorumProof {
         payload_digest: &[u8; 32],
         aggregate_signature: &[u8],
     ) -> Result<Self, MaterializeRefuse> {
-        let Ok(verifying) =
-            frost_ed25519::VerifyingKey::deserialize(matrix.group_verifying_key().as_bytes().as_slice())
-        else {
+        let Ok(verifying) = frost_ed25519::VerifyingKey::deserialize(
+            matrix.group_verifying_key().as_bytes().as_slice(),
+        ) else {
             return Err(MaterializeRefuse::QuorumUnverified);
         };
         let Ok(signature) = frost_ed25519::Signature::deserialize(aggregate_signature) else {
@@ -618,9 +617,7 @@ pub enum MaterializeRefuse {
     #[diagnostic(code(store::grants::consent_mismatch))]
     ConsentMismatch,
     /// No sealed consent verifying key is registered for the predecessor StoreId.
-    #[error(
-        "ConsentKeyUnknown: no sealed predecessor-consent verifying key for the named StoreId"
-    )]
+    #[error("ConsentKeyUnknown: no sealed predecessor-consent verifying key for the named StoreId")]
     #[diagnostic(code(store::grants::consent_key_unknown))]
     ConsentKeyUnknown,
     /// StoreId already has a sealed trust root; a different key cannot overwrite it.
@@ -741,11 +738,7 @@ impl PriorRecoveryTable {
     }
 
     /// GrantId that already took the recovery one-shot for this predecessor epoch, if any.
-    pub fn shot_for(
-        &self,
-        store_id: StoreId,
-        predecessor_epoch: FenceEpoch,
-    ) -> Option<GrantId> {
+    pub fn shot_for(&self, store_id: StoreId, predecessor_epoch: FenceEpoch) -> Option<GrantId> {
         if predecessor_epoch.store_id() != store_id {
             return None;
         }
@@ -850,8 +843,7 @@ fn materialize_recovery(
     // One-shot quorum: a second distinct RecoveryGrant for this predecessor
     // epoch is equivocation poison — never a second WriteAuthority lineage.
     if let Some(table) = prior_recovery
-        && let Some(first_grant) =
-            table.shot_for(recovery.store_id(), recovery.predecessor_epoch())
+        && let Some(first_grant) = table.shot_for(recovery.store_id(), recovery.predecessor_epoch())
         && first_grant != recovery.grant_id()
     {
         return Err(MaterializeRefuse::QuorumEquivocationPoison {
@@ -963,8 +955,7 @@ impl AncestorEntitlementProof {
         let Ok(sig) = Signature::try_from(signature.as_slice()) else {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         };
-        let mut message =
-            Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
+        let mut message = Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
         message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
         message.extend_from_slice(store_id.as_bytes());
         message.extend_from_slice(payload_digest);
@@ -1329,8 +1320,7 @@ fn frost_recovery_aggregate(
     for participant_index in 1..=participating {
         let participant_identifier = participant_index.try_into().expect("nonzero id");
         let key_package = &key_packages[&participant_identifier];
-        let (nonces, commitments) =
-            frost::round1::commit(key_package.signing_share(), &mut rng);
+        let (nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
         nonces_map.insert(participant_identifier, nonces);
         commitments_map.insert(participant_identifier, commitments);
     }
@@ -1340,8 +1330,8 @@ fn frost_recovery_aggregate(
     for participant_identifier in nonces_map.keys() {
         let key_package = &key_packages[participant_identifier];
         let nonces = &nonces_map[participant_identifier];
-        let signature_share = frost::round2::sign(&signing_package, nonces, key_package)
-            .expect("FROST round2 share");
+        let signature_share =
+            frost::round2::sign(&signing_package, nonces, key_package).expect("FROST round2 share");
         signature_shares.insert(*participant_identifier, signature_share);
     }
 
@@ -1397,8 +1387,7 @@ fn frost_try_aggregate_below_threshold(
     for participant_index in 1..=min_signers {
         let participant_identifier = participant_index.try_into().expect("nonzero id");
         let key_package = &key_packages[&participant_identifier];
-        let (nonces, commitments) =
-            frost::round1::commit(key_package.signing_share(), &mut rng);
+        let (nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
         nonces_map.insert(participant_identifier, nonces);
         commitments_map.insert(participant_identifier, commitments);
     }
@@ -1447,12 +1436,7 @@ pub(crate) fn sign_fork_consent(
     predecessor_store: StoreId,
     payload_digest: &[u8; 32],
 ) -> ([u8; 32], [u8; 64]) {
-    sign_domain_label(
-        FORK_CONSENT_DOMAIN,
-        seed,
-        predecessor_store,
-        payload_digest,
-    )
+    sign_domain_label(FORK_CONSENT_DOMAIN, seed, predecessor_store, payload_digest)
 }
 
 /// Test-only: ed25519 ancestor-entitlement sign over the entitlement domain.
@@ -1462,12 +1446,7 @@ pub(crate) fn sign_ancestor_entitlement(
     store_id: StoreId,
     payload_digest: &[u8; 32],
 ) -> ([u8; 32], [u8; 64]) {
-    sign_domain_label(
-        ANCESTOR_ENTITLEMENT_DOMAIN,
-        seed,
-        store_id,
-        payload_digest,
-    )
+    sign_domain_label(ANCESTOR_ENTITLEMENT_DOMAIN, seed, store_id, payload_digest)
 }
 
 #[cfg(test)]
@@ -1532,7 +1511,9 @@ mod tests {
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = PredecessorConsentTable::new();
-        table.insert(store, weak).expect("register weak consent key (from_bytes accepts identity)");
+        table
+            .insert(store, weak)
+            .expect("register weak consent key (from_bytes accepts identity)");
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
@@ -1549,7 +1530,9 @@ mod tests {
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = AncestorEntitlementTable::new();
-        table.insert(store, weak).expect("register weak entitlement key");
+        table
+            .insert(store, weak)
+            .expect("register weak entitlement key");
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
@@ -1600,11 +1583,9 @@ mod tests {
 
         // Attacker mints a real FROST aggregate against a *different* matrix,
         // names the victim, then materializes against the victim store matrix.
-        let (attacker_matrix, attacker_sig) =
-            frost_sign_recovery_quorum([0xB1; 32], &payload);
-        let forged_proof =
-            RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sig)
-                .expect("attacker quorum against their own matrix");
+        let (attacker_matrix, attacker_sig) = frost_sign_recovery_quorum([0xB1; 32], &payload);
+        let forged_proof = RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sig)
+            .expect("attacker quorum against their own matrix");
         let grant = RecoveryGrant::new(
             grant_id,
             victim,
@@ -1722,8 +1703,7 @@ mod tests {
                 signed_matrix.group_verifying_key(),
                 matrix.group_verifying_key()
             );
-            let proof =
-                RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
+            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
             RecoveryGrant::new(
                 grant_id,
                 store_id,
@@ -1738,8 +1718,14 @@ mod tests {
         let g1 = mint(GrantId::from_bytes([0x01; 32]), [0xA1; 32], [0xA2; 32]);
         let g2 = mint(GrantId::from_bytes([0x02; 32]), [0xB1; 32], [0xB2; 32]);
 
-        let first = materialize(&Grant::Recovery(g1.clone()), None, Some(&matrix), None, None)
-            .expect("first recovery must mint");
+        let first = materialize(
+            &Grant::Recovery(g1.clone()),
+            None,
+            Some(&matrix),
+            None,
+            None,
+        )
+        .expect("first recovery must mint");
         assert_eq!(first.store_id(), store_id);
 
         let mut prior = PriorRecoveryTable::new();
@@ -1804,8 +1790,7 @@ mod tests {
                 signed_matrix.group_verifying_key(),
                 matrix.group_verifying_key()
             );
-            let proof =
-                RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
+            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
             RecoveryGrant::new(
                 grant_id,
                 store_id,
@@ -1922,13 +1907,9 @@ mod tests {
             &commitment,
         );
         let forged_sig = consent.sign_consent(victim, &forged_lineage_payload);
-        let forged_lineage_proof = PredecessorConsentProof::verify(
-            &table,
-            victim,
-            &forged_lineage_payload,
-            &forged_sig,
-        )
-        .expect("consent verifies for forged lineage payload");
+        let forged_lineage_proof =
+            PredecessorConsentProof::verify(&table, victim, &forged_lineage_payload, &forged_sig)
+                .expect("consent verifies for forged lineage payload");
         assert_eq!(
             ForkGrant::new(
                 grant_id,
@@ -2039,8 +2020,8 @@ mod tests {
             .insert(predecessor, *consent.verifying_key())
             .expect("register predecessor consent key");
         let sig = consent.sign_consent(predecessor, &payload);
-        let proof = PredecessorConsentProof::verify(&table, predecessor, &payload, &sig)
-            .expect("consent");
+        let proof =
+            PredecessorConsentProof::verify(&table, predecessor, &payload, &sig).expect("consent");
         let grant = ForkGrant::new(
             grant_id,
             predecessor,
@@ -2074,8 +2055,7 @@ mod tests {
         }
 
         fn sign_consent(&self, predecessor_store: StoreId, payload_digest: &[u8; 32]) -> [u8; 64] {
-            let mut message =
-                Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
+            let mut message = Vec::with_capacity(FORK_CONSENT_DOMAIN.len() + 32 + 32);
             message.extend_from_slice(FORK_CONSENT_DOMAIN);
             message.extend_from_slice(predecessor_store.as_bytes());
             message.extend_from_slice(payload_digest);
@@ -2101,8 +2081,7 @@ mod tests {
         }
 
         fn sign_entitlement(&self, store_id: StoreId, payload_digest: &[u8; 32]) -> [u8; 64] {
-            let mut message =
-                Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
+            let mut message = Vec::with_capacity(ANCESTOR_ENTITLEMENT_DOMAIN.len() + 32 + 32);
             message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
             message.extend_from_slice(store_id.as_bytes());
             message.extend_from_slice(payload_digest);
@@ -2134,7 +2113,9 @@ mod tests {
         assert_eq!(grant.to_epoch(), to_epoch);
 
         let domain = CryptoDomain::new(store_id, from_epoch);
-        grant.authorize(domain).expect("in-range domain must authorize");
+        grant
+            .authorize(domain)
+            .expect("in-range domain must authorize");
     }
 
     /// Nasty: entitlement signed by an attacker key NOT bound in the sealed

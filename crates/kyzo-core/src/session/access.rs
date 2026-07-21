@@ -64,11 +64,7 @@ impl Display for AccessLevel {
 #[derive(Debug, Error, Diagnostic)]
 #[error("Insufficient access level {2} for {1} on stored relation '{0}'")]
 #[diagnostic(code(tx::insufficient_access_level))]
-pub struct InsufficientAccessLevel(
-    pub(crate) String,
-    pub(crate) String,
-    pub(crate) AccessLevel,
-);
+pub struct InsufficientAccessLevel(pub(crate) String, pub(crate) String, pub(crate) AccessLevel);
 
 /// Map the parser's access-level enum to the catalog's. Both are the same
 /// four-rung ladder; the parse tier and runtime tier keep distinct types.

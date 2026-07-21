@@ -36,7 +36,7 @@
 
 use syn::visit::{self, Visit};
 
-use crate::fsutil::{span_line, SourceFile};
+use crate::fsutil::{SourceFile, span_line};
 use crate::synutil::mod_is_test_scope;
 
 /// Committed count of hand-rolled byte-layout sites on the store surface
@@ -54,8 +54,7 @@ pub struct Site {
 /// True for the sealed-artifact surface this ratchet governs: `store/` inside
 /// `kyzo-core`, excluding the one canonical constructor (`transcript.rs`).
 fn is_sealed_surface(rel_path: &str) -> bool {
-    rel_path.starts_with("crates/kyzo-core/src/store/")
-        && !rel_path.ends_with("/transcript.rs")
+    rel_path.starts_with("crates/kyzo-core/src/store/") && !rel_path.ends_with("/transcript.rs")
 }
 
 struct Scanner {
@@ -134,7 +133,11 @@ mod tests {
              h.update(b\"kyzo.checkpoint_seal.v1\"); h.update(p.store_id()); }",
         );
         let hits = check(std::slice::from_ref(&f));
-        assert_eq!(hits.len(), 1, "the b\"...\" domain-tag update must be counted");
+        assert_eq!(
+            hits.len(),
+            1,
+            "the b\"...\" domain-tag update must be counted"
+        );
     }
 
     #[test]
@@ -167,11 +170,17 @@ mod tests {
             "crates/kyzo-core/src/session/admit.rs",
             "fn f() { let mut h = Sha256::new(); h.update(b\"x\"); }",
         );
-        assert!(check(std::slice::from_ref(&outside)).is_empty(), "off the store surface");
+        assert!(
+            check(std::slice::from_ref(&outside)).is_empty(),
+            "off the store surface"
+        );
         let test_scope = parse(
             "crates/kyzo-core/src/store/seal.rs",
             "#[cfg(test)] mod tests { fn f() { let mut h = Sha256::new(); h.update(b\"x\"); } }",
         );
-        assert!(check(std::slice::from_ref(&test_scope)).is_empty(), "test scaffolding");
+        assert!(
+            check(std::slice::from_ref(&test_scope)).is_empty(),
+            "test scaffolding"
+        );
     }
 }

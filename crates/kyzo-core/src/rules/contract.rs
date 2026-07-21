@@ -537,10 +537,15 @@ impl<'a> FixedRulePayload<'a> {
     }
     /// Extract a floating point option
     pub fn float_option(&self, name: &str, default: Option<f64>) -> Result<f64> {
-        self.typed_option(name, default, |val| match val {
-            DataValue::Num(n) => Some(n.to_f64()),
-            _ => None,
-        }, WrongFixedRuleOptionHelp::FloatRequired)
+        self.typed_option(
+            name,
+            default,
+            |val| match val {
+                DataValue::Num(n) => Some(n.to_f64()),
+                _ => None,
+            },
+            WrongFixedRuleOptionHelp::FloatRequired,
+        )
     }
     /// Extract a floating point option between 0. and 1.
     pub fn unit_interval_option(&self, name: &str, default: Option<f64>) -> Result<f64> {
@@ -558,10 +563,15 @@ impl<'a> FixedRulePayload<'a> {
     }
     /// Extract a boolean option
     pub fn bool_option(&self, name: &str, default: Option<bool>) -> Result<bool> {
-        self.typed_option(name, default, |val| match val {
-            DataValue::Bool(b) => Some(b),
-            _ => None,
-        }, WrongFixedRuleOptionHelp::BoolRequired)
+        self.typed_option(
+            name,
+            default,
+            |val| match val {
+                DataValue::Bool(b) => Some(b),
+                _ => None,
+            },
+            WrongFixedRuleOptionHelp::BoolRequired,
+        )
     }
 }
 

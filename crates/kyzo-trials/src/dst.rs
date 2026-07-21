@@ -80,12 +80,12 @@ use miette::{Result, miette};
 use smartstring::SmartString;
 
 use kyzo_model::program::aggregate::parse_aggr;
-use kyzo_model::program::{
-    HeadAggrSlot, InputRelationHandle, SourceSpan, Symbol, ValidityClause,
-};
+use kyzo_model::program::{HeadAggrSlot, InputRelationHandle, SourceSpan, Symbol, ValidityClause};
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{AsOf, DataValue, Tuple, ValidityTs};
 
+use crate::exec::fixpoint::delta_store::TupleInIter;
+use crate::exec::fixpoint::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::exec::plan::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
@@ -93,8 +93,6 @@ use crate::exec::plan::program::{
     MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom,
     MagicRulesOrFixed, MagicSymbol, StoreLifetimes, StratifiedMagicProgram,
 };
-use crate::exec::fixpoint::delta_store::TupleInIter;
-use crate::exec::fixpoint::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::project::current::Segments;
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::store::sim::{FaultConfig, SimRng, SimStorage, SimWriteTx, for_each_seed};
@@ -1383,7 +1381,6 @@ fn antivacuity_corrupt_reference_is_caught() {
     assert_eq!(real, tc_expected());
 }
 
-
 // ═════════════════════════════════════════════════════════════════════════
 // Power-cut / recovery-bound corpus at the SweepDoor (§28 / §29 / §86).
 // Structural work units only — sealed ns coefficients come from the
@@ -1391,19 +1388,19 @@ fn antivacuity_corrupt_reference_is_caught() {
 // ═════════════════════════════════════════════════════════════════════════
 
 use super::{
-    CommitOrdinal, SweepDoor, SweepSession, emit_recovery_sla_claim, recovery_time_bound_ns,
-    RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
+    CommitOrdinal, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
+    SweepDoor, SweepSession, emit_recovery_sla_claim, recovery_time_bound_ns,
 };
 use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
 use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
 use crate::store::merkle::{GENESIS_ROOT, StateRoot};
 use crate::store::open::{
-    open_with_capability, EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl,
-    StoreId, genesis,
+    EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
+    open_with_capability,
 };
 use crate::store::scratch::TempTx;
-use crate::store::wal::{replay, WalPayload, WalRecord, WalRefuse, WalSegment};
+use crate::store::wal::{WalPayload, WalRecord, WalRefuse, WalSegment, replay};
 
 fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
     let key = OperationKey::single_store(b"kyzo.sweep.dst", op, store_id, b"s0");
@@ -1448,8 +1445,7 @@ fn open_live_door(
     let cap = StableCommitCap::NativeFsyncProof {
         snapshot_fork: SnapshotFork::No,
     };
-    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
-        .expect("live SweepDoor");
+    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap).expect("live SweepDoor");
     (door, incarnation, session)
 }
 
@@ -1621,14 +1617,15 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                         .append_continuing_head(record)
                         .expect("flushed WAL continuing head");
                 } else {
-                    segments[seg_i]
-                        .append(record)
-                        .expect("flushed WAL append");
+                    segments[seg_i].append(record).expect("flushed WAL append");
                 }
                 ci += 1;
             }
         }
-        assert_eq!(ci, n_flushed_commits, "seed {seed}: flushed commits must all land");
+        assert_eq!(
+            ci, n_flushed_commits,
+            "seed {seed}: flushed commits must all land"
+        );
     }
 
     let unflushed_idx = n_segments - 1;
@@ -1752,11 +1749,8 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                 recovered, again,
                 "seed {seed}: crash-during-recovery must be idempotent"
             );
-            let recovered_ordinals: Vec<CommitOrdinal> = recovered
-                .commit_bodies
-                .iter()
-                .map(|(o, _)| *o)
-                .collect();
+            let recovered_ordinals: Vec<CommitOrdinal> =
+                recovered.commit_bodies.iter().map(|(o, _)| *o).collect();
             assert_eq!(
                 recovered_ordinals, committed,
                 "seed {seed}: every minted Committed must survive the power cut"
@@ -1777,13 +1771,9 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                 WalRefuse::RecordHashMismatch,
                 "seed {seed}: torn tail must typed-refuse RecordHashMismatch, got {refuse:?}"
             );
-            let prefix_state =
-                replay(store_id, &clean_prefix).expect("clean prefix must replay");
-            let prefix_ordinals: Vec<CommitOrdinal> = prefix_state
-                .commit_bodies
-                .iter()
-                .map(|(o, _)| *o)
-                .collect();
+            let prefix_state = replay(store_id, &clean_prefix).expect("clean prefix must replay");
+            let prefix_ordinals: Vec<CommitOrdinal> =
+                prefix_state.commit_bodies.iter().map(|(o, _)| *o).collect();
             assert_eq!(
                 prefix_ordinals, expected_clean,
                 "seed {seed}: clean-prefix recovery must match durable whole records only"
@@ -1875,7 +1865,8 @@ fn power_cut_at_commit_door_dst() {
     assert!(RECOVERY_SLA_SLOPE_DEN > 0);
     assert_eq!(recovery_time_bound_ns(0), RECOVERY_SLA_INTERCEPT_NS);
 
-    let mut structural_works: Vec<u64> = samples.iter().map(|s| s.structural_recovery_work).collect();
+    let mut structural_works: Vec<u64> =
+        samples.iter().map(|s| s.structural_recovery_work).collect();
     let recovery_time_p999 = percentile_999(&mut structural_works);
     assert!(
         recovery_time_p999 > 0,
@@ -1994,18 +1985,17 @@ fn operation_key_production_commit_write_dedupes_same_process() {
         ..ScriptOptions::default()
     };
 
-    let tx1 = SessionTx::new_write(
-        db.store.write_tx().expect("write tx 1"),
-        opts.clone(),
-    );
+    let tx1 = SessionTx::new_write(db.store.write_tx().expect("write tx 1"), opts.clone());
     tx1.commit_write().expect("first production commit_write");
-    let commits_after_first = db.sweep.with_mut(|door, _, _| door.highest_commit_ordinal().get());
-    assert_eq!(commits_after_first, 1, "first commit_write must seal via SweepDoor");
-
-    let tx2 = SessionTx::new_write(
-        db.store.write_tx().expect("write tx 2"),
-        opts,
+    let commits_after_first = db
+        .sweep
+        .with_mut(|door, _, _| door.highest_commit_ordinal().get());
+    assert_eq!(
+        commits_after_first, 1,
+        "first commit_write must seal via SweepDoor"
     );
+
+    let tx2 = SessionTx::new_write(db.store.write_tx().expect("write tx 2"), opts);
     tx2.commit_write()
         .expect("retry commit_write with same operation identity");
     let (commits, wal_len, store_id, segment) = db.sweep.with_mut(|door, _, _| {
@@ -2020,7 +2010,10 @@ fn operation_key_production_commit_write_dedupes_same_process() {
         commits, 1,
         "production commit_write retry must not mint a second CommitOrdinal"
     );
-    assert_eq!(wal_len, 1, "exactly one WAL Commit after two production acks");
+    assert_eq!(
+        wal_len, 1,
+        "exactly one WAL Commit after two production acks"
+    );
     let recovered = replay(store_id, std::slice::from_ref(&segment)).expect("replay");
     assert_eq!(recovered.commit_bodies.len(), 1);
 }
@@ -2175,8 +2168,8 @@ pub mod storage_campaign_lanes {
     };
     use crate::store::authority::IncarnationMintCap;
     use crate::store::backup::{
-        LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness, OriginRootRegistry,
-        PackRefuse, import_verify,
+        LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
+        OriginRootRegistry, PackRefuse, import_verify,
     };
     use crate::store::compact::{
         CompactRefuse, LineageHash, MergeProof, MergeProofParts, PacketContentHash,
@@ -2189,10 +2182,16 @@ pub mod storage_campaign_lanes {
         CarriageReport, KeyspaceId, ScopedMismatchCarriage, UnknownInvariantCarriage,
         mint_quarantine,
     };
+    use crate::store::grants::{
+        ForkPointRoot, IdentitySeed, KeyMaterialCommitment, MaterializeRefuse,
+        PredecessorConsentProof, PredecessorConsentTable, PriorRecoveryTable, RecoveryQuorumProof,
+        SuccessorPrincipal, fork_grant_payload_digest, frost_sign_recovery_quorum,
+        recovery_grant_payload_digest, sign_fork_consent,
+    };
     use crate::store::replica::{
-        mint_admission_certificate, sign_admission_parts, AdmissionCertificate,
-        AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, LocalProjection,
-        OriginContinuity, PostStateRoot, ReplicaRefuse, verify_replica,
+        AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable,
+        LocalProjection, OriginContinuity, PostStateRoot, ReplicaRefuse,
+        mint_admission_certificate, sign_admission_parts, verify_replica,
     };
     use crate::store::scratch::TempTx;
     use crate::store::seal::CheckpointSeal;
@@ -2205,18 +2204,12 @@ pub mod storage_campaign_lanes {
         IntentOrdinal, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
         ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate,
         PermanenceWitness, PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant,
-        RecoveryMatrix, Regions, ReplicaCustody, ReplicaKey, RequestDigest,
-        ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, SealDigest, SealRefuse,
-        SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingToken, StagingTtl,
-        StateRoot, Storage, StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession,
-        TranscriptRefuse, VolatilePending, WalHash, WriteTx, encode_normative_production_transcript,
-        genesis, materialize, nonce, parse_golden_hex, reclaim_candidate,
-    };
-    use crate::store::grants::{
-        ForkPointRoot, IdentitySeed, KeyMaterialCommitment, MaterializeRefuse,
-        PredecessorConsentProof, PredecessorConsentTable, PriorRecoveryTable,
-        RecoveryQuorumProof, SuccessorPrincipal, fork_grant_payload_digest,
-        frost_sign_recovery_quorum, recovery_grant_payload_digest, sign_fork_consent,
+        RecoveryMatrix, Regions, ReplicaCustody, ReplicaKey, RequestDigest, ScopeManifestDigest,
+        ScopeManifestStatus, ScopeManifestTable, SealDigest, SealRefuse, SealedArtifactKind,
+        SizeClass, SnapshotFork, StableCommitCap, StagingToken, StagingTtl, StateRoot, Storage,
+        StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse,
+        VolatilePending, WalHash, WriteTx, encode_normative_production_transcript, genesis,
+        materialize, nonce, parse_golden_hex, reclaim_candidate,
     };
 
     /// Mint a RecoveryGrant under a fresh FROST 2-of-3 matrix (positive recovery paths).
@@ -2347,9 +2340,7 @@ pub mod storage_campaign_lanes {
             staging_ttl: StagingTtl::new(1_024),
             size_class: SizeClass::Compact,
             entropy_arm: EntropyArm::OsRandom,
-            stable_commit_cap: crate::store::StableCommitCapArm::NativeFsyncProof {
-                snapshot_fork,
-            },
+            stable_commit_cap: crate::store::StableCommitCapArm::NativeFsyncProof { snapshot_fork },
         }
     }
 
@@ -2368,8 +2359,8 @@ pub mod storage_campaign_lanes {
             .mint(Entropy::from_bytes(entropy))
             .expect("incarnation mint");
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
-        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
-            .expect("live SweepDoor");
+        let door =
+            SweepDoor::open(store_id, fence_epoch, session, auth, cap).expect("live SweepDoor");
         (door, incarnation, session)
     }
 
@@ -2619,7 +2610,10 @@ pub mod storage_campaign_lanes {
                 "seed {seed}: refuse must not advance CommitOrdinal (no cut)"
             );
         }
-        assert!(saw_gap, "admit/seal campaign must emit at least one IntentOrdinal gap");
+        assert!(
+            saw_gap,
+            "admit/seal campaign must emit at least one IntentOrdinal gap"
+        );
         assert!(
             saw_multi_seal,
             "admit/seal campaign must seal ≥2 intents on some seed"
@@ -2697,8 +2691,7 @@ pub mod storage_campaign_lanes {
                 let mut tx = db.write_tx().expect("sim write_tx");
                 let k = format!("pipeline.committed.{seed}.{i}");
                 let v = format!("survives-power-cut-{seed}-{i}");
-                tx.put(k.as_bytes(), v.as_bytes())
-                    .expect("put under seal");
+                tx.put(k.as_bytes(), v.as_bytes()).expect("put under seal");
                 let committed = door
                     .seal_durable(
                         intent,
@@ -2826,9 +2819,8 @@ pub mod storage_campaign_lanes {
         let quarantined = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
             ScopedMismatchCarriage::new(ks, b"a".to_vec(), b"c".to_vec()),
         ));
-        let poisoned = FailureLattice::Healthy.report(CarriageReport::UnknownInvariant(
-            UnknownInvariantCarriage,
-        ));
+        let poisoned = FailureLattice::Healthy
+            .report(CarriageReport::UnknownInvariant(UnknownInvariantCarriage));
         let meet = quarantined.combine(poisoned);
         assert_eq!(
             meet.admit_key(ks, b"z"),
@@ -2887,12 +2879,22 @@ pub mod storage_campaign_lanes {
             consent_seed,
             &consent_table,
         );
-        let first =
-            materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table), None)
-                .expect("first discovery");
-        let second =
-            materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table), None)
-                .expect("second discovery");
+        let first = materialize(
+            &Grant::Fork(fork.clone()),
+            None,
+            None,
+            Some(&consent_table),
+            None,
+        )
+        .expect("first discovery");
+        let second = materialize(
+            &Grant::Fork(fork.clone()),
+            None,
+            None,
+            Some(&consent_table),
+            None,
+        )
+        .expect("second discovery");
         assert_eq!(
             first.store_id(),
             second.store_id(),
@@ -2924,9 +2926,8 @@ pub mod storage_campaign_lanes {
             consent_seed,
             &consent_table,
         );
-        let foreign =
-            materialize(&Grant::Fork(other), None, None, Some(&consent_table), None)
-                .expect("foreign successor");
+        let foreign = materialize(&Grant::Fork(other), None, None, Some(&consent_table), None)
+            .expect("foreign successor");
         let prior_bad = PriorMaterialization::new(fork.grant_id(), foreign.store_id());
         let refuse = materialize(
             &Grant::Fork(fork),
@@ -2959,20 +2960,10 @@ pub mod storage_campaign_lanes {
         let g1_id = GrantId::from_bytes([0x71; 32]);
         let g2_id = GrantId::from_bytes([0x72; 32]);
         let (g1, matrix) = recovery_grant_with_quorum(
-            g1_id,
-            store_id,
-            pred_epoch,
-            [0xA1; 32],
-            [0xA2; 32],
-            [0x11; 32],
+            g1_id, store_id, pred_epoch, [0xA1; 32], [0xA2; 32], [0x11; 32],
         );
         let (g2, _) = recovery_grant_with_quorum(
-            g2_id,
-            store_id,
-            pred_epoch,
-            [0xB1; 32],
-            [0xB2; 32],
-            [0x11; 32],
+            g2_id, store_id, pred_epoch, [0xB1; 32], [0xB2; 32], [0x11; 32],
         );
 
         let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix), None, None)
@@ -3042,8 +3033,7 @@ pub mod storage_campaign_lanes {
             );
 
             // Real stage at cut ZERO: expires_at = 0 + TTL; idle cut never reaches it.
-            let token =
-                StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x22, seed)));
+            let token = StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x22, seed)));
             let hash = ContentHash::from_digest(seed_bytes(0xAD, seed));
             let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
                 .expect("stage under idle cut");
@@ -3060,9 +3050,8 @@ pub mod storage_campaign_lanes {
                 IntegrityVerification::ContentHash,
                 BackendContract::from_digest([0xBC; 32]),
             );
-            let witness =
-                PermanenceWitness::mint(&candidate, door.highest_commit_ordinal(), class)
-                    .expect("unresolved Pending on idle store must not Decayed");
+            let witness = PermanenceWitness::mint(&candidate, door.highest_commit_ordinal(), class)
+                .expect("unresolved Pending on idle store must not Decayed");
             assert_eq!(witness.content_hash(), hash);
 
             // Reclaim always lawful idle — matching certificate.
@@ -3214,8 +3203,7 @@ pub mod storage_campaign_lanes {
             let sealed = genesis(genesis_params(seed_bytes(0x23, seed), SnapshotFork::No));
             let store_id = sealed.store_id();
             let ttl = StagingTtl::new(ttl_n);
-            let token =
-                StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x23, seed)));
+            let token = StagingToken::mint(store_id, ObjectId::from_digest(seed_bytes(0x23, seed)));
             let hash = ContentHash::from_digest(seed_bytes(0xCA, seed));
             let pending = VolatilePending::stage(token, hash, CommitOrdinal::ZERO, ttl)
                 .expect("stage PermanenceCandidate precursor");
@@ -3439,8 +3427,7 @@ pub mod storage_campaign_lanes {
 
         for &(kind, golden_file) in GOLDENS {
             let expected = parse_golden_hex(golden_file).expect("golden vector parses");
-            let encoded =
-                encode_normative_production_transcript(kind).expect("production encodes");
+            let encoded = encode_normative_production_transcript(kind).expect("production encodes");
             assert_eq!(
                 encoded.as_bytes(),
                 expected.as_slice(),
@@ -3469,7 +3456,10 @@ pub mod storage_campaign_lanes {
         // Mutation campaign: corrupt golden bits at seed-derived offsets →
         // refuse / mismatch vs authority (was a single mid-vector flip).
         let golden = parse_golden_hex(GOLDENS[0].1).expect("checkpoint golden");
-        assert!(golden.len() >= 2, "checkpoint golden too short for offset sweep");
+        assert!(
+            golden.len() >= 2,
+            "checkpoint golden too short for offset sweep"
+        );
         let production = encode_normative_production_transcript(SealedArtifactKind::CheckpointSeal)
             .expect("production checkpoint seal");
         let mut offsets = BTreeSet::new();
@@ -3567,12 +3557,8 @@ pub mod storage_campaign_lanes {
                 scope,
                 &key,
             );
-            let expected_key = ReplicaKey::derive(
-                origin_store,
-                origin_epoch,
-                origin_commit,
-                &record_digest,
-            );
+            let expected_key =
+                ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &record_digest);
 
             // At-least-once deliveries through verify_replica → one Queryable custody.
             let mut first: Option<ReplicaCustody> = None;
@@ -3760,26 +3746,16 @@ pub mod storage_campaign_lanes {
 
             // Degenerate single-store organ: same client_operation_id → same key.
             let client_op = format!("client-op-crash-{seed}");
-            let single_a = OperationKey::single_store(
-                domain,
-                client_op.as_bytes(),
-                store_id,
-                b"step-0",
-            );
-            let single_b = OperationKey::single_store(
-                domain,
-                client_op.as_bytes(),
-                store_id,
-                b"step-0",
-            );
+            let single_a =
+                OperationKey::single_store(domain, client_op.as_bytes(), store_id, b"step-0");
+            let single_b =
+                OperationKey::single_store(domain, client_op.as_bytes(), store_id, b"step-0");
             assert_eq!(single_a, single_b);
 
             // Absent adversary: never memoizes as terminal — a later Committed for
             // the same key must still land (no phantom terminal blocking reuse).
-            let read_key =
-                OperationKey::derive(domain, &composition_id, store_id, b"read-at");
-            let request_digest =
-                IdempotencyMemo::digest_request(format!("read-{seed}").as_bytes());
+            let read_key = OperationKey::derive(domain, &composition_id, store_id, b"read-at");
+            let request_digest = IdempotencyMemo::digest_request(format!("read-{seed}").as_bytes());
             assert_eq!(
                 memo.remember(read_key, request_digest, OperationOutcome::Absent),
                 Ok(OperationOutcome::Absent),
@@ -3913,8 +3889,7 @@ pub mod storage_campaign_lanes {
                     .wrapping_add(i as u8)
                     .wrapping_mul(3);
                 let local_schema_cut = [cut_tag; 32];
-                let projection =
-                    LocalProjection::from_certificate(cert.clone(), local_schema_cut);
+                let projection = LocalProjection::from_certificate(cert.clone(), local_schema_cut);
                 assert_eq!(
                     projection.local_schema_cut(),
                     &local_schema_cut,
@@ -4037,10 +4012,7 @@ pub mod storage_campaign_lanes {
             arities.insert(n as u8);
             let inputs: Vec<_> = (0..n)
                 .map(|i| {
-                    PacketContentHash::from_digest(seed_bytes(
-                        0x01u8.wrapping_add(i as u8),
-                        seed,
-                    ))
+                    PacketContentHash::from_digest(seed_bytes(0x01u8.wrapping_add(i as u8), seed))
                 })
                 .collect();
             let parts = MergeProofParts {
@@ -4066,8 +4038,7 @@ pub mod storage_campaign_lanes {
 
             // Distinct plaintext → distinct sealed identity (cipher-invariant: no ciphertext in identity).
             let mut other = parts;
-            other.output_content_hash =
-                PacketContentHash::from_digest(seed_bytes(0x44, seed));
+            other.output_content_hash = PacketContentHash::from_digest(seed_bytes(0x44, seed));
             let (proof_c, _) = MergeProof::mint(other).expect("mint c");
             assert_ne!(
                 proof_a.sealed_identity(),
@@ -4101,20 +4072,10 @@ pub mod storage_campaign_lanes {
         let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x55; 32]));
         let seg_a = SegmentCounter::ZERO;
         let seg_b = SegmentCounter::from_raw(1);
-        let wrap_a = wrap_shred_salt(
-            &cap,
-            &ShredSalt::from_bytes([0xAA; 32]),
-            seg_a,
-            domain,
-        )
-        .expect("wrap A");
-        let wrap_b = wrap_shred_salt(
-            &cap,
-            &ShredSalt::from_bytes([0xBB; 32]),
-            seg_b,
-            domain,
-        )
-        .expect("wrap B");
+        let wrap_a = wrap_shred_salt(&cap, &ShredSalt::from_bytes([0xAA; 32]), seg_a, domain)
+            .expect("wrap A");
+        let wrap_b = wrap_shred_salt(&cap, &ShredSalt::from_bytes([0xBB; 32]), seg_b, domain)
+            .expect("wrap B");
 
         let mut ledger = ShredLedger::new();
         let opened_b = unwrap_shred_salt(&cap, &wrap_b, &ledger).expect("neighbor decrypt");
@@ -4151,12 +4112,7 @@ pub mod storage_campaign_lanes {
             .after_chain_root_verify(&pack)
             .expect("registry-trusted import ceremony");
         assert_eq!(
-            import_verify(
-                &pack,
-                verified,
-                ObjectsCompleteness::Complete,
-                &ledger,
-            ),
+            import_verify(&pack, verified, ObjectsCompleteness::Complete, &ledger,),
             Err(PackRefuse::Shredded),
             "leave-is-free pack carrying shredded salt must refuse Shredded"
         );
@@ -4168,9 +4124,8 @@ pub mod storage_campaign_lanes {
         let ks = KeyspaceId::from_raw(1);
 
         // Ordered half adversary: unknown-invariant carriage → poison → OrderedCorrupt.
-        let ordered = FailureLattice::Healthy.report(CarriageReport::UnknownInvariant(
-            UnknownInvariantCarriage,
-        ));
+        let ordered = FailureLattice::Healthy
+            .report(CarriageReport::UnknownInvariant(UnknownInvariantCarriage));
         assert_eq!(
             ordered.admit_key(ks, b"any"),
             Err(StoreRefuse::OrderedCorrupt),
@@ -4195,9 +4150,10 @@ pub mod storage_campaign_lanes {
         );
 
         // Dual-meet adversary: quarantine + poison → OrderedCorrupt wins; no mixed success.
-        let dual = quarantined.combine(FailureLattice::Healthy.report(
-            CarriageReport::UnknownInvariant(UnknownInvariantCarriage),
-        ));
+        let dual = quarantined.combine(
+            FailureLattice::Healthy
+                .report(CarriageReport::UnknownInvariant(UnknownInvariantCarriage)),
+        );
         assert_eq!(
             dual.admit_key(ks, b"z"),
             Err(StoreRefuse::OrderedCorrupt),
@@ -4217,8 +4173,8 @@ pub mod storage_campaign_lanes {
     fn replica_equivalence_two_instance_recompute_compare_dst() {
         use crate::store::merkle::{
             ChainLinkKind, GENESIS_ROOT, MerkleChainRefuse, PathUrlSamenessClaim,
-            ReplicaCutRecompute, StateRoot, refuse_path_url_sameness,
-            replica_equivalence_at_cut, roots_equal_at_cut,
+            ReplicaCutRecompute, StateRoot, refuse_path_url_sameness, replica_equivalence_at_cut,
+            roots_equal_at_cut,
         };
         use crate::store::{CommitOrdinal, FenceEpoch, StoreId};
         use sha2::{Digest, Sha256};
@@ -4343,19 +4299,19 @@ pub mod storage_campaign_lanes {
     /// constants inside lane tests; now seed-swept so the campaign explores the
     /// pattern space (delivery count, admit/seal mask, mutation offset, …).
     const STORAGE_CAMPAIGN_SEEDED_COUNT_PATTERN_DIMENSIONS: &[&str] = &[
-        "clone_nonce_step_count",           // two_clone_at_rest
-        "admit_seal_gap_pattern",           // mixed_load_ordinals
-        "nonce_reserve_block_len",          // pipeline_power_cut
-        "pipeline_durable_seal_count",      // pipeline_power_cut
-        "idle_admit_count_no_seal",         // idle_staging_ttl
-        "staging_ttl_ordinals",             // permanence_candidate_stall
+        "clone_nonce_step_count",            // two_clone_at_rest
+        "admit_seal_gap_pattern",            // mixed_load_ordinals
+        "nonce_reserve_block_len",           // pipeline_power_cut
+        "pipeline_durable_seal_count",       // pipeline_power_cut
+        "idle_admit_count_no_seal",          // idle_staging_ttl
+        "staging_ttl_ordinals",              // permanence_candidate_stall
         "checkpoint_binding_corruption_arm", // checkpoint_seal_mismatch
-        "mutation_byte_offset",             // transcript_mutation
-        "delivery_count",                   // five_delivery_custody
-        "composition_step_count",           // composition_crash_replay
-        "local_schema_cut_advance_count",   // catalog_advance_origin
-        "merge_proof_input_arity",          // merge_proof_dst
-        "replica_fact_fold_arity",          // replica_equivalence_…
+        "mutation_byte_offset",              // transcript_mutation
+        "delivery_count",                    // five_delivery_custody
+        "composition_step_count",            // composition_crash_replay
+        "local_schema_cut_advance_count",    // catalog_advance_origin
+        "merge_proof_input_arity",           // merge_proof_dst
+        "replica_fact_fold_arity",           // replica_equivalence_…
     ];
 
     /// Lanes left single-shot: structural binary / refuse-arm laws without a
@@ -4453,9 +4409,7 @@ pub mod storage_campaign_lanes {
 
     /// Seed → graph edges + Vector embeddings + Geometry loci; one query joins
     /// all three modalities. Relational-only upstairs DST never emitted this.
-    fn generate_cross_modality(
-        seed: u64,
-    ) -> (Vec<Tuple>, Vec<Tuple>, Vec<Tuple>, BTreeSet<Tuple>) {
+    fn generate_cross_modality(seed: u64) -> (Vec<Tuple>, Vec<Tuple>, Vec<Tuple>, BTreeSet<Tuple>) {
         let n = 3 + (seed % 4) as i64; // nodes 0..n-1
         let mut vectors = Vec::with_capacity(n as usize);
         let mut geos = Vec::with_capacity(n as usize);
@@ -4482,17 +4436,15 @@ pub mod storage_campaign_lanes {
         }
         let mut edge_rows = Vec::new();
         let mut expected = BTreeSet::new();
-        let push_edge = |edges: &mut Vec<Tuple>,
-                         expected: &mut BTreeSet<Tuple>,
-                         src: i64,
-                         dst: i64| {
-            edges.push(Tuple::from_vec(vec![super::v(src), super::v(dst)]));
-            expected.insert(Tuple::from_vec(vec![
-                super::v(dst),
-                vectors[dst as usize].clone(),
-                geos[dst as usize].clone(),
-            ]));
-        };
+        let push_edge =
+            |edges: &mut Vec<Tuple>, expected: &mut BTreeSet<Tuple>, src: i64, dst: i64| {
+                edges.push(Tuple::from_vec(vec![super::v(src), super::v(dst)]));
+                expected.insert(Tuple::from_vec(vec![
+                    super::v(dst),
+                    vectors[dst as usize].clone(),
+                    geos[dst as usize].clone(),
+                ]));
+            };
         for i in 0..n - 1 {
             push_edge(&mut edge_rows, &mut expected, i, i + 1);
         }
@@ -4649,7 +4601,10 @@ pub mod storage_campaign_lanes {
                 "seed {seed}: single-byte seal corruption must SealMismatch"
             );
         }
-        assert!(flipped_any, "generator must emit at least one single-byte flip");
+        assert!(
+            flipped_any,
+            "generator must emit at least one single-byte flip"
+        );
     }
 
     /// Seed → tear a multi-byte payload at an interior offset that is **not**
@@ -4745,10 +4700,7 @@ pub mod storage_campaign_lanes {
 
             // Control: also emit an aligned tear so the campaign still covers
             // lane-boundary faults — without *only* emitting those.
-            if let Some(&block) = TORN_LANE_BLOCK_BOUNDARIES
-                .iter()
-                .find(|&&b| b < len)
-            {
+            if let Some(&block) = TORN_LANE_BLOCK_BOUNDARIES.iter().find(|&&b| b < len) {
                 let aligned = block;
                 if aligned > 0 && aligned < len {
                     saw_aligned_control = true;

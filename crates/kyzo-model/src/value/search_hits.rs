@@ -218,9 +218,6 @@ mod tests {
     fn materialize_hit_refuses_out_of_range() {
         let hits = SearchHits::empty();
         let err = hits.materialize_hit(0).unwrap_err();
-        assert_eq!(
-            err,
-            MaterializeError::RowOutOfRange { index: 0, len: 0 }
-        );
+        assert_eq!(err, MaterializeError::RowOutOfRange { index: 0, len: 0 });
     }
 }

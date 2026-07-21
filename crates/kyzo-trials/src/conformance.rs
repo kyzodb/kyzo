@@ -128,10 +128,7 @@ pub fn law_kv_matches_model_oracle<S: Storage>(db: &S) {
             (k.to_vec(), v.to_vec())
         })
         .collect();
-    let want: Vec<_> = model
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     assert_eq!(got, want, "store diverged from the model oracle");
 
     let got: Vec<_> = tx

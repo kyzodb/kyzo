@@ -27,8 +27,8 @@ use crate::store::replica::{
     CrossingValidated, GraphBoundKey, GraphBoundary, NamespacedRecordIdentity, PromotionMeaning,
     ReplicaKey, TenantId, view_under_schema_cut,
 };
-use kyzo_model::value::canonical::encode_owned;
 use kyzo_model::value::DataValue;
+use kyzo_model::value::canonical::encode_owned;
 use sha2::{Digest, Sha256};
 
 use super::{KyzoRecord, SemanticSurface};
@@ -354,11 +354,9 @@ fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataVa
             record.value().as_value().clone(),
             DataValue::from(SurfaceTag::from_surface(record.surface()).encode()),
         ]),
-        StatementDimension::QuantityAndLocation => DataValue::List(vec![
-            record_id,
-            subject,
-            record.value().as_value().clone(),
-        ]),
+        StatementDimension::QuantityAndLocation => {
+            DataValue::List(vec![record_id, subject, record.value().as_value().clone()])
+        }
         StatementDimension::Time => DataValue::List(vec![
             record_id,
             subject,
@@ -383,12 +381,12 @@ mod tests {
     use super::*;
     use crate::data::digest::RecordContentDigest;
     use crate::data::statement::{
-        construct, ContextId, SourceArtifactId, StatementBody, StatementContext, StatementSource,
-        StatementSubject, StatementValue, ValidityTime,
+        ContextId, SourceArtifactId, StatementBody, StatementContext, StatementSource,
+        StatementSubject, StatementValue, ValidityTime, construct,
     };
     use crate::session::admit::{
-        admit_record, AdmitRecordParts, IngestShape, LiveCertificateInputs, Placement, RecordCore,
-        SemanticSurface,
+        AdmitRecordParts, IngestShape, LiveCertificateInputs, Placement, RecordCore,
+        SemanticSurface, admit_record,
     };
     use crate::session::generation::{CatalogGeneration, RelationGeneration};
     use crate::store::authority::WriteAuthority;
@@ -428,14 +426,7 @@ mod tests {
             StatementSource::unbound(),
         );
         admit_record(AdmitRecordParts::new(
-            RecordCore::new(
-                store,
-                digest,
-                SemanticSurface::None,
-                None,
-                kind,
-                statement,
-            ),
+            RecordCore::new(store, digest, SemanticSurface::None, None, kind, statement),
             Placement::Unrestricted,
             None,
             IngestShape::Record,
@@ -450,14 +441,7 @@ mod tests {
         let digest = RecordContentDigest::from_digest([0xB2; 32]);
         let (kind, statement) = kind_body;
         admit_record(AdmitRecordParts::new(
-            RecordCore::new(
-                store,
-                digest,
-                SemanticSurface::None,
-                None,
-                kind,
-                statement,
-            ),
+            RecordCore::new(store, digest, SemanticSurface::None, None, kind, statement),
             Placement::Unrestricted,
             None,
             IngestShape::Record,
@@ -676,50 +660,112 @@ mod tests {
 
         let kinds = [
             super::super::admit_construct::event(
-                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
-                src.clone(), SemanticSurface::None, None, &live,
+                store,
+                digest,
+                subject.clone(),
+                pred.clone(),
+                value.clone(),
+                vt,
+                ctx.clone(),
+                src.clone(),
+                SemanticSurface::None,
+                None,
+                &live,
             )
             .expect("event")
             .0
             .kind(),
             super::super::admit_construct::state(
-                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
-                src.clone(), SemanticSurface::None, None, &live,
+                store,
+                digest,
+                subject.clone(),
+                pred.clone(),
+                value.clone(),
+                vt,
+                ctx.clone(),
+                src.clone(),
+                SemanticSurface::None,
+                None,
+                &live,
             )
             .expect("state")
             .0
             .kind(),
             super::super::admit_construct::role(
-                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
-                src.clone(), SemanticSurface::None, None, &live,
+                store,
+                digest,
+                subject.clone(),
+                pred.clone(),
+                value.clone(),
+                vt,
+                ctx.clone(),
+                src.clone(),
+                SemanticSurface::None,
+                None,
+                &live,
             )
             .expect("role")
             .0
             .kind(),
             super::super::admit_construct::concept(
-                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
-                src.clone(), SemanticSurface::None, None, &live,
+                store,
+                digest,
+                subject.clone(),
+                pred.clone(),
+                value.clone(),
+                vt,
+                ctx.clone(),
+                src.clone(),
+                SemanticSurface::None,
+                None,
+                &live,
             )
             .expect("concept")
             .0
             .kind(),
             super::super::admit_construct::rule(
-                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
-                src.clone(), SemanticSurface::None, None, &live,
+                store,
+                digest,
+                subject.clone(),
+                pred.clone(),
+                value.clone(),
+                vt,
+                ctx.clone(),
+                src.clone(),
+                SemanticSurface::None,
+                None,
+                &live,
             )
             .expect("rule")
             .0
             .kind(),
             super::super::admit_construct::derivation(
-                store, digest, subject.clone(), pred.clone(), value.clone(), vt, ctx.clone(),
-                src.clone(), SemanticSurface::None, None, &live,
+                store,
+                digest,
+                subject.clone(),
+                pred.clone(),
+                value.clone(),
+                vt,
+                ctx.clone(),
+                src.clone(),
+                SemanticSurface::None,
+                None,
+                &live,
             )
             .expect("derivation")
             .0
             .kind(),
             super::super::admit_construct::context_record(
-                store, digest, subject.clone(), value.clone(), vt, ctx.clone(), src.clone(),
-                SemanticSurface::None, None, &live,
+                store,
+                digest,
+                subject.clone(),
+                value.clone(),
+                vt,
+                ctx.clone(),
+                src.clone(),
+                SemanticSurface::None,
+                None,
+                &live,
             )
             .expect("context")
             .0
