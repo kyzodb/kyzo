@@ -157,6 +157,12 @@ impl From<[u8; 32]> for KeyMaterialCommitment {
 /// Register at genesis/seal time. [`PredecessorConsentProof::verify`] and
 /// [`materialize`] resolve the trust root by StoreId lookup — never a
 /// caller-supplied verifying key (self-issued consent is Unconstructible).
+///
+/// [`Self::insert`] is operator/genesis-scoped: untrusted or peer input must
+/// never reach it unvalidated. Seal-once per StoreId — first key wins;
+/// same key re-register is idempotent; a different key refuses
+/// [`MaterializeRefuse::TrustRootAlreadySealed`] (rotation is a separate
+/// explicit verb, not insert).
 #[derive(Debug, Default, Clone)]
 pub struct PredecessorConsentTable {
     /// store_id bytes → ed25519 verifying key bytes (32).
@@ -169,10 +175,12 @@ impl PredecessorConsentTable {
         Self::default()
     }
 
-    /// Register the consent verifying key for a StoreId (genesis/seal door).
+    /// Register the consent verifying key for a StoreId (operator/genesis door).
     ///
-    /// Invalid ed25519 material refuses. Overwrites a prior key for the same
-    /// StoreId (seal construction is single-writer).
+    /// Invalid ed25519 material refuses. Seal-once per StoreId: first key
+    /// wins; same key → idempotent Ok; different key →
+    /// [`MaterializeRefuse::TrustRootAlreadySealed`] (never silent overwrite).
+    /// Untrusted/peer input must not reach this door unvalidated.
     pub fn insert(
         &mut self,
         store_id: StoreId,
@@ -180,8 +188,14 @@ impl PredecessorConsentTable {
     ) -> Result<(), MaterializeRefuse> {
         VerifyingKey::from_bytes(&verifying_key)
             .map_err(|_| MaterializeRefuse::ConsentUnverified)?;
-        self.keys.insert(*store_id.as_bytes(), verifying_key);
-        Ok(())
+        match self.keys.get(store_id.as_bytes()) {
+            None => {
+                self.keys.insert(*store_id.as_bytes(), verifying_key);
+                Ok(())
+            }
+            Some(existing) if existing == &verifying_key => Ok(()),
+            Some(_) => Err(MaterializeRefuse::TrustRootAlreadySealed { store_id }),
+        }
     }
 
     /// Lookup the sealed consent verifying key for `store_id`, if registered.
@@ -664,6 +678,16 @@ pub enum MaterializeRefuse {
     )]
     #[diagnostic(code(store::grants::consent_key_unknown))]
     ConsentKeyUnknown,
+    /// StoreId already has a sealed trust root; a different key cannot overwrite it.
+    ///
+    /// First registration wins. Same key re-register is idempotent Ok on
+    /// [`PredecessorConsentTable::insert`]. Rotation is a separate explicit
+    /// verb — never silent overwrite via insert.
+    #[error(
+        "TrustRootAlreadySealed: StoreId {store_id:?} already has a sealed predecessor-consent trust root"
+    )]
+    #[diagnostic(code(store::grants::trust_root_already_sealed))]
+    TrustRootAlreadySealed { store_id: StoreId },
     /// Second distinct RecoveryGrant for one predecessor epoch — quorum equivocation poison.
     ///
     /// Never a second WriteAuthority / second lineage. Distinct from
@@ -949,6 +973,12 @@ fn derive_recovery_write_token(recovery: &RecoveryGrant) -> super::authority::Wr
 /// Register at genesis/seal time. [`AncestorEntitlementProof::verify`] and
 /// [`AncestorReadGrant::new`] resolve the trust root by StoreId lookup — never a
 /// caller-supplied verifying key (self-issued decrypt-scope is Unconstructible).
+///
+/// [`Self::insert`] is operator/genesis-scoped: untrusted or peer input must
+/// never reach it unvalidated. Seal-once per StoreId — first key wins;
+/// same key re-register is idempotent; a different key refuses
+/// [`AncestorReadRefuse::TrustRootAlreadySealed`] (rotation is a separate
+/// explicit verb, not insert).
 #[derive(Debug, Default, Clone)]
 pub struct AncestorEntitlementTable {
     /// store_id bytes → ed25519 verifying key bytes (32).
@@ -961,10 +991,12 @@ impl AncestorEntitlementTable {
         Self::default()
     }
 
-    /// Register the entitlement verifying key for a StoreId (genesis/seal door).
+    /// Register the entitlement verifying key for a StoreId (operator/genesis door).
     ///
-    /// Invalid ed25519 material refuses. Overwrites a prior key for the same
-    /// StoreId (seal construction is single-writer).
+    /// Invalid ed25519 material refuses. Seal-once per StoreId: first key
+    /// wins; same key → idempotent Ok; different key →
+    /// [`AncestorReadRefuse::TrustRootAlreadySealed`] (never silent overwrite).
+    /// Untrusted/peer input must not reach this door unvalidated.
     pub fn insert(
         &mut self,
         store_id: StoreId,
@@ -972,8 +1004,14 @@ impl AncestorEntitlementTable {
     ) -> Result<(), AncestorReadRefuse> {
         VerifyingKey::from_bytes(&verifying_key)
             .map_err(|_| AncestorReadRefuse::EntitlementUnverified)?;
-        self.keys.insert(*store_id.as_bytes(), verifying_key);
-        Ok(())
+        match self.keys.get(store_id.as_bytes()) {
+            None => {
+                self.keys.insert(*store_id.as_bytes(), verifying_key);
+                Ok(())
+            }
+            Some(existing) if existing == &verifying_key => Ok(()),
+            Some(_) => Err(AncestorReadRefuse::TrustRootAlreadySealed { store_id }),
+        }
     }
 
     /// Lookup the sealed entitlement verifying key for `store_id`, if registered.
@@ -1107,6 +1145,16 @@ pub enum AncestorReadRefuse {
     #[error("EntitlementMismatch: entitlement proof store does not match the ancestor-read grant")]
     #[diagnostic(code(store::grants::entitlement_mismatch))]
     EntitlementMismatch,
+    /// StoreId already has a sealed trust root; a different key cannot overwrite it.
+    ///
+    /// First registration wins. Same key re-register is idempotent Ok on
+    /// [`AncestorEntitlementTable::insert`]. Rotation is a separate explicit
+    /// verb — never silent overwrite via insert.
+    #[error(
+        "TrustRootAlreadySealed: StoreId {store_id:?} already has a sealed ancestor-entitlement trust root"
+    )]
+    #[diagnostic(code(store::grants::entitlement_trust_root_already_sealed))]
+    TrustRootAlreadySealed { store_id: StoreId },
 }
 
 impl AncestorReadGrant {
@@ -1959,6 +2007,84 @@ mod tests {
         assert_eq!(
             AncestorEntitlementProof::verify(&sealed_table, victim, &payload, &[0xFFu8; 64]),
             Err(AncestorReadRefuse::EntitlementUnverified)
+        );
+    }
+
+    // ---- #375 T3 — seal-once registration doors (operator/genesis) ----------
+
+    /// NASTY (#375 T3): register key A for victim StoreId, then attacker key
+    /// B(!=A) for the same StoreId on the production
+    /// [`PredecessorConsentTable::insert`] door → typed refuse (never silent
+    /// overwrite of the sealed consent trust root).
+    #[test]
+    fn predecessor_consent_registration_attacker_key_refuses_overwrite() {
+        let victim = StoreId::from_digest([0x91; 32]);
+        let key_a = ConsentSigningKey::from_seed([0xA1; 32]);
+        let key_b = ConsentSigningKey::from_seed([0xB2; 32]);
+        assert_ne!(
+            key_a.verifying_key(),
+            key_b.verifying_key(),
+            "control: attacker key must differ from sealed key A"
+        );
+
+        let mut table = PredecessorConsentTable::new();
+        table
+            .insert(victim, *key_a.verifying_key())
+            .expect("first registration of key A seals the StoreId");
+        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
+
+        // Same key re-register → idempotent Ok (seal-once, not one-shot grief).
+        table
+            .insert(victim, *key_a.verifying_key())
+            .expect("same key re-registration must be idempotent Ok");
+        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
+
+        // Attacker key B for the already-sealed StoreId → TrustRootAlreadySealed.
+        assert_eq!(
+            table.insert(victim, *key_b.verifying_key()),
+            Err(MaterializeRefuse::TrustRootAlreadySealed { store_id: victim })
+        );
+        assert_eq!(
+            table.get(victim),
+            Some(key_a.verifying_key()),
+            "sealed key A must survive the refused overwrite attempt"
+        );
+    }
+
+    /// NASTY (#375 T3): register key A for victim StoreId, then attacker key
+    /// B(!=A) for the same StoreId on the production
+    /// [`AncestorEntitlementTable::insert`] door → typed refuse (never silent
+    /// overwrite of the sealed entitlement trust root).
+    #[test]
+    fn ancestor_entitlement_registration_attacker_key_refuses_overwrite() {
+        let victim = StoreId::from_digest([0x92; 32]);
+        let key_a = EntitlementSigningKey::from_seed([0xC1; 32]);
+        let key_b = EntitlementSigningKey::from_seed([0xD2; 32]);
+        assert_ne!(
+            key_a.verifying_key(),
+            key_b.verifying_key(),
+            "control: attacker key must differ from sealed key A"
+        );
+
+        let mut table = AncestorEntitlementTable::new();
+        table
+            .insert(victim, *key_a.verifying_key())
+            .expect("first registration of key A seals the StoreId");
+        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
+
+        table
+            .insert(victim, *key_a.verifying_key())
+            .expect("same key re-registration must be idempotent Ok");
+        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
+
+        assert_eq!(
+            table.insert(victim, *key_b.verifying_key()),
+            Err(AncestorReadRefuse::TrustRootAlreadySealed { store_id: victim })
+        );
+        assert_eq!(
+            table.get(victim),
+            Some(key_a.verifying_key()),
+            "sealed key A must survive the refused overwrite attempt"
         );
     }
 }

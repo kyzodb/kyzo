@@ -503,6 +503,17 @@ pub enum PackRefuse {
     #[error("post-shred restore of shredded segment")]
     #[diagnostic(code(store::backup::shredded))]
     Shredded,
+    /// Origin StoreId already has a sealed trusted root; a different root
+    /// cannot overwrite it.
+    ///
+    /// First registration wins. Same root re-register is idempotent Ok on
+    /// [`OriginRootRegistry::insert`]. Rotation is a separate explicit verb
+    /// — never silent overwrite via insert.
+    #[error(
+        "TrustRootAlreadySealed: StoreId {store_id:?} already has a sealed origin trust root"
+    )]
+    #[diagnostic(code(store::backup::trust_root_already_sealed))]
+    TrustRootAlreadySealed { store_id: StoreId },
 }
 
 impl LeaveIsFreePack {
@@ -640,6 +651,12 @@ impl LeaveIsFreePack {
 /// Established out-of-band when the receiver first accepts that origin. The
 /// leave-is-free PACK never supplies the trust root — ceremony `local` resolves
 /// here only.
+///
+/// [`Self::insert`] is operator/genesis-scoped: untrusted or peer input must
+/// never reach it unvalidated. Seal-once per StoreId — first root wins;
+/// same root re-register is idempotent; a different root refuses
+/// [`PackRefuse::TrustRootAlreadySealed`] (rotation is a separate explicit
+/// verb, not insert).
 #[derive(Debug, Default, Clone)]
 pub struct OriginRootRegistry {
     /// origin StoreId bytes → trusted chain root at the known cut.
@@ -652,12 +669,24 @@ impl OriginRootRegistry {
         Self::default()
     }
 
-    /// Register the trusted chain root for an origin StoreId (out-of-band accept).
+    /// Register the trusted chain root for an origin StoreId (operator/genesis door).
     ///
-    /// Overwrites a prior root for the same StoreId (seal construction is
-    /// single-writer).
-    pub fn insert(&mut self, origin: StoreId, trusted_root: StateRoot) {
-        self.roots.insert(*origin.as_bytes(), trusted_root);
+    /// Seal-once per StoreId: first root wins; same root → idempotent Ok;
+    /// different root → [`PackRefuse::TrustRootAlreadySealed`] (never silent
+    /// overwrite). Untrusted/peer input must not reach this door unvalidated.
+    pub fn insert(
+        &mut self,
+        origin: StoreId,
+        trusted_root: StateRoot,
+    ) -> Result<(), PackRefuse> {
+        match self.roots.get(origin.as_bytes()) {
+            None => {
+                self.roots.insert(*origin.as_bytes(), trusted_root);
+                Ok(())
+            }
+            Some(existing) if *existing == trusted_root => Ok(()),
+            Some(_) => Err(PackRefuse::TrustRootAlreadySealed { store_id: origin }),
+        }
     }
 
     /// Lookup the sealed trusted chain root for `origin`, if registered.
@@ -959,7 +988,9 @@ mod pins {
         assert!(!pack.wrapped_shred_salts().is_empty());
         let empty_ledger = ShredLedger::new();
         let mut registry = OriginRootRegistry::new();
-        registry.insert(pack.claimed_origin_store_id(), pack.recompute_root());
+        registry
+            .insert(pack.claimed_origin_store_id(), pack.recompute_root())
+            .expect("first origin-root registration seals");
         let verified = registry
             .after_chain_root_verify(&pack)
             .expect("trusted-origin ceremony");
@@ -1047,7 +1078,9 @@ mod import_verify {
 
     fn registry_trusting(pack: &LeaveIsFreePack) -> OriginRootRegistry {
         let mut registry = OriginRootRegistry::new();
-        registry.insert(pack.claimed_origin_store_id(), pack.recompute_root());
+        registry
+            .insert(pack.claimed_origin_store_id(), pack.recompute_root())
+            .expect("first origin-root registration seals");
         registry
     }
 
@@ -1103,10 +1136,12 @@ mod import_verify {
     fn wrong_registered_root_refuses_foreign_history() {
         let (pack, _) = sample_pack();
         let mut registry = OriginRootRegistry::new();
-        registry.insert(
-            pack.claimed_origin_store_id(),
-            StateRoot::from_digest([0xAD; 32]),
-        );
+        registry
+            .insert(
+                pack.claimed_origin_store_id(),
+                StateRoot::from_digest([0xAD; 32]),
+            )
+            .expect("first origin-root registration seals");
         assert_ne!(
             registry.get(pack.claimed_origin_store_id()),
             Some(pack.recompute_root()),
@@ -1116,6 +1151,44 @@ mod import_verify {
             registry.after_chain_root_verify(&pack),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+    }
+
+    /// NASTY (#375 T3): register trusted root A for victim StoreId, then
+    /// attacker root B(!=A) for the same StoreId on the production
+    /// [`OriginRootRegistry::insert`] door → typed refuse (never silent
+    /// overwrite of the sealed origin trust root).
+    #[test]
+    fn origin_root_registration_attacker_root_refuses_overwrite() {
+        let (pack, _) = sample_pack();
+        let victim = pack.claimed_origin_store_id();
+        let root_a = pack.recompute_root();
+        let root_b = StateRoot::from_digest([0xBE; 32]);
+        assert_ne!(
+            root_a, root_b,
+            "control: attacker root must differ from sealed root A"
+        );
+
+        let mut registry = OriginRootRegistry::new();
+        registry
+            .insert(victim, root_a)
+            .expect("first registration of root A seals the StoreId");
+        assert_eq!(registry.get(victim), Some(root_a));
+
+        // Same root re-register → idempotent Ok.
+        registry
+            .insert(victim, root_a)
+            .expect("same root re-registration must be idempotent Ok");
+        assert_eq!(registry.get(victim), Some(root_a));
+
+        assert_eq!(
+            registry.insert(victim, root_b),
+            Err(PackRefuse::TrustRootAlreadySealed { store_id: victim })
+        );
+        assert_eq!(
+            registry.get(victim),
+            Some(root_a),
+            "sealed root A must survive the refused overwrite attempt"
+        );
     }
 
     /// Positive (#374 T7): pack root matches registered trusted root → admit.
