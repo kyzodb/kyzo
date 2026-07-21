@@ -366,20 +366,21 @@ fn transitive_closure_magic_symbols_under_unbound_query() {
 // The two diagnostic tests above pin the symbol shape for one program
 // each, by hand. This is that check turned into a permanent, generic
 // differential: a small recursive corpus, each program queried with NO
-// bound arguments, run BOTH through the public `Db::run_script` path
-// (this file, `magic.rs`'s rewrite included) and through the
-// crate-internal path `bench_api::Workload` drives directly
-// (`stratified_magic_compile` → `bind_for_eval` → `stratified_evaluate`,
-// bypassing `magic.rs` entirely) — asserting byte-identical answers
-// (magic-sets law 1) AND a byte-identical adorned-symbol shape, one
-// variant per predicate with no `Input`/`Sup` (magic.rs's fully-free
-// identity theorem). A regression in either direction — wrong answers,
-// or the theorem's cost guarantee — fails here, for any future program
-// added to the corpus, not just points-to.
-#[cfg(feature = "bench-internals")]
+// bound arguments, run BOTH through the public `Engine::run_script` path
+// (`magic.rs`'s rewrite included) and through the production bypass
+// door `:disable_magic_rewrite true` on the same facts (every rule
+// exempt → muggle symbols → compile/eval with no adornment) — asserting
+// byte-identical answers (magic-sets law 1) AND the adorned-symbol shape
+// on the magic path, one variant per predicate with no `Input`/`Sup`
+// (magic.rs's fully-free identity theorem). A regression in either
+// direction — wrong answers, or the theorem's cost guarantee — fails
+// here, for any future program added to the corpus, not just points-to.
+//
+// The deleted `bench_api` façade used to host the bypass; that sealed
+// door stays cut. The language option is the honest production twin.
 mod magic_bypass_differential {
     use super::*;
-    use crate::bench_api::{Backend, Graph, points_to, transitive_closure};
+    use kyzo_oracle::eval::Name;
 
     /// Every non-`?` symbol name, sorted — order-independent, so this
     /// doesn't couple to `BTreeMap` iteration order the way the
@@ -390,21 +391,22 @@ mod magic_bypass_differential {
         syms
     }
 
-    /// Transitive closure over a tiny deterministic chain (`gen_edges`'s
-    /// `Graph::Chain`, `0→1→…→n-1` — no RNG, so the public path can
-    /// reproduce it by construction rather than by mirroring a seed).
+    /// Same program + facts with magic rewrite forced off — the production
+    /// bypass twin of a magic-rewritten plan.
+    fn run_bypass<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Vec<i64>> {
+        int_rows(
+            &db.run_script(
+                &format!("{script}\n:disable_magic_rewrite true"),
+                no_params(),
+            )
+            .expect("bypass query"),
+        )
+    }
+
+    /// Transitive closure over a tiny deterministic chain (`0→1→…→n-1`).
     #[test]
     fn tc_chain_public_matches_bypass_byte_identical_and_unadorned() {
         let n = 10usize;
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let bypass = transitive_closure(Backend::Mem, Graph::Chain, n, 0, tmp.path());
-        let mut bypass_rows: Vec<Vec<i64>> = bypass
-            .collect()
-            .into_iter()
-            .map(|t| t.iter().map(|v| v.get_int().expect("int")).collect())
-            .collect();
-        bypass_rows.sort();
-
         let db = open_sim(0);
         let edge_literal: String = (0..n as i64 - 1)
             .map(|i| format!("[{i},{}],", i + 1))
@@ -420,6 +422,7 @@ mod magic_bypass_differential {
             ?[a, b] := path[a, b]
         ";
         let public_rows = int_rows(&db.run_script(script, no_params()).expect("query"));
+        let bypass_rows = run_bypass(&db, script);
 
         assert_eq!(
             public_rows, bypass_rows,
@@ -434,10 +437,10 @@ mod magic_bypass_differential {
     }
 
     /// Andersen points-to's self-join shape (`pt` occurs twice in
-    /// `load`/`store`'s bodies) — issue #68's actual corpus member. The
-    /// public path's facts mirror `bench_api::points_to`'s `gen_rel`
-    /// generator exactly (same `StdRng` seeding, same dedup-via-`BTreeSet`
-    /// construction), so both paths compute over byte-identical input.
+    /// `load`/`store`'s bodies) — issue #68's actual corpus member.
+    /// Facts are generated with the same seeded `StdRng` + `BTreeSet`
+    /// dedup the retired bench façade used, so both paths still compute
+    /// over a fixed deterministic input.
     #[test]
     fn pointsto_self_join_public_matches_bypass_byte_identical_and_unadorned() {
         use rand::rngs::StdRng;
@@ -460,24 +463,6 @@ mod magic_bypass_differential {
             rows.into_iter().collect()
         };
 
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let bypass = points_to(
-            Backend::Mem,
-            vars,
-            addrs,
-            assigns,
-            loads,
-            stores,
-            seed,
-            tmp.path(),
-        );
-        let mut bypass_rows: Vec<Vec<i64>> = bypass
-            .collect()
-            .into_iter()
-            .map(|t| t.iter().map(|v| v.get_int().expect("int")).collect())
-            .collect();
-        bypass_rows.sort();
-
         let db = open_sim(0);
         let load_rel = |name: &str, rows: &[(i64, i64)]| {
             let literal: String = rows.iter().map(|(y, x)| format!("[{y},{x}],")).collect();
@@ -499,6 +484,7 @@ mod magic_bypass_differential {
             ?[y, x] := pt[y, x]
         ";
         let public_rows = int_rows(&db.run_script(script, no_params()).expect("query"));
+        let bypass_rows = run_bypass(&db, script);
 
         assert_eq!(
             public_rows, bypass_rows,
@@ -576,19 +562,23 @@ mod magic_bypass_differential {
             ],
             facts: [
                 (
-                    "seedp",
+                    Name::from("seedp"),
+
                     [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
                 ),
                 (
-                    "linkp",
+                    Name::from("linkp"),
+
                     [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect(),
                 ),
                 (
-                    "seedr",
+                    Name::from("seedr"),
+
                     [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect(),
                 ),
                 (
-                    "linkr",
+                    Name::from("linkr"),
+
                     [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect(),
                 ),
             ]
@@ -681,7 +671,8 @@ mod magic_bypass_differential {
             ],
             facts: [
                 (
-                    "addr_of",
+                    Name::from("addr_of"),
+
                     [
                         Tuple::from_vec(vec![v(1), v(2)]),
                         Tuple::from_vec(vec![v(2), v(3)]),
@@ -690,7 +681,8 @@ mod magic_bypass_differential {
                     .collect(),
                 ),
                 (
-                    "assign",
+                    Name::from("assign"),
+
                     [
                         Tuple::from_vec(vec![v(2), v(3)]),
                         Tuple::from_vec(vec![v(3), v(4)]),
@@ -699,7 +691,8 @@ mod magic_bypass_differential {
                     .collect(),
                 ),
                 (
-                    "blocked",
+                    Name::from("blocked"),
+
                     [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
                 ),
             ]
@@ -776,7 +769,8 @@ mod magic_bypass_differential {
             ],
             facts: [
                 (
-                    "baseq",
+                    Name::from("baseq"),
+
                     [
                         Tuple::from_vec(vec![v(1), v(2), v(2)]),
                         Tuple::from_vec(vec![v(1), v(3), v(4)]),
@@ -784,7 +778,7 @@ mod magic_bypass_differential {
                     .into_iter()
                     .collect(),
                 ),
-                ("seedv", [Tuple::from_vec(vec![v(1)])].into_iter().collect()),
+                (Name::from("seedv"), [Tuple::from_vec(vec![v(1)])].into_iter().collect()),
             ]
             .into_iter()
             .collect(),
@@ -888,27 +882,33 @@ mod magic_bypass_differential {
             ],
             facts: [
                 (
-                    "addr_of",
+                    Name::from("addr_of"),
+
                     [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect(),
                 ),
                 (
-                    "assign",
+                    Name::from("assign"),
+
                     [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect(),
                 ),
                 (
-                    "load",
+                    Name::from("load"),
+
                     [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect(),
                 ),
                 (
-                    "store",
+                    Name::from("store"),
+
                     [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect(),
                 ),
                 (
-                    "baseh",
+                    Name::from("baseh"),
+
                     [Tuple::from_vec(vec![v(4), v(5)])].into_iter().collect(),
                 ),
                 (
-                    "linkh",
+                    Name::from("linkh"),
+
                     [Tuple::from_vec(vec![v(5), v(6)])].into_iter().collect(),
                 ),
             ]
