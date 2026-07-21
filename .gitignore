@@ -32,3 +32,4 @@ __pycache__/
 # Claude Code kyzo-plan 0.2.9 sync copies (operator-ordered; not story allowlist)
 .claude/agents/kyzo-plan-*.md
 .claude/skills/kyzo-plan-*/
+crates/xtask/resonance.log*
