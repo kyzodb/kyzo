@@ -25,10 +25,12 @@
  * core took no cancel flag and never polled, so a `keep_ties=false` search
  * — and every Yen spur, which drives this core — was uninterruptible on a
  * large graph (the ratified budget/deadline design could not stop it). It
- * now takes a `CancelFlag` and polls once per node popped, the same
- * granularity as `dijkstra_cost_only` and `dijkstra_keep_ties`. `check`
- * only reads the flag, so an unset flag leaves every result byte-identical;
- * pinned by `plain_dijkstra_honors_cancel` below.
+ * now takes a `CancelFlag` and polls once per node popped. `dijkstra_keep_ties`
+ * polls at the same site — unconditional top-of-pop — not inside the out-edge
+ * scan (a sink / all-forbidden hub never entered that scan). `check` only
+ * reads the flag, so an unset flag leaves every result byte-identical; pinned
+ * by `plain_dijkstra_honors_cancel` and
+ * `keep_ties_honors_cancel_on_all_forbidden_hub` below.
  */
 
 //! Dijkstra shortest paths from starting nodes to optional termination
@@ -342,6 +344,10 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
     let mut goals_remaining = goals.clone();
 
     while let Some((node, Reverse(OrderedFloat(cost)))) = pq.pop() {
+        // Unconditional top-of-pop — same site as plain `dijkstra`. A hub
+        // whose every out-edge is forbidden (or a sink) never enters the
+        // scan body; polling only there left those pops uninterruptible.
+        cancel.check()?;
         if cost > distance[node as usize] {
             continue;
         }
@@ -366,7 +372,6 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
                 back_pointers[nxt_node as usize].push(node);
             }
-            cancel.check()?;
         }
 
         goals_remaining = goals_remaining.visit(node);
@@ -680,5 +685,35 @@ mod tests {
         let (auth, flag) = CancelAuthority::arm();
         let _ = auth.cancel();
         assert!(dijkstra(&graph, 0, &Some(3u32), &(), &(), flag).is_err());
+    }
+
+    /// CANCELLATION: pins unconditional top-of-pop in `dijkstra_keep_ties`.
+    /// Hub 0's only out-edge is forbidden, so the out-edge scan body never
+    /// reaches a mid-scan poll — under the bug a pre-raised flag still
+    /// returns Ok (unreachable goal); under the fix the first pop refuses.
+    #[test]
+    fn keep_ties_honors_cancel_on_all_forbidden_hub() {
+        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f32)]).unwrap();
+        let forbidden: BTreeSet<(u32, u32)> = BTreeSet::from([(0, 1)]);
+        // Unset flag: hub is a dead end; goal 1 stays unreachable.
+        let ok = dijkstra_keep_ties(
+            &graph,
+            0,
+            &Some(1u32),
+            &forbidden,
+            &(),
+            CancelFlag::default(),
+        )
+        .unwrap();
+        assert_eq!(ok.len(), 1);
+        assert!(!ok[0].1.is_finite());
+        assert!(ok[0].2.is_empty());
+        // Spent authority: must refuse on the hub pop itself.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
+        assert!(
+            dijkstra_keep_ties(&graph, 0, &Some(1u32), &forbidden, &(), flag).is_err(),
+            "all-forbidden hub pop must poll cancel (Ok under mid-scan-only poll)"
+        );
     }
 }

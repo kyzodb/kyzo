@@ -10,7 +10,10 @@
  * (MPL-2.0): the back-trace reconstruction `unwrap` is annotated as
  * structural (every non-start node on a reconstructed path was inserted
  * into `back_trace` when it was first relaxed); output rows flow through
- * the arity-checked writer. `run` and the search are otherwise unchanged.
+ * the arity-checked writer. CANCELLATION FIX (deliberate, pinned vs
+ * upstream): cancel polls unconditional top-of-pop, not inside the out-edge
+ * scan — a sink / zero-outgoing hub never entered that scan. Pinned by
+ * `astar_honors_cancel_on_sink_hub` below.
  */
 
 //! A* shortest path over relation-shaped graphs: edges and nodes stay as
@@ -35,6 +38,8 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
+#[cfg(test)]
+use crate::rules::contract::CancelAuthority;
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
 #[cfg(test)]
@@ -127,6 +132,9 @@ fn astar(
     open_set.push(start_node.clone(), (Reverse(OrderedFloat(0.)), 0));
     let mut sub_priority: usize = 0;
     while let Some((node, (Reverse(OrderedFloat(cost)), _))) = open_set.pop() {
+        // Unconditional top-of-pop. A sink (zero out-edges) never enters the
+        // scan body; polling only there left those pops uninterruptible.
+        cancel.check()?;
         if node == *goal_node {
             let mut current = node;
             let mut ret = vec![];
@@ -191,7 +199,6 @@ fn astar(
                     ),
                 );
             }
-            cancel.check()?;
         }
     }
     Ok((f64::INFINITY, vec![]))
@@ -259,5 +266,66 @@ mod tests {
             DataValue::List(vec![s("a"), s("b"), s("c")]),
         ])];
         assert_eq!(got, want);
+    }
+
+    /// CANCELLATION: pins unconditional top-of-pop in `astar`. Start `a` is a
+    /// sink (no out-edges), so the out-edge scan never runs — under the bug a
+    /// pre-raised flag still returns Ok (infinite cost); under the fix the
+    /// first pop refuses.
+    #[test]
+    fn astar_honors_cancel_on_sink_hub() {
+        fn sink_hub_inputs() -> Vec<TestInput> {
+            vec![
+                // Only b→c exists; start a has zero outgoing edges.
+                TestInput::new(
+                    vec!["fr", "to", "w"],
+                    vec![Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)])],
+                ),
+                TestInput::new(
+                    vec!["id", "h"],
+                    vec![
+                        Tuple::from_vec(vec![s("a"), DataValue::from(1.0)]),
+                        Tuple::from_vec(vec![s("b"), DataValue::from(1.0)]),
+                        Tuple::from_vec(vec![s("c"), DataValue::from(0.0)]),
+                    ],
+                ),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["goal"], vec![Tuple::from_vec(vec![s("c")])]),
+            ]
+        }
+        fn sink_hub_opts() -> FixedRuleOptions {
+            let h_binding = Expr::Binding {
+                var: Symbol::new("h", SourceSpan::default()),
+                tuple_pos: BindingPos::Unresolved,
+            };
+            opts_map(BTreeMap::from([(
+                SmartString::from("heuristic"),
+                h_binding,
+            )]))
+        }
+        // Unset flag: sink search completes with infinite cost / empty path.
+        let ok = run_fixed_rule(
+            &ShortestPathAStar,
+            sink_hub_inputs(),
+            sink_hub_opts(),
+            CancelFlag::default(),
+        )
+        .unwrap();
+        assert_eq!(ok.len(), 1);
+        assert_eq!(ok[0][2], DataValue::from(f64::INFINITY));
+        assert_eq!(ok[0][3], DataValue::List(vec![]));
+        // Spent authority: must refuse on the sink pop itself.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
+        assert!(
+            run_fixed_rule(
+                &ShortestPathAStar,
+                sink_hub_inputs(),
+                sink_hub_opts(),
+                flag
+            )
+            .is_err(),
+            "sink hub pop must poll cancel (Ok under mid-scan-only poll)"
+        );
     }
 }
