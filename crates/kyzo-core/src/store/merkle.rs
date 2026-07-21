@@ -1393,6 +1393,166 @@ mod tests {
         assert!(roots_equal_at_cut(stored_prior, chain.prior_root()));
     }
 
+    /// Disk rollback: real fjall directory backed up at v1, advanced to v3,
+    /// directory restored from the v1 backup, reopened. Recomputed content
+    /// root equals the v1 root and differs from the live tip content; binding
+    /// the restored content under the tip cut ≠ the stored prior tip.
+    #[test]
+    fn valid_but_stale_rollback_on_disk_dir_restore() {
+        use std::path::{Path, PathBuf};
+
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, as_of_root, link_at_cut,
+            roots_equal_at_cut,
+        };
+
+        fn copy_dir_recursive(src: &Path, dst: &Path) {
+            std::fs::create_dir_all(dst).expect("create backup dir");
+            for entry in std::fs::read_dir(src).expect("read live dir") {
+                let entry = entry.expect("dir entry");
+                let ty = entry.file_type().expect("file type");
+                let from = entry.path();
+                let to = dst.join(entry.file_name());
+                if ty.is_dir() {
+                    copy_dir_recursive(&from, &to);
+                } else {
+                    std::fs::copy(&from, &to).expect("copy file");
+                }
+            }
+        }
+
+        fn replace_dir_with(src: &Path, dst: &Path) {
+            if dst.exists() {
+                std::fs::remove_dir_all(dst).expect("remove live before restore");
+            }
+            copy_dir_recursive(src, dst);
+        }
+
+        let store_id = StoreId::from_digest([0x5D; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let o3 = o2.successor().unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let live: PathBuf = root.path().join("live");
+        let backup_v1: PathBuf = root.path().join("backup_v1");
+        std::fs::create_dir_all(&live).unwrap();
+
+        // Cut 1: write v1, seal content root, back up the on-disk directory.
+        let content_v1 = {
+            let db = new_fjall_storage(&live).unwrap();
+            let mut tx = db.write_tx().unwrap();
+            tx.put(b"k00", b"v0").unwrap();
+            tx.put(b"k01", b"v1").unwrap();
+            tx.commit().unwrap();
+            let content = StateRoot::from_merkle(
+                state_root(&db.read_tx().unwrap(), big_budget()).unwrap(),
+            );
+            drop(db);
+            content
+        };
+        copy_dir_recursive(&live, &backup_v1);
+
+        // Advance live store to v3; mint RootChain under the advanced tip.
+        let (content_v3, chain) = {
+            let db = new_fjall_storage(&live).unwrap();
+            {
+                let mut tx = db.write_tx().unwrap();
+                tx.put(b"k02", b"v2").unwrap();
+                tx.commit().unwrap();
+            }
+            let content_v2 = StateRoot::from_merkle(
+                state_root(&db.read_tx().unwrap(), big_budget()).unwrap(),
+            );
+            {
+                let mut tx = db.write_tx().unwrap();
+                tx.put(b"k03", b"v3").unwrap();
+                tx.commit().unwrap();
+            }
+            let content_v3 = StateRoot::from_merkle(
+                state_root(&db.read_tx().unwrap(), big_budget()).unwrap(),
+            );
+            assert_ne!(content_v1, content_v2);
+            assert_ne!(content_v2, content_v3);
+
+            let mut chain = RootChain::empty();
+            chain
+                .append(ChainedStateRoot::mint(
+                    store_id,
+                    fence,
+                    o1,
+                    content_v1,
+                    GENESIS_ROOT,
+                    ChainLinkKind::Ordinary,
+                ))
+                .unwrap();
+            chain
+                .append(ChainedStateRoot::mint(
+                    store_id,
+                    fence,
+                    o2,
+                    content_v2,
+                    chain.prior_root(),
+                    ChainLinkKind::Ordinary,
+                ))
+                .unwrap();
+            chain
+                .append(ChainedStateRoot::mint(
+                    store_id,
+                    fence,
+                    o3,
+                    content_v3,
+                    chain.prior_root(),
+                    ChainLinkKind::Ordinary,
+                ))
+                .unwrap();
+            drop(db);
+            (content_v3, chain)
+        };
+
+        let tip_prior = chain.prior_root();
+        let tip_as_of = as_of_root(&chain, o3).unwrap();
+        assert!(roots_equal_at_cut(tip_prior, tip_as_of));
+
+        // Attacker restores the v1 directory under the advanced tip.
+        replace_dir_with(&backup_v1, &live);
+        let restored_content = {
+            let db = new_fjall_storage(&live).unwrap();
+            StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap())
+        };
+
+        assert_eq!(
+            restored_content, content_v1,
+            "dir-restored store must recompute to the v1 content root"
+        );
+        assert_ne!(
+            restored_content, content_v3,
+            "restored v1 content root must differ from the live tip content"
+        );
+
+        // Detection door (same bind as session verify): restored content under
+        // the tip cut's predecessor ≠ stored tip prior.
+        let tip_link = link_at_cut(&chain, o3).unwrap();
+        let recomputed_at_tip = ChainedStateRoot::mint(
+            tip_link.store_id(),
+            tip_link.fence_epoch(),
+            tip_link.commit_ordinal(),
+            restored_content,
+            tip_link.predecessor_root(),
+            tip_link.link(),
+        )
+        .root();
+        assert!(
+            !roots_equal_at_cut(tip_prior, recomputed_at_tip),
+            "valid-but-stale on-disk rollback: stored tip prior ≠ tip rebound over restored bytes"
+        );
+    }
+
     /// Adversarial historical_edit: mutate a past commit's content (and thus its
     /// [`ChainedStateRoot`]), then remint every later link with the *same*
     /// forward content roots. If [`chain_bind`] omitted the predecessor, those
@@ -1642,6 +1802,127 @@ mod tests {
         assert!(
             !roots_equal_at_cut(as_of_o2, tip_as_of),
             "point-in-time: mid cut differs from tip"
+        );
+    }
+
+    /// Empty [`RootChain`]: [`as_of_root`] refuses — no cut exists before genesis.
+    #[test]
+    fn as_of_root_refuses_empty_chain() {
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{MerkleChainRefuse, RootChain, as_of_root};
+
+        let chain = RootChain::empty();
+        let cut = CommitOrdinal::ZERO.successor().unwrap();
+        assert_eq!(
+            as_of_root(&chain, cut),
+            Err(MerkleChainRefuse::CutBeforeGenesis)
+        );
+    }
+
+    /// [`build_consistency_proof`] refuses inverted ordinal range and a gap
+    /// where the chain has no link exactly at `older`.
+    #[test]
+    fn build_consistency_proof_refuses_inverted_range_and_ordinal_gap() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, MerkleChainRefuse, RootChain,
+            build_consistency_proof,
+        };
+
+        let store_id = StoreId::from_digest([0xCF; 32]);
+        let fence = FenceEpoch::genesis(store_id);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let o3 = o2.successor().unwrap();
+
+        let mut chain = RootChain::empty();
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"a".to_vec(), b"1".to_vec())]));
+        let c3 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"a".to_vec(), b"1".to_vec()),
+            (b"c".to_vec(), b"3".to_vec()),
+        ]));
+        chain
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o1,
+                c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        // Skip o2 deliberately — gap between o1 and o3.
+        chain
+            .append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o3,
+                c3,
+                chain.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            build_consistency_proof(&chain, o3, o1),
+            Err(MerkleChainRefuse::ConsistencyProofFailed),
+            "inverted range (older > newer) must refuse"
+        );
+        assert_eq!(
+            build_consistency_proof(&chain, o2, o3),
+            Err(MerkleChainRefuse::ConsistencyProofFailed),
+            "ordinal gap: no link at older cut must refuse"
+        );
+        // Empty chain: no covering links.
+        assert_eq!(
+            build_consistency_proof(&RootChain::empty(), o1, o3),
+            Err(MerkleChainRefuse::CutBeforeGenesis)
+        );
+    }
+
+    /// [`fork_equivalence`] is true only when fork-point root, predecessor
+    /// store, fence, and commit ordinal all agree — not path/URL sameness.
+    #[test]
+    fn fork_equivalence_true_only_on_identical_fork_points() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{ForkPoint, fork_equivalence};
+
+        let store_a = StoreId::from_digest([0xF1; 32]);
+        let store_b = StoreId::from_digest([0xF2; 32]);
+        let fence_a = FenceEpoch::genesis(store_a);
+        let fence_a_later = FenceEpoch::from_raw(store_a, 1);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+        let root = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+        let other_root =
+            StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"OTHER".to_vec())]));
+
+        let a = ForkPoint::seal(root, store_a, fence_a, o1);
+        let same = ForkPoint::seal(root, store_a, fence_a, o1);
+        assert!(fork_equivalence(&a, &same));
+
+        assert!(
+            !fork_equivalence(&a, &ForkPoint::seal(other_root, store_a, fence_a, o1)),
+            "divergent fork-point root must not equate"
+        );
+        assert!(
+            !fork_equivalence(&a, &ForkPoint::seal(root, store_b, fence_a, o1)),
+            "foreign predecessor StoreId must not equate"
+        );
+        assert!(
+            !fork_equivalence(&a, &ForkPoint::seal(root, store_a, fence_a_later, o1)),
+            "foreign fence epoch must not equate"
+        );
+        assert!(
+            !fork_equivalence(&a, &ForkPoint::seal(root, store_a, fence_a, o2)),
+            "foreign commit ordinal must not equate"
         );
     }
 
@@ -2249,6 +2530,83 @@ mod tests {
         assert_eq!(
             check_sth_gossip(&head_a, &head_a, None),
             Ok(GossipConsistency::Identical)
+        );
+    }
+
+    /// Distinct Store identities on an STH pair → [`MerkleChainRefuse::SthStoreMismatch`]
+    /// from both gossip and consistency-proof verify (never soft-pass).
+    #[test]
+    fn sth_store_mismatch_refuses_cross_store_gossip_and_proof() {
+        use crate::store::epoch::FenceEpoch;
+        use crate::store::open::StoreId;
+        use crate::store::sweep::CommitOrdinal;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, MerkleChainRefuse, RootChain,
+            StateRootHead, build_consistency_proof, check_sth_gossip, verify_consistency_proof,
+        };
+
+        let store_a = StoreId::from_digest([0xA1; 32]);
+        let store_b = StoreId::from_digest([0xB2; 32]);
+        let fence_a = FenceEpoch::genesis(store_a);
+        let fence_b = FenceEpoch::genesis(store_b);
+        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o2 = o1.successor().unwrap();
+
+        let mut chain_a = RootChain::empty();
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())]));
+        let c2 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"x".to_vec(), b"1".to_vec()),
+            (b"y".to_vec(), b"2".to_vec()),
+        ]));
+        chain_a
+            .append(ChainedStateRoot::mint(
+                store_a,
+                fence_a,
+                o1,
+                c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+        chain_a
+            .append(ChainedStateRoot::mint(
+                store_a,
+                fence_a,
+                o2,
+                c2,
+                chain_a.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+
+        let mut chain_b = RootChain::empty();
+        chain_b
+            .append(ChainedStateRoot::mint(
+                store_b,
+                fence_b,
+                o1,
+                c1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))
+            .unwrap();
+
+        let head_a = StateRootHead::from_cut(&chain_a, o1).unwrap();
+        let head_b = StateRootHead::from_cut(&chain_b, o1).unwrap();
+        assert_ne!(head_a.store_id(), head_b.store_id());
+
+        assert_eq!(
+            check_sth_gossip(&head_a, &head_b, None),
+            Err(MerkleChainRefuse::SthStoreMismatch)
+        );
+
+        let proof = build_consistency_proof(&chain_a, o1, o2).unwrap();
+        let newer_a = StateRootHead::from_cut(&chain_a, o2).unwrap();
+        assert_eq!(
+            verify_consistency_proof(&head_b, &newer_a, &proof),
+            Err(MerkleChainRefuse::SthStoreMismatch),
+            "cross-store heads must refuse even with a well-formed same-store proof"
         );
     }
 
