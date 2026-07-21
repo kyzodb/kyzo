@@ -1603,19 +1603,22 @@ fn percentile_999(values: &mut [u64]) -> u64 {
     values[idx]
 }
 
-/// Structural bound shape matching sealed `f`: intercept + slope * bytes.
-/// Uses sealed RECOVERY_SLA_* from the bench-calibrated surface — does not
-/// re-derive intercept from a synthetic formula (§86 anti-fraud). Not a
-/// comparison of structural work-units to wall-clock nanoseconds.
-fn structural_bound(bytes_since_last_flush: u64) -> u64 {
-    RECOVERY_SLA_INTERCEPT_NS
-        + bytes_since_last_flush.saturating_mul(RECOVERY_SLA_SLOPE_NUM) / RECOVERY_SLA_SLOPE_DEN
+/// Independent structural ceiling for the DST meter — not a twin of sealed
+/// `recovery_time_bound_ns` (structural work-units ≠ wall-clock ns; no fake
+/// conversion). Corpus law: `n_commits = 1 + (seed % 8) ≤ 8`, and
+/// `structural_recovery_work = Σ(STRUCTURAL_PER_RECORD_WORK + payload_bytes)`.
+const MAX_COMMITS_PER_SAMPLE: u64 = 8;
+
+fn structural_work_ceiling(bytes_since_last_flush: u64) -> u64 {
+    bytes_since_last_flush
+        .saturating_add(STRUCTURAL_PER_RECORD_WORK.saturating_mul(MAX_COMMITS_PER_SAMPLE))
 }
 
 /// §29/§28/§86 — durable license + recovery correctness at the adversarial
 /// crash instant. Every Committed survives; recovery converges; sealed `f`
-/// bound-shape is cited (not equated to structural work-units); claim emit
-/// refuses above f and never refuses Store open.
+/// is cited only via `recovery_time_bound_ns` (no local twin of the formula);
+/// measured structural p999 is asserted against the independent structural
+/// ceiling; claim emit refuses above f and never refuses Store open.
 #[test]
 fn power_cut_at_commit_door_dst() {
     let samples: Vec<CrashInstantSample> = (0..CORPUS_SEEDS).map(sample_crash_instant).collect();
@@ -1642,10 +1645,14 @@ fn power_cut_at_commit_door_dst() {
             sample.structural_recovery_work,
             sample.bytes_since_last_flush
         );
-        // Bound-shape: DST cites the same sealed f the claim surface publishes.
-        assert_eq!(
-            structural_bound(sample.bytes_since_last_flush),
-            recovery_time_bound_ns(sample.bytes_since_last_flush)
+        // Per-sample structural work stays under the independent ceiling.
+        assert!(
+            sample.structural_recovery_work
+                <= structural_work_ceiling(sample.bytes_since_last_flush),
+            "structural_recovery_work={} exceeds independent ceiling {} at bytes={}",
+            sample.structural_recovery_work,
+            structural_work_ceiling(sample.bytes_since_last_flush),
+            sample.bytes_since_last_flush
         );
     }
 
@@ -1654,10 +1661,21 @@ fn power_cut_at_commit_door_dst() {
         .map(|s| s.bytes_since_last_flush)
         .max()
         .expect("corpus");
-    // Sealed f is monotonic in dirty-tail bytes (slope > 0).
+    // Sealed f cited once — monotonic in dirty-tail bytes (slope > 0).
+    let bound_worst = recovery_time_bound_ns(worst_bytes);
     assert!(
-        recovery_time_bound_ns(worst_bytes) >= recovery_time_bound_ns(worst_bytes / 2),
+        bound_worst >= recovery_time_bound_ns(worst_bytes / 2),
         "sealed f(bytes_since_last_flush) must be non-decreasing"
+    );
+
+    // Measured structural p999 vs independent structural ceiling (unit-matched).
+    // Wall-clock Instant p999 ≤ sealed f(ns) is the recovery_sla bench obligation;
+    // DST does not convert work-units into nanoseconds.
+    let structural_ceiling = structural_work_ceiling(worst_bytes);
+    assert!(
+        recovery_time_p999 <= structural_ceiling,
+        "recovery_time_p999={recovery_time_p999} (structural work) exceeds \
+         independent ceiling at worst_bytes={worst_bytes}: {structural_ceiling}"
     );
 
     // Bench-lane emit: at the bound, claim succeeds; one ns over, claim refuses
@@ -1668,14 +1686,16 @@ fn power_cut_at_commit_door_dst() {
         .expect("claim at sealed f must emit");
     assert_eq!(ok.recovery_time_p999_ns, bound);
     assert_eq!(ok.bytes_since_last_flush, bytes_since_last_flush);
+    assert_eq!(ok.bound_ns, bound);
     assert!(
         emit_recovery_sla_claim(bound.saturating_add(1), bytes_since_last_flush).is_err(),
         "claim above f(bytes_since_last_flush) must refuse the SLA badge — not Store open"
     );
-
-    // Keep the board Check tokens load-bearing in this corpus seat.
-    let _: u64 = recovery_time_p999;
-    let _: u64 = bytes_since_last_flush;
+    // Sealed f at worst_bytes remains the claim ceiling for the corpus tip.
+    assert!(
+        emit_recovery_sla_claim(bound_worst, worst_bytes).is_ok(),
+        "claim at sealed f(worst_bytes) must emit"
+    );
 }
 
 /// #374 T10 — live KyzoScript write ack through the production
