@@ -19,7 +19,8 @@
 #                         is the subset a stale-artifact or wrong-commit release would most
 #                         visibly falsify: does it build, does it pass, is it clean, is it pure,
 #                         is it unsafe-free.)
-#   build-artifacts     -> kyzo-bin release binaries (linux x86_64 gnu) + SHA256SUMS.
+#   build-artifacts     -> kyzo-bin release binaries (linux x86_64, macOS arm64/x86_64, windows
+#                         x86_64) + per-target SHA256SUMS, built as a matrix across native runners.
 #   publish-release     -> drafts and publishes the GitHub Release: changelog since the previous
 #                         tag, the gate summary, FormatVersion, a benchmark-status placeholder for
 #                         a human to fill in (see RELEASING.md), and the attribution note.
@@ -185,27 +186,50 @@ jobs:
   # ---------- Artifacts ----------
 
   build-artifacts:
-    name: Build kyzo-bin release artifacts
-    runs-on: ubuntu-latest
-    container:
-      image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
+    name: Build kyzo-bin release artifacts (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
     needs: [pure-rust-gate, unsafe-audit, lint, build-test, double-build-diff]
     permissions:
       contents: read
       id-token: write
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            bin: kyzo
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            bin: kyzo
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            bin: kyzo
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            bin: kyzo.exe
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
       - uses: Swatinem/rust-cache@v2
-      - name: Build kyzo-bin (release, x86_64-unknown-linux-gnu)
-        run: cargo build -p kyzo-bin --release --target x86_64-unknown-linux-gnu
+      - name: Install target toolchain (pinned via rust-toolchain.toml)
+        run: rustup target add ${{ matrix.target }}
+      - name: Build kyzo-bin (release, ${{ matrix.target }})
+        run: cargo build -p kyzo-bin --release --target ${{ matrix.target }}
       - name: Version agreement (built binary vs tag)
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          got=$(./target/x86_64-unknown-linux-gnu/release/kyzo --version | awk '{print $NF}')
+          got=$(./target/${{ matrix.target }}/release/${{ matrix.bin }} --version | awk '{print $NF}')
           if [ "$got" != "$tag" ]; then
             echo "::error::REFUSED — built binary reports version $got, tag is $tag."
             exit 1
@@ -221,7 +245,7 @@ jobs:
           cargo install cargo-cyclonedx --version 0.5.9 --locked
           cargo cyclonedx --manifest-path crates/kyzo-bin/Cargo.toml --format json
           mkdir -p dist
-          mv crates/kyzo-bin/kyzo-bin.cdx.json "dist/kyzo-${tag}.cdx.json"
+          mv crates/kyzo-bin/kyzo-bin.cdx.json "dist/kyzo-${tag}-${{ matrix.target }}.cdx.json"
           find . -name '*.cdx.json' -not -path './dist/*' -delete
       - name: Package + checksum
         run: |
@@ -230,14 +254,19 @@ jobs:
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             tag="dryrun-${GITHUB_SHA::12}"
           fi
-          dir="kyzo-${tag}-x86_64-unknown-linux-gnu"
+          dir="kyzo-${tag}-${{ matrix.target }}"
           mkdir -p "dist/$dir"
-          cp target/x86_64-unknown-linux-gnu/release/kyzo "dist/$dir/"
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} "dist/$dir/"
           cp README.md LICENSE-MPL FORK.md "dist/$dir/"
-          (cd dist && tar czf "$dir.tar.gz" "$dir")
-          (cd dist && sha256sum "$dir.tar.gz" "kyzo-${tag}.cdx.json" > SHA256SUMS)
+          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
+            (cd dist && tar czf "$dir.tar.gz" "$dir")
+            (cd dist && sha256sum "$dir.tar.gz" "kyzo-${tag}-${{ matrix.target }}.cdx.json" > "SHA256SUMS-${{ matrix.target }}")
+          else
+            (cd dist && tar -a -cf "$dir.zip" "$dir")
+            (cd dist && sha256sum "$dir.zip" "kyzo-${tag}-${{ matrix.target }}.cdx.json" > "SHA256SUMS-${{ matrix.target }}")
+          fi
           ls -la dist/
-          cat dist/SHA256SUMS
+          cat "dist/SHA256SUMS-${{ matrix.target }}"
       - name: Provenance manifest (commit + environment + command)
         run: |
           set -euo pipefail
@@ -246,22 +275,21 @@ jobs:
             tag="dryrun-${GITHUB_SHA::12}"
           fi
           toolchain="$(grep -m1 '^channel' rust-toolchain.toml | sed 's/.*"\(.*\)"/\1/')"
-          # Must match this job's own container: line — single source is this file; greppable.
-          container_image="rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663"
           artifacts=""
           while read -r hash name; do
             artifacts="${artifacts}{\"name\":\"${name}\",\"sha256\":\"${hash}\"},"
-          done < dist/SHA256SUMS
+          done < "dist/SHA256SUMS-${{ matrix.target }}"
           artifacts="[${artifacts%,}]"
-          cat > "dist/kyzo-${tag}.provenance.json" <<EOF
+          cat > "dist/kyzo-${tag}-${{ matrix.target }}.provenance.json" <<EOF
           {
             "tag": "${tag}",
             "commit": "${GITHUB_SHA}",
             "build_environment": {
-              "container_image": "${container_image}",
+              "runner_os": "${{ matrix.os }}",
+              "target": "${{ matrix.target }}",
               "toolchain": "${toolchain}"
             },
-            "build_command": "cargo build -p kyzo-bin --release --target x86_64-unknown-linux-gnu",
+            "build_command": "cargo build -p kyzo-bin --release --target ${{ matrix.target }}",
             "artifacts": ${artifacts}
           }
           EOF
@@ -270,7 +298,8 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          for f in *.tar.gz *.cdx.json *.provenance.json SHA256SUMS; do
+          for f in *.tar.gz *.zip *.cdx.json *.provenance.json SHA256SUMS-*; do
+            [ -e "$f" ] || continue
             cosign sign-blob --yes \
               --output-signature "${f}.sig" \
               --output-certificate "${f}.pem" \
@@ -279,10 +308,11 @@ jobs:
           ls -la *.sig *.pem
       - uses: actions/upload-artifact@v7
         with:
-          name: release-artifacts
+          name: release-artifacts-${{ matrix.target }}
           path: |
             dist/*.tar.gz
-            dist/SHA256SUMS
+            dist/*.zip
+            dist/SHA256SUMS-*
             dist/*.cdx.json
             dist/*.provenance.json
             dist/*.sig
@@ -305,7 +335,8 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
-          name: release-artifacts
+          pattern: release-artifacts-*
+          merge-multiple: true
           path: dist
       - name: Draft release notes (RELEASING.md's mandatory sections)
         run: |
@@ -341,7 +372,7 @@ jobs:
             echo
             echo "## FormatVersion"
             echo
-            fv=$(grep -oP 'pub const CURRENT: FormatVersion = FormatVersion\(\K[0-9]+' crates/kyzo-core/src/storage/mod.rs || echo "unknown")
+            fv=$(grep -oP 'pub const CURRENT: FormatVersion = FormatVersion\(\K[0-9]+' crates/kyzo-core/src/store/contract.rs || echo "unknown")
             echo "FormatVersion: ${fv} — see VERSIONING.md for the migration stance."
             echo
             echo "## Benchmark status"
@@ -362,7 +393,7 @@ jobs:
           gh release create "$tag" \
             --title "$tag" \
             --notes-file notes.md \
-            dist/*.tar.gz dist/SHA256SUMS dist/*.cdx.json dist/*.provenance.json dist/*.sig dist/*.pem
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS-* dist/*.cdx.json dist/*.provenance.json dist/*.sig dist/*.pem
 
   # ---------- crates.io ----------
 
