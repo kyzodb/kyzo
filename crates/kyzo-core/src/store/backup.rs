@@ -652,6 +652,13 @@ impl LeaveIsFreePack {
 /// leave-is-free PACK never supplies the trust root — ceremony `local` resolves
 /// here only.
 ///
+/// **External visibility (DELIBERATE, #359 / #375 T5):** not re-exported from
+/// `store` — crate-internal ceremony only. This is fail-closed product state
+/// for external leave-is-free import, not unfinished wiring. External callers
+/// reach only [`ImportCapability::after_chain_root_verify`] (hard-refuse) and
+/// [`ImportCapability::unverified`]; both yield
+/// [`PackRefuse::ForeignHistoryUnverified`] on [`import_leave_is_free`].
+///
 /// [`Self::insert`] is operator/genesis-scoped: untrusted or peer input must
 /// never reach it unvalidated. Seal-once per StoreId — first root wins;
 /// same root re-register is idempotent; a different root refuses
@@ -754,11 +761,17 @@ fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
 /// root verify. Blind import is a second write door for forged belief.
 ///
 /// Sealed struct — never a public enum variant or bool standing in for verify
-/// authority. A verified capability is reachable only through
-/// [`OriginRootRegistry::after_chain_root_verify`], which binds the receiver's
-/// sealed trusted origin root (never the pack's self-computed cut, never two
-/// bare caller-supplied [`StateRoot`]s). Ambient / silent verified is
-/// Unconstructible. Verified without a bound root is Unconstructible.
+/// authority. Ambient / silent verified is Unconstructible. Verified without a
+/// bound root is Unconstructible.
+///
+/// **External leave-is-free import — DELIBERATE fail-closed (#359 / #375 T5):**
+/// the only public mint door ([`Self::after_chain_root_verify`]) hard-refuses
+/// every call with [`PackRefuse::ForeignHistoryUnverified`].
+/// [`OriginRootRegistry`] (crate-internal; not re-exported from `store`) can
+/// mint a bound capability for in-crate ceremony tests / future host wiring —
+/// that is not an unfinished external export. External callers have no path to
+/// a verified capability; [`import_leave_is_free`] therefore always refuses
+/// foreign history until an explicit product decision opens a host door.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImportCapability {
     /// Trusted origin root bound at mint. `None` = unverified.
@@ -766,11 +779,17 @@ pub struct ImportCapability {
 }
 
 impl ImportCapability {
-    /// Two bare [`ReplicaCutRecompute`]s are never a trust source (seat 80 / #374 T7).
+    /// Public / external mint door — **DELIBERATE hard-refuse** (#359 / #375 T5).
     ///
-    /// Self-anchoring a pack by comparing its own cut to itself is
-    /// Unconstructible as Verified — always [`PackRefuse::ForeignHistoryUnverified`].
-    /// The ceremony door is [`OriginRootRegistry::after_chain_root_verify`].
+    /// Two bare [`ReplicaCutRecompute`]s are never a trust source (seat 80 /
+    /// #374 T7). Self-anchoring a pack by comparing its own cut to itself is
+    /// Unconstructible as Verified. This door always returns
+    /// [`PackRefuse::ForeignHistoryUnverified`] — fail-closed product state for
+    /// external leave-is-free import, not unfinished wiring.
+    ///
+    /// Crate-internal ceremony (when a host eventually wires it) is
+    /// [`OriginRootRegistry::after_chain_root_verify`]; that type is not
+    /// re-exported from `store`.
     pub fn after_chain_root_verify(
         local: ReplicaCutRecompute,
         peer: ReplicaCutRecompute,
@@ -810,12 +829,14 @@ pub enum ObjectsCompleteness {
 
 /// Run the import verify ceremony over a leave-is-free pack.
 ///
-/// Requires [`ImportCapability`] minted by [`OriginRootRegistry::after_chain_root_verify`]
-/// and bound to this pack's independently recomputed root; unverified, forged,
-/// or unbound-to-pack → [`PackRefuse::ForeignHistoryUnverified`]. [`ShredLedger`]
-/// is consulted so post-shred restore of a pack that still carries a shredded
-/// segment's `WrappedShredSalt` converges to [`PackRefuse::Shredded`] (§64 / §80)
-/// — not silent unreadability.
+/// Requires a bound [`ImportCapability`]. Externally, that capability is
+/// Unconstructible — public [`ImportCapability::after_chain_root_verify`]
+/// hard-refuses (#359 / #375 T5 fail-closed). Crate-internal mint is
+/// [`OriginRootRegistry::after_chain_root_verify`] (not re-exported). Unverified,
+/// forged, or unbound-to-pack → [`PackRefuse::ForeignHistoryUnverified`].
+/// [`ShredLedger`] is consulted so post-shred restore of a pack that still
+/// carries a shredded segment's `WrappedShredSalt` converges to
+/// [`PackRefuse::Shredded`] (§64 / §80) — not silent unreadability.
 pub fn import_verify(
     pack: &LeaveIsFreePack,
     cap: ImportCapability,
@@ -850,8 +871,13 @@ pub fn import_verify(
 ///
 /// Runs [`import_verify`] then admits the pack under the verified ceremony.
 /// There is no blind side door — unverified / unbound capability refuses
-/// [`PackRefuse::ForeignHistoryUnverified`]. Payload materialization stays
-/// adapter-side; the ceremony gate is the Store production path.
+/// [`PackRefuse::ForeignHistoryUnverified`].
+///
+/// **External callers (#375 T5):** fail-closed by design — no re-exported
+/// registry, public mint hard-refuses — so this door always refuses foreign
+/// history until a host explicitly wires a trust door. Not unfinished wiring.
+/// Payload materialization stays adapter-side; the ceremony gate is the Store
+/// production path.
 pub fn import_leave_is_free(
     pack: &LeaveIsFreePack,
     cap: ImportCapability,
@@ -1094,6 +1120,34 @@ mod import_verify {
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         )
+    }
+
+    /// DELIBERATE fail-closed (#359 / #375 T5): the external leave-is-free
+    /// import path — public [`ImportCapability::after_chain_root_verify`] plus
+    /// [`import_leave_is_free`] — always refuses
+    /// [`PackRefuse::ForeignHistoryUnverified`]. This is intentional product
+    /// state (OriginRootRegistry not re-exported; public mint hard-refuses),
+    /// not unfinished wiring.
+    #[test]
+    fn external_leave_is_free_import_fail_closed_refuses_foreign_history() {
+        let (pack, _) = sample_pack();
+        let cut = pack.replica_cut_recompute();
+        // Public mint door: even matching cuts never yield Verified.
+        assert!(matches!(
+            ImportCapability::after_chain_root_verify(cut, cut),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+        let ledger = ShredLedger::new();
+        // Only externally constructible capability is unverified → import refuses.
+        assert!(matches!(
+            import_leave_is_free(
+                &pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &ledger
+            ),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
     }
 
     /// NASTY (#374 T7): minting a capability from the pack's OWN cut must refuse

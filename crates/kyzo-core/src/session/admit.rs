@@ -560,35 +560,6 @@ impl LiveCertificateInputs {
             scope_manifest_digest,
         })
     }
-
-    /// Origin path: public id + distinct ed25519 seed (id must not equal seed).
-    ///
-    /// Caller is responsible for registering the verifying id in an
-    /// [`AuthorizingKeyTable`] before a receiver can verify (e.g. seats genesis).
-    /// Prefer [`Self::from_live`] when the registration proof is available.
-    pub(crate) fn from_authorizing(
-        catalog_generation: CatalogGeneration,
-        root_chain: &RootChain,
-        authorizing_key_id: [u8; 32],
-        authorizing_key_material: [u8; 32],
-        origin_commit: CommitOrdinal,
-        scope_manifest_digest: ScopeManifestDigest,
-    ) -> Self {
-        debug_assert_ne!(
-            authorizing_key_id, authorizing_key_material,
-            "authorizing_key_id must not equal authorizing_key_material (seed)"
-        );
-        let (predecessor_history_digest, post_state_root) = root_tip_digests(root_chain);
-        let key = AuthorizingKey::mint(authorizing_key_id, authorizing_key_material);
-        Self {
-            catalog_generation,
-            predecessor_history_digest,
-            post_state_root,
-            authorizing_key: key,
-            origin_commit,
-            scope_manifest_digest,
-        }
-    }
 }
 
 fn root_tip_digests(root_chain: &RootChain) -> ([u8; 32], [u8; 32]) {

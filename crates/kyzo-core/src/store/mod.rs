@@ -79,6 +79,11 @@ pub use authority::{
     IncarnationMintCap, OpenOrdinal, RecoveryMatrix, RecoveryPublicKey, WriteAuthority,
     WriteTokenId,
 };
+// Leave-is-free external import is DELIBERATELY fail-closed (#359 / #375 T5):
+// `OriginRootRegistry` is intentionally omitted from this reexport. The only
+// public mint door on `ImportCapability` hard-refuses; external callers cannot
+// obtain a verified capability. Crate-internal registry ceremony stays for
+// tests / future host wiring — not unfinished export.
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use backup::{
     ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
