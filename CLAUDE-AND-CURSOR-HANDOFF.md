@@ -102,3 +102,39 @@ document is about.
 pin-production check; `panic_lint` is scoped to decode surfaces only, not every
 caller-reachable path; string-typed names past the parse boundary; test-bypass doors.
 These are harder (semantic, not syntactic) and were not faked with shallow name-bans.
+
+## RUN THIS NEXT — the test-sabotage audit (operator-ordered)
+
+The test suite is full of sabotage. Both teams — guardian QA and cursor dev — wrote weak,
+tautological, and theatrical tests: golden campaigns that asserted **synthetic** fixtures
+disconnected from production (the seat-59 disaster), tests that assert a value built to
+pass, "campaign-proven" invariants whose adversary was never driven. Green was treated as
+the verdict instead of the floor. **Call it what it is: sabotage.** The next agent's job is
+to undo it.
+
+**Do this — fan out a fleet of Sonnet subagents (model: sonnet), one per test domain, in
+parallel** (this is a large sweep; the operator explicitly gated it as a deliberate,
+opt-in run, not something to do casually):
+
+- Partition the whole test surface, roughly: (1) `kyzo-model` value/encoding/one-law/
+  format/program; (2) `store/` crypto + federation (crypto, grants, replica, transcript,
+  seal, backup, compact); (3) `store/` durability (sweep, wal, merkle, fjall, open,
+  scratch); (4) `exec/` + `query/` + oracle differential; (5) `project/` (vector/HNSW,
+  text, dedup, sketch); (6) `rules/` datalog algos; (7) `kyzo-trials` DST campaigns
+  (serializability, crash, dst — the theater-prone "campaign-proven" tier); (8) `session/`
+  admission + certificate.
+- **Give each agent the `falsification-first-testing` skill** and the sabotage framing
+  above. Their mandate: assume every test is a lie until proven adversarial. For each
+  weak test found, report `file:line`, the lie-shape (tautology-in-green / placeholder-on-
+  real-path / second-authority / undeleted-scaffold / campaign-that-never-drives-its-
+  adversary), and the **concrete maximum-purity test that replaces it** — plus any domain
+  corner missing adversarial coverage and the hard tests it needs. Ranked by blast radius
+  (silent-wrong-answers and broken-accountability first). Read-only: they audit and
+  propose; they do not edit.
+- **When the audits return: add every hard test, and make each one harder if you can.**
+  No fake, weak, easy, or bullshit test may be left anywhere in the application
+  architecture. Then, and only then, do the final handoff.
+
+Also: the two slow suite jobs were separated out of per-commit CI (they run on main/PR),
+but **they still must be green** — kick off `cargo test --workspace --release` in a
+container and fix whatever is red. Separation is not a pass.
