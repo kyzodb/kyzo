@@ -5,15 +5,14 @@ use std::fmt::{Display, Formatter};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use miette::{Diagnostic, Result, bail, ensure};
-use serde_json::json;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data_value_any;
-use crate::envelope::{json_from_serde, serde_from_json};
+use crate::envelope::json_from_serde;
 use crate::program::expr::Expr;
 use crate::value::json_convert::to_json;
-use crate::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
+use crate::value::{DataValue, Validity, ValidityTs, Vector};
 
 /// Schema vocabulary: a vector column's declared element width. Stored
 /// vector VALUES are always f64 canonical (format v1); `F32` columns
@@ -471,67 +470,60 @@ impl NullableColType {
                 }
             }
             ColType::Json => {
-                let serde_val = match data {
-                    DataValue::Null => {
-                        json!(null)
-                    }
-                    DataValue::Bool(b) => {
-                        json!(b)
-                    }
-                    DataValue::Num(n) => match n.repr() {
-                        NumRepr::Int(i) => {
-                            json!(i)
-                        }
-                        NumRepr::Float(f) => {
-                            json!(f)
-                        }
-                    },
-                    DataValue::Str(s) => {
-                        json!(s)
-                    }
-                    DataValue::Bytes(b) => {
-                        json!(b)
-                    }
-                    DataValue::Uuid(u) => {
-                        json!(u.as_uuid().as_bytes())
-                    }
-                    DataValue::Regex(r) => {
-                        json!(r.pattern())
-                    }
-                    DataValue::List(l) => {
-                        let mut arr = Vec::with_capacity(l.len());
-                        for el in l {
-                            arr.push(to_json(&self.coerce(el, cur_vld)?));
-                        }
-                        arr.into()
-                    }
-                    DataValue::Set(l) => {
-                        let mut arr = Vec::with_capacity(l.len());
-                        for el in l {
-                            arr.push(to_json(&self.coerce(el, cur_vld)?));
-                        }
-                        arr.into()
-                    }
-                    DataValue::Vector(v) => {
-                        let mut arr = Vec::with_capacity(v.len());
-                        for el in v.to_f64s() {
-                            arr.push(json!(el));
-                        }
-                        arr.into()
-                    }
-                    DataValue::Json(j) => serde_from_json(&j),
-                    DataValue::Validity(vld) => {
-                        json!([vld.ts_micros(), vld.is_assert()])
-                    }
-                    DataValue::Interval(iv) => {
-                        json!([iv.start(), iv.end()])
-                    }
-                    DataValue::Geometry(g) => {
-                        json!([g.lat().get(), g.lon().get()])
-                    }
-                };
-                DataValue::Json(json_from_serde(&serde_val))
+                // One door: kind-preserving tags (Bytes/Uuid/Vector/Regex)
+                // live in `to_json` — never a second hand-rolled render.
+                DataValue::Json(json_from_serde(&to_json(&data)))
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::{RegexFlags, RegexSource, ValidityTs};
+
+    #[test]
+    fn json_coerce_preserves_regex_flags_via_to_json() {
+        let col = NullableColType::required(ColType::Json);
+        let cur = ValidityTs::from_raw(0);
+        let ci = DataValue::Regex(
+            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).unwrap(),
+        );
+        let cs =
+            DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap());
+        let j_ci = col.coerce(ci, cur).unwrap();
+        let j_cs = col.coerce(cs, cur).unwrap();
+        assert_ne!(j_ci, j_cs, "Json coerce must not drop regex flags");
+    }
+
+    #[test]
+    fn required_null_refuses_optional_null_admits() {
+        let cur = ValidityTs::from_raw(0);
+        assert!(NullableColType::required(ColType::Int)
+            .coerce(DataValue::Null, cur)
+            .is_err());
+        assert_eq!(
+            NullableColType::optional(ColType::Int)
+                .coerce(DataValue::Null, cur)
+                .unwrap(),
+            DataValue::Null
+        );
+    }
+
+    #[test]
+    fn bytes_from_base64_string_and_uuid_from_str() {
+        let cur = ValidityTs::from_raw(0);
+        let b = NullableColType::required(ColType::Bytes)
+            .coerce(DataValue::from("AQID"), cur)
+            .unwrap();
+        assert_eq!(b, DataValue::Bytes(vec![1, 2, 3]));
+        let u = NullableColType::required(ColType::Uuid)
+            .coerce(
+                DataValue::from("550e8400-e29b-41d4-a716-446655440000"),
+                cur,
+            )
+            .unwrap();
+        assert!(matches!(u, DataValue::Uuid(_)));
     }
 }
