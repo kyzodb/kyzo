@@ -47,11 +47,20 @@
 //! there is no committed-but-aborted state for a reader to observe (no G1a),
 //! and every read in this workload targets a register no earlier op in the
 //! same transaction wrote (see `plan_txn`), so no transaction ever produces
-//! two versions of one key to disagree about (no G1b). The checker still
-//! catches an actual violation of the first claim: a read whose observed
-//! write-id has no matching COMMITTED writer anywhere in the history is
-//! reported directly, as a dirty/phantom read, before the graph is even
-//! built.
+//! two versions of one key to disagree about (no G1b). Range reads claim a
+//! half-open register span and remove those registers from the same-txn
+//! pool — the same distinct-register law, now over a predicate footprint.
+//! The checker still catches an actual violation of the first claim: a read
+//! whose observed write-id has no matching COMMITTED writer anywhere in the
+//! history is reported directly, as a dirty/phantom read, before the graph
+//! is even built.
+//!
+//! Predicate / phantom anti-dependencies are first-class: a [`ExecutedOp::RangeRead`]
+//! induces item wr/rw edges on every version it observes inside `[lo, hi)`,
+//! plus a predicate rw-edge to the first real writer of any register in the
+//! span that the range read did **not** observe (Adya phantom / predicate
+//! rw — the insert that should have matched). Without `RangeRead` in the
+//! history model those edges are structurally unreachable.
 //!
 //! ## Out of scope (named)
 //!
@@ -153,42 +162,73 @@ fn decode_write_id(bytes: &[u8]) -> u64 {
     )
 }
 
+/// One planned micro-op. `RangeRead` claims every register in `[lo, hi)` —
+/// those ids are removed from the same-txn pool so a later Write cannot
+/// target a register the range already observed (G1b unrepresentable).
 #[derive(Clone, Copy, Debug)]
-enum OpKind {
-    Read,
-    Write,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct PlannedOp {
-    reg: u32,
-    kind: OpKind,
+enum PlannedOp {
+    Read { reg: u32 },
+    Write { reg: u32 },
+    /// Half-open register span `[lo, hi)`, executed via [`ReadTx::range_scan`].
+    RangeRead { lo: u32, hi: u32 },
 }
 
 /// One transaction's plan: 2..=4 ops over DISTINCT registers (never read
 /// *and* write the same register in one transaction — see the module docs'
-/// G1b argument), each independently a read or a write.
+/// G1b argument). Ops are point reads, point writes, or range reads over a
+/// contiguous free span.
 fn plan_txn(rng: &mut Rng) -> Vec<PlannedOp> {
     let n_ops = rng.range(2, 5) as usize;
-    let mut pool: Vec<u32> = (0..NUM_REGISTERS).collect();
+    let mut available = [true; NUM_REGISTERS as usize];
     let mut ops = Vec::with_capacity(n_ops);
     for _ in 0..n_ops {
-        let idx = rng.below(pool.len() as u64) as usize;
-        let reg = pool.remove(idx);
-        let kind = if rng.chance(1, 2) {
-            OpKind::Write
+        let free: Vec<u32> = (0..NUM_REGISTERS).filter(|&r| available[r as usize]).collect();
+        if free.is_empty() {
+            break;
+        }
+        // Prefer some range reads so predicate/phantom rw-edges are reachable
+        // in live campaign histories, not only in hand-built checker seals.
+        if free.len() >= 2 && rng.chance(1, 3) {
+            let start_idx = rng.below(free.len() as u64) as usize;
+            let lo = free[start_idx];
+            let mut max_hi = lo + 1;
+            while max_hi < NUM_REGISTERS && available[max_hi as usize] {
+                max_hi += 1;
+            }
+            let width = max_hi - lo;
+            let take = 1 + rng.below(width as u64) as u32;
+            let hi = lo + take;
+            for r in lo..hi {
+                available[r as usize] = false;
+            }
+            ops.push(PlannedOp::RangeRead { lo, hi });
         } else {
-            OpKind::Read
-        };
-        ops.push(PlannedOp { reg, kind });
+            let idx = rng.below(free.len() as u64) as usize;
+            let reg = free[idx];
+            available[reg as usize] = false;
+            if rng.chance(1, 2) {
+                ops.push(PlannedOp::Write { reg });
+            } else {
+                ops.push(PlannedOp::Read { reg });
+            }
+        }
     }
     ops
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum ExecutedOp {
     Read { reg: u32, write_id: u64 },
     Write { reg: u32, write_id: u64 },
+    /// Observed `(reg, write_id)` pairs inside `[lo, hi)`, in ascending reg order.
+    /// A register in the span missing from `observed` is an Adya phantom /
+    /// predicate non-match at read time — the checker draws a predicate rw
+    /// to the first real writer of that register.
+    RangeRead {
+        lo: u32,
+        hi: u32,
+        observed: Vec<(u32, u64)>,
+    },
 }
 
 /// One COMMITTED transaction, as the checker sees it: its executed ops (in
@@ -263,25 +303,41 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
         let stamp = tx.system_stamp().raw();
         let mut ops = Vec::with_capacity(plan.len());
         for p in plan {
-            match p.kind {
-                OpKind::Read => {
+            match *p {
+                PlannedOp::Read { reg } => {
                     let bytes = tx
-                        .get(&reg_key(p.reg))
+                        .get(&reg_key(reg))
                         .expect("read op")
                         .expect("every register is seeded before the campaign starts");
                     ops.push(ExecutedOp::Read {
-                        reg: p.reg,
+                        reg,
                         write_id: decode_write_id(&bytes),
                     });
                 }
-                OpKind::Write => {
+                PlannedOp::Write { reg } => {
                     let id = write_id_ctr.fetch_add(1, Ordering::SeqCst);
-                    tx.put(&reg_key(p.reg), &encode_write_id(id))
+                    tx.put(&reg_key(reg), &encode_write_id(id))
                         .expect("write op");
                     ops.push(ExecutedOp::Write {
-                        reg: p.reg,
+                        reg,
                         write_id: id,
                     });
+                }
+                PlannedOp::RangeRead { lo, hi } => {
+                    // Inclusive lower / exclusive upper over memcmp-ordered keys
+                    // (u32 BE) — the storage contract's range_scan shape, and the
+                    // footprint SSI conflict-tracks for phantom protection.
+                    let mut observed = Vec::new();
+                    for item in tx.range_scan(&reg_key(lo), &reg_key(hi)) {
+                        let (k, v) = item.expect("range_scan item");
+                        let reg = u32::from_be_bytes(
+                            k.as_ref()
+                                .try_into()
+                                .expect("register key is 4 bytes"),
+                        );
+                        observed.push((reg, decode_write_id(v.as_ref())));
+                    }
+                    ops.push(ExecutedOp::RangeRead { lo, hi, observed });
                 }
             }
         }
@@ -379,11 +435,11 @@ fn version_chains(txns: &[CommittedTxn]) -> BTreeMap<u32, Vec<(Option<usize>, u6
     let mut real_writes: BTreeMap<u32, Vec<(i64, usize, u64)>> = BTreeMap::new();
     for (idx, txn) in txns.iter().enumerate() {
         for op in &txn.ops {
-            if let ExecutedOp::Write { reg, write_id } = *op {
+            if let ExecutedOp::Write { reg, write_id } = op {
                 real_writes
-                    .entry(reg)
+                    .entry(*reg)
                     .or_default()
-                    .push((txn.stamp, idx, write_id));
+                    .push((txn.stamp, idx, *write_id));
             }
         }
     }
@@ -410,6 +466,34 @@ struct HistoryCheck {
     cycle: Option<(Anomaly, Vec<(usize, usize, EdgeKind)>)>,
 }
 
+/// Item wr + adjacent rw for one observed `(reg, write_id)` — shared by point
+/// [`ExecutedOp::Read`] and each version a [`ExecutedOp::RangeRead`] selects.
+fn push_item_read_edges(
+    edges: &mut Vec<(usize, usize, EdgeKind)>,
+    integrity_findings: &mut Vec<String>,
+    chains: &BTreeMap<u32, Vec<(Option<usize>, u64)>>,
+    reader_idx: usize,
+    reg: u32,
+    write_id: u64,
+) {
+    let chain = &chains[&reg];
+    let Some(pos) = chain.iter().position(|(_, wid)| *wid == write_id) else {
+        integrity_findings.push(format!(
+            "txn {reader_idx} read reg {reg} write-id {write_id}: no committed writer \
+             anywhere in this key's history — dirty or phantom read"
+        ));
+        return;
+    };
+    if let Some(writer_idx) = chain[pos].0 {
+        edges.push((writer_idx, reader_idx, EdgeKind::Wr));
+    }
+    if let Some(&(Some(next_writer_idx), _)) = chain.get(pos + 1)
+        && next_writer_idx != reader_idx
+    {
+        edges.push((reader_idx, next_writer_idx, EdgeKind::Rw));
+    }
+}
+
 fn check_history(txns: &[CommittedTxn]) -> HistoryCheck {
     let chains = version_chains(txns);
     let mut edges: Vec<(usize, usize, EdgeKind)> = Vec::new();
@@ -423,28 +507,53 @@ fn check_history(txns: &[CommittedTxn]) -> HistoryCheck {
         }
     }
 
-    // wr + rw: every read, attributed to the writer whose id it observed.
+    // wr + rw: every point/range read, attributed to the writer whose id it
+    // observed; range reads also emit predicate rw-edges for unobserved keys
+    // in the scanned span (Adya phantom / predicate anti-dependency).
     let mut integrity_findings = Vec::new();
     for (reader_idx, txn) in txns.iter().enumerate() {
         for op in &txn.ops {
-            let ExecutedOp::Read { reg, write_id } = *op else {
-                continue;
-            };
-            let chain = &chains[&reg];
-            let Some(pos) = chain.iter().position(|(_, wid)| *wid == write_id) else {
-                integrity_findings.push(format!(
-                    "txn {reader_idx} read reg {reg} write-id {write_id}: no committed writer \
-                     anywhere in this key's history — dirty or phantom read"
-                ));
-                continue;
-            };
-            if let Some(writer_idx) = chain[pos].0 {
-                edges.push((writer_idx, reader_idx, EdgeKind::Wr));
-            }
-            if let Some(&(Some(next_writer_idx), _)) = chain.get(pos + 1)
-                && next_writer_idx != reader_idx
-            {
-                edges.push((reader_idx, next_writer_idx, EdgeKind::Rw));
+            match op {
+                ExecutedOp::Write { .. } => {}
+                ExecutedOp::Read { reg, write_id } => {
+                    push_item_read_edges(
+                        &mut edges,
+                        &mut integrity_findings,
+                        &chains,
+                        reader_idx,
+                        *reg,
+                        *write_id,
+                    );
+                }
+                ExecutedOp::RangeRead { lo, hi, observed } => {
+                    let mut seen = std::collections::BTreeSet::new();
+                    for &(reg, write_id) in observed {
+                        seen.insert(reg);
+                        push_item_read_edges(
+                            &mut edges,
+                            &mut integrity_findings,
+                            &chains,
+                            reader_idx,
+                            reg,
+                            write_id,
+                        );
+                    }
+                    // Predicate / phantom rw: a register in [lo, hi) the range
+                    // did not observe — first real writer installs a matching
+                    // version the predicate read missed.
+                    for reg in *lo..*hi {
+                        if seen.contains(&reg) {
+                            continue;
+                        }
+                        let chain = &chains[&reg];
+                        if let Some(&(Some(writer_idx), _)) =
+                            chain.iter().find(|(owner, _)| owner.is_some())
+                            && writer_idx != reader_idx
+                        {
+                            edges.push((reader_idx, writer_idx, EdgeKind::Rw));
+                        }
+                    }
+                }
             }
         }
     }
@@ -640,8 +749,8 @@ fn single_node_serializability_campaign() {
     );
 }
 
-/// #376 T6: Elle history recording captures every committed read/write from
-/// a live campaign — the black-box input the anomaly checker consumes.
+/// #376 T6: Elle history recording captures every committed read/write/range
+/// from a live campaign — the black-box input the anomaly checker consumes.
 #[test]
 fn elle_history_recording_captures_serializability_campaign_ops() {
     let history = ElleHistory::record(run_campaign(0xE11E_0001));
@@ -651,17 +760,20 @@ fn elle_history_recording_captures_serializability_campaign_ops() {
     );
     let mut saw_read = false;
     let mut saw_write = false;
+    let mut saw_range = false;
     for txn in &history.txns {
         for op in &txn.ops {
             match op {
                 ExecutedOp::Read { .. } => saw_read = true,
                 ExecutedOp::Write { .. } => saw_write = true,
+                ExecutedOp::RangeRead { .. } => saw_range = true,
             }
         }
     }
     assert!(
-        saw_read && saw_write,
-        "Elle history must record both reads and writes (saw_read={saw_read}, saw_write={saw_write})"
+        saw_read && saw_write && saw_range,
+        "Elle history must record reads, writes, and range reads \
+         (saw_read={saw_read}, saw_write={saw_write}, saw_range={saw_range})"
     );
     // Recording alone is not the claim — the recorded history must check clean
     // under the same G0/G1/G2 cycle detector the campaign uses.
@@ -800,6 +912,121 @@ fn elle_anomaly_detection_flags_g2_write_skew_cycle_in_serializability_history()
         Anomaly::G2,
         "two independent anti-dependency edges (each txn reads the other's stale value) \
          is the canonical G2 shape, got {anomaly:?}: {cycle:?}"
+    );
+}
+
+/// Predicate / phantom G2 via range reads: each txn range-scans a span it
+/// records as empty, then writes into the other's span — mutual Adya
+/// predicate rw-edges, unreachable before `RangeRead` existed in the model.
+#[test]
+fn elle_anomaly_detection_flags_g2_predicate_rw_via_range_read() {
+    let history = ElleHistory::record(vec![
+        CommittedTxn {
+            // T0: range [0,2) observes nothing; writes reg 2 (into T1's span).
+            ops: vec![
+                ExecutedOp::RangeRead {
+                    lo: 0,
+                    hi: 2,
+                    observed: vec![],
+                },
+                ExecutedOp::Write {
+                    reg: 2,
+                    write_id: 100,
+                },
+            ],
+            stamp: 10,
+        },
+        CommittedTxn {
+            // T1: range [2,4) observes nothing; writes reg 0 (into T0's span).
+            ops: vec![
+                ExecutedOp::RangeRead {
+                    lo: 2,
+                    hi: 4,
+                    observed: vec![],
+                },
+                ExecutedOp::Write {
+                    reg: 0,
+                    write_id: 200,
+                },
+            ],
+            stamp: 20,
+        },
+    ]);
+    let check = history.check();
+    assert!(
+        check.integrity_findings.is_empty(),
+        "no integrity findings expected: {:?}",
+        check.integrity_findings
+    );
+    let (anomaly, cycle) = check.cycle.expect(
+        "mutual phantom inserts into each other's empty range reads must form a G2 cycle",
+    );
+    assert_eq!(
+        anomaly,
+        Anomaly::G2,
+        "two predicate/phantom rw-edges is G2, got {anomaly:?}: {cycle:?}"
+    );
+    let rw = cycle
+        .iter()
+        .filter(|(_, _, k)| *k == EdgeKind::Rw)
+        .count();
+    assert!(
+        rw >= 2,
+        "predicate G2 requires ≥2 rw-edges, got {rw} in {cycle:?}"
+    );
+}
+
+/// Item-level G2 through a range read's selected versions (write skew on a
+/// predicate footprint): each txn range-reads [0,2) at genesis and writes one
+/// key inside that span — two anti-dependencies, same shape as point-read
+/// write skew, but the read half is a single RangeRead.
+#[test]
+fn elle_anomaly_detection_flags_g2_write_skew_via_range_read() {
+    const LO: u32 = 0;
+    const HI: u32 = 2;
+    let history = ElleHistory::record(vec![
+        CommittedTxn {
+            ops: vec![
+                ExecutedOp::RangeRead {
+                    lo: LO,
+                    hi: HI,
+                    observed: vec![(0, GENESIS_WRITE_ID), (1, GENESIS_WRITE_ID)],
+                },
+                ExecutedOp::Write {
+                    reg: 0,
+                    write_id: 100,
+                },
+            ],
+            stamp: 10,
+        },
+        CommittedTxn {
+            ops: vec![
+                ExecutedOp::RangeRead {
+                    lo: LO,
+                    hi: HI,
+                    observed: vec![(0, GENESIS_WRITE_ID), (1, GENESIS_WRITE_ID)],
+                },
+                ExecutedOp::Write {
+                    reg: 1,
+                    write_id: 200,
+                },
+            ],
+            stamp: 20,
+        },
+    ]);
+    let check = history.check();
+    assert!(
+        check.integrity_findings.is_empty(),
+        "no integrity findings expected: {:?}",
+        check.integrity_findings
+    );
+    let (anomaly, cycle) = check
+        .cycle
+        .expect("range-read write skew must be flagged as G2");
+    assert_eq!(
+        anomaly,
+        Anomaly::G2,
+        "range-read write skew is G2, got {anomaly:?}: {cycle:?}"
     );
 }
 
