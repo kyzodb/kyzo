@@ -35,6 +35,11 @@
  *   original computed `1 - dot/sqrt(a·a * b·b)` unguarded: a zero vector
  *   yielded NaN, and NaN then PASSED the radius filter (`NaN > r` is
  *   false). See [`IndexVec`] for the invariant, per metric.
+ * - RaBitQ (Gao & Long, SIGMOD 2024) is seated here as the Approximate
+ *   accelerator over exact-float authority: a true orthogonal rotation,
+ *   D-bit nearest-codebook encode, unbiased `⟨ō,q⟩/⟨ō,o⟩` estimator, and
+ *   Theorem 3.2 additive IP error bound. Exact [`IndexVec`] stays truth;
+ *   the quantized code never mints a second vector identity.
  * - Node rows store their degree as an `Int` (the original stored an
  *   integer degree in the `Float` `dist` column). The `dist` value slot is
  *   a sum-typed column: `Int` degree on node rows, `Float` distance on edge
@@ -1252,6 +1257,306 @@ fn dist_kernel_dyn(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
             1.0 - a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// RaBitQ — provable-error-bound quantization accelerator (seat 14 Approximate).
+// Exact float [`IndexVec`] remains authority; the D-bit code accelerates only.
+//
+// Construction (Gao & Long, SIGMOD 2024 / arXiv 2405.12497 §3.1–3.2):
+//   unit sphere → random orthogonal P → nearest ±1/√D codebook vertex →
+//   D-bit sign string of P⁻¹o. Estimator ⟨ō,q⟩/⟨ō,o⟩. Theorem 3.2 Eq (14)/(16)
+//   is PROBABILISTIC:
+//     P{|est − ⟨o,q⟩| > √((1−⟨ō,o⟩²)/⟨ō,o⟩²) · ε₀/√(D−1)} ≤ 2e^(−c₀ ε₀²),
+//   with paper-default practical ε₀ = 1.9 (§5.2.4) — not absolute 0/N certainty.
+// ---------------------------------------------------------------------------
+
+/// Paper-default confidence parameter ε₀ for RaBitQ Theorem 3.2
+/// (Gao & Long, SIGMOD 2024 §3.2.2 / §5.2.4 — "nearly perfect confidence").
+/// Production stays at 1.9; Theorem 3.2 is probabilistic at this ε₀ — do not
+/// raise it to silence a 0/N property. Pinned with [`rabitq_error_bound`].
+const RABITQ_EPSILON_0: f64 = 1.9;
+
+/// Hard-coverage ε for the property seal: large enough that independent Monte
+/// Carlo of the paper construction yields 0/300 Eq-(14) violations while
+/// production [`RABITQ_EPSILON_0`] remains 1.9 (theorem-honest).
+#[cfg(test)]
+const RABITQ_EPSILON_HARD: f64 = 3.5;
+
+/// Random orthogonal transform for a RaBitQ codebook: stores `P⁻¹` as a
+/// row-major `dim × dim` orthonormal matrix so encode/query apply the
+/// inverse transform without materializing the 2^D codebook.
+///
+/// Seeded and deterministic: same `(dim, seed)` ⇒ identical rotation.
+///
+/// Seated as the Approximate accelerator (#376 T10); HNSW search wiring that
+/// consumes codes for candidate generation is a later seam — exact float
+/// [`IndexVec`] remains the live distance authority.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
+pub(crate) struct RaBitQRotation {
+    dim: usize,
+    /// Row-major `P⁻¹` with orthonormal columns (≡ orthonormal rows of `P`).
+    inv: Vec<f64>,
+}
+
+#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
+impl RaBitQRotation {
+    /// Build a seeded random orthogonal `P⁻¹` via modified Gram–Schmidt with
+    /// reorthogonalization on Gaussian columns. Classical GS alone loses
+    /// orthonormality by D≈64–128 and breaks Theorem 3.2's geometric premise
+    /// (`⟨P x̄, q⟩ = ⟨x̄, P⁻¹ q⟩` requires a true orthogonal `P`).
+    ///
+    /// `dim` must be ≥ 2 (Theorem 3.2 divides by √(D−1)).
+    pub(crate) fn from_seed(dim: usize, seed: u64) -> Option<Self> {
+        if dim < 2 {
+            return None;
+        }
+        // A few attempts: rare near-singular Gaussian draws refuse and retry.
+        for attempt in 0..8u64 {
+            // INVARIANT: seed mix is a pure bit mixer for deterministic
+            // rotation identity — wraparound is the intended mix, not a
+            // counted quantity; saturating/checked mul would change the
+            // seeded orthogonal family.
+            let attempt_seed = seed
+                ^ (dim as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ attempt.wrapping_mul(0xD1B5_4A32_D192_ED03);
+            if let Some(rot) = Self::try_orthogonal(dim, attempt_seed) {
+                if rot.orthonormality_error() < 1e-10 {
+                    return Some(rot);
+                }
+            }
+        }
+        None
+    }
+
+    fn try_orthogonal(dim: usize, seed: u64) -> Option<Self> {
+        let mut state = seed;
+        // Column-major scratch: cols[c][r] = entry (r,c) before packing.
+        let mut cols: Vec<Vec<f64>> = (0..dim)
+            .map(|_| (0..dim).map(|_| rabitq_gauss(&mut state)).collect())
+            .collect();
+        // Modified Gram–Schmidt + one reorthogonalization pass (Daniel–
+        // Gragg–Kaufman–Stewart style) so Q stays orthonormal at D=128.
+        for i in 0..dim {
+            for _reorth in 0..2 {
+                for j in 0..i {
+                    let mut dot = 0.0f64;
+                    for k in 0..dim {
+                        dot += cols[i][k] * cols[j][k];
+                    }
+                    for k in 0..dim {
+                        cols[i][k] -= dot * cols[j][k];
+                    }
+                }
+                let mut norm_sq = 0.0f64;
+                for k in 0..dim {
+                    norm_sq += cols[i][k] * cols[i][k];
+                }
+                let norm = norm_sq.sqrt();
+                if !(norm > 1e-12) {
+                    return None;
+                }
+                for k in 0..dim {
+                    cols[i][k] /= norm;
+                }
+            }
+        }
+        let mut inv = vec![0.0f64; dim * dim];
+        for c in 0..dim {
+            for r in 0..dim {
+                inv[r * dim + c] = cols[c][r];
+            }
+        }
+        Some(RaBitQRotation { dim, inv })
+    }
+
+    /// Max |⟨col_i, col_j⟩ − δᵢⱼ| over the packed `P⁻¹` columns.
+    fn orthonormality_error(&self) -> f64 {
+        let d = self.dim;
+        let mut err = 0.0f64;
+        for i in 0..d {
+            for j in i..d {
+                let mut dot = 0.0f64;
+                for r in 0..d {
+                    dot += self.inv[r * d + i] * self.inv[r * d + j];
+                }
+                let target = if i == j { 1.0 } else { 0.0 };
+                err = err.max((dot - target).abs());
+            }
+        }
+        err
+    }
+
+    /// Apply `P⁻¹` (row-major mat-vec).
+    fn transform(&self, v: &[f64]) -> Vec<f64> {
+        debug_assert_eq!(v.len(), self.dim);
+        let mut out = vec![0.0f64; self.dim];
+        for r in 0..self.dim {
+            let mut s = 0.0f64;
+            let row = &self.inv[r * self.dim..(r + 1) * self.dim];
+            for c in 0..self.dim {
+                s += row[c] * v[c];
+            }
+            out[r] = s;
+        }
+        out
+    }
+}
+
+/// Standard normal via Box–Muller over the house [`splitmix64`] stream.
+fn rabitq_gauss(state: &mut u64) -> f64 {
+    let u1 = (splitmix64(state) as f64 + 1.0) / (u64::MAX as f64 + 2.0);
+    let u2 = (splitmix64(state) as f64) / (u64::MAX as f64 + 1.0);
+    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+}
+
+/// Deterministic seed stream for RaBitQ Monte Carlo tests (same mix as
+/// [`splitmix64`], owned here so tests do not share HNSW level state).
+#[cfg(test)]
+struct RabitqSplitMix64(u64);
+
+#[cfg(test)]
+impl RabitqSplitMix64 {
+    fn new(seed: u64) -> Self {
+        RabitqSplitMix64(seed)
+    }
+
+    fn gauss(&mut self) -> f64 {
+        rabitq_gauss(&mut self.0)
+    }
+}
+
+/// RaBitQ quantization code for one unit data vector: the D-bit sign string
+/// of `P⁻¹ o` plus the precomputed factor `⟨ō, o⟩`.
+///
+/// **Authority:** exact float components on [`IndexVec`] remain truth.
+/// This code is a rebuildable accelerator for bounded inner-product
+/// estimation (seat 14 Approximate — provable bound).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
+pub(crate) struct RaBitQCode {
+    dim: usize,
+    /// Packed signs: bit `i` set ⇒ `+1/√D`, clear ⇒ `−1/√D` in the
+    /// inverse-transformed basis (`x̄ = (2 x̄_b − 1_D)/√D`).
+    bits: Vec<u64>,
+    /// Precomputed `⟨ō, o⟩ = (1/√D) · Σᵢ |o'ᵢ|` — stored as bits of an `f64`
+    /// so the code stays `Eq` without float-partial traps.
+    ip_with_data_bits: u64,
+}
+
+#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
+impl RaBitQCode {
+    /// Quantize a **unit** data vector under `rotation`. Refuses non-unit
+    /// (or wrong-dim) inputs — normalization is the caller's admit step;
+    /// this door does not invent a second float authority.
+    ///
+    /// Encode: `o' = P⁻¹ o`; bit `i` is set iff `o'[i] > 0` (paper §3.1.3 /
+    /// official `XP > 0`); `⟨ō,o⟩ = Σᵢ |o'[i]| / √D`.
+    pub(crate) fn encode(o_unit: &[f64], rotation: &RaBitQRotation) -> Option<Self> {
+        if o_unit.len() != rotation.dim || rotation.dim < 2 {
+            return None;
+        }
+        let norm_sq: f64 = o_unit.iter().map(|x| x * x).sum();
+        if (norm_sq - 1.0).abs() > 1e-6 {
+            return None;
+        }
+        let o_prime = rotation.transform(o_unit);
+        let words = (rotation.dim + 63) / 64;
+        let mut bits = vec![0u64; words];
+        let mut abs_sum = 0.0f64;
+        for (i, &x) in o_prime.iter().enumerate() {
+            abs_sum += x.abs();
+            // Strict `>` matches the official RaBitQ encode (`XP > 0`);
+            // zeros (measure-zero under continuous rotation) map to −1/√D.
+            if x > 0.0 {
+                bits[i / 64] |= 1u64 << (i % 64);
+            }
+        }
+        let inv_sqrt_d = 1.0 / (rotation.dim as f64).sqrt();
+        let ip_with_data = abs_sum * inv_sqrt_d;
+        if !(ip_with_data > 0.0 && ip_with_data.is_finite()) {
+            return None;
+        }
+        Some(RaBitQCode {
+            dim: rotation.dim,
+            bits,
+            ip_with_data_bits: ip_with_data.to_bits(),
+        })
+    }
+
+    fn ip_with_data(&self) -> f64 {
+        f64::from_bits(self.ip_with_data_bits)
+    }
+
+    /// Unbiased estimator `⟨ō, q⟩ / ⟨ō, o⟩` for the true inner product
+    /// `⟨o, q⟩` (Theorem 3.2). `q_unit` must be unit and share `dim`.
+    ///
+    /// Computes `⟨x̄, P⁻¹ q⟩ / ⟨ō, o⟩` — equal to `⟨P x̄, q⟩ / ⟨ō, o⟩` iff
+    /// `P` is orthogonal (guaranteed by [`RaBitQRotation::from_seed`]).
+    pub(crate) fn estimate_inner_product(
+        &self,
+        q_unit: &[f64],
+        rotation: &RaBitQRotation,
+    ) -> Option<f64> {
+        if q_unit.len() != self.dim || rotation.dim != self.dim {
+            return None;
+        }
+        let q_prime = rotation.transform(q_unit);
+        let inv_sqrt_d = 1.0 / (self.dim as f64).sqrt();
+        let mut ip_bar_q = 0.0f64;
+        for (i, &q) in q_prime.iter().enumerate() {
+            let sign = if (self.bits[i / 64] >> (i % 64)) & 1 == 1 {
+                1.0
+            } else {
+                -1.0
+            };
+            ip_bar_q += sign * q;
+        }
+        ip_bar_q *= inv_sqrt_d;
+        Some(ip_bar_q / self.ip_with_data())
+    }
+
+    /// Theorem 3.2 error half-width at the paper-default `ε₀`
+    /// ([`RABITQ_EPSILON_0`] = 1.9). The inequality is high-probability
+    /// (Theorem 3.2), not a hard absolute cover of every draw:
+    ///
+    /// ```text
+    /// √( (1 − ⟨ō,o⟩²) / ⟨ō,o⟩² ) · ε₀ / √(D − 1)
+    /// ```
+    ///
+    /// (Gao & Long, SIGMOD 2024, Eq (14)/(16).)
+    pub(crate) fn error_bound(&self) -> f64 {
+        rabitq_error_bound(self.ip_with_data(), self.dim, RABITQ_EPSILON_0)
+    }
+}
+
+/// Pure Theorem 3.2 bound formula — extracted so the property test can
+/// mutate-detect a wrong expression without going through encode.
+///
+/// `√((1 − ⟨ō,o⟩²) / ⟨ō,o⟩²) · ε₀ / √(D − 1)` — Gao & Long Eq (14)/(16).
+/// Callers pick `ε₀`; production uses [`RABITQ_EPSILON_0`], hard-coverage
+/// tests may pass a larger ε without changing the formula.
+pub(crate) fn rabitq_error_bound(ip_with_data: f64, dim: usize, epsilon_0: f64) -> f64 {
+    debug_assert!(dim >= 2);
+    debug_assert!(ip_with_data > 0.0);
+    let ratio = (1.0 - ip_with_data * ip_with_data).max(0.0).sqrt() / ip_with_data;
+    ratio * epsilon_0 / ((dim - 1) as f64).sqrt()
+}
+
+/// Exact (authority) inner product of two equal-length float slices.
+#[cfg(test)]
+fn exact_inner_product(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+#[cfg(test)]
+fn normalize_unit(v: &[f64]) -> Option<Vec<f64>> {
+    let n = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if !(n > 0.0) {
+        return None;
+    }
+    Some(v.iter().map(|x| x / n).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -4409,6 +4714,174 @@ mod tests {
             a, b,
             "the equidistant tie-break is deterministic across runs"
         );
+    }
+
+    /// Pin Theorem 3.2 Eq (14)/(16) formula + [`RABITQ_EPSILON_0`] = 1.9 so a
+    /// mutated bound expression fails without needing random trials.
+    #[test]
+    fn rabitq_theorem_3_2_formula_pinned() {
+        // ⟨ō,o⟩ ≈ 0.8 (paper concentration), D = 100, ε₀ = 1.9.
+        let ip = 0.8f64;
+        let dim = 100usize;
+        let expected =
+            ((1.0 - ip * ip).sqrt() / ip) * RABITQ_EPSILON_0 / ((dim - 1) as f64).sqrt();
+        assert_eq!(
+            rabitq_error_bound(ip, dim, RABITQ_EPSILON_0).to_bits(),
+            expected.to_bits(),
+            "rabitq_error_bound must be √((1−ip²)/ip²)·ε₀/√(D−1) with ε₀={}",
+            RABITQ_EPSILON_0
+        );
+        assert_eq!(RABITQ_EPSILON_0.to_bits(), 1.9f64.to_bits());
+    }
+
+    /// Rotation door must mint a true orthonormal `P⁻¹` — classical GS alone
+    /// fails this at D=128 and was the prior Check-red root cause.
+    #[test]
+    fn rabitq_rotation_is_orthonormal() {
+        let rot = RaBitQRotation::from_seed(128, 0x0AB1_7000).expect("rotation");
+        assert!(
+            rot.orthonormality_error() < 1e-10,
+            "P⁻¹ columns must be orthonormal, err={}",
+            rot.orthonormality_error()
+        );
+    }
+
+    /// #376 T10 — Theorem 3.2 property (Gao & Long, SIGMOD 2024 / arXiv
+    /// 2405.12497 §3.2.2 Eq (14)/(16)): the bound is **probabilistic**
+    /// `P{|est−⟨o,q⟩| > bound(ε₀)} ≤ 2e^(−c₀ ε₀²)`, not absolute 0/N cover.
+    ///
+    /// Encode/estimate/orthonormal match the paper + Faiss `RaBitQUtils` +
+    /// official IVF-RaBitQ (`max_x1 = 1.9/√(B−1)`); §5.2.4's "nearly perfect"
+    /// at ε₀=1.9 is ANN NN-rerank recall, not random-pair CI coverage. Sealed
+    /// claim:
+    ///   (a) at production ε₀=1.9, empirical violation *rate* stays below a
+    ///       conservative ceiling (catches a broken estimator; permits rare
+    ///       theorem-allowed failures);
+    ///   (b) hard arm at [`RABITQ_EPSILON_HARD`] asserts 0/N violations
+    ///       (concentration as O(1/√D) without overclaiming ε₀=1.9 certainty);
+    ///   (c) mutation load-bearing: estimator correlates with exact IP;
+    ///       max err/bound at ε_hard < 1; mean bias near zero.
+    ///
+    /// Exact float IP is the authority oracle; the quantized code is
+    /// accelerator-only. Calls [`RaBitQCode::encode`],
+    /// [`RaBitQCode::estimate_inner_product`], [`rabitq_error_bound`].
+    #[test]
+    fn rabitq_inner_product_error_bound_holds() {
+        const DIM: usize = 128;
+        const TRIALS: u64 = 300;
+        // Ceiling ≫ paper ANN-recall folklore; ≪ a broken always-0 estimator.
+        // Independent MC of this construction ≈ 5% at ε₀=1.9; ≤10% catches
+        // collapse while staying theorem-honest.
+        const MAX_VIOLATION_RATE_AT_EPS0: f64 = 0.10;
+        let mut rng = RabitqSplitMix64::new(0x0AB1_7001);
+        let mut violations_eps0 = 0u64;
+        let mut violations_hard = 0u64;
+        let mut max_ratio_hard = 0.0f64;
+        let mut sum_err = 0.0f64;
+        let mut sum_truth_sq = 0.0f64;
+        let mut sum_est_truth = 0.0f64;
+        for trial in 0..TRIALS {
+            let raw_o: Vec<f64> = (0..DIM).map(|_| rng.gauss()).collect();
+            let raw_q: Vec<f64> = (0..DIM).map(|_| rng.gauss()).collect();
+            let o = normalize_unit(&raw_o).expect("gaussian unit o");
+            let q = normalize_unit(&raw_q).expect("gaussian unit q");
+            let rot = RaBitQRotation::from_seed(DIM, trial ^ 0x0AB1_7A7A).expect("rotation");
+            let code = RaBitQCode::encode(&o, &rot).expect("encode");
+            let est = code
+                .estimate_inner_product(&q, &rot)
+                .expect("dim-matched estimate");
+            let truth = exact_inner_product(&o, &q);
+            let err = (est - truth).abs();
+            sum_err += est - truth;
+            sum_truth_sq += truth * truth;
+            sum_est_truth += est * truth;
+
+            let bound_eps0 = code.error_bound();
+            if err > bound_eps0 + 1e-12 {
+                violations_eps0 += 1;
+            }
+
+            // Same Eq-(14) formula; ε linear — scale production bound, or
+            // equivalently `rabitq_error_bound(..., RABITQ_EPSILON_HARD)`.
+            let bound_hard =
+                bound_eps0 * (RABITQ_EPSILON_HARD / RABITQ_EPSILON_0);
+            let ratio_hard = err / bound_hard.max(1e-18);
+            if ratio_hard > max_ratio_hard {
+                max_ratio_hard = ratio_hard;
+            }
+            if err > bound_hard + 1e-12 {
+                violations_hard += 1;
+            }
+        }
+        let rate = violations_eps0 as f64 / TRIALS as f64;
+        assert!(
+            rate <= MAX_VIOLATION_RATE_AT_EPS0,
+            "Theorem 3.2 at ε₀={} permits rare failures; rate {rate} \
+             ({violations_eps0}/{TRIALS}) exceeds ceiling {MAX_VIOLATION_RATE_AT_EPS0} \
+             — estimator likely broken",
+            RABITQ_EPSILON_0
+        );
+        assert_eq!(
+            violations_hard, 0,
+            "hard-coverage arm ε={} must yield 0/{TRIALS} Eq-(14) violations \
+             (max err/bound = {max_ratio_hard})",
+            RABITQ_EPSILON_HARD
+        );
+        assert!(
+            max_ratio_hard < 1.0,
+            "every trial must sit strictly inside the ε_hard half-width \
+             (max ratio {max_ratio_hard})"
+        );
+        // Always-0 estimator: Σ est·truth = 0 and MSE = Σ truth². A live
+        // estimator must beat that baseline and stay near-unbiased.
+        assert!(
+            sum_est_truth > 0.5 * sum_truth_sq,
+            "estimator must correlate with exact IP (Σ est·truth={sum_est_truth}, \
+             ½ Σ truth²={})",
+            0.5 * sum_truth_sq
+        );
+        let mean_bias = sum_err / TRIALS as f64;
+        assert!(
+            mean_bias.abs() < 0.05,
+            "Theorem 3.2 unbiasedness: |mean(est−truth)|={mean_bias} too large"
+        );
+    }
+
+    /// Exact-float authority: IndexVec distance ignores RaBitQ codes.
+    /// Quantized estimate may differ; exact path stays bit-stable.
+    #[test]
+    fn rabitq_is_accelerator_exact_float_remains_authority() {
+        let dim = 32usize;
+        let rot = RaBitQRotation::from_seed(dim, 0x0AB1_A07B).expect("rotation");
+        let o = normalize_unit(&(0..dim).map(|i| (i as f64 + 1.0).sin()).collect::<Vec<_>>())
+            .unwrap();
+        let q = normalize_unit(&(0..dim).map(|i| (i as f64 + 2.0).cos()).collect::<Vec<_>>())
+            .unwrap();
+        let code = RaBitQCode::encode(&o, &rot).expect("encode");
+        let est = code.estimate_inner_product(&q, &rot).unwrap();
+        let truth = exact_inner_product(&o, &q);
+        assert!(
+            (est - truth).abs() <= code.error_bound() + 1e-12,
+            "accelerator estimate must sit inside the proven bound"
+        );
+        let mut m = manifest(HnswDistance::Cosine);
+        m.vec_dim = dim;
+        let va = IndexVec::admit(&Vector::try_new(o.clone()).unwrap(), &m).unwrap();
+        let vb = IndexVec::admit(&Vector::try_new(q.clone()).unwrap(), &m).unwrap();
+        let d1 = va.dist(&vb, HnswDistance::Cosine);
+        let d2 = va.dist(&vb, HnswDistance::Cosine);
+        assert_eq!(d1.to_bits(), d2.to_bits(), "exact path must be bit-stable");
+        assert!(
+            (d1 - (1.0 - truth)).abs() < 1e-9,
+            "exact IndexVec distance is 1 − float IP, not the quantized estimate"
+        );
+        assert!(
+            (d1 - (1.0 - est)).abs() > 1e-6 || (est - truth).abs() < 1e-6,
+            "when the accelerator is not exact, IndexVec must not follow the estimate"
+        );
+        // Encode refusal: non-unit input cannot mint a code (no second authority).
+        let non_unit = vec![2.0f64; dim];
+        assert!(RaBitQCode::encode(&non_unit, &rot).is_none());
     }
 }
 
