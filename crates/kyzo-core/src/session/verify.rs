@@ -828,4 +828,153 @@ mod tests {
         assert_eq!(rows.rows().len(), 1);
         assert_eq!(rows.rows()[0][0], DataValue::from("match"));
     }
+
+    /// Seeded edge relation for refuse-path pins through [`Engine::verify_script`].
+    fn seeded_edge_db() -> Engine<crate::store::fjall::FjallStorage> {
+        use crate::session::catalog::Catalog;
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_fjall_storage(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        db.run_script(":create edge {a: Int, b: Int}", Default::default())
+            .expect("create schema");
+        let rows = DataValue::List(vec![
+            DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
+            DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
+            DataValue::List(vec![DataValue::from(3i64), DataValue::from(4i64)]),
+        ]);
+        db.run_script(
+            "?[a, b] <- $rows :put edge {a, b}",
+            BTreeMap::from([("rows".into(), rows)]),
+        )
+        .expect("seed");
+        db
+    }
+
+    /// `:put` reaches [`verify_input_program`] → [`VerifyUnsupported::Mutation`].
+    /// Hand-constructed `Unsupported { Mutation }` never proved this door.
+    #[test]
+    fn verify_input_program_refuses_mutation() {
+        let db = seeded_edge_db();
+        let outcome = db
+            .verify_script(
+                "?[a, b] := *edge[a, b] :put edge {a, b}",
+                Default::default(),
+                ScriptOptions::default(),
+            )
+            .expect("verify_script returns outcome, not Err");
+        assert!(
+            matches!(
+                outcome,
+                VerifyOutcome::Unsupported {
+                    reason: VerifyUnsupported::Mutation
+                }
+            ),
+            "expected Mutation refuse, got {outcome:?}"
+        );
+    }
+
+    /// `:order` reaches [`verify_input_program`] → [`VerifyUnsupported::OrderLimitOffset`].
+    #[test]
+    fn verify_input_program_refuses_order_limit_offset() {
+        let db = seeded_edge_db();
+        let outcome = db
+            .verify_script(
+                "?[a, b] := *edge[a, b] :order a",
+                Default::default(),
+                ScriptOptions::default(),
+            )
+            .expect("verify_script returns outcome, not Err");
+        assert!(
+            matches!(
+                outcome,
+                VerifyOutcome::Unsupported {
+                    reason: VerifyUnsupported::OrderLimitOffset
+                }
+            ),
+            "expected OrderLimitOffset refuse, got {outcome:?}"
+        );
+    }
+
+    /// `@spans` reaches [`verify_input_program`] → [`VerifyUnsupported::IntervalDerivation`].
+    #[test]
+    fn verify_input_program_refuses_interval_derivation() {
+        let db = seeded_edge_db();
+        db.run_script(":create hist {k: Int => v: Any}", Default::default())
+            .expect("create hist");
+        let outcome = db
+            .verify_script(
+                "?[k, v, iv] := *hist[k, v @spans iv]",
+                Default::default(),
+                ScriptOptions::default(),
+            )
+            .expect("verify_script returns outcome, not Err");
+        match outcome {
+            VerifyOutcome::Unsupported {
+                reason: VerifyUnsupported::IntervalDerivation { name },
+            } => assert_eq!(name, "hist"),
+            other => panic!("expected IntervalDerivation {{ hist }}, got {other:?}"),
+        }
+    }
+
+    /// Starved provenance ceiling: eval completes, provenance enumeration
+    /// refuses → [`VerifyOutcome::BudgetRefused`] (not Err, not Match).
+    #[test]
+    fn verify_input_program_refuses_budget() {
+        use crate::session::catalog::Catalog;
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_fjall_storage(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        db.run_script(":create edge {a: Int, b: Int}", Default::default())
+            .expect("create edge");
+        let mut pairs = Vec::new();
+        let layers = [0i64, 4, 8, 12, 16];
+        for w in layers.windows(2) {
+            let (a0, a1) = (w[0], w[1]);
+            for i in a0..a1 {
+                for j in a1..(a1 + (a1 - a0)) {
+                    if j <= 19 {
+                        pairs.push(DataValue::List(vec![
+                            DataValue::from(i),
+                            DataValue::from(j),
+                        ]));
+                    }
+                }
+            }
+        }
+        for i in 0..12 {
+            for j in (i + 1)..12 {
+                pairs.push(DataValue::List(vec![
+                    DataValue::from(i),
+                    DataValue::from(j),
+                ]));
+            }
+        }
+        db.run_script(
+            "?[a, b] <- $rows :put edge {a, b}",
+            BTreeMap::from([("rows".into(), DataValue::List(pairs))]),
+        )
+        .expect("seed dense edge");
+
+        let outcome = db
+            .verify_script(
+                r#"
+                path[x, y] := *edge[x, y]
+                path[x, z] := path[x, y], path[y, z]
+                ?[x, y] := path[x, y]
+                "#,
+                Default::default(),
+                ScriptOptions {
+                    derived_tuple_ceiling: Some(500),
+                    epoch_ceiling: Some(1_000_000),
+                    ..ScriptOptions::default()
+                },
+            )
+            .expect("starved ceiling returns BudgetRefused, not Err");
+        assert!(
+            matches!(outcome, VerifyOutcome::BudgetRefused { .. }),
+            "expected BudgetRefused, got {outcome:?}"
+        );
+    }
 }
