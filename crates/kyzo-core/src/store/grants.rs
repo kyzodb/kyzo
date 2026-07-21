@@ -249,7 +249,7 @@ impl PredecessorConsentProof {
         message.extend_from_slice(FORK_CONSENT_DOMAIN);
         message.extend_from_slice(predecessor_store.as_bytes());
         message.extend_from_slice(payload_digest);
-        if verifying.verify(message.as_slice(), &sig).is_err() {
+        if verifying.verify_strict(message.as_slice(), &sig).is_err() {
             return Err(MaterializeRefuse::ConsentUnverified);
         }
         Ok(Self {
@@ -432,7 +432,7 @@ impl RecoveryQuorumProof {
             let Ok(signature) = Signature::try_from(sig_bytes.as_slice()) else {
                 continue;
             };
-            if verifying.verify(message.as_slice(), &signature).is_ok() {
+            if verifying.verify_strict(message.as_slice(), &signature).is_ok() {
                 distinct_valid.insert(pk_bytes);
             }
         }
@@ -1065,7 +1065,7 @@ impl AncestorEntitlementProof {
         message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
         message.extend_from_slice(store_id.as_bytes());
         message.extend_from_slice(payload_digest);
-        if verifying.verify(message.as_slice(), &sig).is_err() {
+        if verifying.verify_strict(message.as_slice(), &sig).is_err() {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         }
         Ok(Self {

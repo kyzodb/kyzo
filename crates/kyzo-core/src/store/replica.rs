@@ -258,7 +258,7 @@ impl AuthorizingKey {
         let Ok(sig) = Signature::try_from(signature.as_slice()) else {
             return false;
         };
-        self.verifying.verify(body.as_slice(), &sig).is_ok()
+        self.verifying.verify_strict(body.as_slice(), &sig).is_ok()
     }
 }
 
