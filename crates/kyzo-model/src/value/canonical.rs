@@ -757,6 +757,15 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             let mut count_arr = [0u8; 4];
             count_arr.copy_from_slice(count_bytes);
             let count = u32::from_be_bytes(count_arr) as usize;
+            // Hostile length prefix: each float Num key is ≥1 byte, so a
+            // claimed count larger than the remaining body cannot be
+            // lawful. Refuse before `Vec::with_capacity` — otherwise a
+            // 5-byte input can ask for a multi-gigabyte allocation
+            // (fuzz-smoke fact_payload_decode OOM on tag+u32).
+            let rest = body.len().saturating_sub(4);
+            if count > rest {
+                return Err(DecodeError::Truncated);
+            }
             let mut floats = Vec::with_capacity(count);
             let mut used = 4usize;
             for _ in 0..count {
@@ -1829,6 +1838,16 @@ mod tests {
         short_vec.extend_from_slice(&3u32.to_be_bytes());
         Num::float(1.0).encode_key(&mut short_vec);
         assert!(decode(&short_vec).is_err());
+        // REGRESSION (CI memcmp release OOM / fuzz fact_payload_decode):
+        // a 5-byte Vector claiming u32::MAX components must refuse before
+        // `Vec::with_capacity` — otherwise law3 byte-flip / fuzz allocate
+        // tens of GB and abort the tripwire under --release.
+        let hostile = {
+            let mut v = vec![Tag::Vector.byte()];
+            v.extend_from_slice(&u32::MAX.to_be_bytes());
+            v
+        };
+        assert_eq!(decode(&hostile), Err(DecodeError::Truncated));
         // Validity: bad polarity byte.
         let mut bad_pol = vec![Tag::Validity.byte()];
         bad_pol.extend_from_slice(&[0x7F; 8]);
