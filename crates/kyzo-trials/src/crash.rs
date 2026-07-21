@@ -978,7 +978,8 @@ mod crypto_shred_deep_reachability {
     /// (golden transcript kinds incl. KeyCommit + WalHeader + CheckpointSeal
     /// encode + leave-is-free pack) is searched for residual
     /// DEK/KEK/plaintext ShredSalt bytes. Clean artifacts pass; planting a
-    /// shredded needle into a sealed field must refuse via the production
+    /// shredded needle into each CheckpointSeal digest-bearing field (and
+    /// leave-is-free / transcript surfaces) must refuse via the production
     /// scrub doors.
     #[test]
     fn crypto_shred_deep_reachability_refuses_residual_secrets_in_sealed_artifacts() {
@@ -1080,35 +1081,102 @@ mod crypto_shred_deep_reachability {
             "production transcript scrub must refuse residual plaintext ShredSalt"
         );
 
-        // Hostile: plant shredded salt as CheckpointSeal state_root → encode
-        // surfaces it in CanonicalTranscript → production seal scrub refuses.
-        let mut dirty_parts = clean_seal_parts(store, [0x27; 32]);
-        dirty_parts.state_root = SealDigest::from_digest(salt_bytes);
-        let dirty_seal = CheckpointSeal::mint(dirty_parts).expect("mint dirty");
-        assert_eq!(
-            dirty_seal.refuse_residual_secrets(&needles),
-            Err(SealRefuse::ResidualSecretMaterial),
-            "production CheckpointSeal scrub must refuse residual ShredSalt in sealed bytes"
+        // Hostile: plant a shredded needle into every CheckpointSeal
+        // digest-bearing field independently → encode surfaces it in
+        // CanonicalTranscript → production seal scrub refuses. Residual-secret
+        // scrub must cover the whole sealed transcript surface, not only
+        // state_root.
+        fn assert_digest_field_refuses(
+            store: StoreId,
+            incarnation_entropy: [u8; 32],
+            field: &str,
+            plant: impl FnOnce(&mut CheckpointSealParts),
+            needles: &[&[u8]],
+        ) {
+            let mut parts = clean_seal_parts(store, incarnation_entropy);
+            plant(&mut parts);
+            assert_eq!(
+                CheckpointSeal::mint(parts)
+                    .expect("mint dirty")
+                    .refuse_residual_secrets(needles),
+                Err(SealRefuse::ResidualSecretMaterial),
+                "production CheckpointSeal scrub must refuse residual secret in {field}"
+            );
+        }
+
+        // state_root: salt / KEK / DEK (all three needles on the primary digest lane).
+        assert_digest_field_refuses(
+            store,
+            [0x27; 32],
+            "state_root/salt",
+            |p| p.state_root = SealDigest::from_digest(salt_bytes),
+            &needles,
+        );
+        assert_digest_field_refuses(
+            store,
+            [0x28; 32],
+            "state_root/kek",
+            |p| p.state_root = SealDigest::from_digest(kek_bytes),
+            &needles,
+        );
+        assert_digest_field_refuses(
+            store,
+            [0x29; 32],
+            "state_root/dek",
+            |p| p.state_root = SealDigest::from_digest(dek_bytes),
+            &needles,
         );
 
-        // Hostile: plant KEK / DEK needles the same way.
-        let mut kek_parts = clean_seal_parts(store, [0x28; 32]);
-        kek_parts.state_root = SealDigest::from_digest(kek_bytes);
-        assert_eq!(
-            CheckpointSeal::mint(kek_parts)
-                .expect("mint")
-                .refuse_residual_secrets(&needles),
-            Err(SealRefuse::ResidualSecretMaterial),
-            "residual KEK bytes in sealed seal must refuse"
+        // Remaining digest-bearing CheckpointSealParts fields — one needle each
+        // (salt), independently planted so a scrub hole on any lane detonate.
+        assert_digest_field_refuses(
+            store,
+            [0x2E; 32],
+            "final_wal_hash",
+            |p| p.final_wal_hash = WalHash::from_digest(salt_bytes),
+            &needles,
         );
-        let mut dek_parts = clean_seal_parts(store, [0x29; 32]);
-        dek_parts.state_root = SealDigest::from_digest(dek_bytes);
-        assert_eq!(
-            CheckpointSeal::mint(dek_parts)
-                .expect("mint")
-                .refuse_residual_secrets(&needles),
-            Err(SealRefuse::ResidualSecretMaterial),
-            "residual DEK bytes in sealed seal must refuse"
+        assert_digest_field_refuses(
+            store,
+            [0x2F; 32],
+            "checkpoint_manifest",
+            |p| p.checkpoint_manifest = SealDigest::from_digest(salt_bytes),
+            &needles,
+        );
+        assert_digest_field_refuses(
+            store,
+            [0x30; 32],
+            "retained_object_manifest",
+            |p| p.retained_object_manifest = SealDigest::from_digest(salt_bytes),
+            &needles,
+        );
+        assert_digest_field_refuses(
+            store,
+            [0x31; 32],
+            "permanence_candidate_manifest",
+            |p| p.permanence_candidate_manifest = SealDigest::from_digest(salt_bytes),
+            &needles,
+        );
+        assert_digest_field_refuses(
+            store,
+            [0x32; 32],
+            "replica_custody_manifest",
+            |p| p.replica_custody_manifest = SealDigest::from_digest(salt_bytes),
+            &needles,
+        );
+        assert_digest_field_refuses(
+            store,
+            [0x33; 32],
+            "prior_seal_digest",
+            |p| p.prior_seal_digest = SealDigest::from_digest(salt_bytes),
+            &needles,
+        );
+        assert_digest_field_refuses(
+            store,
+            [0x34; 32],
+            "retention_certificate_digest",
+            |p| p.retention_certificate_digest = SealDigest::from_digest(salt_bytes),
+            &needles,
         );
 
         // Hostile: plant shredded plaintext salt / KEK / DEK into leave-is-free
