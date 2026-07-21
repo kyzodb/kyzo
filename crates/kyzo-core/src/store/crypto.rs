@@ -854,6 +854,53 @@ mod pins {
         ));
     }
 
+    /// GUARDIAN NASTY (#376 T2 — cross-domain reinterpretation): the CMT-1 commitment
+    /// binds CryptoDomain, but the T2 gate only ever varies the KEY. This drives the
+    /// DOMAIN axis under the SAME KEK: a KEK-wrapped ShredSalt sealed for one
+    /// CryptoDomain must REFUSE when the identical ciphertext bytes are re-presented
+    /// (via the real `from_persisted` forge door) under a DIFFERENT CryptoDomain.
+    /// Lifting a segment's wrapped key material across epochs or stores would be
+    /// cross-epoch / cross-tenant key-material confusion (seat 62 CryptoDomain
+    /// separation). RED if `unwrap` ever returns the salt under a forged domain.
+    #[test]
+    fn cross_domain_wrapped_salt_reinterpretation_refuses() {
+        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x77; 32])); // SAME KEK throughout
+        let salt = ShredSalt::from_bytes([0x99; 32]);
+        let seg = SegmentCounter::from_raw(4);
+        let ledger = ShredLedger::new();
+
+        let store_a = StoreId::from_digest([0xA1; 32]);
+        let store_b = StoreId::from_digest([0xB2; 32]);
+        let domain_a = CryptoDomain::new(store_a, FenceEpoch::genesis(store_a));
+
+        // Sanity: wrap+unwrap under the TRUE domain succeeds (not a blanket lockout).
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain_a).expect("wrap under A");
+        assert!(
+            unwrap_shred_salt(&cap, &wrapped, &ledger).is_ok(),
+            "true-domain unwrap must succeed"
+        );
+
+        // Axis 1 — cross-EPOCH (same store, same KEK, forged later fence epoch).
+        let domain_a_ep5 = CryptoDomain::new(store_a, FenceEpoch::from_raw(store_a, 5));
+        let forged_epoch =
+            WrappedShredSalt::from_persisted(wrapped.ciphertext().to_vec(), seg, domain_a_ep5);
+        assert!(
+            unwrap_shred_salt(&cap, &forged_epoch, &ledger).is_err(),
+            "CROSS-EPOCH REINTERPRETATION: a wrapped salt sealed at epoch genesis must NOT \
+             unwrap under a forged later epoch on the same KEK"
+        );
+
+        // Axis 2 — cross-STORE (different store id, same KEK).
+        let domain_b = CryptoDomain::new(store_b, FenceEpoch::genesis(store_b));
+        let forged_store =
+            WrappedShredSalt::from_persisted(wrapped.ciphertext().to_vec(), seg, domain_b);
+        assert!(
+            unwrap_shred_salt(&cap, &forged_store, &ledger).is_err(),
+            "CROSS-STORE REINTERPRETATION: a wrapped salt sealed for store A must NOT unwrap \
+             under a forged store B on the same KEK"
+        );
+    }
+
     #[test]
     fn compress_then_encrypt_round_trips_siv_and_is_not_identity() {
         let kek = Kek::from_bytes([0x33; 32]);
