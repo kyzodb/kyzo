@@ -2459,11 +2459,14 @@ dependencies = [
 name = "kyzo-trials"
 version = "0.8.2"
 dependencies = [
+ "itertools 0.15.0",
  "kyzo",
  "kyzo-model",
  "kyzo-oracle",
  "miette",
+ "proptest",
  "rayon",
+ "smartstring",
  "tempfile",
  "thiserror 2.0.18",
 ]

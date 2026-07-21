@@ -163,7 +163,7 @@ use kyzo_model::schema::StoredRelationMetadata;
 /// not `Validity`, and to resolve named-field bindings to positional ones.
 /// Those lookups are the only transaction-facing part of this file; when
 /// the runtime tier lands, its session transaction implements this trait.
-pub(crate) trait StoredRelationSchemaSource {
+pub trait StoredRelationSchemaSource {
     /// The declared schema of the stored relation `name`, or an error if no
     /// such relation exists (the implementation owns that diagnostic).
     fn stored_relation_schema(
@@ -287,7 +287,7 @@ impl StratifiedNormalFormProgram {
     /// cross-stratum producers, which evaluation then resolves to empty
     /// stores — wrong answers. The direction is pinned by
     /// `cross_stratum_consumers_keep_producers_unrewritten` in the tests.
-    pub(crate) fn magic_sets_rewrite(
+    pub fn magic_sets_rewrite(
         self,
         schemas: &impl StoredRelationSchemaSource,
     ) -> Result<StratifiedMagicProgram> {

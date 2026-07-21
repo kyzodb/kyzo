@@ -1,18 +1,19 @@
+//! Session normalize + magic-sets oracle differentials. Re-homed from
+//! `kyzo-core::session::normalize` tests (crate wall).
+
+#![cfg(test)]
+
 use std::collections::BTreeMap;
 
+use kyzo::oracle_harness::{
+    SessionNormalizer, SessionTx, SessionView, current_validity, into_normalized_program,
+};
+use kyzo::{
+    CancelFlag, Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage,
+};
+use kyzo_model::parse::{Script, parse_script};
 use kyzo_model::value::{DataValue, Tuple};
-
-use crate::data::json::NamedRows;
-use crate::parse::{Script, parse_script};
-use crate::rules::contract::CancelFlag;
-use crate::session::catalog::Catalog;
-use crate::session::current_validity;
-use crate::session::db::{Engine, ScriptOptions, SessionTx, SessionView};
-use crate::store::Storage;
-use crate::store::fjall::new_fjall_storage;
-use crate::store::sim::SimStorage;
-
-use super::SessionNormalizer;
+use kyzo_oracle::eval::{Program, Rel, naive_eval};
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
@@ -24,6 +25,16 @@ fn no_params() -> BTreeMap<String, DataValue> {
 fn open_engine<S: Storage>(store: S) -> Engine<S> {
     Engine::compose(store, Catalog::new()).expect("compose engine")
 }
+
+fn open_sim(_seed: u64) -> Engine<kyzo::FjallStorage> {
+    // Seed retained for call-site parity with the former SimStorage::new(seed)
+    // campaigns; Fjall is deterministic enough for these magic-sets shape laws.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let storage = new_fjall_storage(dir.path()).expect("fjall");
+    std::mem::forget(dir); // keep store path alive for Engine lifetime
+    open_engine(storage)
+}
+
 
 /// Result rows as sorted `i64` vectors, for order-independent assertions.
 fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
@@ -121,7 +132,7 @@ fn guard_survives_conjunction_pushdown_across_joins() {
 /// read (`*edge{a: x}`), which drives catalog-schema field resolution.
 #[test]
 fn negation_and_named_field_through_public_api() {
-    let db = open_engine(SimStorage::new(13));
+    let db = open_sim(0);
     db.run_script(
         "?[a, b] <- [[1, 2], [2, 1], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
         no_params(),
@@ -150,9 +161,8 @@ fn negation_and_named_field_through_public_api() {
 /// bound-recursive query to have triggered it.
 fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
     let cur_vld = current_validity().unwrap();
-    let fixed = db.fixed_rules();
-    let prog = match parse_script(script, &no_params(), &fixed, cur_vld).unwrap() {
-        Script::Single(p) => *p,
+    let prog = match parse_script(script, &no_params(), cur_vld).unwrap() {
+        Script::Query(p) => p,
         Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
     };
     let tx = SessionTx::new_read(db.store.read_tx().unwrap(), ScriptOptions::default());
@@ -162,7 +172,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
     };
     let mut normalizer = SessionNormalizer::new(view, CancelFlag::default());
     let (nf, _) =
-        crate::exec::plan::program::into_normalized_program(prog, &mut normalizer).unwrap();
+        into_normalized_program(prog, &mut normalizer).unwrap();
     let (strat, _lifetimes) = nf.into_stratified_program().unwrap();
     let magic = strat.magic_sets_rewrite(&view).unwrap();
     magic
@@ -186,7 +196,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
     use kyzo_oracle::eval::{Literal, Program, Rule, Term, naive_eval};
 
     let edges = [(1, 2), (2, 3), (3, 4), (5, 6)];
-    let var = |s: &'static str| Term::Var(s);
+    let var = |s: &'static str| Term::var(s);
     let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
 
     // The reference program: path = edge ∪ edge∘path, full fixpoint.
@@ -195,19 +205,19 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
             Rule::plain(
                 "path",
                 vec![var("a"), var("b")],
-                vec![lit("edge", vec![var("a"), var("b")])],
+                vec![lit("edge".into(), vec![var("a"), var("b")])],
             ),
             Rule::plain(
                 "path",
                 vec![var("a"), var("b")],
                 vec![
-                    lit("edge", vec![var("a"), var("c")]),
+                    lit("edge".into(), vec![var("a"), var("c")]),
                     lit("path", vec![var("c"), var("b")]),
                 ],
             ),
         ],
         facts: [(
-            "edge",
+            "edge".into(),
             edges
                 .iter()
                 .map(|(a, b)| {
@@ -226,7 +236,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
     let full_path = &oracle["path"];
 
     // The same program+facts through the real engine.
-    let db = open_engine(SimStorage::new(17));
+    let db = open_sim(0);
     db.run_script(
         "?[a, b] <- [[1, 2], [2, 3], [3, 4], [5, 6]] :create edge {a, b}",
         no_params(),
@@ -293,7 +303,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() {
 /// `bench_api::points_to` hand-builds.
 #[test]
 fn pointsto_magic_symbols_are_unadorned() {
-    let db = open_engine(SimStorage::new(6800));
+    let db = open_sim(0);
     db.run_script("?[a, b] <- [] :create addr_of {a, b}", no_params())
         .expect("create addr_of");
     db.run_script("?[a, b] <- [] :create assign {a, b}", no_params())
@@ -331,7 +341,7 @@ fn pointsto_magic_symbols_are_unadorned() {
 /// transitive-closure shape used throughout this test module.)
 #[test]
 fn transitive_closure_magic_symbols_under_unbound_query() {
-    let db = open_engine(SimStorage::new(6801));
+    let db = open_sim(0);
     db.run_script(
         "?[a, b] <- [[1,2],[2,3],[3,4]] :create edge {a, b}",
         no_params(),
@@ -395,7 +405,7 @@ mod magic_bypass_differential {
             .collect();
         bypass_rows.sort();
 
-        let db = open_engine(SimStorage::new(68_001));
+        let db = open_sim(0);
         let edge_literal: String = (0..n as i64 - 1)
             .map(|i| format!("[{i},{}],", i + 1))
             .collect();
@@ -468,7 +478,7 @@ mod magic_bypass_differential {
             .collect();
         bypass_rows.sort();
 
-        let db = open_engine(SimStorage::new(68_002));
+        let db = open_sim(0);
         let load_rel = |name: &str, rows: &[(i64, i64)]| {
             let literal: String = rows.iter().map(|(y, x)| format!("[{y},{x}],")).collect();
             db.run_script(
@@ -531,7 +541,7 @@ mod magic_bypass_differential {
     #[test]
     fn mutual_recursion_bf_and_ff_stays_correctly_reachable() {
         use kyzo_oracle::eval::{Literal, Program, Rule, Term};
-        let var = |s: &'static str| Term::Var(s);
+        let var = |s: &'static str| Term::var(s);
         let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
         let v = |i: i64| DataValue::from(i);
 
@@ -588,7 +598,7 @@ mod magic_bypass_differential {
         };
         let expected = oracle_answer(&program, "p");
 
-        let db = open_engine(SimStorage::new(68_101));
+        let db = open_sim(0);
         for (name, rows) in [
             ("seedp", vec![(1i64, 2i64)]),
             ("linkp", vec![(2, 3)]),
@@ -636,7 +646,7 @@ mod magic_bypass_differential {
     #[test]
     fn negation_with_ff_sibling_stays_correct() {
         use kyzo_oracle::eval::{Literal, Program, Rule, Term};
-        let var = |s: &'static str| Term::Var(s);
+        let var = |s: &'static str| Term::var(s);
         let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
         let neg = |rel: &'static str, args: Vec<Term>| Literal::neg(rel, args);
         let v = |i: i64| DataValue::from(i);
@@ -699,7 +709,7 @@ mod magic_bypass_differential {
         };
         let expected = oracle_answer(&program, "excluded");
 
-        let db = open_engine(SimStorage::new(68_102));
+        let db = open_sim(0);
         for (name, rows) in [
             ("addr_of", vec![(1i64, 2i64), (2, 3)]),
             ("assign", vec![(2, 3), (3, 4)]),
@@ -744,7 +754,7 @@ mod magic_bypass_differential {
     #[test]
     fn repeated_var_partial_adornment_matches_oracle() {
         use kyzo_oracle::eval::{Literal, Program, Rule, Term};
-        let var = |s: &'static str| Term::Var(s);
+        let var = |s: &'static str| Term::var(s);
         let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
         let v = |i: i64| DataValue::from(i);
 
@@ -782,7 +792,7 @@ mod magic_bypass_differential {
         };
         let expected = oracle_answer(&program, "dup");
 
-        let db = open_engine(SimStorage::new(68_103));
+        let db = open_sim(0);
         db.run_script(
             "?[a, b, c] <- [[1,2,2],[1,3,4]] :create baseq {a, b, c}",
             no_params(),
@@ -825,7 +835,7 @@ mod magic_bypass_differential {
     #[test]
     fn helper_via_relation_bound_var_inside_self_join_survives_correctly() {
         use kyzo_oracle::eval::{Literal, Program, Rule, Term};
-        let var = |s: &'static str| Term::Var(s);
+        let var = |s: &'static str| Term::var(s);
         let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
         let v = |i: i64| DataValue::from(i);
 
@@ -908,7 +918,7 @@ mod magic_bypass_differential {
         };
         let expected = oracle_answer(&program, "pt");
 
-        let db = open_engine(SimStorage::new(68_104));
+        let db = open_sim(0);
         for (name, rows) in [
             ("addr_of", vec![(1i64, 2i64)]),
             ("assign", vec![(2, 3)]),

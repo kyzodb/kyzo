@@ -39,8 +39,8 @@ use thiserror::Error;
 /// names them) extends the parent row. "A vector search is a join."
 ///
 /// [`SearchAtom::own_bindings`]: crate::exec::plan::search::SearchAtom
-pub(crate) struct SearchRA {
-    pub(crate) parent: Box<RelAlgebra>,
+pub struct SearchRA {
+    pub parent: Box<RelAlgebra>,
     pub(crate) atom: crate::exec::plan::search::SearchAtom,
 }
 

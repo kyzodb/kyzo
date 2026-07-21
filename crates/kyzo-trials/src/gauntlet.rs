@@ -123,6 +123,7 @@ pub(crate) fn entry_symbol() -> MagicSymbol {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct ModelBody {
     head: Vec<Term>,
     body: Vec<Literal>,
@@ -132,7 +133,7 @@ pub(crate) struct ModelBody {
 }
 
 impl ModelBody {
-    fn new(
+    pub(crate) fn new(
         head: Vec<Term>,
         body: Vec<Literal>,
         facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>>,

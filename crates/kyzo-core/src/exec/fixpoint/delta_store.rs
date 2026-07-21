@@ -203,7 +203,7 @@ impl LevelArenaBytes {
         &self.0
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 
@@ -306,7 +306,7 @@ impl<L> LevelStack<L> {
     }
 
     #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.above.len() + 1
     }
 
@@ -375,7 +375,7 @@ pub(crate) struct NormalLevel {
 }
 
 impl NormalLevel {
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.offsets.len()
     }
     pub(crate) fn is_empty(&self) -> bool {
@@ -900,7 +900,7 @@ impl EpochStore {
     }
     /// The rows an early-returned (`:limit`-satisfied) entry rule actually
     /// returns: everything not flagged limiter-skipped.
-    pub(crate) fn early_returned_iter(
+    pub fn early_returned_iter(
         &self,
     ) -> Result<impl Iterator<Item = TupleInIter<'_>>, TempStoreCorruptRefuse> {
         Ok(self.all_iter()?.filter(|t| !t.should_skip()))
@@ -1406,7 +1406,7 @@ impl RegularTempStore {
     /// [`MeetAggrStore::len`](MeetAggrStore::len), whose fresh out-store also
     /// holds re-derived unchanged groups, so it is resident memory but NOT an
     /// admission count.
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.inner.len()
     }
 
@@ -1434,11 +1434,11 @@ impl RegularTempStore {
 /// `aggr.iter().enumerate()` at layout / eval rule-set construction.
 /// Bare `usize` head positions are not admitted on the Meet path (P101).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct HeadPos(usize);
+pub struct HeadPos(usize);
 
 impl HeadPos {
     /// Door used when the enumerate index is already a head position.
-    pub(crate) fn from_index(i: usize) -> Self {
+    pub fn from_index(i: usize) -> Self {
         Self(i)
     }
 
@@ -1626,7 +1626,7 @@ impl MeetAggrStore {
     /// admitted `== 0`). The budget's mid-epoch spend guard must therefore
     /// count with [`Self::meet_put_admission_faithful`], not `len`; `len`
     /// remains the honest memory-resident measure for the boundedness law.
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.by_group.len()
     }
     pub(crate) fn is_empty(&self) -> bool {

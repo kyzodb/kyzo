@@ -28,6 +28,20 @@ pub mod verify_differential;
 /// Test-only module (`#![cfg(test)]` inside).
 pub mod serializability;
 
+/// Re-homed kyzo-core law corpora (crate wall). Holding-area sources; wired here.
+#[cfg(test)]
+#[path = "../rehomed_from_core/fixpoint_eval_tests.rs"]
+mod fixpoint_eval_tests;
+#[cfg(test)]
+#[path = "../rehomed_from_core/compile_tests.rs"]
+mod compile_tests;
+#[cfg(test)]
+#[path = "../rehomed_from_core/normalize_tests.rs"]
+mod normalize_tests;
+#[cfg(test)]
+#[path = "../rehomed_from_core/incremental_laws.rs"]
+mod incremental_laws;
+
 pub use conformance::{
     law_concurrent_writers_across_threads, law_del_range_chunk_boundaries,
     law_del_range_kills_own_writes, law_kv_matches_model_oracle, law_mvcc_first_committer_wins,

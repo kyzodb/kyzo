@@ -298,7 +298,7 @@ impl Default for ScriptOptions {
 /// The fused `Db` / `Db::new(storage)` ambient bag is deleted; callers must
 /// supply Store and Catalog explicitly via [`Engine::compose`].
 pub struct Engine<S> {
-    pub(crate) store: S,
+    pub store: S,
     pub(crate) catalog: Catalog,
     pub(crate) segments: Arc<crate::project::current::SegmentEngine>,
     pub(crate) fixed_rules: Arc<RwLock<BTreeMap<String, Arc<dyn FixedRule>>>>,
@@ -384,7 +384,7 @@ impl<S: Storage> Engine<S> {
     /// A snapshot of the fixed-rule registry: the built-ins plus every
     /// user-registered rule. Handed to the parser (which resolves fixed-rule
     /// names) and to the mutation pipeline (for trigger parsing).
-    pub(crate) fn fixed_rules(&self) -> BTreeMap<String, Arc<dyn FixedRule>> {
+    pub fn fixed_rules(&self) -> BTreeMap<String, Arc<dyn FixedRule>> {
         self.fixed_rules
             .read()
             .expect("fixed-rule registry poisoned")
@@ -968,8 +968,8 @@ pub struct SessionTx<T> {
         smartstring::SmartString<smartstring::LazyCompact>,
         crate::session::ops::IndexCtx,
     >,
-    pub(crate) store: T,
-    pub(crate) temp: TempTx,
+    pub store: T,
+    pub temp: TempTx,
     /// The evaluation controls for every query in this session, including
     /// triggers (which run under the parent's budget).
     pub(crate) options: ScriptOptions,
@@ -990,7 +990,7 @@ pub struct SessionTx<T> {
 }
 
 impl<T: ReadTx> SessionTx<T> {
-    pub(crate) fn new_read(store: T, options: ScriptOptions) -> Self {
+    pub fn new_read(store: T, options: ScriptOptions) -> Self {
         Self {
             store,
             temp: TempTx::default(),
@@ -1222,9 +1222,9 @@ impl<T: WriteTx> SessionTx<T> {
 /// kernel transaction for stored relations, the scratch store for temp
 /// relations, and name-routed catalog access over both. `Copy` by design —
 /// it is two references.
-pub(crate) struct SessionView<'a, T> {
-    pub(crate) store: &'a T,
-    pub(crate) temp: &'a TempTx,
+pub struct SessionView<'a, T> {
+    pub store: &'a T,
+    pub temp: &'a TempTx,
 }
 
 impl<T> Clone for SessionView<'_, T> {

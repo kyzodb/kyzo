@@ -32,7 +32,7 @@ use std::iter;
 /// seeds every rule body; data-bearing forms arrive with the constant-rule
 /// wiring in db.rs.
 #[derive(Debug)]
-pub(crate) struct InlineFixedRA {
+pub struct InlineFixedRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) data: Vec<Vec<DataValue>>,
     pub(crate) to_eliminate: BTreeSet<Symbol>,

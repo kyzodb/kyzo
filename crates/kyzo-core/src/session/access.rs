@@ -64,7 +64,7 @@ impl Display for AccessLevel {
 #[derive(Debug, Error, Diagnostic)]
 #[error("Insufficient access level {2} for {1} on stored relation '{0}'")]
 #[diagnostic(code(tx::insufficient_access_level))]
-pub(crate) struct InsufficientAccessLevel(
+pub struct InsufficientAccessLevel(
     pub(crate) String,
     pub(crate) String,
     pub(crate) AccessLevel,

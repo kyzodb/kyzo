@@ -224,17 +224,17 @@ pub(crate) fn compose(
 /// its own simpler versioning algebra) — see the module doc for why the
 /// operator still buffers a full per-fact version set regardless of axis.
 #[derive(Debug)]
-pub(crate) struct SpansRA {
+pub struct SpansRA {
     /// The base relation's key and payload bindings, plus one trailing
     /// binding for the produced interval — never folded into the base
     /// columns, so relation-arity checks against the base columns are
     /// unaffected (the same shape `SearchAtom::own_bindings` uses for a
     /// search's engine-appended columns).
-    pub(crate) bindings: Vec<Symbol>,
+    pub bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     /// The fixed system snapshot the sweep resolves against.
     pub(crate) sys: ValidityTs,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 /// How [`DeltaRA`] computes its signed patch — naive dual snapshot, or
@@ -253,12 +253,12 @@ pub(crate) enum DeltaScan {
 /// axis once); `sgn` binds `+1`/`-1` (new/gone), one trailing binding
 /// beyond the base row exactly like [`SpansRA`]'s interval column.
 #[derive(Debug)]
-pub(crate) struct DeltaRA {
-    pub(crate) bindings: Vec<Symbol>,
+pub struct DeltaRA {
+    pub bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     pub(crate) from: AsOf,
     pub(crate) to: AsOf,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
     /// Scan strategy: [`DeltaScan::Accelerated`] when compile resolved an
     /// `IndexKind::Temporal` posting for this clause (`Valid` axis only);
     /// [`DeltaScan::Naive`] otherwise (including a fresh relation with no

@@ -8,7 +8,7 @@
 /// Lives in the session tier by law — the value plane has no ambient
 /// clock, and determinism campaigns replay stamps rather than minting
 /// them.
-pub(crate) fn current_validity() -> miette::Result<kyzo_model::value::ValidityTs> {
+pub fn current_validity() -> miette::Result<kyzo_model::value::ValidityTs> {
     let micros = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| miette::miette!("system clock before the epoch: {e}"))?

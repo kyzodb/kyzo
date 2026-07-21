@@ -162,7 +162,7 @@ use kyzo_model::value::DataValue;
 /// atom, for index selection. Owns [`RelationHandle::choose_index`] so the
 /// catalog seat does not import this type (avoids a session↔exec cycle).
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub(crate) enum IndexPositionUse {
+pub enum IndexPositionUse {
     /// The position is bound and can seed an index prefix scan.
     Join,
     /// The position is needed later but not bound for the scan.
@@ -181,7 +181,7 @@ impl RelationHandle {
     /// [`IndexRef::relation_name`] and [`get_relation`] — this handle does
     /// not embed a copy of it. Manifest-backed indices (HNSW/FTS/LSH) are
     /// never chosen here; their own operators own their access paths.
-    pub(crate) fn choose_index(
+    pub fn choose_index(
         &self,
         arg_uses: &[IndexPositionUse],
         validity_query: bool,
@@ -237,12 +237,12 @@ type HeadAggr = HeadAggrSlot;
 /// One compiled stratum: each rule store's definition, ready to bind to a
 /// transaction and evaluate. A whole program is `Vec<CompiledProgram>` in
 /// execution order.
-pub(crate) type CompiledProgram = BTreeMap<MagicSymbol, CompiledRuleSet>;
+pub type CompiledProgram = BTreeMap<MagicSymbol, CompiledRuleSet>;
 
 /// A compiled definition: an inline rule set (plans), or a fixed-rule
 /// application handed through to the fixed-rule tier unchanged.
 #[derive(Debug)]
-pub(crate) enum CompiledRuleSet {
+pub enum CompiledRuleSet {
     Rules(CompiledInlineRules),
     Fixed(MagicFixedRuleApply),
 }
@@ -264,12 +264,12 @@ impl CompiledRuleSet {
 /// non-empty and that every rule aggregates identically — per position,
 /// **arguments included** — so the signature travels once, on the set.
 #[derive(Debug)]
-pub(crate) struct CompiledInlineRules {
+pub struct CompiledInlineRules {
     /// The head's per-position aggregation signature, uniform across the
     /// set's rules.
     pub(crate) aggr: Vec<HeadAggr>,
     /// The rules' plans, in source order. Non-empty.
-    pub(crate) rules: Vec<CompiledRule>,
+    pub rules: Vec<CompiledRule>,
 }
 
 /// A rule set that disagrees with itself about its head aggregations.
@@ -284,7 +284,7 @@ pub(crate) struct CompiledInlineRules {
     "Every definition of a rule must apply the same aggregation (with the \
      same arguments) to each head position."
 ))]
-pub(crate) struct RulesetHeadAggrMismatch(MagicSymbol, #[label] SourceSpan);
+pub struct RulesetHeadAggrMismatch(MagicSymbol, #[label] SourceSpan);
 
 impl CompiledInlineRules {
     /// Mint from `(signature, plan)` pairs, refusing an empty set and any
@@ -316,9 +316,9 @@ impl CompiledInlineRules {
 /// signature lives on the set ([`CompiledInlineRules::aggr`]), not here —
 /// it is a per-head fact, proven uniform.
 #[derive(Debug)]
-pub(crate) struct CompiledRule {
-    pub(crate) relation: RelAlgebra,
-    pub(crate) contained_rules: BTreeMap<AtomOccurrence, MagicSymbol>,
+pub struct CompiledRule {
+    pub relation: RelAlgebra,
+    pub contained_rules: BTreeMap<AtomOccurrence, MagicSymbol>,
     /// Source of each **positive** body literal, in body order — aligned
     /// with the premise rows [`CompiledRuleBody`] passes when
     /// `want_premises` is true.
@@ -390,7 +390,7 @@ impl MagicInlineRule {
     /// occurrence in the tree would read its total, the harmless
     /// (wasteful, never-taken) equivalent of the predecessor's `Many`
     /// fallback.
-    pub(crate) fn contained_rules(&self) -> BTreeMap<AtomOccurrence, MagicSymbol> {
+    pub fn contained_rules(&self) -> BTreeMap<AtomOccurrence, MagicSymbol> {
         let mut coll = BTreeMap::new();
         for (occurrence, atom) in atom_occurrences(&self.body) {
             match atom {
@@ -431,7 +431,7 @@ struct UnboundSymbolInRuleHead(Symbol, #[label] SourceSpan);
 ///
 /// The input tier is execution-ordered by construction; the output `Vec`
 /// keeps that order (`compiled[0]` evaluates first).
-pub(crate) fn stratified_magic_compile(
+pub fn stratified_magic_compile(
     tx: &impl ReadTx,
     prog: StratifiedMagicProgram,
 ) -> Result<Vec<CompiledProgram>> {
@@ -1082,10 +1082,10 @@ pub(crate) fn compile_magic_rule_body(
 /// - iteration order is a function of stores and plan alone — the
 ///   operators are order-preserving over canonical-order store scans and
 ///   memcmp-order relation scans.
-pub(crate) struct CompiledRuleBody<'a, T> {
-    plan: &'a CompiledRule,
-    tx: &'a T,
-    segments: Segments<'a>,
+pub struct CompiledRuleBody<'a, T> {
+    pub plan: &'a CompiledRule,
+    pub tx: &'a T,
+    pub segments: Segments<'a>,
 }
 
 impl<T: ReadTx> crate::exec::fixpoint::eval::seal::Sealed for CompiledRuleBody<'_, T> {}
@@ -1143,7 +1143,7 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
 /// refuses unknown fixed rules much earlier) use this as `F`.
 #[derive(Debug)]
 #[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) enum NoFixedRules {}
+pub enum NoFixedRules {}
 
 impl FixedRuleEval for NoFixedRules {
     fn run(
@@ -1163,7 +1163,7 @@ impl FixedRuleEval for NoFixedRules {
 /// fixed-rule wiring seam (`runtime/db.rs` supplies the real one, built on
 /// `MagicFixedRuleApply::fixed_impl`; a fixed-rule-free caller passes a
 /// refusing closure with `F = NoFixedRules`).
-pub(crate) fn bind_for_eval<'a, T: ReadTx, F: FixedRuleEval>(
+pub fn bind_for_eval<'a, T: ReadTx, F: FixedRuleEval>(
     compiled: &'a [CompiledProgram],
     tx: &'a T,
     segments: Segments<'a>,

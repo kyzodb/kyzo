@@ -36,10 +36,10 @@ use kyzo_model::value::{DataValue, RelationId, Tuple};
 /// without a session) or a borrow of the session's engine. `Copy`, so it
 /// threads through operator dispatch like `tx` does.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Segments<'a>(pub(crate) Option<&'a SegmentEngine>);
+pub struct Segments<'a>(pub(crate) Option<&'a SegmentEngine>);
 
 impl Segments<'_> {
-    pub(crate) const OFF: Segments<'static> = Segments(None);
+    pub const OFF: Segments<'static> = Segments(None);
 }
 
 /// Shared handle to a sealed segment body — `Clone` is an `Arc` bump, so

@@ -411,12 +411,12 @@ impl Joiner {
 /// prefix scan when the join columns are a leading run of the right
 /// relation's columns, a point lookup when they cover a stored relation's
 /// whole key, and a sorted materialization otherwise.
-pub(crate) struct InnerJoin {
-    pub(crate) left: RelAlgebra,
-    pub(crate) right: RelAlgebra,
+pub struct InnerJoin {
+    pub left: RelAlgebra,
+    pub right: RelAlgebra,
     pub(crate) joiner: Joiner,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
     /// When true, each right-side grounding row is appended to the premise
     /// channel for the joined output (one positive body literal). Index
     /// acceleration joins leave this false so only the base-relation join
@@ -467,7 +467,7 @@ impl InnerJoin {
 
     /// The join strategy this node will use (explain output).
     #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn join_type(&self) -> Result<&'static str> {
+    pub fn join_type(&self) -> Result<&'static str> {
         Ok(match &self.right {
             RelAlgebra::Fixed(f) => f.join_type(),
             RelAlgebra::TempStore(_) => {

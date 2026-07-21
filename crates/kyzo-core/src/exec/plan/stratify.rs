@@ -378,7 +378,7 @@ impl NormalFormProgram {
     ///
     /// Prerequisite: the program is already in disjunctive normal form
     /// (this type is proof of that).
-    pub(crate) fn into_stratified_program(
+    pub fn into_stratified_program(
         self,
     ) -> Result<(StratifiedNormalFormProgram, StoreLifetimes)> {
         // 0. build the labelled dependency graph of the program, plus the

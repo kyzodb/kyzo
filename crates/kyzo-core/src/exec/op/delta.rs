@@ -44,8 +44,8 @@ use std::fmt::Debug;
 /// `TempStoreRA`s with two distinct [`AtomOccurrence`]s), the scan reads
 /// the delta instead of the total, per the `RuleBody` seam contract.
 #[derive(Debug)]
-pub(crate) struct TempStoreRA {
-    pub(crate) bindings: Vec<Symbol>,
+pub struct TempStoreRA {
+    pub bindings: Vec<Symbol>,
     pub(crate) storage_key: MagicSymbol,
     /// This atom's position among its body's `Rule`/`NegatedRule` atoms —
     /// the key `delta_from` compares against (`compile.rs`'s shared
@@ -53,7 +53,7 @@ pub(crate) struct TempStoreRA {
     pub(crate) occurrence: AtomOccurrence,
     /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 impl TempStoreRA {

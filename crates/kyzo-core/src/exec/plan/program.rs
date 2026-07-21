@@ -58,7 +58,7 @@ pub(crate) struct TierInvariantError(pub(crate) &'static str);
 /// The transaction-facing half of normalization: DNF conversion (which
 /// resolves index search atoms against the catalog) and binding-safety
 /// reordering. The total desugar half lives in [`into_normalized_program`].
-pub(crate) trait BodyNormalizer {
+pub trait BodyNormalizer {
     /// Convert one rule body to disjunctive normal form: a disjunction
     /// (outer `Vec`) of flat conjunctions (inner `Vec`s) of normal-form
     /// atoms. Fallible — this is where search atoms resolve against the
@@ -78,7 +78,7 @@ pub(crate) trait BodyNormalizer {
 /// in every body), and the fan-out of each DNF conjunction into its own
 /// flat rule. The fallible, catalog-facing parts enter through the
 /// [`BodyNormalizer`] seam.
-pub(crate) fn into_normalized_program(
+pub fn into_normalized_program(
     prog: InputProgram,
     normalizer: &mut impl BodyNormalizer,
 ) -> Result<(NormalFormProgram, QueryOutOptions)> {
@@ -174,9 +174,9 @@ pub(crate) fn normalize_ruleset(
 /// One normalized rule: a flat, well-ordered conjunction body.
 #[derive(Debug)]
 pub(crate) struct NormalFormInlineRule {
-    pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<HeadAggrSlot>,
-    pub(crate) body: Vec<NormalFormAtom>,
+    pub head: Vec<Symbol>,
+    pub aggr: Vec<HeadAggrSlot>,
+    pub body: Vec<NormalFormAtom>,
 }
 
 /// A normalized definition: flat rules, or a fixed-rule application
@@ -219,26 +219,26 @@ pub(crate) enum NormalFormAtom {
 /// A rule application over plain symbols.
 #[derive(Clone, Debug)]
 pub(crate) struct NormalFormRuleApplyAtom {
-    pub(crate) name: Symbol,
-    pub(crate) args: Vec<Symbol>,
-    pub(crate) span: SourceSpan,
+    pub name: Symbol,
+    pub args: Vec<Symbol>,
+    pub span: SourceSpan,
 }
 
 /// A stored-relation application over plain symbols, optionally carrying a
 /// [`ValidityClause`] (time travel, interval derivation, or diff).
 #[derive(Clone, Debug)]
 pub(crate) struct NormalFormRelationApplyAtom {
-    pub(crate) name: Symbol,
-    pub(crate) args: Vec<Symbol>,
-    pub(crate) validity: Option<ValidityClause>,
-    pub(crate) span: SourceSpan,
+    pub name: Symbol,
+    pub args: Vec<Symbol>,
+    pub validity: Option<ValidityClause>,
+    pub span: SourceSpan,
 }
 
 /// The normalized program: every body flat, deduplicated, well-ordered.
 /// Minted only by [`into_normalized_program`], so possession is proof of
 /// normalization — and of an entry, carried over as a field.
 #[derive(Debug)]
-pub(crate) struct NormalFormProgram {
+pub struct NormalFormProgram {
     entry_name: Symbol,
     entry: NormalFormRulesOrFixed,
     rules: BTreeMap<Symbol, NormalFormRulesOrFixed>,
@@ -302,7 +302,7 @@ impl NormalFormProgram {
 
 /// One stratum: the definitions that evaluate together in one fixpoint.
 #[derive(Debug, Default)]
-pub(crate) struct NormalFormStratum {
+pub struct NormalFormStratum {
     /// The stratifier distributes rule sets in here; by construction of
     /// [`StratifiedNormalFormProgram`] the final stratum holds the entry.
     pub(crate) rules: BTreeMap<Symbol, NormalFormRulesOrFixed>,
@@ -317,7 +317,7 @@ impl NormalFormStratum {
 /// The stratified program: strata stored **in execution order** — stratum
 /// `0` evaluates first, the last stratum holds the entry and evaluates last.
 #[derive(Debug)]
-pub(crate) struct StratifiedNormalFormProgram {
+pub struct StratifiedNormalFormProgram {
     /// Execution order: `strata[0]` evaluates first.
     strata: Vec<NormalFormStratum>,
     disable_magic_rewrite: bool,
@@ -352,7 +352,7 @@ impl StratifiedNormalFormProgram {
 
     /// The strata in execution order.
     #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn strata(&self) -> &[NormalFormStratum] {
+    pub fn strata(&self) -> &[NormalFormStratum] {
         &self.strata
     }
 
@@ -526,16 +526,16 @@ impl Debug for MagicSymbol {
 
 /// One rule after the magic rewrite.
 #[derive(Debug)]
-pub(crate) struct MagicInlineRule {
-    pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<HeadAggrSlot>,
-    pub(crate) body: Vec<MagicAtom>,
+pub struct MagicInlineRule {
+    pub head: Vec<Symbol>,
+    pub aggr: Vec<HeadAggrSlot>,
+    pub body: Vec<MagicAtom>,
 }
 
 /// A magic-tier definition: rewritten rules, or a fixed-rule application
 /// with magic-renamed arguments.
 #[derive(Debug)]
-pub(crate) enum MagicRulesOrFixed {
+pub enum MagicRulesOrFixed {
     Rules { rules: Vec<MagicInlineRule> },
     Fixed { fixed: MagicFixedRuleApply },
 }
@@ -569,22 +569,22 @@ impl MagicRulesOrFixed {
 
 /// A fixed-rule application in the magic tier: in-memory arguments are now
 /// named by [`MagicSymbol`]. Keeps the live [`FixedRule`] impl — engine bind.
-pub(crate) struct MagicFixedRuleApply {
-    pub(crate) fixed_handle: FixedRuleHandle,
-    pub(crate) rule_args: Vec<MagicFixedRuleRuleArg>,
-    pub(crate) options: FixedRuleOptions,
-    pub(crate) span: SourceSpan,
-    pub(crate) arity: usize,
-    pub(crate) fixed_impl: Arc<dyn FixedRule>,
+pub struct MagicFixedRuleApply {
+    pub fixed_handle: FixedRuleHandle,
+    pub rule_args: Vec<MagicFixedRuleRuleArg>,
+    pub options: FixedRuleOptions,
+    pub span: SourceSpan,
+    pub arity: usize,
+    pub fixed_impl: Arc<dyn FixedRule>,
 }
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Cannot find a required named option '{name}' for '{rule_name}'")]
 #[diagnostic(code(fixed_rule::arg_not_found))]
 pub(crate) struct FixedRuleOptionNotFoundError {
-    pub(crate) name: Symbol,
+    pub name: Symbol,
     #[label]
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
     pub(crate) rule_name: Symbol,
 }
 
@@ -592,9 +592,9 @@ pub(crate) struct FixedRuleOptionNotFoundError {
 #[error("Wrong value for option '{name}' of '{rule_name}'")]
 #[diagnostic(code(fixed_rule::arg_wrong))]
 pub(crate) struct WrongFixedRuleOptionError {
-    pub(crate) name: Symbol,
+    pub name: Symbol,
     #[label]
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
     pub(crate) rule_name: Symbol,
     #[help]
     pub(crate) help: WrongFixedRuleOptionHelp,
@@ -684,7 +684,7 @@ impl Debug for MagicFixedRuleApply {
 
 /// A fixed-rule argument in the magic tier.
 #[derive(Debug)]
-pub(crate) enum MagicFixedRuleRuleArg {
+pub enum MagicFixedRuleRuleArg {
     InMem {
         name: MagicSymbol,
         bindings: Vec<Symbol>,
@@ -729,7 +729,7 @@ impl MagicFixedRuleRuleArg {
 /// A body atom in the magic tier. As with [`NormalFormAtom`], the resolved
 /// index-search variants land with the index tier.
 #[derive(Debug, Clone)]
-pub(crate) enum MagicAtom {
+pub enum MagicAtom {
     Rule(MagicRuleApplyAtom),
     Relation(MagicRelationApplyAtom),
     Predicate(Expr),
@@ -743,26 +743,26 @@ pub(crate) enum MagicAtom {
 
 /// A rule application naming a [`MagicSymbol`].
 #[derive(Clone, Debug)]
-pub(crate) struct MagicRuleApplyAtom {
-    pub(crate) name: MagicSymbol,
-    pub(crate) args: Vec<Symbol>,
-    pub(crate) span: SourceSpan,
+pub struct MagicRuleApplyAtom {
+    pub name: MagicSymbol,
+    pub args: Vec<Symbol>,
+    pub span: SourceSpan,
 }
 
 /// A stored-relation application in the magic tier (stored relations are
 /// never adorned; demand cannot restrict what is already materialized).
 #[derive(Clone, Debug)]
-pub(crate) struct MagicRelationApplyAtom {
-    pub(crate) name: Symbol,
-    pub(crate) args: Vec<Symbol>,
-    pub(crate) validity: Option<ValidityClause>,
-    pub(crate) span: SourceSpan,
+pub struct MagicRelationApplyAtom {
+    pub name: Symbol,
+    pub args: Vec<Symbol>,
+    pub validity: Option<ValidityClause>,
+    pub span: SourceSpan,
 }
 
 /// One stratum after the magic rewrite.
 #[derive(Debug, Default)]
-pub(crate) struct MagicProgram {
-    pub(crate) prog: BTreeMap<MagicSymbol, MagicRulesOrFixed>,
+pub struct MagicProgram {
+    pub prog: BTreeMap<MagicSymbol, MagicRulesOrFixed>,
 }
 
 impl MagicProgram {
@@ -773,7 +773,7 @@ impl MagicProgram {
 
 /// The demand-rewritten program: strata **in execution order**.
 #[derive(Debug)]
-pub(crate) struct StratifiedMagicProgram {
+pub struct StratifiedMagicProgram {
     /// Execution order: `strata[0]` evaluates first.
     strata: Vec<MagicProgram>,
 }
@@ -782,7 +782,7 @@ impl StratifiedMagicProgram {
     /// Mint the magic tier from the rewrite's per-stratum output, already in
     /// execution order. Proves the entry survived the rewrite unadorned and
     /// sits in the final stratum.
-    pub(crate) fn from_execution_order(strata: Vec<MagicProgram>) -> Result<Self> {
+    pub fn from_execution_order(strata: Vec<MagicProgram>) -> Result<Self> {
         match strata.last() {
             None => bail!(NoEntry::spanless()),
             Some(last) if !last.holds_entry() => {
@@ -800,12 +800,12 @@ impl StratifiedMagicProgram {
     }
 
     /// The strata in execution order.
-    pub(crate) fn strata(&self) -> &[MagicProgram] {
+    pub fn strata(&self) -> &[MagicProgram] {
         &self.strata
     }
 
     /// Consume into execution-ordered strata for compilation.
-    pub(crate) fn into_strata(self) -> Vec<MagicProgram> {
+    pub fn into_strata(self) -> Vec<MagicProgram> {
         self.strata
     }
 }

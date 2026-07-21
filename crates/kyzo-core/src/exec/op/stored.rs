@@ -43,12 +43,12 @@ use std::sync::Arc;
 /// transaction to read; see that module's routing note for temp
 /// relations).
 #[derive(Debug)]
-pub(crate) struct StoredRA {
-    pub(crate) bindings: Vec<Symbol>,
+pub struct StoredRA {
+    pub bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 impl StoredRA {
@@ -383,13 +383,13 @@ impl Iterator for SegmentScanBatches {
 /// contract's `range_skip_scan_tuple`). Any facts relation constructs
 /// this — bitemporality is the format, not a schema opt-in.
 #[derive(Debug)]
-pub(crate) struct StoredWithValidityRA {
-    pub(crate) bindings: Vec<Symbol>,
+pub struct StoredWithValidityRA {
+    pub bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
     pub(crate) as_of: AsOf,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 impl StoredWithValidityRA {

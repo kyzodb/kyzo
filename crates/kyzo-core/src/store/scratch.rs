@@ -94,7 +94,7 @@ use kyzo_model::value::{AsOf, ValidityTs};
 #[cfg(test)]
 use kyzo_model::data_value_any;
 #[derive(Debug)]
-pub(crate) struct TempTx {
+pub struct TempTx {
     /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
     map: Option<BTreeMap<Vec<u8>, Vec<u8>>>,
     /// This session-store's system stamp: logical time from a

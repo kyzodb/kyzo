@@ -60,7 +60,7 @@ use crate::rules::graph_view::{DirectedCsrGraph, as_directed_graph, as_directed_
 use crate::rules::io::*;
 
 // Model owns the name wrapper; re-export so engine call sites share one type.
-pub(crate) use kyzo_model::program::rule::FixedRuleHandle;
+pub use kyzo_model::program::rule::FixedRuleHandle;
 
 #[cfg(test)]
 use crate::exec::fixpoint::delta_store::TupleInIter;

@@ -362,7 +362,7 @@ impl Budget {
 
     /// Arm a wall-clock timeout, starting now. (This is the only budget
     /// dimension that touches the clock; see the module doc's WASM note.)
-    pub(crate) fn with_timeout(mut self, allotted: Duration) -> Self {
+    pub fn with_timeout(mut self, allotted: Duration) -> Self {
         self.deadline = Some(Deadline {
             started: Instant::now(),
             allotted,
@@ -373,7 +373,7 @@ impl Budget {
     /// Attach the cancel poll (session arms
     /// [`crate::rules::contract::CancelAuthority`]; eval only reads via
     /// [`crate::rules::contract::CancelFlag::check`]).
-    pub(crate) fn with_cancel(mut self, cancel: crate::rules::contract::CancelFlag) -> Self {
+    pub fn with_cancel(mut self, cancel: crate::rules::contract::CancelFlag) -> Self {
         self.cancel = Some(cancel);
         self
     }
@@ -408,7 +408,7 @@ impl Budget {
     /// `baseline` is the globally admitted total as of this epoch's barrier
     /// (a snapshot of `spent_derived`, deterministic and fixed for the whole
     /// epoch); `rule` names the rule for a refusal's attribution.
-    pub(crate) fn ticker<'a>(
+    pub fn ticker<'a>(
         &'a self,
         baseline: u64,
         rule: &'a MagicSymbol,
@@ -427,7 +427,7 @@ impl Budget {
 /// iteration. Small enough that no scan is unkillable for long; large
 /// enough that the check does not dominate the loop. NonZero by construction
 /// — wrap-through-zero is unrepresentable.
-pub(crate) const INTERRUPT_STRIDE: std::num::NonZeroU32 = match std::num::NonZeroU32::new(64) {
+pub const INTERRUPT_STRIDE: std::num::NonZeroU32 = match std::num::NonZeroU32::new(64) {
     Some(n) => n,
     // 64 is nonzero; this arm is compile-time dead. [`NonZeroU32::MIN`]
     // keeps the match total without a panic-shape (Law 5).
@@ -447,7 +447,7 @@ impl InterruptCountdown {
 
     /// Count one derivation. Returns `true` when the stride elapsed and the
     /// interrupt/spend guard must run.
-    fn tick(&mut self) -> bool {
+    pub fn tick(&mut self) -> bool {
         match std::num::NonZeroU32::new(self.0.get() - 1) {
             None => {
                 // Was 1: stride elapsed.
@@ -548,7 +548,7 @@ impl InterruptCountdown {
 /// and the stride, **independent of the input relations' product size**.
 /// That is the guarantee the incident violated: no single epoch can OOM the
 /// host.
-pub(crate) struct InterruptTicker<'a> {
+pub struct InterruptTicker<'a> {
     budget: &'a Budget,
     countdown: InterruptCountdown,
     /// Globally admitted total as of this epoch's barrier (fixed snapshot).
@@ -567,7 +567,7 @@ impl InterruptTicker<'_> {
     /// admission-faithful transition count on the meet path (see the
     /// Non-perturbation section). Every [`INTERRUPT_STRIDE`]th call polls the
     /// interrupt and enforces the mid-epoch ceiling.
-    pub(crate) fn tick(&mut self, in_flight: usize) -> Result<()> {
+    pub fn tick(&mut self, in_flight: usize) -> Result<()> {
         if self.countdown.tick() {
             self.budget.check_interrupt()?;
             if let Some(ceiling) = self.ceiling {
@@ -757,7 +757,7 @@ pub trait FixedRuleEval: Send + Sync {
 /// freestanding `kind` beside an empty-for-other-modes `meet_key_positions`
 /// field is unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HeadAggrKind {
+pub enum HeadAggrKind {
     /// No aggregation: a plain rule set, re-derived every epoch it has
     /// changed dependencies.
     None,
@@ -782,7 +782,7 @@ pub(crate) enum HeadAggrKind {
 #[derive(Debug)]
 pub struct EvalRuleSet<R> {
     pub(crate) aggr: Vec<HeadAggr>,
-    pub(crate) kind: HeadAggrKind,
+    pub kind: HeadAggrKind,
     pub(crate) bodies: Vec<R>,
 }
 
@@ -960,7 +960,7 @@ pub struct EvalOutcome {
 
 /// Typed lookup for the cross-stage invariant "every referenced rule has a
 /// store" (upstream panic sites 4–6).
-pub(crate) fn store_of<'m>(
+pub fn store_of<'m>(
     stores: &'m BTreeMap<MagicSymbol, EpochStore>,
     name: &MagicSymbol,
 ) -> Result<&'m EpochStore> {

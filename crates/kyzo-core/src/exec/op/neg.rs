@@ -45,7 +45,7 @@ use std::fmt::Debug;
 /// below (the original's `unreachable!()` arms stay unreachable).
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
-pub(crate) enum NegRight {
+pub enum NegRight {
     TempStore(TempStoreRA),
     Stored(StoredRA),
     StoredWithValidity(StoredWithValidityRA),
@@ -69,12 +69,12 @@ impl NegRight {
 /// columns. Introduces no columns of its own — semantically a filter over
 /// the left stream. Negation always reads right-side TOTALS, never deltas.
 #[derive(Debug)]
-pub(crate) struct NegJoin {
-    pub(crate) left: RelAlgebra,
-    pub(crate) right: NegRight,
+pub struct NegJoin {
+    pub left: RelAlgebra,
+    pub right: NegRight,
     pub(crate) joiner: Joiner,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 impl NegJoin {
@@ -93,7 +93,7 @@ impl NegJoin {
 
     /// The join strategy this node will use (explain output).
     #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn join_type(&self) -> Result<&'static str> {
+    pub fn join_type(&self) -> Result<&'static str> {
         let join_indices = self
             .joiner
             .join_indices(&self.left.bindings_after_eliminate(), self.right.bindings())?;

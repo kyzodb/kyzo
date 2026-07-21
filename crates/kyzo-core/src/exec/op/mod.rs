@@ -270,7 +270,7 @@ pub(crate) struct PlanInvariantError(pub(crate) &'static str);
 #[error("a stored row of relation '{0}' is too short: index is {1}, length is {2}")]
 #[diagnostic(code(query::stored_row_too_short))]
 #[diagnostic(help("The stored value is truncated or corrupt. Please report it."))]
-pub(crate) struct StoredRowTooShortError(
+pub struct StoredRowTooShortError(
     pub(crate) Symbol,
     pub(crate) usize,
     pub(crate) usize,
@@ -301,7 +301,7 @@ pub(crate) fn epoch_store_of<'m>(
 /// bindings, mapping every parent tuple to the search results seeded by
 /// one bound column.
 #[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
-pub(crate) enum RelAlgebra {
+pub enum RelAlgebra {
     /// Inline rows (the unit relation, or literal data).
     Fixed(InlineFixedRA),
     /// Scan of an in-memory rule store (total or delta — the semi-naive

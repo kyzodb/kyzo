@@ -82,7 +82,7 @@ use kyzo_model::value::Tuple;
 
 /// One rule-body argument: a bound value, or a variable to unify.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Term {
+pub enum Term {
     Const(DataValue),
     Var(Symbol),
 }
@@ -93,21 +93,21 @@ pub(crate) enum Term {
 /// doc), and the oracle crate wall forbids kyzo-core from depending on
 /// kyzo-oracle at all, test code included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Polarity {
+pub enum Polarity {
     Positive,
     Negative,
 }
 
 /// One rule-body literal: a relation read, optionally negated.
 #[derive(Debug, Clone)]
-pub(crate) struct Literal {
-    pub(crate) rel: Symbol,
-    pub(crate) args: Vec<Term>,
-    pub(crate) polarity: Polarity,
+pub struct Literal {
+    pub rel: Symbol,
+    pub args: Vec<Term>,
+    pub polarity: Polarity,
 }
 
 impl Literal {
-    pub(crate) fn is_negated(&self) -> bool {
+    pub fn is_negated(&self) -> bool {
         matches!(self.polarity, Polarity::Negative)
     }
 }
@@ -116,7 +116,7 @@ impl Literal {
 /// [`Aggregation`] from `data/aggr.rs`, the same type `laws::HeadAggr`
 /// wraps: both tiers fold through exactly the code users get, never a
 /// second hand-rolled implementation of "sum" or "min".
-pub(crate) type HeadAggr = HeadAggrSlot;
+pub type HeadAggr = HeadAggrSlot;
 
 /// One derivation rule: `head_rel(head_args) :- body`. `aggr` is always
 /// the same length as `head_args`; all-`None` marks an ordinary
@@ -124,11 +124,11 @@ pub(crate) type HeadAggr = HeadAggrSlot;
 /// fixed-rule variant: that stays unrepresentable (see the module doc's
 /// scope section), not merely refused at runtime.
 #[derive(Debug, Clone)]
-pub(crate) struct Rule {
-    pub(crate) head_rel: Symbol,
-    pub(crate) head_args: Vec<Term>,
-    pub(crate) body: Vec<Literal>,
-    pub(crate) aggr: Vec<HeadAggr>,
+pub struct Rule {
+    pub head_rel: Symbol,
+    pub head_args: Vec<Term>,
+    pub body: Vec<Literal>,
+    pub aggr: Vec<HeadAggr>,
 }
 
 /// A standing query's rule set. Unlike `laws::Program`, there is no
@@ -137,8 +137,8 @@ pub(crate) struct Rule {
 /// query's whole point is that its EDB changes out from under it, commit
 /// after commit.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct IncrementalProgram {
-    pub(crate) rules: Vec<Rule>,
+pub struct IncrementalProgram {
+    pub rules: Vec<Rule>,
 }
 
 /// Every relation's current fully-materialized row set — the persistent,
@@ -150,7 +150,7 @@ pub(crate) struct IncrementalProgram {
 /// patch" — exactly the two things a standing query needs forever. This
 /// type is the production twin of `laws::naive_eval`'s return value
 /// (`BTreeMap<Rel, BTreeSet<Tuple>>`), long-lived instead of one-shot.
-pub(crate) type MaintainedState = BTreeMap<Symbol, BTreeSet<Tuple>>;
+pub type MaintainedState = BTreeMap<Symbol, BTreeSet<Tuple>>;
 
 /// One literal's variable bindings so far, keyed by variable identity
 /// (`Symbol`'s `Ord`/`Eq` is name-only, span-independent — see
@@ -513,7 +513,7 @@ use crate::exec::plan::program::{
 /// A compiled query this module cannot translate — a typed refusal, never
 /// a silently wrong or partial `IncrementalProgram`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
-pub(crate) enum TranslationRejection {
+pub enum TranslationRejection {
     #[error("standing queries do not cover fixed rules (opaque graph algorithms)")]
     #[diagnostic(code(incremental::translate::fixed_rule))]
     FixedRule,
@@ -621,7 +621,7 @@ fn translate_rule(
 /// predicates, index searches, and non-constant unifications — every
 /// one of those has no representation in this module's
 /// `Rule`/`Literal`/`Term` today.
-pub(crate) fn translate(
+pub fn translate(
     program: StratifiedMagicProgram,
 ) -> Result<IncrementalProgram, TranslationRejection> {
     let mut rules = Vec::new();
@@ -819,7 +819,7 @@ fn eval_aggregating_head_incremental(
 /// to refuse for them here. Aggregation (normal or meet form) is fully
 /// covered via [`eval_aggregating_head_incremental`] — see the module
 /// doc's scope section.
-pub(crate) fn incremental_eval(
+pub fn incremental_eval(
     program: &IncrementalProgram,
     state: &MaintainedState,
     edb_patch: &BTreeMap<Symbol, BTreeSet<SignedFact>>,

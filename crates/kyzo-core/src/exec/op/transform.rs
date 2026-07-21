@@ -39,8 +39,8 @@ use thiserror::Error;
 /// (aligning body bindings to the rule head); never a join RHS, which
 /// [`RelAlgebra::join`] enforces at construction.
 #[derive(Debug)]
-pub(crate) struct ReorderRA {
-    pub(crate) relation: Box<RelAlgebra>,
+pub struct ReorderRA {
+    pub relation: Box<RelAlgebra>,
     pub(crate) new_order: Vec<Symbol>,
 }
 
@@ -103,11 +103,11 @@ impl ReorderRA {
 ///
 /// One owner for residual filters: binding indices are filled in place
 /// (`fill_binding_indices_and_compile`); evaluation reads the same field.
-pub(crate) struct FilteredRA {
-    pub(crate) parent: Box<RelAlgebra>,
+pub struct FilteredRA {
+    pub parent: Box<RelAlgebra>,
     pub(crate) filters: Vec<Expr>,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 impl FilteredRA {
@@ -178,13 +178,13 @@ pub(crate) enum UnificationKind {
 /// Append one computed column per tuple (`binding = expr`), or — when
 /// [`UnificationKind::Spread`] (`binding in expr`) — one output tuple per
 /// element of the list `expr` evaluates to.
-pub(crate) struct UnificationRA {
-    pub(crate) parent: Box<RelAlgebra>,
+pub struct UnificationRA {
+    pub parent: Box<RelAlgebra>,
     pub(crate) binding: Symbol,
     pub(crate) expr: Expr,
     pub(crate) kind: UnificationKind,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
-    pub(crate) span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 impl UnificationRA {

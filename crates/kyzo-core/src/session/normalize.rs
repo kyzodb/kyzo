@@ -26,14 +26,14 @@ use kyzo_model::program::{InputAtom, TempSymbGen};
 /// The session's [`BodyNormalizer`]: DNF conversion (which resolves
 /// named-field relation atoms against the catalog) plus binding-safety
 /// well-ordering. Pure NNF/DNF/reorder live in [`crate::exec::plan::normalize`].
-pub(crate) struct SessionNormalizer<'a, T> {
-    pub(crate) view: SessionView<'a, T>,
+pub struct SessionNormalizer<'a, T> {
+    pub view: SessionView<'a, T>,
     cancel: CancelFlag,
     symb_gen: TempSymbGen,
 }
 
 impl<'a, T> SessionNormalizer<'a, T> {
-    pub(crate) fn new(view: SessionView<'a, T>, cancel: CancelFlag) -> Self {
+    pub fn new(view: SessionView<'a, T>, cancel: CancelFlag) -> Self {
         Self {
             view,
             cancel,

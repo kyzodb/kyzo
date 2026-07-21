@@ -235,10 +235,10 @@ fn next_relation_id(cur: RelationId) -> Result<RelationId> {
 /// the index relation's handle.
 // `PartialEq` only: `IndexKind` carries float-bearing manifests.
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) struct IndexRef {
+pub struct IndexRef {
     /// The index's short name, unique among the parent's indices.
-    pub(crate) name: SmartString<LazyCompact>,
-    pub(crate) kind: IndexKind,
+    pub name: SmartString<LazyCompact>,
+    pub kind: IndexKind,
 }
 
 impl IndexRef {
@@ -260,7 +260,7 @@ impl IndexRef {
 /// manifests contain floats, so the kinds are `PartialEq` only — the same
 /// story as [`RelationHandle`] itself.
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) enum IndexKind {
+pub enum IndexKind {
     /// A plain projection index. `mapper[i]` gives, for the `i`-th column
     /// of the index relation, that column's position in the base
     /// relation's full tuple (keys then non-keys).
@@ -397,7 +397,7 @@ impl Debug for ConstraintRef {
 /// What a keyspace's rows ARE — the dispatch between the one universal
 /// bitemporal fact format and version-less algorithm state.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) enum KeyspaceKind {
+pub enum KeyspaceKind {
     /// Facts in the universal bitemporal format: two pinned time slots in
     /// the key, polarity in the value. Every read is an as-of resolution;
     /// there is no un-versioned read of a fact.
@@ -503,7 +503,7 @@ impl Debug for Trigger {
 }
 
 #[derive(Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) struct RelationHandle {
+pub struct RelationHandle {
     pub(crate) name: SmartString<LazyCompact>,
     pub(crate) id: RelationId,
     pub(crate) metadata: StoredRelationMetadata,
@@ -519,7 +519,7 @@ pub(crate) struct RelationHandle {
     pub(crate) access_level: AccessLevel,
     /// Attached indices, by reference, sorted by name (the attach hook —
     /// operator tier — maintains the ordering; names are unique).
-    pub(crate) indices: Vec<IndexRef>,
+    pub indices: Vec<IndexRef>,
     pub(crate) description: SmartString<LazyCompact>,
     /// Integrity constraints whose bodies read this relation, held as
     /// sealed [`ConstraintRef`] substances (see that type). Sorted by name
@@ -652,7 +652,7 @@ impl RelationHandle {
     /// input declaration and an allocated id. Storage writes happen in
     /// [`create_relation`]; the session tier reuses this constructor for
     /// temp relations against its own store.
-    pub(crate) fn new_from_input(
+    pub fn new_from_input(
         input: InputRelationHandle,
         id: RelationId,
         keyspace_kind: KeyspaceKind,
@@ -810,8 +810,8 @@ impl RelationHandle {
     /// Test / harness fact-write door. Production mutation goes through
     /// [`crate::session::admit`]; this path genesis-mints live seats and is
     /// exercised by in-crate index/operator tests.
-    #[cfg(test)]
-    pub(crate) fn put_fact(
+    #[cfg(any(test, feature = "bench-internals"))]
+    pub fn put_fact(
         &self,
         tx: &mut impl WriteTx,
         row: &[DataValue],
@@ -1433,7 +1433,7 @@ fn allocate_relation_id(tx: &mut impl WriteTx) -> Result<RelationId> {
 /// Create a stored relation from its parsed declaration: allocate an id,
 /// shape the handle, and write its catalog row. The relation's keyspace
 /// starts empty; no data write happens here.
-pub(crate) fn create_relation(
+pub fn create_relation(
     tx: &mut impl WriteTx,
     input: InputRelationHandle,
     keyspace_kind: KeyspaceKind,
@@ -1494,7 +1494,7 @@ pub(crate) fn destroy_relation(tx: &mut impl WriteTx, name: &str) -> Result<()> 
 /// Set a relation's access level. Deliberately ungated (matching the
 /// original): lowering and raising the level is how relations are locked
 /// and unlocked, so gating it on itself would wedge them shut.
-pub(crate) fn set_access_level(
+pub fn set_access_level(
     tx: &mut impl WriteTx,
     name: &str,
     level: AccessLevel,

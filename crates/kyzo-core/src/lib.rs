@@ -357,21 +357,47 @@ pub use react::standing::StandingQuery;
 /// fixpoint through this path; production hosts use [`Engine`] only.
 pub mod oracle_harness {
     pub use crate::exec::fixpoint::delta_store::{
-        EpochStore, RegularTempStore, TempStoreCorruptRefuse, TupleInIter, collect_materialized,
+        EpochStore, HeadPos, RegularTempStore, TempStoreCorruptRefuse, TupleInIter,
+        collect_materialized,
     };
     pub use crate::exec::fixpoint::eval::seal::Sealed;
     pub use crate::exec::fixpoint::eval::{
         AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalOutcome, EvalProgram,
-        EvalRuleSet, EvalStratum, FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody,
-        RuleSetShapeError, stratified_evaluate,
+        EvalRuleSet, EvalStratum, FixedRuleEval, HeadAggrKind, INTERRUPT_STRIDE, LimitExceeded,
+        Premises, RowLimit, RuleBody, InterruptTicker, RuleSetShapeError, store_of, stratified_evaluate,
     };
-    pub use crate::exec::plan::program::{MagicSymbol, StoreLifetimes};
+    pub use crate::exec::op::{RelAlgebra, StoredRowTooShortError};
+    pub use crate::exec::plan::compile::{
+        CompiledProgram, CompiledRuleBody, CompiledRuleSet, IndexPositionUse, NoFixedRules,
+        RulesetHeadAggrMismatch, bind_for_eval, stratified_magic_compile,
+    };
+    pub use kyzo_model::program::expr::BindingPos;
+    pub use kyzo_model::value::RelationId;
+    pub use crate::exec::plan::program::{
+        MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
+        MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram, StoreLifetimes,
+        into_normalized_program,
+    };
     pub use crate::exec::provenance::eval::{Witness, WitnessTable};
+    pub use crate::project::current::Segments;
+    pub use crate::react::incremental::{
+        IncrementalProgram, Literal as IncLiteral, MaintainedState, Polarity as IncPolarity,
+        Rule as IncRule, Term as IncTerm, TranslationRejection, incremental_eval, translate,
+    };
+    pub use crate::rules::contract::FixedRuleHandle;
+    pub use crate::session::access::{AccessLevel, InsufficientAccessLevel};
+    pub use crate::session::catalog::{
+        IndexKind, IndexRef, KeyspaceKind, RelationHandle, create_relation, set_access_level,
+    };
+    pub use crate::session::current_validity;
+    pub use crate::session::db::{SessionTx, SessionView};
+    pub use crate::session::normalize::SessionNormalizer;
     /// Trials-only certificate mutation injector (seats 8 + 59).
     /// Not a production `Engine` / `::verify` forge door.
     pub use crate::session::certificate_inject::{
         CertificateFault, golden_certificate_verifies, mismatch_named_rows_under_fault,
     };
+
 }
 
 // Sealed single-host doors deleted. Tooling speaks the sealed contract or
