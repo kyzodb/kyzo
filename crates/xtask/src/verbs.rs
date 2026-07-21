@@ -1229,17 +1229,19 @@ pub fn supply_chain() -> Result<(), ProcessFailure> {
 /// zero-match filter as its own failure (a probe referencing a dead path
 /// must go red, never silently green — CLAUDE.md's activation-probe-freshness
 /// law, and the falsifier map's `meaning-memcomparable-order-contract`
-/// entry). `--lib` scopes the run to kyzo-core's own unit test binary, the
-/// only one the filter can ever match.
+/// entry). Successor of condemned `storage::tests::law` after the
+/// storage→kyzo-model peel: `--lib` scopes to `kyzo-model`'s unit tests,
+/// filter `format::tests::law` (law1 round-trip / law2 order embedding /
+/// law3 corrupt-input — see `crates/kyzo-model/src/format/tests.rs`).
 pub fn memcmp_invariant() -> Result<(), ProcessFailure> {
     let mut cmd = Command::new("cargo");
     cmd.args([
         "test",
         "-p",
-        CORE_PACKAGE,
+        "kyzo-model",
         "--release",
         "--lib",
-        "storage::tests::law",
+        "format::tests::law",
     ]);
     let output = cmd
         .output()

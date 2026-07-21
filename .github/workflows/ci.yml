@@ -187,19 +187,19 @@ jobs:
       # probe exists for this job (a probe like "does data/memcmp.rs exist"
       # would go silently, permanently dark the moment that file is renamed
       # or split — exactly what happened when the codec moved to
-      # data/value/canonical.rs). Runs the on-disk-format law tests
+      # data/value/canonical.rs, and again when storage::tests::law moved to
+      # kyzo-model format::tests::law*). Runs the on-disk-format law tests
       # (round-trip identity, order embedding, corrupt-input safety).
       # `--lib` scopes the run to the one binary the filter can match
-      # (crates/kyzo-core's own unit tests): every OTHER binary in the
-      # workspace (each integration test file under crates/kyzo-core/tests/)
-      # also reports "running 0 tests" for a filter it can never match,
-      # which would make the zero-tests check below fire unconditionally
-      # over the unscoped combined output — a false RED that is exactly as
-      # useless as the false GREEN this job used to give. If the filter
-      # matches zero tests the job goes RED: a dead tripwire is a failure,
-      # fix the filter, never delete the job.
+      # (crates/kyzo-model's own unit tests): every OTHER binary in the
+      # workspace also reports "running 0 tests" for a filter it can never
+      # match, which would make the zero-tests check below fire
+      # unconditionally over the unscoped combined output — a false RED
+      # that is exactly as useless as the false GREEN this job used to
+      # give. If the filter matches zero tests the job goes RED: a dead
+      # tripwire is a failure, fix the filter, never delete the job.
       - run: |
-          out=$(cargo test -p kyzo --release --lib storage::tests::law 2>&1) || { echo "$out"; exit 1; }
+          out=$(cargo test -p kyzo-model --release --lib format::tests::law 2>&1) || { echo "$out"; exit 1; }
           echo "$out"
           if echo "$out" | grep -q "running 0 tests"; then
             echo "FAIL memcmp tripwire: the law-test filter matched zero tests — fix the filter or the tests, do not delete the job."
