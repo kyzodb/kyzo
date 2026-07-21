@@ -170,7 +170,11 @@ negate = { "!" }
 term = _{ literal | param | grouping | apply | var | list | object }
 object = { "{" ~ (object_pair ~ ",")* ~ object_pair? ~ "}" }
 object_pair = {expr ~ ":" ~ expr}
-list = { "[" ~ (expr ~ ",")* ~ expr? ~ "]" }
+// Deterministic separated-list form. The old `(expr ~ ",")* ~ expr?`
+// forces exponential backtracking on an unterminated nested list
+// (`:timeout[[[[...`), hanging the public parse door. Same language:
+// empty, comma-separated expressions, optional trailing comma.
+list = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]" }
 grouping = { "(" ~ expr ~ ")" }
 
 option = _{(limit_option|offset_option|sort_option|relation_option|timeout_option|sleep_option|returning_option|
