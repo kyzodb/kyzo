@@ -36,6 +36,11 @@ services:
     # blocks unprivileged CLONE_NEWUSER here (kill-tested 2026-07-13). Not `privileged`.
     cap_add:
       - SYS_ADMIN
+    # /dev/fuse so the kyzo-crashfs FUSE crash matrix actually RUNS in-container.
+    # Without it the matrix silently reported green while never executing —
+    # vacuous-green is exactly what the trials zone forbids.
+    devices:
+      - /dev/fuse
     mem_limit: 32g
     cpus: 16
     command: bash
