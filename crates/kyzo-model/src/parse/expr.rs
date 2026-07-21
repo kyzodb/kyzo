@@ -212,11 +212,6 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             }
         }
         Rule::pos_int => {
-            #[derive(Error, Diagnostic, Debug)]
-            #[error("Cannot parse integer")]
-            #[diagnostic(code(parser::bad_pos_int))]
-            struct BadIntError(#[label] SourceSpan);
-
             let i = pair
                 .as_str()
                 .replace('_', "")
@@ -228,21 +223,21 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             }
         }
         Rule::hex_pos_int => {
-            let i = parse_int(pair.as_str(), 16);
+            let i = parse_int(pair.as_str(), 16, span)?;
             Expr::Const {
                 val: DataValue::from(i),
                 span,
             }
         }
         Rule::octo_pos_int => {
-            let i = parse_int(pair.as_str(), 8);
+            let i = parse_int(pair.as_str(), 8, span)?;
             Expr::Const {
                 val: DataValue::from(i),
                 span,
             }
         }
         Rule::bin_pos_int => {
-            let i = parse_int(pair.as_str(), 2);
+            let i = parse_int(pair.as_str(), 2, span)?;
             Expr::Const {
                 val: DataValue::from(i),
                 span,
@@ -428,8 +423,15 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
     })
 }
 
-pub(crate) fn parse_int(s: &str, radix: u32) -> i64 {
-    i64::from_str_radix(&s[2..].replace('_', ""), radix).unwrap()
+#[derive(Error, Diagnostic, Debug)]
+#[error("Cannot parse integer")]
+#[diagnostic(code(parser::bad_pos_int))]
+struct BadIntError(#[label] SourceSpan);
+
+/// Parse a prefixed radix literal (`0x` / `0o` / `0b` / `\u`) to `i64`.
+/// Overflow and malformed digits refuse with spanned [`BadIntError`] — never abort.
+pub(crate) fn parse_int(s: &str, radix: u32, span: SourceSpan) -> Result<i64> {
+    Ok(i64::from_str_radix(&s[2..].replace('_', ""), radix).map_err(|_| BadIntError(span))?)
 }
 
 pub(crate) fn parse_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
@@ -467,9 +469,10 @@ fn parse_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
             r"\r" => ret.push('\r'),
             r"\t" => ret.push('\t'),
             s if s.starts_with(r"\u") => {
-                let code = parse_int(s, 16) as u32;
+                let esc_span = pair.extract_span();
+                let code = parse_int(s, 16, esc_span)? as u32;
                 let ch = char::from_u32(code)
-                    .ok_or_else(|| InvalidUtf8Error(code, pair.extract_span()))?;
+                    .ok_or_else(|| InvalidUtf8Error(code, esc_span))?;
                 ret.push(ch);
             }
             s if s.starts_with('\\') => {
@@ -496,9 +499,10 @@ fn parse_s_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
             r"\r" => ret.push('\r'),
             r"\t" => ret.push('\t'),
             s if s.starts_with(r"\u") => {
-                let code = parse_int(s, 16) as u32;
+                let esc_span = pair.extract_span();
+                let code = parse_int(s, 16, esc_span)? as u32;
                 let ch = char::from_u32(code)
-                    .ok_or_else(|| InvalidUtf8Error(code, pair.extract_span()))?;
+                    .ok_or_else(|| InvalidUtf8Error(code, esc_span))?;
                 ret.push(ch);
             }
             s if s.starts_with('\\') => {
@@ -514,4 +518,74 @@ fn parse_raw_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
     Ok(SmartString::from(
         pair.into_inner().next().unwrap().as_str(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::parse::parse_expressions;
+
+    /// Overflowing radix literals must refuse with BadIntError — never panic/abort.
+    fn assert_radix_overflow_refuses(src: &str) {
+        let err = parse_expressions(src, &BTreeMap::new())
+            .expect_err("overflowing int literal must refuse, not succeed");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("Cannot parse integer") || msg.contains("bad_pos_int"),
+            "expected BadIntError for {src:?}, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn hex_literal_overflow_is_bad_int_error() {
+        assert_radix_overflow_refuses("0xFFFFFFFFFFFFFFFF");
+        assert_radix_overflow_refuses("0x1_0000_0000_0000_0000");
+    }
+
+    #[test]
+    fn octal_literal_overflow_is_bad_int_error() {
+        // 2^63 in octal exceeds i64::MAX
+        assert_radix_overflow_refuses("0o1000000000000000000000");
+    }
+
+    #[test]
+    fn binary_literal_overflow_is_bad_int_error() {
+        assert_radix_overflow_refuses(&format!("0b{}", "1".repeat(64)));
+        assert_radix_overflow_refuses(&format!("0b{}", "1".repeat(80)));
+    }
+
+    #[test]
+    fn radix_literal_in_bounds_parses() {
+        let e = parse_expressions("0x7FFFFFFFFFFFFFFF", &BTreeMap::new()).unwrap();
+        assert_eq!(e.get_const().and_then(|v| v.get_int()), Some(i64::MAX));
+        let e = parse_expressions("0o777", &BTreeMap::new()).unwrap();
+        assert_eq!(e.get_const().and_then(|v| v.get_int()), Some(0o777));
+        let e = parse_expressions("0b1010", &BTreeMap::new()).unwrap();
+        assert_eq!(e.get_const().and_then(|v| v.get_int()), Some(0b1010));
+    }
+
+    #[test]
+    fn fuzzish_radix_overflow_corpus_refuses_without_panic() {
+        let corpus = [
+            "0xFFFFFFFFFFFFFFFF",
+            "0xffffffffffffffff",
+            "0x8000000000000000",
+            "0o1777777777777777777777",
+            "0o2000000000000000000000",
+            "0b1111111111111111111111111111111111111111111111111111111111111111",
+            "0b1000000000000000000000000000000000000000000000000000000000000000",
+            "0xFFFF_FFFF_FFFF_FFFF",
+            "0o1_000_000_000_000_000_000_000",
+        ];
+        for src in corpus {
+            let err = parse_expressions(src, &BTreeMap::new())
+                .expect_err("overflowing radix literal must refuse, not succeed or abort");
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("Cannot parse integer") || msg.contains("bad_pos_int"),
+                "expected BadIntError for {src:?}, got: {msg}"
+            );
+        }
+    }
 }
