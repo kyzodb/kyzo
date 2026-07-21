@@ -35,8 +35,7 @@ use crate::session::catalog::{KeyspaceKind, list_relations};
 use crate::store::authority::IncarnationId;
 use crate::store::crypto::{ShredLedger, WrappedShredSalt};
 use crate::store::merkle::{
-    ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot, replica_equivalence_at_cut,
-    roots_equal_at_cut,
+    ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot, roots_equal_at_cut,
 };
 use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
@@ -407,15 +406,27 @@ impl LeaveIsFreePack {
         StateRoot::from_digest(out)
     }
 
+    /// Claimed origin [`StoreId`] carried by this pack (first wrapped salt domain).
+    ///
+    /// Ceremony trust is never taken from this claim alone — [`OriginRootRegistry`]
+    /// must already hold a trusted root for this id (seat 80 / #374 T7).
+    pub fn claimed_origin_store_id(&self) -> StoreId {
+        self.wrapped_shred_salts
+            .first()
+            .expect("LeaveIsFreePack: non-empty wrapped_shred_salts by build invariant")
+            .crypto_domain()
+            .store_id()
+    }
+
     /// Independent [`ReplicaCutRecompute`] derived solely from this pack's
     /// sealed fields — never from a peer-delivered root (seat 80).
-    pub fn replica_cut_recompute(&self) -> ReplicaCutRecompute {
+    ///
+    /// Crate-visible recompute only — unusable as the ceremony `local` anchor
+    /// ([`ImportCapability::after_chain_root_verify`] always refuses bare cuts).
+    /// Mint via [`OriginRootRegistry::after_chain_root_verify`].
+    pub(crate) fn replica_cut_recompute(&self) -> ReplicaCutRecompute {
         let content = self.pack_content_root();
-        let store_id = self
-            .wrapped_shred_salts
-            .first()
-            .map(|w| w.crypto_domain().store_id())
-            .unwrap_or_else(|| StoreId::from_digest(*content.as_bytes()));
+        let store_id = self.claimed_origin_store_id();
         let fence = self
             .wrapped_shred_salts
             .first()
@@ -441,6 +452,61 @@ impl LeaveIsFreePack {
     /// [`import_verify`] gates admission on `observed == capability.bound_root()`.
     pub fn recompute_root(&self) -> StateRoot {
         self.replica_cut_recompute().recompute()
+    }
+}
+
+/// Receiver-held sealed registry: origin [`StoreId`] → trusted chain root at a
+/// known cut (seat 80 / #374 T7).
+///
+/// Established out-of-band when the receiver first accepts that origin. The
+/// leave-is-free PACK never supplies the trust root — ceremony `local` resolves
+/// here only.
+#[derive(Debug, Default, Clone)]
+pub struct OriginRootRegistry {
+    /// origin StoreId bytes → trusted chain root at the known cut.
+    roots: BTreeMap<[u8; 32], StateRoot>,
+}
+
+impl OriginRootRegistry {
+    /// Empty sealed origin-root registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register the trusted chain root for an origin StoreId (out-of-band accept).
+    ///
+    /// Overwrites a prior root for the same StoreId (seal construction is
+    /// single-writer).
+    pub fn insert(&mut self, origin: StoreId, trusted_root: StateRoot) {
+        self.roots.insert(*origin.as_bytes(), trusted_root);
+    }
+
+    /// Lookup the sealed trusted chain root for `origin`, if registered.
+    pub fn get(&self, origin: StoreId) -> Option<StateRoot> {
+        self.roots.get(origin.as_bytes()).copied()
+    }
+
+    /// Import ceremony: `local` from this registry for the pack's claimed origin;
+    /// `peer` is the pack's independently recomputed root; require equivalence.
+    ///
+    /// - origin not registered → [`PackRefuse::ForeignHistoryUnverified`]
+    /// - pack root ≠ registered trusted root → [`PackRefuse::ForeignHistoryUnverified`]
+    pub fn after_chain_root_verify(
+        &self,
+        pack: &LeaveIsFreePack,
+    ) -> Result<ImportCapability, PackRefuse> {
+        let origin = pack.claimed_origin_store_id();
+        let Some(trusted) = self.get(origin) else {
+            return Err(PackRefuse::ForeignHistoryUnverified);
+        };
+        // peer: pack's own independently recomputed root (never the local anchor).
+        let peer = pack.recompute_root();
+        if !roots_equal_at_cut(trusted, peer) {
+            return Err(PackRefuse::ForeignHistoryUnverified);
+        }
+        Ok(ImportCapability {
+            bound_root: Some(trusted),
+        })
     }
 }
 
@@ -481,36 +547,28 @@ fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
 ///
 /// Sealed struct — never a public enum variant or bool standing in for verify
 /// authority. A verified capability is reachable only through
-/// [`Self::after_chain_root_verify`], which binds the independently-recomputed
-/// root from [`ReplicaCutRecompute`] — never two bare caller-supplied
-/// [`StateRoot`]s. Ambient / silent verified is Unconstructible. Verified
-/// without a bound root is Unconstructible.
+/// [`OriginRootRegistry::after_chain_root_verify`], which binds the receiver's
+/// sealed trusted origin root (never the pack's self-computed cut, never two
+/// bare caller-supplied [`StateRoot`]s). Ambient / silent verified is
+/// Unconstructible. Verified without a bound root is Unconstructible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImportCapability {
-    /// Independently-recomputed root bound at mint. `None` = unverified.
+    /// Trusted origin root bound at mint. `None` = unverified.
     bound_root: Option<StateRoot>,
 }
 
 impl ImportCapability {
-    /// Mint after chain/root verification succeeded over independent recomputes.
+    /// Two bare [`ReplicaCutRecompute`]s are never a trust source (seat 80 / #374 T7).
     ///
-    /// Both sides supply [`ReplicaCutRecompute`] mint material; equivalence is
-    /// [`replica_equivalence_at_cut`] / [`roots_equal_at_cut`] over
-    /// [`ReplicaCutRecompute::recompute`] digests. On success the capability
-    /// binds that recomputed root. Forged or mismatched cuts →
-    /// [`PackRefuse::ForeignHistoryUnverified`] — never a silent Verified
-    /// costume from two equal bare [`StateRoot`]s.
+    /// Self-anchoring a pack by comparing its own cut to itself is
+    /// Unconstructible as Verified — always [`PackRefuse::ForeignHistoryUnverified`].
+    /// The ceremony door is [`OriginRootRegistry::after_chain_root_verify`].
     pub fn after_chain_root_verify(
         local: ReplicaCutRecompute,
         peer: ReplicaCutRecompute,
     ) -> Result<Self, PackRefuse> {
-        if replica_equivalence_at_cut(local, peer) {
-            Ok(Self {
-                bound_root: Some(local.recompute()),
-            })
-        } else {
-            Err(PackRefuse::ForeignHistoryUnverified)
-        }
+        let _ = (local, peer);
+        Err(PackRefuse::ForeignHistoryUnverified)
     }
 
     /// Unverified foreign import — [`import_verify`] refuses
@@ -544,12 +602,12 @@ pub enum ObjectsCompleteness {
 
 /// Run the import verify ceremony over a leave-is-free pack.
 ///
-/// Requires [`ImportCapability`] minted by chain/root verify and bound to this
-/// pack's independently recomputed root; unverified, forged, or unbound-to-pack
-/// → [`PackRefuse::ForeignHistoryUnverified`]. [`ShredLedger`] is consulted so
-/// post-shred restore of a pack that still carries a shredded segment's
-/// `WrappedShredSalt` converges to [`PackRefuse::Shredded`] (§64 / §80) — not
-/// silent unreadability.
+/// Requires [`ImportCapability`] minted by [`OriginRootRegistry::after_chain_root_verify`]
+/// and bound to this pack's independently recomputed root; unverified, forged,
+/// or unbound-to-pack → [`PackRefuse::ForeignHistoryUnverified`]. [`ShredLedger`]
+/// is consulted so post-shred restore of a pack that still carries a shredded
+/// segment's `WrappedShredSalt` converges to [`PackRefuse::Shredded`] (§64 / §80)
+/// — not silent unreadability.
 pub fn import_verify(
     pack: &LeaveIsFreePack,
     cap: ImportCapability,
@@ -678,7 +736,7 @@ mod pins {
         use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
         use crate::store::backup::{
             ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts,
-            ObjectsCompleteness, PackRefuse, import_verify,
+            ObjectsCompleteness, OriginRootRegistry, PackRefuse, import_verify,
         };
         use crate::store::crypto::{
             Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
@@ -721,9 +779,11 @@ mod pins {
         .expect("pack with WrappedShredSalt + IncarnationId");
         assert!(!pack.wrapped_shred_salts().is_empty());
         let empty_ledger = ShredLedger::new();
-        let cut = pack.replica_cut_recompute();
-        let verified =
-            ImportCapability::after_chain_root_verify(cut, cut).expect("pack cut self-verify");
+        let mut registry = OriginRootRegistry::new();
+        registry.insert(pack.claimed_origin_store_id(), pack.recompute_root());
+        let verified = registry
+            .after_chain_root_verify(&pack)
+            .expect("trusted-origin ceremony");
         assert!(
             import_verify(
                 &pack,
@@ -761,14 +821,14 @@ mod pins {
 
 /// Seat 80 — foreign-dump import verify ceremony.
 ///
-/// Board Check filters `backup::import_verify`: capability + chain/root verify,
-/// forged/unverified → [`PackRefuse::ForeignHistoryUnverified`], silent import
-/// Unconstructible (no free Verified mint).
+/// Board Check filters `backup::import_verify`: capability + trusted-origin
+/// chain/root verify, forged/unanchored → [`PackRefuse::ForeignHistoryUnverified`],
+/// silent import Unconstructible (no free Verified mint from pack self-cut).
 #[cfg(test)]
 mod import_verify {
     use super::{
         ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
-        PackRefuse, import_leave_is_free, import_verify,
+        OriginRootRegistry, PackRefuse, import_leave_is_free, import_verify,
     };
     use crate::store::FormatVersion;
     use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
@@ -777,8 +837,7 @@ mod import_verify {
     };
     use crate::store::epoch::{CryptoDomain, FenceEpoch};
     use crate::store::merkle::{
-        ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot, replica_equivalence_at_cut,
-        roots_equal_at_cut,
+        ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot,
     };
     use crate::store::open::StoreId;
     use crate::store::sweep::CommitOrdinal;
@@ -807,6 +866,12 @@ mod import_verify {
         (pack, wrapped)
     }
 
+    fn registry_trusting(pack: &LeaveIsFreePack) -> OriginRootRegistry {
+        let mut registry = OriginRootRegistry::new();
+        registry.insert(pack.claimed_origin_store_id(), pack.recompute_root());
+        registry
+    }
+
     fn attacker_cut(content_tag: u8) -> ReplicaCutRecompute {
         let store = StoreId::from_digest([content_tag; 32]);
         ReplicaCutRecompute::from_local(
@@ -819,22 +884,80 @@ mod import_verify {
         )
     }
 
+    /// NASTY (#374 T7): minting a capability from the pack's OWN cut must refuse
+    /// — self-anchor forge is Unconstructible as Verified.
     #[test]
-    fn chain_root_verify_mints_capability_only_on_equal_roots() {
-        let local = attacker_cut(0xCE);
-        let peer = attacker_cut(0xCE);
-        assert!(replica_equivalence_at_cut(local, peer));
-        let cap = ImportCapability::after_chain_root_verify(local, peer)
-            .expect("equivalent cuts mint Verified");
-        assert!(cap.is_verified());
-        assert_eq!(cap.bound_root(), Some(local.recompute()));
-
-        let forged = attacker_cut(0xFF);
-        assert!(!roots_equal_at_cut(local.recompute(), forged.recompute()));
+    fn self_anchor_forge_from_pack_own_cut_refuses() {
+        let (pack, _) = sample_pack();
+        let cut = pack.replica_cut_recompute();
+        // Old forge: compare pack cut to itself → always equal → free Verified.
         assert!(matches!(
-            ImportCapability::after_chain_root_verify(local, forged),
+            ImportCapability::after_chain_root_verify(cut, cut),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+        // No verified cap exists to pass import_verify; unverified still refuses.
+        let ledger = ShredLedger::new();
+        assert!(matches!(
+            import_verify(
+                &pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &ledger
+            ),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+    }
+
+    /// NASTY (#374 T7): pack origin StoreId absent from sealed registry → refuse.
+    #[test]
+    fn unregistered_origin_refuses_foreign_history() {
+        let (pack, _) = sample_pack();
+        let empty = OriginRootRegistry::new();
+        assert!(matches!(
+            empty.after_chain_root_verify(&pack),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+    }
+
+    /// NASTY (#374 T7): registered origin but attacker-chosen root ≠ trusted → refuse.
+    #[test]
+    fn wrong_registered_root_refuses_foreign_history() {
+        let (pack, _) = sample_pack();
+        let mut registry = OriginRootRegistry::new();
+        registry.insert(
+            pack.claimed_origin_store_id(),
+            StateRoot::from_digest([0xAD; 32]),
+        );
+        assert_ne!(
+            registry.get(pack.claimed_origin_store_id()),
+            Some(pack.recompute_root()),
+            "control: attacker root must differ from pack root"
+        );
+        assert!(matches!(
+            registry.after_chain_root_verify(&pack),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+    }
+
+    /// Positive (#374 T7): pack root matches registered trusted root → admit.
+    #[test]
+    fn trusted_origin_matching_root_admits() {
+        let (pack, _) = sample_pack();
+        let registry = registry_trusting(&pack);
+        let cap = registry
+            .after_chain_root_verify(&pack)
+            .expect("matching trusted root mints Verified");
+        assert!(cap.is_verified());
+        assert_eq!(cap.bound_root(), Some(pack.recompute_root()));
+        let ledger = ShredLedger::new();
+        assert!(
+            import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
+            "trusted-origin verified + complete objects must admit"
+        );
+        assert!(
+            import_leave_is_free(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
+            "production import_leave_is_free door must admit after ceremony"
+        );
     }
 
     #[test]
@@ -854,50 +977,27 @@ mod import_verify {
         assert_eq!(ImportCapability::unverified().bound_root(), None);
     }
 
-    #[test]
-    fn verified_ceremony_admits_complete_pack() {
-        let (pack, _) = sample_pack();
-        let cut = pack.replica_cut_recompute();
-        let cap = ImportCapability::after_chain_root_verify(cut, cut).unwrap();
-        assert_eq!(cap.bound_root(), Some(pack.recompute_root()));
-        let ledger = ShredLedger::new();
-        assert!(
-            import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
-            "verified + complete objects must admit"
-        );
-        assert!(
-            import_leave_is_free(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
-            "production import_leave_is_free door must admit after ceremony"
-        );
-    }
-
-    /// NASTY (guardian, seat 80): a verified `ImportCapability` minted by
-    /// self-comparing an arbitrary attacker-chosen cut — with no relation to
-    /// the pack — must NOT import that pack. Cap minted against an unrelated
-    /// root must refuse: binding exists and `import_verify` gates on the pack's
-    /// independently recomputed root.
+    /// NASTY (guardian, seat 80): bare two-cut mint is Unconstructible — attacker
+    /// self-comparing an arbitrary cut never yields a verified capability.
     #[test]
     fn verified_capability_unbound_to_pack_must_not_import_it() {
         let (pack, _) = sample_pack();
         let ledger = ShredLedger::new();
-        // Attacker picks any cut and compares it to itself → "verified" for
-        // free, with zero connection to this pack's actual history.
         let attacker = attacker_cut(0x00);
-        let free_cap = ImportCapability::after_chain_root_verify(attacker, attacker)
-            .expect("self-equivalent attacker cut mints verified");
-        assert!(
-            free_cap.is_verified(),
-            "control: attacker self-verify still mints a verified capability"
-        );
-        assert_ne!(
-            free_cap.bound_root(),
-            Some(pack.recompute_root()),
-            "control: attacker bound root must differ from this pack's root"
-        );
-        assert!(
-            import_verify(&pack, free_cap, ObjectsCompleteness::Complete, &ledger).is_err(),
-            "CONFUSED DEPUTY: a capability verified against an arbitrary root unrelated to this pack imported it — the cap binds no root and import_verify never recomputes the pack's own (seat 80)"
-        );
+        assert!(matches!(
+            ImportCapability::after_chain_root_verify(attacker, attacker),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+        // Only unverified remains; import still refuses.
+        assert!(matches!(
+            import_verify(
+                &pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &ledger
+            ),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
     }
 
     #[test]
@@ -905,12 +1005,9 @@ mod import_verify {
         let (pack, _) = sample_pack();
         let expected = attacker_cut(0x01);
         let forged = attacker_cut(0x02);
-        // Ceremony refuse happens at capability mint — silent Verified is
-        // Unconstructible; there is no ImportCapability::Verified free ctor.
+        // Bare two-cut ceremony is Unconstructible as Verified.
         let refuse = ImportCapability::after_chain_root_verify(expected, forged);
         assert!(matches!(refuse, Err(PackRefuse::ForeignHistoryUnverified)));
-        // Only unverified remains constructible without equivalent cuts, and
-        // import still refuses ForeignHistoryUnverified.
         let ledger = ShredLedger::new();
         assert!(matches!(
             import_verify(
@@ -926,8 +1023,8 @@ mod import_verify {
     #[test]
     fn incomplete_objects_refuse_even_when_verified() {
         let (pack, _) = sample_pack();
-        let cut = pack.replica_cut_recompute();
-        let cap = ImportCapability::after_chain_root_verify(cut, cut).unwrap();
+        let registry = registry_trusting(&pack);
+        let cap = registry.after_chain_root_verify(&pack).unwrap();
         let ledger = ShredLedger::new();
         assert!(matches!(
             import_verify(&pack, cap, ObjectsCompleteness::Incomplete, &ledger),
@@ -938,8 +1035,8 @@ mod import_verify {
     #[test]
     fn post_shred_restore_refuses_shredded() {
         let (pack, wrapped) = sample_pack();
-        let cut = pack.replica_cut_recompute();
-        let cap = ImportCapability::after_chain_root_verify(cut, cut).unwrap();
+        let registry = registry_trusting(&pack);
+        let cap = registry.after_chain_root_verify(&pack).unwrap();
         let (_receipt, tombstone) = shred(wrapped);
         let mut ledger = ShredLedger::new();
         ledger.record(tombstone);

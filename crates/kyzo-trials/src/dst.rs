@@ -1681,7 +1681,7 @@ pub mod storage_campaign_lanes {
     };
     use crate::store::authority::IncarnationMintCap;
     use crate::store::backup::{
-        ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
+        LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness, OriginRootRegistry,
         PackRefuse, import_verify,
     };
     use crate::store::compact::{
@@ -3397,9 +3397,13 @@ pub mod storage_campaign_lanes {
             payload: vec![1, 2, 3],
         })
         .expect("leave-is-free pack with wrapped salt");
-        let cut = pack.replica_cut_recompute();
-        let verified =
-            ImportCapability::after_chain_root_verify(cut, cut).expect("pack cut self-verify");
+        // Positive trusted path: out-of-band register pack origin root, then mint
+        // via OriginRootRegistry — never pack-cut self-verify (seat 80 / #374 T7).
+        let mut registry = OriginRootRegistry::new();
+        registry.insert(pack.claimed_origin_store_id(), pack.recompute_root());
+        let verified = registry
+            .after_chain_root_verify(&pack)
+            .expect("registry-trusted import ceremony");
         assert_eq!(
             import_verify(
                 &pack,
