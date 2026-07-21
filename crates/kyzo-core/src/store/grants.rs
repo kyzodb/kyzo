@@ -10,14 +10,16 @@
 //! Grants are seeds; [`materialize`] is pure (decisions.md §2, §68).
 //!
 //! Owns: [`ForkGrant`], [`RecoveryGrant`], [`GrantId`], [`materialize`],
-//! [`AncestorReadGrant`], [`RecoveryQuorumProof`], [`PredecessorConsentProof`].
+//! [`AncestorReadGrant`], [`RecoveryQuorumProof`], [`PredecessorConsentProof`],
+//! [`PredecessorConsentTable`].
 //!
 //! Bans: discovery-time identity entropy outside the grant seed; grant-time
 //! kill of the original token; post-grant shared-confidentiality Rotate;
 //! in-place WriteAuthority reissue for the same epoch; signatureless recovery
-//! mint of [`WriteAuthority`]; signatureless fork mint of [`WriteAuthority`].
+//! mint of [`WriteAuthority`]; signatureless fork mint of [`WriteAuthority`];
+//! caller-supplied consent verifying keys as the trust root (self-issued consent).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -141,6 +143,52 @@ impl From<[u8; 32]> for KeyMaterialCommitment {
     }
 }
 
+/// Sealed registry of predecessor-consent verifying keys keyed by [`StoreId`].
+///
+/// Register at genesis/seal time. [`PredecessorConsentProof::verify`] and
+/// [`materialize`] resolve the trust root by StoreId lookup — never a
+/// caller-supplied verifying key (self-issued consent is Unconstructible).
+#[derive(Debug, Default, Clone)]
+pub struct PredecessorConsentTable {
+    /// store_id bytes → ed25519 verifying key bytes (32).
+    keys: BTreeMap<[u8; 32], [u8; 32]>,
+}
+
+impl PredecessorConsentTable {
+    /// Empty sealed consent-key registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register the consent verifying key for a StoreId (genesis/seal door).
+    ///
+    /// Invalid ed25519 material refuses. Overwrites a prior key for the same
+    /// StoreId (seal construction is single-writer).
+    pub fn insert(
+        &mut self,
+        store_id: StoreId,
+        verifying_key: [u8; 32],
+    ) -> Result<(), MaterializeRefuse> {
+        VerifyingKey::from_bytes(&verifying_key)
+            .map_err(|_| MaterializeRefuse::ConsentUnverified)?;
+        self.keys.insert(*store_id.as_bytes(), verifying_key);
+        Ok(())
+    }
+
+    /// Lookup the sealed consent verifying key for `store_id`, if registered.
+    pub fn get(&self, store_id: StoreId) -> Option<&[u8; 32]> {
+        self.keys.get(store_id.as_bytes())
+    }
+}
+
+/// Digest of a consent verifying key (bound into [`PredecessorConsentProof`]).
+fn consent_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
+    let mut key_h = Sha256::new();
+    key_h.update(b"kyzo.fork_consent.key_id.v1");
+    key_h.update(verifying_key);
+    key_h.finalize().into()
+}
+
 /// Opaque sealed evidence that a predecessor consented to a fork payload.
 ///
 /// No public free constructor — mint only via [`PredecessorConsentProof::verify`].
@@ -153,15 +201,20 @@ pub struct PredecessorConsentProof {
 }
 
 impl PredecessorConsentProof {
-    /// Verify an ed25519 consent signature and seal the proof.
+    /// Verify an ed25519 consent signature against the sealed table and seal the proof.
     ///
+    /// Resolves the verifying key from `consent_table` for `predecessor_store`
+    /// — never accepts a caller-supplied verifying key as the trust root.
     /// Message: `kyzo.fork_consent.v1 || predecessor_store || payload_digest`.
     pub fn verify(
+        consent_table: &PredecessorConsentTable,
         predecessor_store: StoreId,
-        consent_verifying_key: &[u8; 32],
         payload_digest: &[u8; 32],
         signature: &[u8; 64],
     ) -> Result<Self, MaterializeRefuse> {
+        let Some(consent_verifying_key) = consent_table.get(predecessor_store) else {
+            return Err(MaterializeRefuse::ConsentKeyUnknown);
+        };
         let Ok(verifying) = VerifyingKey::from_bytes(consent_verifying_key) else {
             return Err(MaterializeRefuse::ConsentUnverified);
         };
@@ -176,13 +229,10 @@ impl PredecessorConsentProof {
         if verifying.verify(message.as_slice(), &sig).is_err() {
             return Err(MaterializeRefuse::ConsentUnverified);
         }
-        let mut key_h = Sha256::new();
-        key_h.update(b"kyzo.fork_consent.key_id.v1");
-        key_h.update(consent_verifying_key);
         Ok(Self {
             predecessor_store,
             payload_digest: *payload_digest,
-            key_id_digest: key_h.finalize().into(),
+            key_id_digest: consent_key_id_digest(consent_verifying_key),
             _priv: (),
         })
     }
@@ -599,6 +649,12 @@ pub enum MaterializeRefuse {
     #[error("ConsentMismatch: consent proof predecessor does not match the fork grant")]
     #[diagnostic(code(store::grants::consent_mismatch))]
     ConsentMismatch,
+    /// No sealed consent verifying key is registered for the predecessor StoreId.
+    #[error(
+        "ConsentKeyUnknown: no sealed predecessor-consent verifying key for the named StoreId"
+    )]
+    #[diagnostic(code(store::grants::consent_key_unknown))]
+    ConsentKeyUnknown,
 }
 
 /// Optional prior materialization witness for idempotent rediscovery.
@@ -638,7 +694,8 @@ impl PriorMaterialization {
 /// - mismatched successor → [`MaterializeRefuse::GrantAlreadyMaterialized`].
 ///
 /// Original lineage continues untouched (ForkGrant) and only when the grant
-/// carries a verified [`PredecessorConsentProof`] for the named predecessor.
+/// carries a verified [`PredecessorConsentProof`] for the named predecessor
+/// whose verifying key is resolved from `consent_table` (never caller-supplied).
 /// Recovery mints a new WriteAuthority for the same StoreId under a new
 /// CryptoDomain — never in-place reissue for the same epoch — and only when
 /// `recovery_matrix` matches the grant's sealed [`RecoveryQuorumProof`].
@@ -646,9 +703,10 @@ pub fn materialize(
     grant: &Grant,
     prior: Option<PriorMaterialization>,
     recovery_matrix: Option<&RecoveryMatrix>,
+    consent_table: Option<&PredecessorConsentTable>,
 ) -> Result<MaterializedGrant, MaterializeRefuse> {
     let computed = match grant {
-        Grant::Fork(fork) => materialize_fork(fork)?,
+        Grant::Fork(fork) => materialize_fork(fork, consent_table)?,
         Grant::Recovery(recovery) => materialize_recovery(recovery, recovery_matrix)?,
     };
     if let Some(prior) = prior
@@ -664,8 +722,16 @@ pub fn materialize(
     Ok(computed)
 }
 
-fn materialize_fork(fork: &ForkGrant) -> Result<MaterializedGrant, MaterializeRefuse> {
-    // Sealed consent is trusted only when it still binds THIS grant's fields.
+fn materialize_fork(
+    fork: &ForkGrant,
+    consent_table: Option<&PredecessorConsentTable>,
+) -> Result<MaterializedGrant, MaterializeRefuse> {
+    let table = consent_table.ok_or(MaterializeRefuse::ConsentKeyUnknown)?;
+    let Some(sealed_key) = table.get(fork.predecessor_store()) else {
+        return Err(MaterializeRefuse::ConsentKeyUnknown);
+    };
+    // Sealed consent is trusted only when it still binds THIS grant's fields
+    // and the sealed table key for the predecessor (not an attacker-chosen key).
     if fork.consent_proof().predecessor_store() != fork.predecessor_store() {
         return Err(MaterializeRefuse::ConsentMismatch);
     }
@@ -678,6 +744,9 @@ fn materialize_fork(fork: &ForkGrant) -> Result<MaterializedGrant, MaterializeRe
         fork.key_material_commitment(),
     );
     if fork.consent_proof().payload_digest() != &expected {
+        return Err(MaterializeRefuse::ConsentUnverified);
+    }
+    if fork.consent_proof().key_id_digest() != &consent_key_id_digest(sealed_key) {
         return Err(MaterializeRefuse::ConsentUnverified);
     }
     let store_id = derive_fork_store_id(fork);
@@ -971,7 +1040,7 @@ mod tests {
         .expect("payload binds; proof is sealed against wrong matrix");
 
         // Absent store matrix → refuse (no WriteAuthority).
-        let absent = materialize(&Grant::Recovery(grant.clone()), None, None);
+        let absent = materialize(&Grant::Recovery(grant.clone()), None, None, None);
         assert_eq!(absent, Err(MaterializeRefuse::RecoveryMatrixAbsent));
 
         // Wrong store matrix → QuorumUnverified (no WriteAuthority).
@@ -979,6 +1048,7 @@ mod tests {
             &Grant::Recovery(grant),
             None,
             Some(&store_matrix),
+            None,
         );
         assert_eq!(wrong, Err(MaterializeRefuse::QuorumUnverified));
     }
@@ -1012,7 +1082,7 @@ mod tests {
             proof,
         )
         .expect("grant");
-        let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix))
+        let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix), None)
             .expect("valid quorum must mint");
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(matured.crypto_domain().fence_epoch(), pred_epoch);
@@ -1037,15 +1107,14 @@ mod tests {
         );
 
         let consent = ConsentSigningKey::from_seed([0xF1; 32]);
+        let mut table = PredecessorConsentTable::new();
+        table
+            .insert(victim, *consent.verifying_key())
+            .expect("register victim consent key");
 
         // Forged signature bytes — no proof, no grant power.
         assert_eq!(
-            PredecessorConsentProof::verify(
-                victim,
-                consent.verifying_key(),
-                &payload,
-                &[0xFFu8; 64],
-            ),
+            PredecessorConsentProof::verify(&table, victim, &payload, &[0xFFu8; 64]),
             Err(MaterializeRefuse::ConsentUnverified)
         );
 
@@ -1059,14 +1128,13 @@ mod tests {
             &identity,
             &commitment,
         );
+        table
+            .insert(other, *consent.verifying_key())
+            .expect("register other consent key");
         let other_sig = consent.sign_consent(other, &other_payload);
-        let wrong_store_proof = PredecessorConsentProof::verify(
-            other,
-            consent.verifying_key(),
-            &other_payload,
-            &other_sig,
-        )
-        .expect("consent for other store");
+        let wrong_store_proof =
+            PredecessorConsentProof::verify(&table, other, &other_payload, &other_sig)
+                .expect("consent for other store");
         assert_eq!(
             ForkGrant::new(
                 grant_id,
@@ -1093,8 +1161,8 @@ mod tests {
         );
         let forged_sig = consent.sign_consent(victim, &forged_lineage_payload);
         let forged_lineage_proof = PredecessorConsentProof::verify(
+            &table,
             victim,
-            consent.verifying_key(),
             &forged_lineage_payload,
             &forged_sig,
         )
@@ -1109,6 +1177,80 @@ mod tests {
                 commitment,
                 forged_lineage_proof,
             ),
+            Err(MaterializeRefuse::ConsentUnverified)
+        );
+    }
+
+    /// Nasty: consent signed by an attacker key NOT bound in the sealed table
+    /// for predecessor_store must refuse — closes self-issued consent forge.
+    #[test]
+    fn fork_grant_attacker_own_key_not_bound_in_table_refuses() {
+        let victim = StoreId::from_digest([0x75; 32]);
+        let grant_id = GrantId::from_bytes([0xA3; 32]);
+        let fork_point = ForkPointRoot::from_digest([0x55; 32]);
+        let successor = SuccessorPrincipal::from_digest([0x66; 32]);
+        let identity = IdentitySeed::from_digest([0x77; 32]);
+        let commitment = KeyMaterialCommitment::from_digest([0x88; 32]);
+        let payload = fork_grant_payload_digest(
+            grant_id,
+            victim,
+            &fork_point,
+            &successor,
+            &identity,
+            &commitment,
+        );
+
+        let legitimate = ConsentSigningKey::from_seed([0xD1; 32]);
+        let attacker = ConsentSigningKey::from_seed([0xD2; 32]);
+
+        // Sealed store authority: only the legitimate key is registered.
+        let mut sealed_table = PredecessorConsentTable::new();
+        sealed_table
+            .insert(victim, *legitimate.verifying_key())
+            .expect("register legitimate predecessor consent key");
+
+        // Attacker signs with their own keypair — must not verify against sealed table.
+        let attacker_sig = attacker.sign_consent(victim, &payload);
+        assert_eq!(
+            PredecessorConsentProof::verify(&sealed_table, victim, &payload, &attacker_sig),
+            Err(MaterializeRefuse::ConsentUnverified)
+        );
+
+        // Unknown predecessor (no sealed key) → ConsentKeyUnknown, even with a
+        // cryptographically valid signature under some key.
+        let empty = PredecessorConsentTable::new();
+        assert_eq!(
+            PredecessorConsentProof::verify(&empty, victim, &payload, &attacker_sig),
+            Err(MaterializeRefuse::ConsentKeyUnknown)
+        );
+
+        // Cross-stream: attacker seals a proof against a *private* table that
+        // binds their own key to the victim StoreId, then materializes against
+        // the real sealed store table — key_id mismatch must refuse.
+        let mut attacker_table = PredecessorConsentTable::new();
+        attacker_table
+            .insert(victim, *attacker.verifying_key())
+            .expect("attacker private table");
+        let forged_proof =
+            PredecessorConsentProof::verify(&attacker_table, victim, &payload, &attacker_sig)
+                .expect("verifies only against attacker's private table");
+        let grant = ForkGrant::new(
+            grant_id,
+            victim,
+            fork_point,
+            successor,
+            identity,
+            commitment,
+            forged_proof,
+        )
+        .expect("payload binds; proof sealed against wrong table");
+
+        assert_eq!(
+            materialize(&Grant::Fork(grant.clone()), None, None, None),
+            Err(MaterializeRefuse::ConsentKeyUnknown)
+        );
+        assert_eq!(
+            materialize(&Grant::Fork(grant), None, None, Some(&sealed_table)),
             Err(MaterializeRefuse::ConsentUnverified)
         );
     }
@@ -1130,14 +1272,13 @@ mod tests {
             &commitment,
         );
         let consent = ConsentSigningKey::from_seed([0xF2; 32]);
+        let mut table = PredecessorConsentTable::new();
+        table
+            .insert(predecessor, *consent.verifying_key())
+            .expect("register predecessor consent key");
         let sig = consent.sign_consent(predecessor, &payload);
-        let proof = PredecessorConsentProof::verify(
-            predecessor,
-            consent.verifying_key(),
-            &payload,
-            &sig,
-        )
-        .expect("consent");
+        let proof = PredecessorConsentProof::verify(&table, predecessor, &payload, &sig)
+            .expect("consent");
         let grant = ForkGrant::new(
             grant_id,
             predecessor,
@@ -1148,7 +1289,8 @@ mod tests {
             proof,
         )
         .expect("grant");
-        let matured = materialize(&Grant::Fork(grant), None, None).expect("valid consent must mint");
+        let matured = materialize(&Grant::Fork(grant), None, None, Some(&table))
+            .expect("valid consent must mint");
         assert_ne!(matured.store_id(), predecessor);
     }
 

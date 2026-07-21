@@ -1709,8 +1709,9 @@ pub mod storage_campaign_lanes {
     };
     use crate::store::grants::{
         ForkPointRoot, IdentitySeed, KeyMaterialCommitment, PredecessorConsentProof,
-        RecoveryQuorumProof, SuccessorPrincipal, fork_grant_payload_digest,
-        recovery_grant_payload_digest, sign_fork_consent, sign_recovery_quorum,
+        PredecessorConsentTable, RecoveryQuorumProof, SuccessorPrincipal,
+        fork_grant_payload_digest, recovery_grant_payload_digest, sign_fork_consent,
+        sign_recovery_quorum,
     };
 
     /// Mint a RecoveryGrant under a fresh 2-of-3 matrix (positive recovery paths).
@@ -1754,7 +1755,22 @@ pub mod storage_campaign_lanes {
         (grant, matrix)
     }
 
+    /// Register a predecessor consent verifying key derived from `consent_seed`.
+    fn register_predecessor_consent(
+        table: &mut PredecessorConsentTable,
+        predecessor: StoreId,
+        consent_seed: [u8; 32],
+    ) {
+        let (vk, _) = sign_fork_consent(consent_seed, predecessor, &[0u8; 32]);
+        table
+            .insert(predecessor, vk)
+            .expect("register predecessor consent key");
+    }
+
     /// Mint a ForkGrant under a predecessor consent signature (positive fork paths).
+    ///
+    /// `consent_table` must already bind `predecessor` to the verifying key of
+    /// `consent_seed` — verify resolves the trust root from the sealed table.
     fn fork_grant_with_consent(
         grant_id: GrantId,
         predecessor: StoreId,
@@ -1763,6 +1779,7 @@ pub mod storage_campaign_lanes {
         identity_seed: [u8; 32],
         commitment: [u8; 32],
         consent_seed: [u8; 32],
+        consent_table: &PredecessorConsentTable,
     ) -> ForkGrant {
         let fork_point = ForkPointRoot::from_digest(fork_point);
         let successor_principal = SuccessorPrincipal::from_digest(successor_principal);
@@ -1776,8 +1793,8 @@ pub mod storage_campaign_lanes {
             &identity_seed,
             &commitment,
         );
-        let (vk, sig) = sign_fork_consent(consent_seed, predecessor, &payload);
-        let proof = PredecessorConsentProof::verify(predecessor, &vk, &payload, &sig)
+        let (_vk, sig) = sign_fork_consent(consent_seed, predecessor, &payload);
+        let proof = PredecessorConsentProof::verify(consent_table, predecessor, &payload, &sig)
             .expect("predecessor consent");
         ForkGrant::new(
             grant_id,
@@ -2224,7 +2241,7 @@ pub mod storage_campaign_lanes {
             [0xEF; 32],
             [[0x91; 32], [0x92; 32], [0x93; 32]],
         );
-        let matured = materialize(&Grant::Recovery(recovery), None, Some(&matrix))
+        let matured = materialize(&Grant::Recovery(recovery), None, Some(&matrix), None)
             .expect("recovery materialize");
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(
@@ -2242,6 +2259,9 @@ pub mod storage_campaign_lanes {
     fn fork_grant_double_discovery() {
         let sealed = genesis(genesis_params([0xF6; 32], SnapshotFork::No));
         let predecessor = sealed.store_id();
+        let consent_seed = [0xC0; 32];
+        let mut consent_table = PredecessorConsentTable::new();
+        register_predecessor_consent(&mut consent_table, predecessor, consent_seed);
 
         let fork = fork_grant_with_consent(
             GrantId::from_bytes([0xF0; 32]),
@@ -2250,12 +2270,13 @@ pub mod storage_campaign_lanes {
             [0xBB; 32],
             [0xCC; 32],
             [0xDD; 32],
-            [0xC0; 32],
+            consent_seed,
+            &consent_table,
         );
-        let first =
-            materialize(&Grant::Fork(fork.clone()), None, None).expect("first discovery");
-        let second =
-            materialize(&Grant::Fork(fork.clone()), None, None).expect("second discovery");
+        let first = materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table))
+            .expect("first discovery");
+        let second = materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table))
+            .expect("second discovery");
         assert_eq!(
             first.store_id(),
             second.store_id(),
@@ -2265,11 +2286,17 @@ pub mod storage_campaign_lanes {
 
         // Idempotent rediscovery with matching prior converges.
         let prior_ok = PriorMaterialization::new(fork.grant_id(), first.store_id());
-        let again =
-            materialize(&Grant::Fork(fork.clone()), Some(prior_ok), None).expect("converge");
+        let again = materialize(
+            &Grant::Fork(fork.clone()),
+            Some(prior_ok),
+            None,
+            Some(&consent_table),
+        )
+        .expect("converge");
         assert_eq!(again.store_id(), first.store_id());
 
         // Mismatched prior → typed GrantAlreadyMaterialized carrying existing identity.
+        // Same sealed consent key for the predecessor (one StoreId → one trust root).
         let other = fork_grant_with_consent(
             GrantId::from_bytes([0xF1; 32]),
             predecessor,
@@ -2277,12 +2304,19 @@ pub mod storage_campaign_lanes {
             [0x02; 32],
             [0x03; 32],
             [0x04; 32],
-            [0xC1; 32],
+            consent_seed,
+            &consent_table,
         );
-        let foreign = materialize(&Grant::Fork(other), None, None).expect("foreign successor");
+        let foreign = materialize(&Grant::Fork(other), None, None, Some(&consent_table))
+            .expect("foreign successor");
         let prior_bad = PriorMaterialization::new(fork.grant_id(), foreign.store_id());
-        let refuse =
-            materialize(&Grant::Fork(fork), Some(prior_bad), None).expect_err("must refuse");
+        let refuse = materialize(
+            &Grant::Fork(fork),
+            Some(prior_bad),
+            None,
+            Some(&consent_table),
+        )
+        .expect_err("must refuse");
         let msg = format!("{refuse:?}");
         assert!(
             msg.contains("GrantAlreadyMaterialized"),
@@ -2322,11 +2356,12 @@ pub mod storage_campaign_lanes {
             [[0x11; 32], [0x12; 32], [0x13; 32]],
         );
 
-        let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix)).expect("first recovery");
+        let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix), None)
+            .expect("first recovery");
         // When the door exists: second RecoveryGrant for one predecessor epoch
         // must refuse equivocation — never Ok with a second WriteAuthority token,
         // never a substitute UnknownInvariant lattice.
-        let refuse = materialize(&Grant::Recovery(g2), None, Some(&matrix));
+        let refuse = materialize(&Grant::Recovery(g2), None, Some(&matrix), None);
         assert!(
             refuse.is_err(),
             "second RecoveryGrant for one predecessor epoch must refuse equivocation (store {:?})",
