@@ -24,50 +24,6 @@ citation = "Issue #89's ruling: the three REFERENCE-tier copies of this classifi
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::add_vecs",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::mul_vecs",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_acos",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_acosh",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_add",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_asin",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_asinh",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_atan",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_atanh",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_bit_and",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_bit_xor",
-  "crates/kyzo-core/src/exec/stdlib/collection.rs::op_chunks",
-  "crates/kyzo-core/src/exec/stdlib/collection.rs::op_chunks_exact",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_cos",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_cosh",
-  "crates/kyzo-core/src/exec/stdlib/text.rs::op_ends_with",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_exp",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_exp2",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_ln",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_log10",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_log2",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_max",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_min",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_mul",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_sin",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_sinh",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_sqrt",
-  "crates/kyzo-core/src/exec/stdlib/text.rs::op_starts_with",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_tan",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_tanh",
-  "crates/kyzo-core/src/exec/stdlib/collection.rs::op_windows",
-  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_gt",
-  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_lt",
-  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_ge",
-  "crates/kyzo-core/src/exec/stdlib/compare.rs::op_le",
-  "crates/kyzo-core/src/exec/stdlib/metric.rs::op_ip_dist",
-  "crates/kyzo-core/src/exec/stdlib/metric.rs::op_l2_dist",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_minus",
-  "crates/kyzo-core/src/exec/stdlib/numeric.rs::op_abs",
-]
-citation = "Intentional per-operator dispatch boilerplate in data/functions.rs's scalar/vector operator table (trig, log/exp, comparison, bitwise, arithmetic, slice-windowing, distance-metric families) -- each function differs only in which underlying primitive it calls for its one operator; the shared shape is the arity/type-coercion scaffold every operator needs, not accidental copy-paste. Consolidating further would need a macro, a design choice for a future story. (Story #321: added the comparison family (op_gt/op_lt/op_ge/op_le), the distance-metric pair (op_ip_dist/op_l2_dist), and the arithmetic pair (op_minus/op_abs) -- the same category this entry already covers, just never enumerated; check 3 had never actually run in CI to surface them until the root-derivation bug (task 1) was fixed.)"
-
-[[copy_detector]]
-members = [
   "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::interleave",
 ]
 citation = "laws.rs::materialize (the oracle's own row-reassembly from a MeetState's key/value split) and query/temp_store.rs::interleave (the production MeetAggrStore's identical reassembly) compute the exact same key_positions/val_positions interleave loop -- but laws.rs is the REFERENCE SEMANTICS tier, whose whole module doc states the reason it exists: 'deliberately naive ... written to be OBVIOUSLY correct', judge never production, sharing no code with the engine it judges (the same independence law the issue-#89 entry states for head_classes/unify). Collapsing this pair into one shared helper would violate that independence law and is an engine-semantics change outside this task's scope in any case (crates/kyzo-core is not this story's file scope)."
@@ -95,48 +51,6 @@ citation = "The codec's two encode doors for its two currency forms: encode_owne
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-model/src/program/expr.rs::collect_bindings",
-  "crates/kyzo-model/src/program/expr.rs::do_binding_indices",
-  "crates/kyzo-model/src/program/expr.rs::do_get_variables",
-  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_abs",
-  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_add",
-  "crates/kyzo-core/src/exec/stdlib/tests/compare.rs::test_comparators",
-  "crates/kyzo-core/src/exec/stdlib/tests/compare.rs::test_eq_neq",
-  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_floor_ceil",
-  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_minus",
-  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_mul",
-  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_round",
-  "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_signum",
-  "crates/kyzo-core/src/project/text/fts.rs::fts_index_metadata",
-  "crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs::input_handle",
-  "crates/kyzo-core/src/project/dedup/lsh.rs::lsh_index_metadata",
-  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_index_metadata",
-  "crates/kyzo-core/src/project/sparse/sparse_hostile.rs::input_handle",
-  "crates/kyzo-core/src/project/text/tokenizer/simple_tokenizer.rs::advance",
-  "crates/kyzo-core/src/project/text/tokenizer/whitespace_tokenizer.rs::advance",
-  "crates/kyzo-core/src/rules/algo/bfs.rs::run",
-  "crates/kyzo-core/src/rules/algo/dfs.rs::run",
-  "crates/kyzo-core/src/rules/contract.rs::bool_option",
-  "crates/kyzo-core/src/rules/contract.rs::float_option",
-  "crates/kyzo-core/src/rules/contract.rs::integer_option",
-  "crates/kyzo-core/src/rules/contract.rs::pos_integer_option",
-  "crates/kyzo-core/src/rules/contract.rs::non_neg_integer_option",
-  "crates/kyzo-core/src/session/normalize_tests.rs::helper_via_relation_bound_var_inside_self_join_survives_correctly",
-  "crates/kyzo-core/src/session/normalize_tests.rs::mutual_recursion_bf_and_ff_stays_correctly_reachable",
-  "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::ranged",
-  "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::prefix_iter_projected",
-  "crates/kyzo-core/src/exec/op/join.rs::next",
-  "crates/kyzo-core/src/exec/op/delta.rs::next",
-  "crates/kyzo-model/src/parse/expr.rs::parse_quoted_string",
-  "crates/kyzo-model/src/parse/expr.rs::parse_s_quoted_string",
-  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@449",
-  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@453",
-  "crates/kyzo-core/src/exec/op/temporal.rs::resolve_at",
-]
-citation = "Deliberately mirrored/symmetric code, reviewed by name and file context: test A/B pairs (test_add/test_mul, and_short_circuits/or_short_circuits, spans_* interval-algebra probes, mutation_*_is_caught boundary pairs, skip_scan_*_terminates pairs), oracle-vs-engine differential test-helper twins across query/laws.rs, query/provenance.rs, and query/trials.rs (rows_of, strata_of, compile_for, for_each_derivation, resolve_events/resolve_at -- the deliberate parallel structure a differential test needs), per-engine *_index_metadata twins (lsh/sparse/fts/spatial share one operator architecture by design, see .claude/rules/engines.md), per-type option-parser triplets (integer_option/float_option/bool_option) and expr.rs's parallel binding-collection helpers, and same-test sub-closures compared against each other (concurrent-writer/retry/write-skew DST campaigns, observe's three probe closures) -- structurally similar by the test's own design, not by accidental copy-paste. (Story #301: closure line numbers repointed after rustfmt of T2-T7 surfaces; not re-worded.)"
-
-[[copy_detector]]
-members = [
   "crates/kyzo-core/src/exec/fold/aggr.rs::get",
   "crates/kyzo-core/src/exec/fold/aggr.rs::init_val",
 ]
@@ -159,49 +73,4 @@ members = [
   "crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token",
 ]
 citation = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/store/grants.rs::sign_ancestor_entitlement",
-  "crates/kyzo-core/src/store/grants.rs::sign_fork_consent",
-]
-citation = "SEAT-59 / grants test helpers: sign_fork_consent and sign_ancestor_entitlement are #[cfg(test)] domain-separated ed25519 signers that deliberately share the SigningKey→message→sig scaffold while binding different domain labels (FORK_CONSENT vs ANCESTOR_ENTITLEMENT). Independence is the domain string; the scaffold is intentional."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/project/text/fts.rs::eval_near::closure@563",
-  "crates/kyzo-core/src/project/text/fts.rs::eval_near::closure@564",
-]
-citation = "Line-number / rustfmt drift or intentional parallel structure after SEAT-59 / #376 gate hardening (similarity 0.84). Pair crates/kyzo-core/src/project/text/fts.rs::eval_near::closure@564 <-> crates/kyzo-core/src/project/text/fts.rs::eval_near::closure@563: deliberately mirrored control flow reviewed in situ; not accidental copy-paste. Re-cited so copy_detector stays honest rather than silently green."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/exec/fixpoint/eval.rs::incremental_plain_eval::closure@1375",
-  "crates/kyzo-core/src/exec/fixpoint/eval.rs::initial_plain_eval::closure@1307",
-]
-citation = "Line-number / rustfmt drift or intentional parallel structure after SEAT-59 / #376 gate hardening (similarity 0.52). Pair crates/kyzo-core/src/exec/fixpoint/eval.rs::initial_plain_eval::closure@1307 <-> crates/kyzo-core/src/exec/fixpoint/eval.rs::incremental_plain_eval::closure@1375: deliberately mirrored control flow reviewed in situ; not accidental copy-paste. Re-cited so copy_detector stays honest rather than silently green."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/session/catalog.rs::put_fact",
-  "crates/kyzo-core/src/session/catalog.rs::retract_fact",
-]
-citation = "Line-number / rustfmt drift or intentional parallel structure after SEAT-59 / #376 gate hardening (similarity 0.73). Pair crates/kyzo-core/src/session/catalog.rs::retract_fact <-> crates/kyzo-core/src/session/catalog.rs::put_fact: deliberately mirrored control flow reviewed in situ; not accidental copy-paste. Re-cited so copy_detector stays honest rather than silently green."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/session/admit.rs::admit_sugar_relation_row",
-  "crates/kyzo-core/src/session/admit_supersession.rs::admit_correction",
-]
-citation = "Line-number / rustfmt drift or intentional parallel structure after SEAT-59 / #376 gate hardening (similarity 0.58). Pair crates/kyzo-core/src/session/admit.rs::admit_sugar_relation_row <-> crates/kyzo-core/src/session/admit_supersession.rs::admit_correction: deliberately mirrored control flow reviewed in situ; not accidental copy-paste. Re-cited so copy_detector stays honest rather than silently green."
-
-[[dead_code_ratchet]]
-file = "crates/kyzo-core/src/project/contract.rs"
-line = 118
-citation = "[OPEN] rules::gazetteer query host — allow(dead_code) until the gazetteer query host is seated; cited for dead_code_ratchet (#376 gate clear)."
-
-[[dead_code_ratchet]]
-file = "crates/kyzo-core/src/project/gazetteer.rs"
-line = 146
-citation = "[OPEN] rules::gazetteer query host — allow(dead_code) until the gazetteer query host is seated; cited for dead_code_ratchet (#376 gate clear)."
 
