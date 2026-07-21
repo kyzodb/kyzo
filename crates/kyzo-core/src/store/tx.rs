@@ -19,6 +19,10 @@
 //! apply. Adapter `commit` returns `()` on successful apply; only the
 //! SweepDoor mints the durability proofs ([`Applied`](super::sweep::Applied)
 //! vs [`Committed`](super::sweep::Committed)).
+//!
+//! Live KyzoScript ack ([`crate::session::db::SessionTx::commit_write`]) routes
+//! through [`super::sweep::SweepDoor::ack_native_fsync_barrier`] — NativeFsyncProof
+//! fsync barrier, never bare non-fsync [`WriteTx::commit`].
 
 use std::fmt;
 
@@ -121,6 +125,14 @@ pub enum CommitIo {
     /// Simulator injected an fsync failure after the commit applied.
     #[error("sim: injected fsync failure (commit applied, not power-cut durable)")]
     SimInjectedFsyncAfterCommit,
+
+    /// Live write ack refused: required NativeFsyncProof StableCommitCap arm
+    /// was not presented (#359 / #374 T10). Never a silent volatile ack.
+    #[error(
+        "durable ack refused: NativeFsyncProof StableCommitCap barrier required \
+         (SnapshotFork::No)"
+    )]
+    DurableAckArmRefused,
 }
 
 /// Structured corruption refusal detected while committing.

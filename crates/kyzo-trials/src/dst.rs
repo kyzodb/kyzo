@@ -1659,6 +1659,40 @@ fn power_cut_at_commit_door_dst() {
     let _: u64 = bytes_since_last_flush;
 }
 
+/// #374 T10 — live KyzoScript write ack through
+/// [`SweepDoor::ack_native_fsync_barrier`] must survive a power cut.
+/// Path-wired beside SweepDoor so the session ack barrier stays linked to
+/// the same DurableCommit corpus as `power_cut_at_commit_door_dst`.
+#[test]
+fn live_script_write_ack_survives_power_cut_dst() {
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use std::collections::BTreeMap;
+
+    let store = SimStorage::new(0x3740_0010);
+    let db = Engine::compose(store, Catalog::new()).expect("compose");
+    db.run_script(
+        "?[x] <- [[99]] :create dst_ack_survive {x}",
+        BTreeMap::new(),
+    )
+    .expect("live KyzoScript write ack");
+    let after_cut = db.store.sim_powercut();
+    let reopened = Engine::compose(after_cut, Catalog::new()).expect("recompose");
+    let rows = reopened
+        .run_script("?[x] := *dst_ack_survive[x]", BTreeMap::new())
+        .expect("acked write must survive power cut");
+    let got: Vec<i64> = rows
+        .rows()
+        .iter()
+        .map(|r| r[0].get_int().expect("int"))
+        .collect();
+    assert_eq!(
+        got,
+        vec![99],
+        "SessionTx::commit_write NativeFsyncProof barrier must fsync before ack"
+    );
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 // Storage-Spec campaign lanes (07 campaigns_proposed) — named seats.
 // Bodies red until seats green; naming is the T12 obligation (§95).

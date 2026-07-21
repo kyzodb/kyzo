@@ -47,7 +47,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use super::authority::{IncarnationId, WriteAuthority};
-use super::commit_cap::StableCommitCap;
+use super::commit_cap::{SnapshotFork, StableCommitCap};
 use super::epoch::FenceEpoch;
 use super::failure::StoreRefuse;
 use super::idempotency::{IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest};
@@ -409,6 +409,39 @@ pub struct SweepDoor {
 }
 
 impl SweepDoor {
+    /// Physical StableCommitCap barrier for a live write **acknowledgement**
+    /// (seat 25 / #374 T10).
+    ///
+    /// Ruled arm for single-process native: [`StableCommitCap::NativeFsyncProof`]
+    /// with [`SnapshotFork::No`]. Applies the same physical fsync path
+    /// [`Self::seal_durable`] uses for that arm — never bare
+    /// [`WriteTx::commit`].
+    ///
+    /// Does **not** mint [`Committed`] / [`CommitOrdinal`] / WAL / RootChain
+    /// (full door ceremony re-homed when Engine carries a live door). Until
+    /// then this is the durability binding: ack returns only after the
+    /// NativeFsyncProof barrier, or loud-refuses (#359) when the presented
+    /// arm is not the ruled one.
+    pub fn ack_native_fsync_barrier<W: WriteTx>(
+        cap: StableCommitCap,
+        tx: W,
+    ) -> Result<(), SweepSealFailure> {
+        match cap {
+            StableCommitCap::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::No,
+            } => tx.commit_durable().map_err(SweepSealFailure::Apply),
+            StableCommitCap::NativeFsyncProof {
+                snapshot_fork: SnapshotFork::Yes,
+            }
+            | StableCommitCap::PlatformTransactionProof { .. } => {
+                let _ = tx.abort();
+                Err(SweepSealFailure::Sweep(
+                    SweepRefuse::NativeFsyncAckArmRequired,
+                ))
+            }
+        }
+    }
+
     /// Open the door for one Store under WriteAuthority + sealed arm + session.
     pub fn open(
         store_id: StoreId,
@@ -904,6 +937,13 @@ pub enum SweepRefuse {
     #[error("OperationKeyReuse: same key with a changed request digest")]
     #[diagnostic(code(store::sweep::operation_key_reuse))]
     OperationKeyReuse,
+    /// Live ack path must present NativeFsyncProof{SnapshotFork::No} (#359 / #374 T10).
+    #[error(
+        "NativeFsyncAckArmRequired: live write acknowledgement requires \
+         StableCommitCap::NativeFsyncProof {{ snapshot_fork: No }}"
+    )]
+    #[diagnostic(code(store::sweep::native_fsync_ack_arm_required))]
+    NativeFsyncAckArmRequired,
 }
 
 /// Seal path refusal: SweepDoor law or physical apply failure.
@@ -1066,6 +1106,43 @@ mod composition_tests {
         let mut bytes = *GENESIS_ROOT.as_bytes();
         bytes[0] = tag;
         StateRoot::from_digest(bytes)
+    }
+
+    /// #374 T10: live ack barrier loud-refuses non-ruled arms (#359).
+    #[test]
+    fn ack_native_fsync_barrier_refuses_wrong_arm() {
+        let wrong = StableCommitCap::PlatformTransactionProof {
+            snapshot_fork: SnapshotFork::No,
+        };
+        let refused = SweepDoor::ack_native_fsync_barrier(wrong, TempTx::default());
+        assert!(
+            matches!(
+                refused,
+                Err(SweepSealFailure::Sweep(
+                    SweepRefuse::NativeFsyncAckArmRequired
+                ))
+            ),
+            "PlatformTransactionProof must not ack as NativeFsyncProof: {refused:?}"
+        );
+        let fork_yes = StableCommitCap::NativeFsyncProof {
+            snapshot_fork: SnapshotFork::Yes,
+        };
+        let refused_fork = SweepDoor::ack_native_fsync_barrier(fork_yes, TempTx::default());
+        assert!(
+            matches!(
+                refused_fork,
+                Err(SweepSealFailure::Sweep(
+                    SweepRefuse::NativeFsyncAckArmRequired
+                ))
+            ),
+            "NativeFsyncProof with SnapshotFork::Yes is not the ruled single-process arm: \
+             {refused_fork:?}"
+        );
+        let ruled = StableCommitCap::NativeFsyncProof {
+            snapshot_fork: SnapshotFork::No,
+        };
+        SweepDoor::ack_native_fsync_barrier(ruled, TempTx::default())
+            .expect("ruled NativeFsyncProof{{No}} must pass the ack barrier");
     }
 
     fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {

@@ -102,7 +102,10 @@ pub(crate) use crate::session::normalize::SessionNormalizer;
 use crate::session::observe::{CallbackCollector, EventCallbackRegistry};
 use crate::store::retry::RetryError;
 use crate::store::scratch::TempTx;
-use crate::store::{ReadTx, Storage, WriteTx};
+use crate::store::{
+    CommitFailure, CommitIo, ReadTx, SnapshotFork, StableCommitCap, Storage, SweepDoor,
+    SweepRefuse, SweepSealFailure, WriteTx,
+};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::{
@@ -1030,13 +1033,43 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Commit the persistent write tx and spend the session scratch Open.
     /// Consumes `self` so Drop cannot bomb either side.
-    pub(crate) fn commit_write(self) -> std::result::Result<(), crate::store::CommitFailure> {
+    ///
+    /// Seat 25 / #374 T10: acknowledgement returns only after the ruled
+    /// [`StableCommitCap::NativeFsyncProof`] `{ SnapshotFork::No }` barrier
+    /// ([`SweepDoor::ack_native_fsync_barrier`]) — never bare non-fsync
+    /// [`WriteTx::commit`]. A path that cannot present that arm loud-refuses
+    /// (#359); it never silently acks a volatile apply.
+    pub(crate) fn commit_write(self) -> std::result::Result<(), CommitFailure> {
         let SessionTx {
             store, mut temp, ..
         } = self;
-        store.commit()?;
+        // ARM = NativeFsyncProof with SnapshotFork::No (single-process native).
+        let cap = StableCommitCap::NativeFsyncProof {
+            snapshot_fork: SnapshotFork::No,
+        };
+        let sealed = SweepDoor::ack_native_fsync_barrier(cap, store);
         temp.discard();
-        Ok(())
+        match sealed {
+            Ok(()) => Ok(()),
+            Err(SweepSealFailure::Apply(f)) => Err(f),
+            Err(SweepSealFailure::Sweep(SweepRefuse::NativeFsyncAckArmRequired)) => {
+                Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
+            }
+            Err(SweepSealFailure::Sweep(other)) => {
+                debug_assert!(
+                    false,
+                    "ack_native_fsync_barrier returned unexpected SweepRefuse: {other:?}"
+                );
+                Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
+            }
+            Err(SweepSealFailure::MerkleChain(_)) | Err(SweepSealFailure::Wal(_)) => {
+                debug_assert!(
+                    false,
+                    "ack_native_fsync_barrier must not mint chain/WAL effects"
+                );
+                Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
+            }
+        }
     }
 
     /// The system stamp every bitemporal row written to the given store
@@ -1975,5 +2008,58 @@ mod db_battery {
         // The refusal really was a refusal: nothing half-created.
         db.run_script("?[a] := *_scratch[a]", no_params())
             .expect_err("the temp relation must not exist after the refusal");
+    }
+
+    /// #374 T10 nasty: acknowledge a live KyzoScript write, inject a
+    /// power-cut that drops non-fsync'd data, reopen, and assert the
+    /// acknowledged write survives. RED on a bare `WriteTx::commit()` ack
+    /// path (buffer-tier only); GREEN only when `commit_write` passes the
+    /// NativeFsyncProof StableCommitCap barrier (`commit_durable`).
+    #[test]
+    fn live_write_ack_survives_power_cut_via_stable_commit_cap() {
+        let store = SimStorage::new(37_410);
+        let db = open_engine(store);
+        db.run_script("?[x] <- [[42]] :create ack_survive {x}", no_params())
+            .expect("live KyzoScript write must acknowledge");
+        // Power cut after ack: only the fsynced prefix survives.
+        let after_cut = db.store.sim_powercut();
+        let reopened = open_engine(after_cut);
+        let rows = reopened
+            .run_script("?[x] := *ack_survive[x]", no_params())
+            .expect("acked write must be query-visible after power cut");
+        assert_eq!(
+            int_rows(&rows),
+            vec![vec![42]],
+            "acknowledged live write must survive SimStorage::sim_powercut \
+             (StableCommitCap NativeFsyncProof barrier)"
+        );
+    }
+
+    /// #374 T10: barrier-on-ack — injected fsync failure must refuse the
+    /// acknowledgement (never production Committed / silent volatile ack).
+    #[test]
+    fn live_write_ack_refuses_when_fsync_barrier_fails() {
+        let store = SimStorage::with_faults(
+            37_411,
+            crate::store::sim::FaultConfig {
+                sync_fail_ppm: 1_000_000,
+                ..Default::default()
+            },
+        );
+        let db = open_engine(store);
+        let err = db
+            .run_script("?[x] <- [[7]] :create ack_fsync_fail {x}", no_params())
+            .expect_err("fsync-barrier failure must refuse live ack");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("fsync") || msg.contains("sync") || msg.contains("Io"),
+            "typed durability shortfall on ack, got: {msg}"
+        );
+        // Nothing half-acked at the durable tier.
+        let after_cut = db.store.sim_powercut();
+        let reopened = open_engine(after_cut);
+        reopened
+            .run_script("?[x] := *ack_fsync_fail[x]", no_params())
+            .expect_err("refused ack must not leave a durable relation");
     }
 }
