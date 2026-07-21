@@ -17,10 +17,13 @@
 //! stratified negation, normal aggregation, and meet aggregation in every
 //! positional layout — suffix, position-0, and interleaved — plus mutual
 //! recursion, a non-self-healing two-delta join (`cross_join`), and opaque
-//! fixed rules. Per seed, under a finite [`Budget`]: the answer is
+//! fixed rules. Node identity payloads are seeded across [`PayloadKind`]
+//! (Int / Vector / Geometry) so recursion, negation, and aggregation are
+//! not Int-only. Per seed, under a finite [`Budget`]: the answer is
 //! differentially checked against the oracle, and the answer set, the
-//! witness table, and deliberately budget-exceeding refusals are asserted
-//! byte-identical across 1/2/4/8 rayon threads.
+//! witness table, and deliberately budget-exceeding refusals — including
+//! mid-epoch [`BudgetDimension::InFlightDerivations`] — are asserted
+//! byte-identical across 1/2/4/8 rayon threads (and twice at width 1).
 //!
 //! ## What this harness does and does not exercise
 //!
@@ -64,8 +67,7 @@ use kyzo_model::SourceSpan;
 use kyzo_model::program::aggregate::parse_aggr;
 use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::DataValue;
-use kyzo_model::value::Tuple;
+use kyzo_model::value::{DataValue, Geometry, Tuple, Vector};
 use kyzo_oracle::{
     Bindings, FixedRule, HeadAggr, Literal, Program, Rel, Rule, Term, ground, head_classes,
     naive_eval, unify,
@@ -582,6 +584,42 @@ pub(crate) fn generous_budget() -> Budget {
 pub(crate) fn v(i: i64) -> DataValue {
     DataValue::from(i)
 }
+
+/// Seeded identity kind for nodes that flow through recursion / negation /
+/// aggregation. Meet-folded and `sum` columns stay numeric/bool via
+/// [`meet_value`] / [`v`] — those folds refuse Vector/Geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PayloadKind {
+    Int,
+    Vector,
+    Geometry,
+}
+
+const PAYLOAD_KINDS: [PayloadKind; 3] = [
+    PayloadKind::Int,
+    PayloadKind::Vector,
+    PayloadKind::Geometry,
+];
+
+pub(crate) fn choose_payload_kind(rng: &mut Rng) -> PayloadKind {
+    rng.one_of(&PAYLOAD_KINDS)
+}
+
+/// Identity-stable payload for node index `i` under `kind` — joins unify.
+pub(crate) fn node_payload(kind: PayloadKind, i: i64) -> DataValue {
+    match kind {
+        PayloadKind::Int => v(i),
+        PayloadKind::Vector => DataValue::Vector(
+            Vector::try_new(vec![i as f64, (i.wrapping_mul(3)) as f64])
+                .expect("gauntlet: vector dim fits u32"),
+        ),
+        PayloadKind::Geometry => DataValue::Geometry(Geometry::from_cells(
+            i as u32,
+            (i as u32).wrapping_mul(7).wrapping_add(1),
+        )),
+    }
+}
+
 pub(crate) fn x() -> Term {
     Term::Var("X".into())
 }
@@ -616,6 +654,9 @@ pub(crate) const MEET_OPS: [&str; 4] = ["min", "max", "and", "or"];
 #[derive(Debug, Clone)]
 struct GenParams {
     n_nodes: i64,
+    /// Node identity kind for edge/node/seed keys (recursion / negation /
+    /// aggregation group keys). Not Int-only.
+    payload_kind: PayloadKind,
     self_join: bool,
     mutual: bool,
     two_dep: bool,
@@ -633,9 +674,10 @@ struct GenParams {
     meet_interleaved: bool,
 }
 
-fn gen_params(rng: &mut Rng) -> GenParams {
+fn gen_params(rng: &mut Rng, payload_kind: PayloadKind) -> GenParams {
     GenParams {
         n_nodes: rng.range(6, 15),
+        payload_kind,
         self_join: rng.chance(1, 2),
         mutual: rng.chance(1, 2),
         two_dep: rng.chance(2, 5),
@@ -665,30 +707,50 @@ pub(crate) struct Generated {
 }
 
 pub(crate) fn generate(seed: u64) -> Generated {
+    // Payload kind from an independent stream so Cap1's structural/sizing
+    // draws (and the substantial-EDB law) stay seed-stable; kind still
+    // varies across seeds and is what Cap1 actually materializes.
+    let payload_kind =
+        choose_payload_kind(&mut Rng::new(seed.wrapping_mul(0xA24B_AED4_96E9_F2D9).wrapping_add(1)));
     let mut rng = Rng::new(seed);
-    let p = gen_params(&mut rng);
+    let p = gen_params(&mut rng, payload_kind);
     let n = p.n_nodes;
+    let pk = p.payload_kind;
 
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
 
     let n_edges = rng.below((n * 3) as u64) as i64 + 1;
     let edges: BTreeSet<Tuple> = (0..n_edges)
-        .map(|_| vec![v(rng.range(0, n)), v(rng.range(0, n))])
+        .map(|_| {
+            vec![
+                node_payload(pk, rng.range(0, n)),
+                node_payload(pk, rng.range(0, n)),
+            ]
+        })
         .map(Tuple::from_vec)
         .collect();
     facts.insert("edge".into(), edges);
     facts.insert(
         "node".into(),
-        (0..n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
+        (0..n)
+            .map(|i| vec![node_payload(pk, i)])
+            .map(Tuple::from_vec)
+            .collect(),
     );
 
     let n_seeds = rng.below(n as u64) as i64 + 1;
     let seeds: BTreeSet<Tuple> = (0..n_seeds)
-        .map(|_| vec![v(rng.range(0, n)), meet_value(&mut rng, p.meet_op)])
+        .map(|_| {
+            vec![
+                node_payload(pk, rng.range(0, n)),
+                meet_value(&mut rng, p.meet_op),
+            ]
+        })
         .map(Tuple::from_vec)
         .collect();
     facts.insert("seed".into(), seeds);
 
+    // `sum` refuses non-numeric payloads — item columns stay Int via `v`.
     let n_items = rng.range(800, 3000);
     let n_keys = rng.range(20, 100);
     let items: BTreeSet<Tuple> = (0..n_items)
@@ -763,7 +825,7 @@ pub(crate) fn generate(seed: u64) -> Generated {
         let seed3: BTreeSet<Tuple> = (0..n_s3)
             .map(|_| {
                 vec![
-                    v(rng.range(0, n)),
+                    node_payload(pk, rng.range(0, n)),
                     v(rng.range(-10, 10)),
                     v(rng.range(-10, 10)),
                 ]
@@ -915,6 +977,48 @@ fn fixed_endpoints(inputs: &[BTreeSet<Tuple>]) -> BTreeSet<Tuple> {
     out
 }
 
+/// Near-cross-product shaped so mid-epoch [`BudgetDimension::InFlightDerivations`]
+/// fires before the barrier. Cap1's main generator tops out below the
+/// mid-epoch interrupt stride (64) in edge cardinality, so InFlight is
+/// unreachable there — this companion closes that structural hole with a
+/// seeded payload kind.
+pub(crate) fn generate_in_flight_probe(seed: u64) -> Generated {
+    // Independent stream from [`generate`] so Cap1's main corpus RNG is
+    // not coupled to the in-flight arm's sizing draws.
+    let mut rng = Rng::new(seed.wrapping_mul(0xD2B7_44F4_5AD5_5A5A).wrapping_add(1));
+    let kind = choose_payload_kind(&mut rng);
+    // 70..=119 per side → product ≫ ceiling+stride; one join epoch trips
+    // the mid-epoch guard (stride 64) before DerivedTuples at the barrier.
+    let a_n = 70 + rng.below(50) as i64;
+    let b_n = 70 + rng.below(50) as i64;
+    let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+    facts.insert(
+        "a".into(),
+        (0..a_n)
+            .map(|i| Tuple::from_vec(vec![node_payload(kind, i)]))
+            .collect(),
+    );
+    facts.insert(
+        "b".into(),
+        (0..b_n)
+            .map(|i| Tuple::from_vec(vec![node_payload(kind, i)]))
+            .collect(),
+    );
+    let rules = vec![Rule::plain(
+        "prod",
+        vec![x(), y()],
+        vec![
+            lit("a", vec![x()], false),
+            lit("b", vec![y()], false),
+        ],
+    )];
+    Generated {
+        program: Program::untimed(rules, vec![], facts),
+        entry: "prod".into(),
+        entry_arity: 2,
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // CAPABILITY 1 — the determinism campaign.
 // ════════════════════════════════════════════════════════════════════════
@@ -994,12 +1098,20 @@ fn eval_fingerprint(g: &Generated, threads: usize) -> (BTreeSet<Tuple>, Vec<Stri
     })
 }
 
+/// Refusal identity: message, dimension, spend, ceiling, and (for mid-epoch
+/// InFlight) the offending rule name + span — the fields most likely to
+/// diverge when thread width changes the interrupt order.
+type RefusalFp = (
+    String,
+    BudgetDimension,
+    u64,
+    u64,
+    Option<String>,
+    Option<SourceSpan>,
+);
+
 #[cfg(not(target_arch = "wasm32"))]
-fn refusal_fingerprint(
-    g: &Generated,
-    budget: &Budget,
-    threads: usize,
-) -> (String, BudgetDimension, u64, u64) {
+fn refusal_fingerprint(g: &Generated, budget: &Budget, threads: usize) -> RefusalFp {
     at_thread_count(threads, || {
         let arities = model_arities(&g.program);
         let fixed_arities = fixed_arities_of(&g.program, &arities);
@@ -1018,6 +1130,11 @@ fn refusal_fingerprint(
             refusal.dimension,
             refusal.spent,
             refusal.ceiling,
+            refusal
+                .rule
+                .as_ref()
+                .map(|s| s.as_plain_symbol().name.to_string()),
+            refusal.span,
         )
     })
 }
@@ -1051,6 +1168,16 @@ pub(crate) fn run_seed(seed: u64) -> std::result::Result<(), String> {
     let derived_budget = generous_budget().with_derived_tuple_ceiling(1);
     check_refusal(&g, &derived_budget, BudgetDimension::DerivedTuples)?;
 
+    // InFlightDerivations: companion cross-product (main generator stays
+    // below INTERRUPT_STRIDE). Same seed twice at width 1, then 2/4/8.
+    let inflight = generate_in_flight_probe(seed);
+    let inflight_budget = generous_budget().with_derived_tuple_ceiling(100);
+    check_refusal(
+        &inflight,
+        &inflight_budget,
+        BudgetDimension::InFlightDerivations,
+    )?;
+
     Ok(())
 }
 
@@ -1063,6 +1190,14 @@ fn check_refusal(
     let baseline = refusal_fingerprint(g, budget, 1);
     if baseline.1 != expect {
         return Err(format!("expected {expect:?} refusal, got {:?}", baseline.1));
+    }
+    // Same seed / width twice — catches non-thread ambient divergence
+    // (the hazard dst multihead proved real for parallel seams).
+    let again = refusal_fingerprint(g, budget, 1);
+    if again != baseline {
+        return Err(format!(
+            "{expect:?} refusal diverged on repeat at 1 thread: {again:?} vs {baseline:?}"
+        ));
     }
     for threads in [2, 4, 8] {
         let got = refusal_fingerprint(g, budget, threads);
@@ -1118,6 +1253,94 @@ fn generator_is_seed_reproducible() {
     assert_eq!(a.entry, b.entry);
     let total: usize = a.program.facts.values().map(|s| s.len()).sum();
     assert!(total > 800, "generated EDB is substantial: {total} tuples");
+}
+
+fn fact_has_kind(g: &Generated, pred: impl Fn(&DataValue) -> bool) -> bool {
+    g.program
+        .facts
+        .values()
+        .flat_map(|rows| rows.iter())
+        .flat_map(|t| t.iter())
+        .any(pred)
+}
+
+/// Anti-vacuity: Cap1's generator must actually emit Vector and Geometry
+/// node payloads into edge/node facts (the recursion / negation / aggr keys)
+/// for some seeds — not merely offer an unused chooser.
+#[test]
+fn generator_emits_vector_and_geometry_payloads_for_some_seeds() {
+    let mut saw_vector = false;
+    let mut saw_geometry = false;
+    let mut saw_int = false;
+    for i in 0..96u64 {
+        let seed = Rng::new(i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+        let g = generate(seed);
+        // edge feeds path recursion; node feeds negation; seed keys feed meet.
+        let edge: Rel = "edge".into();
+        let node: Rel = "node".into();
+        let edge_nodes = g
+            .program
+            .facts
+            .get(&edge)
+            .into_iter()
+            .chain(g.program.facts.get(&node))
+            .flat_map(|rows| rows.iter())
+            .flat_map(|t| t.iter());
+        for val in edge_nodes {
+            match val {
+                DataValue::Vector(_) => saw_vector = true,
+                DataValue::Geometry(_) => saw_geometry = true,
+                DataValue::Num(_) => saw_int = true,
+                _ => {}
+            }
+        }
+        if saw_vector && saw_geometry && saw_int {
+            break;
+        }
+    }
+    assert!(saw_int, "Int payload kind never appeared in edge/node facts");
+    assert!(
+        saw_vector,
+        "Vector payload kind never appeared in edge/node facts (chooser unused?)"
+    );
+    assert!(
+        saw_geometry,
+        "Geometry payload kind never appeared in edge/node facts (chooser unused?)"
+    );
+}
+
+/// Anti-vacuity: the InFlight companion must refuse on that dimension (not
+/// silently fall through to barrier DerivedTuples), and must carry Vector/
+/// Geometry for some seeds (same chooser Cap1 uses).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn in_flight_probe_refuses_in_flight_derivations() {
+    let mut saw_vector = false;
+    let mut saw_geometry = false;
+    for i in 0..48u64 {
+        let seed = Rng::new(0x1F_u64.wrapping_add(i).wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+        let g = generate_in_flight_probe(seed);
+        saw_vector |= fact_has_kind(&g, |v| matches!(v, DataValue::Vector(_)));
+        saw_geometry |= fact_has_kind(&g, |v| matches!(v, DataValue::Geometry(_)));
+        let budget = generous_budget().with_derived_tuple_ceiling(100);
+        let fp = refusal_fingerprint(&g, &budget, 1);
+        assert_eq!(
+            fp.1,
+            BudgetDimension::InFlightDerivations,
+            "seed {seed}: expected InFlightDerivations, got {:?}",
+            fp.1
+        );
+        assert!(fp.4.is_some(), "InFlight refusal must name a rule");
+        assert!(fp.5.is_some(), "InFlight refusal must carry a span");
+    }
+    assert!(
+        saw_vector,
+        "InFlight probe never carried Vector (chooser unused on companion?)"
+    );
+    assert!(
+        saw_geometry,
+        "InFlight probe never carried Geometry (chooser unused on companion?)"
+    );
 }
 
 /// Generative magic-vs-bypass (demand rewriter) — standing disclosed red.
