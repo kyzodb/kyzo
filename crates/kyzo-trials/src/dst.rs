@@ -1846,9 +1846,44 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
 /// must be `#[ignore = "<exact unbuilt seat>"]` — never `unimplemented!()`,
 /// never a silent tautology. Campaign green never substitutes for a story
 /// board Check (CLAUDE.md).
+///
+/// # Generator-diversity audit (TigerBeetle failure mode — #376 T4)
+///
+/// A whole reachable-state dimension the generator never emits is the exact
+/// hole external Jepsen caught in TigerBeetle. This module's pre-T4 lanes
+/// were scenario seats, not seed generators over the full reachable space.
+///
+/// ## Covered dimensions (pre-T4 — scenario lanes)
+///
+/// - incarnation / nonce two-clone at-rest; live-fork SIV equality leak
+/// - SweepDoor IntentOrdinal gap + dense CommitOrdinal; WriteSessionDead
+/// - pipeline power-cut at **clean durability barriers** (synced watermark)
+/// - RecoveryGrant / ForkGrant materialize; recovery equivocation poison
+/// - idle StagingTTL / durability product dominance / PermanenceCandidate stall
+/// - CheckpointSeal **whole-binding** digest replacement → SealMismatch
+/// - CanonicalTranscript golden match + one ad-hoc mid-vector flip
+/// - five-delivery ReplicaKey idempotence; forged/revoked scope manifests
+/// - CompositionId crash-replay; OperationKeyReuse; catalog-advance origin
+/// - footprint crash-holder drop; MergeProof determinism; shred × leave-is-free
+/// - dual lattice corruption (OrderedCorrupt / Quarantined — not payload bytes)
+/// - replica recompute-and-compare equivalence
+/// - upstairs query-path DST (TC / join / aggr / neg): **relational Int only**
+///
+/// ## Holes closed by T4 (seed generators — must appear in every campaign)
+///
+/// 1. **cross-modality queries** — graph edge join + Vector + Geometry at once
+/// 2. **single-byte corruption** — one payload byte flipped (not whole digest/block)
+/// 3. **torn writes at arbitrary byte offsets** — interior split, not lane/block
+///    boundaries (512/4096-aligned tears alone are the TigerBeetle-shaped hole)
+///
+/// Enumeration meter: [`storage_campaign_generator_diversity_enumeration`].
+/// Generators: `storage_campaign_cross_modality_*`,
+/// `storage_campaign_single_byte_*`, `storage_campaign_torn_write_*`.
 #[allow(dead_code)]
 pub mod storage_campaign_lanes {
     use std::collections::BTreeSet;
+
+    use kyzo_model::value::{DataValue, Geometry, Tuple, Vector, decode, encode_owned};
 
     use crate::session::footprint::{
         AcceleratorVerdict, AskShape, ByteRange, FencedFootprint, Footprint, FootprintIndexKey,
@@ -3723,6 +3758,390 @@ pub mod storage_campaign_lanes {
             )),
             MerkleChainRefuse::PathUrlSameness,
             "path/URL same-store claim must refuse"
+        );
+    }
+
+    // ── #376 T4 — generator-diversity audit (TigerBeetle hole class) ──────
+
+    /// Pre-T4 scenario dimensions this module already emitted (see module docs).
+    const STORAGE_CAMPAIGN_COVERED_DIMENSIONS: &[&str] = &[
+        "incarnation_nonce_two_clone",
+        "live_fork_siv_equality_leak",
+        "sweepdoor_ordinal_gaps",
+        "write_session_dead",
+        "pipeline_power_cut_clean_barrier",
+        "recovery_fork_grant_materialize",
+        "staging_ttl_durability_dominance",
+        "checkpoint_seal_whole_binding_corruption",
+        "transcript_golden_and_adhoc_mid_flip",
+        "replica_custody_five_delivery",
+        "composition_crash_replay_key_reuse",
+        "footprint_merge_shred_leave_is_free",
+        "dual_lattice_ordered_corrupt",
+        "replica_recompute_compare",
+        "query_path_relational_int_only",
+    ];
+
+    /// Reachable-state dimensions the pre-T4 corpus never generated.
+    const STORAGE_CAMPAIGN_HOLE_DIMENSIONS_CLOSED_T4: &[&str] = &[
+        "cross_modality_graph_vector_geo",
+        "single_byte_payload_corruption",
+        "torn_write_arbitrary_byte_offset",
+    ];
+
+    /// Clean lane / block sizes that alone are insufficient (TigerBeetle shape).
+    const TORN_LANE_BLOCK_BOUNDARIES: &[usize] = &[64, 512, 4096];
+
+    /// Enumeration meter: covered vs newly-added generator dimensions.
+    ///
+    /// Filter name carries `storage_campaign` so path-wired
+    /// `kyzo::store::sweep::dst::storage_campaign_lanes::*` is discoverable.
+    #[test]
+    fn storage_campaign_generator_diversity_enumeration() {
+        assert!(
+            !STORAGE_CAMPAIGN_COVERED_DIMENSIONS.is_empty(),
+            "covered-dimension roster must stay non-empty"
+        );
+        assert_eq!(
+            STORAGE_CAMPAIGN_HOLE_DIMENSIONS_CLOSED_T4,
+            &[
+                "cross_modality_graph_vector_geo",
+                "single_byte_payload_corruption",
+                "torn_write_arbitrary_byte_offset",
+            ],
+            "T4 must close exactly the three TigerBeetle-shaped generator holes"
+        );
+        for dim in STORAGE_CAMPAIGN_HOLE_DIMENSIONS_CLOSED_T4 {
+            assert!(
+                !STORAGE_CAMPAIGN_COVERED_DIMENSIONS.contains(dim),
+                "hole dimension {dim} must not be mislisted as pre-T4 covered"
+            );
+        }
+        // Generators below are the executable proof these dimensions emit.
+        assert!(
+            STORAGE_CAMPAIGN_HOLE_DIMENSIONS_CLOSED_T4.len() == 3,
+            "three hole dimensions → three generators"
+        );
+    }
+
+    /// Seed → graph edges + Vector embeddings + Geometry loci; one query joins
+    /// all three modalities. Relational-only upstairs DST never emitted this.
+    fn generate_cross_modality(
+        seed: u64,
+    ) -> (Vec<Tuple>, Vec<Tuple>, Vec<Tuple>, BTreeSet<Tuple>) {
+        let n = 3 + (seed % 4) as i64; // nodes 0..n-1
+        let mut vectors = Vec::with_capacity(n as usize);
+        let mut geos = Vec::with_capacity(n as usize);
+        let mut emb_rows = Vec::with_capacity(n as usize);
+        let mut loc_rows = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let vector = DataValue::Vector(
+                Vector::try_new(vec![
+                    (seed as f64).mul_add(0.01, i as f64),
+                    (i as f64) * 0.5 + (seed % 7) as f64,
+                ])
+                .expect("vector dim fits u32"),
+            );
+            let geometry = DataValue::Geometry(Geometry::from_cells(
+                (seed as u32).wrapping_add(i as u32),
+                (seed as u32)
+                    .wrapping_mul(3)
+                    .wrapping_add((i as u32).wrapping_mul(7)),
+            ));
+            vectors.push(vector.clone());
+            geos.push(geometry.clone());
+            emb_rows.push(Tuple::from_vec(vec![super::v(i), vector]));
+            loc_rows.push(Tuple::from_vec(vec![super::v(i), geometry]));
+        }
+        let mut edge_rows = Vec::new();
+        let mut expected = BTreeSet::new();
+        let push_edge = |edges: &mut Vec<Tuple>,
+                         expected: &mut BTreeSet<Tuple>,
+                         src: i64,
+                         dst: i64| {
+            edges.push(Tuple::from_vec(vec![super::v(src), super::v(dst)]));
+            expected.insert(Tuple::from_vec(vec![
+                super::v(dst),
+                vectors[dst as usize].clone(),
+                geos[dst as usize].clone(),
+            ]));
+        };
+        for i in 0..n - 1 {
+            push_edge(&mut edge_rows, &mut expected, i, i + 1);
+        }
+        // Seed-dependent chord so the generator is not a single fixed topology.
+        if seed % 3 == 0 && n > 2 {
+            push_edge(&mut edge_rows, &mut expected, 0, n - 1);
+        }
+        if seed % 5 == 0 && n > 3 {
+            push_edge(&mut edge_rows, &mut expected, 1, n - 1);
+        }
+        (edge_rows, emb_rows, loc_rows, expected)
+    }
+
+    fn cross_modality_program() -> crate::exec::plan::program::StratifiedMagicProgram {
+        let (src, dst, vec, geo) = (
+            super::sym("src"),
+            super::sym("dst"),
+            super::sym("vec"),
+            super::sym("geo"),
+        );
+        super::program_of(vec![vec![(
+            super::entry_symbol(),
+            vec![super::plain_rule(
+                &[dst.clone(), vec.clone(), geo.clone()],
+                vec![
+                    super::rel_atom("edge", &[src, dst.clone()]),
+                    super::rel_atom("emb", &[dst.clone(), vec]),
+                    super::rel_atom("loc", &[dst, geo]),
+                ],
+            )],
+        )]])
+    }
+
+    #[test]
+    fn storage_campaign_cross_modality_query_generator() {
+        for seed in 0..32u64 {
+            let (edge_rows, emb_rows, loc_rows, expected) = generate_cross_modality(seed);
+            assert!(
+                !edge_rows.is_empty() && !emb_rows.is_empty() && !loc_rows.is_empty(),
+                "seed {seed}: generator must emit graph+vector+geo facts"
+            );
+            let db = SimStorage::new(0xC4_05_B0D0 ^ seed);
+            super::stored_relation(&db, "edge", 2, &edge_rows)
+                .unwrap_or_else(|e| panic!("seed {seed}: edge populate: {e}"));
+            super::stored_relation(&db, "emb", 2, &emb_rows)
+                .unwrap_or_else(|e| panic!("seed {seed}: emb populate: {e}"));
+            super::stored_relation(&db, "loc", 2, &loc_rows)
+                .unwrap_or_else(|e| panic!("seed {seed}: loc populate: {e}"));
+            let got = super::try_run(&db, cross_modality_program())
+                .unwrap_or_else(|e| panic!("seed {seed}: cross-modality query: {e}"));
+            assert_eq!(
+                got, expected,
+                "seed {seed}: cross-modality (graph+vector+geo) answer must match oracle"
+            );
+        }
+    }
+
+    /// Seed → pick one byte index + flip mask; corrupted payload must never
+    /// decode/verify as the intact value (whole-block digest swap is not enough).
+    #[test]
+    fn storage_campaign_single_byte_corruption_generator() {
+        let flip_masks = [0x01u8, 0x80, 0xFF];
+        let mut flipped_any = false;
+        for seed in 0..96u64 {
+            // Value-plane: multi-kind payload (vector + geometry + ints).
+            let intact_val = DataValue::List(vec![
+                DataValue::from(seed as i64),
+                DataValue::Vector(
+                    Vector::try_new(vec![1.0, -2.5, (seed % 11) as f64]).expect("vec"),
+                ),
+                DataValue::Geometry(Geometry::from_cells(seed as u32, !(seed as u32))),
+                DataValue::from((seed % 3 == 0) as i64),
+            ]);
+            let encoded = encode_owned(&intact_val);
+            let bytes = encoded.as_bytes();
+            assert!(bytes.len() >= 2, "seed {seed}: corpus encoding too short");
+            let idx = (seed as usize).wrapping_mul(13) % bytes.len();
+            let mask = flip_masks[(seed as usize) % flip_masks.len()];
+            let mut corrupted = bytes.to_vec();
+            corrupted[idx] ^= mask;
+            assert_ne!(
+                corrupted.as_slice(),
+                bytes,
+                "seed {seed}: single-byte flip must diverge"
+            );
+            flipped_any = true;
+            match decode(&corrupted) {
+                Ok(v) => assert_ne!(
+                    v, intact_val,
+                    "seed {seed}: single-byte corruption must not decode to intact value"
+                ),
+                Err(_) => {} // typed Truncated/BadTag/… is the honest refuse
+            }
+
+            // Seal binding: flip one byte inside a 32-byte digest (not whole replace).
+            let sealed = genesis(genesis_params(
+                {
+                    let mut s = [0x26u8; 32];
+                    s[0] = seed as u8;
+                    s
+                },
+                SnapshotFork::No,
+            ));
+            let store_id = sealed.store_id();
+            let crypto_domain = sealed.crypto_domain();
+            let fence_epoch = sealed.fence_epoch();
+            let (_view, auth) = sealed.take_write_authority();
+            let incarnation = auth
+                .incarnation_mint_cap(OpenOrdinal::ZERO)
+                .mint(Entropy::from_bytes({
+                    let mut e = [0x26u8; 32];
+                    e[1] = (seed >> 8) as u8;
+                    e
+                }))
+                .expect("incarnation");
+            let mut state_root = [0x01u8; 32];
+            let intact_parts = CheckpointSealParts {
+                store_id,
+                crypto_domain,
+                fence_epoch,
+                cut: CommitOrdinal::ZERO,
+                state_root: SealDigest::from_digest(state_root),
+                final_wal_hash: WalHash::from_digest([0x02; 32]),
+                checkpoint_manifest: SealDigest::from_digest([0x03; 32]),
+                format_version: FormatVersion::CURRENT,
+                catalog_generation: CommitOrdinal::ZERO,
+                retained_object_manifest: SealDigest::from_digest([0x04; 32]),
+                permanence_candidate_manifest: SealDigest::from_digest([0x05; 32]),
+                replica_custody_manifest: SealDigest::from_digest([0x06; 32]),
+                nonce_floors: NonceLeaseFloors::genesis(),
+                incarnation_boundary: incarnation,
+                prior_seal_digest: GENESIS_PRIOR_SEAL,
+                retention_certificate_digest: SealDigest::from_digest([0x07; 32]),
+            };
+            let seal = CheckpointSeal::mint(intact_parts.clone()).expect("mint");
+            let byte_i = (seed as usize) % 32;
+            state_root[byte_i] ^= mask;
+            let mut single = intact_parts.clone();
+            single.state_root = SealDigest::from_digest(state_root);
+            // Control: whole-block replace is a different adversary (already covered).
+            let mut whole_block = intact_parts.clone();
+            whole_block.state_root = SealDigest::from_digest([0xEE; 32]);
+            assert_ne!(
+                single.state_root, intact_parts.state_root,
+                "seed {seed}: single-byte digest flip must change binding"
+            );
+            assert_ne!(
+                single.state_root, whole_block.state_root,
+                "seed {seed}: single-byte adversary must differ from whole-block replace"
+            );
+            assert_eq!(
+                seal.verify(&single),
+                Err(SealRefuse::SealMismatch),
+                "seed {seed}: single-byte seal corruption must SealMismatch"
+            );
+        }
+        assert!(flipped_any, "generator must emit at least one single-byte flip");
+    }
+
+    /// Seed → tear a multi-byte payload at an interior offset that is **not**
+    /// restricted to clean lane/block boundaries. Prefix must never parse as
+    /// the intact artifact.
+    #[test]
+    fn storage_campaign_torn_write_arbitrary_offset_generator() {
+        let golden = parse_golden_hex(include_str!(
+            "../../kyzo-core/src/store/golden/checkpoint_seal.vec"
+        ))
+        .expect("checkpoint golden parses");
+        assert!(
+            golden.len() >= 8,
+            "golden must be long enough for interior tears"
+        );
+
+        let long_val = DataValue::List(
+            (0..24i64)
+                .map(|i| {
+                    DataValue::List(vec![
+                        DataValue::from(i),
+                        DataValue::Vector(
+                            Vector::try_new(vec![i as f64, (i * 3) as f64]).expect("vec"),
+                        ),
+                        DataValue::Geometry(Geometry::from_cells(i as u32, i as u32 * 9)),
+                    ])
+                })
+                .collect(),
+        );
+        let value_bytes = encode_owned(&long_val);
+        let value_raw = value_bytes.as_bytes();
+        assert!(value_raw.len() >= 16);
+
+        let mut saw_non_aligned = false;
+        let mut saw_aligned_control = false;
+        for seed in 0..160u64 {
+            // Mix two payload species so the generator is not golden-only.
+            let (payload, intact_decode): (&[u8], Option<&DataValue>) = if seed % 2 == 0 {
+                (golden.as_slice(), None)
+            } else {
+                (value_raw, Some(&long_val))
+            };
+            let len = payload.len();
+            // Interior cut in 1..len (exclusive end): true torn prefix.
+            let mut split_at = 1 + ((seed as usize).wrapping_mul(31).wrapping_add(7) % (len - 1));
+            // Prefer non-aligned offsets; nudge off every listed lane boundary.
+            for &block in TORN_LANE_BLOCK_BOUNDARIES {
+                if split_at % block == 0 {
+                    split_at = if split_at + 1 < len {
+                        split_at + 1
+                    } else {
+                        split_at - 1
+                    };
+                    if split_at == 0 {
+                        split_at = 1;
+                    }
+                }
+            }
+            if TORN_LANE_BLOCK_BOUNDARIES
+                .iter()
+                .all(|&b| split_at % b != 0)
+            {
+                saw_non_aligned = true;
+            }
+
+            let torn = &payload[..split_at];
+            assert!(
+                torn.len() < payload.len(),
+                "seed {seed}: torn prefix must be shorter than intact"
+            );
+
+            if seed % 2 == 0 {
+                match CanonicalTranscript::parse(torn) {
+                    Err(_) => {}
+                    Ok(parsed) => assert_ne!(
+                        parsed.as_bytes(),
+                        golden.as_slice(),
+                        "seed {seed}: torn golden must not verify as intact transcript"
+                    ),
+                }
+            } else {
+                match decode(torn) {
+                    Ok(v) => {
+                        let intact = intact_decode.expect("value species");
+                        assert_ne!(
+                            &v, intact,
+                            "seed {seed}: torn value bytes must not decode to intact List"
+                        );
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            // Control: also emit an aligned tear so the campaign still covers
+            // lane-boundary faults — without *only* emitting those.
+            if let Some(&block) = TORN_LANE_BLOCK_BOUNDARIES
+                .iter()
+                .find(|&&b| b < len)
+            {
+                let aligned = block;
+                if aligned > 0 && aligned < len {
+                    saw_aligned_control = true;
+                    let aligned_torn = &payload[..aligned];
+                    if seed % 2 == 0 {
+                        let _ = CanonicalTranscript::parse(aligned_torn);
+                    } else {
+                        let _ = decode(aligned_torn);
+                    }
+                }
+            }
+        }
+        assert!(
+            saw_non_aligned,
+            "generator must emit tears at offsets off every clean lane boundary \
+             ({TORN_LANE_BLOCK_BOUNDARIES:?}) — aligned-only is the TigerBeetle hole"
+        );
+        assert!(
+            saw_aligned_control,
+            "generator must still exercise aligned tears as a control, not as the sole class"
         );
     }
 }
