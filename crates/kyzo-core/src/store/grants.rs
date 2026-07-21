@@ -1259,6 +1259,73 @@ mod tests {
     use super::*;
     use crate::store::authority::RecoveryMatrix;
 
+    // ---- GUARDIAN RED GATES (#376 T1) --------------------------------------
+    // Empirically confirmed vs pinned ed25519-dalek 3.0.0-rc.1 (guardian probe):
+    // from_bytes constructs a small-order (identity) key and permissive `.verify()`
+    // accepts a total forgery (R = identity, S = 0) over ANY message; verify_strict
+    // refuses. Every hostile-peer verify below uses permissive `.verify()`, so a
+    // weak key + this forgery mints authority nobody controls. RED until each site
+    // swaps `.verify` -> `verify_strict`.
+
+    /// Weak-key forged RECOVERY QUORUM = write-authority theft.
+    #[test]
+    fn permissive_verify_accepts_weak_key_forged_recovery_quorum() {
+        let store = StoreId::from_digest([0x71; 32]);
+        let payload = recovery_grant_payload_digest(
+            GrantId::from_bytes([0x90; 32]),
+            store,
+            FenceEpoch::genesis(store),
+            &IdentitySeed::from_digest([0xEE; 32]),
+            &KeyMaterialCommitment::from_digest([0xEF; 32]),
+        );
+        let mut weak = [0u8; 32];
+        weak[0] = 1;
+        let weak_pk = RecoveryPublicKey::from_bytes(weak);
+        let matrix = RecoveryMatrix::new(1, vec![weak_pk]).expect("1-of-1 matrix");
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        assert!(
+            RecoveryQuorumProof::verify(&matrix, &payload, &[(weak_pk, forged)]).is_err(),
+            "FORGED QUORUM: small-order recovery key + weak-key forgery mints a verified \
+             RecoveryQuorumProof (write-authority theft) -- verify must become verify_strict"
+        );
+    }
+
+    /// Weak-key forged FORK CONSENT = fork-lineage forgery.
+    #[test]
+    fn permissive_verify_accepts_weak_key_forged_fork_consent() {
+        let store = StoreId::from_digest([0x72; 32]);
+        let mut weak = [0u8; 32];
+        weak[0] = 1;
+        let mut table = PredecessorConsentTable::new();
+        table.insert(store, weak).expect("register weak consent key (from_bytes accepts identity)");
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        assert!(
+            PredecessorConsentProof::verify(&table, store, &[0x33; 32], &forged).is_err(),
+            "FORGED CONSENT: small-order consent key + weak-key forgery mints predecessor \
+             consent (fork-lineage forgery) -- verify must become verify_strict"
+        );
+    }
+
+    /// Weak-key forged ANCESTOR ENTITLEMENT = ancestor-decrypt forgery.
+    #[test]
+    fn permissive_verify_accepts_weak_key_forged_ancestor_entitlement() {
+        let store = StoreId::from_digest([0x73; 32]);
+        let mut weak = [0u8; 32];
+        weak[0] = 1;
+        let mut table = AncestorEntitlementTable::new();
+        table.insert(store, weak).expect("register weak entitlement key");
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        assert!(
+            AncestorEntitlementProof::verify(&table, store, &[0x33; 32], &forged).is_err(),
+            "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery mints ancestor \
+             decrypt-scope entitlement -- verify must become verify_strict"
+        );
+    }
+    // -----------------------------------------------------------------------
+
     /// Test-only recovery custodian signing key (ed25519 seed → verifying bytes).
     struct RecoverySigningKey {
         signing: SigningKey,
