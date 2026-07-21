@@ -192,7 +192,12 @@ fuzz_target!(|data: &[u8]| {
     let file = dir.path().join("table_fuzz");
 
     {
-        let mut writer = lsm_tree::table::Writer::new(file.clone(), 0, 0)
+        // Writer::new(path, table_id: TableId, initial_level: Level) —
+        // TableId is the u64 newtype alias; Level is the write-time LSM
+        // level identity (not a bare integer).
+        let table_id: lsm_tree::table::TableId = 0;
+        let initial_level = lsm_tree::table::Level::new(0);
+        let mut writer = lsm_tree::table::Writer::new(file.clone(), table_id, initial_level)
             .unwrap()
             .use_data_block_restart_interval(restart_interval)
             .use_data_block_size(data_block_size)
@@ -213,8 +218,12 @@ fuzz_target!(|data: &[u8]| {
         writer.finish().unwrap();
     }
 
+    // recover(path, table_id, checksum, global_seqno, tree_id, cache, …)
+    // — table_id hoisted ahead of checksum when Level/TableId typed.
+    let table_id: lsm_tree::table::TableId = 0;
     let table = lsm_tree::Table::recover(
         file,
+        table_id,
         lsm_tree::Checksum::from_raw(0),
         0,
         0,
