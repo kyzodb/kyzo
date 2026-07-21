@@ -1,3 +1,0 @@
-# THE CUT
-
-This era's hard cuts are the job — red is green until storage seats. The functions-bag peel and the storage-model cut destinies (`docs/decisions.md` Spec, `docs/deprecated/storage-model/*.json` + validator) are deliberate max-purity surgery, not accidents. Mid-cut `cargo` red from missing mods, unre-homed importers, or severed bags is expected and healthy until the schema/store/session peels finish seating the L1–L14 constructors; do not soothe the tree by restoring condemned paths, inventing shims into deleted files, or treating whole-engine green as the cut's meter. Trust the allowlist meters and the sealed doors; finish the peels.
