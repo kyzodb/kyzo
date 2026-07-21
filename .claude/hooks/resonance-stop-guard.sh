@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Stop hook: block stopping while the resonance log is dirty or mid-run.
+# Stop hook: block stopping while the combined gate (resonance + fast lib tests)
+# is dirty or mid-run.
 set -u
 LOG="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/resonance.log"
 LOCK="$LOG.lock"
 
 if [ -d "$LOCK" ]; then
-  echo "RESONANCE GATE IS MID-RUN. Wait for crates/xtask/resonance.log to get its verdict, then stop again." >&2
+  echo "GATE IS MID-RUN. Wait for crates/xtask/resonance.log to get its verdict, then stop again." >&2
   exit 2
 fi
 
@@ -13,13 +14,22 @@ fi
 head1="$(head -n 1 "$LOG")"
 
 case "$head1" in
-  "RESONANCE: PASS"*) exit 0 ;;
-  "RESONANCE: FAIL"*)
+  "GATE: PASS"* | "RESONANCE: PASS"*) exit 0 ;;
+  "GATE: FAIL fast-tests"*)
     {
-      echo "RESONANCE GATE VIOLATION — STOP BLOCKED."
+      echo "GATE VIOLATION — STOP BLOCKED (fast lib tests are RED)."
       echo "$head1"
       echo ""
-      echo "Cut the report below the header out of crates/xtask/resonance.log, flip line 1 to \"RESONANCE: PASS\", and post that report to the development team in CLAUDE-AND-CURSOR.md right now — direct message, NO story, NO board task. Tell them: URGENT — fix this now."
+      echo "Cut the failing-test detail below the header out of crates/xtask/resonance.log, flip line 1 to \"GATE: PASS\", and post that detail to the development team in CLAUDE-AND-CURSOR.md right now — direct message, NO story, NO board task. Tell them: URGENT — a unit test is failing, fix this now."
+    } >&2
+    exit 2
+    ;;
+  "GATE: FAIL"* | "RESONANCE: FAIL"*)
+    {
+      echo "GATE VIOLATION — STOP BLOCKED (resonance gate is RED)."
+      echo "$head1"
+      echo ""
+      echo "Cut the report below the header out of crates/xtask/resonance.log, flip line 1 to \"GATE: PASS\", and post that report to the development team in CLAUDE-AND-CURSOR.md right now — direct message, NO story, NO board task. Tell them: URGENT — fix this now."
     } >&2
     exit 2
     ;;

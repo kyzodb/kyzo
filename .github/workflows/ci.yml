@@ -327,6 +327,23 @@ jobs:
 
   # ---------- No silent skips ----------
 
+  fast-tests:
+    name: Fast tests (lib, every push)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_workspace == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The fast correctness tier: kyzo-model + kyzo library unit tests in the
+      # debug profile, on EVERY push (not just main/PR). This is the light-tier
+      # counterpart to build-test's whole-workspace release run — it catches a
+      # broken unit test per-commit instead of only at PR. The genuinely-slow
+      # tiers stay heavy and main/PR-gated: kyzo-trials DST/crash campaigns are
+      # NOT in this job, and the 12 #[ignore]'d slow tests auto-skip.
+      - run: cargo test -p kyzo-model -p kyzo --lib
+
   actionlint:
     name: actionlint (workflow static lint)
     runs-on: ubuntu-latest
@@ -342,12 +359,12 @@ jobs:
   gate-summary:
     name: Gate summary (no silent skips)
     runs-on: ubuntu-latest
-    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate, release-checked-test, actionlint]
+    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate, release-checked-test, actionlint, fast-tests]
     if: always()
     steps:
       - name: Print every gate's outcome; fail if any gate failed
         run: |
-          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }} release-checked-test:${{ needs.release-checked-test.result }} actionlint:${{ needs.actionlint.result }}"
+          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }} release-checked-test:${{ needs.release-checked-test.result }} actionlint:${{ needs.actionlint.result }} fast-tests:${{ needs.fast-tests.result }}"
           echo "$summary" | tr ' ' '\n'
           echo "'skipped' = activation-gated on repo state, displayed here on purpose. Never hidden."
           case "$summary" in
