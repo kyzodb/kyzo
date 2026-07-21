@@ -855,6 +855,12 @@ fn crash_recovery_under_faults_never_tears() {
     // history read.
     let base = rows(&[&[1, 2], &[1, 3], &[2, 3]]);
     let full = rows(&[&[1, 2], &[1, 3], &[1, 4], &[2, 3], &[2, 4], &[3, 4]]);
+    // Anti-vacuity tallies (house pattern, see read-fault campaign above):
+    // `for_each_seed` re-panics on the first failing seed, so these are read
+    // only when every seed obeyed the law — and then they must prove the law
+    // was actually driven, not skipped by early returns / error arms.
+    let established = std::cell::Cell::new(0u64);
+    let checked = std::cell::Cell::new(0u64);
     for_each_seed(0..n, |seed| {
         let db = SimStorage::with_faults(seed, faults);
         // Build the durable base, retrying setup through faults; keep the
@@ -902,6 +908,7 @@ fn crash_recovery_under_faults_never_tears() {
         let Some(h) = handle else {
             return; // could not establish the base; nothing to assert
         };
+        established.set(established.get() + 1);
         // A buffer-tier edge 3->4 whose survival depends on the failure mode.
         // Its own landing is best-effort: if a fault aborts it, it simply did
         // not commit, which is one of the two legal recovered states.
@@ -926,9 +933,21 @@ fn crash_recovery_under_faults_never_tears() {
                     "seed {seed}: torn history read — post-recovery answer {ans:?} \
                      is neither the base prefix nor the full closure"
                 );
+                checked.set(checked.get() + 1);
             }
         }
     });
+    // Anti-vacuity: the campaign must actually establish bases and actually
+    // read recovered answers, or the torn-read law was never driven.
+    assert!(
+        established.get() > 0,
+        "no seed established the durable base — faults too dense, torn-read law untested"
+    );
+    assert!(
+        checked.get() > 0,
+        "no post-recovery query returned an answer — every recovery errored, \
+         torn-read assertion never exercised"
+    );
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -4139,10 +4158,29 @@ pub mod storage_campaign_lanes {
                 if aligned > 0 && aligned < len {
                     saw_aligned_control = true;
                     let aligned_torn = &payload[..aligned];
+                    // Aligned tears are the likeliest real-fjall class (512/4096
+                    // segment boundaries) — they get the same detonation the
+                    // arbitrary-offset arm gets, never a fire-and-forget parse.
                     if seed % 2 == 0 {
-                        let _ = CanonicalTranscript::parse(aligned_torn);
+                        match CanonicalTranscript::parse(aligned_torn) {
+                            Err(_) => {}
+                            Ok(parsed) => assert_ne!(
+                                parsed.as_bytes(),
+                                golden.as_slice(),
+                                "seed {seed}: aligned torn golden must not verify as intact transcript"
+                            ),
+                        }
                     } else {
-                        let _ = decode(aligned_torn);
+                        match decode(aligned_torn) {
+                            Ok(v) => {
+                                let intact = intact_decode.expect("value species");
+                                assert_ne!(
+                                    &v, intact,
+                                    "seed {seed}: aligned torn value bytes must not decode to intact List"
+                                );
+                            }
+                            Err(_) => {}
+                        }
                     }
                 }
             }
