@@ -583,6 +583,131 @@ pub enum NumDecodeError {
 mod tests {
     use super::*;
 
+    // ---- GUARDIAN ONE-LAW HUNT: independent true-numeric-order oracle ----
+    // The edge-corpus one-law test checks byte order == Num::cmp, and its
+    // "semantic" leg delegates to Num::cmp -- so nothing independently checks
+    // Num::cmp against TRUE numeric order. encode_key AND Num::cmp both derive
+    // from sign_magnitude(), so a magnitude bug at the int/float boundary or a
+    // subnormal would agree across byte-order, Num::cmp, and the semantic leg
+    // and stay green. This oracle computes the storage order from exact reals
+    // WITHOUT sign_magnitude and drives the boundary cases the corpus omits.
+    #[derive(Clone, Copy, Debug)]
+    enum HuntV {
+        I(i64),
+        F(f64),
+    }
+
+    fn hunt_num(v: HuntV) -> Num {
+        match v {
+            HuntV::I(i) => Num::int(i),
+            HuntV::F(f) => Num::float(f),
+        }
+    }
+
+    fn hunt_enc(v: HuntV) -> Vec<u8> {
+        let mut o = Vec::new();
+        hunt_num(v).encode_key(&mut o);
+        o
+    }
+
+    fn hunt_is_nan(v: HuntV) -> bool {
+        matches!(v, HuntV::F(f) if f.is_nan())
+    }
+
+    /// Exact compare i64 vs (finite or infinite, non-NaN) f64.
+    fn hunt_cmp_i_f(i: i64, f: f64) -> Ordering {
+        if f.is_infinite() {
+            return if f > 0.0 { Ordering::Less } else { Ordering::Greater };
+        }
+        if f >= 9223372036854775808.0 {
+            return Ordering::Less; // f >= 2^63 > i64::MAX
+        }
+        if f < -9223372036854775808.0 {
+            return Ordering::Greater; // f < -2^63 <= i64::MIN
+        }
+        let fl = f.floor();
+        let fli = fl as i64; // exact: fl integral, in [-2^63, 2^63)
+        match (i as i128).cmp(&(fli as i128)) {
+            Ordering::Less => Ordering::Less,
+            Ordering::Greater => Ordering::Greater,
+            Ordering::Equal => {
+                if f == fl {
+                    Ordering::Equal
+                } else {
+                    Ordering::Less // floor(f) < f, so i == floor < f
+                }
+            }
+        }
+    }
+
+    /// Independent STORAGE order: exact real order, NaN greatest and equal to
+    /// itself, ties broken Int < Float (REPR_INT < REPR_FLOAT). -0.0 == +0.0.
+    fn hunt_true_order(a: HuntV, b: HuntV) -> Ordering {
+        match (hunt_is_nan(a), hunt_is_nan(b)) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => return Ordering::Greater,
+            (false, true) => return Ordering::Less,
+            (false, false) => {}
+        }
+        let real = match (a, b) {
+            (HuntV::I(x), HuntV::I(y)) => x.cmp(&y),
+            (HuntV::F(x), HuntV::F(y)) => x.partial_cmp(&y).expect("no NaN in this arm"),
+            (HuntV::I(x), HuntV::F(y)) => hunt_cmp_i_f(x, y),
+            (HuntV::F(x), HuntV::I(y)) => hunt_cmp_i_f(y, x).reverse(),
+        };
+        if real != Ordering::Equal {
+            return real;
+        }
+        let rank = |v: HuntV| matches!(v, HuntV::F(_)) as u8;
+        rank(a).cmp(&rank(b))
+    }
+
+    #[test]
+    fn one_law_holds_at_int_float_boundary_and_ugly_floats() {
+        let corpus = [
+            HuntV::I(0),
+            HuntV::F(0.0),
+            HuntV::F(-0.0),
+            HuntV::I(1),
+            HuntV::F(1.0),
+            HuntV::I(-1),
+            HuntV::F(-1.0),
+            HuntV::I(i64::MAX),
+            HuntV::I(i64::MIN),
+            HuntV::F(9223372036854775808.0), // 2^63 == i64::MAX + 1
+            HuntV::F(9223372036854774784.0), // largest f64 strictly below 2^63
+            HuntV::F(-9223372036854775808.0), // -2^63 == i64::MIN
+            HuntV::I(9007199254740993),      // 2^53 + 1 (not f64-representable)
+            HuntV::F(9007199254740992.0),    // 2^53
+            HuntV::F(9007199254740994.0),    // 2^53 + 2
+            HuntV::F(f64::from_bits(1)),      // smallest positive subnormal
+            HuntV::F(-f64::from_bits(1)),     // smallest negative subnormal
+            HuntV::F(f64::MIN_POSITIVE),
+            HuntV::F(1e-300),
+            HuntV::F(-1e-300),
+            HuntV::F(f64::NEG_INFINITY),
+            HuntV::F(f64::INFINITY),
+            HuntV::F(f64::NAN),
+            HuntV::F(f64::MIN),
+            HuntV::F(f64::MAX),
+        ];
+        for &a in &corpus {
+            for &b in &corpus {
+                let byte = hunt_enc(a).cmp(&hunt_enc(b));
+                let truth = hunt_true_order(a, b);
+                assert_eq!(
+                    byte, truth,
+                    "ONE-LAW VIOLATION: byte order {byte:?} != true numeric order {truth:?} for {a:?} vs {b:?}"
+                );
+                assert_eq!(
+                    hunt_num(a).cmp(&hunt_num(b)),
+                    byte,
+                    "Num::cmp != byte order for {a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+
     /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
     struct Rng(u64);
 
