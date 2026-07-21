@@ -11,6 +11,9 @@
 //!
 //! ## The numeric identity law (format v1, ruled before any byte)
 //!
+//! Seats: **14a** (one law + identity-first float divergence), **98**
+//! (future Decimal/BigInt tag encoding — not this layout).
+//!
 //! The domain is `i64 ∪ f64` under **one** top-level tag, totally ordered
 //! by **exact real value**, with a representation tie-break:
 //!
@@ -21,10 +24,15 @@
 //!   *adjacent, not equal* — equal reals order `Int < Float`, uniformly,
 //!   both signs. (Unifying them would make round-trip lossy: aggregates
 //!   producing `2.0` must not come back as `2`.)
-//! - `-0.0` normalizes to `+0.0` at construction: two floats that compare
-//!   equal must be one identity, or dedup splits equal things forever.
-//! - All NaN bit patterns collapse to one canonical NaN, which is a
-//!   `Float`, equal to itself, and **greatest**: above `+∞`.
+//! - **Identity-first (law, not a defect):** `-0.0` normalizes to `+0.0`
+//!   at construction; all NaN bit patterns collapse to one canonical NaN
+//!   (`Float`, equal to itself, **greatest** — above `+∞`). Float order
+//!   authority is IEEE 754-2019 totalOrder; Kyzo’s ruled divergence from
+//!   strict totalOrder *payload fidelity* is this collapse — **prior art
+//!   matching CockroachDB/TiDB** (decisions.md seat 14a, locked again in
+//!   seat 98). Do **not** “fix” toward preserving distinct NaN payloads
+//!   or signed zero as distinct stored identities: that splits equal
+//!   things under dedup forever.
 //! - `±∞` order as the finite extremes' neighbors.
 //!
 //! Consequence: equivalence = dedup identity = code identity, and numeric
@@ -34,10 +42,13 @@
 //! - `Int(1) != Float(1.0)` is **query-layer semantics forever**, not an
 //!   encoding detail — the expression layer's oracle differentials verify
 //!   that the semantics agree across all consumers.
-//! - The v1 numeric domain is closed: exactly `i64 ∪ f64`. Decimal or
-//!   bigint, if they ever earn existence, are *new kinds* in reserved tag
-//!   space with their own identity laws — never extensions of this key,
-//!   whose byte layout is permanent.
+//! - The v1 numeric domain is **closed**: exactly `i64 ∪ f64`. This
+//!   fixed-width key is permanent. Decimal / BigInt, when they earn Tag
+//!   membership, are **new kinds** under seat 98 — SQLite4/CockroachDB
+//!   `E(exp)` + base-100 self-terminating-mantissa (ELEN §7 production
+//!   form) — **never** an extension or widen of this `Num` layout.
+//!   Named blocker until then: those Tag variants are not in the Tag
+//!   enum yet (research-open encode; do not invent a Decimal type here).
 //!
 //! ## The order-preserving key (format v1)
 //!
@@ -96,8 +107,10 @@ impl Num {
         Num(Repr::Int(v))
     }
 
-    /// Construct a float, applying the identity law: `-0.0 → +0.0`, any
-    /// NaN → the canonical NaN.
+    /// Construct a float under the identity-first law (seats 14a / 98):
+    /// `-0.0 → +0.0`, any NaN → the canonical NaN. Not payload-faithful
+    /// IEEE totalOrder — Cockroach/TiDB prior art; do not "restore" distinct
+    /// NaN payloads or signed zero.
     pub fn float(v: f64) -> Num {
         if v.is_nan() {
             return Num(Repr::Float(f64::from_bits(CANON_NAN_BITS)));
@@ -952,17 +965,19 @@ mod tests {
         }
     }
 
-    /// The identity law's pinned edges.
+    /// Identity-first pin (seats 14a / 98): NaN-collapse and `-0` normalize
+    /// are construction law matching Cockroach/TiDB — not a hole to fill
+    /// toward strict IEEE 754-2019 totalOrder payload fidelity.
     #[test]
     fn identity_law_edges() {
-        // -0.0 collapses at construction.
+        // -0.0 collapses at construction (not a distinct stored identity).
         assert_eq!(Num::float(-0.0), Num::float(0.0));
         assert_eq!(key(Num::float(-0.0)), key(Num::float(0.0)));
         assert_eq!(
             Num::float(-0.0).as_float().unwrap().to_bits(),
             0.0f64.to_bits()
         );
-        // All NaNs are one NaN, equal to itself, greatest.
+        // All NaN payloads are one canonical NaN, equal to itself, greatest.
         let weird_nan = f64::from_bits(0xFFF8_DEAD_BEEF_0001);
         assert_eq!(Num::float(weird_nan), Num::float(f64::NAN));
         assert_eq!(key(Num::float(weird_nan)), key(Num::float(f64::NAN)));
