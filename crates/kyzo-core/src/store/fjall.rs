@@ -1014,7 +1014,7 @@ mod pins {
         AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
     };
 
-    use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
+    use crate::store::fjall::new_fjall_storage;
     use crate::store::time::ClaimPolarity;
     use crate::store::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 
@@ -1292,12 +1292,47 @@ mod pins {
 
     #[test]
     fn format_version_rejects_noncanonical_and_v4_boundary() {
+        // Parse law: non-canonical spelling refuses; older stamps parse so the
+        // reopen guard can NAME them in the mismatch Err.
         assert!(FormatVersion::parse(b"6").is_ok());
         assert!(FormatVersion::parse(b"06").is_err());
-        assert!(FormatVersion::parse(b"4").is_ok()); // older stamps parse so mismatch can NAME them
-        let _opts = StorageOptions::default();
-        let _ctor =
-            |path: &std::path::Path, opts: StorageOptions| new_fjall_storage_with(path, opts);
-        let _ = (_opts, _ctor);
+        let older =
+            FormatVersion::parse(b"4").expect("older stamps parse so mismatch can NAME them");
+        assert_ne!(older, FormatVersion::CURRENT);
+
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = new_fjall_storage(dir.path()).expect("create store stamps CURRENT");
+            drop(db);
+        }
+
+        // Adversary: rewrite the meta stamp to an older-but-parseable version.
+        {
+            use fjall::{KeyspaceCreateOptions, OptimisticTxDatabase, PersistMode};
+            let raw = OptimisticTxDatabase::builder(dir.path())
+                .open()
+                .expect("raw reopen of created store");
+            let meta = raw
+                .keyspace(super::META_KEYSPACE_NAME, KeyspaceCreateOptions::default)
+                .expect("open meta keyspace");
+            meta.insert(super::FORMAT_VERSION_KEY, older.as_bytes())
+                .expect("stamp older format version");
+            raw.persist(PersistMode::SyncAll)
+                .expect("persist older stamp before production reopen");
+        }
+
+        let err = match new_fjall_storage(dir.path()) {
+            Err(e) => e,
+            Ok(_) => panic!("production open must refuse older-but-parseable stamp"),
+        };
+        let msg = format!("{err:#}");
+        let found = older.to_string();
+        let expected = FormatVersion::CURRENT.to_string();
+        assert!(
+            msg.contains("on-disk format version mismatch")
+                && msg.contains(&found)
+                && msg.contains(&expected),
+            "mismatch Err must name both versions (store={found}, build={expected}), got: {msg}"
+        );
     }
 }
