@@ -626,6 +626,46 @@ mod pins {
     use crate::store::open::StoreId;
     use crate::store::transcript::{CanonicalTranscriptBuilder, FieldId, SealedArtifactKind};
 
+    /// GUARDIAN RED GATE (#376 T2) -- the Gcm arm (ChaCha20-Poly1305) is NOT key-committing.
+    /// Empirically constructed (invisible-salamanders / Partitioning Oracle Attacks): ONE
+    /// (ciphertext || tag) that `open_arm(Gcm, ..)` accepts under TWO distinct keys, using
+    /// our exact `wrap_aad` framing. The collision block was solved over GF(2^130-5) so both
+    /// keys' Poly1305 tags coincide; the pinned `chacha20poly1305` crate then authenticates
+    /// it under both. A committing AEAD binds a ciphertext to exactly one key -- ours does
+    /// not, so a hostile party can present one shredded/multi-tenant record as decrypting to
+    /// two different plaintexts under two keys. RED until a key-commitment transform lands.
+    #[test]
+    fn gcm_arm_is_not_key_committing() {
+        let k1 = [0x11u8; 32];
+        let k2 = [0x22u8; 32];
+        let nonce = [0x24u8; 12];
+        // production wrap_aad framing: "WSS1" || store_id || epoch_be || segment_be.
+        let mut aad = Vec::new();
+        aad.extend_from_slice(b"WSS1");
+        aad.extend_from_slice(&[0x5au8; 32]);
+        aad.extend_from_slice(&1u64.to_be_bytes());
+        aad.extend_from_slice(&1u64.to_be_bytes());
+        // crafted collision: ciphertext (32B) || Poly1305 tag (16B).
+        let ct: [u8; 32] = [
+            0xba, 0x07, 0x9a, 0x1e, 0x2a, 0xc2, 0x5c, 0x23, 0xfd, 0xaf, 0x16, 0xf3, 0xa6, 0x29,
+            0x71, 0x7d, 0x01, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        let tag: [u8; 16] = [
+            0xed, 0x37, 0x20, 0x04, 0x6f, 0xe1, 0x63, 0xe8, 0xfb, 0xc6, 0x50, 0x60, 0x44, 0x21,
+            0xab, 0x77,
+        ];
+        let mut msg = ct.to_vec();
+        msg.extend_from_slice(&tag);
+        let o1 = open_arm(AeadArm::Gcm, &k1, &nonce, &aad, &msg);
+        let o2 = open_arm(AeadArm::Gcm, &k2, &nonce, &aad, &msg);
+        assert!(
+            !(o1.is_ok() && o2.is_ok()),
+            "AEAD NOT KEY-COMMITTING: one ciphertext+tag opens under two distinct keys \
+             (invisible-salamanders / Partitioning Oracle) -- add a key-commitment transform"
+        );
+    }
+
     fn test_domain() -> CryptoDomain {
         let store = StoreId::from_digest([0xAB; 32]);
         CryptoDomain::new(store, FenceEpoch::genesis(store))
