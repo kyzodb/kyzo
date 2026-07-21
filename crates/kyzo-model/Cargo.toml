@@ -10,6 +10,11 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "KyzoDB shared vocabulary: DataValue, program atoms, envelopes, validity coerce"
+documentation = "https://docs.rs/kyzo-model"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 miette = { version = "7", features = ["fancy"] }

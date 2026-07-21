@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo_k.png" width="160" alt="KyzoDB logo">
+  <img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/logo_k.png" width="160" alt="KyzoDB logo">
 </p>
 
 <h1 align="center">KyzoDB</h1>
@@ -33,7 +33,7 @@ chmod +x kyzo
 
 Thirty seconds later you have a REPL. A join is shared variables — not `JOIN`:
 
-<p align="center"><img src="docs/assets/repl_first_touch.svg" width="860" alt="KyzoDB REPL: create cites and runbook, join them, get rows."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_first_touch.svg" width="860" alt="KyzoDB REPL: create cites and runbook, join them, get rows."></p>
 
 Or skip the typing and run the ops-world demo that seeds incidents, privilege edges, HNSW, claims,
 and coverage, then asks the knowing question:
@@ -45,13 +45,13 @@ and coverage, then asks the knowing question:
 
 Embed like SQLite — no server; a database is a file handle:
 
-<p align="center"><img src="docs/assets/embed.svg" width="860" alt="Rust: Db::new + new_fjall_storage + run_script."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/embed.svg" width="860" alt="Rust: Db::new + new_fjall_storage + run_script."></p>
 
 Other targets: `cargo build -p kyzo-bin --release`.
 
 ## Why the usual stack fails
 
-<p align="center"><img src="docs/assets/collapse.svg" width="820" alt="Five stores drift; KyzoDB collapses them to one language, one transaction."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/collapse.svg" width="820" alt="Five stores drift; KyzoDB collapses them to one language, one transaction."></p>
 
 Keeping facts, vectors, graph, text, and history in sync is the second product nobody asked for.
 KyzoDB collapses them to **one query, one transaction, one snapshot**.
@@ -62,7 +62,7 @@ Vector DBs don’t join. Graph DBs don’t mean. Audit logs don’t query.
 KyzoScript (Datalog) treats search hits as relations — so similarity, recursion, negation, and
 privilege closure compose in **one program**.
 
-<p align="center"><img src="docs/assets/repl_knowing.svg" width="860" alt="Near live prod unclaimed incidents with runbooks while attacker reach includes db-customers."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_knowing.svg" width="860" alt="Near live prod unclaimed incidents with runbooks while attacker reach includes db-customers."></p>
 
 Near this alert · live · prod · has a runbook · **no claim yet** · and the attacker can still reach
 `db-customers`. That is retrieval as *knowing*, not a fan-out pipeline.
@@ -76,32 +76,32 @@ Correct the record; as-of the incident date still returns what was believed then
 change-log archaeology project. Same ops memory: customer `C-77` was `trial` when the incident
 fired, `enterprise` after the correction:
 
-<p align="center"><img src="docs/assets/repl_timetravel.svg" width="860" alt="As-of reads: coverage trial on the incident date, enterprise today."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_timetravel.svg" width="860" alt="As-of reads: coverage trial on the incident date, enterprise today."></p>
 
 ## Filtered search that cannot come back empty
 
 Anyone who has run a vector database knows the failure: fill `k`, then filter, watch the set go empty
 at low selectivity. Here the filter is inside the search; `k` counts matches:
 
-<p align="center"><img src="docs/assets/repl_filtered_contrast.svg" width="860" alt="Naive post-filter ANN empty; KyzoDB filtered HNSW returns min(k, matches)."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_filtered_contrast.svg" width="860" alt="Naive post-filter ANN empty; KyzoDB filtered HNSW returns min(k, matches)."></p>
 
 ## The engine keeps its word
 
 Ask it to prove a recursive answer against its own oracle — or hit a budget and get a typed refusal.
 Same facts and budget also produce **byte-identical** answers across thread counts:
 
-<p align="center"><img src="docs/assets/repl_verify.svg" width="860" alt="::verify returns match when engine and reference oracle agree."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_verify.svg" width="860" alt="::verify returns match when engine and reference oracle agree."></p>
 
-<p align="center"><img src="docs/assets/repl_refusal.svg" width="860" alt="Typed budget refusal: eval::limit_exceeded."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_refusal.svg" width="860" alt="Typed budget refusal: eval::limit_exceeded."></p>
 
-<p align="center"><img src="docs/assets/repl_determinism.svg" width="860" alt="Same reach query row hash under 1 and 32 Rayon threads."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_determinism.svg" width="860" alt="Same reach query row hash under 1 and 32 Rayon threads."></p>
 
 ## Why you can believe that
 
 KyzoDB ships **its own adversary**: a deliberately naive reference oracle that speaks the whole
 language. Generated workloads are answered twice; the answers must match.
 
-<p align="center"><img src="docs/assets/oracle.svg" width="760" alt="Optimized engine and naive oracle must agree on every generated program."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/oracle.svg" width="760" alt="Optimized engine and naive oracle must agree on every generated program."></p>
 
 - **Oracle** — stratified Datalog semantics as an executable, slow, obviously-correct evaluator.
 - **`::verify`** — user surface: match, budgeted refusal, or a reproducible mismatch bundle.
@@ -114,11 +114,11 @@ language. Generated workloads are answered twice; the answers must match.
 When an agent must not get it wrong, a derived fact names the premises that entailed it — re-checked
 by an independent checker that imports nothing from the evaluator:
 
-<p align="center"><img src="docs/assets/repl_provenance.svg" width="860" alt="Provenance proof: must_clear derived from ground facts, checker Ok."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/repl_provenance.svg" width="860" alt="Provenance proof: must_clear derived from ground facts, checker Ok."></p>
 
 ## Architecture
 
-<p align="center"><img src="docs/assets/architecture.svg" width="560" alt="KyzoScript → relational algebra → relational/graph/HNSW/FTS/as-of → memcomparable → fjall."></p>
+<p align="center"><img src="https://raw.githubusercontent.com/kyzodb/kyzo/main/docs/assets/architecture.svg" width="560" alt="KyzoScript → relational algebra → relational/graph/HNSW/FTS/as-of → memcomparable → fjall."></p>
 
 KyzoScript compiles to relational algebra and evaluates with semi-naive, stratified, magic-set
 Datalog. Storage is [`fjall`](https://github.com/fjall-rs/fjall) behind a memcomparable encoding —

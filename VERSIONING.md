@@ -44,7 +44,7 @@ is the mistake this section exists to prevent.
 | Axis | Where it lives | What it promises | Who bumps it |
 |---|---|---|---|
 | **Crate SemVer** | `Cargo.toml` `version` (workspace-inherited) | API/behavior compatibility per the rules above | Every release, per the changes it carries |
-| **FormatVersion** | `kyzo_core::FormatVersion` (`crates/kyzo-core/src/storage/mod.rs`), an integer stamped into every store at creation | On-disk byte-layout compatibility — a store written at one FormatVersion either opens at that exact version or is refused, never silently misread | Only when the on-disk encoding changes; independent of the SemVer bump size |
+| **FormatVersion** | `kyzo_core::FormatVersion` (`crates/kyzo-core/src/store/contract.rs`), an integer stamped into every store at creation | On-disk byte-layout compatibility — a store written at one FormatVersion either opens at that exact version or is refused, never silently misread | Only when the on-disk encoding changes; independent of the SemVer bump size |
 | **MSRV** | `rust-version` in the workspace `Cargo.toml` (currently **1.93**) | The minimum Rust toolchain that can build this crate | Raised deliberately, stated in the release that raises it |
 
 A release's notes always state all three explicitly (template in [RELEASING.md](RELEASING.md)),

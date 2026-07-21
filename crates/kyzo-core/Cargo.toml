@@ -10,6 +10,11 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "KyzoDB storage engine core: a pure-Rust fork of CozoDB"
+documentation = "https://docs.rs/kyzo"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 kyzo-model = { path = "../kyzo-model", version = "0.8.2" }
