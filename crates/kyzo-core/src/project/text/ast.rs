@@ -144,7 +144,15 @@ mod tests {
         let stop = analyzer("Simple", &[("Stopwords", vec![DataValue::from("en")])]);
         let e = FtsExpr::and(vec![lit("the"), lit("crafty fox")]).tokenize(&stop);
         match &e {
-            FtsExpr::And(v) => assert_eq!(v.len(), 2, "'the' must vanish: {v:?}"),
+            FtsExpr::And(v) => {
+                // Content pin: "the" vanishes; "crafty fox" survives as two
+                // literals — length alone would green on ["x","y"].
+                assert_eq!(
+                    v.as_slice(),
+                    &[lit("crafty"), lit("fox")],
+                    "stopword must drop 'the' and keep crafty/fox: {v:?}"
+                );
+            }
             other @ FtsExpr::Literal(_)
             | other @ FtsExpr::Near(_)
             | other @ FtsExpr::Or(_)

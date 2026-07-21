@@ -1256,6 +1256,68 @@ mod tests {
         assert_eq!(hits.len(), 1);
     }
 
+    /// One-law surface: CJK / multi-byte text indexed under Cangjie must be
+    /// prefix-searchable. Offsets written into postings are UTF-8 byte
+    /// ranges that reconstruct the term — a wrong Cangjie offset stream
+    /// would index garbage and miss the prefix hit.
+    #[test]
+    fn cjk_multibyte_index_and_prefix_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let meta = base_meta();
+        // ForSearch: jieba-rs keeps 南京长江大桥 as one Default dict entry;
+        // search mode emits 南京/长江/大桥 (+ whole) so prefix is meaningful.
+        let a = TokenizerConfig::admit("Cangjie", vec![DataValue::from("search")])
+            .unwrap()
+            .build(&[])
+            .unwrap();
+        let ex = extractor();
+        let mut tx = db.write_tx().unwrap();
+        let base = create_relation(
+            &mut tx,
+            input_handle("docs", meta.clone()),
+            KeyspaceKind::Facts,
+        )
+        .unwrap();
+        let idx = create_relation(
+            &mut tx,
+            input_handle("docs:fts", fts_index_metadata(&meta)),
+            KeyspaceKind::AlgorithmState,
+        )
+        .unwrap();
+        let rows = [(1i64, "南京长江大桥"), (2i64, "北京天安门")];
+        for (k, text) in rows {
+            let row = vec![DataValue::from(k), DataValue::from(text)];
+            base.put_fact(
+                &mut tx,
+                &row,
+                kyzo_model::value::ValidityTs::from_raw(0),
+                SourceSpan(0, 0),
+            )
+            .unwrap();
+            fts_put(&mut tx, &row, &ex, &a, &base, &idx).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let f = Fixture {
+            base,
+            idx,
+            analyzer: a,
+            extractor: ex,
+        };
+        // Exact multi-byte term.
+        let hit = run(&db, &f, "南京", params(10, FtsScoreKind::Tf));
+        assert_eq!(hit.len(), 1, "exact CJK term: {hit:?}");
+        assert_eq!(hit[0].0, 1);
+        // Prefix over a multi-byte term: 南* matches 南京, not 北京.
+        let pref = run(&db, &f, "南*", params(10, FtsScoreKind::Tf));
+        assert_eq!(pref.len(), 1, "CJK prefix: {pref:?}");
+        assert_eq!(pref[0].0, 1);
+        let other = run(&db, &f, "北京", params(10, FtsScoreKind::Tf));
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].0, 2);
+    }
+
     /// `k == 0` must bound the filtered path exactly like the unfiltered
     /// one: zero rows. The loop used to check `ret.len() >= k` AFTER
     /// pushing a candidate, so a filter-present search with k=0 returned

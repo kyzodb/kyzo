@@ -130,19 +130,26 @@ impl<'a> SplitCompoundWordsTokenStream<'a> {
             // Fill `self.parts` in reverse order,
             // so that `self.parts.pop()` yields
             // the tokens in their original order.
-            for pos in self.cuts.iter().rev() {
-                let (head, tail) = text.split_at(*pos);
-
+            //
+            // KYZO DEVIATION: each part gets byte offsets inside the parent
+            // token (parent.from + cut .. + part.len). The vendored code
+            // copied the full parent range onto every part — wrong for
+            // highlighting and for multi-byte (umlaut) compounds.
+            let parent_from = token.offset_from();
+            for &cut in self.cuts.iter().rev() {
+                let (head, tail) = text.split_at(cut);
+                let part_from = parent_from + cut;
+                let part_to = part_from + tail.len();
                 text = head;
                 self.parts.push(
                     Token::new(
-                        token.offset_from(),
-                        token.offset_to(),
+                        part_from,
+                        part_to,
                         token.position,
                         tail.to_owned(),
                         token.position_length,
                     )
-                    .expect("parent token offsets already proven"),
+                    .expect("part offsets derived from proven parent + cut"),
                 );
             }
         }
@@ -181,7 +188,31 @@ impl<'a> TokenStream for SplitCompoundWordsTokenStream<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer};
+    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer, TokenStream, Tokenizer};
+
+    /// Umlaut compounds: cuts are UTF-8 byte offsets, and each part's
+    /// `offset_from`/`offset_to` reconstruct that part from the source.
+    #[test]
+    fn split_compound_umlaut_byte_offsets_round_trip() {
+        // "über" is 5 bytes (ü = C3 BC); "fahrt" is 5 ASCII bytes.
+        let text = "überfahrt";
+        assert_eq!("über".len(), 5);
+        let tokenizer = TextAnalyzer::from(SimpleTokenizer).filter(
+            SplitCompoundWords::from_dictionary(["über", "fahrt"]).unwrap(),
+        );
+        let mut stream = tokenizer.token_stream(text);
+        let first = stream.next().expect("über");
+        assert_eq!(first.text, "über");
+        assert_eq!(first.offset_from(), 0);
+        assert_eq!(first.offset_to(), 5);
+        assert_eq!(&text[first.offset_from()..first.offset_to()], "über");
+        let second = stream.next().expect("fahrt");
+        assert_eq!(second.text, "fahrt");
+        assert_eq!(second.offset_from(), 5);
+        assert_eq!(second.offset_to(), 10);
+        assert_eq!(&text[second.offset_from()..second.offset_to()], "fahrt");
+        assert!(stream.next().is_none());
+    }
 
     #[test]
     fn splitting_compound_words_works() {

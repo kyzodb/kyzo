@@ -42,8 +42,10 @@ impl RemoveLongFilter {
 }
 
 impl<'a> RemoveLongFilterStream<'a> {
+    /// Keep tokens whose UTF-8 byte length is at most the limit ("longer than"
+    /// is removed; exact-boundary length == limit is kept).
     fn predicate(&self, token: &Token) -> bool {
-        token.text.len() < self.token_length_limit
+        token.text.len() <= self.token_length_limit
     }
 }
 
@@ -87,14 +89,24 @@ mod tests {
 
     #[test]
     fn test_remove_long() {
-        let tokens = token_stream_helper("hello tantivy, happy searching!");
+        let tokens = token_stream_helper("hello tantivy, happy searching!", 6);
         assert_eq!(tokens.len(), 2);
         assert_token(&tokens[0], 0, "hello", 0, 5);
         assert_token(&tokens[1], 2, "happy", 15, 20);
     }
 
-    fn token_stream_helper(text: &str) -> Vec<Token> {
-        let a = TextAnalyzer::from(SimpleTokenizer).filter(RemoveLongFilter::limit(6));
+    /// Exact-boundary pin: length == limit is kept ("longer than", not
+    /// "longer than or equal"). Six ASCII letters survive limit 6; seven die.
+    #[test]
+    fn remove_long_keeps_exact_boundary_token() {
+        let tokens = token_stream_helper("abcdef abcdefg", 6);
+        assert_eq!(tokens.len(), 1, "exact-6 kept, 7 dropped: {tokens:?}");
+        assert_eq!(tokens[0].text, "abcdef");
+        assert_eq!(tokens[0].text.len(), 6);
+    }
+
+    fn token_stream_helper(text: &str, limit: usize) -> Vec<Token> {
+        let a = TextAnalyzer::from(SimpleTokenizer).filter(RemoveLongFilter::limit(limit));
         let mut token_stream = a.token_stream(text);
         let mut tokens: Vec<Token> = vec![];
         let mut add_token = |token: &Token| {

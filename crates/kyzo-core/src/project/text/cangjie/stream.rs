@@ -10,21 +10,62 @@
 
 use crate::project::text::tokenizer::Token;
 
+/// One jieba cut with byte offsets proven against the source string.
+#[derive(Debug)]
+struct CangjieToken<'a> {
+    word: &'a str,
+    byte_start: usize,
+    byte_end: usize,
+}
+
+impl<'a> CangjieToken<'a> {
+    fn new(word: &'a str, byte_start: usize, byte_end: usize) -> Self {
+        CangjieToken {
+            word,
+            byte_start,
+            byte_end,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CangjieTokenStream<'a> {
-    result: Vec<&'a str>,
-    // Begin with 1
+    result: Vec<CangjieToken<'a>>,
     index: usize,
-    offset_from: usize,
     token: Token,
 }
 
 impl<'a> CangjieTokenStream<'a> {
-    pub(crate) fn new(result: Vec<&'a str>) -> Self {
+    /// Create a token stream from slices borrowed from `src`.
+    ///
+    /// Every item in `result` must be a subslice of `src` so byte offsets can
+    /// be derived from the slice addresses. Sequential length-accumulation
+    /// (the vendored All/ForSearch bug) is refused: overlapping cuts would
+    /// walk past `src.len()` and make `text[from..to]` reconstruct the wrong
+    /// token — silent wrong answers on the one-law surface.
+    ///
+    /// KYZO DEVIATION: matches upstream cang-jie `new(src, result)` (slice
+    /// address offsets). Position length is always 1 (upstream); the old
+    /// vendored stream used `result.len()` for every token.
+    pub(crate) fn new(src: &'a str, result: Vec<&'a str>) -> Self {
+        let base = src.as_ptr() as usize;
+        let end = base + src.len();
+        let result = result
+            .into_iter()
+            .map(|word| {
+                let word_start = word.as_ptr() as usize;
+                let word_end = word_start + word.len();
+                assert!(
+                    base <= word_start && word_end <= end,
+                    "token slice must be borrowed from src"
+                );
+                let byte_start = word_start - base;
+                CangjieToken::new(word, byte_start, byte_start + word.len())
+            })
+            .collect();
         CangjieTokenStream {
             result,
             index: 0,
-            offset_from: 0,
             token: Token::default(),
         }
     }
@@ -33,20 +74,18 @@ impl<'a> CangjieTokenStream<'a> {
 impl<'a> crate::project::text::tokenizer::TokenStream for CangjieTokenStream<'a> {
     fn advance(&mut self) -> bool {
         if self.index < self.result.len() {
-            let current_word = self.result[self.index];
-            let offset_to = self.offset_from + current_word.len();
+            let current = &self.result[self.index];
 
             self.token = Token::new(
-                self.offset_from,
-                offset_to,
+                current.byte_start,
+                current.byte_end,
                 self.index,
-                current_word.to_string(),
-                self.result.len(),
+                current.word.to_string(),
+                1,
             )
-            .expect("offset_to is offset_from + word len");
+            .expect("byte_end is byte_start + word len");
 
             self.index += 1;
-            self.offset_from = offset_to;
             true
         } else {
             false

@@ -133,3 +133,42 @@ impl<'a> TokenStream for StemmerTokenStream<'a> {
         self.tail.token_mut()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer, TokenStream, Tokenizer};
+
+    fn stem_one(lang: Language, word: &str) -> String {
+        let an = TextAnalyzer::from(SimpleTokenizer).filter(Stemmer::new(lang));
+        let mut stream = an.token_stream(word);
+        let text = stream
+            .next()
+            .unwrap_or_else(|| panic!("expected a token for {word:?}"))
+            .text
+            .clone();
+        assert!(stream.next().is_none(), "single-word input");
+        text
+    }
+
+    /// Per-language content pins — snowball stems, not length theater.
+    #[test]
+    fn stemmer_per_language_pairs() {
+        assert_eq!(stem_one(Language::English, "running"), "run");
+        assert_eq!(stem_one(Language::English, "dogs"), "dog");
+        assert_eq!(stem_one(Language::German, "häuser"), "haus");
+        assert_eq!(stem_one(Language::French, "chevaux"), "cheval");
+        assert_eq!(stem_one(Language::Spanish, "caminando"), "camin");
+        assert_eq!(stem_one(Language::Italian, "parlando"), "parl");
+        assert_eq!(stem_one(Language::Portuguese, "falando"), "fal");
+        assert_eq!(stem_one(Language::Dutch, "huizen"), "huiz");
+        assert_eq!(stem_one(Language::Swedish, "hoppar"), "hopp");
+        assert_eq!(stem_one(Language::Russian, "бегает"), "бега");
+        assert_eq!(stem_one(Language::Danish, "løber"), "løb");
+        assert_eq!(stem_one(Language::Finnish, "talossa"), "talo");
+        assert_eq!(stem_one(Language::Norwegian, "hopper"), "hopp");
+        assert_eq!(stem_one(Language::Romanian, "vorbind"), "vorb");
+        assert_eq!(stem_one(Language::Greek, "τρέχει"), "τρεχ");
+        assert_eq!(stem_one(Language::Hungarian, "házak"), "ház");
+    }
+}

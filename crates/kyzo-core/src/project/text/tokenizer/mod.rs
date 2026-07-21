@@ -299,11 +299,11 @@ pub(crate) mod tests {
             let mut n = 0usize;
             while let Some(tok) = stream.next() {
                 // Touch the token: its text is `String`, so being here at
-                // all proves valid UTF-8. Offsets are not asserted because
-                // the Cangjie stream's are wrong for overlapping cuts
-                // (vendored behavior), and AsciiFolding may legitimately
-                // grow text beyond the input (single codepoints fold to
-                // multi-char ASCII).
+                // all proves valid UTF-8. Offsets are not asserted against
+                // the input here: AsciiFolding may legitimately grow text
+                // beyond the input (single codepoints fold to multi-char
+                // ASCII). Cangjie offsets are pinned in cangjie::tokenizer
+                // tests (slice-address round-trip, including All overlaps).
                 let _walked = tok.text.chars().count();
                 n += 1;
             }

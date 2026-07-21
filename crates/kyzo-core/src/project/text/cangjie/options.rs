@@ -9,7 +9,7 @@
  */
 
 /// Tokenizer Option
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TokenizerOption {
     /// Cut the input text, return all possible words
     All,
