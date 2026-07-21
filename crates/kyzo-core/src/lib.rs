@@ -312,8 +312,9 @@ pub(crate) mod store;
 pub use data::json::JsonData;
 pub use data::json::format_error_as_json;
 pub use kyzo_model::value::{
-    Arity, AsOf, DataValue, Num, RegexSource, RelationId, StorageKey, Tuple, TupleKey, TupleT,
-    UuidWrapper, Validity, ValiditySlot, ValidityTs, Vector, decode_tuple_from_key,
+    Arity, AsOf, DataValue, NonFiniteJsonNumber, Num, RegexSource, RelationId, StorageKey, Tuple,
+    TupleKey, TupleT, UuidWrapper, Validity, ValiditySlot, ValidityTs, Vector,
+    decode_tuple_from_key,
 };
 pub use store::backup::{
     IncompleteRestore, admit_complete_store, dump_storage, open_complete_store,

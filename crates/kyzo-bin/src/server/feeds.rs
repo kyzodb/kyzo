@@ -34,8 +34,8 @@ use serde_json::{Value as JsonValue, json};
 use tokio::task::spawn_blocking;
 
 use kyzo::{
-    CallbackId, DataValue, Engine, FjallStorage, NamedRows, SignedFact, StandingQuery, Storage,
-    Tuple,
+    CallbackId, DataValue, Engine, FjallStorage, NamedRows, NonFiniteJsonNumber, SignedFact,
+    StandingQuery, Storage, Tuple,
 };
 
 use super::DbState;
@@ -74,10 +74,17 @@ pub(super) async fn observe_changes(
         info!("starting changes SSE {}: {}", relation, id.get());
         let _guard = Guard {id, db: st.db, relation};
         while let Some(event) = receiver.recv().await {
+            let (Ok(new_rows), Ok(old_rows)) = (
+                NamedRows::into_json(event.new_rows),
+                NamedRows::into_json(event.old_rows),
+            ) else {
+                error!("changes SSE: non-finite Num cannot encode as JSON; ending stream");
+                break;
+            };
             let item = json!({
                 "op": event.op.to_string(),
-                "new_rows": NamedRows::into_json(event.new_rows),
-                "old_rows": NamedRows::into_json(event.old_rows),
+                "new_rows": new_rows,
+                "old_rows": old_rows,
             });
             match Event::default().json_data(item) {
                 Ok(event) => yield Ok(event),
@@ -130,14 +137,17 @@ fn parse_params(raw: &str) -> Result<BTreeMap<String, DataValue>, String> {
     }
 }
 
-fn tuple_json(row: &Tuple) -> JsonValue {
-    JsonValue::Array(row.iter().map(JsonValue::from).collect())
+fn tuple_json(row: &Tuple) -> Result<JsonValue, NonFiniteJsonNumber> {
+    row.iter()
+        .map(JsonValue::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map(JsonValue::Array)
 }
 
-fn signed_fact_json(fact: &SignedFact) -> JsonValue {
+fn signed_fact_json(fact: &SignedFact) -> Result<JsonValue, NonFiniteJsonNumber> {
     match fact {
-        SignedFact::Plus(row) => json!({"op": "assert", "row": tuple_json(row)}),
-        SignedFact::Minus(row) => json!({"op": "retract", "row": tuple_json(row)}),
+        SignedFact::Plus(row) => Ok(json!({"op": "assert", "row": tuple_json(row)?})),
+        SignedFact::Minus(row) => Ok(json!({"op": "retract", "row": tuple_json(row)?})),
     }
 }
 
@@ -187,7 +197,15 @@ pub(super) async fn observe_standing(
         }
     };
 
-    let initial: Vec<JsonValue> = sq.current_answer().iter().map(tuple_json).collect();
+    let initial = match sq
+        .current_answer()
+        .iter()
+        .map(tuple_json)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(rows) => rows,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, err.to_string()),
+    };
     let log_query = q.query.clone();
 
     let stream = async_stream::stream! {
@@ -240,7 +258,15 @@ pub(super) async fn observe_standing(
             if delta.is_empty() {
                 continue;
             }
-            let changes: Vec<JsonValue> = delta.iter().map(signed_fact_json).collect();
+            let changes = match delta.iter().map(signed_fact_json).collect::<Result<Vec<_>, _>>() {
+                Ok(c) => c,
+                Err(err) => {
+                    error!(
+                        "standing SSE: non-finite Num cannot encode as JSON, ending stream: {err}"
+                    );
+                    break;
+                }
+            };
             match Event::default().json_data(json!({"type": "delta", "changes": changes})) {
                 Ok(event) => yield Ok(event),
                 Err(err) => {

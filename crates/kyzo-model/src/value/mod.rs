@@ -80,7 +80,7 @@ pub use tag::Tag;
 // Kind faces seated at model/value/kind (wide/ cut). Re-export until data/
 // dissolves — no second copy under data/value.
 pub use crate::value::kind::interval::{Bound, Interval};
-pub use crate::value::kind::json::{Json, JsonNum, JsonObj};
+pub use crate::value::kind::json::{Json, JsonNum, JsonObj, NonFiniteJsonNumber};
 pub use crate::value::kind::regex::{CompiledRegexV1, RegexFlags, RegexSource};
 pub use crate::value::kind::validity::{
     AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValiditySeekBound,

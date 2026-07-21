@@ -16,7 +16,7 @@ use serde_json::json;
 use std::sync::LazyLock;
 use thiserror::Error;
 
-use kyzo_model::value::{DataValue, Tuple};
+use kyzo_model::value::{DataValue, NonFiniteJsonNumber, Tuple};
 
 #[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub use kyzo_model::envelope::json::{
@@ -157,21 +157,29 @@ impl NamedRows {
     /// Render as the envelope every binding's success path returns:
     /// `{"headers": [...], "rows": [[...], ...], "next": null | <nested
     /// envelope>}`.
-    pub fn into_json(self) -> JsonValue {
+    ///
+    /// Refuses when any cell is a non-finite [`DataValue::Num`] (or a nested
+    /// value that cannot encode honestly as JSON) — never Null/Str-remaps.
+    pub fn into_json(self) -> Result<JsonValue, NonFiniteJsonNumber> {
         let (headers, rows, next) = self.into_parts();
         let next = match next {
             None => JsonValue::Null,
-            Some(more) => more.into_json(),
+            Some(more) => more.into_json()?,
         };
         let rows: Vec<JsonValue> = rows
             .into_iter()
-            .map(|row| JsonValue::Array(row.into_iter().map(JsonValue::from).collect()))
-            .collect();
-        json!({
+            .map(|row| {
+                row.into_iter()
+                    .map(JsonValue::try_from)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(JsonValue::Array)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({
             "headers": headers,
             "rows": rows,
             "next": next,
-        })
+        }))
     }
 
     /// Encode this page as a self-contained Arrow IPC stream via

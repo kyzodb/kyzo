@@ -39,13 +39,15 @@ fn save_to_file(out: &NamedRows, path: &str) -> Result<()> {
     let records: Vec<Value> = out
         .rows()
         .iter()
-        .map(|row| -> Value {
+        .map(|row| {
             row.iter()
                 .zip(out.headers().iter())
-                .map(|(v, k)| (k.to_string(), Value::from(v)))
-                .collect()
+                .map(|(v, k)| Value::try_from(v).map(|j| (k.to_string(), j)))
+                .collect::<Result<serde_json::Map<_, _>, _>>()
+                .map(Value::Object)
         })
-        .collect();
+        .collect::<Result<_, _>>()
+        .into_diagnostic()?;
     let mut file = File::create(path).into_diagnostic()?;
     file.write_all(Value::Array(records).to_string().as_bytes())
         .into_diagnostic()

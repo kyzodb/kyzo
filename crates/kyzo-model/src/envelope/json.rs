@@ -4,8 +4,17 @@
  */
 
 //! JSON wire conversions for [`DataValue`]: serde bridge, plane Json, and
-//! total From mappings. NamedRows envelopes and diagnostic envelopes live
+//! ordered lifts. NamedRows envelopes and diagnostic envelopes live
 //! in `kyzo` (`data::json`) because they need session/fixed-rule types.
+//!
+//! # Float-edge round-trip law
+//!
+//! Standard JSON cannot carry NaN/±Inf as a number without a nonstandard
+//! dialect. Silently remapping `DataValue::Num` → `Null` / `Str` on encode
+//! (or inventing `Num` from those on decode) changes value kind — Spec fraud.
+//! Finite `Num` encodes as JSON number and round-trips as `Num`. Non-finite
+//! `Num` encode refuses with [`NonFiniteJsonNumber`]. Decode never lifts
+//! `Null` or `Str` into `Num`.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -14,9 +23,7 @@ pub use serde_json::Value as JsonValue;
 use serde_json::json;
 
 use crate::value::kind::interval::{Hi, Lo};
-use crate::value::{
-    DataValue, DecodeError, Json, JsonNum, JsonObj, Num, RelationId, decode, encode_owned,
-};
+use crate::value::{DataValue, Json, JsonNum, JsonObj, NonFiniteJsonNumber, Num};
 
 /// The serde bridge value: engine-side JSON carried as `serde_json`
 /// until it crosses into the value plane's identity-lawful [`Json`].
@@ -160,6 +167,9 @@ impl From<JsonValue> for DataValue {
             JsonValue::Number(n) => match n.as_i64() {
                 Some(i) => DataValue::from(i),
                 None => match n.as_f64() {
+                    // serde_json::Number is finite by construction; as_f64
+                    // never yields NaN/Inf, so this arm cannot invent a
+                    // non-finite Num from JSON wire.
                     Some(f) => DataValue::from(f),
                     None => DataValue::from(n.to_string()),
                 },
@@ -192,38 +202,48 @@ impl From<&JsonValue> for DataValue {
     }
 }
 
-impl From<&DataValue> for JsonValue {
-    fn from(v: &DataValue) -> Self {
+fn json_number_from_finite_f64(f: f64) -> Result<JsonValue, NonFiniteJsonNumber> {
+    serde_json::Number::from_f64(f)
+        .map(JsonValue::Number)
+        .ok_or(NonFiniteJsonNumber)
+}
+
+/// Named door for `DataValue` → JSON wire. Same law as [`TryFrom<&DataValue>`].
+pub fn datavalue_to_json(v: &DataValue) -> Result<JsonValue, NonFiniteJsonNumber> {
+    JsonValue::try_from(v)
+}
+
+impl TryFrom<&DataValue> for JsonValue {
+    type Error = NonFiniteJsonNumber;
+
+    fn try_from(v: &DataValue) -> Result<Self, Self::Error> {
         match v {
-            DataValue::Null => JsonValue::Null,
-            DataValue::Bool(b) => JsonValue::Bool(*b),
+            DataValue::Null => Ok(JsonValue::Null),
+            DataValue::Bool(b) => Ok(JsonValue::Bool(*b)),
             DataValue::Num(n) => match (n.as_int(), n.as_float()) {
-                (Some(i), _) => JsonValue::Number(i.into()),
-                (_, Some(f)) => {
-                    if f.is_finite() {
-                        json!(f)
-                    } else if f.is_nan() {
-                        JsonValue::Null
-                    } else if f.is_sign_negative() {
-                        json!("NEGATIVE_INFINITY")
-                    } else {
-                        json!("INFINITY")
-                    }
-                }
+                (Some(i), _) => Ok(JsonValue::Number(i.into())),
+                (_, Some(f)) => json_number_from_finite_f64(f),
                 _ => unreachable!("Num is int or float"),
             },
-            DataValue::Str(s) => JsonValue::String(s.to_string()),
-            DataValue::Bytes(bytes) => JsonValue::String(STANDARD.encode(bytes)),
-            DataValue::List(l) => JsonValue::Array(l.iter().map(JsonValue::from).collect()),
-            DataValue::Set(s) => JsonValue::Array(s.iter().map(JsonValue::from).collect()),
-            DataValue::Regex(r) => json!(r.pattern()),
-            DataValue::Uuid(u) => json!(u.as_uuid().to_string()),
-            DataValue::Vector(v) => json!(v.to_f64s()),
-            DataValue::Validity(v) => json!([v.ts_micros(), v.is_assert()]),
+            DataValue::Str(s) => Ok(JsonValue::String(s.to_string())),
+            DataValue::Bytes(bytes) => Ok(JsonValue::String(STANDARD.encode(bytes))),
+            DataValue::List(l) => Ok(JsonValue::Array(
+                l.iter()
+                    .map(JsonValue::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            DataValue::Set(s) => Ok(JsonValue::Array(
+                s.iter()
+                    .map(JsonValue::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            DataValue::Regex(r) => Ok(json!(r.pattern())),
+            DataValue::Uuid(u) => Ok(json!(u.as_uuid().to_string())),
+            DataValue::Vector(v) => Ok(json!(v.to_f64s())),
+            DataValue::Validity(v) => Ok(json!([v.ts_micros(), v.is_assert()])),
             DataValue::Interval(iv) => match iv.ends() {
-                None => JsonValue::Null,
+                None => Ok(JsonValue::Null),
                 Some((lo, hi)) => {
-                    use crate::value::kind::interval::{Hi, Lo};
                     let l = match lo {
                         Lo::NegUnbounded => JsonValue::Null,
                         Lo::At(t) => JsonValue::Number(t.into()),
@@ -232,22 +252,91 @@ impl From<&DataValue> for JsonValue {
                         Hi::PosUnbounded => JsonValue::Null,
                         Hi::At(t) => JsonValue::Number(t.into()),
                     };
-                    JsonValue::Array(vec![l, h])
+                    Ok(JsonValue::Array(vec![l, h]))
                 }
             },
-            DataValue::Geometry(g) => json!([g.lat().get(), g.lon().get()]),
-            DataValue::Json(j) => serde_from_json(j),
+            DataValue::Geometry(g) => Ok(json!([g.lat().get(), g.lon().get()])),
+            DataValue::Json(j) => Ok(serde_from_json(j)),
         }
     }
 }
 
-impl From<DataValue> for JsonValue {
-    fn from(v: DataValue) -> Self {
-        JsonValue::from(&v)
+impl TryFrom<DataValue> for JsonValue {
+    type Error = NonFiniteJsonNumber;
+
+    fn try_from(v: DataValue) -> Result<Self, Self::Error> {
+        JsonValue::try_from(&v)
     }
 }
 
 /// Named door for JSON → `DataValue`: same total mapping as [`From<&JsonValue>`].
+/// Never invents `Num` from `Null` or `Str`.
 pub fn json_to_datavalue(v: &JsonValue) -> DataValue {
     DataValue::from(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::Num;
+
+    #[test]
+    fn nan_num_encode_refuses() {
+        let v = DataValue::Num(Num::float(f64::NAN));
+        assert_eq!(datavalue_to_json(&v), Err(NonFiniteJsonNumber));
+    }
+
+    #[test]
+    fn pos_inf_num_encode_refuses() {
+        let v = DataValue::Num(Num::float(f64::INFINITY));
+        assert_eq!(datavalue_to_json(&v), Err(NonFiniteJsonNumber));
+    }
+
+    #[test]
+    fn neg_inf_num_encode_refuses() {
+        let v = DataValue::Num(Num::float(f64::NEG_INFINITY));
+        assert_eq!(datavalue_to_json(&v), Err(NonFiniteJsonNumber));
+    }
+
+    #[test]
+    fn finite_num_round_trip_preserves_num_kind() {
+        for f in [0.0_f64, -0.0, 1.5, -2.25, 1e308, f64::MIN_POSITIVE] {
+            let v = DataValue::Num(Num::float(f));
+            let wire = datavalue_to_json(&v).expect("finite Num encodes");
+            assert!(
+                matches!(wire, JsonValue::Number(_)),
+                "finite Num must wire as JSON number, got {wire:?}"
+            );
+            let back = json_to_datavalue(&wire);
+            assert!(
+                matches!(back, DataValue::Num(_)),
+                "round-trip must preserve Num kind, got {back:?}"
+            );
+            assert_eq!(back, v);
+        }
+        let i = DataValue::Num(Num::int(42));
+        let wire = datavalue_to_json(&i).expect("int Num encodes");
+        let back = json_to_datavalue(&wire);
+        assert_eq!(back, i);
+        assert!(matches!(back, DataValue::Num(_)));
+    }
+
+    #[test]
+    fn null_decode_stays_null_not_num() {
+        let back = json_to_datavalue(&JsonValue::Null);
+        assert_eq!(back, DataValue::Null);
+        assert!(!matches!(back, DataValue::Num(_)));
+    }
+
+    #[test]
+    fn infinity_string_decode_stays_str_not_num() {
+        // Former Cozo remap tokens must not invent Num on the way back.
+        for s in ["INFINITY", "NEGATIVE_INFINITY", "NaN", "nan", "Inf"] {
+            let back = json_to_datavalue(&JsonValue::String(s.to_string()));
+            assert!(
+                matches!(back, DataValue::Str(_)),
+                "{s:?} must decode as Str, got {back:?}"
+            );
+        }
+    }
 }

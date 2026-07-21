@@ -60,8 +60,20 @@ pub enum Json {
 pub struct JsonNum(Num);
 
 /// The typed refusal for non-finite numbers.
+///
+/// Shared by plane [`JsonNum`] construction and the serde JSON wire encode
+/// of [`crate::DataValue::Num`]: JSON has no NaN/Inf, so the boundary
+/// refuses rather than remapping to Null/Str (which would change value kind).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NonFiniteJsonNumber;
+
+impl std::fmt::Display for NonFiniteJsonNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("JSON cannot represent non-finite numbers (NaN/Inf)")
+    }
+}
+
+impl std::error::Error for NonFiniteJsonNumber {}
 
 impl JsonNum {
     pub fn new(n: Num) -> Result<JsonNum, NonFiniteJsonNumber> {

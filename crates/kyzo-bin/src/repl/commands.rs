@@ -90,8 +90,9 @@ fn unset(payload: &str, params: &mut BTreeMap<String, DataValue>) -> Result<()> 
 fn print_params(params: &BTreeMap<String, DataValue>) -> Result<()> {
     let as_json: serde_json::Map<_, _> = params
         .iter()
-        .map(|(k, v)| (k.clone(), Value::from(v)))
-        .collect();
+        .map(|(k, v)| Value::try_from(v).map(|j| (k.clone(), j)))
+        .collect::<Result<_, _>>()
+        .into_diagnostic()?;
     let display = serde_json::to_string_pretty(&json!(as_json)).into_diagnostic()?;
     println!("{display}");
     Ok(())

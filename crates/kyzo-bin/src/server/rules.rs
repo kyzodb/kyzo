@@ -123,11 +123,28 @@ pub(super) async fn register_rule(
         rayon::spawn(move || {
             for (inputs, options, sender) in task_receiver {
                 let id = rule_counter.fetch_add(1, Ordering::AcqRel);
-                let inputs: JsonValue = inputs.into_iter().map(NamedRows::into_json).collect();
-                let options: JsonValue = options
+                let inputs = match inputs
                     .into_iter()
-                    .map(|(k, v)| (k, JsonValue::from(&v)))
-                    .collect();
+                    .map(NamedRows::into_json)
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(v) => JsonValue::Array(v),
+                    Err(err) => {
+                        let _ = sender.send(Err(miette!("{err}")));
+                        continue;
+                    }
+                };
+                let options = match options
+                    .into_iter()
+                    .map(|(k, v)| JsonValue::try_from(&v).map(|j| (k, j)))
+                    .collect::<Result<serde_json::Map<_, _>, _>>()
+                {
+                    Ok(m) => JsonValue::Object(m),
+                    Err(err) => {
+                        let _ = sender.send(Err(miette!("{err}")));
+                        continue;
+                    }
+                };
                 if down_sender.blocking_send((id, inputs, options)).is_err() {
                     let _ = sender.send(Err(miette!("cannot send request to downstream")));
                 } else {

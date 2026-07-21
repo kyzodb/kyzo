@@ -39,12 +39,16 @@ pub(super) async fn export_relations(
         .collect_vec();
     let result = spawn_blocking(move || bulk::export_relations(&st.db, names.into_iter())).await;
     match result {
-        Ok(Ok(exported)) => {
-            let data: serde_json::Map<_, _> = exported
-                .into_iter()
-                .map(|(name, rows)| (name, rows.into_json()))
-                .collect();
-            (StatusCode::OK, json!({"ok": true, "data": data}).into())
+        Ok(Ok(exported)) => match exported
+            .into_iter()
+            .map(|(name, rows)| rows.into_json().map(|j| (name, j)))
+            .collect::<Result<serde_json::Map<_, _>, _>>()
+        {
+            Ok(data) => (StatusCode::OK, json!({"ok": true, "data": data}).into()),
+            Err(err) => (
+                StatusCode::BAD_REQUEST,
+                json!({"ok": false, "message": err.to_string()}).into(),
+            ),
         }
         Ok(Err(err)) => (
             StatusCode::BAD_REQUEST,
