@@ -138,14 +138,18 @@ enum Verb {
         #[arg(long, group = "authority_mode")]
         update_baseline: bool,
     },
-    /// The five resonance-gate ontology checks (story #81).
+    /// The resonance-gate registry of seat-tagged ontology checks
+    /// (docs/resonance-gate.md).
     Resonance {
-        /// Run a single named check instead of all five (+ later ratchets).
+        /// Run a single named check instead of the whole registry.
         #[arg(long, value_enum)]
         only: Option<ResonanceCheck>,
         /// Restore per-check headers and PASS chatter (default is quiet).
         #[arg(long)]
         verbose: bool,
+        /// Print the seat-coverage table (check -> enforced seats) and exit.
+        #[arg(long)]
+        coverage: bool,
     },
     /// The full first-party test suite.
     Test,
@@ -215,8 +219,17 @@ fn main() -> ExitCode {
                 verbs::authority_update_baseline().map_err(XtaskError::Authority)
             }
         },
-        Verb::Resonance { only, verbose } => {
-            resonance::run(only, verbose).map_err(XtaskError::Resonance)
+        Verb::Resonance {
+            only,
+            verbose,
+            coverage,
+        } => {
+            if coverage {
+                resonance::coverage();
+                Ok(())
+            } else {
+                resonance::run(only, verbose).map_err(XtaskError::Resonance)
+            }
         }
         Verb::Test => verbs::test().map_err(XtaskError::Process),
         Verb::TestReleaseChecked => verbs::test_release_checked().map_err(XtaskError::Process),

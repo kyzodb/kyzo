@@ -7,16 +7,22 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Story #81's resonance gate (the five deterministic ontology checks),
-//! wired into the gate program as an in-process verb (story #322): it runs
-//! inside the same binary as every other verb, in dependency order, and
-//! joins the seal on day one instead of living only in a separate CI job.
-//! `RESONANCE_ROOT` still overrides the scanned root, which is what the
-//! bite-proof harness uses against a throwaway rsync copy.
+//! The resonance gate: a registry of uniform, seat-tagged static checks that
+//! enforce ruled architecture seats (`docs/decisions.md`) against the source
+//! tree. Architecture, machine-surface contract, and evolution rules live in
+//! `docs/resonance-gate.md` — read that before adding or changing a check.
+//!
+//! Shape: one shared [`Ctx`] (parsed corpus + configs, computed once), one
+//! [`GateCheck`] contract, one [`REGISTRY`] slice. Adding a check is one
+//! registered entry plus its bite-proof; the runner is a loop, not an
+//! if-chain. `RESONANCE_ROOT` still overrides the scanned root, which is
+//! what the bite-proof harness uses against a throwaway rsync copy.
 //!
 //! Default output is quiet (GATE-OUTPUT): one GREEN line, or fail-only RED
 //! lines plus the summary. `--verbose` restores per-check headers and PASS
-//! chatter.
+//! chatter. Those output shapes and the exit code are the FROZEN machine
+//! surface consumed by the file watcher, the stop hook, CI, and board
+//! Checks — see the doc before changing a byte of them.
 
 use std::fmt;
 
@@ -24,8 +30,88 @@ use clap::ValueEnum;
 
 use crate::{allowlist, checks, fsutil};
 
-/// The five story #81 resonance ontology checks. Illegal check names are
-/// unconstructable at the CLI (`--only` is a [`ValueEnum`], not a free string).
+/// Shared context every check runs against, computed once per gate run:
+/// repo root, the parsed engine corpus, and the waiver allowlist.
+pub struct Ctx {
+    pub root: std::path::PathBuf,
+    pub files: Vec<fsutil::SourceFile>,
+    pub allow: allowlist::Allowlist,
+}
+
+/// One registered gate check: its meter name (CLI / summary identity), the
+/// `docs/decisions.md` seats or law it enforces, and its runner. A runner
+/// records violations on [`CheckOut`] and returns pass/fail; `Err` means its
+/// own config could not load (never a violation).
+struct GateCheck {
+    name: &'static str,
+    seats: &'static [&'static str],
+    run: fn(&Ctx, &mut CheckOut) -> Result<bool, anyhow::Error>,
+}
+
+/// The registry. Order is execution order (cheapest / most-arguable first,
+/// preserved from the historical if-chain). Adding a check here without a
+/// pass-proof and a bite-proof test is forbidden — see docs/resonance-gate.md.
+static REGISTRY: &[GateCheck] = &[
+    GateCheck {
+        name: "derive_bypass",
+        seats: &["14a (one law — no Ord/Hash derive bypassing the order authority)"],
+        run: run_derive_bypass,
+    },
+    GateCheck {
+        name: "panic_lint",
+        seats: &["zone-store/zone-model decode totality (typed refusal, never panic)"],
+        run: run_panic_lint,
+    },
+    GateCheck {
+        name: "copy_detector",
+        seats: &["one-authority (near-duplicate bodies need a cited waiver)"],
+        run: run_copy_detector,
+    },
+    GateCheck {
+        name: "dead_code_ratchet",
+        seats: &["dead concepts are wired or cut, never parked silently"],
+        run: run_dead_code_ratchet,
+    },
+    GateCheck {
+        name: "agreement_registry",
+        seats: &["95 (agreement laws stay tested AND reachable by the compile)"],
+        run: run_agreement_registry,
+    },
+    GateCheck {
+        name: "allocation_admission",
+        seats: &["42 (one typed allocation-admission economy, no inline caps)"],
+        run: run_allocation_admission,
+    },
+    GateCheck {
+        name: "boundary_closure",
+        seats: &["demolition law (condemned shapes stay cut)"],
+        run: run_boundary_closure,
+    },
+    GateCheck {
+        name: "peer_dial_ban",
+        seats: &["18", "92 (NATS is the only nervous system)"],
+        run: run_peer_dial_ban,
+    },
+    GateCheck {
+        name: "serializer_authority",
+        seats: &["59 (one CanonicalTranscript — no second sealed serializer)"],
+        run: run_serializer_authority,
+    },
+    GateCheck {
+        name: "determinism_ban",
+        seats: &["25", "45", "83", "84 (sealed surface is clock/rng-free)"],
+        run: run_determinism_ban,
+    },
+    GateCheck {
+        name: "unchecked_arith",
+        seats: &["unchecked arithmetic carries a named INVARIANT proof"],
+        run: run_unchecked_arith,
+    },
+];
+
+/// CLI selector for `--only`. Illegal check names are unconstructable at the
+/// CLI (a [`ValueEnum`], not a free string). Variants map 1:1 onto
+/// [`REGISTRY`] names — pinned by `registry_matches_cli_selector`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
 pub enum ResonanceCheck {
@@ -34,6 +120,12 @@ pub enum ResonanceCheck {
     CopyDetector,
     DeadCodeRatchet,
     AgreementRegistry,
+    AllocationAdmission,
+    BoundaryClosure,
+    PeerDialBan,
+    SerializerAuthority,
+    DeterminismBan,
+    UncheckedArith,
 }
 
 impl ResonanceCheck {
@@ -44,6 +136,12 @@ impl ResonanceCheck {
             ResonanceCheck::CopyDetector => "copy_detector",
             ResonanceCheck::DeadCodeRatchet => "dead_code_ratchet",
             ResonanceCheck::AgreementRegistry => "agreement_registry",
+            ResonanceCheck::AllocationAdmission => "allocation_admission",
+            ResonanceCheck::BoundaryClosure => "boundary_closure",
+            ResonanceCheck::PeerDialBan => "peer_dial_ban",
+            ResonanceCheck::SerializerAuthority => "serializer_authority",
+            ResonanceCheck::DeterminismBan => "determinism_ban",
+            ResonanceCheck::UncheckedArith => "unchecked_arith",
         }
     }
 }
@@ -156,10 +254,18 @@ impl CheckOut {
     }
 }
 
-/// Run the resonance gate. `only`, if given, runs a single story #81 check.
-/// When `only` is `None`, all five plus the later ratchets
-/// (`allocation_admission`, `boundary_closure`, `unchecked_arith`) run.
-/// Default output is quiet; `verbose` restores per-check chatter.
+/// Print the seat-coverage table: which decisions.md seat/law each registered
+/// check enforces. This is the gate reporting on itself — a seat with no
+/// check here has no meter.
+pub fn coverage() {
+    for check in REGISTRY {
+        println!("check {}: seats [{}]", check.name, check.seats.join("; "));
+    }
+}
+
+/// Run the resonance gate. `only`, if given, runs a single registered check;
+/// `None` runs the whole registry in order. Default output is quiet;
+/// `verbose` restores per-check chatter.
 pub fn run(only: Option<ResonanceCheck>, verbose: bool) -> Result<(), ResonanceError> {
     let root = fsutil::repo_root().map_err(ResonanceError::RepoRoot)?;
     let files = fsutil::walk_engine_sources(&root).map_err(ResonanceError::SourceScan)?;
@@ -167,84 +273,24 @@ pub fn run(only: Option<ResonanceCheck>, verbose: bool) -> Result<(), ResonanceE
         return Err(ResonanceError::NoSourceFiles);
     }
     let allow = allowlist::load(&root).map_err(ResonanceError::AllowlistLoad)?;
+    let ctx = Ctx { root, files, allow };
 
+    let only_name = only.map(ResonanceCheck::as_meter_name);
     let mut failing_checks: Vec<&'static str> = Vec::new();
     let mut checks_run: usize = 0;
-    let want = |check: ResonanceCheck| only.map(|o| o == check).unwrap_or(true);
-    let run_later_ratchets = only.is_none();
 
-    if want(ResonanceCheck::DeriveBypass) {
-        checks_run += 1;
-        if !run_derive_bypass(&files, &allow, verbose) {
-            failing_checks.push(ResonanceCheck::DeriveBypass.as_meter_name());
+    for check in REGISTRY {
+        if only_name.is_some_and(|n| n != check.name) {
+            continue;
         }
-    }
-    if want(ResonanceCheck::PanicLint) {
         checks_run += 1;
-        match run_panic_lint(&files, &allow, &root, verbose) {
+        let mut out = CheckOut::new(verbose);
+        match (check.run)(&ctx, &mut out) {
             Ok(true) => {}
-            Ok(false) => failing_checks.push(ResonanceCheck::PanicLint.as_meter_name()),
+            Ok(false) => failing_checks.push(check.name),
             Err(source) => {
                 return Err(ResonanceError::CheckConfig {
-                    check: ResonanceCheck::PanicLint.as_meter_name(),
-                    source,
-                });
-            }
-        }
-    }
-    if want(ResonanceCheck::CopyDetector) {
-        checks_run += 1;
-        if !run_copy_detector(&files, &allow, verbose) {
-            failing_checks.push(ResonanceCheck::CopyDetector.as_meter_name());
-        }
-    }
-    if want(ResonanceCheck::DeadCodeRatchet) {
-        checks_run += 1;
-        if !run_dead_code_ratchet(&files, &allow, verbose) {
-            failing_checks.push(ResonanceCheck::DeadCodeRatchet.as_meter_name());
-        }
-    }
-    if want(ResonanceCheck::AgreementRegistry) {
-        checks_run += 1;
-        match run_agreement_registry(&files, &root, verbose) {
-            Ok(true) => {}
-            Ok(false) => failing_checks.push(ResonanceCheck::AgreementRegistry.as_meter_name()),
-            Err(source) => {
-                return Err(ResonanceError::CheckConfig {
-                    check: ResonanceCheck::AgreementRegistry.as_meter_name(),
-                    source,
-                });
-            }
-        }
-    }
-    if run_later_ratchets {
-        checks_run += 1;
-        if !run_allocation_admission(&files, verbose) {
-            failing_checks.push("allocation_admission");
-        }
-        checks_run += 1;
-        if !run_boundary_closure(&files, verbose) {
-            failing_checks.push("boundary_closure");
-        }
-        checks_run += 1;
-        if !run_peer_dial_ban(&files, verbose) {
-            failing_checks.push("peer_dial_ban");
-        }
-        checks_run += 1;
-        if !run_serializer_authority(&files, verbose) {
-            failing_checks.push("serializer_authority");
-        }
-        checks_run += 1;
-        if !run_determinism_ban(&files, verbose) {
-            failing_checks.push("determinism_ban");
-        }
-        checks_run += 1;
-        match run_unchecked_arith(&files, &root, verbose) {
-            Ok(true) => {}
-            Ok(false) => failing_checks.push("unchecked_arith"),
-            Err(source) => {
-                return Err(ResonanceError::CheckConfig {
-                    check: "unchecked_arith",
+                    check: check.name,
                     source,
                 });
             }
@@ -255,12 +301,12 @@ pub fn run(only: Option<ResonanceCheck>, verbose: bool) -> Result<(), ResonanceE
         if verbose {
             println!(
                 "resonance gate: ALL CHECKS PASSED ({} source files scanned)",
-                files.len()
+                ctx.files.len()
             );
         } else {
             println!(
                 "resonance gate clears ({checks_run} checks, {} files)",
-                files.len()
+                ctx.files.len()
             );
         }
         Ok(())
@@ -272,14 +318,9 @@ pub fn run(only: Option<ResonanceCheck>, verbose: bool) -> Result<(), ResonanceE
     }
 }
 
-fn run_derive_bypass(
-    files: &[fsutil::SourceFile],
-    allow: &allowlist::Allowlist,
-    verbose: bool,
-) -> bool {
-    let mut out = CheckOut::new(verbose);
+fn run_derive_bypass(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check 1: derive-bypass detector ==");
-    let (violations, stale) = checks::derive_bypass::check(files, allow);
+    let (violations, stale) = checks::derive_bypass::check(&ctx.files, &ctx.allow);
     for v in &violations {
         out.violation(format!(
             "{}:{} — `{}` derives {:?} but also has a fallible `{}` (line {}) — the derive bypasses the constructor's invariant",
@@ -296,19 +337,13 @@ fn run_derive_bypass(
         violations.len(),
         stale.len()
     ));
-    ok
+    Ok(ok)
 }
 
-fn run_panic_lint(
-    files: &[fsutil::SourceFile],
-    allow: &allowlist::Allowlist,
-    root: &std::path::Path,
-    verbose: bool,
-) -> Result<bool, anyhow::Error> {
-    let mut out = CheckOut::new(verbose);
+fn run_panic_lint(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check 2: panic-on-hostile-bytes lint ==");
-    let surfaces = checks::panic_lint::load_config(root)?;
-    let (occurrences, missing) = checks::panic_lint::check(files, &surfaces, allow);
+    let surfaces = checks::panic_lint::load_config(&ctx.root)?;
+    let (occurrences, missing) = checks::panic_lint::check(&ctx.files, &surfaces, &ctx.allow);
     for m in &missing {
         out.violation(format!("config:0 — {m}"));
     }
@@ -328,14 +363,9 @@ fn run_panic_lint(
     Ok(ok)
 }
 
-fn run_copy_detector(
-    files: &[fsutil::SourceFile],
-    allow: &allowlist::Allowlist,
-    verbose: bool,
-) -> bool {
-    let mut out = CheckOut::new(verbose);
+fn run_copy_detector(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check 3: copy-detector ==");
-    let (violations, _pairs, units, stale) = checks::copy_detector::check(files, allow);
+    let (violations, _pairs, units, stale) = checks::copy_detector::check(&ctx.files, &ctx.allow);
     for v in &violations {
         out.violation(format!(
             "{}:{} — near-identical bodies (similarity {:.2}): `{}`  <->  {}:{} `{}`",
@@ -354,22 +384,14 @@ fn run_copy_detector(
         units.len(),
         checks::copy_detector::MIN_TOKENS
     ));
-    ok
+    Ok(ok)
 }
 
-fn run_dead_code_ratchet(
-    files: &[fsutil::SourceFile],
-    allow: &allowlist::Allowlist,
-    verbose: bool,
-) -> bool {
-    let mut out = CheckOut::new(verbose);
+fn run_dead_code_ratchet(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check 4: dead-concept ratchet ==");
-    let (violations, stale) = checks::dead_code_ratchet::check(files, allow);
+    let (violations, stale) = checks::dead_code_ratchet::check(&ctx.files, &ctx.allow);
     for v in &violations {
-        out.violation(format!(
-            "{}:{} — uncited `{}`",
-            v.file, v.line, v.attr_text
-        ));
+        out.violation(format!("{}:{} — uncited `{}`", v.file, v.line, v.attr_text));
     }
     for s in &stale {
         out.violation(format!("allowlist:0 — stale allowlist: {s}"));
@@ -381,13 +403,32 @@ fn run_dead_code_ratchet(
         violations.len(),
         stale.len()
     ));
-    ok
+    Ok(ok)
 }
 
-fn run_allocation_admission(files: &[fsutil::SourceFile], verbose: bool) -> bool {
-    let mut out = CheckOut::new(verbose);
+fn run_agreement_registry(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
+    out.header("== check 5: agreement-law registry ==");
+    let registry = checks::agreement_registry::load(&ctx.root)?;
+    let violations = checks::agreement_registry::check(&ctx.files, &registry, &ctx.root);
+    for v in &violations {
+        out.violation(format!(
+            "{}:0 — registry entry \"{}\" ({}): {}",
+            v.file, v.name, v.test_fn, v.reason
+        ));
+    }
+    let ok = out.finish_ok();
+    out.note(format!(
+        "check 5: {} ({} law(s) registered, {} missing)",
+        if ok { "PASS" } else { "FAIL" },
+        registry.len(),
+        violations.len()
+    ));
+    Ok(ok)
+}
+
+fn run_allocation_admission(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check: allocation-admission ratchet ==");
-    let violations = checks::allocation_admission::check(files);
+    let violations = checks::allocation_admission::check(&ctx.files);
     for v in &violations {
         out.violation(format!(
             "{}:{} — `{}` caps its size inline with `.min(...)` — route the \
@@ -401,18 +442,14 @@ fn run_allocation_admission(files: &[fsutil::SourceFile], verbose: bool) -> bool
         if ok { "PASS" } else { "FAIL" },
         violations.len()
     ));
-    ok
+    Ok(ok)
 }
 
-fn run_boundary_closure(files: &[fsutil::SourceFile], verbose: bool) -> bool {
-    let mut out = CheckOut::new(verbose);
+fn run_boundary_closure(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check: boundary-closure ratchet ==");
-    let violations = checks::boundary_closure::check(files);
+    let violations = checks::boundary_closure::check(&ctx.files);
     for v in &violations {
-        out.violation(format!(
-            "{}:{} — [{}]: {}",
-            v.file, v.line, v.shape, v.detail
-        ));
+        out.violation(format!("{}:{} — [{}]: {}", v.file, v.line, v.shape, v.detail));
     }
     let ok = out.finish_ok();
     out.note(format!(
@@ -420,13 +457,12 @@ fn run_boundary_closure(files: &[fsutil::SourceFile], verbose: bool) -> bool {
         if ok { "PASS" } else { "FAIL" },
         violations.len()
     ));
-    ok
+    Ok(ok)
 }
 
-fn run_peer_dial_ban(files: &[fsutil::SourceFile], verbose: bool) -> bool {
-    let mut out = CheckOut::new(verbose);
+fn run_peer_dial_ban(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check: peer-dial ban (seats 18/92 — NATS is the only nervous system) ==");
-    let violations = checks::peer_dial_ban::check(files);
+    let violations = checks::peer_dial_ban::check(&ctx.files);
     for v in &violations {
         out.violation(format!(
             "{}:{} — `{}` — a raw peer/transport socket in the engine is a second \
@@ -440,13 +476,14 @@ fn run_peer_dial_ban(files: &[fsutil::SourceFile], verbose: bool) -> bool {
         if ok { "PASS" } else { "FAIL" },
         violations.len()
     ));
-    ok
+    Ok(ok)
 }
 
-fn run_determinism_ban(files: &[fsutil::SourceFile], verbose: bool) -> bool {
-    let mut out = CheckOut::new(verbose);
-    out.header("== check: determinism ban (seats 25/45/83/84 — sealed surface is clock/rng-free) ==");
-    let violations = checks::determinism_ban::check(files);
+fn run_determinism_ban(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
+    out.header(
+        "== check: determinism ban (seats 25/45/83/84 — sealed surface is clock/rng-free) ==",
+    );
+    let violations = checks::determinism_ban::check(&ctx.files);
     for v in &violations {
         out.violation(format!(
             "{}:{} — `{}` — wall-clock/unseeded randomness on the sealed/commit surface; \
@@ -460,13 +497,14 @@ fn run_determinism_ban(files: &[fsutil::SourceFile], verbose: bool) -> bool {
         if ok { "PASS" } else { "FAIL" },
         violations.len()
     ));
-    ok
+    Ok(ok)
 }
 
-fn run_serializer_authority(files: &[fsutil::SourceFile], verbose: bool) -> bool {
-    let mut out = CheckOut::new(verbose);
-    out.header("== check: sealed-serializer authority ratchet (seat 59 — one CanonicalTranscript) ==");
-    let sites = checks::serializer_authority::check(files);
+fn run_serializer_authority(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
+    out.header(
+        "== check: sealed-serializer authority ratchet (seat 59 — one CanonicalTranscript) ==",
+    );
+    let sites = checks::serializer_authority::check(&ctx.files);
     let n = sites.len();
     let baseline = checks::serializer_authority::BASELINE;
     if n > baseline {
@@ -489,7 +527,7 @@ fn run_serializer_authority(files: &[fsutil::SourceFile], verbose: bool) -> bool
         out.note(format!(
             "check: sealed-serializer authority FAIL ({n} sites, baseline {baseline})"
         ));
-        return ok;
+        return Ok(ok);
     }
     if n < baseline {
         out.violation(format!(
@@ -503,25 +541,21 @@ fn run_serializer_authority(files: &[fsutil::SourceFile], verbose: bool) -> bool
         out.note(format!(
             "check: sealed-serializer authority FAIL (baseline stale: {n} < {baseline})"
         ));
-        return ok;
+        return Ok(ok);
     }
     // At baseline: sites are expected internal digests, not violations.
     out.note(format!(
         "check: sealed-serializer authority PASS ({n} internal-digest site(s); baseline {baseline})"
     ));
-    true
+    Ok(true)
 }
 
-fn run_unchecked_arith(
-    files: &[fsutil::SourceFile],
-    root: &std::path::Path,
-    verbose: bool,
-) -> Result<bool, anyhow::Error> {
-    let mut out = CheckOut::new(verbose);
+fn run_unchecked_arith(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check: unchecked-arith named-invariant ratchet ==");
-    let baseline = checks::unchecked_arith::load_baseline(root).map_err(|e| anyhow::anyhow!(e))?;
-    let examples = checks::unchecked_arith::walk_examples(root)?;
-    let mut violations = checks::unchecked_arith::check(files);
+    let baseline =
+        checks::unchecked_arith::load_baseline(&ctx.root).map_err(|e| anyhow::anyhow!(e))?;
+    let examples = checks::unchecked_arith::walk_examples(&ctx.root)?;
+    let mut violations = checks::unchecked_arith::check(&ctx.files);
     violations.extend(checks::unchecked_arith::check(&examples));
     violations.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     let n = violations.len();
@@ -561,7 +595,7 @@ fn run_unchecked_arith(
         return Ok(ok);
     }
     // At baseline: uncommented sites are ratcheted debt, not new violations.
-    if verbose {
+    if out.verbose {
         for v in &violations {
             println!(
                 "FAIL {}:{}: `{}` lacks an adjacent `// INVARIANT(Name): …` proof \
@@ -576,27 +610,51 @@ fn run_unchecked_arith(
     Ok(true)
 }
 
-fn run_agreement_registry(
-    files: &[fsutil::SourceFile],
-    root: &std::path::Path,
-    verbose: bool,
-) -> Result<bool, anyhow::Error> {
-    let mut out = CheckOut::new(verbose);
-    out.header("== check 5: agreement-law registry ==");
-    let registry = checks::agreement_registry::load(root)?;
-    let violations = checks::agreement_registry::check(files, &registry, root);
-    for v in &violations {
-        out.violation(format!(
-            "{}:0 — registry entry \"{}\" ({}): {}",
-            v.file, v.name, v.test_fn, v.reason
-        ));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every CLI selector resolves to exactly one registry entry, and every
+    /// registry entry is CLI-selectable — the registry and the selector
+    /// cannot drift apart silently.
+    #[test]
+    fn registry_matches_cli_selector() {
+        let registry_names: Vec<&str> = REGISTRY.iter().map(|c| c.name).collect();
+        let selector_names: Vec<&str> = [
+            ResonanceCheck::DeriveBypass,
+            ResonanceCheck::PanicLint,
+            ResonanceCheck::CopyDetector,
+            ResonanceCheck::DeadCodeRatchet,
+            ResonanceCheck::AgreementRegistry,
+            ResonanceCheck::AllocationAdmission,
+            ResonanceCheck::BoundaryClosure,
+            ResonanceCheck::PeerDialBan,
+            ResonanceCheck::SerializerAuthority,
+            ResonanceCheck::DeterminismBan,
+            ResonanceCheck::UncheckedArith,
+        ]
+        .iter()
+        .map(|c| c.as_meter_name())
+        .collect();
+        assert_eq!(
+            registry_names, selector_names,
+            "REGISTRY order/names must match the ResonanceCheck selector exactly"
+        );
     }
-    let ok = out.finish_ok();
-    out.note(format!(
-        "check 5: {} ({} law(s) registered, {} missing)",
-        if ok { "PASS" } else { "FAIL" },
-        registry.len(),
-        violations.len()
-    ));
-    Ok(ok)
+
+    /// Registry hygiene: names unique, every check tagged with the seat or
+    /// law it enforces. An untagged check is unaccountable — the coverage
+    /// query would lie about what the gate enforces.
+    #[test]
+    fn registry_entries_are_unique_and_seat_tagged() {
+        let mut seen = std::collections::BTreeSet::new();
+        for check in REGISTRY {
+            assert!(seen.insert(check.name), "duplicate check name {}", check.name);
+            assert!(
+                !check.seats.is_empty(),
+                "check {} has no seat/law tag",
+                check.name
+            );
+        }
+    }
 }
