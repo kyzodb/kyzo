@@ -89,7 +89,7 @@ mod tests {
     use crate::store::authority::WriteAuthority;
     use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
-    use crate::store::replica::ScopeManifestDigest;
+    use crate::store::replica::{AuthorizingKey, AuthorizingKeyTable, ScopeManifestDigest};
     use crate::store::sweep::CommitOrdinal;
     use kyzo_model::value::DataValue;
 
@@ -106,13 +106,19 @@ mod tests {
         );
         let authority = WriteAuthority::mint(store, [0xB2; 32]);
         let chain = RootChain::empty();
+        let key = AuthorizingKey::mint_with_verifying_id([0xB2; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
         let live = LiveCertificateInputs::from_live(
             CatalogGeneration::from_relation(RelationGeneration::witness(3)),
             &chain,
             &authority,
+            &key,
+            &keys,
             CommitOrdinal::ZERO,
             ScopeManifestDigest::from_digest([0x61; 32]),
-        );
+        )
+        .expect("registered key must open the live door");
         admit_record(AdmitRecordParts::new(
             RecordCore::new(
                 store,

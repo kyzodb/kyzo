@@ -259,9 +259,8 @@ struct LiveAdmissionChain {
 #[derive(Clone)]
 pub(crate) struct LiveAdmissionSeats {
     store_id: StoreId,
-    /// Opaque write-token identity — SweepDoor presentation only; never cert seed.
+    /// Opaque write-token identity — SweepDoor presentation / live-door store bind.
     /// Gap: SweepDoor presentation from seats is not yet a live caller.
-    #[allow(dead_code)]
     write_token: [u8; 32],
     /// Origin-only ed25519 signing seed (OS entropy at genesis). Never equals id.
     signing_seed: [u8; 32],
@@ -409,20 +408,37 @@ impl LiveAdmissionSeats {
             .clone()
     }
 
+    /// Receiver-facing authorizing key table (public verifying material only).
+    pub(crate) fn authorizing_keys(&self) -> &AuthorizingKeyTable {
+        &self.authorizing_keys
+    }
+
+    /// Scope manifest table bound at genesis for replica verify.
+    pub(crate) fn scopes(&self) -> &ScopeManifestTable {
+        &self.scopes
+    }
+
     /// Capture [`LiveCertificateInputs`] from these seats + a live catalog clock.
+    ///
+    /// Signs with the genesis-registered origin key (receiver-resolvable in
+    /// [`Self::authorizing_keys`]) — never an unregistered ephemeral key.
     pub(crate) fn certificate_inputs(
         &self,
         catalog_generation: CatalogGeneration,
     ) -> LiveCertificateInputs {
         let chain = self.chain.lock().expect("live admission chain lock");
-        LiveCertificateInputs::from_authorizing(
+        let authority = WriteAuthority::mint(self.store_id, self.write_token);
+        let key = AuthorizingKey::mint(self.authorizing_key_id, self.signing_seed);
+        LiveCertificateInputs::from_live(
             catalog_generation,
             &chain.root_chain,
-            *self.authorizing_key_id.as_bytes(),
-            self.signing_seed,
+            &authority,
+            &key,
+            &self.authorizing_keys,
             chain.origin_commit,
             self.scope_manifest_digest,
         )
+        .expect("genesis seats register the origin authorizing key")
     }
 
     /// Persist + verify a minted certificate on the admit path (not mint-and-drop).
@@ -491,57 +507,65 @@ fn genesis_scope_manifest_digest(
     ScopeManifestDigest::from_digest(h.finalize().into())
 }
 
-fn fresh_signing_seed() -> [u8; 32] {
-    let mut seed = [0u8; 32];
-    rand::rng().fill_bytes(&mut seed);
-    seed
-}
-
-/// Wired from Catalog generation, RootChain tip, and distinct authorizing
-/// key id + ed25519 seed — never 0x11..0x66 placeholders; never id==seed.
+/// Wired from Catalog generation, RootChain tip, and a receiver-resolvable
+/// authorizing key — never 0x11..0x66 placeholders; never a fresh unregistered
+/// ephemeral signing key per record (#374 T4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveCertificateInputs {
     catalog_generation: CatalogGeneration,
     predecessor_history_digest: [u8; 32],
     post_state_root: [u8; 32],
-    authorizing_key_id: [u8; 32],
-    authorizing_key_material: [u8; 32],
+    /// Signing-capable key proven registered at the live door.
+    authorizing_key: AuthorizingKey,
     origin_commit: CommitOrdinal,
     scope_manifest_digest: ScopeManifestDigest,
 }
 
 impl LiveCertificateInputs {
-    /// Capture live certificate authority at the admission door.
+    /// Live door: sign with a registered authorizing key a receiver can resolve.
     ///
-    /// - `schema_cut` ← Catalog generation
-    /// - predecessor / post_state_root ← RootChain tip (or [`GENESIS_ROOT`])
-    /// - authorizing_key_id = public id; authorizing_key_material = ed25519 seed
+    /// `authorizing_key` must be able to sign, and `registered_keys` must
+    /// resolve its verifying id to the same public material — otherwise
+    /// loud-refuses [`AdmitRefuse::UnregisteredAuthorizingKey`]. Never mints
+    /// a fresh unregistered ephemeral key per record (#374 T4).
     ///
-    /// Callers that only hold [`WriteAuthority`] still go through this door:
-    /// the write token is **not** used as signing material (seed is fresh OS
-    /// entropy; id is the derived verifying key). Prefer seats /
-    /// [`from_authorizing`] when a stable origin key is held.
+    /// [`WriteAuthority`] alone is not signing material — it only binds the
+    /// open store identity at the door.
     pub(crate) fn from_live(
         catalog_generation: CatalogGeneration,
         root_chain: &RootChain,
         write_authority: &WriteAuthority,
+        authorizing_key: &AuthorizingKey,
+        registered_keys: &AuthorizingKeyTable,
         origin_commit: CommitOrdinal,
         scope_manifest_digest: ScopeManifestDigest,
-    ) -> Self {
+    ) -> Result<Self, AdmitRefuse> {
         let _store = write_authority.store_id();
-        let seed = fresh_signing_seed();
-        let key = AuthorizingKey::mint_with_verifying_id(seed);
-        Self::from_authorizing(
+        if !authorizing_key.can_sign() {
+            return Err(AdmitRefuse::UnregisteredAuthorizingKey);
+        }
+        let Some(public) = registered_keys.lookup(&authorizing_key.id()) else {
+            return Err(AdmitRefuse::UnregisteredAuthorizingKey);
+        };
+        if public.verifying_bytes() != authorizing_key.verifying_bytes() {
+            return Err(AdmitRefuse::UnregisteredAuthorizingKey);
+        }
+        let (predecessor_history_digest, post_state_root) = root_tip_digests(root_chain);
+        Ok(Self {
             catalog_generation,
-            root_chain,
-            *key.id().as_bytes(),
-            seed,
+            predecessor_history_digest,
+            post_state_root,
+            authorizing_key: authorizing_key.clone(),
             origin_commit,
             scope_manifest_digest,
-        )
+        })
     }
 
     /// Origin path: public id + distinct ed25519 seed (id must not equal seed).
+    ///
+    /// Caller is responsible for registering the verifying id in an
+    /// [`AuthorizingKeyTable`] before a receiver can verify (e.g. seats genesis).
+    /// Prefer [`Self::from_live`] when the registration proof is available.
     pub(crate) fn from_authorizing(
         catalog_generation: CatalogGeneration,
         root_chain: &RootChain,
@@ -554,22 +578,26 @@ impl LiveCertificateInputs {
             authorizing_key_id, authorizing_key_material,
             "authorizing_key_id must not equal authorizing_key_material (seed)"
         );
-        let (predecessor_history_digest, post_state_root) = match root_chain.links().last() {
-            Some(link) => (
-                *link.predecessor_root().as_bytes(),
-                *link.root().as_bytes(),
-            ),
-            None => (*GENESIS_ROOT.as_bytes(), *GENESIS_ROOT.as_bytes()),
-        };
+        let (predecessor_history_digest, post_state_root) = root_tip_digests(root_chain);
+        let key = AuthorizingKey::mint(authorizing_key_id, authorizing_key_material);
         Self {
             catalog_generation,
             predecessor_history_digest,
             post_state_root,
-            authorizing_key_id,
-            authorizing_key_material,
+            authorizing_key: key,
             origin_commit,
             scope_manifest_digest,
         }
+    }
+}
+
+fn root_tip_digests(root_chain: &RootChain) -> ([u8; 32], [u8; 32]) {
+    match root_chain.links().last() {
+        Some(link) => (
+            *link.predecessor_root().as_bytes(),
+            *link.root().as_bytes(),
+        ),
+        None => (*GENESIS_ROOT.as_bytes(), *GENESIS_ROOT.as_bytes()),
     }
 }
 
@@ -584,7 +612,10 @@ fn mint_certificate_from_live(
     core: &RecordCore,
     live: &LiveCertificateInputs,
 ) -> Result<AdmissionCertificate, AdmitRefuse> {
-    let key = AuthorizingKey::mint(live.authorizing_key_id, live.authorizing_key_material);
+    if !live.authorizing_key.can_sign() {
+        return Err(AdmitRefuse::UnregisteredAuthorizingKey);
+    }
+    let key = &live.authorizing_key;
     let mut parts = AdmissionCertificateParts {
         protocol_version: *b"kyzo.v01",
         origin_store: core.store_id,
@@ -595,12 +626,12 @@ fn mint_certificate_from_live(
         record_digest: *core.digest.as_digest(),
         predecessor_history_digest: live.predecessor_history_digest,
         post_state_root: PostStateRoot::from_digest(live.post_state_root),
-        authorizing_key_id: AuthorizingKeyId::from_digest(live.authorizing_key_id),
+        authorizing_key_id: key.id(),
         scope_manifest_digest: live.scope_manifest_digest,
         operation_key: None,
         signature: [0u8; 64],
     };
-    parts.signature = sign_admission_parts(&parts, &key)?;
+    parts.signature = sign_admission_parts(&parts, key)?;
     Ok(mint_admission_certificate(parts)?)
 }
 
@@ -848,6 +879,15 @@ pub enum AdmitRefuse {
     )]
     #[diagnostic(code(session::admit::missing_live_admission_context))]
     MissingLiveAdmissionContext,
+    /// Live certificate mint without a receiver-resolvable authorizing key.
+    ///
+    /// Ephemeral unregistered signing keys are condemned (#374 T4) — the door
+    /// refuses rather than mint a certificate no peer can verify.
+    #[error(
+        "UnregisteredAuthorizingKey: live admission requires a registered authorizing key a receiver can resolve"
+    )]
+    #[diagnostic(code(session::admit::unregistered_authorizing_key))]
+    UnregisteredAuthorizingKey,
     /// Certificate mint / replica refuse bubbled from the store seat.
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -2613,6 +2653,161 @@ pub(crate) fn make_const_rule(
         },
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod live_certificate_verifiability {
+    use super::*;
+    use crate::data::statement::{
+        construct, ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
+        ValidityTime,
+    };
+    use crate::session::generation::{CatalogGeneration, RelationGeneration};
+    use crate::store::authority::WriteAuthority;
+    use crate::store::merkle::RootChain;
+    use crate::store::open::StoreId;
+    use crate::store::replica::{AuthorizingKey, AuthorizingKeyTable, ScopeManifestDigest};
+    use crate::store::sweep::CommitOrdinal;
+    use kyzo_model::value::DataValue;
+
+    fn claim_parts(store: StoreId, live: LiveCertificateInputs) -> AdmitRecordParts {
+        let digest = RecordContentDigest::from_digest([0xE4; 32]);
+        let (kind, statement) = construct::claim(
+            StatementSubject::new(DataValue::from("live-subject")),
+            crate::data::statement::StatementPredicate::new("about").expect("predicate"),
+            StatementValue::new(DataValue::from("payload")),
+            ValidityTime::instant(1),
+            StatementContext::Scoped(ContextId::from_digest([0xC4; 32])),
+            StatementSource::unbound(),
+        );
+        AdmitRecordParts::new(
+            RecordCore::new(
+                store,
+                digest,
+                SemanticSurface::None,
+                None,
+                kind,
+                statement,
+            ),
+            Placement::Unrestricted,
+            None,
+            IngestShape::Record,
+            live,
+        )
+    }
+
+    /// #374 T4 nasty: admit via the live door with a registered authorizing key,
+    /// then verify the certificate against that same key table — must succeed.
+    #[test]
+    fn live_admission_certificate_verifies_against_registered_key_table() {
+        let store = StoreId::from_digest([0x74; 32]);
+        let authority = WriteAuthority::mint(store, [0xD4; 32]);
+        let chain = RootChain::empty();
+        let key = AuthorizingKey::mint_with_verifying_id([0xD4; 32]);
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let scope = ScopeManifestDigest::from_digest([0x54; 32]);
+        let mut scopes = ScopeManifestTable::new();
+        scopes.set(scope, ScopeManifestStatus::Verified);
+
+        let live = LiveCertificateInputs::from_live(
+            CatalogGeneration::from_relation(RelationGeneration::witness(1)),
+            &chain,
+            &authority,
+            &key,
+            &keys,
+            CommitOrdinal::ZERO,
+            scope,
+        )
+        .expect("registered key must open the live door");
+
+        let (_record, cert) =
+            admit_record(claim_parts(store, live)).expect("admit through live door");
+
+        verify_replica(
+            &cert,
+            store,
+            CommitOrdinal::ZERO,
+            &keys,
+            &scopes,
+            None,
+        )
+        .expect("receiver must verify against the store key table");
+    }
+
+    /// Seats genesis path: certificate_inputs signs with the store-registered
+    /// origin key; attach_verified / verify_replica against seats' table succeed.
+    #[test]
+    fn seats_live_certificate_verifies_against_store_key_table() {
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(2),
+        ));
+        let (_record, cert) =
+            admit_record(claim_parts(seats.store_id(), live)).expect("admit via seats");
+
+        verify_replica(
+            &cert,
+            seats.store_id(),
+            cert.origin_commit(),
+            seats.authorizing_keys(),
+            seats.scopes(),
+            None,
+        )
+        .expect("seats key table must resolve the signing id");
+
+        let live2 = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(3),
+        ));
+        let (record2, cert2) =
+            admit_record(claim_parts(seats.store_id(), live2)).expect("second admit");
+        seats
+            .attach_verified(&record2, cert2)
+            .expect("attach_verified uses store key table");
+    }
+
+    /// Negative: unregistered / non-signing key — refuse, never mint ephemeral.
+    #[test]
+    fn from_live_refuses_without_registered_signing_key() {
+        let store = StoreId::from_digest([0x75; 32]);
+        let authority = WriteAuthority::mint(store, [0xD5; 32]);
+        let chain = RootChain::empty();
+        let key = AuthorizingKey::mint_with_verifying_id([0xD5; 32]);
+        let empty = AuthorizingKeyTable::new();
+        let scope = ScopeManifestDigest::from_digest([0x55; 32]);
+
+        let err = LiveCertificateInputs::from_live(
+            CatalogGeneration::from_relation(RelationGeneration::witness(1)),
+            &chain,
+            &authority,
+            &key,
+            &empty,
+            CommitOrdinal::ZERO,
+            scope,
+        )
+        .expect_err("unregistered key must not open the live door");
+        assert_eq!(err, AdmitRefuse::UnregisteredAuthorizingKey);
+
+        // Public-only table material cannot sign — refuse, do not mint ephemeral.
+        let mut keys = AuthorizingKeyTable::new();
+        keys.insert(key.clone());
+        let public_only = keys.lookup(&key.id()).expect("public install");
+        assert!(
+            !public_only.can_sign(),
+            "table lookup must not reconstitute signing"
+        );
+        let err = LiveCertificateInputs::from_live(
+            CatalogGeneration::from_relation(RelationGeneration::witness(1)),
+            &chain,
+            &authority,
+            &public_only,
+            &keys,
+            CommitOrdinal::ZERO,
+            scope,
+        )
+        .expect_err("verify-only key must not open the live door");
+        assert_eq!(err, AdmitRefuse::UnregisteredAuthorizingKey);
+    }
 }
 
 #[cfg(test)]
