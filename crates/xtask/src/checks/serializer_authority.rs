@@ -43,7 +43,7 @@ use crate::synutil::mod_is_test_scope;
 /// (byte-string-literal hasher updates outside `transcript.rs` / test scope).
 /// Measured on the seat-59-consolidated tree. Raising it is a reviewed act;
 /// lowering the real count means this must be tightened.
-pub const BASELINE: usize = 24;
+pub const BASELINE: usize = 23;
 
 /// One `h.update(b"...")` site — a domain-tagged byte layout fed to a hasher.
 pub struct Site {
