@@ -496,7 +496,11 @@ impl HashValues {
     }
 
     /// Estimated Jaccard similarity against another signature drawn from
-    /// the same permutations.
+    /// the same permutations. Campaign-proven by [`tests::minhash_jaccard`]
+    /// (exact 2/3 ± 0.02 at 20k perms) — the estimator the silent-wrong-
+    /// answer audit requires, not a "< 1.0" theater assert. Production
+    /// post-filter similarity stays in Datalog; this seat is the MinHash
+    /// estimator under that oracle.
     #[cfg(test)]
     pub(crate) fn jaccard(&self, other_minhash: &Self) -> f32 {
         let matches = self
@@ -506,6 +510,21 @@ impl HashValues {
             .filter(|(left, right)| left == right)
             .count();
         matches as f32 / self.0.len() as f32
+    }
+
+    /// True iff the two signatures share at least one band of `r` consecutive
+    /// hashes under `b` bands (`b * r == sig_len`). The banding collision
+    /// event that [`LshParams::false_positive_probability`] /
+    /// [`false_negative_probability`] integrate — the ground-truth meter for
+    /// the collision-rate campaign.
+    #[cfg(test)]
+    fn shares_any_band(&self, other: &Self, b: usize, r: usize) -> bool {
+        assert_eq!(self.0.len(), other.0.len());
+        assert_eq!(b * r, self.0.len());
+        (0..b).any(|band| {
+            let start = band * r;
+            self.0[start..start + r] == other.0[start..start + r]
+        })
     }
 
     /// The signature as explicit little-endian bytes (see the header
@@ -1051,9 +1070,11 @@ mod tests {
             .collect()
     }
 
-    /// The original's MinHash law, ported: identical sets agree exactly,
-    /// divergence lowers the Jaccard estimate, and the permutations
-    /// round-trip through their bytes.
+    /// MinHash estimator pin: identical sets agree exactly; after extending
+    /// `{1..6}` with `{7,8,9}` the true Jaccard against `{1..6}` is exactly
+    /// 6/9 = 2/3, and 20k permutations must estimate that within ±0.02.
+    /// A "< 1.0" assert would green on any drift; this pin fails if the
+    /// estimator (or the element hash) is silently wrong.
     #[test]
     fn minhash_jaccard() {
         let perms = HashPermutations::new(20000, DEFAULT_PERM_SEED);
@@ -1065,13 +1086,139 @@ mod tests {
             "same set (any order) ⇒ same signature"
         );
         assert_eq!(m1.jaccard(&m2), 1.0);
+        // |{1..6} ∪ {7,8,9}| = 9, |∩ with {1..6}| = 6 → Jaccard = 2/3.
         m1.update(int_bytes(&[7, 8, 9]).into_iter(), &perms);
-        assert!(m1.jaccard(&m2) < 1.0);
+        let est = m1.jaccard(&m2) as f64;
+        let truth = 2.0 / 3.0;
+        assert!(
+            (est - truth).abs() <= 0.02,
+            "minhash Jaccard estimate {est} must pin 2/3 ± 0.02 (got Δ={})",
+            (est - truth).abs()
+        );
         assert_eq!(
             perms.as_slice(),
             HashPermutations::from_bytes(&perms.to_bytes())
                 .unwrap()
                 .as_slice()
+        );
+    }
+
+    /// Theoretical band-collision probability for Jaccard similarity `s`
+    /// under `b` bands of `r` rows: `1 - (1 - s^r)^b`. The integrand of
+    /// [`LshParams::false_positive_probability`] /
+    /// [`false_negative_probability`].
+    fn predicted_collision_rate(s: f64, b: usize, r: usize) -> f64 {
+        1.0 - (1.0 - s.powi(r as i32)).powi(b as i32)
+    }
+
+    /// Two equal-sized integer sets with exact Jaccard `inter / (2n - inter)`.
+    fn jaccard_pair(n: usize, inter: usize, offset: i64) -> (Vec<i64>, Vec<i64>, f64) {
+        assert!(inter <= n);
+        let a: Vec<i64> = (0..n as i64).map(|i| offset + i).collect();
+        let mut b: Vec<i64> = (0..inter as i64).map(|i| offset + i).collect();
+        b.extend((0..(n - inter) as i64).map(|i| offset + n as i64 + i));
+        let union = 2 * n - inter;
+        let s = inter as f64 / union as f64;
+        (a, b, s)
+    }
+
+    /// Empirical band-collision rate over `trials` independent pair/seed
+    /// draws at a controlled Jaccard, vs the closed-form prediction.
+    fn empirical_collision_rate(
+        n: usize,
+        inter: usize,
+        b: usize,
+        r: usize,
+        trials: usize,
+        seed0: u64,
+    ) -> (f64, f64) {
+        let num_perm = b * r;
+        let mut hits = 0usize;
+        let mut s_sum = 0.0;
+        for t in 0..trials {
+            let (a, bset, s) = jaccard_pair(n, inter, (t as i64) * 10_000);
+            s_sum += s;
+            let perms = HashPermutations::new(num_perm, seed0.wrapping_add(t as u64));
+            let ha = HashValues::new(int_bytes(&a).into_iter(), &perms);
+            let hb = HashValues::new(int_bytes(&bset).into_iter(), &perms);
+            if ha.shares_any_band(&hb, b, r) {
+                hits += 1;
+            }
+        }
+        let empirical = hits as f64 / trials as f64;
+        let s_mean = s_sum / trials as f64;
+        (empirical, s_mean)
+    }
+
+    /// AUDIT-lsh-oracle: the FP/FN integrands of `find_optimal_params` are
+    /// the band-collision curve `1-(1-s^r)^b`. At controlled Jaccard bands,
+    /// the empirical collision rate under real MinHash signatures must match
+    /// that prediction within ±10 percentage points — ground truth the
+    /// numeric integration never had.
+    #[test]
+    fn lsh_collision_rate_matches_prediction_within_10pp() {
+        // Params a real create would pick near threshold 0.5 / 128 perms.
+        let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5));
+        assert!(params.b >= 1 && params.r >= 1);
+        let (b, r) = (params.b, params.r);
+        // Controlled Jaccard bands via equal-sized sets (n=80).
+        // inter → s = inter/(160-inter): 20→0.143, 36→0.290, 48→0.429,
+        // 55→0.524, 64→0.667, 72→0.818.
+        let bands: &[(usize, &str)] = &[
+            (20, "low"),
+            (36, "mid-low"),
+            (48, "near-threshold-below"),
+            (55, "near-threshold-above"),
+            (64, "high"),
+            (72, "very-high"),
+        ];
+        const TRIALS: usize = 400;
+        const TOL_PP: f64 = 0.10; // ±10 percentage points
+        for &(inter, label) in bands {
+            let (emp, s) = empirical_collision_rate(80, inter, b, r, TRIALS, DEFAULT_PERM_SEED);
+            let pred = predicted_collision_rate(s, b, r);
+            let delta = (emp - pred).abs();
+            assert!(
+                delta <= TOL_PP,
+                "band {label}: s={s:.3} b={b} r={r}: empirical={emp:.3} \
+                 predicted={pred:.3} |Δ|={delta:.3} exceeds ±{TOL_PP} ({TRIALS} trials)"
+            );
+        }
+    }
+
+    /// Threshold-boundary discrimination: under `find_optimal_params` at
+    /// threshold 0.5, pairs at ~0.45 Jaccard must collide LESS often than
+    /// pairs at ~0.55 — the curve the FP/FN weights optimize against must
+    /// actually separate the two sides of the declared threshold.
+    #[test]
+    fn lsh_threshold_boundary_pairs_discriminate() {
+        let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5));
+        let (b, r) = (params.b, params.r);
+        // n=100: inter=62 → s≈0.449; inter=71 → s≈0.550.
+        let (emp_lo, s_lo) = empirical_collision_rate(100, 62, b, r, 500, DEFAULT_PERM_SEED ^ 0x45);
+        let (emp_hi, s_hi) = empirical_collision_rate(100, 71, b, r, 500, DEFAULT_PERM_SEED ^ 0x55);
+        assert!((s_lo - 0.45).abs() < 0.01, "low band must be ~0.45, got {s_lo}");
+        assert!((s_hi - 0.55).abs() < 0.01, "high band must be ~0.55, got {s_hi}");
+        let pred_lo = predicted_collision_rate(s_lo, b, r);
+        let pred_hi = predicted_collision_rate(s_hi, b, r);
+        assert!(
+            pred_hi > pred_lo,
+            "prediction itself must rise across threshold: {pred_lo} vs {pred_hi}"
+        );
+        assert!(
+            emp_hi > emp_lo,
+            "empirical collision must discriminate ~0.45 vs ~0.55: \
+             P(s≈{s_lo:.3})={emp_lo:.3} vs P(s≈{s_hi:.3})={emp_hi:.3} \
+             (predicted {pred_lo:.3} vs {pred_hi:.3}; b={b} r={r})"
+        );
+        // Each side also stays within the campaign tolerance of its prediction.
+        assert!(
+            (emp_lo - pred_lo).abs() <= 0.10,
+            "lo band off prediction: emp={emp_lo} pred={pred_lo}"
+        );
+        assert!(
+            (emp_hi - pred_hi).abs() <= 0.10,
+            "hi band off prediction: emp={emp_hi} pred={pred_hi}"
         );
     }
 
