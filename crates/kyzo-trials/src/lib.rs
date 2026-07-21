@@ -24,6 +24,9 @@ pub mod time_travel;
 /// Oracle-differential verify corpus (re-homed from kyzo-core session/verify).
 /// Test-only module (`#![cfg(test)]` inside).
 pub mod verify_differential;
+/// Elle-style external serializability / isolation checker (#376 T6).
+/// Test-only module (`#![cfg(test)]` inside).
+pub mod serializability;
 
 pub use conformance::{
     law_concurrent_writers_across_threads, law_del_range_chunk_boundaries,

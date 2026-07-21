@@ -7,42 +7,35 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Trial (issue #34): a single-node, elle/Adya-style serializability checker
-//! over the real `fjall`-backed [`Storage`] — the SSI core, driven directly
+//! # External isolation-checking tier (Elle-style) — #376 T6 first milestone
+//!
+//! Black-box serializability / isolation-anomaly checker over the SSI claim:
+//! record an Elle history from the real concurrent campaign, then detect
+//! Adya/Elle cycles (G0 / G1 / G2) independently of storage-tier internals.
+//! This is the external tier TigerBeetle admits found what in-process DST
+//! structurally could not — the checker sees only committed reads/writes and
+//! the engine's sealed stamp order, never SSI's internal conflict machinery.
+//!
+//! Trial roots (issue #34): a single-node, elle/Adya-style campaign over the
+//! real `fjall`-backed [`Storage`] — the SSI core, driven directly
 //! (`write_tx`/`get`/`put`/`commit`), never through [`crate::Db::run_script`]
 //! (whose mutation path retries a whole script on conflict, so it never
 //! surfaces a raw abort to the caller — unsuitable for a harness that needs
 //! the true commit/abort truth of every attempt).
 //!
-//! ## Scope, stated plainly
+//! ## First milestone (this module)
 //!
-//! This is the SINGLE-NODE half of the Jepsen trial the issue asks for:
-//! concurrent transaction histories against one in-process engine, checked
-//! for serializability anomalies. Two things the full issue calls for are
-//! **explicitly out of scope here, each for a named reason**:
+//! 1. **Elle history recording** — [`ElleHistory`]: every COMMITTED txn's
+//!    reads and writes, ordered by `system_stamp`.
+//! 2. **G0 / G1 / G2 anomaly detection** against that history (and against
+//!    the live serializability campaign).
+//! 3. **Cycle detection a la Elle** — Adya dependency graph (ww / wr / rw)
+//!    over the SSI claim; any cycle is a serializability violation.
 //!
-//! - **The distributed rig** (partitions, replica divergence) — KyzoDB has no
-//!   replication story yet; that trial returns with the replication work
-//!   post-1.0, per the issue's own ruling.
-//! - **Fault injection (process-crash, power-cut) through the public
-//!   `kyzo-bin` HTTP surface** — that leg shares fault infrastructure with
-//!   issue #31's crash matrix and is sequenced after #31's injector lands;
-//!   wiring this checker to drive `kyzo-bin` over HTTP instead of the
-//!   in-process `Storage` trait is separate follow-on work, not a gap in
-//!   this module's own claim.
-//!
-//! What IS built: a seeded, reproducible workload generator; real concurrent
-//! execution against `FjallStorage` (the one shipped backend); a recorded
-//! history of every COMMITTED transaction's reads and writes; and an
-//! independent checker — importing no storage-tier internals, only the
-//! public [`Storage`]/[`ReadTx`]/[`WriteTx`] surface plus the recorded
-//! history — that builds the Adya dependency graph (write-write,
-//! write-read, read-write/anti-dependency edges) and reports any cycle,
-//! classified exactly as elle does:
+//! Classification (Elle / Adya):
 //!
 //! - **G0** (dirty write): a cycle using only ww-edges.
-//! - **G1c** (aberrant read of a stale-but-plausible value): a cycle using
-//!   only ww/wr-edges.
+//! - **G1** (Adya G1c): a cycle using only ww/wr-edges (no rw).
 //! - **G-single**: a cycle with exactly one rw-edge.
 //! - **G2**: a cycle with two or more rw-edges.
 //!
@@ -59,6 +52,13 @@
 //! write-id has no matching COMMITTED writer anywhere in the history is
 //! reported directly, as a dirty/phantom read, before the graph is even
 //! built.
+//!
+//! ## Out of scope (named)
+//!
+//! - **The distributed rig** (partitions, replica divergence) — returns with
+//!   replication post-1.0.
+//! - **Fault injection through `kyzo-bin` HTTP** — sequenced after the crash
+//!   injector; not a gap in this module's black-box claim.
 //!
 //! Any anomaly this checker finds is a real engine defect (SSI is the
 //! storage contract's sealed guarantee — `storage/mod.rs`'s "every committed
@@ -83,7 +83,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{ConflictError, ReadTx, Storage, WriteTx, new_fjall_storage};
+use kyzo::{ReadTx, Storage, WriteTx, new_fjall_storage};
 
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — the splitmix64 of `storage/sim.rs`, transcribed exactly as
@@ -209,7 +209,7 @@ enum ExecutedOp {
 /// recorded `commit_seq` order could legitimately invert relative to the
 /// TRUE internal order, an external race with nothing to do with SSI.
 /// Confirmed directly: forcing that window open (an injected delay at the
-/// old post-commit site) produced a false G0/G1c/GSingle/G2 cycle in 19 of
+/// old post-commit site) produced a false G0/G1/GSingle/G2 cycle in 19 of
 /// 60 seeds via `commit_seq` ordering, and ZERO via `system_stamp` ordering
 /// on the IDENTICAL recorded executions — same checker, same data, only
 /// the ordering witness differed. `system_stamp` has no such window: it is
@@ -220,6 +220,25 @@ enum ExecutedOp {
 struct CommittedTxn {
     ops: Vec<ExecutedOp>,
     stamp: i64,
+}
+
+/// Black-box Elle history: every COMMITTED transaction's reads and writes.
+/// The external isolation-checking tier (#376 T6) consumes only this shape —
+/// what an out-of-process Jepsen/Elle client would observe — never SSI's
+/// internal conflict sets or abort reasons.
+#[derive(Clone, Debug)]
+struct ElleHistory {
+    txns: Vec<CommittedTxn>,
+}
+
+impl ElleHistory {
+    fn record(txns: Vec<CommittedTxn>) -> Self {
+        Self { txns }
+    }
+
+    fn check(&self) -> HistoryCheck {
+        check_history(&self.txns)
+    }
 }
 
 fn seed_registers<S: Storage>(storage: &S) {
@@ -329,9 +348,13 @@ enum EdgeKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Anomaly {
+    /// Dirty write: cycle of only ww-edges (Elle G0).
     G0,
-    G1c,
+    /// Cycle of only ww/wr-edges — Adya G1c, the G1 graph class for this tier.
+    G1,
+    /// Exactly one rw-edge in the cycle (Elle G-single).
     GSingle,
+    /// Two or more rw-edges (Elle G2).
     G2,
 }
 
@@ -340,7 +363,7 @@ impl Anomaly {
         let rw_count = cycle.iter().filter(|(_, _, k)| *k == EdgeKind::Rw).count();
         match rw_count {
             0 if cycle.iter().all(|(_, _, k)| *k == EdgeKind::Ww) => Anomaly::G0,
-            0 => Anomaly::G1c,
+            0 => Anomaly::G1,
             1 => Anomaly::GSingle,
             _ => Anomaly::G2,
         }
@@ -501,12 +524,13 @@ fn find_cycle(
     None
 }
 
-/// Run the full battery for one seed. `Ok(())` means the history is
-/// serializable and every read attributed to a real committed writer; the
-/// `Err` string names the anomaly (a campaign pins it against its seed).
+/// Run the full battery for one seed: campaign → Elle history → G0/G1/G2
+/// cycle check. `Ok(())` means the history is serializable and every read
+/// attributed to a real committed writer; the `Err` string names the anomaly
+/// (a campaign pins it against its seed).
 fn run_seed(seed: u64) -> Result<(), String> {
-    let txns = run_campaign(seed);
-    let check = check_history(&txns);
+    let history = ElleHistory::record(run_campaign(seed));
+    let check = history.check();
     if !check.integrity_findings.is_empty() {
         return Err(format!(
             "integrity violation(s): {:?}",
@@ -616,24 +640,123 @@ fn single_node_serializability_campaign() {
     );
 }
 
-/// Falsification seal for kyzo#95's fix, mandatory per the finding's own
-/// discipline: removing a false positive is only correct if the checker
-/// hasn't ALSO gone blind to a true one — "0 cycles" must mean "the engine
-/// is correct," never "the checker is now vacuous." Hand-built history, no
-/// real storage involved (the two witnesses this issue was ever about,
-/// `commit_seq` and `stamp`, do not even enter into it): two transactions
-/// each read the OTHER's register at its GENESIS value and write their OWN
-/// — the classic write-skew shape (each is consistent run alone; run
-/// together, both cannot be, since each's read is stale by the time the
-/// other's write lands) — which produces exactly two anti-dependency
-/// (`Rw`) edges forming a 2-cycle: the canonical G2. `check_history` (the
-/// SAME function `run_seed` calls, completely unmodified by this fix) must
-/// still report it under the now-stamp-ordered `CommittedTxn` shape.
+/// #376 T6: Elle history recording captures every committed read/write from
+/// a live campaign — the black-box input the anomaly checker consumes.
 #[test]
-fn check_history_still_flags_a_genuine_write_skew_g2_cycle() {
+fn elle_history_recording_captures_serializability_campaign_ops() {
+    let history = ElleHistory::record(run_campaign(0xE11E_0001));
+    assert!(
+        !history.txns.is_empty(),
+        "campaign must commit at least one transaction into the Elle history"
+    );
+    let mut saw_read = false;
+    let mut saw_write = false;
+    for txn in &history.txns {
+        for op in &txn.ops {
+            match op {
+                ExecutedOp::Read { .. } => saw_read = true,
+                ExecutedOp::Write { .. } => saw_write = true,
+            }
+        }
+    }
+    assert!(
+        saw_read && saw_write,
+        "Elle history must record both reads and writes (saw_read={saw_read}, saw_write={saw_write})"
+    );
+    // Recording alone is not the claim — the recorded history must check clean
+    // under the same G0/G1/G2 cycle detector the campaign uses.
+    let check = history.check();
+    assert!(
+        check.integrity_findings.is_empty() && check.cycle.is_none(),
+        "recorded Elle history must be serializable under SSI: integrity={:?} cycle={:?}",
+        check.integrity_findings,
+        check.cycle
+    );
+}
+
+/// #376 T6: G0 — ww-only cycle. Stamp-ordered version chains make G0
+/// unrepresentable in a real campaign (ww edges always follow stamp order),
+/// so this seals the classifier + cycle detector directly — the same path
+/// `check_history` uses after building edges.
+#[test]
+fn elle_anomaly_detection_flags_g0_ww_only_cycle() {
+    let edges = [
+        (0, 1, EdgeKind::Ww),
+        (1, 2, EdgeKind::Ww),
+        (2, 0, EdgeKind::Ww),
+    ];
+    let cycle = find_cycle(3, &edges).expect("ww-only triangle must be a cycle");
+    assert_eq!(
+        Anomaly::classify(&cycle),
+        Anomaly::G0,
+        "ww-only cycle is Elle G0, got cycle {cycle:?}"
+    );
+}
+
+/// #376 T6: G1 — wr-only cycle (Adya G1c). Two committed writers each read
+/// the other's write: a cycle with only wr-edges, no rw.
+#[test]
+fn elle_anomaly_detection_flags_g1_wr_cycle_in_hand_built_history() {
     const REG_A: u32 = 0;
     const REG_B: u32 = 1;
-    let txns = vec![
+    let history = ElleHistory::record(vec![
+        CommittedTxn {
+            // T0: writes A, reads B observing T1's write.
+            ops: vec![
+                ExecutedOp::Write {
+                    reg: REG_A,
+                    write_id: 100,
+                },
+                ExecutedOp::Read {
+                    reg: REG_B,
+                    write_id: 200,
+                },
+            ],
+            stamp: 10,
+        },
+        CommittedTxn {
+            // T1: writes B, reads A observing T0's write.
+            ops: vec![
+                ExecutedOp::Write {
+                    reg: REG_B,
+                    write_id: 200,
+                },
+                ExecutedOp::Read {
+                    reg: REG_A,
+                    write_id: 100,
+                },
+            ],
+            stamp: 20,
+        },
+    ]);
+    let check = history.check();
+    assert!(
+        check.integrity_findings.is_empty(),
+        "no integrity findings expected: {:?}",
+        check.integrity_findings
+    );
+    let (anomaly, cycle) = check
+        .cycle
+        .expect("wr cycle (each reads the other's write) must be flagged as G1");
+    assert_eq!(
+        anomaly,
+        Anomaly::G1,
+        "wr-only cycle is Elle G1 (Adya G1c), got {anomaly:?}: {cycle:?}"
+    );
+}
+
+/// Falsification seal for kyzo#95's fix + #376 T6 G2: removing a false
+/// positive is only correct if the checker hasn't ALSO gone blind to a true
+/// one — "0 cycles" must mean "the engine is correct," never "the checker is
+/// now vacuous." Hand-built history, no real storage: two transactions each
+/// read the OTHER's register at its GENESIS value and write their OWN — the
+/// classic write-skew shape — which produces exactly two anti-dependency
+/// (`Rw`) edges forming a 2-cycle: the canonical G2.
+#[test]
+fn elle_anomaly_detection_flags_g2_write_skew_cycle_in_serializability_history() {
+    const REG_A: u32 = 0;
+    const REG_B: u32 = 1;
+    let history = ElleHistory::record(vec![
         CommittedTxn {
             // T0: reads B at its genesis value, writes A.
             ops: vec![
@@ -662,8 +785,8 @@ fn check_history_still_flags_a_genuine_write_skew_g2_cycle() {
             ],
             stamp: 20,
         },
-    ];
-    let check = check_history(&txns);
+    ]);
+    let check = history.check();
     assert!(
         check.integrity_findings.is_empty(),
         "no integrity findings expected in this hand-built history: {:?}",
@@ -677,6 +800,39 @@ fn check_history_still_flags_a_genuine_write_skew_g2_cycle() {
         Anomaly::G2,
         "two independent anti-dependency edges (each txn reads the other's stale value) \
          is the canonical G2 shape, got {anomaly:?}: {cycle:?}"
+    );
+}
+
+/// #376 T6: the live serializability campaign is checked through the Elle
+/// history recorder + G0/G1/G2 cycle detector (not a separate in-process
+/// oracle that could share SSI's blind spots).
+#[test]
+fn external_elle_isolation_tier_against_serializability_campaign() {
+    let base = seed_base();
+    let count = seed_count();
+    let mut failures: Vec<(u64, String)> = Vec::new();
+    for i in 0..count {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
+        let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+        let history = ElleHistory::record(run_campaign(seed));
+        let check = history.check();
+        if !check.integrity_findings.is_empty() {
+            failures.push((
+                seed,
+                format!("integrity violation(s): {:?}", check.integrity_findings),
+            ));
+        } else if let Some((anomaly, cycle)) = check.cycle {
+            failures.push((
+                seed,
+                format!("{anomaly:?} serializability violation: cycle {cycle:?}"),
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "Elle external isolation tier FINDINGS against serializability campaign \
+         ({} of {count}): {failures:?}",
+        failures.len()
     );
 }
 
