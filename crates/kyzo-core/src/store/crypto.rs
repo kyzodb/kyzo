@@ -213,9 +213,43 @@ pub enum CryptoRefuse {
     #[error("crypto: AEAD seal or open failed")]
     #[diagnostic(code(store::crypto::aead_failed))]
     AeadFailed,
+    #[error("crypto: AEAD key-commitment mismatch")]
+    #[diagnostic(code(store::crypto::key_commitment_mismatch))]
+    KeyCommitmentMismatch,
     #[error("crypto: lz4 decompress failed")]
     #[diagnostic(code(store::crypto::decompress_failed))]
     DecompressFailed,
+}
+
+/// Domain separation for the CTX/CMTD key-commitment (Chan-Rogaway).
+const KEY_COMMIT_DOMAIN_V1: &[u8] = b"KEY_COMMIT_DOMAIN_v1";
+/// Poly1305 / GCM-SIV authentication tag length (both arms).
+const AEAD_TAG_LEN: usize = 16;
+/// SHA-256 key-commitment length appended after ciphertext ‖ tag.
+const KEY_COMMIT_LEN: usize = 32;
+
+/// `C = SHA-256(KEY_COMMIT_DOMAIN_v1 || key || nonce || len‖aad || tag)`.
+fn key_commitment(key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], tag: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(KEY_COMMIT_DOMAIN_V1);
+    h.update(key);
+    h.update(nonce);
+    h.update(u32::to_be_bytes(aad.len() as u32));
+    h.update(aad);
+    h.update(tag);
+    let dig = h.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&dig);
+    out
+}
+
+/// Constant-time equality over a 32-byte commitment.
+fn ct_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut diff = 0u8;
+    for i in 0..32 {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
 }
 
 /// Domain + segment binding bytes used as wrap AAD.
@@ -333,7 +367,8 @@ fn chacha20poly1305_open(
         .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
-fn seal_arm(
+/// Base AEAD seal (ciphertext ‖ tag) — no key-commitment.
+fn seal_aead_arm(
     arm: AeadArm,
     key: &[u8; 32],
     nonce: &[u8; 12],
@@ -346,7 +381,8 @@ fn seal_arm(
     }
 }
 
-fn open_arm(
+/// Base AEAD open over ciphertext ‖ tag — no key-commitment.
+fn open_aead_arm(
     arm: AeadArm,
     key: &[u8; 32],
     nonce: &[u8; 12],
@@ -357,6 +393,60 @@ fn open_arm(
         AeadArm::Siv => aes_gcm_siv_open(key, nonce, aad, ciphertext),
         AeadArm::Gcm => chacha20poly1305_open(key, nonce, aad, ciphertext),
     }
+}
+
+/// Committing-AEAD seal: base arm then append `C` (CTX/CMTD).
+///
+/// Sealed bytes = ciphertext ‖ tag ‖ C, with
+/// `C = SHA-256(KEY_COMMIT_DOMAIN_v1 ‖ key ‖ nonce ‖ len‖aad ‖ tag)`.
+fn seal_arm(
+    arm: AeadArm,
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    let mut sealed = seal_aead_arm(arm, key, nonce, aad, plaintext)?;
+    if sealed.len() < AEAD_TAG_LEN {
+        return Err(CryptoRefuse::AeadFailed);
+    }
+    let tag_start = sealed.len() - AEAD_TAG_LEN;
+    let c = key_commitment(key, nonce, aad, &sealed[tag_start..]);
+    sealed.extend_from_slice(&c);
+    Ok(sealed)
+}
+
+/// Committing-AEAD open: base arm, then constant-time key-commitment check.
+///
+/// On commitment mismatch returns [`CryptoRefuse::KeyCommitmentMismatch`] and
+/// does not release the AEAD plaintext.
+fn open_arm(
+    arm: AeadArm,
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    sealed: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    if sealed.len() < AEAD_TAG_LEN + KEY_COMMIT_LEN {
+        return Err(CryptoRefuse::AeadFailed);
+    }
+    let split = sealed.len() - KEY_COMMIT_LEN;
+    let (aead_body, presented_c) = sealed.split_at(split);
+    let plaintext = open_aead_arm(arm, key, nonce, aad, aead_body)?;
+    if aead_body.len() < AEAD_TAG_LEN {
+        drop(plaintext);
+        return Err(CryptoRefuse::AeadFailed);
+    }
+    let tag = &aead_body[aead_body.len() - AEAD_TAG_LEN..];
+    let expected = key_commitment(key, nonce, aad, tag);
+    let mut presented = [0u8; KEY_COMMIT_LEN];
+    presented.copy_from_slice(presented_c);
+    if !ct_eq_32(&expected, &presented) {
+        // never release plaintext on commitment mismatch
+        drop(plaintext);
+        return Err(CryptoRefuse::KeyCommitmentMismatch);
+    }
+    Ok(plaintext)
 }
 
 /// Wrap a plaintext [`ShredSalt`] under the KEK for persistence.
@@ -458,7 +548,7 @@ impl Ciphertext {
         &self.nonce
     }
 
-    /// Ciphertext body (AEAD ciphertext ‖ tag).
+    /// Ciphertext body (AEAD ciphertext ‖ tag ‖ key-commitment).
     pub fn body(&self) -> &[u8] {
         &self.body
     }
@@ -626,14 +716,14 @@ mod pins {
     use crate::store::open::StoreId;
     use crate::store::transcript::{CanonicalTranscriptBuilder, FieldId, SealedArtifactKind};
 
-    /// GUARDIAN RED GATE (#376 T2) -- the Gcm arm (ChaCha20-Poly1305) is NOT key-committing.
+    /// GUARDIAN GATE (#376 T2) — committing-AEAD contract over the Gcm collision.
     /// Empirically constructed (invisible-salamanders / Partitioning Oracle Attacks): ONE
-    /// (ciphertext || tag) that `open_arm(Gcm, ..)` accepts under TWO distinct keys, using
-    /// our exact `wrap_aad` framing. The collision block was solved over GF(2^130-5) so both
-    /// keys' Poly1305 tags coincide; the pinned `chacha20poly1305` crate then authenticates
-    /// it under both. A committing AEAD binds a ciphertext to exactly one key -- ours does
-    /// not, so a hostile party can present one shredded/multi-tenant record as decrypting to
-    /// two different plaintexts under two keys. RED until a key-commitment transform lands.
+    /// (ciphertext ‖ tag) that the base ChaCha20-Poly1305 AEAD accepts under TWO distinct
+    /// keys, using our exact `wrap_aad` framing. The collision block was solved over
+    /// GF(2^130-5) so both keys' Poly1305 tags coincide. With the CTX/CMTD transform,
+    /// C is bound to the opening key: present (ct‖tag‖C_K1) → opens under K1 and refuses
+    /// under K2 with [`CryptoRefuse::KeyCommitmentMismatch`] (K2 recomputes C_K2 ≠ C_K1).
+    /// Exercises two-key rejection through production [`open_arm`], not a short-input refuse.
     #[test]
     fn gcm_arm_is_not_key_committing() {
         let k1 = [0x11u8; 32];
@@ -655,14 +745,28 @@ mod pins {
             0xed, 0x37, 0x20, 0x04, 0x6f, 0xe1, 0x63, 0xe8, 0xfb, 0xc6, 0x50, 0x60, 0x44, 0x21,
             0xab, 0x77,
         ];
-        let mut msg = ct.to_vec();
-        msg.extend_from_slice(&tag);
+        // Prove the base AEAD still collides under both keys (transform sits above).
+        let mut aead_body = ct.to_vec();
+        aead_body.extend_from_slice(&tag);
+        assert!(
+            open_aead_arm(AeadArm::Gcm, &k1, &nonce, &aad, &aead_body).is_ok()
+                && open_aead_arm(AeadArm::Gcm, &k2, &nonce, &aad, &aead_body).is_ok(),
+            "fixture must still be a two-key Poly1305 collision under the base Gcm arm"
+        );
+        // Commit under K1; present (ct‖tag‖C_K1) to production open_arm.
+        let c_k1 = key_commitment(&k1, &nonce, &aad, &tag);
+        let mut msg = aead_body;
+        msg.extend_from_slice(&c_k1);
         let o1 = open_arm(AeadArm::Gcm, &k1, &nonce, &aad, &msg);
         let o2 = open_arm(AeadArm::Gcm, &k2, &nonce, &aad, &msg);
         assert!(
-            !(o1.is_ok() && o2.is_ok()),
-            "AEAD NOT KEY-COMMITTING: one ciphertext+tag opens under two distinct keys \
-             (invisible-salamanders / Partitioning Oracle) -- add a key-commitment transform"
+            o1.is_ok(),
+            "committed ciphertext must open under the committing key K1"
+        );
+        assert!(
+            matches!(o2, Err(CryptoRefuse::KeyCommitmentMismatch)),
+            "production open_arm must refuse the K1-committed collision under K2 with \
+             KeyCommitmentMismatch (got {o2:?})"
         );
     }
 
