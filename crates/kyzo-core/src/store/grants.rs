@@ -30,24 +30,22 @@ use std::collections::BTreeMap;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 
-use super::authority::{RecoveryMatrix, WriteAuthority};
+use super::authority::{RecoveryMatrix, WriteAuthority, WriteTokenId};
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
+use super::transcript::{
+    encode_ancestor_entitlement_key_id, encode_ancestor_read_grant_payload,
+    encode_fork_consent_key_id, encode_fork_grant_payload, encode_fork_store_id,
+    encode_fork_write_token, encode_recovery_grant_payload, encode_recovery_matrix,
+    encode_recovery_write_token, CanonicalTranscript,
+};
 
 /// Domain-separated prefix for recovery quorum signatures.
 const RECOVERY_QUORUM_DOMAIN: &[u8] = b"kyzo.recovery_quorum.v1";
-/// Domain-separated prefix for RecoveryMatrix digests bound into proofs.
-const RECOVERY_MATRIX_DIGEST_DOMAIN: &[u8] = b"kyzo.recovery_matrix.v1";
-/// Domain-separated prefix for RecoveryGrant payload digests.
-const RECOVERY_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.recovery_grant.payload.v1";
 /// Domain-separated prefix for predecessor fork-consent signatures.
 const FORK_CONSENT_DOMAIN: &[u8] = b"kyzo.fork_consent.v1";
-/// Domain-separated prefix for ForkGrant payload digests.
-const FORK_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.fork_grant.payload.v1";
 /// Domain-separated prefix for ancestor-entitlement signatures.
 const ANCESTOR_ENTITLEMENT_DOMAIN: &[u8] = b"kyzo.ancestor_entitlement.v1";
-/// Domain-separated prefix for AncestorReadGrant payload digests.
-const ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN: &[u8] = b"kyzo.ancestor_read_grant.payload.v1";
 
 /// Stable grant identity bound into the signed payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -205,14 +203,6 @@ impl PredecessorConsentTable {
     }
 }
 
-/// Digest of a consent verifying key (bound into [`PredecessorConsentProof`]).
-fn consent_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
-    let mut key_h = Sha256::new();
-    key_h.update(b"kyzo.fork_consent.key_id.v1");
-    key_h.update(verifying_key);
-    key_h.finalize().into()
-}
-
 /// Opaque sealed evidence that a predecessor consented to a fork payload.
 ///
 /// No public free constructor — mint only via [`PredecessorConsentProof::verify`].
@@ -275,26 +265,6 @@ impl PredecessorConsentProof {
     pub fn key_id_digest(&self) -> &[u8; 32] {
         &self.key_id_digest
     }
-}
-
-/// Payload digest a predecessor must consent to for a fork grant's sealed fields.
-pub fn fork_grant_payload_digest(
-    grant_id: GrantId,
-    predecessor_store: StoreId,
-    fork_point_root: &ForkPointRoot,
-    successor_principal: &SuccessorPrincipal,
-    identity_seed: &IdentitySeed,
-    key_material_commitment: &KeyMaterialCommitment,
-) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(FORK_GRANT_PAYLOAD_DOMAIN);
-    h.update(grant_id.as_bytes());
-    h.update(predecessor_store.as_bytes());
-    h.update(fork_point_root.as_bytes());
-    h.update(successor_principal.as_bytes());
-    h.update(identity_seed.as_bytes());
-    h.update(key_material_commitment.as_bytes());
-    h.finalize().into()
 }
 
 /// Different-principal fork seed — not an event.
@@ -463,35 +433,6 @@ impl RecoveryQuorumProof {
     pub fn payload_digest(&self) -> &[u8; 32] {
         &self.payload_digest
     }
-}
-
-/// Canonical digest of a [`RecoveryMatrix`] (threshold + max_signers + group VK).
-fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(RECOVERY_MATRIX_DIGEST_DOMAIN);
-    h.update(u32::to_be_bytes(matrix.threshold()));
-    h.update(u32::to_be_bytes(matrix.max_signers()));
-    h.update(matrix.group_verifying_key().as_bytes());
-    h.finalize().into()
-}
-
-/// Payload digest a recovery quorum must sign for a grant's sealed fields.
-pub fn recovery_grant_payload_digest(
-    grant_id: GrantId,
-    store_id: StoreId,
-    predecessor_epoch: FenceEpoch,
-    successor_identity_seed: &IdentitySeed,
-    key_material_commitment: &KeyMaterialCommitment,
-) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(RECOVERY_GRANT_PAYLOAD_DOMAIN);
-    h.update(grant_id.as_bytes());
-    h.update(store_id.as_bytes());
-    h.update(u64::to_be_bytes(predecessor_epoch.get()));
-    h.update(predecessor_epoch.store_id().as_bytes());
-    h.update(successor_identity_seed.as_bytes());
-    h.update(key_material_commitment.as_bytes());
-    h.finalize().into()
 }
 
 /// Same-principal recovery seed — one-shot quorum under RecoveryMatrix.
@@ -938,40 +879,6 @@ fn materialize_recovery(
     })
 }
 
-fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
-    let mut h = Sha256::new();
-    h.update(b"kyzo.store_id.fork.v1");
-    h.update(fork.grant_id().as_bytes());
-    h.update(fork.predecessor_store().as_bytes());
-    h.update(fork.fork_point_root().as_bytes());
-    h.update(fork.successor_principal().as_bytes());
-    h.update(fork.identity_seed().as_bytes());
-    h.update(fork.key_material_commitment().as_bytes());
-    StoreId::from_digest(h.finalize().into())
-}
-
-fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> super::authority::WriteTokenId {
-    let mut h = Sha256::new();
-    h.update(b"kyzo.write_authority.fork.v1");
-    h.update(store_id.as_bytes());
-    h.update(fork.grant_id().as_bytes());
-    h.update(fork.identity_seed().as_bytes());
-    h.update(fork.key_material_commitment().as_bytes());
-    super::authority::WriteTokenId::from_digest(h.finalize().into())
-}
-
-fn derive_recovery_write_token(recovery: &RecoveryGrant) -> super::authority::WriteTokenId {
-    let mut h = Sha256::new();
-    h.update(b"kyzo.write_authority.recovery.v1");
-    h.update(recovery.store_id().as_bytes());
-    h.update(recovery.grant_id().as_bytes());
-    h.update(u64::to_be_bytes(recovery.predecessor_epoch().get()));
-    h.update(recovery.predecessor_epoch().store_id().as_bytes());
-    h.update(recovery.successor_identity_seed().as_bytes());
-    h.update(recovery.key_material_commitment().as_bytes());
-    super::authority::WriteTokenId::from_digest(h.finalize().into())
-}
-
 /// Sealed registry of ancestor-decrypt entitlement verifying keys keyed by [`StoreId`].
 ///
 /// Register at genesis/seal time. [`AncestorEntitlementProof::verify`] and
@@ -1022,14 +929,6 @@ impl AncestorEntitlementTable {
     pub fn get(&self, store_id: StoreId) -> Option<&[u8; 32]> {
         self.keys.get(store_id.as_bytes())
     }
-}
-
-/// Digest of an entitlement verifying key (bound into [`AncestorEntitlementProof`]).
-fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
-    let mut key_h = Sha256::new();
-    key_h.update(b"kyzo.ancestor_entitlement.key_id.v1");
-    key_h.update(verifying_key);
-    key_h.finalize().into()
 }
 
 /// Opaque sealed evidence that a sealed entitlement key authorized ancestor decrypt-scope.
@@ -1094,22 +993,6 @@ impl AncestorEntitlementProof {
     pub fn key_id_digest(&self) -> &[u8; 32] {
         &self.key_id_digest
     }
-}
-
-/// Payload digest an entitlement key must sign for an ancestor-read grant's sealed fields.
-pub fn ancestor_read_grant_payload_digest(
-    store_id: StoreId,
-    from_epoch: FenceEpoch,
-    to_epoch: FenceEpoch,
-) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN);
-    h.update(store_id.as_bytes());
-    h.update(u64::to_be_bytes(from_epoch.get()));
-    h.update(from_epoch.store_id().as_bytes());
-    h.update(u64::to_be_bytes(to_epoch.get()));
-    h.update(to_epoch.store_id().as_bytes());
-    h.finalize().into()
 }
 
 /// Ancestor-epoch plaintext read grant — O(epochs) rewrap.
@@ -1243,6 +1126,138 @@ impl AncestorReadGrant {
         }
         Ok(())
     }
+}
+
+/// SHA-256 over sealed [`CanonicalTranscript`] bytes — the only digest step on
+/// the grant surface. Field layout lives solely in the transcript encoders.
+fn hash_transcript(transcript: &CanonicalTranscript) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(transcript.as_bytes());
+    h.finalize().into()
+}
+
+/// Fork-consent verifying-key id via [`encode_fork_consent_key_id`].
+fn consent_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
+    let transcript = encode_fork_consent_key_id(verifying_key)
+        .expect("INVARIANT(CanonicalTranscript): fork consent key-id encode");
+    hash_transcript(&transcript)
+}
+
+/// ForkGrant payload digest via [`encode_fork_grant_payload`].
+pub(crate) fn fork_grant_payload_digest(
+    grant_id: GrantId,
+    predecessor_store: StoreId,
+    fork_point_root: &ForkPointRoot,
+    successor_principal: &SuccessorPrincipal,
+    identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> [u8; 32] {
+    let transcript = encode_fork_grant_payload(
+        grant_id.as_bytes(),
+        predecessor_store.as_bytes(),
+        fork_point_root.as_bytes(),
+        successor_principal.as_bytes(),
+        identity_seed.as_bytes(),
+        key_material_commitment.as_bytes(),
+    )
+    .expect("INVARIANT(CanonicalTranscript): fork grant payload encode");
+    hash_transcript(&transcript)
+}
+
+/// RecoveryMatrix digest via [`encode_recovery_matrix`].
+fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> [u8; 32] {
+    let transcript = encode_recovery_matrix(
+        matrix.threshold(),
+        matrix.max_signers(),
+        matrix.group_verifying_key().as_bytes(),
+    )
+    .expect("INVARIANT(CanonicalTranscript): recovery matrix encode");
+    hash_transcript(&transcript)
+}
+
+/// RecoveryGrant payload digest via [`encode_recovery_grant_payload`].
+pub(crate) fn recovery_grant_payload_digest(
+    grant_id: GrantId,
+    store_id: StoreId,
+    predecessor_epoch: FenceEpoch,
+    successor_identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> [u8; 32] {
+    let transcript = encode_recovery_grant_payload(
+        grant_id.as_bytes(),
+        store_id.as_bytes(),
+        predecessor_epoch.get(),
+        predecessor_epoch.store_id().as_bytes(),
+        successor_identity_seed.as_bytes(),
+        key_material_commitment.as_bytes(),
+    )
+    .expect("INVARIANT(CanonicalTranscript): recovery grant payload encode");
+    hash_transcript(&transcript)
+}
+
+/// Successor StoreId for a fork — hash of [`encode_fork_store_id`] bytes once.
+fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
+    let transcript = encode_fork_store_id(
+        fork.grant_id().as_bytes(),
+        fork.predecessor_store().as_bytes(),
+        fork.fork_point_root().as_bytes(),
+        fork.successor_principal().as_bytes(),
+        fork.identity_seed().as_bytes(),
+        fork.key_material_commitment().as_bytes(),
+    )
+    .expect("INVARIANT(CanonicalTranscript): fork store-id encode");
+    StoreId::from_digest(hash_transcript(&transcript))
+}
+
+/// Fork WriteAuthority token — hash of [`encode_fork_write_token`] bytes once.
+fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> WriteTokenId {
+    let transcript = encode_fork_write_token(
+        store_id.as_bytes(),
+        fork.grant_id().as_bytes(),
+        fork.identity_seed().as_bytes(),
+        fork.key_material_commitment().as_bytes(),
+    )
+    .expect("INVARIANT(CanonicalTranscript): fork write-token encode");
+    WriteTokenId::from_digest(hash_transcript(&transcript))
+}
+
+/// Recovery WriteAuthority token — hash of [`encode_recovery_write_token`] bytes once.
+fn derive_recovery_write_token(recovery: &RecoveryGrant) -> WriteTokenId {
+    let pred = recovery.predecessor_epoch();
+    let transcript = encode_recovery_write_token(
+        recovery.store_id().as_bytes(),
+        recovery.grant_id().as_bytes(),
+        pred.get(),
+        pred.store_id().as_bytes(),
+        recovery.successor_identity_seed().as_bytes(),
+        recovery.key_material_commitment().as_bytes(),
+    )
+    .expect("INVARIANT(CanonicalTranscript): recovery write-token encode");
+    WriteTokenId::from_digest(hash_transcript(&transcript))
+}
+
+/// Ancestor-entitlement verifying-key id via [`encode_ancestor_entitlement_key_id`].
+fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
+    let transcript = encode_ancestor_entitlement_key_id(verifying_key)
+        .expect("INVARIANT(CanonicalTranscript): ancestor entitlement key-id encode");
+    hash_transcript(&transcript)
+}
+
+/// AncestorReadGrant payload digest via [`encode_ancestor_read_grant_payload`].
+fn ancestor_read_grant_payload_digest(
+    store_id: StoreId,
+    from_epoch: FenceEpoch,
+    to_epoch: FenceEpoch,
+) -> [u8; 32] {
+    let transcript = encode_ancestor_read_grant_payload(
+        store_id.as_bytes(),
+        from_epoch.get(),
+        from_epoch.store_id().as_bytes(),
+        to_epoch.get(),
+        to_epoch.store_id().as_bytes(),
+    )
+    .expect("INVARIANT(CanonicalTranscript): ancestor-read grant payload encode");
+    hash_transcript(&transcript)
 }
 
 /// Test-only: mint a FROST 2-of-3 recovery matrix + one aggregate signature

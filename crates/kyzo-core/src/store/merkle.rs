@@ -85,6 +85,7 @@ use super::ReadTx;
 use super::epoch::FenceEpoch;
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
+use super::transcript::{encode_chained_state_root, encode_state_root_head};
 use super::wal::WalHash;
 use kyzo_model::value::RelationId;
 
@@ -294,6 +295,17 @@ pub enum ChainLinkKind {
     Recovery,
     /// Different-principal fork discovery link.
     Fork,
+}
+
+impl ChainLinkKind {
+    /// Wire discriminant for [`encode_chained_state_root`]: 1=Ordinary, 2=Recovery, 3=Fork.
+    pub(crate) fn transcript_tag(self) -> u8 {
+        match self {
+            ChainLinkKind::Ordinary => 1,
+            ChainLinkKind::Recovery => 2,
+            ChainLinkKind::Fork => 3,
+        }
+    }
 }
 
 /// One per-commit chained state root — predecessor hash seals the chain.
@@ -794,14 +806,21 @@ impl StateRootHead {
         self.root
     }
 
-    /// Domain-separated compact digest for fabric carriage / signing body.
+    /// Compact signing / gossip body: SHA-256 of the ONE
+    /// [`encode_state_root_head`] transcript bytes.
+    ///
+    /// Hand-rolled field hashing of the head is Unconstructible — the
+    /// transcript is the sole serializer; this digests its sealed bytes only.
     pub fn compact_digest(self) -> [u8; 32] {
+        let transcript = encode_state_root_head(
+            self.store_id.as_bytes(),
+            self.fence_epoch.get(),
+            self.commit_ordinal.get(),
+            self.root.as_bytes(),
+        )
+        .expect("INVARIANT(StateRootHead): typed head encodes under CanonicalTranscript");
         let mut h = Sha256::new();
-        h.update(b"kyzo.state_root_head.v1");
-        h.update(self.store_id.as_bytes());
-        h.update(u64::to_be_bytes(self.fence_epoch.get()));
-        h.update(u64::to_be_bytes(self.commit_ordinal.get()));
-        h.update(self.root.as_bytes());
+        h.update(transcript.as_bytes());
         h.finalize().into()
     }
 }
@@ -954,22 +973,26 @@ pub fn check_sth_gossip(
     }
 }
 
+/// Chained root bind: SHA-256 of the ONE [`encode_chained_state_root`]
+/// transcript bytes (content ‖ predecessor ‖ link ‖ ordinal).
+///
+/// Hand-rolled `kyzo.chained_state_root.v1` field hashing is Unconstructible —
+/// the transcript is the sole serializer; this digests its sealed bytes only.
 fn chain_bind(
     content_root: StateRoot,
     predecessor_root: StateRoot,
     link: ChainLinkKind,
     commit_ordinal: CommitOrdinal,
 ) -> StateRoot {
+    let transcript = encode_chained_state_root(
+        content_root.as_bytes(),
+        predecessor_root.as_bytes(),
+        link.transcript_tag(),
+        commit_ordinal.get(),
+    )
+    .expect("INVARIANT(ChainedStateRoot): typed bind encodes under CanonicalTranscript");
     let mut h = Sha256::new();
-    h.update(b"kyzo.chained_state_root.v1");
-    h.update(content_root.as_bytes());
-    h.update(predecessor_root.as_bytes());
-    h.update([match link {
-        ChainLinkKind::Ordinary => 1,
-        ChainLinkKind::Recovery => 2,
-        ChainLinkKind::Fork => 3,
-    }]);
-    h.update(u64::to_be_bytes(commit_ordinal.get()));
+    h.update(transcript.as_bytes());
     StateRoot(h.finalize().into())
 }
 
@@ -1985,7 +2008,8 @@ mod tests {
                 commit_ordinal: ordinal,
                 body: meaning.root().as_bytes().to_vec(),
             },
-        );
+        )
+        .expect("honest wal seal");
         let honest_wal = honest_record.record_hash();
         let honest = DurableCommitCut::compose(&meaning, honest_wal);
         assert_eq!(honest.wal_final_hash(), honest_wal);
@@ -2016,7 +2040,8 @@ mod tests {
                 commit_ordinal: ordinal,
                 body: vec![0xDE, 0xAD],
             },
-        );
+        )
+        .expect("broken wal seal");
         let wal_broken = DurableCommitCut::compose(&meaning, broken_wal_record.record_hash());
         assert_ne!(
             honest.wal_final_hash(),

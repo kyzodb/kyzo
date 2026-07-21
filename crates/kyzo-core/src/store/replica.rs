@@ -1746,6 +1746,10 @@ impl SthGossipObligation {
 }
 
 /// Signed state-root head — CT STH analogue under the origin authorizing key.
+///
+/// The signed body is [`StateRootHead::compact_digest`]: SHA-256 over the ONE
+/// `encode_state_root_head` CanonicalTranscript bytes — never a hand-rolled
+/// field hash of the head (seat 59).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignedStateRootHead {
     head: StateRootHead,
@@ -1755,6 +1759,9 @@ pub struct SignedStateRootHead {
 
 impl SignedStateRootHead {
     /// Sign a compact head under an origin authorizing key.
+    ///
+    /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
+    /// head fields.
     pub(crate) fn sign(
         head: StateRootHead,
         key: &AuthorizingKey,
@@ -1784,6 +1791,9 @@ impl SignedStateRootHead {
     }
 
     /// Verify signature against a trusted key table.
+    ///
+    /// Recomputes the transcript-derived compact digest — same body as
+    /// [`Self::sign`].
     pub fn verify_authenticity(&self, keys: &AuthorizingKeyTable) -> Result<(), ReplicaRefuse> {
         let key = keys
             .lookup(&self.authorizing_key_id)

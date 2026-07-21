@@ -1266,7 +1266,7 @@ impl SweepDoor {
                 commit_ordinal,
                 body,
             },
-        );
+        )?;
         self.wal_segment
             .append(record.clone())
             .map_err(SweepSealFailure::Wal)?;
@@ -1602,6 +1602,7 @@ mod composition_tests {
                 body: vec![0xFF; 32],
             },
         )
+        .expect("forged wal seal")
         .record_hash();
         let wal_broken = DurableCommitCut::compose(&meaning, forged_wal);
         assert!(

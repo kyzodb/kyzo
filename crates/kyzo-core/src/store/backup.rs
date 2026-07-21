@@ -45,7 +45,10 @@ use crate::store::merkle::{
 use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::system_stamp_of_key;
-use crate::store::transcript::{TranscriptRefuse, refuse_residual_secret_bytes};
+use crate::store::transcript::{
+    LeaveIsFreeIncarnationTranscriptPart, LeaveIsFreeSaltTranscriptPart, TranscriptRefuse,
+    encode_leave_is_free_pack, refuse_residual_secret_bytes,
+};
 use crate::store::fjall::FjallStorage;
 use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
 use crate::store::tx::WriteTx;
@@ -596,36 +599,46 @@ impl LeaveIsFreePack {
 
     /// Deterministic content digest of this pack's sealed bytes/fields.
     ///
-    /// Hashes kind, format_version, wrapped salts, incarnation history, and
-    /// payload under a domain separator — never a caller-supplied root.
+    /// Content root = SHA-256 of the ONE [`encode_leave_is_free_pack`]
+    /// [`CanonicalTranscript`](crate::store::transcript::CanonicalTranscript)
+    /// bytes — never a hand-rolled field hasher (seat 59).
     fn pack_content_root(&self) -> StateRoot {
+        let pack_kind: &[u8] = match self.kind {
+            LeaveIsFreeKind::SealAndSuffix => b"seal_and_suffix",
+            LeaveIsFreeKind::FullWal => b"full_wal",
+        };
+        let salts: Vec<LeaveIsFreeSaltTranscriptPart> = self
+            .wrapped_shred_salts
+            .iter()
+            .map(|wrapped| {
+                let domain = wrapped.crypto_domain();
+                LeaveIsFreeSaltTranscriptPart {
+                    store_id: *domain.store_id().as_bytes(),
+                    fence_epoch: domain.fence_epoch().get(),
+                    segment: wrapped.segment().get(),
+                    ciphertext: wrapped.ciphertext().to_vec(),
+                }
+            })
+            .collect();
+        let incarnations: Vec<LeaveIsFreeIncarnationTranscriptPart> = self
+            .incarnation_history
+            .iter()
+            .map(|incarnation| LeaveIsFreeIncarnationTranscriptPart {
+                open_ordinal: incarnation.open_ordinal().get(),
+                entropy: *incarnation.entropy().as_bytes(),
+            })
+            .collect();
+        let transcript = encode_leave_is_free_pack(
+            pack_kind,
+            self.format_version,
+            &salts,
+            &incarnations,
+            self.payload.as_slice(),
+        )
+        .expect("LeaveIsFreePack: sealed pack fields always encode under CanonicalTranscript");
         let mut h = Sha256::new();
-        h.update(b"kyzo.leave_is_free.pack.root.v1");
-        h.update(match self.kind {
-            LeaveIsFreeKind::SealAndSuffix => b"seal_and_suffix".as_slice(),
-            LeaveIsFreeKind::FullWal => b"full_wal".as_slice(),
-        });
-        h.update(self.format_version.as_bytes());
-        h.update(u64::to_be_bytes(self.wrapped_shred_salts.len() as u64));
-        for wrapped in &self.wrapped_shred_salts {
-            let domain = wrapped.crypto_domain();
-            h.update(domain.store_id().as_bytes());
-            h.update(u64::to_be_bytes(domain.fence_epoch().get()));
-            h.update(u64::to_be_bytes(wrapped.segment().get()));
-            h.update(u64::to_be_bytes(wrapped.ciphertext().len() as u64));
-            h.update(wrapped.ciphertext());
-        }
-        h.update(u64::to_be_bytes(self.incarnation_history.len() as u64));
-        for incarnation in &self.incarnation_history {
-            h.update(u64::to_be_bytes(incarnation.open_ordinal().get()));
-            h.update(incarnation.entropy().as_bytes());
-        }
-        h.update(u64::to_be_bytes(self.payload.len() as u64));
-        h.update(&self.payload);
-        let dig = h.finalize();
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&dig);
-        StateRoot::from_digest(out)
+        h.update(transcript.as_bytes());
+        StateRoot::from_digest(h.finalize().into())
     }
 
     /// Claimed origin [`StoreId`] carried by this pack (first wrapped salt domain).

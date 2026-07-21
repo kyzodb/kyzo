@@ -27,6 +27,7 @@ use super::epoch::FenceEpoch;
 use super::nonce::{DomainCounter, MintDomain, NonceLease};
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
+use super::transcript::{encode_wal_record, WalRecordPayloadParts};
 
 /// Fixed-width predecessor / record hash (SHA-256).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -71,13 +72,16 @@ pub struct WalRecord {
 
 impl WalRecord {
     /// Seal a record over `predecessor_hash` and `payload`.
-    pub fn seal(predecessor_hash: WalHash, payload: WalPayload) -> Self {
-        let record_hash = hash_record(predecessor_hash, &payload);
-        Self {
+    ///
+    /// Record hash is SHA-256 of the ONE [`encode_wal_record`] CanonicalTranscript
+    /// — hand-rolled field hashing is Unconstructible.
+    pub fn seal(predecessor_hash: WalHash, payload: WalPayload) -> Result<Self, WalRefuse> {
+        let record_hash = hash_record(predecessor_hash, &payload)?;
+        Ok(Self {
             predecessor_hash,
             payload,
             record_hash,
-        }
+        })
     }
 
     /// Predecessor hash this record covers.
@@ -256,6 +260,10 @@ pub enum WalRefuse {
     #[error("WAL record hash does not match sealed payload")]
     #[diagnostic(code(store::wal::record_hash_mismatch))]
     RecordHashMismatch,
+    /// WAL record CanonicalTranscript encode refused.
+    #[error("WAL: CanonicalTranscript encode refused for wal record")]
+    #[diagnostic(code(store::wal::transcript_refuse))]
+    TranscriptEncode,
 }
 
 /// Replay the retained WAL suffix from durable segments alone.
@@ -285,7 +293,7 @@ pub fn replay(store_id: StoreId, segments: &[WalSegment]) -> Result<WalReplaySta
                     got: record.predecessor_hash(),
                 });
             }
-            let recomputed = hash_record(record.predecessor_hash(), record.payload());
+            let recomputed = hash_record(record.predecessor_hash(), record.payload())?;
             if recomputed != record.record_hash() {
                 return Err(WalRefuse::RecordHashMismatch);
             }
@@ -326,35 +334,52 @@ fn apply_payload(
     }
 }
 
-fn hash_record(predecessor_hash: WalHash, payload: &WalPayload) -> WalHash {
+/// Record hash = SHA-256(`CanonicalTranscript.as_bytes()`) from the ONE
+/// [`encode_wal_record`] constructor (former `kyzo.wal.record.v1` digester).
+fn hash_record(predecessor_hash: WalHash, payload: &WalPayload) -> Result<WalHash, WalRefuse> {
+    // Owned scratch: `IncarnationId::entropy()` returns by value; parts need `&[u8; 32]`.
+    let mut incarnation_entropy = [0u8; 32];
+    let parts = wal_payload_parts(payload, &mut incarnation_entropy);
+    let transcript = encode_wal_record(predecessor_hash.as_bytes(), parts)
+        .map_err(|_| WalRefuse::TranscriptEncode)?;
     let mut h = Sha256::new();
-    h.update(b"kyzo.wal.record.v1");
-    h.update(predecessor_hash.as_bytes());
+    h.update(transcript.as_bytes());
+    Ok(WalHash::from_digest(h.finalize().into()))
+}
+
+fn wal_payload_parts<'a>(
+    payload: &'a WalPayload,
+    incarnation_entropy: &'a mut [u8; 32],
+) -> WalRecordPayloadParts<'a> {
     match payload {
         WalPayload::Commit {
             commit_ordinal,
             body,
-        } => {
-            h.update(b"commit");
-            h.update(u64::to_be_bytes(commit_ordinal.get()));
-            h.update(body);
-        }
-        WalPayload::NonceFloor { domain, ceiling } => {
-            h.update(b"nonce_floor");
-            h.update([match domain {
-                MintDomain::Commit => 1,
-                MintDomain::Compact => 2,
-                MintDomain::Rotate => 3,
-            }]);
-            h.update(u64::to_be_bytes(ceiling.get()));
-        }
+        } => WalRecordPayloadParts::Commit {
+            commit_ordinal: commit_ordinal.get(),
+            body: body.as_slice(),
+        },
+        WalPayload::NonceFloor { domain, ceiling } => WalRecordPayloadParts::NonceFloor {
+            domain: mint_domain_wire_tag(*domain),
+            ceiling: ceiling.get(),
+        },
         WalPayload::IncarnationSealed { incarnation_id } => {
-            h.update(b"incarnation");
-            h.update(u64::to_be_bytes(incarnation_id.open_ordinal().get()));
-            h.update(incarnation_id.entropy().as_bytes());
+            *incarnation_entropy = *incarnation_id.entropy().as_bytes();
+            WalRecordPayloadParts::IncarnationSealed {
+                open_ordinal: incarnation_id.open_ordinal().get(),
+                entropy: incarnation_entropy,
+            }
         }
     }
-    WalHash::from_digest(h.finalize().into())
+}
+
+/// Wire tag for [`MintDomain`] — must match `encode_wal_record` (1/2/3).
+fn mint_domain_wire_tag(domain: MintDomain) -> u8 {
+    match domain {
+        MintDomain::Commit => 1,
+        MintDomain::Compact => 2,
+        MintDomain::Rotate => 3,
+    }
 }
 
 /// Bind a [`NonceLease`]'s exclusive ceiling into a floor payload for append.

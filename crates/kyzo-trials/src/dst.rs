@@ -1525,7 +1525,7 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
             commit_ordinal: *ord,
             body: commit_body(seed, ord.get(), body_len.saturating_add(i * 8)),
         };
-        let record = WalRecord::seal(pred, payload);
+        let record = WalRecord::seal(pred, payload).expect("wal seal");
         pred = record.record_hash();
         unflushed.append(record).expect("unflushed WAL append");
     }
@@ -1925,8 +1925,8 @@ pub mod storage_campaign_lanes {
         ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, SealDigest, SealRefuse,
         SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingToken, StagingTtl,
         StateRoot, Storage, StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession,
-        TranscriptRefuse, VolatilePending, WalHash, WriteTx, encode_golden_fixture, genesis,
-        materialize, nonce, parse_golden_hex, reclaim_candidate,
+        TranscriptRefuse, VolatilePending, WalHash, WriteTx, encode_normative_production_transcript,
+        genesis, materialize, nonce, parse_golden_hex, reclaim_candidate,
     };
     use crate::store::grants::{
         ForkPointRoot, IdentitySeed, KeyMaterialCommitment, MaterializeRefuse,
@@ -2989,6 +2989,22 @@ pub mod storage_campaign_lanes {
                 include_str!("../../kyzo-core/src/store/golden/wal_header.vec"),
             ),
             (
+                SealedArtifactKind::StateRootHead,
+                include_str!("../../kyzo-core/src/store/golden/state_root_head.vec"),
+            ),
+            (
+                SealedArtifactKind::LeaveIsFreePack,
+                include_str!("../../kyzo-core/src/store/golden/leave_is_free_pack.vec"),
+            ),
+            (
+                SealedArtifactKind::ChainedStateRoot,
+                include_str!("../../kyzo-core/src/store/golden/chained_state_root.vec"),
+            ),
+            (
+                SealedArtifactKind::AncestorReadGrant,
+                include_str!("../../kyzo-core/src/store/golden/ancestor_read_grant.vec"),
+            ),
+            (
                 SealedArtifactKind::KeyCommit,
                 crate::store::transcript::KEY_COMMIT_GOLDEN_VEC,
             ),
@@ -2996,7 +3012,8 @@ pub mod storage_campaign_lanes {
 
         for &(kind, golden_file) in GOLDENS {
             let expected = parse_golden_hex(golden_file).expect("golden vector parses");
-            let encoded = encode_golden_fixture(kind).expect("fixture encodes");
+            let encoded =
+                encode_normative_production_transcript(kind).expect("production encodes");
             assert_eq!(
                 encoded.as_bytes(),
                 expected.as_slice(),
@@ -3034,8 +3051,8 @@ pub mod storage_campaign_lanes {
         );
         assert_ne!(
             flipped.as_slice(),
-            encode_golden_fixture(SealedArtifactKind::CheckpointSeal)
-                .expect("fixture")
+            encode_normative_production_transcript(SealedArtifactKind::CheckpointSeal)
+                .expect("production checkpoint seal")
                 .as_bytes(),
             "mutated vector must fail verify against encoder (authority mismatch)"
         );

@@ -19,6 +19,8 @@
 //! exactly; a retention certificate covers every snapshot/as-of obligation
 //! in the prefix. Unsealed dumps stay disposable.
 
+use sha2::{Digest, Sha256};
+
 use super::authority::IncarnationId;
 use super::contract::FormatVersion;
 use super::epoch::{CryptoDomain, FenceEpoch};
@@ -26,7 +28,7 @@ use super::nonce::{DomainCounter, MintDomain};
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
 use super::transcript::{
-    CanonicalTranscript, CanonicalTranscriptBuilder, FieldId, SealedArtifactKind, TranscriptRefuse,
+    CanonicalTranscript, CheckpointSealTranscriptParts, TranscriptRefuse, encode_checkpoint_seal,
     refuse_residual_secret_bytes,
 };
 use super::wal::WalHash;
@@ -159,7 +161,7 @@ pub struct CheckpointSeal {
     incarnation_boundary: IncarnationId,
     prior_seal_digest: SealDigest,
     retention_certificate_digest: SealDigest,
-    /// Self-digest over the bound fields (CanonicalTranscript seat later).
+    /// Self-digest: SHA-256 over the ONE [`encode_checkpoint_seal`] transcript bytes.
     seal_digest: SealDigest,
 }
 
@@ -176,7 +178,7 @@ impl CheckpointSeal {
         if parts.crypto_domain.fence_epoch() != parts.fence_epoch {
             return Err(SealRefuse::EpochSpanForbidden);
         }
-        let seal_digest = digest_parts(&parts);
+        let seal_digest = seal_digest_from_parts(&parts)?;
         Ok(CheckpointSeal {
             store_id: parts.store_id,
             crypto_domain: parts.crypto_domain,
@@ -287,7 +289,7 @@ impl CheckpointSeal {
     ///
     /// Any mismatch → [`SealRefuse::SealMismatch`]. Never silent prefer-dump.
     pub fn verify(&self, observed: &CheckpointSealParts) -> Result<(), SealRefuse> {
-        let expected = digest_parts(observed);
+        let expected = seal_digest_from_parts(observed)?;
         if self.seal_digest != expected
             || self.store_id != observed.store_id
             || self.crypto_domain != observed.crypto_domain
@@ -311,27 +313,35 @@ impl CheckpointSeal {
         Ok(())
     }
 
-    /// Encode this seal under the one [`CanonicalTranscript`] law (seat 59/26).
+    /// Encode this seal under the one [`encode_checkpoint_seal`] constructor (seat 59/26).
     ///
     /// Bound digests that survive into sealed bytes are the deep-reachability
     /// surface the crypto-shred campaign searches — never a second encoder.
     pub fn encode_transcript(&self) -> Result<CanonicalTranscript, SealRefuse> {
-        let mut b = CanonicalTranscriptBuilder::new(self.format_version)
-            .map_err(SealRefuse::from_transcript)?;
-        b.append_u64(
-            FieldId::ARTIFACT_KIND,
-            SealedArtifactKind::CheckpointSeal.tag(),
-        )
-        .map_err(SealRefuse::from_transcript)?;
-        b.append_bytes(FieldId::FORMAT_VERSION, &self.format_version.as_bytes())
-            .map_err(SealRefuse::from_transcript)?;
-        b.append_digest32(FieldId::PRIMARY_DIGEST, self.seal_digest.as_bytes())
-            .map_err(SealRefuse::from_transcript)?;
-        b.append_digest32(FieldId::SECONDARY_DIGEST, self.state_root.as_bytes())
-            .map_err(SealRefuse::from_transcript)?;
-        b.append_bytes(FieldId::DOMAIN_LABEL, b"checkpoint-seal")
-            .map_err(SealRefuse::from_transcript)?;
-        Ok(b.seal())
+        encode_checkpoint_seal(&checkpoint_seal_transcript_parts(&self.as_parts()))
+            .map_err(SealRefuse::from_transcript)
+    }
+
+    /// Bound fields as mint/verify parts (excludes self-digest).
+    fn as_parts(&self) -> CheckpointSealParts {
+        CheckpointSealParts {
+            store_id: self.store_id,
+            crypto_domain: self.crypto_domain,
+            fence_epoch: self.fence_epoch,
+            cut: self.cut,
+            state_root: self.state_root,
+            final_wal_hash: self.final_wal_hash,
+            checkpoint_manifest: self.checkpoint_manifest,
+            format_version: self.format_version,
+            catalog_generation: self.catalog_generation,
+            retained_object_manifest: self.retained_object_manifest,
+            permanence_candidate_manifest: self.permanence_candidate_manifest,
+            replica_custody_manifest: self.replica_custody_manifest,
+            nonce_floors: self.nonce_floors,
+            incarnation_boundary: self.incarnation_boundary,
+            prior_seal_digest: self.prior_seal_digest,
+            retention_certificate_digest: self.retention_certificate_digest,
+        }
     }
 
     /// Deep sealed-artifact scrub (§64/§65): encode under CanonicalTranscript,
@@ -464,33 +474,43 @@ impl SealRefuse {
     }
 }
 
-fn digest_parts(parts: &CheckpointSealParts) -> SealDigest {
-    use sha2::{Digest, Sha256};
+/// Map mint/verify parts onto the ONE CheckpointSeal transcript schema.
+fn checkpoint_seal_transcript_parts(parts: &CheckpointSealParts) -> CheckpointSealTranscriptParts {
+    CheckpointSealTranscriptParts {
+        format_version: parts.format_version,
+        store_id: *parts.store_id.as_bytes(),
+        crypto_domain: parts.crypto_domain,
+        fence_epoch: parts.fence_epoch.get(),
+        fence_epoch_store_id: *parts.fence_epoch.store_id().as_bytes(),
+        cut: parts.cut.get(),
+        state_root: *parts.state_root.as_bytes(),
+        final_wal_hash: *parts.final_wal_hash.as_bytes(),
+        checkpoint_manifest: *parts.checkpoint_manifest.as_bytes(),
+        catalog_generation: parts.catalog_generation.get(),
+        retained_object_manifest: *parts.retained_object_manifest.as_bytes(),
+        permanence_candidate_manifest: *parts.permanence_candidate_manifest.as_bytes(),
+        replica_custody_manifest: *parts.replica_custody_manifest.as_bytes(),
+        nonce_floor_commit: parts.nonce_floors.commit.get(),
+        nonce_floor_compact: parts.nonce_floors.compact.get(),
+        nonce_floor_rotate: parts.nonce_floors.rotate.get(),
+        incarnation_open_ordinal: parts.incarnation_boundary.open_ordinal().get(),
+        incarnation_entropy: *parts.incarnation_boundary.entropy().as_bytes(),
+        prior_seal_digest: *parts.prior_seal_digest.as_bytes(),
+        retention_certificate_digest: *parts.retention_certificate_digest.as_bytes(),
+    }
+}
+
+/// Binding digest: one SHA-256 over the ONE [`encode_checkpoint_seal`] byte stream.
+///
+/// Not a field-by-field hasher — the transcript is the serializer; this is only
+/// `H_canonical` over those sealed bytes (same shape as key-commitment).
+fn seal_digest_from_parts(parts: &CheckpointSealParts) -> Result<SealDigest, SealRefuse> {
+    let transcript = encode_checkpoint_seal(&checkpoint_seal_transcript_parts(parts))
+        .map_err(SealRefuse::from_transcript)?;
     let mut h = Sha256::new();
-    h.update(b"kyzo.checkpoint_seal.v1");
-    h.update(parts.store_id.as_bytes());
-    h.update(parts.crypto_domain.store_id().as_bytes());
-    h.update(u64::to_be_bytes(parts.crypto_domain.fence_epoch().get()));
-    h.update(parts.crypto_domain.fence_epoch().store_id().as_bytes());
-    h.update(u64::to_be_bytes(parts.fence_epoch.get()));
-    h.update(parts.fence_epoch.store_id().as_bytes());
-    h.update(u64::to_be_bytes(parts.cut.get()));
-    h.update(parts.state_root.as_bytes());
-    h.update(parts.final_wal_hash.as_bytes());
-    h.update(parts.checkpoint_manifest.as_bytes());
-    h.update(parts.format_version.as_bytes());
-    h.update(u64::to_be_bytes(parts.catalog_generation.get()));
-    h.update(parts.retained_object_manifest.as_bytes());
-    h.update(parts.permanence_candidate_manifest.as_bytes());
-    h.update(parts.replica_custody_manifest.as_bytes());
-    h.update(u64::to_be_bytes(parts.nonce_floors.commit.get()));
-    h.update(u64::to_be_bytes(parts.nonce_floors.compact.get()));
-    h.update(u64::to_be_bytes(parts.nonce_floors.rotate.get()));
-    h.update(u64::to_be_bytes(
-        parts.incarnation_boundary.open_ordinal().get(),
-    ));
-    h.update(parts.incarnation_boundary.entropy().as_bytes());
-    h.update(parts.prior_seal_digest.as_bytes());
-    h.update(parts.retention_certificate_digest.as_bytes());
-    SealDigest::from_digest(h.finalize().into())
+    h.update(transcript.as_bytes());
+    let dig = h.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&dig);
+    Ok(SealDigest::from_digest(out))
 }

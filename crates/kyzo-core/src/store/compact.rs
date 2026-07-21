@@ -20,8 +20,11 @@
 //! benches), never dogma in either direction — inventing a constant without
 //! the campaign is forbidden (carried obligation `kv-separation-threshold`).
 
+use sha2::{Digest, Sha256};
+
 use super::nonce::DomainCounter;
 use super::sweep::CommitOrdinal;
+use super::transcript::encode_merge_proof_header;
 
 /// Committed-byte / reclaimable-debt quantities — the only legal pace inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -181,7 +184,7 @@ impl MergeProof {
         if parts.input_content_hashes.is_empty() {
             return Err(CompactRefuse::EmptyMerge);
         }
-        let sealed_identity = sealed_identity_digest(&parts);
+        let sealed_identity = sealed_identity_from_transcript(&parts)?;
         let proof = MergeProof {
             input_content_hashes: parts.input_content_hashes,
             lineage_hash: parts.lineage_hash,
@@ -311,18 +314,30 @@ pub enum CompactRefuse {
     #[error("compact: pace coefficients unmeasured — refuse until bench campaign seals them")]
     #[diagnostic(code(store::compact::pace_unmeasured))]
     PaceCoefficientsUnmeasured,
+    /// MergeProofHeader CanonicalTranscript encode refused.
+    #[error("compact: CanonicalTranscript encode refused for MergeProofHeader")]
+    #[diagnostic(code(store::compact::transcript_refuse))]
+    TranscriptEncode,
 }
 
-fn sealed_identity_digest(parts: &MergeProofParts) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
+/// Sealed MergeProof identity = SHA-256(`CanonicalTranscript.as_bytes()`) from
+/// the ONE [`encode_merge_proof_header`] constructor. Hand-rolled field hashing
+/// is Unconstructible.
+fn sealed_identity_from_transcript(parts: &MergeProofParts) -> Result<[u8; 32], CompactRefuse> {
+    let inputs: Vec<[u8; 32]> = parts
+        .input_content_hashes
+        .iter()
+        .map(|h| *h.as_bytes())
+        .collect();
+    let transcript = encode_merge_proof_header(
+        &inputs,
+        parts.lineage_hash.as_bytes(),
+        parts.state_root.as_bytes(),
+        parts.compact_counter.get(),
+        parts.output_content_hash.as_bytes(),
+    )
+    .map_err(|_| CompactRefuse::TranscriptEncode)?;
     let mut h = Sha256::new();
-    h.update(b"kyzo.merge_proof.v1");
-    for content in &parts.input_content_hashes {
-        h.update(content.as_bytes());
-    }
-    h.update(parts.lineage_hash.as_bytes());
-    h.update(parts.state_root.as_bytes());
-    h.update(u64::to_be_bytes(parts.compact_counter.get()));
-    h.update(parts.output_content_hash.as_bytes());
-    h.finalize().into()
+    h.update(transcript.as_bytes());
+    Ok(h.finalize().into())
 }

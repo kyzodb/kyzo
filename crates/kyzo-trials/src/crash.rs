@@ -635,8 +635,8 @@ mod crypto_shred_deep_reachability {
     use crate::store::sweep::CommitOrdinal;
     use crate::store::transcript::{
         CanonicalTranscriptBuilder, FieldId, SEALED_ARTIFACT_KINDS, TranscriptRefuse,
-        encode_golden_fixture, refuse_residual_secret_bytes,
-        refuse_residual_secrets_in_all_sealed_kinds,
+        encode_all_normative_production_transcripts, encode_normative_production_transcript,
+        refuse_residual_secret_bytes, refuse_residual_secrets_in_all_sealed_kinds,
     };
     use crate::store::wal::WalHash;
     use crate::store::{FormatVersion, SealedArtifactKind};
@@ -736,19 +736,23 @@ mod crypto_shred_deep_reachability {
         // production all-kinds scrub door — clean of shredded needles.
         assert_eq!(
             SEALED_ARTIFACT_KINDS.len(),
-            8,
+            12,
             "campaign must enumerate every SealedArtifactKind incl. KeyCommit"
         );
-        refuse_residual_secrets_in_all_sealed_kinds(&needles)
+        let sealed_transcripts = encode_all_normative_production_transcripts()
+            .expect("normative production transcripts encode");
+        refuse_residual_secrets_in_all_sealed_kinds(&sealed_transcripts, &needles)
             .expect("clean goldens must pass all-kinds residual scrub");
         // Explicit WAL-header lane (same production encode door).
-        let wal_header = encode_golden_fixture(SealedArtifactKind::WalHeader).expect("wal header");
+        let wal_header = encode_normative_production_transcript(SealedArtifactKind::WalHeader)
+            .expect("wal header");
         assert_eq!(
             refuse_residual_secret_bytes(wal_header.as_bytes(), &needles),
             Ok(())
         );
         // KeyCommit / CMT-1 golden must stay intact and clean of shredded needles.
-        let key_commit = encode_golden_fixture(SealedArtifactKind::KeyCommit).expect("key commit");
+        let key_commit = encode_normative_production_transcript(SealedArtifactKind::KeyCommit)
+            .expect("key commit");
         assert_eq!(
             refuse_residual_secret_bytes(key_commit.as_bytes(), &needles),
             Ok(()),

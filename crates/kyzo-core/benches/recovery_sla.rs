@@ -143,7 +143,7 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
             commit_ordinal: ord,
             body: commit_body(seed, ord.get(), body_len),
         };
-        let record = WalRecord::seal(pred, payload);
+        let record = WalRecord::seal(pred, payload).expect("wal seal");
         pred = record.record_hash();
         unflushed.append(record).expect("unflushed WAL append");
     }

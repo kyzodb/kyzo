@@ -56,7 +56,7 @@ pub(crate) mod skip_walk;
 /// SweepDoor + IntentOrdinal/CommitOrdinal + Applied/Committed mint (07 seat).
 pub(crate) mod sweep;
 pub(crate) mod time;
-/// CanonicalTranscript + golden vectors + unknown-version refuse (07 seat).
+/// CanonicalTranscript + production golden vectors + unknown-version refuse (§59).
 pub(crate) mod transcript;
 pub(crate) mod tx;
 pub(crate) mod verify_walk;
@@ -177,8 +177,17 @@ pub use sweep::{
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use transcript::{
-    CanonicalTranscript, CanonicalTranscriptBuilder, FieldId, MapValue, SealedArtifactKind,
-    TranscriptRefuse, encode_golden_fixture, parse_golden_hex,
+    AdmissionCertificateTranscriptParts, CanonicalTranscript, CanonicalTranscriptBuilder,
+    CheckpointSealTranscriptParts, FieldId, LeaveIsFreeIncarnationTranscriptPart,
+    LeaveIsFreeSaltTranscriptPart, MapValue, SEALED_ARTIFACT_KINDS, SealedArtifactKind,
+    TranscriptRefuse, WalRecordPayloadParts, encode_admission_certificate,
+    encode_all_normative_production_transcripts, encode_ancestor_entitlement_key_id,
+    encode_ancestor_read_grant_payload, encode_audit_key_leaf, encode_chained_state_root,
+    encode_checkpoint_seal, encode_fork_consent_key_id, encode_fork_grant_payload,
+    encode_fork_store_id, encode_fork_write_token, encode_key_commitment,
+    encode_leave_is_free_pack, encode_merge_proof_header, encode_normative_production_transcript,
+    encode_recovery_grant_payload, encode_recovery_matrix, encode_recovery_write_token,
+    encode_state_root_head, encode_wal_record, parse_golden_hex,
 };
 #[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use tx::{
