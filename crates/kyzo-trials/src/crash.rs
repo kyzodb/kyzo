@@ -210,9 +210,11 @@ mod fuse_crash_matrix {
     use crate::store::{ReadTx, Slice, Storage, WriteTx};
 
     /// The main data keyspace's journal file at a fresh store's very first
-    /// segment — verified empirically (see the story's own session record):
-    /// with the small row counts this class drives, the journal never rotates
-    /// past `0.jnl`, so the Nth `fsync()` on this ONE path is unambiguous.
+    /// segment. The commit-boundary matrix hard-pins this: after the
+    /// fault-free recorder, `journal_segment_basenames` must equal
+    /// `[JOURNAL_PATH]` — with the small row counts this class drives, the
+    /// journal must never rotate past `0.jnl`, so the Nth op on this ONE
+    /// path is unambiguous.
     const JOURNAL_PATH: &str = "0.jnl";
 
     /// One durable round's key/value pairs, deterministic in `round` and `n` so
@@ -265,13 +267,41 @@ mod fuse_crash_matrix {
         total_scan_set(&cut)
     }
 
+    /// Journal segment basenames (`0.jnl`, `1.jnl`, …) under a store root —
+    /// the hard-pin for this class: the small-row matrix must never rotate
+    /// past a single segment, or `JOURNAL_PATH`'s Nth-fsync premise is void.
+    fn journal_segment_basenames(store_root: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(store_root)
+            .unwrap_or_else(|e| panic!("read store root {}: {e}", store_root.display()))
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jnl"))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     const ROUNDS: u32 = 6;
     const KEYS_PER_ROUND: u32 = 20;
+
+    /// Faults exercised at each recorded commit_durable barrier. ClearCache
+    /// keeps the exact power-cut oracle; TornSeq/TornOp are write-time
+    /// decisions (see `kyzo_crashfs::fault`) so they arm on the journal
+    /// Write count observed at the same barrier — never on Fsync, where
+    /// only ClearCache is a first-class event.
+    const COMMIT_BOUNDARY_FAULTS: [Fault; 3] = [Fault::ClearCache, Fault::TornSeq, Fault::TornOp];
 
     /// Commit-boundary class: a real `FjallStorage`, mounted through
     /// `kyzo-crashfs`, crashed EXACTLY at each of its own `commit_durable`
     /// calls in turn — never a byte offset, per the design ruling's
     /// field-converged lesson ("anchored to durability barriers").
+    ///
+    /// Rows stay small so the journal is hard-pinned on `0.jnl` (asserted).
+    /// Each barrier is crossed with ClearCache (exact SimStorage power-cut
+    /// oracle) AND with TornSeq/TornOp on the barrier's last journal write
+    /// (open-or-typed-refuse; never durable past the torn round; never
+    /// wrong bytes). A ≥2-journal-segment matrix is blocked without a
+    /// `max_journaling_size` door on `StorageOptions` (AUDIT-crash-multiseg).
     #[test]
     fn commit_boundary_crash_matrix_matches_the_powercut_oracle() {
         if !can_mount() {
@@ -282,9 +312,10 @@ mod fuse_crash_matrix {
             return;
         }
 
-        // Pass 1: the fault-free recorder. Learn which occurrence of Fsync on
-        // the journal coincides with each round's own commit_durable by
-        // OBSERVING it once, honestly — never by guessing fjall's internals.
+        // Pass 1: the fault-free recorder. Learn which occurrence of Fsync
+        // AND Write on the journal coincides with each round's own
+        // commit_durable by OBSERVING it once, honestly — never by guessing
+        // fjall's internals.
         let backing_a = tempfile::tempdir().unwrap();
         let mnt_a = tempfile::tempdir().unwrap();
         let fs_a = PassthroughFs::new(backing_a.path(), FaultPlan::new(1));
@@ -293,23 +324,37 @@ mod fuse_crash_matrix {
             return;
         };
         wait_for_mount(mnt_a.path());
-        let boundary_fsync_count: Vec<u64> = {
+        let (boundary_fsync_count, boundary_write_count): (Vec<u64>, Vec<u64>) = {
             let db = new_fjall_storage(mnt_a.path()).unwrap();
-            let mut counts = Vec::with_capacity(ROUNDS as usize);
+            let mut fsyncs = Vec::with_capacity(ROUNDS as usize);
+            let mut writes = Vec::with_capacity(ROUNDS as usize);
             for round in 0..ROUNDS {
                 let mut tx = db.write_tx().unwrap();
                 for (k, v) in round_kv(round, KEYS_PER_ROUND) {
                     tx.put(&k, &v).unwrap();
                 }
                 tx.commit_durable().unwrap();
-                counts.push(counters.fsync_count(JOURNAL_PATH));
+                fsyncs.push(counters.fsync_count(JOURNAL_PATH));
+                writes.push(counters.write_count(JOURNAL_PATH));
             }
-            counts
+            (fsyncs, writes)
         };
+        // Hard-pin: this matrix's rows must never rotate the journal. If a
+        // second segment appears, JOURNAL_PATH's Nth-op counts are no longer
+        // the commit-boundary identity — fail loud, do not paper over.
+        let journals = journal_segment_basenames(backing_a.path());
+        assert_eq!(
+            journals,
+            vec![JOURNAL_PATH.to_string()],
+            "commit-boundary matrix must stay on a single journal segment \
+             ({JOURNAL_PATH}); observed {journals:?} — shrink rows or seat a \
+             multi-segment variant with per-segment triggers"
+        );
         drop(session_a);
         // Sanity: strictly increasing, or this class's entire premise (one
-        // fsync per round on this one path) is void and every assertion below
-        // would be meaningless — fail loud here, not by mis-triggering later.
+        // fsync/write frontier per round on this one path) is void and every
+        // assertion below would be meaningless — fail loud here, not by
+        // mis-triggering later.
         for w in boundary_fsync_count.windows(2) {
             assert!(
                 w[0] < w[1],
@@ -317,55 +362,112 @@ mod fuse_crash_matrix {
              {boundary_fsync_count:?}"
             );
         }
+        for w in boundary_write_count.windows(2) {
+            assert!(
+                w[0] < w[1],
+                "write counts on {JOURNAL_PATH} must strictly increase per round: \
+             {boundary_write_count:?}"
+            );
+        }
 
-        // Pass 2: one independent campaign per round boundary. Fresh backing
-        // directory every time — no campaign ever reuses another's disk state.
-        for (idx, &fsync_count) in boundary_fsync_count.iter().enumerate() {
-            let round_idx = idx as u32; // the round whose OWN fsync gets interrupted
-            let backing_b = tempfile::tempdir().unwrap();
-            let mnt_b = tempfile::tempdir().unwrap();
-            let plan = FaultPlan::new(1).with_trigger(Trigger::new(
-                JOURNAL_PATH,
-                OpKind::Fsync,
-                fsync_count,
-                Fault::ClearCache,
-            ));
-            let fs_b = PassthroughFs::new(backing_b.path(), plan);
-            let Some(session_b) = mount(fs_b, mnt_b.path()) else {
-                return;
-            };
-            wait_for_mount(mnt_b.path());
-            {
-                let db = new_fjall_storage(mnt_b.path()).unwrap();
-                for round in 0..=round_idx {
-                    let mut tx = db.write_tx().unwrap();
-                    for (k, v) in round_kv(round, KEYS_PER_ROUND) {
-                        tx.put(&k, &v).unwrap();
+        // Pass 2: one independent campaign per (round boundary × fault).
+        // Fresh backing directory every time — no campaign ever reuses
+        // another's disk state.
+        for (idx, (&fsync_count, &write_count)) in boundary_fsync_count
+            .iter()
+            .zip(boundary_write_count.iter())
+            .enumerate()
+        {
+            let round_idx = idx as u32; // the round whose OWN barrier is torn
+            for fault in COMMIT_BOUNDARY_FAULTS {
+                let backing_b = tempfile::tempdir().unwrap();
+                let mnt_b = tempfile::tempdir().unwrap();
+                // ClearCache is an fsync-boundary power cut; TornSeq/TornOp
+                // decide at write time and materialize on the next fsync —
+                // arming them on Fsync would be a silent no-op in passthrough.
+                let (op, at_count) = match fault {
+                    Fault::ClearCache => (OpKind::Fsync, fsync_count),
+                    Fault::TornSeq | Fault::TornOp => (OpKind::Write, write_count),
+                };
+                let plan = FaultPlan::new(1).with_trigger(Trigger::new(
+                    JOURNAL_PATH,
+                    op,
+                    at_count,
+                    fault,
+                ));
+                let fs_b = PassthroughFs::new(backing_b.path(), plan);
+                let Some(session_b) = mount(fs_b, mnt_b.path()) else {
+                    return;
+                };
+                wait_for_mount(mnt_b.path());
+                {
+                    let db = new_fjall_storage(mnt_b.path()).unwrap();
+                    for round in 0..=round_idx {
+                        let mut tx = db.write_tx().unwrap();
+                        for (k, v) in round_kv(round, KEYS_PER_ROUND) {
+                            tx.put(&k, &v).unwrap();
+                        }
+                        tx.commit_durable().unwrap();
                     }
-                    tx.commit_durable().unwrap();
+                }
+                drop(session_b); // the simulated crash: unmount, nothing more written
+
+                // Reopen directly on the backing directory — bypassing FUSE
+                // entirely, exactly as a real process reopening after a crash
+                // would see the disk (mirrors kyzo-crashfs's own standalone tests).
+                let reopen = new_fjall_storage(backing_b.path());
+                let expected_prefix = oracle_after_powercut(round_idx, KEYS_PER_ROUND);
+                match fault {
+                    Fault::ClearCache => {
+                        let reopened = reopen.unwrap_or_else(|e| {
+                            panic!(
+                                "ClearCache round {round_idx}: store must open clean, not: {e}"
+                            )
+                        });
+                        // "Opens clean" is necessary, never sufficient (the issue's
+                        // own pinned lsm-tree finding: data blocks are checksummed
+                        // lazily, on first read) — total_scan forces the traversal
+                        // that would surface a torn data block instead of silently
+                        // skipping it.
+                        let observed = total_scan_set(&reopened);
+                        assert_eq!(
+                            observed, expected_prefix,
+                            "ClearCache round {round_idx}: a crash exactly at its own \
+                             commit_durable's fsync must leave precisely rounds \
+                             0..{round_idx} visible (this round's own writes never durable), \
+                             matching SimStorage crashed at the analogous logical point"
+                        );
+                    }
+                    Fault::TornSeq | Fault::TornOp => {
+                        // Torn* has no SimStorage twin for "drop/split one journal
+                        // write then fsync". Honest outcomes: typed reopen refuse,
+                        // OR open clean with exactly the already-fsynced prefix
+                        // (same set ClearCache must leave). Showing the torn round
+                        // as durable, or losing prior fsynced rounds, is a fail —
+                        // and equality with the prefix makes a vacuous (no-op)
+                        // trigger fail too, because a no-op would leave
+                        // rounds 0..=round_idx.
+                        match reopen {
+                            Ok(reopened) => {
+                                let observed = total_scan_set(&reopened);
+                                // Equality with the ClearCache prefix is itself the
+                                // anti-vacuity check: a no-op trigger would leave
+                                // rounds 0..=round_idx durable, which is a larger set.
+                                assert_eq!(
+                                    observed, expected_prefix,
+                                    "{fault:?} round {round_idx}: open-clean after a torn \
+                                     commit-boundary write must leave exactly the already-\
+                                     fsynced prefix (rounds 0..{round_idx}), never the torn \
+                                     round and never less than prior durable rounds"
+                                );
+                            }
+                            Err(_typed_refusal) => {
+                                // A typed reopen refusal is an honest torn-journal outcome.
+                            }
+                        }
+                    }
                 }
             }
-            drop(session_b); // the simulated crash: unmount, nothing more written
-
-            // Reopen directly on the backing directory — bypassing FUSE
-            // entirely, exactly as a real process reopening after a crash
-            // would see the disk (mirrors kyzo-crashfs's own standalone tests).
-            let reopened = new_fjall_storage(backing_b.path()).unwrap_or_else(|e| {
-                panic!("round {round_idx}: store must open clean or refuse typed, not: {e}")
-            });
-
-            // "Opens clean" is necessary, never sufficient (the issue's own
-            // pinned lsm-tree finding: data blocks are checksummed lazily, on
-            // first read) — total_scan forces the traversal that would
-            // surface a torn data block instead of silently skipping it.
-            let observed = total_scan_set(&reopened);
-            let expected = oracle_after_powercut(round_idx, KEYS_PER_ROUND);
-            assert_eq!(
-                observed, expected,
-                "round {round_idx}: a crash exactly at its own commit_durable's fsync must leave \
-             precisely rounds 0..{round_idx} visible (this round's own writes never durable), \
-             matching SimStorage crashed at the analogous logical point"
-            );
         }
     }
 
