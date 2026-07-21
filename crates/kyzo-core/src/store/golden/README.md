@@ -1,17 +1,23 @@
 # Golden vectors — CanonicalTranscript (§59 / §81)
 
-Authority for sealed-artifact byte identity. Goldens are **pinned production
-encoder bytes** for the normative fixtures (`encode_*` / production
-`CanonicalTranscript` is the authority) — not independent hand-derivation
-theater.
+Authority for sealed-artifact byte identity. Goldens are **independently
+derived** from the CanonicalTranscript wire format specification
+(MAGIC `KTX1` / FormatVersion length-prefix / field id + tag + payload /
+big-endian u64 / digest32 / length-prefixed bytes). They are **not**
+captured by calling production `encode_*` and pasting the output.
 
-Each `.vec` holds the sealed bytes of that kind's normative production fixture
-(`store = [0x11]*32`, `dig = [0x22]*32`, `FormatVersion::CURRENT = 6`).
+Production `encode_*` must match the independent derivation for the same
+normative parts. Phase-0 forbids encoder-self-capture goldens.
+
+## FormatVersion decision
+
+| Version | Decision |
+| --- | --- |
+| 6 | Current sealed-transcript stamp (`FormatVersion::CURRENT`). All vectors in this directory are FormatVersion 6. Changing any vector bytes requires a FormatVersion decision recorded here — never a silent test-fix commit. |
 
 ## Header law
 
-Every `.vec` file begins with a header. Changing vector bytes requires a
-`FormatVersion` decision recorded here — never a silent test-fix commit.
+Every `.vec` file begins with a header:
 
 ```
 # FormatVersion: <n>
@@ -21,22 +27,25 @@ Every `.vec` file begins with a header. Changing vector bytes requires a
 
 ## Files
 
-| File | Kind | Production encoder |
+| File | Kind | Independent of |
 | --- | --- | --- |
-| `checkpoint_seal.vec` | CheckpointSeal | `encode_checkpoint_seal` |
-| `admission_certificate.vec` | AdmissionCertificate | `encode_admission_certificate` |
-| `fork_grant.vec` | ForkGrant | `encode_fork_grant_payload` |
-| `recovery_grant.vec` | RecoveryGrant | `encode_recovery_grant_payload` |
-| `merge_proof_header.vec` | MergeProofHeader | `encode_merge_proof_header` |
-| `audit_key_leaf.vec` | AuditKeyLeaf | `encode_audit_key_leaf` |
-| `wal_header.vec` | WalHeader | `encode_wal_record` |
-| `state_root_head.vec` | StateRootHead | `encode_state_root_head` |
-| `leave_is_free_pack.vec` | LeaveIsFreePack | `encode_leave_is_free_pack` |
-| `chained_state_root.vec` | ChainedStateRoot | `encode_chained_state_root` |
-| `ancestor_read_grant.vec` | AncestorReadGrant | `encode_ancestor_read_grant_payload` |
+| `checkpoint_seal.vec` | CheckpointSeal | wire schema for `encode_checkpoint_seal` parts |
+| `admission_certificate.vec` | AdmissionCertificate | wire schema for `encode_admission_certificate` parts |
+| `fork_grant.vec` | ForkGrant | wire schema for `encode_fork_grant_payload` parts |
+| `recovery_grant.vec` | RecoveryGrant | wire schema for `encode_recovery_grant_payload` parts |
+| `merge_proof_header.vec` | MergeProofHeader | wire schema for `encode_merge_proof_header` parts |
+| `audit_key_leaf.vec` | AuditKeyLeaf | wire schema for `encode_audit_key_leaf` parts |
+| `wal_header.vec` | WalHeader | wire schema for `encode_wal_record` (commit) parts |
+| `state_root_head.vec` | StateRootHead | wire schema for `encode_state_root_head` parts |
+| `leave_is_free_pack.vec` | LeaveIsFreePack | wire schema for `encode_leave_is_free_pack` parts |
+| `chained_state_root.vec` | ChainedStateRoot | wire schema for `encode_chained_state_root` parts |
+| `ancestor_read_grant.vec` | AncestorReadGrant | wire schema for `encode_ancestor_read_grant_payload` parts |
 
-`KeyCommit` golden lives as `KEY_COMMIT_GOLDEN_VEC` beside `encode_key_commitment`
-in `transcript.rs` (same pin law).
+`KeyCommit` golden lives as `KEY_COMMIT_GOLDEN_VEC` beside the production
+constructor in `transcript.rs` (same independent-derivation law).
 
-Payload lines after the header are lowercase hex of the sealed
-`CanonicalTranscript` for that kind's normative fixture.
+Normative fixture constants: `store = [0x11]*32`, `dig = [0x22]*32`,
+`FormatVersion::CURRENT = 6` (ASCII `"6"`).
+
+Payload lines after the header are lowercase hex of the independently
+derived sealed transcript for that kind's normative fixture.

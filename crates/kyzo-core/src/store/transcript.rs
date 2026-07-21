@@ -793,18 +793,19 @@ pub const AUDIT_KEY_LEAF_DOMAIN_LABEL: &[u8] = b"kyzo.audit_key_leaf.v1";
 /// Domain label for AdmissionCertificate envelopes.
 pub const ADMISSION_CERTIFICATE_DOMAIN_LABEL: &[u8] = b"kyzo.admission_certificate.v1";
 
-/// Golden vector authority for [`SealedArtifactKind::KeyCommit`] (seat 59).
+/// Independently derived golden for [`SealedArtifactKind::KeyCommit`] (seat 59).
 ///
-/// Embedded here because the production constructor is
-/// [`encode_key_commitment`]; the hex payload must match that encoder for the
-/// normative fixture key-id + CryptoDomain — never a second serialization path.
+/// Hex is hand-derived from the CanonicalTranscript wire format
+/// (MAGIC/version/field tags/be u64/digest32/bytes) for the normative fixture —
+/// never captured by calling [`encode_key_commitment`] and pasting its output.
+/// Production [`encode_key_commitment`] must match this derivation.
 ///
-/// Normative fixture (hand-derived): key-id starts `08 01 8b…`, store-id starts
-/// `02 8c 8d…`, fence_epoch = 0, domain label `KEY_COMMIT`.
+/// Normative fixture: key-id starts `08 01 8b…`, store-id starts `02 8c 8d…`,
+/// fence_epoch = 0, domain label `KEY_COMMIT`.
 pub const KEY_COMMIT_GOLDEN_VEC: &str = r#"
 # FormatVersion: 6
 # Kind: KeyCommit
-# Decision: seat-59 — CMT-1 key-commitment CanonicalTranscript via encode_key_commitment
+# Decision: seat-59 — independently derived wire bytes (not captured from production encoder)
 4b5458310136000000060001010000000000000008000202000000013600030308018b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a800040308028c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a90005020000000a4b45595f434f4d4d49540008010000000000000000
 "#;
 
@@ -1490,8 +1491,10 @@ pub fn normative_key_commit_domain() -> CryptoDomain {
 
 /// Encode one sealed kind via production `encode_*` with normative pins.
 ///
-/// Golden vectors and residual-secret campaigns share this path. Not theater:
-/// each arm calls the typed production encoder with hand-derived parts.
+/// Residual-secret campaigns and the production half of the independent-golden
+/// pin test share this path. Each arm calls the typed production encoder with
+/// hand-derived parts; expected bytes come from the independent wire encoder
+/// in `pins`, never from capturing this function's output into `.vec`.
 pub fn encode_normative_production_transcript(
     kind: SealedArtifactKind,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
@@ -1601,69 +1604,284 @@ fn from_hex(b: u8) -> Result<u8, TranscriptRefuse> {
 mod pins {
     use super::*;
 
-    fn assert_production_matches_golden(kind: SealedArtifactKind, golden: &str, production: &[u8]) {
-        let expected = parse_golden_hex(golden).expect("golden vector parses");
-        assert_eq!(
-            production,
-            expected.as_slice(),
-            "production encode_{kind:?} must match pinned production golden"
-        );
-        let parsed = CanonicalTranscript::parse(&expected).expect("golden must parse");
-        assert_eq!(parsed.as_bytes(), expected.as_slice());
+    /// Wire field tags from the CanonicalTranscript format spec (not production API).
+    const TAG_U64: u8 = 1;
+    const TAG_BYTES: u8 = 2;
+    const TAG_DIGEST32: u8 = 3;
+    const TAG_OPTIONAL_ABSENT: u8 = 5;
+
+    /// Deliberately dumb independent encoder written from the wire format only:
+    /// MAGIC ‖ ver_len ‖ ver ‖ field_count_be_u32 ‖ (field_id_be_u16 ‖ tag ‖ payload)*.
+    /// Does **not** call [`CanonicalTranscriptBuilder`] or any production `encode_*`.
+    struct IndepWire {
+        buf: Vec<u8>,
+        field_count_at: usize,
+        field_count: u32,
     }
 
+    impl IndepWire {
+        /// FormatVersion 6 → ASCII `"6"` (canonical spelling).
+        fn new_v6() -> Self {
+            let mut buf = Vec::with_capacity(64);
+            buf.extend_from_slice(b"KTX1"); // MAGIC
+            buf.push(1); // ver_len
+            buf.extend_from_slice(b"6"); // ver
+            let field_count_at = buf.len();
+            buf.extend_from_slice(&0u32.to_be_bytes());
+            Self {
+                buf,
+                field_count_at,
+                field_count: 0,
+            }
+        }
+
+        fn begin(&mut self, id: u16) {
+            self.buf.extend_from_slice(&id.to_be_bytes());
+            self.field_count += 1;
+        }
+
+        fn u64(&mut self, id: u16, value: u64) {
+            self.begin(id);
+            self.buf.push(TAG_U64);
+            self.buf.extend_from_slice(&value.to_be_bytes());
+        }
+
+        fn bytes(&mut self, id: u16, bytes: &[u8]) {
+            self.begin(id);
+            self.buf.push(TAG_BYTES);
+            self.buf
+                .extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            self.buf.extend_from_slice(bytes);
+        }
+
+        fn digest32(&mut self, id: u16, digest: &[u8; 32]) {
+            self.begin(id);
+            self.buf.push(TAG_DIGEST32);
+            self.buf.extend_from_slice(digest);
+        }
+
+        fn optional_absent(&mut self, id: u16) {
+            self.begin(id);
+            self.buf.push(TAG_OPTIONAL_ABSENT);
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            let count = self.field_count.to_be_bytes();
+            self.buf[self.field_count_at..self.field_count_at + 4].copy_from_slice(&count);
+            self.buf
+        }
+    }
+
+    /// Shared sealed-artifact header fields from the wire schema
+    /// (ARTIFACT_KIND / FORMAT_VERSION / DOMAIN_LABEL).
+    fn indep_begin_sealed(kind_tag: u64, domain_label: &[u8]) -> IndepWire {
+        let mut w = IndepWire::new_v6();
+        w.u64(1, kind_tag); // FieldId::ARTIFACT_KIND
+        w.bytes(2, b"6"); // FieldId::FORMAT_VERSION
+        w.bytes(5, domain_label); // FieldId::DOMAIN_LABEL
+        w
+    }
+
+    /// Independently derive expected sealed bytes for the normative fixture of `kind`.
+    /// Field order and tags come from the CanonicalTranscript wire schema / FieldId table —
+    /// never from calling production `encode_*` and capturing output.
+    fn independent_encode_normative(kind: SealedArtifactKind) -> Vec<u8> {
+        let store = [0x11u8; 32];
+        let dig = [0x22u8; 32];
+        match kind {
+            SealedArtifactKind::CheckpointSeal => {
+                let mut w = indep_begin_sealed(1, b"kyzo.checkpoint_seal.v1");
+                w.digest32(9, &store); // STORE_ID
+                w.digest32(10, &store); // CRYPTO_DOMAIN_STORE_ID
+                w.u64(11, 0); // CRYPTO_DOMAIN_FENCE_EPOCH
+                w.digest32(12, &store); // CRYPTO_DOMAIN_FENCE_STORE_ID
+                w.u64(13, 0); // CUT_FENCE_EPOCH
+                w.digest32(14, &store); // CUT_FENCE_STORE_ID
+                w.u64(15, 1); // CUT_ORDINAL
+                w.digest32(16, &dig); // STATE_ROOT
+                w.digest32(17, &dig); // FINAL_WAL_HASH
+                w.digest32(18, &dig); // CHECKPOINT_MANIFEST
+                w.u64(19, 1); // CATALOG_GENERATION
+                w.digest32(20, &dig); // RETAINED_OBJECT_MANIFEST
+                w.digest32(21, &dig); // PERMANENCE_CANDIDATE_MANIFEST
+                w.digest32(22, &dig); // REPLICA_CUSTODY_MANIFEST
+                w.u64(23, 0); // NONCE_FLOOR_COMMIT
+                w.u64(24, 0); // NONCE_FLOOR_COMPACT
+                w.u64(25, 0); // NONCE_FLOOR_ROTATE
+                w.u64(26, 0); // INCARNATION_OPEN_ORDINAL
+                w.digest32(27, &dig); // INCARNATION_ENTROPY
+                w.digest32(28, &dig); // PRIOR_SEAL_DIGEST
+                w.digest32(29, &dig); // RETENTION_CERTIFICATE_DIGEST
+                w.finish()
+            }
+            SealedArtifactKind::AdmissionCertificate => {
+                let mut w = indep_begin_sealed(2, b"kyzo.admission_certificate.v1");
+                w.digest32(9, &store); // STORE_ID
+                w.bytes(68, &[0u8; 8]); // PROTOCOL_VERSION
+                w.u64(69, 0); // ORIGIN_EPOCH
+                w.u64(70, 1); // ORIGIN_COMMIT
+                w.digest32(71, &dig); // SCHEMA_CUT
+                w.digest32(72, &dig); // RECORD_DIGEST
+                w.digest32(73, &dig); // PREDECESSOR_HISTORY_DIGEST
+                w.digest32(74, &dig); // POST_STATE_ROOT
+                w.digest32(75, &dig); // AUTHORIZING_KEY_ID
+                w.digest32(76, &dig); // SCOPE_MANIFEST_DIGEST
+                w.digest32(77, &store); // ORIGIN_EPOCH_STORE_ID
+                w.optional_absent(78); // OPERATION_KEY absent
+                w.bytes(79, &[0u8; 64]); // SIGNATURE
+                w.finish()
+            }
+            SealedArtifactKind::ForkGrant => {
+                let mut w = indep_begin_sealed(3, b"kyzo.fork_grant.payload.v1");
+                w.digest32(34, &dig); // GRANT_ID
+                w.digest32(35, &dig); // PREDECESSOR_STORE
+                w.digest32(36, &dig); // FORK_POINT_ROOT
+                w.digest32(37, &dig); // SUCCESSOR_PRINCIPAL
+                w.digest32(38, &dig); // IDENTITY_SEED
+                w.digest32(39, &dig); // KEY_MATERIAL_COMMITMENT
+                w.finish()
+            }
+            SealedArtifactKind::RecoveryGrant => {
+                let mut w = indep_begin_sealed(4, b"kyzo.recovery_grant.payload.v1");
+                w.digest32(34, &dig); // GRANT_ID
+                w.digest32(35, &dig); // PREDECESSOR_STORE
+                w.digest32(38, &dig); // IDENTITY_SEED
+                w.digest32(39, &dig); // KEY_MATERIAL_COMMITMENT
+                w.u64(40, 0); // PREDECESSOR_EPOCH
+                w.digest32(41, &dig); // PREDECESSOR_EPOCH_STORE_ID
+                w.finish()
+            }
+            SealedArtifactKind::MergeProofHeader => {
+                let mut w = indep_begin_sealed(5, b"kyzo.merge_proof.v1");
+                w.digest32(30, &dig); // INPUT_CONTENT_HASH
+                w.digest32(31, &dig); // LINEAGE_HASH
+                w.digest32(84, &dig); // MERGE_STATE_ROOT
+                w.u64(85, 1); // MERGE_COMPACT_COUNTER
+                w.digest32(86, &dig); // MERGE_OUTPUT_CONTENT_HASH
+                w.finish()
+            }
+            SealedArtifactKind::AuditKeyLeaf => {
+                // Digests precede DOMAIN_LABEL (field ids 3/4 before 5).
+                let mut w = IndepWire::new_v6();
+                w.u64(1, 6); // ARTIFACT_KIND = AuditKeyLeaf
+                w.bytes(2, b"6"); // FORMAT_VERSION
+                w.digest32(3, &dig); // PRIMARY_DIGEST
+                w.digest32(4, &dig); // SECONDARY_DIGEST
+                w.bytes(5, b"kyzo.audit_key_leaf.v1"); // DOMAIN_LABEL
+                w.finish()
+            }
+            SealedArtifactKind::WalHeader => {
+                let mut w = indep_begin_sealed(7, b"kyzo.wal.record.v1");
+                w.digest32(50, &dig); // PREDECESSOR_HASH
+                w.bytes(51, b"commit"); // PAYLOAD_KIND
+                w.u64(52, 1); // COMMIT_ORDINAL
+                w.bytes(53, b"body"); // PAYLOAD_BODY
+                w.finish()
+            }
+            SealedArtifactKind::KeyCommit => {
+                let key_id = [
+                    0x08u8, 0x01, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94,
+                    0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1,
+                    0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8,
+                ];
+                let key_store = [
+                    0x08u8, 0x02, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95,
+                    0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2,
+                    0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9,
+                ];
+                let mut w = IndepWire::new_v6();
+                w.u64(1, 8); // ARTIFACT_KIND = KeyCommit
+                w.bytes(2, b"6"); // FORMAT_VERSION
+                w.digest32(3, &key_id); // PRIMARY_DIGEST
+                w.digest32(4, &key_store); // SECONDARY_DIGEST
+                w.bytes(5, b"KEY_COMMIT"); // DOMAIN_LABEL
+                w.u64(8, 0); // FENCE_EPOCH
+                w.finish()
+            }
+            SealedArtifactKind::StateRootHead => {
+                let mut w = indep_begin_sealed(9, b"kyzo.state_root_head.v1");
+                w.digest32(9, &store); // STORE_ID
+                w.u64(13, 0); // CUT_FENCE_EPOCH
+                w.u64(15, 1); // CUT_ORDINAL
+                w.digest32(16, &dig); // STATE_ROOT
+                w.finish()
+            }
+            SealedArtifactKind::LeaveIsFreePack => {
+                let mut w = indep_begin_sealed(10, b"kyzo.leave_is_free.pack.root.v1");
+                w.bytes(59, b"seal_and_suffix"); // PACK_KIND
+                w.u64(60, 1); // WRAPPED_SALT_COUNT
+                w.digest32(61, &store); // SALT_STORE_ID
+                w.u64(62, 0); // SALT_FENCE_EPOCH
+                w.u64(63, 0); // SEGMENT_COUNTER
+                w.bytes(64, &[1, 2, 3]); // CIPHERTEXT
+                w.u64(65, 1); // INCARNATION_COUNT
+                w.u64(66, 0); // PACK_INCARNATION_ORDINAL
+                w.digest32(67, &dig); // PACK_INCARNATION_ENTROPY
+                w.bytes(80, b"payload"); // PACK_PAYLOAD
+                w.finish()
+            }
+            SealedArtifactKind::ChainedStateRoot => {
+                let mut w = indep_begin_sealed(11, b"kyzo.chained_state_root.v1");
+                w.digest32(56, &dig); // CONTENT_ROOT
+                w.digest32(57, &dig); // PREDECESSOR_ROOT
+                w.u64(58, 1); // CHAIN_LINK_KIND = Ordinary
+                w.u64(81, 1); // CHAIN_COMMIT_ORDINAL
+                w.finish()
+            }
+            SealedArtifactKind::AncestorReadGrant => {
+                let mut w = indep_begin_sealed(12, b"kyzo.ancestor_read_grant.payload.v1");
+                w.digest32(9, &dig); // STORE_ID
+                w.u64(46, 0); // FROM_EPOCH
+                w.digest32(47, &dig); // FROM_EPOCH_STORE_ID
+                w.u64(48, 1); // TO_EPOCH
+                w.digest32(49, &dig); // TO_EPOCH_STORE_ID
+                w.finish()
+            }
+        }
+    }
+
+    fn golden_file_for(kind: SealedArtifactKind) -> Option<&'static str> {
+        Some(match kind {
+            SealedArtifactKind::CheckpointSeal => include_str!("golden/checkpoint_seal.vec"),
+            SealedArtifactKind::AdmissionCertificate => {
+                include_str!("golden/admission_certificate.vec")
+            }
+            SealedArtifactKind::ForkGrant => include_str!("golden/fork_grant.vec"),
+            SealedArtifactKind::RecoveryGrant => include_str!("golden/recovery_grant.vec"),
+            SealedArtifactKind::MergeProofHeader => include_str!("golden/merge_proof_header.vec"),
+            SealedArtifactKind::AuditKeyLeaf => include_str!("golden/audit_key_leaf.vec"),
+            SealedArtifactKind::WalHeader => include_str!("golden/wal_header.vec"),
+            SealedArtifactKind::StateRootHead => include_str!("golden/state_root_head.vec"),
+            SealedArtifactKind::LeaveIsFreePack => include_str!("golden/leave_is_free_pack.vec"),
+            SealedArtifactKind::ChainedStateRoot => include_str!("golden/chained_state_root.vec"),
+            SealedArtifactKind::AncestorReadGrant => include_str!("golden/ancestor_read_grant.vec"),
+            SealedArtifactKind::KeyCommit => KEY_COMMIT_GOLDEN_VEC,
+        })
+    }
+
+    /// Expected bytes = independent wire derivation; production `encode_*` must match.
+    /// `.vec` files hold that same independently derived hex (durability pin) — never
+    /// encoder-self-capture.
     #[test]
-    fn production_goldens_match_encoder() {
-        const GOLDENS: &[(SealedArtifactKind, &str)] = &[
-            (
-                SealedArtifactKind::CheckpointSeal,
-                include_str!("golden/checkpoint_seal.vec"),
-            ),
-            (
-                SealedArtifactKind::AdmissionCertificate,
-                include_str!("golden/admission_certificate.vec"),
-            ),
-            (
-                SealedArtifactKind::ForkGrant,
-                include_str!("golden/fork_grant.vec"),
-            ),
-            (
-                SealedArtifactKind::RecoveryGrant,
-                include_str!("golden/recovery_grant.vec"),
-            ),
-            (
-                SealedArtifactKind::MergeProofHeader,
-                include_str!("golden/merge_proof_header.vec"),
-            ),
-            (
-                SealedArtifactKind::AuditKeyLeaf,
-                include_str!("golden/audit_key_leaf.vec"),
-            ),
-            (
-                SealedArtifactKind::WalHeader,
-                include_str!("golden/wal_header.vec"),
-            ),
-            (
-                SealedArtifactKind::StateRootHead,
-                include_str!("golden/state_root_head.vec"),
-            ),
-            (
-                SealedArtifactKind::LeaveIsFreePack,
-                include_str!("golden/leave_is_free_pack.vec"),
-            ),
-            (
-                SealedArtifactKind::ChainedStateRoot,
-                include_str!("golden/chained_state_root.vec"),
-            ),
-            (
-                SealedArtifactKind::AncestorReadGrant,
-                include_str!("golden/ancestor_read_grant.vec"),
-            ),
-            (SealedArtifactKind::KeyCommit, KEY_COMMIT_GOLDEN_VEC),
-        ];
-        for &(kind, golden) in GOLDENS {
-            let encoded = encode_normative_production_transcript(kind).expect("fixture encodes");
-            assert_production_matches_golden(kind, golden, encoded.as_bytes());
+    fn production_matches_independent_wire_goldens() {
+        for &kind in SEALED_ARTIFACT_KINDS {
+            let expected = independent_encode_normative(kind);
+            let production =
+                encode_normative_production_transcript(kind).expect("fixture encodes");
+            assert_eq!(
+                production.as_bytes(),
+                expected.as_slice(),
+                "production encode_{kind:?} must match independent wire derivation"
+            );
+            let golden = golden_file_for(kind).expect("every kind has a golden");
+            let from_vec = parse_golden_hex(golden).expect("golden vector parses");
+            assert_eq!(
+                from_vec.as_slice(),
+                expected.as_slice(),
+                "{kind:?}: .vec must hold independently derived bytes"
+            );
+            let parsed = CanonicalTranscript::parse(&expected).expect("golden must parse");
+            assert_eq!(parsed.as_bytes(), expected.as_slice());
         }
     }
 

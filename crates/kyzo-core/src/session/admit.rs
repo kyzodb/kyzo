@@ -2637,12 +2637,22 @@ mod live_certificate_verifiability {
     use crate::store::authority::WriteAuthority;
     use crate::store::merkle::RootChain;
     use crate::store::open::StoreId;
-    use crate::store::replica::{AuthorizingKey, AuthorizingKeyTable, ScopeManifestDigest};
+    use crate::store::replica::{
+        AuthorizingKey, AuthorizingKeyTable, ReplicaRefuse, ScopeManifestDigest,
+    };
     use crate::store::sweep::CommitOrdinal;
     use kyzo_model::value::DataValue;
 
     fn claim_parts(store: StoreId, live: LiveCertificateInputs) -> AdmitRecordParts {
-        let digest = RecordContentDigest::from_digest([0xE4; 32]);
+        claim_parts_with_digest(store, live, [0xE4; 32])
+    }
+
+    fn claim_parts_with_digest(
+        store: StoreId,
+        live: LiveCertificateInputs,
+        digest_bytes: [u8; 32],
+    ) -> AdmitRecordParts {
+        let digest = RecordContentDigest::from_digest(digest_bytes);
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("live-subject")),
             crate::data::statement::StatementPredicate::new("about").expect("predicate"),
@@ -2778,6 +2788,235 @@ mod live_certificate_verifiability {
         )
         .expect_err("verify-only key must not open the live door");
         assert_eq!(err, AdmitRefuse::UnregisteredAuthorizingKey);
+    }
+
+    /// #376 SEAT-59-GOLDENS fix-order item 3: certificate bound to a different
+    /// record digest must refuse at attach_verified (digest gate before verify).
+    #[test]
+    fn attach_verified_refuses_cert_minted_for_different_record() {
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let live_a = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(10),
+        ));
+        let (record_a, _cert_a) =
+            admit_record(claim_parts_with_digest(seats.store_id(), live_a, [0xA1; 32]))
+                .expect("admit record A");
+        let live_b = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(11),
+        ));
+        let (_record_b, cert_b) =
+            admit_record(claim_parts_with_digest(seats.store_id(), live_b, [0xB2; 32]))
+                .expect("admit record B");
+
+        let err = seats
+            .attach_verified(&record_a, cert_b)
+            .expect_err("cert for B must not attach to record A");
+        assert_eq!(
+            err,
+            AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed),
+            "mismatched record_digest is AuthenticityFailed"
+        );
+        // Chain tip must not advance on refuse (genesis still the only link).
+        assert_eq!(
+            seats.root_chain().links().len(),
+            1,
+            "refused attach must commit nothing to the admission spine"
+        );
+    }
+
+    /// #376: flipped signature byte must fail verify_replica inside attach_verified.
+    #[test]
+    fn attach_verified_refuses_flipped_signature_bit() {
+        use crate::store::replica::{
+            AdmissionCertificateParts, mint_admission_certificate,
+        };
+
+        let seats = LiveAdmissionSeats::mint_genesis();
+        let live = seats.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(12),
+        ));
+        let tip = seats
+            .root_chain()
+            .links()
+            .last()
+            .expect("genesis seats carry a tip link")
+            .clone();
+        let predecessor_history_digest = *tip.predecessor_root().as_bytes();
+        let (record, cert) =
+            admit_record(claim_parts(seats.store_id(), live)).expect("admit");
+
+        let mut flipped = *cert.signature();
+        flipped[0] ^= 0x01;
+        let bad = mint_admission_certificate(AdmissionCertificateParts {
+            protocol_version: *cert.protocol_version(),
+            origin_store: cert.origin_store(),
+            origin_epoch: cert.origin_epoch(),
+            origin_commit: cert.origin_commit(),
+            schema_cut: *cert.schema_cut(),
+            record_digest: *cert.record_digest(),
+            predecessor_history_digest,
+            post_state_root: cert.post_state_root(),
+            authorizing_key_id: cert.authorizing_key_id(),
+            scope_manifest_digest: cert.scope_manifest_digest(),
+            operation_key: cert.operation_key().copied(),
+            signature: flipped,
+        })
+        .expect("mint seals flipped-signature parts without re-checking authenticity");
+
+        let err = seats
+            .attach_verified(&record, bad)
+            .expect_err("flipped signature must refuse");
+        assert_eq!(
+            err,
+            AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed)
+        );
+        assert_eq!(
+            seats.root_chain().links().len(),
+            1,
+            "refused attach must commit nothing to the admission spine"
+        );
+    }
+
+    /// #376: replaying a certificate onto a different store's seats refuses
+    /// (foreign authorizing key / store binding — not a second mint door).
+    #[test]
+    fn attach_verified_refuses_cross_store_replay() {
+        let origin = LiveAdmissionSeats::mint_genesis();
+        let foreign = LiveAdmissionSeats::mint_genesis();
+        assert_ne!(
+            origin.store_id(),
+            foreign.store_id(),
+            "two genesis seats must be distinct stores"
+        );
+
+        let live = origin.certificate_inputs(CatalogGeneration::from_relation(
+            RelationGeneration::witness(13),
+        ));
+        let (record, cert) =
+            admit_record(claim_parts(origin.store_id(), live)).expect("admit on origin");
+
+        let err = foreign
+            .attach_verified(&record, cert)
+            .expect_err("origin cert must not attach on a foreign store");
+        // Foreign store_id is unknown on the destination key table → ScopeUnknown
+        // (not AuthenticityFailed: verification never reaches the signature check).
+        assert_eq!(err, AdmitRefuse::Replica(ReplicaRefuse::ScopeUnknown));
+        assert_eq!(
+            foreign.root_chain().links().len(),
+            1,
+            "foreign seats must not advance on cross-store replay"
+        );
+    }
+}
+
+#[cfg(test)]
+mod access_level_mutation_refuse {
+    use std::collections::BTreeMap;
+
+    use crate::session::access::InsufficientAccessLevel;
+    use crate::session::catalog::Catalog;
+    use crate::session::db::Engine;
+    use crate::store::sim::SimStorage;
+    use kyzo_model::value::DataValue;
+    use kyzo_model::value::Tuple;
+
+    fn no_params() -> BTreeMap<String, DataValue> {
+        BTreeMap::new()
+    }
+
+    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
+        Engine::compose(store, Catalog::new()).expect("compose engine")
+    }
+
+    fn assert_insufficient_access(err: &miette::Error) {
+        assert!(
+            err.downcast_ref::<InsufficientAccessLevel>().is_some(),
+            "expected InsufficientAccessLevel, got: {err:?}"
+        );
+    }
+
+    /// Production Ord law: put/rm/update require `>= Protected`, so Hidden
+    /// (below that floor) refuses every mutation door and commits nothing.
+    #[test]
+    fn hidden_relation_refuses_put_rm_update_and_commits_nothing() {
+        let db = open_engine(SimStorage::new(0xACC5_0001));
+        db.run_script("?[k, v] <- [] :create h {k => v}", no_params())
+            .expect("create");
+        db.run_script("?[k, v] <- [[1, 10]] :put h {k => v}", no_params())
+            .expect("seed under Normal");
+
+        db.run_script("::access_level hidden h", no_params())
+            .expect("lower to Hidden");
+
+        assert_insufficient_access(
+            &db.run_script("?[k, v] <- [[2, 20]] :put h {k => v}", no_params())
+                .expect_err("Hidden put must refuse"),
+        );
+        assert_insufficient_access(
+            &db.run_script("?[k, v] <- [[1, 99]] :update h {k => v}", no_params())
+                .expect_err("Hidden update must refuse"),
+        );
+        assert_insufficient_access(
+            &db.run_script("?[k] <- [[1]] :rm h {k}", no_params())
+                .expect_err("Hidden rm must refuse"),
+        );
+
+        db.run_script("::access_level normal h", no_params())
+            .expect("restore");
+        let out = db
+            .run_script("?[k, v] := *h{k, v}", no_params())
+            .expect("read back");
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
+            DataValue::from(1),
+            DataValue::from(10),
+        ])];
+        assert_eq!(
+            out.rows(),
+            want.as_slice(),
+            "refused Hidden mutations must commit nothing"
+        );
+    }
+
+    /// ReadOnly is the other rung below Protected — same put/rm/update refuse
+    /// + commit-nothing contract as Hidden (production `< Protected` gate).
+    #[test]
+    fn read_only_relation_refuses_put_rm_update_and_commits_nothing() {
+        let db = open_engine(SimStorage::new(0xACC5_0002));
+        db.run_script("?[k, v] <- [] :create r {k => v}", no_params())
+            .expect("create");
+        db.run_script("?[k, v] <- [[1, 10]] :put r {k => v}", no_params())
+            .expect("seed under Normal");
+
+        db.run_script("::access_level read_only r", no_params())
+            .expect("lower to ReadOnly");
+
+        assert_insufficient_access(
+            &db.run_script("?[k, v] <- [[2, 20]] :put r {k => v}", no_params())
+                .expect_err("ReadOnly put must refuse"),
+        );
+        assert_insufficient_access(
+            &db.run_script("?[k, v] <- [[1, 99]] :update r {k => v}", no_params())
+                .expect_err("ReadOnly update must refuse"),
+        );
+        assert_insufficient_access(
+            &db.run_script("?[k] <- [[1]] :rm r {k}", no_params())
+                .expect_err("ReadOnly rm must refuse"),
+        );
+
+        db.run_script("::access_level normal r", no_params())
+            .expect("restore");
+        let out = db
+            .run_script("?[k, v] := *r{k, v}", no_params())
+            .expect("read back");
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
+            DataValue::from(1),
+            DataValue::from(10),
+        ])];
+        assert_eq!(
+            out.rows(),
+            want.as_slice(),
+            "refused ReadOnly mutations must commit nothing"
+        );
     }
 }
 
