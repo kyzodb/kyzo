@@ -34,3 +34,8 @@ __pycache__/
 .claude/skills/kyzo-plan-*/
 crates/xtask/resonance.log*
 /kyzo
+
+# internal agent coordination / handoff — local only, never ship
+CLAUDE-AND-CURSOR-HANDOFF.md
+/RELEASE-STATE.md
+/scratchpad-board/
