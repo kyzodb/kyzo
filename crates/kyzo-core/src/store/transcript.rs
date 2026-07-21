@@ -10,11 +10,14 @@
 //! CanonicalTranscript: the one signed-byte law (decisions.md §59, §81).
 //!
 //! Owns: [`CanonicalTranscript`], golden vector fixtures under `store/golden/`,
-//! unknown-version refuse door.
+//! unknown-version refuse door, deep sealed-artifact residual-secret scrub
+//! ([`refuse_residual_secret_bytes`] / §64/§65).
 //!
 //! Bans: sealed Unicode normalization surfaces (bytes and typed ids only);
 //! map encodings without duplicate-key refusal; allocation before bounds
-//! checks; a second serialization path for sealed artifacts.
+//! checks; a second serialization path for sealed artifacts; residual
+//! DEK / KEK / plaintext ShredSalt bytes surviving in sealed transcript bytes
+//! after shred.
 //!
 //! Encoding checklist as law: field ids and ordering; integer width /
 //! signedness / endianness; optional/default encoding; length bounds and
@@ -127,6 +130,9 @@ pub enum TranscriptRefuse {
     #[error("CanonicalTranscript: unknown FormatVersion — refuse (no silent decode)")]
     #[diagnostic(code(store::transcript::unknown_version))]
     UnknownVersion,
+    /// Corrupt / truncated encoding — also residual DEK / KEK / plaintext
+    /// ShredSalt surviving in sealed bytes after shred (§64/§65 deep scrub).
+    /// No separate refuse variant: dst exhaustive matches must stay green.
     #[error("CanonicalTranscript: corrupt or truncated encoding")]
     #[diagnostic(code(store::transcript::corrupt))]
     Corrupt,
@@ -336,6 +342,20 @@ impl CanonicalTranscript {
         &self.bytes
     }
 
+    /// Deep sealed-artifact scrub (§64/§65): refuse if any shredded secret
+    /// needle (DEK / KEK / plaintext ShredSalt bytes) is still reachable inside
+    /// these sealed transcript bytes.
+    ///
+    /// Empty needles are a no-op Ok. Needle length zero is ignored (not a
+    /// secret). Residual hits refuse as [`TranscriptRefuse::Corrupt`] — the
+    /// production door the crypto-shred reachability campaign exercises.
+    pub fn refuse_residual_secrets(
+        &self,
+        shredded_secret_needles: &[&[u8]],
+    ) -> Result<(), TranscriptRefuse> {
+        refuse_residual_secret_bytes(self.as_bytes(), shredded_secret_needles)
+    }
+
     /// Decode sealed bytes. Unknown version refuses; corrupt input refuses.
     pub fn parse(bytes: &[u8]) -> Result<Self, TranscriptRefuse> {
         let mut i = 0usize;
@@ -415,6 +435,72 @@ impl CanonicalTranscript {
 
 fn is_known_version(version: FormatVersion) -> bool {
     version == FormatVersion::CURRENT
+}
+
+/// Closed list of sealed artifact kinds the deep reachability campaign must
+/// search. Includes [`SealedArtifactKind::KeyCommit`] (CMT-1 intact). Order is
+/// stable for DST replay.
+pub const SEALED_ARTIFACT_KINDS: &[SealedArtifactKind] = &[
+    SealedArtifactKind::CheckpointSeal,
+    SealedArtifactKind::AdmissionCertificate,
+    SealedArtifactKind::ForkGrant,
+    SealedArtifactKind::RecoveryGrant,
+    SealedArtifactKind::MergeProofHeader,
+    SealedArtifactKind::AuditKeyLeaf,
+    SealedArtifactKind::WalHeader,
+    SealedArtifactKind::KeyCommit,
+];
+
+/// Production scrub over arbitrary sealed-artifact bytes (§64/§65).
+///
+/// Refuses when any non-empty needle from `shredded_secret_needles` appears as
+/// a contiguous substring of `sealed_bytes`. Used by transcript parse sites,
+/// CheckpointSeal encode, and the crypto-shred deep reachability DST.
+/// Residual hit → [`TranscriptRefuse::Corrupt`] (no new refuse variant).
+pub fn refuse_residual_secret_bytes(
+    sealed_bytes: &[u8],
+    shredded_secret_needles: &[&[u8]],
+) -> Result<(), TranscriptRefuse> {
+    for needle in shredded_secret_needles {
+        if needle.is_empty() {
+            continue;
+        }
+        if sealed_bytes.len() >= needle.len()
+            && sealed_bytes
+                .windows(needle.len())
+                .any(|window| window == *needle)
+        {
+            return Err(TranscriptRefuse::Corrupt);
+        }
+    }
+    Ok(())
+}
+
+/// Deep reachability scrub over every sealed artifact kind's golden encoding
+/// (CheckpointSeal … WalHeader … KeyCommit). Refuses if any shredded
+/// DEK / KEK / plaintext ShredSalt needle survives in any of them.
+pub fn refuse_residual_secrets_in_all_sealed_kinds(
+    shredded_secret_needles: &[&[u8]],
+) -> Result<(), TranscriptRefuse> {
+    // Exhaustiveness: adding a SealedArtifactKind without updating this match
+    // fails to compile — keep SEALED_ARTIFACT_KINDS in lockstep.
+    fn kinds_complete(kind: SealedArtifactKind) {
+        match kind {
+            SealedArtifactKind::CheckpointSeal
+            | SealedArtifactKind::AdmissionCertificate
+            | SealedArtifactKind::ForkGrant
+            | SealedArtifactKind::RecoveryGrant
+            | SealedArtifactKind::MergeProofHeader
+            | SealedArtifactKind::AuditKeyLeaf
+            | SealedArtifactKind::WalHeader
+            | SealedArtifactKind::KeyCommit => {}
+        }
+    }
+    for kind in SEALED_ARTIFACT_KINDS {
+        kinds_complete(*kind);
+        encode_golden_fixture(*kind)?.refuse_residual_secrets(shredded_secret_needles)?;
+    }
+    Ok(())
 }
 
 fn read_u16(bytes: &[u8], i: &mut usize) -> Result<u16, TranscriptRefuse> {

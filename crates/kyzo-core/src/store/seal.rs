@@ -25,6 +25,10 @@ use super::epoch::{CryptoDomain, FenceEpoch};
 use super::nonce::{DomainCounter, MintDomain};
 use super::open::StoreId;
 use super::sweep::CommitOrdinal;
+use super::transcript::{
+    CanonicalTranscript, CanonicalTranscriptBuilder, FieldId, SealedArtifactKind, TranscriptRefuse,
+    refuse_residual_secret_bytes,
+};
 use super::wal::WalHash;
 
 /// Fixed-width seal / manifest digest (SHA-256).
@@ -306,6 +310,44 @@ impl CheckpointSeal {
         }
         Ok(())
     }
+
+    /// Encode this seal under the one [`CanonicalTranscript`] law (seat 59/26).
+    ///
+    /// Bound digests that survive into sealed bytes are the deep-reachability
+    /// surface the crypto-shred campaign searches — never a second encoder.
+    pub fn encode_transcript(&self) -> Result<CanonicalTranscript, SealRefuse> {
+        let mut b = CanonicalTranscriptBuilder::new(self.format_version)
+            .map_err(SealRefuse::from_transcript)?;
+        b.append_u64(
+            FieldId::ARTIFACT_KIND,
+            SealedArtifactKind::CheckpointSeal.tag(),
+        )
+        .map_err(SealRefuse::from_transcript)?;
+        b.append_bytes(FieldId::FORMAT_VERSION, &self.format_version.as_bytes())
+            .map_err(SealRefuse::from_transcript)?;
+        b.append_digest32(FieldId::PRIMARY_DIGEST, self.seal_digest.as_bytes())
+            .map_err(SealRefuse::from_transcript)?;
+        b.append_digest32(FieldId::SECONDARY_DIGEST, self.state_root.as_bytes())
+            .map_err(SealRefuse::from_transcript)?;
+        b.append_bytes(FieldId::DOMAIN_LABEL, b"checkpoint-seal")
+            .map_err(SealRefuse::from_transcript)?;
+        Ok(b.seal())
+    }
+
+    /// Deep sealed-artifact scrub (§64/§65): encode under CanonicalTranscript,
+    /// then refuse if any shredded DEK / KEK / plaintext ShredSalt needle is
+    /// still reachable in the sealed bytes.
+    pub fn refuse_residual_secrets(
+        &self,
+        shredded_secret_needles: &[&[u8]],
+    ) -> Result<(), SealRefuse> {
+        let transcript = self.encode_transcript()?;
+        match refuse_residual_secret_bytes(transcript.as_bytes(), shredded_secret_needles) {
+            Ok(()) => Ok(()),
+            Err(TranscriptRefuse::Corrupt) => Err(SealRefuse::ResidualSecretMaterial),
+            Err(other) => Err(SealRefuse::from_transcript(other)),
+        }
+    }
 }
 
 /// Consume a covering [`CheckpointSeal`] against a [`TruncateLedger`].
@@ -405,6 +447,21 @@ pub enum SealRefuse {
     #[error("CheckpointSeal: seal already consumed for truncation")]
     #[diagnostic(code(store::seal::already_consumed))]
     SealAlreadyConsumed,
+    /// Deep sealed-artifact scrub: residual DEK / KEK / plaintext ShredSalt in
+    /// the seal's CanonicalTranscript bytes after shred (§64/§65).
+    #[error("CheckpointSeal: residual secret material in sealed artifact")]
+    #[diagnostic(code(store::seal::residual_secret))]
+    ResidualSecretMaterial,
+    /// Transcript encode/parse failed while sealing under CanonicalTranscript.
+    #[error("CheckpointSeal: CanonicalTranscript encode refused")]
+    #[diagnostic(code(store::seal::transcript_refuse))]
+    TranscriptEncode,
+}
+
+impl SealRefuse {
+    fn from_transcript(_err: TranscriptRefuse) -> Self {
+        SealRefuse::TranscriptEncode
+    }
 }
 
 fn digest_parts(parts: &CheckpointSealParts) -> SealDigest {

@@ -10,14 +10,17 @@
 //! Leave-is-free packs + dump/restore interchange (decisions.md §64, §65, §79, §80).
 //!
 //! Owns: leave-is-free pack builder (seal+suffix+objects | full WAL+objects),
-//! pack hygiene scrub point, import verify ceremony; plus the portable
-//! length-prefixed dump format (`KYZODMP2`).
+//! pack hygiene scrub point, deep pack residual-secret byte-needle scrub
+//! ([`LeaveIsFreePack::refuse_residual_secrets`] / §64/§65), import verify
+//! ceremony; plus the portable length-prefixed dump format (`KYZODMP2`).
 //!
-//! Bans: WA / KEK / plaintext salt / AuditKey / MintCap in packs; packs
-//! omitting [`WrappedShredSalt`] or [`IncarnationId`] history; green
-//! incomplete restore (a crash-interrupted [`restore_storage`] leaves a
-//! durable in-progress mark; [`admit_complete_store`] / [`open_complete_store`]
-//! refuse rather than presenting a partial prefix as a smaller complete store).
+//! Bans: WA / KEK / plaintext salt / AuditKey / MintCap in packs; residual
+//! DEK / KEK / plaintext shred-salt bytes surviving in pack-reachable sealed
+//! bytes after shred; packs omitting [`WrappedShredSalt`] or
+//! [`IncarnationId`] history; green incomplete restore (a crash-interrupted
+//! [`restore_storage`] leaves a durable in-progress mark; [`admit_complete_store`]
+//! / [`open_complete_store`] refuse rather than presenting a partial prefix as
+//! a smaller complete store).
 //!
 //! Dump format: 8-byte magic `KYZODMP2`, then for each pair a u64-BE key
 //! length, the key bytes, a u64-BE value length, the value bytes. Pairs appear
@@ -42,6 +45,7 @@ use crate::store::merkle::{
 use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::system_stamp_of_key;
+use crate::store::transcript::{TranscriptRefuse, refuse_residual_secret_bytes};
 use crate::store::fjall::FjallStorage;
 use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
 use crate::store::tx::WriteTx;
@@ -494,6 +498,11 @@ pub enum PackRefuse {
     #[error("pack hygiene: forbidden secret material at scrub point")]
     #[diagnostic(code(store::backup::hygiene_secret))]
     HygieneSecretMaterial,
+    /// Deep pack scrub: residual DEK / KEK / plaintext ShredSalt in
+    /// leave-is-free pack-reachable bytes after shred (§64/§65).
+    #[error("leave-is-free pack: residual secret material in pack bytes")]
+    #[diagnostic(code(store::backup::residual_secret))]
+    ResidualSecretMaterial,
     #[error("ForeignHistoryUnverified: blind import refused")]
     #[diagnostic(code(store::backup::foreign_unverified))]
     ForeignHistoryUnverified,
@@ -560,6 +569,29 @@ impl LeaveIsFreePack {
     /// Opaque retained payload.
     pub fn payload(&self) -> &[u8] {
         &self.payload
+    }
+
+    /// Deep leave-is-free pack scrub (§64/§65): refuse if any shredded secret
+    /// needle (DEK / KEK / plaintext shred-salt bytes) is still reachable
+    /// inside pack-reachable sealed bytes — payload, each
+    /// [`WrappedShredSalt`] ciphertext, and incarnation entropy.
+    ///
+    /// Empty needles are a no-op Ok. Needle length zero is ignored (not a
+    /// secret). Residual hits refuse as [`PackRefuse::ResidualSecretMaterial`]
+    /// — the production door the crypto-shred deep reachability campaign
+    /// exercises for leave-is-free packs.
+    pub fn refuse_residual_secrets(
+        &self,
+        shredded_secret_needles: &[&[u8]],
+    ) -> Result<(), PackRefuse> {
+        scrub_pack_bytes(self.payload.as_slice(), shredded_secret_needles)?;
+        for wrapped in &self.wrapped_shred_salts {
+            scrub_pack_bytes(wrapped.ciphertext(), shredded_secret_needles)?;
+        }
+        for incarnation in &self.incarnation_history {
+            scrub_pack_bytes(incarnation.entropy().as_bytes(), shredded_secret_needles)?;
+        }
+        Ok(())
     }
 
     /// Deterministic content digest of this pack's sealed bytes/fields.
@@ -738,6 +770,10 @@ const HYGIENE_FORBIDDEN_MARKERS: &[&[u8]] = &[
 /// boundaries. WA / KEK / plaintext salt / AuditKey / MintCap presence after
 /// this point is a Spec violation — those types have no field on the pack, and
 /// payload bytes are scanned for their domain markers.
+///
+/// Raw shredded-secret byte needles (DEK / KEK / plaintext shred salt) are
+/// scrubbed by [`LeaveIsFreePack::refuse_residual_secrets`] — a separate
+/// production door exercised after shred with known secret material.
 fn pack_hygiene_scrub(pack: &LeaveIsFreePack) -> Result<(), PackRefuse> {
     if pack.wrapped_shred_salts.is_empty() || pack.incarnation_history.is_empty() {
         return Err(PackRefuse::HygieneSecretMaterial);
@@ -748,6 +784,20 @@ fn pack_hygiene_scrub(pack: &LeaveIsFreePack) -> Result<(), PackRefuse> {
         }
     }
     Ok(())
+}
+
+/// Production deep scrub of one pack-reachable byte slice (§64/§65).
+fn scrub_pack_bytes(
+    sealed_bytes: &[u8],
+    shredded_secret_needles: &[&[u8]],
+) -> Result<(), PackRefuse> {
+    match refuse_residual_secret_bytes(sealed_bytes, shredded_secret_needles) {
+        Ok(()) => Ok(()),
+        Err(TranscriptRefuse::Corrupt) => Err(PackRefuse::ResidualSecretMaterial),
+        // `refuse_residual_secret_bytes` only yields Ok / Corrupt; map any
+        // future refuse onto residual-secret so the pack door stays closed.
+        Err(_) => Err(PackRefuse::ResidualSecretMaterial),
+    }
 }
 
 fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {

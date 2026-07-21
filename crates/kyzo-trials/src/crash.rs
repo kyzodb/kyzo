@@ -609,3 +609,250 @@ mod fuse_crash_matrix {
         assert_eq!(tx.get(b"uncommitted").unwrap(), None);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Crypto-shred deep reachability DST (story #376 T3 / H8) — path-wired under
+// `kyzo::store::sweep::crash`. Searches every sealed CanonicalTranscript kind
+// (incl. KeyCommit / WalHeader), production CheckpointSeal encode, and
+// leave-is-free pack bytes for residual DEK / KEK / plaintext ShredSalt after
+// production `shred`.
+// ---------------------------------------------------------------------------
+mod crypto_shred_deep_reachability {
+    use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
+    use crate::store::backup::{
+        LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse,
+    };
+    use crate::store::crypto::{
+        CryptoRefuse, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, derive_dek,
+        shred, unwrap_shred_salt, wrap_shred_salt,
+    };
+    use crate::store::epoch::{CryptoDomain, FenceEpoch};
+    use crate::store::open::StoreId;
+    use crate::store::seal::{
+        CheckpointSeal, CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest,
+        SealRefuse,
+    };
+    use crate::store::sweep::CommitOrdinal;
+    use crate::store::transcript::{
+        CanonicalTranscriptBuilder, FieldId, SEALED_ARTIFACT_KINDS, TranscriptRefuse,
+        encode_golden_fixture, refuse_residual_secret_bytes,
+        refuse_residual_secrets_in_all_sealed_kinds,
+    };
+    use crate::store::wal::WalHash;
+    use crate::store::{FormatVersion, SealedArtifactKind};
+
+    fn shredded_secret_needles<'a>(
+        kek: &'a [u8; 32],
+        salt: &'a [u8; 32],
+        dek: &'a [u8; 32],
+    ) -> [&'a [u8]; 3] {
+        [kek.as_slice(), salt.as_slice(), dek.as_slice()]
+    }
+
+    fn clean_seal_parts(store: StoreId, incarnation_entropy: [u8; 32]) -> CheckpointSealParts {
+        let fence = FenceEpoch::genesis(store);
+        let domain = CryptoDomain::new(store, fence);
+        let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes(incarnation_entropy))
+            .expect("incarnation boundary");
+        CheckpointSealParts {
+            store_id: store,
+            crypto_domain: domain,
+            fence_epoch: fence,
+            cut: CommitOrdinal::ZERO,
+            state_root: SealDigest::from_digest([0x01; 32]),
+            final_wal_hash: WalHash::from_digest([0x02; 32]),
+            checkpoint_manifest: SealDigest::from_digest([0x03; 32]),
+            format_version: FormatVersion::CURRENT,
+            catalog_generation: CommitOrdinal::ZERO,
+            retained_object_manifest: SealDigest::from_digest([0x04; 32]),
+            permanence_candidate_manifest: SealDigest::from_digest([0x05; 32]),
+            replica_custody_manifest: SealDigest::from_digest([0x06; 32]),
+            nonce_floors: NonceLeaseFloors::genesis(),
+            incarnation_boundary: incarnation,
+            prior_seal_digest: GENESIS_PRIOR_SEAL,
+            retention_certificate_digest: SealDigest::from_digest([0x07; 32]),
+        }
+    }
+
+    fn sample_leave_is_free_pack(
+        store: StoreId,
+        wrapped: crate::store::crypto::WrappedShredSalt,
+        incarnation_entropy: [u8; 32],
+        payload: Vec<u8>,
+    ) -> LeaveIsFreePack {
+        let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
+            .mint(Entropy::from_bytes(incarnation_entropy))
+            .expect("incarnation");
+        LeaveIsFreePack::build(LeaveIsFreeParts {
+            kind: LeaveIsFreeKind::SealAndSuffix,
+            format_version: FormatVersion::CURRENT,
+            wrapped_shred_salts: vec![wrapped],
+            incarnation_history: vec![incarnation],
+            payload,
+        })
+        .expect("leave-is-free pack")
+    }
+
+    /// H8 deep reachability: after production shred, every sealed artifact
+    /// (golden transcript kinds incl. KeyCommit + WalHeader + CheckpointSeal
+    /// encode + leave-is-free pack) is searched for residual
+    /// DEK/KEK/plaintext ShredSalt bytes. Clean artifacts pass; planting a
+    /// shredded needle into a sealed field must refuse via the production
+    /// scrub doors.
+    #[test]
+    fn crypto_shred_deep_reachability_refuses_residual_secrets_in_sealed_artifacts() {
+        let kek_bytes = [0xA1u8; 32];
+        let salt_bytes = [0xB2u8; 32];
+        let store = StoreId::from_digest([0x76; 32]);
+        let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
+        let cap = KekUnwrapCap::from_kek(Kek::from_bytes(kek_bytes));
+        let salt = ShredSalt::from_bytes(salt_bytes);
+        let seg = SegmentCounter::from_raw(9);
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain).expect("production wrap");
+        // Retained wrap copy for leave-is-free pack (post-shred pack may still
+        // carry ciphertext bytes; plaintext needles must not survive in pack
+        // payload / entropy / ciphertext as raw residual).
+        let pack_wrap = wrapped.clone();
+        let stale_wrap = wrapped.clone();
+        let dek = derive_dek(&cap, domain, seg, &salt);
+        let dek_bytes = *dek.as_bytes();
+        let needles = shredded_secret_needles(&kek_bytes, &salt_bytes, &dek_bytes);
+
+        // Production shred path — consumes the wrap handle; ledger tombstone
+        // refuses post-shred unwrap (production door, not a log scrub).
+        let (_receipt, tombstone) = shred(wrapped);
+        let mut ledger = ShredLedger::new();
+        ledger.record(tombstone);
+        assert!(
+            matches!(
+                unwrap_shred_salt(&cap, &stale_wrap, &ledger),
+                Err(CryptoRefuse::Shredded)
+            ),
+            "production shred must refuse post-shred unwrap via Shredded"
+        );
+
+        // Every sealed golden kind (incl. WalHeader + KeyCommit) via the
+        // production all-kinds scrub door — clean of shredded needles.
+        assert_eq!(
+            SEALED_ARTIFACT_KINDS.len(),
+            8,
+            "campaign must enumerate every SealedArtifactKind incl. KeyCommit"
+        );
+        refuse_residual_secrets_in_all_sealed_kinds(&needles)
+            .expect("clean goldens must pass all-kinds residual scrub");
+        // Explicit WAL-header lane (same production encode door).
+        let wal_header = encode_golden_fixture(SealedArtifactKind::WalHeader).expect("wal header");
+        assert_eq!(
+            refuse_residual_secret_bytes(wal_header.as_bytes(), &needles),
+            Ok(())
+        );
+        // KeyCommit / CMT-1 golden must stay intact and clean of shredded needles.
+        let key_commit = encode_golden_fixture(SealedArtifactKind::KeyCommit).expect("key commit");
+        assert_eq!(
+            refuse_residual_secret_bytes(key_commit.as_bytes(), &needles),
+            Ok(()),
+            "CMT-1 KeyCommit golden must remain intact and free of shredded needles"
+        );
+
+        // Production CheckpointSeal mint + encode + scrub — clean seal passes.
+        let clean = CheckpointSeal::mint(clean_seal_parts(store, [0x26; 32])).expect("mint");
+        clean
+            .refuse_residual_secrets(&needles)
+            .expect("clean CheckpointSeal must pass residual scrub");
+        let clean_transcript = clean.encode_transcript().expect("encode");
+        clean_transcript
+            .refuse_residual_secrets(&needles)
+            .expect("clean seal transcript must pass");
+
+        // Production leave-is-free pack scrub — clean pack (no needles in
+        // payload / incarnation entropy; wrap ciphertext is AEAD) passes.
+        let clean_pack = sample_leave_is_free_pack(
+            store,
+            pack_wrap.clone(),
+            [0x2A; 32],
+            b"leave-is-free-clean-payload".to_vec(),
+        );
+        clean_pack
+            .refuse_residual_secrets(&needles)
+            .expect("clean leave-is-free pack must pass residual scrub");
+
+        // Hostile: plant plaintext ShredSalt into a sealed transcript field → refuse.
+        let mut dirty_builder =
+            CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).expect("builder");
+        dirty_builder
+            .append_u64(
+                FieldId::ARTIFACT_KIND,
+                SealedArtifactKind::CheckpointSeal.tag(),
+            )
+            .expect("kind");
+        dirty_builder
+            .append_digest32(FieldId::PRIMARY_DIGEST, &salt_bytes)
+            .expect("plant salt as digest");
+        let dirty_transcript = dirty_builder.seal();
+        assert_eq!(
+            dirty_transcript.refuse_residual_secrets(&needles),
+            Err(TranscriptRefuse::Corrupt),
+            "production transcript scrub must refuse residual plaintext ShredSalt"
+        );
+
+        // Hostile: plant shredded salt as CheckpointSeal state_root → encode
+        // surfaces it in CanonicalTranscript → production seal scrub refuses.
+        let mut dirty_parts = clean_seal_parts(store, [0x27; 32]);
+        dirty_parts.state_root = SealDigest::from_digest(salt_bytes);
+        let dirty_seal = CheckpointSeal::mint(dirty_parts).expect("mint dirty");
+        assert_eq!(
+            dirty_seal.refuse_residual_secrets(&needles),
+            Err(SealRefuse::ResidualSecretMaterial),
+            "production CheckpointSeal scrub must refuse residual ShredSalt in sealed bytes"
+        );
+
+        // Hostile: plant KEK / DEK needles the same way.
+        let mut kek_parts = clean_seal_parts(store, [0x28; 32]);
+        kek_parts.state_root = SealDigest::from_digest(kek_bytes);
+        assert_eq!(
+            CheckpointSeal::mint(kek_parts)
+                .expect("mint")
+                .refuse_residual_secrets(&needles),
+            Err(SealRefuse::ResidualSecretMaterial),
+            "residual KEK bytes in sealed seal must refuse"
+        );
+        let mut dek_parts = clean_seal_parts(store, [0x29; 32]);
+        dek_parts.state_root = SealDigest::from_digest(dek_bytes);
+        assert_eq!(
+            CheckpointSeal::mint(dek_parts)
+                .expect("mint")
+                .refuse_residual_secrets(&needles),
+            Err(SealRefuse::ResidualSecretMaterial),
+            "residual DEK bytes in sealed seal must refuse"
+        );
+
+        // Hostile: plant shredded plaintext salt / KEK / DEK into leave-is-free
+        // pack payload → production pack scrub refuses.
+        let dirty_salt_pack = sample_leave_is_free_pack(
+            store,
+            pack_wrap.clone(),
+            [0x2B; 32],
+            salt_bytes.to_vec(),
+        );
+        assert_eq!(
+            dirty_salt_pack.refuse_residual_secrets(&needles),
+            Err(PackRefuse::ResidualSecretMaterial),
+            "production leave-is-free pack scrub must refuse residual plaintext ShredSalt"
+        );
+        let dirty_kek_pack =
+            sample_leave_is_free_pack(store, pack_wrap.clone(), [0x2C; 32], kek_bytes.to_vec());
+        assert_eq!(
+            dirty_kek_pack.refuse_residual_secrets(&needles),
+            Err(PackRefuse::ResidualSecretMaterial),
+            "residual KEK bytes in leave-is-free pack payload must refuse"
+        );
+        let dirty_dek_pack =
+            sample_leave_is_free_pack(store, pack_wrap, [0x2D; 32], dek_bytes.to_vec());
+        assert_eq!(
+            dirty_dek_pack.refuse_residual_secrets(&needles),
+            Err(PackRefuse::ResidualSecretMaterial),
+            "residual DEK bytes in leave-is-free pack payload must refuse"
+        );
+    }
+}
