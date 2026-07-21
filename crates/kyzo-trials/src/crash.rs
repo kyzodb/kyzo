@@ -1003,8 +1003,8 @@ mod crypto_shred_deep_reachability {
         // production all-kinds scrub door — clean of shredded needles.
         assert_eq!(
             SEALED_ARTIFACT_KINDS.len(),
-            12,
-            "campaign must enumerate every SealedArtifactKind incl. KeyCommit"
+            13,
+            "campaign must enumerate every SealedArtifactKind incl. KeyCommit + WrappedShredSalt"
         );
         let sealed_transcripts = encode_all_normative_production_transcripts()
             .expect("normative production transcripts encode");

@@ -3430,6 +3430,10 @@ pub mod storage_campaign_lanes {
                 SealedArtifactKind::KeyCommit,
                 crate::store::transcript::KEY_COMMIT_GOLDEN_VEC,
             ),
+            (
+                SealedArtifactKind::WrappedShredSalt,
+                crate::store::transcript::WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC,
+            ),
         ];
 
         for &(kind, golden_file) in GOLDENS {
