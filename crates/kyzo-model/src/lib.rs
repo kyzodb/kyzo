@@ -7,6 +7,11 @@
 #![forbid(unsafe_code)]
 
 pub mod envelope;
+/// One-law encoding battery seat (`format/tests.rs`: law1/2/3 corpus).
+/// Compiled under `cfg(test)` so the migration re-point cannot leave the
+/// corpus dead again — production encode/decode stays in `value::canonical`.
+#[cfg(test)]
+mod format;
 pub mod parse;
 pub mod program;
 pub mod schema;
