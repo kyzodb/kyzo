@@ -8,6 +8,57 @@ Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [VERSIONING
 
 Nothing yet.
 
+## [0.9.0] — 2026-07-21
+
+This wave makes the stored record accountable and seals the engine's type surface. It centers on
+**KyzoRecord** — the admission unit — and **CanonicalTranscript**, the single serializer whose bytes
+*are* a record's identity, feeding a MAC-signed, Merkle-rooted audit chain. Around it, a
+codebase-wide campaign replaced ad hoc constructors, boolean/sentinel state, and panic gates with
+sealed type-states, so illegal states no longer compile. Breaking: the on-disk sealed format and
+several public façades changed. Still pre-1.0 — see the warning below.
+
+### Added
+
+- **KyzoRecord, the accountable unit**: admission produces a `KyzoRecord` (`session/admit.rs`) whose
+  canonical bytes come from one authority, `CanonicalTranscript` (`store/transcript.rs`) — the sole
+  sealed serializer on the stored surface. A record's identity is `SHA-256` over those bytes.
+- **An audit chain over the transcript**: leaf MACs over each sealed `CanonicalTranscript`
+  (`store/crypto.rs`), Merkle roots (`store/merkle.rs`), a forge wall, and grant/replica surfaces —
+  every stored fact traceable to a signed, ordered leaf.
+- **Sealed type-states across the engine**: checked `Validity` construction, `UuidWrapper` behind
+  accessors, `NonZero`-backed `Arity` (compile-fail on zero), `Open`/`Committed`/`Aborted` `WriteTx`
+  with typed `CommitFailure`, `EncodedKey` split into `TupleKey` and `StorageKey`, a `DomainCtx`
+  required for raw-handle compare, and a `ProjectionBuilder → Sealed` generation machine.
+
+### Changed
+
+- **Storage backend is now publishable**: the vendored `fjall`/`lsm-tree` fork is packaged under the
+  first-party names `kyzo-fjall`/`kyzo-lsm-tree` and `[patch.crates-io]` is dropped, so a published
+  `kyzo` binds our fork (the `[lib] name` is unchanged — `use fjall::` still works). This replaces
+  the patch routing shipped in 0.8.1.
+- **Semantics moved into types**: expression evaluation rebinds to `Expr::eval`;
+  `Semiring`/aggregation seal as enums with a private-supertrait `RuleBody`; the `MeetAggr` `Null`
+  sentinel becomes `MeetAccum::{Empty, Value}`; `ensure_compatible` becomes a whole-schema
+  `CompatibleInputSchema` proof; cross-`Domain` panics become typed refusals.
+- **Repository layout and release**: the six first-party crates moved under `crates/`; the release
+  workflow builds native binaries for linux/macOS/windows and publishes the crate chain in
+  dependency order.
+
+### Removed
+
+- **The bytecode evaluator** and its call sites — evaluation goes through `Expr::eval`.
+- **Duplicate and unsound surfaces** (the demolition campaign): the `cmp_numeric` second-order
+  compare, mut-self transitions, the erased commit `Result`, `Drop`-as-abort, `admit_to` panic
+  gates, `RelationHandle.is_temp`, `Watermark` `Option`-staleness, the `FtsIndexConfig` twin, raw
+  trigger-source re-parse loops, and other second-authority residue — each cut whole, not silenced.
+
+### Fixed
+
+- Hardening surfaced by fuzzing: a hostile `Vector` length is refused before `with_capacity`
+  (unbounded-allocation OOM), nested-set decode no longer runs `O(2^depth)` (canonicality checked in
+  one pass), and the parser's list rule no longer backtracks exponentially on unterminated nested
+  lists. Per the defect-ledger convention, individual fixes are not itemized pre-1.0.
+
 ## [0.8.1] — 2026-07-09
 
 This wave lands two engine-level projects developed after the 0.8.0 tag: vendoring and tuning the
