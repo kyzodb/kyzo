@@ -617,16 +617,16 @@ pub(crate) fn parse_sys(
                         }
                     }
                     ensure!(
-                        false_positive_weight > 0.,
+                        false_positive_weight.is_finite() && false_positive_weight > 0.,
                         IndexOptionError(
-                            "false_positive_weight must be positive".to_string(),
+                            "false_positive_weight must be finite and positive".to_string(),
                             fpw_span,
                         )
                     );
                     ensure!(
-                        false_negative_weight > 0.,
+                        false_negative_weight.is_finite() && false_negative_weight > 0.,
                         IndexOptionError(
-                            "false_negative_weight must be positive".to_string(),
+                            "false_negative_weight must be finite and positive".to_string(),
                             fnw_span,
                         )
                     );
@@ -646,6 +646,15 @@ pub(crate) fn parse_sys(
                         )
                     );
                     let total_weights = false_positive_weight + false_negative_weight;
+                    // Inf+finite and large-finite overflow both yield a non-finite
+                    // sum; dividing by that silently zeroes both normalized weights.
+                    ensure!(
+                        total_weights.is_finite() && total_weights > 0.,
+                        IndexOptionError(
+                            "false_positive_weight and false_negative_weight must have a finite positive sum".to_string(),
+                            fpw_span,
+                        )
+                    );
                     false_positive_weight /= total_weights;
                     false_negative_weight /= total_weights;
 
@@ -1015,5 +1024,83 @@ fn parse_filters_expr(mut expr: Expr) -> Result<Vec<TokenizerSpec>> {
         | Expr::Lazy { .. } => {
             Err(IndexOptionError("Filters must be a list of filters".to_string(), span).into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::parse::parse_sys;
+    use crate::value::{DataValue, ValidityTs};
+
+    use super::SysScript;
+
+    fn parse_lsh(src: &str, params: BTreeMap<String, DataValue>) -> miette::Result<SysScript> {
+        parse_sys(src, &params, ValidityTs::from_raw(0))
+    }
+
+    fn lsh_create(fp: &str, fn_: &str) -> String {
+        format!(
+            "::lsh create docs:sim {{extractor: body, tokenizer: Simple, \
+             false_positive_weight: {fp}, false_negative_weight: {fn_}}}"
+        )
+    }
+
+    /// Inf/NaN pass a bare `> 0` check (Inf) or must be named at the sum;
+    /// both must refuse with IndexOptionError — never normalize to 0/0.
+    #[test]
+    fn lsh_weights_refuse_non_finite() {
+        let cases: &[(&str, f64, f64)] = &[
+            ("inf fp", f64::INFINITY, 1.0),
+            ("inf fn", 1.0, f64::INFINITY),
+            ("nan fp", f64::NAN, 1.0),
+            ("nan fn", 1.0, f64::NAN),
+            ("both inf", f64::INFINITY, f64::INFINITY),
+        ];
+        for (label, fp, fn_) in cases {
+            let mut params = BTreeMap::new();
+            params.insert("fp".into(), DataValue::from(*fp));
+            params.insert("fn".into(), DataValue::from(*fn_));
+            let err = parse_lsh(&lsh_create("$fp", "$fn"), params)
+                .expect_err(&format!("{label}: non-finite weight must refuse"));
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("finite") || msg.contains("index_option"),
+                "{label}: expected IndexOptionError about finite weights, got: {msg}"
+            );
+        }
+    }
+
+    /// Finite positive weights normalize to a unit sum (the Cozo parse contract).
+    #[test]
+    fn lsh_weights_normalize_when_finite() {
+        let mut params = BTreeMap::new();
+        params.insert("fp".into(), DataValue::from(1.0));
+        params.insert("fn".into(), DataValue::from(3.0));
+        let op = parse_lsh(&lsh_create("$fp", "$fn"), params).expect("finite weights parse");
+        let SysScript::CreateMinHashLshIndex(cfg) = op else {
+            panic!("expected CreateMinHashLshIndex");
+        };
+        assert!((cfg.false_positive_weight - 0.25).abs() < 1e-12);
+        assert!((cfg.false_negative_weight - 0.75).abs() < 1e-12);
+        assert!(
+            (cfg.false_positive_weight + cfg.false_negative_weight - 1.0).abs() < 1e-12
+        );
+    }
+
+    /// Two huge finites whose sum overflows to Inf must refuse at the sum gate.
+    #[test]
+    fn lsh_weights_refuse_infinite_sum_of_finites() {
+        let mut params = BTreeMap::new();
+        params.insert("fp".into(), DataValue::from(f64::MAX));
+        params.insert("fn".into(), DataValue::from(f64::MAX));
+        let err = parse_lsh(&lsh_create("$fp", "$fn"), params)
+            .expect_err("finite weights with Inf sum must refuse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("finite positive sum") || msg.contains("index_option"),
+            "expected sum IndexOptionError, got: {msg}"
+        );
     }
 }
