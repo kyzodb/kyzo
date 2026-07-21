@@ -11,13 +11,15 @@
 //!
 //! Owns: [`ForkGrant`], [`RecoveryGrant`], [`GrantId`], [`materialize`],
 //! [`AncestorReadGrant`], [`RecoveryQuorumProof`], [`PredecessorConsentProof`],
-//! [`PredecessorConsentTable`].
+//! [`PredecessorConsentTable`], [`PriorRecoveryTable`],
+//! [`MaterializeRefuse::QuorumEquivocationPoison`].
 //!
 //! Bans: discovery-time identity entropy outside the grant seed; grant-time
 //! kill of the original token; post-grant shared-confidentiality Rotate;
 //! in-place WriteAuthority reissue for the same epoch; signatureless recovery
 //! mint of [`WriteAuthority`]; signatureless fork mint of [`WriteAuthority`];
-//! caller-supplied consent verifying keys as the trust root (self-issued consent).
+//! caller-supplied consent verifying keys as the trust root (self-issued consent);
+//! a second RecoveryGrant lineage for one predecessor epoch (quorum equivocation).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -655,6 +657,21 @@ pub enum MaterializeRefuse {
     )]
     #[diagnostic(code(store::grants::consent_key_unknown))]
     ConsentKeyUnknown,
+    /// Second distinct RecoveryGrant for one predecessor epoch — quorum equivocation poison.
+    ///
+    /// Never a second WriteAuthority / second lineage. Distinct from
+    /// [`GrantAlreadyMaterialized`] (same-grant rediscovery mismatch) and from
+    /// quorum verification / threshold refuses.
+    #[error(
+        "QuorumEquivocationPoison: second RecoveryGrant {second_grant:?} for predecessor epoch after {first_grant:?} on store {store_id:?}"
+    )]
+    #[diagnostic(code(store::grants::quorum_equivocation_poison))]
+    QuorumEquivocationPoison {
+        store_id: StoreId,
+        predecessor_epoch: FenceEpoch,
+        first_grant: GrantId,
+        second_grant: GrantId,
+    },
 }
 
 /// Optional prior materialization witness for idempotent rediscovery.
@@ -684,6 +701,68 @@ impl PriorMaterialization {
     }
 }
 
+/// Host-side one-shot ledger: which RecoveryGrant already materialized for each
+/// predecessor [`FenceEpoch`] (binds [`StoreId`]).
+///
+/// Pure [`materialize`] consults this evidence; a second distinct RecoveryGrant
+/// naming the same predecessor epoch refuses
+/// [`MaterializeRefuse::QuorumEquivocationPoison`] — never a second lineage.
+#[derive(Debug, Default, Clone)]
+pub struct PriorRecoveryTable {
+    /// predecessor FenceEpoch → GrantId that took the one-shot.
+    shots: BTreeMap<FenceEpoch, GrantId>,
+}
+
+impl PriorRecoveryTable {
+    /// Empty one-shot ledger (no recovery yet observed).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that `grant_id` already materialized recovery for
+    /// `(store_id, predecessor_epoch)`.
+    ///
+    /// Idempotent for the same grant. A distinct grant for the same predecessor
+    /// epoch refuses [`MaterializeRefuse::QuorumEquivocationPoison`].
+    pub fn record(
+        &mut self,
+        store_id: StoreId,
+        predecessor_epoch: FenceEpoch,
+        grant_id: GrantId,
+    ) -> Result<(), MaterializeRefuse> {
+        assert_eq!(
+            predecessor_epoch.store_id(),
+            store_id,
+            "INVARIANT(PriorRecoveryTable): predecessor FenceEpoch must bind StoreId"
+        );
+        match self.shots.get(&predecessor_epoch) {
+            None => {
+                self.shots.insert(predecessor_epoch, grant_id);
+                Ok(())
+            }
+            Some(&first) if first == grant_id => Ok(()),
+            Some(&first) => Err(MaterializeRefuse::QuorumEquivocationPoison {
+                store_id,
+                predecessor_epoch,
+                first_grant: first,
+                second_grant: grant_id,
+            }),
+        }
+    }
+
+    /// GrantId that already took the recovery one-shot for this predecessor epoch, if any.
+    pub fn shot_for(
+        &self,
+        store_id: StoreId,
+        predecessor_epoch: FenceEpoch,
+    ) -> Option<GrantId> {
+        if predecessor_epoch.store_id() != store_id {
+            return None;
+        }
+        self.shots.get(&predecessor_epoch).copied()
+    }
+}
+
 /// Pure / deterministic / idempotent materialization of a grant seed.
 ///
 /// Same grant → same successor StoreId and derivation inputs every time.
@@ -699,15 +778,20 @@ impl PriorMaterialization {
 /// Recovery mints a new WriteAuthority for the same StoreId under a new
 /// CryptoDomain — never in-place reissue for the same epoch — and only when
 /// `recovery_matrix` matches the grant's sealed [`RecoveryQuorumProof`].
+/// A second distinct RecoveryGrant for one predecessor epoch named in
+/// `prior_recovery` refuses [`MaterializeRefuse::QuorumEquivocationPoison`].
 pub fn materialize(
     grant: &Grant,
     prior: Option<PriorMaterialization>,
     recovery_matrix: Option<&RecoveryMatrix>,
     consent_table: Option<&PredecessorConsentTable>,
+    prior_recovery: Option<&PriorRecoveryTable>,
 ) -> Result<MaterializedGrant, MaterializeRefuse> {
     let computed = match grant {
         Grant::Fork(fork) => materialize_fork(fork, consent_table)?,
-        Grant::Recovery(recovery) => materialize_recovery(recovery, recovery_matrix)?,
+        Grant::Recovery(recovery) => {
+            materialize_recovery(recovery, recovery_matrix, prior_recovery)?
+        }
     };
     if let Some(prior) = prior
         && prior.grant_id() == computed.grant_id()
@@ -766,11 +850,26 @@ fn materialize_fork(
 fn materialize_recovery(
     recovery: &RecoveryGrant,
     recovery_matrix: Option<&RecoveryMatrix>,
+    prior_recovery: Option<&PriorRecoveryTable>,
 ) -> Result<MaterializedGrant, MaterializeRefuse> {
     let matrix = recovery_matrix.ok_or(MaterializeRefuse::RecoveryMatrixAbsent)?;
     // Sealed proof is trusted only when its matrix_digest matches THIS store matrix.
     if recovery.quorum_proof().matrix_digest() != &recovery_matrix_digest(matrix) {
         return Err(MaterializeRefuse::QuorumUnverified);
+    }
+    // One-shot quorum: a second distinct RecoveryGrant for this predecessor
+    // epoch is equivocation poison — never a second WriteAuthority lineage.
+    if let Some(table) = prior_recovery
+        && let Some(first_grant) =
+            table.shot_for(recovery.store_id(), recovery.predecessor_epoch())
+        && first_grant != recovery.grant_id()
+    {
+        return Err(MaterializeRefuse::QuorumEquivocationPoison {
+            store_id: recovery.store_id(),
+            predecessor_epoch: recovery.predecessor_epoch(),
+            first_grant,
+            second_grant: recovery.grant_id(),
+        });
     }
     // Same StoreId; new CryptoDomain at successor epoch; new WriteAuthority.
     let store_id = recovery.store_id();
@@ -1040,7 +1139,7 @@ mod tests {
         .expect("payload binds; proof is sealed against wrong matrix");
 
         // Absent store matrix → refuse (no WriteAuthority).
-        let absent = materialize(&Grant::Recovery(grant.clone()), None, None, None);
+        let absent = materialize(&Grant::Recovery(grant.clone()), None, None, None, None);
         assert_eq!(absent, Err(MaterializeRefuse::RecoveryMatrixAbsent));
 
         // Wrong store matrix → QuorumUnverified (no WriteAuthority).
@@ -1048,6 +1147,7 @@ mod tests {
             &Grant::Recovery(grant),
             None,
             Some(&store_matrix),
+            None,
             None,
         );
         assert_eq!(wrong, Err(MaterializeRefuse::QuorumUnverified));
@@ -1082,10 +1182,84 @@ mod tests {
             proof,
         )
         .expect("grant");
-        let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix), None)
+        let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix), None, None)
             .expect("valid quorum must mint");
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(matured.crypto_domain().fence_epoch(), pred_epoch);
+    }
+
+    /// Nasty: second distinct RecoveryGrant for one predecessor epoch is poison.
+    #[test]
+    fn recovery_grant_second_for_same_predecessor_epoch_is_equivocation_poison() {
+        let store_id = StoreId::from_digest([0xE0; 32]);
+        let pred_epoch = FenceEpoch::genesis(store_id);
+        let (keys, matrix) = matrix_2of3([[0xE1; 32], [0xE2; 32], [0xE3; 32]]);
+
+        let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
+            let successor_seed = IdentitySeed::from_digest(seed);
+            let commitment = KeyMaterialCommitment::from_digest(commit);
+            let payload = recovery_grant_payload_digest(
+                grant_id,
+                store_id,
+                pred_epoch,
+                &successor_seed,
+                &commitment,
+            );
+            let sigs = [
+                (keys[0].public_key(), keys[0].sign_quorum(&payload)),
+                (keys[1].public_key(), keys[1].sign_quorum(&payload)),
+            ];
+            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum");
+            RecoveryGrant::new(
+                grant_id,
+                store_id,
+                pred_epoch,
+                successor_seed,
+                commitment,
+                proof,
+            )
+            .expect("grant")
+        };
+
+        let g1 = mint(GrantId::from_bytes([0x01; 32]), [0xA1; 32], [0xA2; 32]);
+        let g2 = mint(GrantId::from_bytes([0x02; 32]), [0xB1; 32], [0xB2; 32]);
+
+        let first = materialize(&Grant::Recovery(g1.clone()), None, Some(&matrix), None, None)
+            .expect("first recovery must mint");
+        assert_eq!(first.store_id(), store_id);
+
+        let mut prior = PriorRecoveryTable::new();
+        prior
+            .record(store_id, pred_epoch, g1.grant_id())
+            .expect("record first shot");
+
+        // Same grant rediscovery with prior shot → still ok (idempotent).
+        let again = materialize(
+            &Grant::Recovery(g1.clone()),
+            None,
+            Some(&matrix),
+            None,
+            Some(&prior),
+        )
+        .expect("same grant must converge");
+        assert_eq!(again.grant_id(), g1.grant_id());
+
+        // Distinct second grant → QuorumEquivocationPoison, never a second lineage.
+        assert_eq!(
+            materialize(
+                &Grant::Recovery(g2.clone()),
+                None,
+                Some(&matrix),
+                None,
+                Some(&prior),
+            ),
+            Err(MaterializeRefuse::QuorumEquivocationPoison {
+                store_id,
+                predecessor_epoch: pred_epoch,
+                first_grant: g1.grant_id(),
+                second_grant: g2.grant_id(),
+            })
+        );
     }
 
     /// Nasty: ForkGrant naming a real predecessor without valid consent must not mint.
@@ -1246,11 +1420,11 @@ mod tests {
         .expect("payload binds; proof sealed against wrong table");
 
         assert_eq!(
-            materialize(&Grant::Fork(grant.clone()), None, None, None),
+            materialize(&Grant::Fork(grant.clone()), None, None, None, None),
             Err(MaterializeRefuse::ConsentKeyUnknown)
         );
         assert_eq!(
-            materialize(&Grant::Fork(grant), None, None, Some(&sealed_table)),
+            materialize(&Grant::Fork(grant), None, None, Some(&sealed_table), None),
             Err(MaterializeRefuse::ConsentUnverified)
         );
     }
@@ -1289,7 +1463,7 @@ mod tests {
             proof,
         )
         .expect("grant");
-        let matured = materialize(&Grant::Fork(grant), None, None, Some(&table))
+        let matured = materialize(&Grant::Fork(grant), None, None, Some(&table), None)
             .expect("valid consent must mint");
         assert_ne!(matured.store_id(), predecessor);
     }

@@ -1708,10 +1708,10 @@ pub mod storage_campaign_lanes {
         materialize, nonce, parse_golden_hex, reclaim_candidate,
     };
     use crate::store::grants::{
-        ForkPointRoot, IdentitySeed, KeyMaterialCommitment, PredecessorConsentProof,
-        PredecessorConsentTable, RecoveryQuorumProof, SuccessorPrincipal,
-        fork_grant_payload_digest, recovery_grant_payload_digest, sign_fork_consent,
-        sign_recovery_quorum,
+        ForkPointRoot, IdentitySeed, KeyMaterialCommitment, MaterializeRefuse,
+        PredecessorConsentProof, PredecessorConsentTable, PriorRecoveryTable,
+        RecoveryQuorumProof, SuccessorPrincipal, fork_grant_payload_digest,
+        recovery_grant_payload_digest, sign_fork_consent, sign_recovery_quorum,
     };
 
     /// Mint a RecoveryGrant under a fresh 2-of-3 matrix (positive recovery paths).
@@ -2241,7 +2241,7 @@ pub mod storage_campaign_lanes {
             [0xEF; 32],
             [[0x91; 32], [0x92; 32], [0x93; 32]],
         );
-        let matured = materialize(&Grant::Recovery(recovery), None, Some(&matrix), None)
+        let matured = materialize(&Grant::Recovery(recovery), None, Some(&matrix), None, None)
             .expect("recovery materialize");
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(
@@ -2273,10 +2273,12 @@ pub mod storage_campaign_lanes {
             consent_seed,
             &consent_table,
         );
-        let first = materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table))
-            .expect("first discovery");
-        let second = materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table))
-            .expect("second discovery");
+        let first =
+            materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table), None)
+                .expect("first discovery");
+        let second =
+            materialize(&Grant::Fork(fork.clone()), None, None, Some(&consent_table), None)
+                .expect("second discovery");
         assert_eq!(
             first.store_id(),
             second.store_id(),
@@ -2291,6 +2293,7 @@ pub mod storage_campaign_lanes {
             Some(prior_ok),
             None,
             Some(&consent_table),
+            None,
         )
         .expect("converge");
         assert_eq!(again.store_id(), first.store_id());
@@ -2307,14 +2310,16 @@ pub mod storage_campaign_lanes {
             consent_seed,
             &consent_table,
         );
-        let foreign = materialize(&Grant::Fork(other), None, None, Some(&consent_table))
-            .expect("foreign successor");
+        let foreign =
+            materialize(&Grant::Fork(other), None, None, Some(&consent_table), None)
+                .expect("foreign successor");
         let prior_bad = PriorMaterialization::new(fork.grant_id(), foreign.store_id());
         let refuse = materialize(
             &Grant::Fork(fork),
             Some(prior_bad),
             None,
             Some(&consent_table),
+            None,
         )
         .expect_err("must refuse");
         let msg = format!("{refuse:?}");
@@ -2329,18 +2334,18 @@ pub mod storage_campaign_lanes {
     }
 
     /// §68 — grants are seeds (RecoveryGrant equivocation).
-    /// Gap: `materialize` accepts a second RecoveryGrant for one predecessor
-    /// epoch (distinct WriteAuthority tokens) — no typed equivocation refuse yet.
+    /// Second distinct RecoveryGrant for one predecessor epoch is
+    /// [`MaterializeRefuse::QuorumEquivocationPoison`] — never a second lineage.
     #[test]
-    #[ignore = "materialize equivocation refuse unbuilt"]
     fn recovery_grant_equivocation() {
         let sealed = genesis(genesis_params([0x17; 32], SnapshotFork::No));
         let store_id = sealed.store_id();
         let pred_epoch = sealed.fence_epoch();
 
-        // Kept ignored until T3 — quorum wired so this compiles; equivocation refuse is T3.
+        let g1_id = GrantId::from_bytes([0x71; 32]);
+        let g2_id = GrantId::from_bytes([0x72; 32]);
         let (g1, matrix) = recovery_grant_with_quorum(
-            GrantId::from_bytes([0x71; 32]),
+            g1_id,
             store_id,
             pred_epoch,
             [0xA1; 32],
@@ -2348,7 +2353,7 @@ pub mod storage_campaign_lanes {
             [[0x11; 32], [0x12; 32], [0x13; 32]],
         );
         let (g2, _) = recovery_grant_with_quorum(
-            GrantId::from_bytes([0x72; 32]),
+            g2_id,
             store_id,
             pred_epoch,
             [0xB1; 32],
@@ -2356,16 +2361,34 @@ pub mod storage_campaign_lanes {
             [[0x11; 32], [0x12; 32], [0x13; 32]],
         );
 
-        let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix), None)
+        let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix), None, None)
             .expect("first recovery");
-        // When the door exists: second RecoveryGrant for one predecessor epoch
-        // must refuse equivocation — never Ok with a second WriteAuthority token,
-        // never a substitute UnknownInvariant lattice.
-        let refuse = materialize(&Grant::Recovery(g2), None, Some(&matrix), None);
-        assert!(
-            refuse.is_err(),
-            "second RecoveryGrant for one predecessor epoch must refuse equivocation (store {:?})",
-            m1.store_id()
+        assert_eq!(m1.store_id(), store_id);
+
+        let mut prior_recovery = PriorRecoveryTable::new();
+        prior_recovery
+            .record(store_id, pred_epoch, g1_id)
+            .expect("record first recovery shot");
+
+        // Second RecoveryGrant for one predecessor epoch must refuse typed
+        // QuorumEquivocationPoison — never Ok with a second WriteAuthority token,
+        // never a substitute UnknownInvariant lattice or GrantAlreadyMaterialized.
+        let refuse = materialize(
+            &Grant::Recovery(g2),
+            None,
+            Some(&matrix),
+            None,
+            Some(&prior_recovery),
+        );
+        assert_eq!(
+            refuse,
+            Err(MaterializeRefuse::QuorumEquivocationPoison {
+                store_id,
+                predecessor_epoch: pred_epoch,
+                first_grant: g1_id,
+                second_grant: g2_id,
+            }),
+            "second RecoveryGrant for one predecessor epoch must be QuorumEquivocationPoison"
         );
     }
 
