@@ -54,6 +54,11 @@ sha2 = "0.11.0"
 # signatures — already in-tree via Cargo.lock (3.0.0-rc.1). Pure Rust;
 # no *-sys / C. Receivers verify with the origin public key only.
 ed25519-dalek = "3.0.0-rc.1"
+# RecoveryMatrix / RecoveryQuorumProof (story #376 T8): FROST threshold
+# signatures (RFC 9591) via ZcashFoundation frost-ed25519 — the RFC reference
+# impl. Real threshold crypto only; NEVER home-rolled aggregate/quorum crypto.
+# Pure Rust (curve25519-dalek); no *-sys / C.
+frost-ed25519 = "3.0.0"
 # Store AEAD pipeline (story #350 T11): RustCrypto pure-Rust misuse-resistant
 # AES-GCM-SIV for AeadArm::Siv (SnapshotFork=yes), ChaCha20-Poly1305 for
 # AeadArm::Gcm. No *-sys / C in either tree. lz4_flex is the same pure-Rust
@@ -104,6 +109,10 @@ tempfile = "3"
 proptest = "1"
 criterion = "0.8.2"
 trybuild = "1"
+# FROST recovery-quorum tests: deterministic ChaCha20Rng matching frost-ed25519's
+# rand_core 0.6 (project `rand` 0.9 is a different rand_core generation).
+rand_chacha = "0.3"
+rand_core = "0.6"
 # Story #31 phase 2: the crash-matrix harness (storage::crash_matrix) drives
 # a real FjallStorage through kyzo-crashfs's FUSE fault injector. Test-only
 # — the dependency edge phase 1's design doc anticipated running this

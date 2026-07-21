@@ -1921,7 +1921,7 @@ pub mod storage_campaign_lanes {
         IntentOrdinal, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
         ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate,
         PermanenceWitness, PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant,
-        RecoveryMatrix, RecoveryPublicKey, Regions, ReplicaCustody, ReplicaKey, RequestDigest,
+        RecoveryMatrix, Regions, ReplicaCustody, ReplicaKey, RequestDigest,
         ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, SealDigest, SealRefuse,
         SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingToken, StagingTtl,
         StateRoot, Storage, StoreId, StoreRefuse, SweepDoor, SweepRefuse, SweepSession,
@@ -1932,17 +1932,21 @@ pub mod storage_campaign_lanes {
         ForkPointRoot, IdentitySeed, KeyMaterialCommitment, MaterializeRefuse,
         PredecessorConsentProof, PredecessorConsentTable, PriorRecoveryTable,
         RecoveryQuorumProof, SuccessorPrincipal, fork_grant_payload_digest,
-        recovery_grant_payload_digest, sign_fork_consent, sign_recovery_quorum,
+        frost_sign_recovery_quorum, recovery_grant_payload_digest, sign_fork_consent,
     };
 
-    /// Mint a RecoveryGrant under a fresh 2-of-3 matrix (positive recovery paths).
+    /// Mint a RecoveryGrant under a fresh FROST 2-of-3 matrix (positive recovery paths).
+    ///
+    /// Uses `frost_sign_recovery_quorum` (frost-ed25519 trusted dealer + aggregate) —
+    /// one group signature under the sealed group verifying key; no enumerated
+    /// N-of-M ed25519 custodian count and no signer-subset leak into the proof.
     fn recovery_grant_with_quorum(
         grant_id: GrantId,
         store_id: StoreId,
         pred_epoch: FenceEpoch,
         successor_seed: [u8; 32],
         commitment: [u8; 32],
-        custodian_seeds: [[u8; 32]; 3],
+        dealer_seed: [u8; 32],
     ) -> (RecoveryGrant, RecoveryMatrix) {
         let successor_seed = IdentitySeed::from_digest(successor_seed);
         let commitment = KeyMaterialCommitment::from_digest(commitment);
@@ -1953,17 +1957,9 @@ pub mod storage_campaign_lanes {
             &successor_seed,
             &commitment,
         );
-        let mut keys = Vec::with_capacity(3);
-        let mut sigs: Vec<(RecoveryPublicKey, [u8; 64])> = Vec::with_capacity(2);
-        for (i, seed) in custodian_seeds.into_iter().enumerate() {
-            let (pk, sig) = sign_recovery_quorum(seed, &payload);
-            keys.push(pk);
-            if i < 2 {
-                sigs.push((pk, sig));
-            }
-        }
-        let matrix = RecoveryMatrix::new(2, keys).expect("2-of-3 recovery matrix");
-        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum proof");
+        let (matrix, aggregate) = frost_sign_recovery_quorum(dealer_seed, &payload);
+        let proof =
+            RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum proof");
         let grant = RecoveryGrant::new(
             grant_id,
             store_id,
@@ -2481,7 +2477,7 @@ pub mod storage_campaign_lanes {
             pred_epoch,
             [0xEE; 32],
             [0xEF; 32],
-            [[0x91; 32], [0x92; 32], [0x93; 32]],
+            [0x91; 32],
         );
         let matured = materialize(&Grant::Recovery(recovery), None, Some(&matrix), None, None)
             .expect("recovery materialize");
@@ -2592,7 +2588,7 @@ pub mod storage_campaign_lanes {
             pred_epoch,
             [0xA1; 32],
             [0xA2; 32],
-            [[0x11; 32], [0x12; 32], [0x13; 32]],
+            [0x11; 32],
         );
         let (g2, _) = recovery_grant_with_quorum(
             g2_id,
@@ -2600,7 +2596,7 @@ pub mod storage_campaign_lanes {
             pred_epoch,
             [0xB1; 32],
             [0xB2; 32],
-            [[0x11; 32], [0x12; 32], [0x13; 32]],
+            [0x11; 32],
         );
 
         let m1 = materialize(&Grant::Recovery(g1), None, Some(&matrix), None, None)

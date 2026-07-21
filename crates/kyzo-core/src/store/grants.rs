@@ -22,14 +22,15 @@
 //! caller-supplied consent verifying keys as the trust root (self-issued consent);
 //! a second RecoveryGrant lineage for one predecessor epoch (quorum equivocation);
 //! signatureless / caller-supplied entitlement for [`AncestorReadGrant`]
-//! (self-issued decrypt-scope forge).
+//! (self-issued decrypt-scope forge); home-rolled N-of-M ed25519 quorum
+//! counting in place of FROST (`frost-ed25519` / RFC 9591).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 
-use super::authority::{RecoveryMatrix, RecoveryPublicKey, WriteAuthority};
+use super::authority::{RecoveryMatrix, WriteAuthority};
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
 
@@ -392,7 +393,11 @@ impl ForkGrant {
     }
 }
 
-/// Opaque sealed evidence that a [`RecoveryMatrix`] quorum signed a payload.
+/// Opaque sealed evidence that a [`RecoveryMatrix`] FROST quorum signed a payload.
+///
+/// Carries only matrix + payload digests — **no signer identifiers**. The
+/// signer subset is not recoverable from sealed proof bytes (FROST aggregate
+/// is one group signature under the sealed group verifying key).
 ///
 /// No public free constructor — mint only via [`RecoveryQuorumProof::verify`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,44 +408,43 @@ pub struct RecoveryQuorumProof {
 }
 
 impl RecoveryQuorumProof {
-    /// Verify ed25519 quorum signatures against `matrix` and seal the proof.
+    /// Verify one FROST (RFC 9591 / `frost-ed25519`) aggregate signature against
+    /// `matrix` and seal the proof.
     ///
-    /// Each signature is over `kyzo.recovery_quorum.v1 || payload_digest`.
-    /// Only verifying keys that appear in `matrix.keys()` count; distinct
-    /// valid signers must meet `matrix.threshold()`.
+    /// Message: `kyzo.recovery_quorum.v1 || payload_digest`. Verification uses
+    /// the matrix's sealed FROST group verifying key — never an enumerated
+    /// N-of-M ed25519 count. Below-threshold or wrong-share aggregates fail
+    /// FROST verify and refuse; the sealed proof never records which custodians
+    /// participated.
     pub fn verify(
         matrix: &RecoveryMatrix,
         payload_digest: &[u8; 32],
-        signatures: &[(RecoveryPublicKey, [u8; 64])],
+        aggregate_signature: &[u8],
     ) -> Result<Self, MaterializeRefuse> {
+        let Ok(verifying) =
+            frost_ed25519::VerifyingKey::deserialize(matrix.group_verifying_key().as_bytes().as_slice())
+        else {
+            return Err(MaterializeRefuse::QuorumUnverified);
+        };
+        let Ok(signature) = frost_ed25519::Signature::deserialize(aggregate_signature) else {
+            return Err(MaterializeRefuse::QuorumInsufficient {
+                have: 0,
+                need: matrix.threshold(),
+            });
+        };
+
         let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
         message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
         message.extend_from_slice(payload_digest);
 
-        let matrix_key_bytes: BTreeSet<[u8; 32]> =
-            matrix.keys().iter().map(|k| *k.as_bytes()).collect();
-        let mut distinct_valid: BTreeSet<[u8; 32]> = BTreeSet::new();
-
-        for (pk, sig_bytes) in signatures {
-            let pk_bytes = *pk.as_bytes();
-            if !matrix_key_bytes.contains(&pk_bytes) || distinct_valid.contains(&pk_bytes) {
-                continue;
-            }
-            let Ok(verifying) = VerifyingKey::from_bytes(&pk_bytes) else {
-                continue;
-            };
-            let Ok(signature) = Signature::try_from(sig_bytes.as_slice()) else {
-                continue;
-            };
-            if verifying.verify_strict(message.as_slice(), &signature).is_ok() {
-                distinct_valid.insert(pk_bytes);
-            }
-        }
-
-        let have = distinct_valid.len() as u32;
-        let need = matrix.threshold();
-        if have < need {
-            return Err(MaterializeRefuse::QuorumInsufficient { have, need });
+        if verifying.verify(message.as_slice(), &signature).is_err() {
+            // Below-threshold / wrong-share / forged aggregate: FROST verify
+            // refuses. Do not distinguish which custodians failed — that would
+            // reintroduce signer-subset leakage into the refuse surface.
+            return Err(MaterializeRefuse::QuorumInsufficient {
+                have: 0,
+                need: matrix.threshold(),
+            });
         }
 
         Ok(Self {
@@ -461,16 +465,13 @@ impl RecoveryQuorumProof {
     }
 }
 
-/// Canonical digest of a [`RecoveryMatrix`] (threshold + ordered key bytes).
+/// Canonical digest of a [`RecoveryMatrix`] (threshold + max_signers + group VK).
 fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> [u8; 32] {
-    let mut ordered: Vec<[u8; 32]> = matrix.keys().iter().map(|k| *k.as_bytes()).collect();
-    ordered.sort_unstable();
     let mut h = Sha256::new();
     h.update(RECOVERY_MATRIX_DIGEST_DOMAIN);
     h.update(u32::to_be_bytes(matrix.threshold()));
-    for key in &ordered {
-        h.update(key);
-    }
+    h.update(u32::to_be_bytes(matrix.max_signers()));
+    h.update(matrix.group_verifying_key().as_bytes());
     h.finalize().into()
 }
 
@@ -650,13 +651,16 @@ pub enum MaterializeRefuse {
     #[error("INVARIANT(FenceEpoch): epoch space exhausted at u64::MAX during recovery materialize")]
     #[diagnostic(code(store::grants::epoch_exhausted))]
     EpochSpaceExhausted,
-    /// Recovery quorum signatures / matrix binding failed verification.
+    /// Recovery quorum aggregate / matrix binding failed verification.
     #[error("QuorumUnverified: recovery quorum proof does not bind the store RecoveryMatrix")]
     #[diagnostic(code(store::grants::quorum_unverified))]
     QuorumUnverified,
-    /// Distinct valid matrix signers below the RecoveryMatrix threshold.
+    /// FROST aggregate failed verify (below-threshold, wrong-share, or forged).
+    ///
+    /// `have` is not a recovered signer count — sealed proofs carry no signer
+    /// subset. Hosts may treat `have == 0` as "aggregate refused".
     #[error(
-        "QuorumInsufficient: recovery quorum has {have} distinct valid signatures, need {need}"
+        "QuorumInsufficient: FROST recovery aggregate refused (need threshold {need}; have={have})"
     )]
     #[diagnostic(code(store::grants::quorum_insufficient))]
     QuorumInsufficient { have: u32, need: u32 },
@@ -1241,22 +1245,163 @@ impl AncestorReadGrant {
     }
 }
 
-/// Test-only: ed25519 recovery-custodian sign over the quorum domain.
-/// Path-wired dst callers use this so positive recovery paths still compile.
+/// Test-only: mint a FROST 2-of-3 recovery matrix + one aggregate signature
+/// over the quorum domain via `frost-ed25519` (trusted dealer + threshold sign).
+///
+/// Real threshold crypto only — never home-rolled share counting.
 #[cfg(test)]
-pub(crate) fn sign_recovery_quorum(
-    seed: [u8; 32],
+pub(crate) fn frost_sign_recovery_quorum(
+    dealer_seed: [u8; 32],
     payload_digest: &[u8; 32],
-) -> (RecoveryPublicKey, [u8; 64]) {
-    use ed25519_dalek::{Signer, SigningKey};
+) -> (RecoveryMatrix, Vec<u8>) {
+    frost_recovery_aggregate(dealer_seed, 3, 2, 2, payload_digest)
+}
 
-    let signing = SigningKey::from_bytes(&seed);
-    let public = RecoveryPublicKey::from_bytes(signing.verifying_key().to_bytes());
+/// Test-only FROST dealer → aggregate over `kyzo.recovery_quorum.v1 || payload`.
+///
+/// `participating` must be ≥ `min_signers` for a valid aggregate; callers that
+/// want a below-threshold attempt should use [`frost_try_aggregate_below_threshold`].
+#[cfg(test)]
+fn frost_recovery_aggregate(
+    dealer_seed: [u8; 32],
+    max_signers: u16,
+    min_signers: u16,
+    participating: u16,
+    payload_digest: &[u8; 32],
+) -> (RecoveryMatrix, Vec<u8>) {
+    use std::collections::BTreeMap;
+
+    use frost_ed25519 as frost;
+    use frost_ed25519::keys::IdentifierList;
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+
+    let mut rng = ChaCha20Rng::from_seed(dealer_seed);
+    let (shares, pubkey_package) = frost::keys::generate_with_dealer(
+        max_signers,
+        min_signers,
+        IdentifierList::Default,
+        &mut rng,
+    )
+    .expect("FROST dealer keygen");
+
+    let mut key_packages = BTreeMap::new();
+    for (identifier, secret_share) in shares {
+        let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
+        key_packages.insert(identifier, key_package);
+    }
+
+    let vk_bytes = pubkey_package
+        .verifying_key()
+        .serialize()
+        .expect("serialize group verifying key");
+    assert_eq!(vk_bytes.len(), 32, "FROST Ed25519 group VK is 32 bytes");
+    let mut group_vk = [0u8; 32];
+    group_vk.copy_from_slice(&vk_bytes);
+    let matrix = RecoveryMatrix::new(
+        u32::from(min_signers),
+        u32::from(max_signers),
+        super::authority::RecoveryPublicKey::from_bytes(group_vk),
+    )
+    .expect("FROST matrix");
+
     let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
     message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
     message.extend_from_slice(payload_digest);
-    let sig = signing.sign(message.as_slice()).to_bytes();
-    (public, sig)
+
+    let mut nonces_map = BTreeMap::new();
+    let mut commitments_map = BTreeMap::new();
+    for participant_index in 1..=participating {
+        let participant_identifier = participant_index.try_into().expect("nonzero id");
+        let key_package = &key_packages[&participant_identifier];
+        let (nonces, commitments) =
+            frost::round1::commit(key_package.signing_share(), &mut rng);
+        nonces_map.insert(participant_identifier, nonces);
+        commitments_map.insert(participant_identifier, commitments);
+    }
+
+    let signing_package = frost::SigningPackage::new(commitments_map, message.as_slice());
+    let mut signature_shares = BTreeMap::new();
+    for participant_identifier in nonces_map.keys() {
+        let key_package = &key_packages[participant_identifier];
+        let nonces = &nonces_map[participant_identifier];
+        let signature_share = frost::round2::sign(&signing_package, nonces, key_package)
+            .expect("FROST round2 share");
+        signature_shares.insert(*participant_identifier, signature_share);
+    }
+
+    let group_signature = frost::aggregate(&signing_package, &signature_shares, &pubkey_package)
+        .expect("FROST aggregate");
+    let aggregate_bytes = group_signature.serialize().expect("serialize aggregate");
+    (matrix, aggregate_bytes)
+}
+
+/// Test-only: attempt FROST aggregate with fewer than min_signers signature shares.
+///
+/// Round1 commitments cover `min_signers` so the SigningPackage is well-formed
+/// and round2 can produce shares; aggregate then receives a strict subset of
+/// those shares and must return `Err` (below-threshold refuse — no panic).
+#[cfg(test)]
+fn frost_try_aggregate_below_threshold(
+    dealer_seed: [u8; 32],
+    payload_digest: &[u8; 32],
+) -> Result<Vec<u8>, frost_ed25519::Error> {
+    use std::collections::BTreeMap;
+
+    use frost_ed25519 as frost;
+    use frost_ed25519::keys::IdentifierList;
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+
+    let max_signers = 3u16;
+    let min_signers = 2u16;
+    let share_count = 1u16; // below threshold at aggregate
+
+    let mut rng = ChaCha20Rng::from_seed(dealer_seed);
+    let (shares, pubkey_package) = frost::keys::generate_with_dealer(
+        max_signers,
+        min_signers,
+        IdentifierList::Default,
+        &mut rng,
+    )
+    .expect("FROST dealer keygen");
+
+    let mut key_packages = BTreeMap::new();
+    for (identifier, secret_share) in shares {
+        let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
+        key_packages.insert(identifier, key_package);
+    }
+
+    let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
+    message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
+    message.extend_from_slice(payload_digest);
+
+    // Enough commitments for a valid SigningPackage (min_signers).
+    let mut nonces_map = BTreeMap::new();
+    let mut commitments_map = BTreeMap::new();
+    for participant_index in 1..=min_signers {
+        let participant_identifier = participant_index.try_into().expect("nonzero id");
+        let key_package = &key_packages[&participant_identifier];
+        let (nonces, commitments) =
+            frost::round1::commit(key_package.signing_share(), &mut rng);
+        nonces_map.insert(participant_identifier, nonces);
+        commitments_map.insert(participant_identifier, commitments);
+    }
+
+    let signing_package = frost::SigningPackage::new(commitments_map, message.as_slice());
+    // Produce fewer signature shares than min_signers — refuse lands at aggregate.
+    let mut signature_shares = BTreeMap::new();
+    for participant_index in 1..=share_count {
+        let participant_identifier = participant_index.try_into().expect("nonzero id");
+        let key_package = &key_packages[&participant_identifier];
+        let nonces = &nonces_map[&participant_identifier];
+        let signature_share = frost::round2::sign(&signing_package, nonces, key_package)
+            .expect("FROST round2 share with valid package");
+        signature_shares.insert(participant_identifier, signature_share);
+    }
+
+    frost::aggregate(&signing_package, &signature_shares, &pubkey_package)
+        .map(|sig| sig.serialize().expect("serialize"))
 }
 
 /// Test-only: ed25519 predecessor consent sign over the fork-consent domain.
@@ -1315,9 +1460,12 @@ mod tests {
     // weak key + this forgery mints authority nobody controls. RED until each site
     // swaps `.verify` -> `verify_strict`.
 
-    /// Weak-key forged RECOVERY QUORUM = write-authority theft.
+    /// Invalid / small-order group verifying key cannot seal a RecoveryMatrix;
+    /// forged aggregate bytes against a real matrix must refuse.
     #[test]
-    fn permissive_verify_accepts_weak_key_forged_recovery_quorum() {
+    fn frost_recovery_refuses_invalid_group_key_and_forged_aggregate() {
+        use crate::store::authority::RecoveryPublicKey;
+
         let store = StoreId::from_digest([0x71; 32]);
         let payload = recovery_grant_payload_digest(
             GrantId::from_bytes([0x90; 32]),
@@ -1329,13 +1477,24 @@ mod tests {
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let weak_pk = RecoveryPublicKey::from_bytes(weak);
-        let matrix = RecoveryMatrix::new(1, vec![weak_pk]).expect("1-of-1 matrix");
-        let mut forged = [0u8; 64];
-        forged[0] = 1;
         assert!(
-            RecoveryQuorumProof::verify(&matrix, &payload, &[(weak_pk, forged)]).is_err(),
-            "FORGED QUORUM: small-order recovery key + weak-key forgery mints a verified \
-             RecoveryQuorumProof (write-authority theft) -- verify must become verify_strict"
+            matches!(
+                RecoveryMatrix::new(1, 1, weak_pk),
+                Err(crate::store::authority::RecoveryMatrixRefuse::InvalidGroupVerifyingKey)
+            ),
+            "small-order / invalid bytes must not seal as a FROST group verifying key"
+        );
+
+        let (matrix, _sig) = frost_sign_recovery_quorum([0xA1; 32], &payload);
+        let mut forged = vec![0u8; 64];
+        forged[0] = 1;
+        assert_eq!(
+            RecoveryQuorumProof::verify(&matrix, &payload, &forged),
+            Err(MaterializeRefuse::QuorumInsufficient {
+                have: 0,
+                need: matrix.threshold(),
+            }),
+            "FORGED AGGREGATE: garbage FROST bytes must not mint RecoveryQuorumProof"
         );
     }
 
@@ -1374,45 +1533,8 @@ mod tests {
     }
     // -----------------------------------------------------------------------
 
-    /// Test-only recovery custodian signing key (ed25519 seed → verifying bytes).
-    struct RecoverySigningKey {
-        signing: SigningKey,
-        public: RecoveryPublicKey,
-    }
-
-    impl RecoverySigningKey {
-        fn from_seed(seed: [u8; 32]) -> Self {
-            let signing = SigningKey::from_bytes(&seed);
-            let public = RecoveryPublicKey::from_bytes(signing.verifying_key().to_bytes());
-            Self { signing, public }
-        }
-
-        fn public_key(&self) -> RecoveryPublicKey {
-            self.public
-        }
-
-        fn sign_quorum(&self, payload_digest: &[u8; 32]) -> [u8; 64] {
-            let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
-            message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
-            message.extend_from_slice(payload_digest);
-            self.signing.sign(message.as_slice()).to_bytes()
-        }
-    }
-
-    fn matrix_2of3(seeds: [[u8; 32]; 3]) -> (Vec<RecoverySigningKey>, RecoveryMatrix) {
-        let keys: Vec<RecoverySigningKey> = seeds
-            .into_iter()
-            .map(RecoverySigningKey::from_seed)
-            .collect();
-        let matrix = RecoveryMatrix::new(
-            2,
-            keys.iter().map(RecoverySigningKey::public_key).collect::<Vec<_>>(),
-        )
-        .expect("2-of-3 matrix");
-        (keys, matrix)
-    }
-
-    /// Nasty: victim StoreId+epoch grant with empty/forged quorum must not mint WriteAuthority.
+    /// Nasty: victim StoreId+epoch grant with empty/forged/wrong-matrix FROST
+    /// aggregate must not mint WriteAuthority.
     #[test]
     fn recovery_grant_without_valid_quorum_refuses_write_authority() {
         let victim = StoreId::from_digest([0x71; 32]);
@@ -1428,41 +1550,34 @@ mod tests {
             &commitment,
         );
 
-        let (custodians, store_matrix) =
-            matrix_2of3([[0xA1; 32], [0xA2; 32], [0xA3; 32]]);
+        let (store_matrix, _store_sig) = frost_sign_recovery_quorum([0xA1; 32], &payload);
 
-        // Empty signatures — no proof, no grant power.
+        // Empty aggregate — no proof, no grant power.
         assert_eq!(
             RecoveryQuorumProof::verify(&store_matrix, &payload, &[]),
             Err(MaterializeRefuse::QuorumInsufficient { have: 0, need: 2 })
         );
 
-        // Forged signature bytes under a matrix key — still insufficient.
-        let forged = [(
-            custodians[0].public_key(),
-            [0xFFu8; 64],
-        )];
+        // Forged aggregate bytes — still refuse.
         assert_eq!(
-            RecoveryQuorumProof::verify(&store_matrix, &payload, &forged),
+            RecoveryQuorumProof::verify(&store_matrix, &payload, &[0xFFu8; 64]),
             Err(MaterializeRefuse::QuorumInsufficient { have: 0, need: 2 })
         );
 
-        // Attacker mints a real quorum against a *different* matrix, names the victim,
-        // then tries materialize against the victim store's matrix — must refuse.
-        let (attacker_keys, attacker_matrix) =
-            matrix_2of3([[0xB1; 32], [0xB2; 32], [0xB3; 32]]);
-        let attacker_sigs = [
-            (
-                attacker_keys[0].public_key(),
-                attacker_keys[0].sign_quorum(&payload),
-            ),
-            (
-                attacker_keys[1].public_key(),
-                attacker_keys[1].sign_quorum(&payload),
-            ),
-        ];
-        let forged_proof = RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sigs)
-            .expect("attacker quorum against their own matrix");
+        // Below-threshold share set cannot form a FROST aggregate (production
+        // frost::aggregate door) — wrong-share / short quorum is refuse.
+        assert!(
+            frost_try_aggregate_below_threshold([0xA1; 32], &payload).is_err(),
+            "below-threshold FROST aggregate must refuse at frost-ed25519 aggregate"
+        );
+
+        // Attacker mints a real FROST aggregate against a *different* matrix,
+        // names the victim, then materializes against the victim store matrix.
+        let (attacker_matrix, attacker_sig) =
+            frost_sign_recovery_quorum([0xB1; 32], &payload);
+        let forged_proof =
+            RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sig)
+                .expect("attacker quorum against their own matrix");
         let grant = RecoveryGrant::new(
             grant_id,
             victim,
@@ -1502,12 +1617,19 @@ mod tests {
             &successor_seed,
             &commitment,
         );
-        let (keys, matrix) = matrix_2of3([[0xC1; 32], [0xC2; 32], [0xC3; 32]]);
-        let sigs = [
-            (keys[0].public_key(), keys[0].sign_quorum(&payload)),
-            (keys[1].public_key(), keys[1].sign_quorum(&payload)),
-        ];
-        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum");
+        let (matrix, aggregate) = frost_sign_recovery_quorum([0xC1; 32], &payload);
+        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
+        // Sealed proof carries only digests — signer subset is not recoverable
+        // from proof bytes (no custodian id / share index field exists).
+        assert_eq!(proof.payload_digest(), &payload);
+        assert_eq!(proof.matrix_digest(), &recovery_matrix_digest(&matrix));
+        let proof_dbg = format!("{proof:?}");
+        assert!(
+            !proof_dbg.contains("signer")
+                && !proof_dbg.contains("participant")
+                && !proof_dbg.contains("share"),
+            "sealed RecoveryQuorumProof debug must not surface signer-subset fields: {proof_dbg}"
+        );
         let grant = RecoveryGrant::new(
             grant_id,
             store_id,
@@ -1518,9 +1640,31 @@ mod tests {
         )
         .expect("grant");
         let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix), None, None)
-            .expect("valid quorum must mint");
+            .expect("valid FROST quorum must mint");
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(matured.crypto_domain().fence_epoch(), pred_epoch);
+    }
+
+    /// Nasty: aggregate under group A must refuse verify against group B
+    /// (wrong-share / wrong group key) — production verify door.
+    #[test]
+    fn frost_recovery_wrong_group_aggregate_refuses() {
+        let payload = [0x44u8; 32];
+        let (matrix_a, sig_a) = frost_sign_recovery_quorum([0x11; 32], &payload);
+        let (matrix_b, _sig_b) = frost_sign_recovery_quorum([0x22; 32], &payload);
+        assert_ne!(
+            matrix_a.group_verifying_key(),
+            matrix_b.group_verifying_key(),
+            "control: distinct dealer seeds yield distinct group keys"
+        );
+        assert_eq!(
+            RecoveryQuorumProof::verify(&matrix_b, &payload, &sig_a),
+            Err(MaterializeRefuse::QuorumInsufficient {
+                have: 0,
+                need: matrix_b.threshold(),
+            }),
+            "wrong-group FROST aggregate must refuse at RecoveryQuorumProof::verify"
+        );
     }
 
     /// Nasty: second distinct RecoveryGrant for one predecessor epoch is poison.
@@ -1528,7 +1672,12 @@ mod tests {
     fn recovery_grant_second_for_same_predecessor_epoch_is_equivocation_poison() {
         let store_id = StoreId::from_digest([0xE0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
-        let (keys, matrix) = matrix_2of3([[0xE1; 32], [0xE2; 32], [0xE3; 32]]);
+
+        // One sealed matrix for the store; each grant gets its own FROST aggregate
+        // over its payload under that same group key (re-deal with fixed seed so
+        // the group verifying key matches).
+        let probe_payload = [0u8; 32];
+        let (matrix, _) = frost_sign_recovery_quorum([0xE1; 32], &probe_payload);
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
             let successor_seed = IdentitySeed::from_digest(seed);
@@ -1540,11 +1689,14 @@ mod tests {
                 &successor_seed,
                 &commitment,
             );
-            let sigs = [
-                (keys[0].public_key(), keys[0].sign_quorum(&payload)),
-                (keys[1].public_key(), keys[1].sign_quorum(&payload)),
-            ];
-            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum");
+            // Same dealer seed → same group VK as `matrix`.
+            let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xE1; 32], &payload);
+            assert_eq!(
+                signed_matrix.group_verifying_key(),
+                matrix.group_verifying_key()
+            );
+            let proof =
+                RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
             RecoveryGrant::new(
                 grant_id,
                 store_id,
@@ -1607,7 +1759,8 @@ mod tests {
     fn prior_recovery_fabricated_grant_id_cannot_presquat_legitimate_recovery() {
         let store_id = StoreId::from_digest([0xF0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
-        let (keys, matrix) = matrix_2of3([[0xF1; 32], [0xF2; 32], [0xF3; 32]]);
+        let probe_payload = [0u8; 32];
+        let (matrix, _) = frost_sign_recovery_quorum([0xF1; 32], &probe_payload);
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
             let successor_seed = IdentitySeed::from_digest(seed);
@@ -1619,11 +1772,13 @@ mod tests {
                 &successor_seed,
                 &commitment,
             );
-            let sigs = [
-                (keys[0].public_key(), keys[0].sign_quorum(&payload)),
-                (keys[1].public_key(), keys[1].sign_quorum(&payload)),
-            ];
-            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &sigs).expect("quorum");
+            let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xF1; 32], &payload);
+            assert_eq!(
+                signed_matrix.group_verifying_key(),
+                matrix.group_verifying_key()
+            );
+            let proof =
+                RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
             RecoveryGrant::new(
                 grant_id,
                 store_id,

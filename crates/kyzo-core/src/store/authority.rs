@@ -10,7 +10,8 @@
 //! Write authority and incarnation identity (decisions.md §2, §62).
 //!
 //! Owns: [`WriteAuthority`], [`IncarnationMintCap`], [`IncarnationId`],
-//! [`OpenOrdinal`], [`Entropy`], [`RecoveryMatrix`], address fence.
+//! [`OpenOrdinal`], [`Entropy`], [`RecoveryMatrix`] (FROST group verifying key),
+//! address fence.
 //!
 //! Bans: watermark / consume-reissue on WriteAuthority; `derive(KEK,…)` for
 //! WriteAuthority; IncarnationMintCap serialization (never in packs); a
@@ -210,71 +211,103 @@ impl WriteAuthority {
     }
 }
 
-/// One recovery custodian public key (distinct class from WriteAuthority).
+/// Sealed FROST group verifying key for recovery quorum (RFC 9591).
+///
+/// Distinct class from WriteAuthority. This is the **group** verifying key
+/// from `frost-ed25519` (ZcashFoundation) — not an enumerated per-custodian
+/// ed25519 key. Custodian shares live off-artifact; only this group key is
+/// sealed into [`RecoveryMatrix`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RecoveryPublicKey([u8; 32]);
 
 impl RecoveryPublicKey {
-    /// Wrap a recovery-custodian public key.
+    /// Wrap already-proven FROST group verifying-key bytes (32-byte compressed).
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
-    /// Borrow the key bytes.
+    /// Borrow the group verifying-key bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-/// Optional M-of-N recovery matrix sealed at genesis only.
+/// Optional FROST recovery matrix sealed at genesis only.
 ///
-/// Post-genesis mutation is Unconstructible — no setters exist. Absent
-/// matrix → lost token means fork (not in-place recovery).
+/// Seals a FROST (RFC 9591 / `frost-ed25519`) **group verifying key** plus
+/// threshold metadata (`threshold` = min_signers, `max_signers` = n) so
+/// proactive share refresh (`frost_ed25519::keys::refresh`) can be seated
+/// without re-enumerating custodian public keys. Post-genesis mutation is
+/// Unconstructible — no setters exist. Absent matrix → lost token means fork
+/// (not in-place recovery).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryMatrix {
+    /// FROST min_signers (t).
     threshold: u32,
-    keys: Box<[RecoveryPublicKey]>,
+    /// FROST max_signers (n) — participant cardinality for proactive refresh.
+    max_signers: u32,
+    /// Sole sealed public material: the FROST group verifying key.
+    group_verifying_key: RecoveryPublicKey,
 }
 
 /// Typed refuse constructing a [`RecoveryMatrix`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum RecoveryMatrixRefuse {
-    #[error("RecoveryMatrix: threshold must be ≥ 1 and ≤ key count ({key_count})")]
+    #[error(
+        "RecoveryMatrix: threshold must be ≥ 1 and ≤ max_signers ({max_signers}); max_signers must be in 1..=u16::MAX"
+    )]
     #[diagnostic(code(store::authority::recovery_matrix_threshold))]
-    ThresholdOutOfRange { key_count: usize },
-    #[error("RecoveryMatrix: key set must be non-empty")]
-    #[diagnostic(code(store::authority::recovery_matrix_empty))]
-    EmptyKeySet,
+    ThresholdOutOfRange { max_signers: u32 },
+    #[error("RecoveryMatrix: group verifying key is not a valid frost-ed25519 VerifyingKey")]
+    #[diagnostic(code(store::authority::recovery_matrix_group_key))]
+    InvalidGroupVerifyingKey,
 }
 
 impl RecoveryMatrix {
-    /// Seal an M-of-N matrix at genesis. No post-genesis mutation path.
+    /// Seal a FROST recovery matrix at genesis. No post-genesis mutation path.
+    ///
+    /// `group_verifying_key` must deserialize as a `frost-ed25519` VerifyingKey
+    /// (RFC 9591 group key). Enumerated N-of-M ed25519 custodian public keys
+    /// are condemned — threshold crypto is FROST only.
     pub fn new(
         threshold: u32,
-        keys: impl Into<Vec<RecoveryPublicKey>>,
+        max_signers: u32,
+        group_verifying_key: RecoveryPublicKey,
     ) -> Result<Self, RecoveryMatrixRefuse> {
-        let keys = keys.into();
-        if keys.is_empty() {
-            return Err(RecoveryMatrixRefuse::EmptyKeySet);
+        if max_signers == 0 || max_signers > u16::MAX as u32 {
+            return Err(RecoveryMatrixRefuse::ThresholdOutOfRange { max_signers });
         }
-        let key_count = keys.len();
-        if threshold == 0 || threshold as usize > key_count {
-            return Err(RecoveryMatrixRefuse::ThresholdOutOfRange { key_count });
+        if threshold == 0 || threshold > max_signers {
+            return Err(RecoveryMatrixRefuse::ThresholdOutOfRange { max_signers });
         }
+        frost_ed25519::VerifyingKey::deserialize(group_verifying_key.as_bytes().as_slice())
+            .map_err(|_| RecoveryMatrixRefuse::InvalidGroupVerifyingKey)?;
         Ok(Self {
             threshold,
-            keys: keys.into_boxed_slice(),
+            max_signers,
+            group_verifying_key,
         })
     }
 
-    /// Quorum threshold M.
+    /// FROST min_signers (t).
     pub fn threshold(&self) -> u32 {
         self.threshold
     }
 
-    /// Custodian public keys (N).
+    /// FROST max_signers (n) — proactive-refresh participant cardinality.
+    pub fn max_signers(&self) -> u32 {
+        self.max_signers
+    }
+
+    /// Sealed FROST group verifying key.
+    pub fn group_verifying_key(&self) -> &RecoveryPublicKey {
+        &self.group_verifying_key
+    }
+
+    /// Genesis / digest surface: the sealed group verifying key as a one-element
+    /// slice. Not an enumerated custodian set — FROST does not seal N public keys.
     pub fn keys(&self) -> &[RecoveryPublicKey] {
-        &self.keys
+        std::slice::from_ref(&self.group_verifying_key)
     }
 }
 
