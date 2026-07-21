@@ -196,13 +196,14 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
 // ---------------------------------------------------------------------------
 // Real power-cut / FUSE crash-matrix campaign (story #31) — path-wired under
 // `kyzo::store::sweep::crash`. Requires kyzo-crashfs (kyzo-core test dep) and
-// `crate::store::sim::SimStorage` (crate-private DST double). Skips cleanly
-// when FUSE mount is unavailable (`can_mount` == false).
+// `crate::store::sim::SimStorage` (crate-private DST double). Absent FUSE
+// refuses LOUD via `require_live_mount` / typed `MountRefuse` — never
+// eprintln+return that cargo reports as `ok`.
 // ---------------------------------------------------------------------------
 mod fuse_crash_matrix {
     use std::collections::BTreeSet;
 
-    use kyzo_crashfs::harness::{can_mount, mount, wait_for_mount};
+    use kyzo_crashfs::harness::{mount, require_live_mount, wait_for_mount};
     use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
     use crate::store::fjall::new_fjall_storage;
@@ -300,17 +301,12 @@ mod fuse_crash_matrix {
     /// Each barrier is crossed with ClearCache (exact SimStorage power-cut
     /// oracle) AND with TornSeq/TornOp on the barrier's last journal write
     /// (open-or-typed-refuse; never durable past the torn round; never
-    /// wrong bytes). A ≥2-journal-segment matrix is blocked without a
-    /// `max_journaling_size` door on `StorageOptions` (AUDIT-crash-multiseg).
+    /// wrong bytes). Multi-segment (≥2 `.jnl`) variants use
+    /// `StorageOptions::max_journaling_size_bytes` (floor-validated) as a
+    /// slow-tier follow-on — this class stays single-segment hard-pinned.
     #[test]
     fn commit_boundary_crash_matrix_matches_the_powercut_oracle() {
-        if !can_mount() {
-            eprintln!(
-                "SKIPPED: no live FUSE mount capability in this sandbox \
-             (see kyzo_crashfs::harness::can_mount)."
-            );
-            return;
-        }
+        require_live_mount();
 
         // Pass 1: the fault-free recorder. Learn which occurrence of Fsync
         // AND Write on the journal coincides with each round's own
@@ -320,9 +316,7 @@ mod fuse_crash_matrix {
         let mnt_a = tempfile::tempdir().unwrap();
         let fs_a = PassthroughFs::new(backing_a.path(), FaultPlan::new(1));
         let counters = fs_a.shared_counters();
-        let Some(session_a) = mount(fs_a, mnt_a.path()) else {
-            return;
-        };
+        let session_a = mount(fs_a, mnt_a.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
         wait_for_mount(mnt_a.path());
         let (boundary_fsync_count, boundary_write_count): (Vec<u64>, Vec<u64>) = {
             let db = new_fjall_storage(mnt_a.path()).unwrap();
@@ -396,9 +390,8 @@ mod fuse_crash_matrix {
                     fault,
                 ));
                 let fs_b = PassthroughFs::new(backing_b.path(), plan);
-                let Some(session_b) = mount(fs_b, mnt_b.path()) else {
-                    return;
-                };
+                let session_b =
+                    mount(fs_b, mnt_b.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
                 wait_for_mount(mnt_b.path());
                 {
                     let db = new_fjall_storage(mnt_b.path()).unwrap();
@@ -550,13 +543,7 @@ mod fuse_crash_matrix {
     /// with.
     #[test]
     fn compaction_segment_torn_write_campaign_never_returns_wrong_bytes() {
-        if !can_mount() {
-            eprintln!(
-                "SKIPPED: no live FUSE mount capability in this sandbox \
-             (see kyzo_crashfs::harness::can_mount)."
-            );
-            return;
-        }
+        require_live_mount();
 
         for seed in 0..SEEDS {
             run_bounded(
@@ -578,9 +565,8 @@ mod fuse_crash_matrix {
                         fault,
                     ));
                     let fs = PassthroughFs::new(backing.path(), plan);
-                    let Some(session) = mount(fs, mnt.path()) else {
-                        return;
-                    };
+                    let session =
+                        mount(fs, mnt.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
                     wait_for_mount(mnt.path());
                     {
                         // A store that itself hits an error mid-open/mid-write

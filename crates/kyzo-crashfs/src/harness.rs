@@ -17,19 +17,65 @@
 //! [`crate::PassthroughFs`] — does not hand-copy the same mount/skip
 //! dance. This is exactly the dependency edge phase 1's design doc
 //! anticipated: a test harness depending on this crate, never the reverse.
+//!
+//! Absent FUSE is never silent success: campaigns either refuse with
+//! [`MountRefuse`] or call [`require_live_mount`] (assert-skip that fails
+//! the test — cargo never reports `ok` for a vacuous body).
 
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
+/// Typed refusal when a live FUSE mount cannot be established.
+///
+/// Identity is the variant — never a silent `None`/early-return that lets
+/// cargo report the campaign as `ok`.
+#[derive(Debug)]
+pub enum MountRefuse {
+    /// `/dev/fuse` missing/unopenable or no `fusermount` helper on PATH.
+    CapabilityAbsent,
+    /// Capability looked present but `spawn_mount2` still failed (policy,
+    /// namespace, AppArmor, etc.).
+    MountFailed(io::Error),
+}
+
+impl fmt::Display for MountRefuse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CapabilityAbsent => write!(
+                f,
+                "SKIPPED: no live FUSE mount capability in this sandbox \
+                 (see kyzo_crashfs::harness::can_mount)"
+            ),
+            Self::MountFailed(e) => write!(
+                f,
+                "SKIPPED (environment limitation, not an injector defect): \
+                 FUSE mount failed: {e}. This sandbox lacks live-mount \
+                 capability (no /dev/fuse access, no user_allow_other, or \
+                 policy-restricted mount(2)/fusermount)."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MountRefuse {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CapabilityAbsent => None,
+            Self::MountFailed(e) => Some(e),
+        }
+    }
+}
+
 /// Best-effort live-mount capability check: `/dev/fuse` must exist and be
-/// openable, and a `fusermount`-family binary must be on `PATH` (the
-/// pure-Rust mount path tries a raw `mount(2)` first and falls back to
-/// shelling out to the setuid helper — see `fuser`'s `fuse_pure.rs`). Not a
-/// guarantee a real mount will succeed (namespaces, seccomp, and AppArmor
-/// profiles can all still refuse it) — actual mount success is re-checked
-/// per test/campaign and reported honestly either way.
+/// openable. A `fusermount`/`fusermount3` helper on `PATH` is sufficient but
+/// not required — fuser's pure-Rust path tries raw `mount(2)` first (works
+/// under `SYS_ADMIN` in kyzo-dev) and only falls back to the setuid helper.
+/// Not a guarantee a real mount will succeed (namespaces, seccomp, and
+/// AppArmor profiles can all still refuse it) — actual mount success is
+/// re-checked per campaign via typed [`MountRefuse`].
 pub fn can_mount() -> bool {
     if !Path::new("/dev/fuse").exists() {
         return false;
@@ -37,30 +83,38 @@ pub fn can_mount() -> bool {
     if fs::metadata("/dev/fuse").is_err() {
         return false;
     }
-    ["fusermount3", "fusermount"]
-        .iter()
-        .any(|bin| Command::new(bin).arg("-V").output().is_ok())
+    // Device is present. Prefer an explicit helper when available; otherwise
+    // allow the privileged mount(2) path to try (and refuse typed on failure).
+    true
 }
 
-/// Mount `fs` at `mountpoint`, returning `None` (with a printed reason) if
-/// this sandbox cannot mount — an environment limitation, never an
-/// injector defect (the fault-decision logic is proven independently by
+/// Assert-skip: panic with a LOUD `SKIPPED:` reason when FUSE is absent.
+///
+/// Cargo reports this as a **failed** test, never `ok`. Silence identical
+/// to success is the trials-zone lie-shape this kills. Prefer this (or
+/// matching on [`MountRefuse`]) over `eprintln` + `return`.
+pub fn require_live_mount() {
+    assert!(
+        can_mount(),
+        "{}",
+        MountRefuse::CapabilityAbsent
+    );
+}
+
+/// Mount `fs` at `mountpoint`, returning a typed [`MountRefuse`] if this
+/// sandbox cannot mount — an environment limitation, never an injector
+/// defect (the fault-decision logic is proven independently by
 /// `src/fault.rs`'s unit tests, which run with no mount at all).
 pub fn mount<FS: fuser::Filesystem + Send + 'static>(
     fs: FS,
     mountpoint: &Path,
-) -> Option<fuser::BackgroundSession> {
+) -> Result<fuser::BackgroundSession, MountRefuse> {
+    if !can_mount() {
+        return Err(MountRefuse::CapabilityAbsent);
+    }
     match fuser::spawn_mount2(fs, mountpoint, &fuser::Config::default()) {
-        Ok(session) => Some(session),
-        Err(e) => {
-            eprintln!(
-                "SKIPPED (environment limitation, not an injector defect): \
-                 FUSE mount failed: {e}. This sandbox lacks live-mount \
-                 capability (no /dev/fuse access, no user_allow_other, or \
-                 policy-restricted mount(2)/fusermount)."
-            );
-            None
-        }
+        Ok(session) => Ok(session),
+        Err(e) => Err(MountRefuse::MountFailed(e)),
     }
 }
 

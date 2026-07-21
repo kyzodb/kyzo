@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       rsync \
       time \
       ca-certificates \
+      fuse3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Caches and artifacts live OUTSIDE the bind-mounted repo (named volumes in

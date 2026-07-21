@@ -15,9 +15,10 @@
 //!
 //! Every test here mounts real FUSE (`/dev/fuse`, `fusermount`/
 //! `fusermount3`). If the sandbox cannot mount — no `/dev/fuse`, no
-//! `user_allow_other`, no setuid `fusermount` — every test in this file is
-//! skipped with a printed reason rather than failing the run, since mount
-//! availability is an environment property, not a defect in the injector.
+//! `user_allow_other`, no setuid `fusermount` — the campaign **refuses**
+//! via [`kyzo_crashfs::harness::require_live_mount`] (assert-skip) or
+//! typed [`kyzo_crashfs::MountRefuse`]. Never `eprintln` + `return` that
+//! lets cargo report `ok` for a vacuous body.
 //! [`kyzo_crashfs::harness::can_mount`] is the single detector all three
 //! tests share (moved into the library so `kyzo-core`'s crash-matrix
 //! harness, story #31 phase 2, can reuse it rather than re-implementing
@@ -27,23 +28,19 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use kyzo_crashfs::harness::{can_mount, mount as harness_mount, wait_for_mount};
+use kyzo_crashfs::harness::{mount as harness_mount, require_live_mount, wait_for_mount};
 use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
 /// This file's own thin wrapper: build the fault-injecting filesystem and
 /// hand it to the shared [`harness::mount`](kyzo_crashfs::harness::mount).
-fn mount(backing: &Path, mountpoint: &Path, plan: FaultPlan) -> Option<fuser::BackgroundSession> {
+fn mount(backing: &Path, mountpoint: &Path, plan: FaultPlan) -> fuser::BackgroundSession {
     harness_mount(PassthroughFs::new(backing, plan), mountpoint)
+        .unwrap_or_else(|refuse| panic!("{refuse}"))
 }
 
 #[test]
 fn clear_cache_implements_the_power_cut_model() {
-    if !can_mount() {
-        eprintln!(
-            "SKIPPED: no live FUSE mount capability in this sandbox (see kyzo_crashfs::harness::can_mount)."
-        );
-        return;
-    }
+    require_live_mount();
     let backing = tempfile::tempdir().expect("backing tempdir");
     let mnt = tempfile::tempdir().expect("mountpoint tempdir");
 
@@ -57,9 +54,7 @@ fn clear_cache_implements_the_power_cut_model() {
         Fault::ClearCache,
     ));
 
-    let Some(session) = mount(backing.path(), mnt.path(), plan) else {
-        return;
-    };
+    let session = mount(backing.path(), mnt.path(), plan);
     wait_for_mount(mnt.path());
 
     let file_path = mnt.path().join("data.bin");
@@ -93,12 +88,7 @@ fn clear_cache_implements_the_power_cut_model() {
 
 #[test]
 fn torn_op_splits_a_write_at_the_seed_dictated_point() {
-    if !can_mount() {
-        eprintln!(
-            "SKIPPED: no live FUSE mount capability in this sandbox (see kyzo_crashfs::harness::can_mount)."
-        );
-        return;
-    }
+    require_live_mount();
     let backing = tempfile::tempdir().expect("backing tempdir");
     let mnt = tempfile::tempdir().expect("mountpoint tempdir");
 
@@ -118,9 +108,7 @@ fn torn_op_splits_a_write_at_the_seed_dictated_point() {
     );
     let expected_split_at = match expected_split {
         kyzo_crashfs::WriteOutcome::Split { split_at } => split_at,
-        other => {
-            panic!("test setup: expected a Split outcome from the pure decision fn, got {other:?}")
-        }
+        other => panic!("TornOp trigger must decide Split, got {other:?}"),
     };
 
     let plan = FaultPlan::new(seed).with_trigger(Trigger::new(
@@ -129,18 +117,14 @@ fn torn_op_splits_a_write_at_the_seed_dictated_point() {
         1,
         Fault::TornOp,
     ));
-    let Some(session) = mount(backing.path(), mnt.path(), plan) else {
-        return;
-    };
+    let session = mount(backing.path(), mnt.path(), plan);
     wait_for_mount(mnt.path());
 
     let file_path = mnt.path().join("data.bin");
     {
         let mut f = File::create(&file_path).expect("create through mount");
-        f.write_all(payload)
-            .expect("the single write this test cares about");
-        f.sync_all()
-            .expect("fsync: this is where the torn-op split is materialized");
+        f.write_all(payload).expect("write that TornOp must split");
+        f.sync_all().expect("fsync so torn bytes reach the backing file");
     }
     drop(session);
 
@@ -170,19 +154,12 @@ fn read_your_own_write_survives_pre_fsync_through_the_live_mount() {
     // durability boundary. This guards against an injector bug where the
     // read-overlay is missing and every read appears to silently rewind
     // to the last fsync even while the process is still running.
-    if !can_mount() {
-        eprintln!(
-            "SKIPPED: no live FUSE mount capability in this sandbox (see kyzo_crashfs::harness::can_mount)."
-        );
-        return;
-    }
+    require_live_mount();
     let backing = tempfile::tempdir().expect("backing tempdir");
     let mnt = tempfile::tempdir().expect("mountpoint tempdir");
 
     let plan = FaultPlan::new(1); // no triggers, no ambient faults: pure passthrough
-    let Some(session) = mount(backing.path(), mnt.path(), plan) else {
-        return;
-    };
+    let session = mount(backing.path(), mnt.path(), plan);
     wait_for_mount(mnt.path());
 
     let file_path = mnt.path().join("data.bin");

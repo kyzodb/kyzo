@@ -74,4 +74,5 @@ pub mod harness;
 pub mod passthrough;
 
 pub use fault::{AmbientRates, Counters, Fault, FaultPlan, OpKind, Trigger, WriteOutcome};
+pub use harness::{MountRefuse, can_mount, mount, require_live_mount, wait_for_mount};
 pub use passthrough::{FaultCounters, PassthroughFs};
