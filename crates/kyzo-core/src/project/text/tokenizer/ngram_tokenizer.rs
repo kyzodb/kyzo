@@ -115,6 +115,7 @@ impl NgramTokenizer {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Create a `NGramTokenizer` which generates tokens for all inner ngrams.
     ///
     /// This is as opposed to only prefix ngrams.
@@ -122,6 +123,7 @@ impl NgramTokenizer {
         Self::new(min_gram, max_gram, false)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Create a `NGramTokenizer` which only generates tokens for the
     /// prefix ngrams.
     pub(crate) fn prefix_only(min_gram: usize, max_gram: usize) -> NgramTokenizer {

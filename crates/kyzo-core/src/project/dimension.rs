@@ -50,6 +50,7 @@ pub enum StatementDimension {
 }
 
 impl StatementDimension {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// The closed universe — every dimension a statement may ever project.
     pub const ALL: [StatementDimension; 6] = [
         StatementDimension::Identity,
@@ -107,11 +108,13 @@ impl LoweredRow {
         self.dimension
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Source [`RecordId`] this projection row resolves to.
     pub fn source_record_id(&self) -> RecordId {
         self.source
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Canonical row bytes for equality / rebuild proofs.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -127,6 +130,7 @@ pub struct RecordLowering {
     rows: Vec<LoweredRow>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl RecordLowering {
     /// Assemble from rows already ordered by dimension.
     pub(crate) fn from_ordered_rows(rows: Vec<LoweredRow>) -> Self {
@@ -137,11 +141,13 @@ impl RecordLowering {
         Self { rows }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the ordered lowered rows.
     pub fn rows(&self) -> &[LoweredRow] {
         &self.rows
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Dimensions present in this lowering (type-entailed subset).
     pub fn dimensions(&self) -> impl Iterator<Item = StatementDimension> + '_ {
         self.rows.iter().map(LoweredRow::dimension)

@@ -17,6 +17,7 @@ use thiserror::Error;
 
 use crate::session::record_id::RecordId;
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// A retrieval span over evidence / projection material.
 ///
 /// Construction that already names a source uses [`RetrievalSpan::from_source`].
@@ -29,7 +30,9 @@ pub struct RetrievalSpan {
     source: Option<RecordId>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl RetrievalSpan {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Span that already resolves to an admitted source RecordId.
     pub fn from_source(source: RecordId, start: u64, end: u64) -> Self {
         Self {
@@ -39,6 +42,7 @@ impl RetrievalSpan {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Orphan span with no source RecordId — resolve must refuse.
     pub fn orphan(start: u64, end: u64) -> Self {
         Self {
@@ -48,11 +52,13 @@ impl RetrievalSpan {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Span start offset.
     pub fn start(&self) -> u64 {
         self.start
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Span end offset.
     pub fn end(&self) -> u64 {
         self.end
@@ -64,6 +70,7 @@ impl RetrievalSpan {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse when retrieval cannot name a source RecordId.
 #[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
 pub enum RetrievalRefuse {

@@ -337,7 +337,7 @@ pub(crate) enum HnswManifestRefused {
 /// Euclidean; `Cosine` is NaN-free by construction because ingest
 /// normalizes (see [`IndexVec`]); `InnerProduct` is `1 - a·b`.
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize)]
-pub(crate) struct HnswIndexManifest {
+pub struct HnswIndexManifest {
     base_relation: SmartString<LazyCompact>,
     index_name: SmartString<LazyCompact>,
     vec_dim: usize,
@@ -1321,11 +1321,10 @@ impl RaBitQRotation {
             let attempt_seed = seed
                 ^ (dim as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 ^ attempt.wrapping_mul(0xD1B5_4A32_D192_ED03);
-            if let Some(rot) = Self::try_orthogonal(dim, attempt_seed) {
-                if rot.orthonormality_error() < 1e-10 {
+            if let Some(rot) = Self::try_orthogonal(dim, attempt_seed)
+                && rot.orthonormality_error() < 1e-10 {
                     return Some(rot);
                 }
-            }
         }
         None
     }
@@ -1342,23 +1341,21 @@ impl RaBitQRotation {
             for _reorth in 0..2 {
                 for j in 0..i {
                     let mut dot = 0.0f64;
-                    for k in 0..dim {
-                        dot += cols[i][k] * cols[j][k];
+                    for (a, b) in cols[i].iter().zip(cols[j].iter()) {
+                        dot += a * b;
                     }
-                    for k in 0..dim {
-                        cols[i][k] -= dot * cols[j][k];
+                    let proj = cols[j].clone();
+                    for (a, b) in cols[i].iter_mut().zip(proj.iter()) {
+                        *a -= dot * b;
                     }
                 }
-                let mut norm_sq = 0.0f64;
-                for k in 0..dim {
-                    norm_sq += cols[i][k] * cols[i][k];
-                }
+                let norm_sq: f64 = cols[i].iter().map(|x| x * x).sum();
                 let norm = norm_sq.sqrt();
-                if !(norm > 1e-12) {
+                if norm.partial_cmp(&1e-12) != Some(std::cmp::Ordering::Greater) {
                     return None;
                 }
-                for k in 0..dim {
-                    cols[i][k] /= norm;
+                for a in &mut cols[i] {
+                    *a /= norm;
                 }
             }
         }
@@ -1392,13 +1389,13 @@ impl RaBitQRotation {
     fn transform(&self, v: &[f64]) -> Vec<f64> {
         debug_assert_eq!(v.len(), self.dim);
         let mut out = vec![0.0f64; self.dim];
-        for r in 0..self.dim {
+        for (r, slot) in out.iter_mut().enumerate() {
             let mut s = 0.0f64;
             let row = &self.inv[r * self.dim..(r + 1) * self.dim];
-            for c in 0..self.dim {
-                s += row[c] * v[c];
+            for (c, &vc) in v.iter().enumerate().take(self.dim) {
+                s += row[c] * vc;
             }
-            out[r] = s;
+            *slot = s;
         }
         out
     }
@@ -1462,7 +1459,7 @@ impl RaBitQCode {
             return None;
         }
         let o_prime = rotation.transform(o_unit);
-        let words = (rotation.dim + 63) / 64;
+        let words = rotation.dim.div_ceil(64);
         let mut bits = vec![0u64; words];
         let mut abs_sum = 0.0f64;
         for (i, &x) in o_prime.iter().enumerate() {
@@ -1553,7 +1550,7 @@ fn exact_inner_product(a: &[f64], b: &[f64]) -> f64 {
 #[cfg(test)]
 fn normalize_unit(v: &[f64]) -> Option<Vec<f64>> {
     let n = v.iter().map(|x| x * x).sum::<f64>().sqrt();
-    if !(n > 0.0) {
+    if n.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     Some(v.iter().map(|x| x / n).collect())

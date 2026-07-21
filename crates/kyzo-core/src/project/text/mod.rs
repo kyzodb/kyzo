@@ -60,7 +60,7 @@ pub(crate) mod tokenizer;
 /// are extracted, and how text is tokenized. Persisted in the catalog; the
 /// `tokenizer`/`filters` configs are re-`build()`-able at any later time.
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) struct FtsIndexManifest {
+pub struct FtsIndexManifest {
     pub(crate) base_relation: SmartString<LazyCompact>,
     pub(crate) index_name: SmartString<LazyCompact>,
     /// The row-extraction expression as a PARSED typed substance. Serde

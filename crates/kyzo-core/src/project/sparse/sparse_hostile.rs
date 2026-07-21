@@ -27,7 +27,6 @@ use crate::store::{Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::InputRelationHandle;
 use kyzo_model::program::expr::Expr;
-use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
 use smartstring::SmartString;

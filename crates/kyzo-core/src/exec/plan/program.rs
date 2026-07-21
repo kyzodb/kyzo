@@ -173,7 +173,7 @@ pub(crate) fn normalize_ruleset(
 
 /// One normalized rule: a flat, well-ordered conjunction body.
 #[derive(Debug)]
-pub(crate) struct NormalFormInlineRule {
+pub struct NormalFormInlineRule {
     pub head: Vec<Symbol>,
     pub aggr: Vec<HeadAggrSlot>,
     pub body: Vec<NormalFormAtom>,
@@ -203,7 +203,7 @@ impl NormalFormRulesOrFixed {
 /// A body atom in normal form: applications over plain symbols, predicates,
 /// and unifications. Negation is atom-level only — DNF pushed it down.
 #[derive(Debug, Clone)]
-pub(crate) enum NormalFormAtom {
+pub enum NormalFormAtom {
     Rule(NormalFormRuleApplyAtom),
     Relation(NormalFormRelationApplyAtom),
     NegatedRule(NormalFormRuleApplyAtom),
@@ -218,7 +218,7 @@ pub(crate) enum NormalFormAtom {
 
 /// A rule application over plain symbols.
 #[derive(Clone, Debug)]
-pub(crate) struct NormalFormRuleApplyAtom {
+pub struct NormalFormRuleApplyAtom {
     pub name: Symbol,
     pub args: Vec<Symbol>,
     pub span: SourceSpan,
@@ -227,7 +227,7 @@ pub(crate) struct NormalFormRuleApplyAtom {
 /// A stored-relation application over plain symbols, optionally carrying a
 /// [`ValidityClause`] (time travel, interval derivation, or diff).
 #[derive(Clone, Debug)]
-pub(crate) struct NormalFormRelationApplyAtom {
+pub struct NormalFormRelationApplyAtom {
     pub name: Symbol,
     pub args: Vec<Symbol>,
     pub validity: Option<ValidityClause>,

@@ -80,10 +80,12 @@ pub(crate) enum RetryFatal {
 pub(crate) enum StorageOpFailure {
     #[error("storage write_tx failed")]
     WriteTx,
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     #[error("storage get failed")]
     Get,
     #[error("storage put failed")]
     Put,
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     #[error("sim: injected transient read fault")]
     SimInjectedReadFault,
 }
@@ -165,6 +167,7 @@ pub(crate) fn write_tx_attempt<S: Storage>(db: &S) -> std::result::Result<S::Wri
         .map_err(|_| RetryError::from(StorageOpFailure::WriteTx))
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Point-get for a retry attempt — typed op failure, never Report.
 pub(crate) fn get_attempt(
     tx: &impl ReadTx,
@@ -174,6 +177,7 @@ pub(crate) fn get_attempt(
         .map_err(|_| RetryError::from(StorageOpFailure::Get))
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Put for a retry attempt — typed op failure, never Report.
 pub(crate) fn put_attempt(
     tx: &mut impl WriteTx,

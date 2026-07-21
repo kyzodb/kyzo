@@ -542,7 +542,7 @@ impl<'a> FixedRulePayload<'a> {
             default,
             |val| match val {
                 DataValue::Num(n) => Some(n.to_f64()),
-                _ => None,
+                data_value_any!() => None,
             },
             WrongFixedRuleOptionHelp::FloatRequired,
         )
@@ -568,7 +568,7 @@ impl<'a> FixedRulePayload<'a> {
             default,
             |val| match val {
                 DataValue::Bool(b) => Some(b),
-                _ => None,
+                data_value_any!() => None,
             },
             WrongFixedRuleOptionHelp::BoolRequired,
         )

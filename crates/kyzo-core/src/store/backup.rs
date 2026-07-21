@@ -40,7 +40,7 @@ use crate::session::catalog::{KeyspaceKind, list_relations};
 use crate::store::authority::IncarnationId;
 use crate::store::crypto::{ShredLedger, WrappedShredSalt};
 use crate::store::fjall::FjallStorage;
-use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
+use crate::store::fjall::{StorageOptions, new_fjall_storage_with};
 use crate::store::merkle::{
     ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot, roots_equal_at_cut,
 };
@@ -451,6 +451,7 @@ fn read_pair(r: &mut impl Read) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
 
 // ── Leave-is-free pack (§79 / §65) ──────────────────────────────────────────
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Leave-is-free pack shape: seal+suffix+objects, or full WAL+objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LeaveIsFreeKind {
@@ -460,6 +461,7 @@ pub enum LeaveIsFreeKind {
     FullWal,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Inputs required to build a leave-is-free pack. Omitting wrapped salts or
 /// incarnation history is Unconstructible as leave-is-free.
 #[derive(Debug, Clone)]
@@ -476,6 +478,7 @@ pub struct LeaveIsFreeParts {
     pub payload: Vec<u8>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed leave-is-free pack. WriteAuthority / KEK / plaintext ShredSalt /
 /// AuditKey / IncarnationMintCap are absent by construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,6 +490,7 @@ pub struct LeaveIsFreePack {
     payload: Vec<u8>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse from pack build / hygiene / import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum PackRefuse {
@@ -524,7 +528,9 @@ pub enum PackRefuse {
     TrustRootAlreadySealed { store_id: StoreId },
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl LeaveIsFreePack {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Build a leave-is-free pack. Requires non-empty WrappedShredSalt list and
     /// IncarnationId history — omitting either is Unconstructible as leave-is-free.
     pub fn build(parts: LeaveIsFreeParts) -> Result<Self, PackRefuse> {
@@ -545,11 +551,13 @@ impl LeaveIsFreePack {
         Ok(pack)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Pack shape.
     pub fn kind(&self) -> LeaveIsFreeKind {
         self.kind
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// FormatVersion stamped into the pack.
     pub fn format_version(&self) -> FormatVersion {
         self.format_version
@@ -686,6 +694,7 @@ impl LeaveIsFreePack {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Receiver-held sealed registry: origin [`StoreId`] → trusted chain root at a
 /// known cut (seat 80 / #374 T7).
 ///
@@ -711,12 +720,15 @@ pub struct OriginRootRegistry {
     roots: BTreeMap<[u8; 32], StateRoot>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl OriginRootRegistry {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty sealed origin-root registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Register the trusted chain root for an origin StoreId (operator/genesis door).
     ///
     /// Seal-once per StoreId: first root wins; same root → idempotent Ok;
@@ -762,6 +774,7 @@ impl OriginRootRegistry {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Forbidden secret markers scrubbed from leave-is-free payload bytes (§65).
 const HYGIENE_FORBIDDEN_MARKERS: &[&[u8]] = &[
     b"kyzo.write_authority.",
@@ -771,6 +784,7 @@ const HYGIENE_FORBIDDEN_MARKERS: &[&[u8]] = &[
     b"kyzo.incarnation_mint_cap.",
 ];
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Pack hygiene scrub point (§65): Store/Engine bundle emit and leave-is-free
 /// boundaries. WA / KEK / plaintext salt / AuditKey / MintCap presence after
 /// this point is a Spec violation — those types have no field on the pack, and
@@ -791,6 +805,7 @@ fn pack_hygiene_scrub(pack: &LeaveIsFreePack) -> Result<(), PackRefuse> {
     Ok(())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Production deep scrub of one pack-reachable byte slice (§64/§65).
 fn scrub_pack_bytes(
     sealed_bytes: &[u8],
@@ -805,6 +820,7 @@ fn scrub_pack_bytes(
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || haystack.len() < needle.len() {
         return false;
@@ -812,6 +828,7 @@ fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Import verify ceremony (§80): foreign dumps only under capability + chain /
 /// root verify. Blind import is a second write door for forged belief.
 ///
@@ -833,7 +850,9 @@ pub struct ImportCapability {
     bound_root: Option<StateRoot>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl ImportCapability {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Public / external mint door — **DELIBERATE hard-refuse** (#359 / #375 T5).
     ///
     /// Two bare [`ReplicaCutRecompute`]s are never a trust source (seat 80 /
@@ -853,6 +872,7 @@ impl ImportCapability {
         Err(PackRefuse::ForeignHistoryUnverified)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Unverified foreign import — [`import_verify`] refuses
     /// [`PackRefuse::ForeignHistoryUnverified`]. Constructible without a bound
     /// root; verified without a bound root is Unconstructible.
@@ -871,6 +891,7 @@ impl ImportCapability {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Whether retained objects named by the cut are present for restore (§79/§80).
 ///
 /// Closed sum — green-incomplete restore is Unconstructible.
@@ -882,6 +903,7 @@ pub enum ObjectsCompleteness {
     Incomplete,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Run the import verify ceremony over a leave-is-free pack.
 ///
 /// Requires a bound [`ImportCapability`]. Externally, that capability is
@@ -922,6 +944,7 @@ pub fn import_verify(
     pack_hygiene_scrub(pack)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Production leave-is-free import door (seat 80 / #359).
 ///
 /// Runs [`import_verify`] then admits the pack under the verified ceremony.

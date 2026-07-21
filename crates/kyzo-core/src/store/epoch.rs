@@ -37,6 +37,7 @@ impl FenceEpoch {
         Self { store_id, epoch: 0 }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Construct from an already-proven epoch (WAL / seal decode) under `store_id`.
     pub(crate) fn from_raw(store_id: StoreId, raw: u64) -> Self {
         Self {
@@ -107,6 +108,7 @@ impl CryptoDomain {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Same-principal live-token grant to advance [`FenceEpoch`] on the same StoreId.
 ///
 /// Distinct from [`super::grants::RecoveryGrant`] and [`super::authority::WriteAuthority`].
@@ -118,6 +120,7 @@ pub struct EpochGrant {
 }
 
 impl EpochGrant {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Host / federation admission of a same-principal advance grant.
     pub fn new(store_id: StoreId, predecessor_epoch: FenceEpoch) -> Self {
         Self {
@@ -137,6 +140,7 @@ impl EpochGrant {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Witness that current-epoch current-incarnation Fenced footprints are clear.
 ///
 /// Ordinary [`advance`] requires this. RecoveryGrant advance is IntentClear-exempt
@@ -148,6 +152,7 @@ pub struct IntentClear {
 }
 
 impl IntentClear {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Attest that no live current-epoch Fenced footprints remain.
     ///
     /// Consumes [`FootprintClearEvidence`] minted by
@@ -173,6 +178,7 @@ impl IntentClear {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Advance is itself a Committed event: last mint in the predecessor
 /// [`CryptoDomain`], its root the mandatory chain predecessor of the
 /// successor domain's genesis root. Recovery advances seal a typed recovery
@@ -185,12 +191,15 @@ pub struct EpochAdvanceCommitted {
     recovery_link: Option<RecoveryEpochLink>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl EpochAdvanceCommitted {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Predecessor CryptoDomain (last mint domain).
     pub fn predecessor(&self) -> CryptoDomain {
         self.predecessor
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Successor CryptoDomain (new genesis root chains from predecessor).
     pub fn successor(&self) -> CryptoDomain {
         self.successor
@@ -202,6 +211,7 @@ impl EpochAdvanceCommitted {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Auditor-distinguishable recovery link sealed into a recovery advance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryEpochLink {
@@ -209,11 +219,13 @@ pub struct RecoveryEpochLink {
 }
 
 impl RecoveryEpochLink {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Bind the predecessor epoch the recovery revoked.
     pub(crate) fn new(predecessor_epoch: FenceEpoch) -> Self {
         Self { predecessor_epoch }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Predecessor epoch named by the link.
     pub fn predecessor_epoch(&self) -> FenceEpoch {
         self.predecessor_epoch
@@ -239,6 +251,7 @@ pub enum EpochAdvanceRefuse {
     EpochSpaceExhausted,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Same-principal live-token advance: new CryptoDomain, same KEK, new IncarnationId
 /// at the next open — WriteAuthority remains the immutable signing capability.
 ///
@@ -277,6 +290,7 @@ pub fn advance(
     })
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// RecoveryGrant advance: IntentClear-exempt under epoch-indexed footprint law.
 /// Seals a typed recovery link. New WriteAuthority is minted by grants materialize;
 /// this door only advances the epoch domain.

@@ -27,7 +27,7 @@
 
 use std::collections::BTreeMap;
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 use super::authority::{RecoveryMatrix, WriteAuthority, WriteTokenId};
@@ -40,18 +40,23 @@ use super::transcript::{
     encode_recovery_write_token,
 };
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain-separated prefix for recovery quorum signatures.
 const RECOVERY_QUORUM_DOMAIN: &[u8] = b"kyzo.recovery_quorum.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain-separated prefix for predecessor fork-consent signatures.
 const FORK_CONSENT_DOMAIN: &[u8] = b"kyzo.fork_consent.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain-separated prefix for ancestor-entitlement signatures.
 const ANCESTOR_ENTITLEMENT_DOMAIN: &[u8] = b"kyzo.ancestor_entitlement.v1";
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Stable grant identity bound into the signed payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GrantId([u8; 32]);
 
 impl GrantId {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven grant id.
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
@@ -63,11 +68,13 @@ impl GrantId {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fork-point state root sealed in a ForkGrant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ForkPointRoot([u8; 32]);
 
 impl ForkPointRoot {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven fork-point root.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -85,11 +92,13 @@ impl From<[u8; 32]> for ForkPointRoot {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Successor principal binding in a ForkGrant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SuccessorPrincipal([u8; 32]);
 
 impl SuccessorPrincipal {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven successor principal digest.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -107,11 +116,13 @@ impl From<[u8; 32]> for SuccessorPrincipal {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Successor identity seed (sole entropy for materialize).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IdentitySeed([u8; 32]);
 
 impl IdentitySeed {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven identity seed.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -129,11 +140,13 @@ impl From<[u8; 32]> for IdentitySeed {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Key-material commitment bound into a grant seed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KeyMaterialCommitment([u8; 32]);
 
 impl KeyMaterialCommitment {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven key-material commitment.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -151,6 +164,7 @@ impl From<[u8; 32]> for KeyMaterialCommitment {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed registry of predecessor-consent verifying keys keyed by [`StoreId`].
 ///
 /// Register at genesis/seal time. [`PredecessorConsentProof::verify`] and
@@ -169,11 +183,13 @@ pub struct PredecessorConsentTable {
 }
 
 impl PredecessorConsentTable {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty sealed consent-key registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Register the consent verifying key for a StoreId (operator/genesis door).
     ///
     /// Invalid ed25519 material refuses. Seal-once per StoreId: first key
@@ -203,6 +219,7 @@ impl PredecessorConsentTable {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Opaque sealed evidence that a predecessor consented to a fork payload.
 ///
 /// No public free constructor — mint only via [`PredecessorConsentProof::verify`].
@@ -215,6 +232,7 @@ pub struct PredecessorConsentProof {
 }
 
 impl PredecessorConsentProof {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Verify an ed25519 consent signature against the sealed table and seal the proof.
     ///
     /// Resolves the verifying key from `consent_table` for `predecessor_store`
@@ -266,6 +284,7 @@ impl PredecessorConsentProof {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Different-principal fork seed — not an event.
 ///
 /// Binds GrantId, predecessor StoreId, fork-point root, successor principal,
@@ -284,6 +303,7 @@ pub struct ForkGrant {
 }
 
 impl ForkGrant {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Construct a fork grant seed bound to a verified predecessor consent proof.
     ///
     /// The proof's predecessor and payload digest must match this grant's sealed
@@ -362,6 +382,7 @@ impl ForkGrant {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Opaque sealed evidence that a [`RecoveryMatrix`] FROST quorum signed a payload.
 ///
 /// Carries only matrix + payload digests — **no signer identifiers**. The
@@ -377,6 +398,7 @@ pub struct RecoveryQuorumProof {
 }
 
 impl RecoveryQuorumProof {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Verify one FROST (RFC 9591 / `frost-ed25519`) aggregate signature against
     /// `matrix` and seal the proof.
     ///
@@ -434,6 +456,7 @@ impl RecoveryQuorumProof {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Same-principal recovery seed — one-shot quorum under RecoveryMatrix.
 ///
 /// Predecessor FenceEpoch in the signed payload. A second valid grant for
@@ -452,6 +475,7 @@ pub struct RecoveryGrant {
 }
 
 impl RecoveryGrant {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Construct a recovery grant seed bound to a verified quorum proof.
     ///
     /// The proof's payload digest must match this grant's sealed fields;
@@ -522,6 +546,7 @@ impl RecoveryGrant {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Closed sum of grant seeds that [`materialize`] accepts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Grant {
@@ -531,6 +556,7 @@ pub enum Grant {
     Recovery(RecoveryGrant),
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Pure materialization of a grant seed: successor identity + derivation inputs.
 ///
 /// Same grant → same result every time (deterministic, idempotent). Discovery
@@ -550,6 +576,7 @@ pub struct MaterializedGrant {
 }
 
 impl MaterializedGrant {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Grant that produced this materialization.
     pub fn grant_id(&self) -> GrantId {
         self.grant_id
@@ -560,22 +587,26 @@ impl MaterializedGrant {
         self.store_id
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Successor CryptoDomain.
     pub fn crypto_domain(&self) -> CryptoDomain {
         self.crypto_domain
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the successor WriteAuthority (affine — move via ownership of self).
     pub fn write_authority(&self) -> &WriteAuthority {
         &self.write_authority
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Key-material commitment from the grant.
     pub fn key_material_commitment(&self) -> &KeyMaterialCommitment {
         &self.key_material_commitment
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse from [`materialize`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum MaterializeRefuse {
@@ -635,18 +666,49 @@ pub enum MaterializeRefuse {
     /// Never a second WriteAuthority / second lineage. Distinct from
     /// [`GrantAlreadyMaterialized`] (same-grant rediscovery mismatch) and from
     /// quorum verification / threshold refuses.
-    #[error(
-        "QuorumEquivocationPoison: second RecoveryGrant {second_grant:?} for predecessor epoch after {first_grant:?} on store {store_id:?}"
-    )]
+    #[error("{0}")]
     #[diagnostic(code(store::grants::quorum_equivocation_poison))]
-    QuorumEquivocationPoison {
+    QuorumEquivocationPoison(Box<QuorumEquivocationPoisonBody>),
+}
+
+/// Payload for [`MaterializeRefuse::QuorumEquivocationPoison`], boxed so the
+/// refuse enum stays Result-sized (clippy::result_large_err).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuorumEquivocationPoisonBody {
+    pub store_id: StoreId,
+    pub predecessor_epoch: FenceEpoch,
+    pub first_grant: GrantId,
+    pub second_grant: GrantId,
+}
+
+impl std::fmt::Display for QuorumEquivocationPoisonBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "QuorumEquivocationPoison: second RecoveryGrant {:?} for predecessor epoch after {:?} on store {:?}",
+            self.second_grant, self.first_grant, self.store_id
+        )
+    }
+}
+
+impl MaterializeRefuse {
+    /// Construct [`Self::QuorumEquivocationPoison`] with a boxed body.
+    pub fn quorum_equivocation_poison(
         store_id: StoreId,
         predecessor_epoch: FenceEpoch,
         first_grant: GrantId,
         second_grant: GrantId,
-    },
+    ) -> Self {
+        Self::QuorumEquivocationPoison(Box::new(QuorumEquivocationPoisonBody {
+            store_id,
+            predecessor_epoch,
+            first_grant,
+            second_grant,
+        }))
+    }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Optional prior materialization witness for idempotent rediscovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PriorMaterialization {
@@ -655,6 +717,7 @@ pub struct PriorMaterialization {
 }
 
 impl PriorMaterialization {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Record that `grant_id` already materialized as `successor`.
     pub fn new(grant_id: GrantId, successor: StoreId) -> Self {
         Self {
@@ -674,6 +737,7 @@ impl PriorMaterialization {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Host-side one-shot ledger: which RecoveryGrant already materialized for each
 /// predecessor [`FenceEpoch`] (binds [`StoreId`]).
 ///
@@ -687,11 +751,13 @@ pub struct PriorRecoveryTable {
 }
 
 impl PriorRecoveryTable {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty one-shot ledger (no recovery yet observed).
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Record that recovery already materialized for `predecessor_epoch`.
     ///
     /// Requires a [`MaterializedGrant`] witness — proof recovery actually
@@ -728,12 +794,12 @@ impl PriorRecoveryTable {
                 Ok(())
             }
             Some(&first) if first == grant_id => Ok(()),
-            Some(&first) => Err(MaterializeRefuse::QuorumEquivocationPoison {
+            Some(&first) => Err(MaterializeRefuse::quorum_equivocation_poison(
                 store_id,
                 predecessor_epoch,
-                first_grant: first,
-                second_grant: grant_id,
-            }),
+                first,
+                grant_id,
+            )),
         }
     }
 
@@ -746,6 +812,7 @@ impl PriorRecoveryTable {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Pure / deterministic / idempotent materialization of a grant seed.
 ///
 /// Same grant → same successor StoreId and derivation inputs every time.
@@ -789,6 +856,7 @@ pub fn materialize(
     Ok(computed)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 fn materialize_fork(
     fork: &ForkGrant,
     consent_table: Option<&PredecessorConsentTable>,
@@ -830,6 +898,7 @@ fn materialize_fork(
     })
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 fn materialize_recovery(
     recovery: &RecoveryGrant,
     recovery_matrix: Option<&RecoveryMatrix>,
@@ -846,12 +915,12 @@ fn materialize_recovery(
         && let Some(first_grant) = table.shot_for(recovery.store_id(), recovery.predecessor_epoch())
         && first_grant != recovery.grant_id()
     {
-        return Err(MaterializeRefuse::QuorumEquivocationPoison {
-            store_id: recovery.store_id(),
-            predecessor_epoch: recovery.predecessor_epoch(),
+        return Err(MaterializeRefuse::quorum_equivocation_poison(
+            recovery.store_id(),
+            recovery.predecessor_epoch(),
             first_grant,
-            second_grant: recovery.grant_id(),
-        });
+            recovery.grant_id(),
+        ));
     }
     // Same StoreId; new CryptoDomain at successor epoch; new WriteAuthority.
     let store_id = recovery.store_id();
@@ -871,6 +940,7 @@ fn materialize_recovery(
     })
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed registry of ancestor-decrypt entitlement verifying keys keyed by [`StoreId`].
 ///
 /// Register at genesis/seal time. [`AncestorEntitlementProof::verify`] and
@@ -889,11 +959,13 @@ pub struct AncestorEntitlementTable {
 }
 
 impl AncestorEntitlementTable {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty sealed entitlement-key registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Register the entitlement verifying key for a StoreId (operator/genesis door).
     ///
     /// Invalid ed25519 material refuses. Seal-once per StoreId: first key
@@ -923,6 +995,7 @@ impl AncestorEntitlementTable {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Opaque sealed evidence that a sealed entitlement key authorized ancestor decrypt-scope.
 ///
 /// No public free constructor — mint only via [`AncestorEntitlementProof::verify`].
@@ -935,6 +1008,7 @@ pub struct AncestorEntitlementProof {
 }
 
 impl AncestorEntitlementProof {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Verify an ed25519 entitlement signature against the sealed table and seal the proof.
     ///
     /// Resolves the verifying key from `entitlement_table` for `store_id` — never
@@ -986,6 +1060,7 @@ impl AncestorEntitlementProof {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Ancestor-epoch plaintext read grant — O(epochs) rewrap.
 ///
 /// Cross-fork foreign-CryptoDomain plaintext is Unconstructible.
@@ -1000,6 +1075,7 @@ pub struct AncestorReadGrant {
     entitlement_proof: AncestorEntitlementProof,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse constructing / using [`AncestorReadGrant`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum AncestorReadRefuse {
@@ -1035,7 +1111,9 @@ pub enum AncestorReadRefuse {
     TrustRootAlreadySealed { store_id: StoreId },
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl AncestorReadGrant {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Seal an O(epochs) rewrap grant bound to verified sealed entitlement evidence.
     ///
     /// Resolves the trust root from `entitlement_table` for `store_id` — never a
@@ -1084,6 +1162,7 @@ impl AncestorReadGrant {
         })
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Store this grant covers.
     pub fn store_id(&self) -> StoreId {
         self.store_id
@@ -1101,6 +1180,7 @@ impl AncestorReadGrant {
         self.to_epoch
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Verified ancestor-entitlement evidence bound into this grant.
     pub fn entitlement_proof(&self) -> &AncestorEntitlementProof {
         &self.entitlement_proof
@@ -1119,6 +1199,7 @@ impl AncestorReadGrant {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// SHA-256 over sealed [`CanonicalTranscript`] bytes — the only digest step on
 /// the grant surface. Field layout lives solely in the transcript encoders.
 fn hash_transcript(transcript: &CanonicalTranscript) -> [u8; 32] {
@@ -1127,6 +1208,7 @@ fn hash_transcript(transcript: &CanonicalTranscript) -> [u8; 32] {
     h.finalize().into()
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fork-consent verifying-key id via [`encode_fork_consent_key_id`].
 fn consent_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
     let transcript = encode_fork_consent_key_id(verifying_key)
@@ -1134,6 +1216,7 @@ fn consent_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
     hash_transcript(&transcript)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// ForkGrant payload digest via [`encode_fork_grant_payload`].
 pub(crate) fn fork_grant_payload_digest(
     grant_id: GrantId,
@@ -1155,6 +1238,7 @@ pub(crate) fn fork_grant_payload_digest(
     hash_transcript(&transcript)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// RecoveryMatrix digest via [`encode_recovery_matrix`].
 fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> [u8; 32] {
     let transcript = encode_recovery_matrix(
@@ -1166,6 +1250,7 @@ fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> [u8; 32] {
     hash_transcript(&transcript)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// RecoveryGrant payload digest via [`encode_recovery_grant_payload`].
 pub(crate) fn recovery_grant_payload_digest(
     grant_id: GrantId,
@@ -1186,6 +1271,7 @@ pub(crate) fn recovery_grant_payload_digest(
     hash_transcript(&transcript)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Successor StoreId for a fork — hash of [`encode_fork_store_id`] bytes once.
 fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
     let transcript = encode_fork_store_id(
@@ -1200,6 +1286,7 @@ fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
     StoreId::from_digest(hash_transcript(&transcript))
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fork WriteAuthority token — hash of [`encode_fork_write_token`] bytes once.
 fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> WriteTokenId {
     let transcript = encode_fork_write_token(
@@ -1212,6 +1299,7 @@ fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> WriteTokenId 
     WriteTokenId::from_digest(hash_transcript(&transcript))
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Recovery WriteAuthority token — hash of [`encode_recovery_write_token`] bytes once.
 fn derive_recovery_write_token(recovery: &RecoveryGrant) -> WriteTokenId {
     let pred = recovery.predecessor_epoch();
@@ -1227,6 +1315,7 @@ fn derive_recovery_write_token(recovery: &RecoveryGrant) -> WriteTokenId {
     WriteTokenId::from_digest(hash_transcript(&transcript))
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Ancestor-entitlement verifying-key id via [`encode_ancestor_entitlement_key_id`].
 fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
     let transcript = encode_ancestor_entitlement_key_id(verifying_key)
@@ -1234,6 +1323,7 @@ fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> [u8; 32] {
     hash_transcript(&transcript)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// AncestorReadGrant payload digest via [`encode_ancestor_read_grant_payload`].
 fn ancestor_read_grant_payload_digest(
     store_id: StoreId,
@@ -1439,6 +1529,7 @@ pub(crate) fn sign_fork_consent(
     sign_domain_label(FORK_CONSENT_DOMAIN, seed, predecessor_store, payload_digest)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Test-only: ed25519 ancestor-entitlement sign over the entitlement domain.
 #[cfg(test)]
 pub(crate) fn sign_ancestor_entitlement(
@@ -1753,12 +1844,12 @@ mod tests {
                 None,
                 Some(&prior),
             ),
-            Err(MaterializeRefuse::QuorumEquivocationPoison {
+            Err(MaterializeRefuse::quorum_equivocation_poison(
                 store_id,
-                predecessor_epoch: pred_epoch,
-                first_grant: g1.grant_id(),
-                second_grant: g2.grant_id(),
-            })
+                pred_epoch,
+                g1.grant_id(),
+                g2.grant_id(),
+            ))
         );
     }
 

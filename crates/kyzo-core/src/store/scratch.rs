@@ -125,6 +125,7 @@ impl TempTx {
         self.map.as_mut().expect("TempTx used after commit/abort")
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Whether nothing has ever been written (used by tests/diagnostics).
     pub(crate) fn is_empty(&self) -> bool {
         self.open_map().is_empty()

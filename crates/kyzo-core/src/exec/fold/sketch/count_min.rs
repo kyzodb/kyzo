@@ -76,6 +76,7 @@ pub(crate) struct CountMinSketch {
     counters: Vec<u64>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl CountMinSketch {
     /// An empty sketch of the given dimensions — the identity element of
     /// [`Self::merge`]. `width` must be positive and `depth` in

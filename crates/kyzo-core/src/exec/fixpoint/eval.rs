@@ -1285,6 +1285,7 @@ pub(crate) fn project_positions(row: &[DataValue], positions: &[HeadPos]) -> Tup
 /// note → limiter put. Used by both epoch-0 and semi-naive epochs; the
 /// epochs differ in *which* derivations are offered (full body vs delta
 /// occurrence), not in how a new row is admitted to `out`.
+#[allow(clippy::too_many_arguments)] // eval staging arity — pending/limiter/out are distinct seats
 fn ingest_plain_derivation(
     out: &mut RegularTempStore,
     pending: &mut PendingWitnesses,

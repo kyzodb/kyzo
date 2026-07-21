@@ -35,6 +35,7 @@ pub struct CompactionDebt {
     pub reclaimable_bytes: u64,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Pure pace outcome — reconstructible from Store debt facts alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompactionPace {
@@ -42,6 +43,7 @@ pub struct CompactionPace {
     pub work_units: u64,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// `pace = f(debt)` — pure function of committed-byte / reclaimable-debt
 /// quantities only. Wall-clock, CPU, and IO-util inputs are Unconstructible
 /// (absent from this signature).
@@ -54,6 +56,7 @@ pub fn pace(debt: CompactionDebt) -> Result<CompactionPace, CompactRefuse> {
     Err(CompactRefuse::PaceCoefficientsUnmeasured)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Range class fixed at write from the bitemporal coordinate (§46).
 ///
 /// Background heuristic reclassification of frozen↔current is Unconstructible.
@@ -65,6 +68,7 @@ pub enum RangeClass {
     Frozen,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Commit-time classifier: range class from the key’s bitemporal fact.
 ///
 /// `written_at` is the commit ordinal that sealed the key; `frozen_before`
@@ -81,11 +85,13 @@ pub fn classify_range_at_commit(
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Plaintext content hash of a sealed packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PacketContentHash([u8; 32]);
 
 impl PacketContentHash {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven packet content hash.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -109,11 +115,13 @@ impl AsRef<[u8]> for PacketContentHash {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Lineage hash covering predecessor packet identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LineageHash([u8; 32]);
 
 impl LineageHash {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven lineage hash.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -137,11 +145,13 @@ impl AsRef<[u8]> for LineageHash {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Plaintext-canonical state root bound into a merged packet header.
 ///
 /// Same meaning as [`super::merkle::StateRoot`] — not a second digest identity.
 pub type CompactStateRoot = super::merkle::StateRoot;
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Inputs required to privately mint a [`MergeProof`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeProofParts {
@@ -157,6 +167,7 @@ pub struct MergeProofParts {
     pub output_content_hash: PacketContentHash,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Private proof that a merged packet was minted under §66 law.
 ///
 /// Sealed / DST-replayable identity is over plaintext content + lineage
@@ -174,7 +185,9 @@ pub struct MergeProof {
     sealed_identity: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl MergeProof {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Privately mint a MergeProof and the merged packet it authorizes.
     ///
     /// Requires at least one input content hash. Empty merge is refused.
@@ -203,11 +216,13 @@ impl MergeProof {
         Ok((proof, packet))
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Input plaintext content hashes.
     pub fn input_content_hashes(&self) -> &[PacketContentHash] {
         &self.input_content_hashes
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Lineage hash.
     pub fn lineage_hash(&self) -> LineageHash {
         self.lineage_hash
@@ -234,6 +249,7 @@ impl MergeProof {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Merged packet — constructible only via [`MergeProof::mint`].
 ///
 /// Salt regeneration under MergeProof does not change sealed identity.
@@ -246,12 +262,15 @@ pub struct MergedPacket {
     sealed_identity: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl MergedPacket {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Plaintext content hash.
     pub fn content_hash(&self) -> PacketContentHash {
         self.content_hash
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Lineage hash.
     pub fn lineage_hash(&self) -> LineageHash {
         self.lineage_hash
@@ -273,6 +292,7 @@ impl MergedPacket {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// KV-separation threshold seat — measured, never dogma.
 ///
 /// The byte threshold is sealed from RUM benches (carried obligation). Until
@@ -284,12 +304,15 @@ pub struct KvSeparationThreshold {
     measured_bytes: Option<u64>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl KvSeparationThreshold {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Unmeasured seat — threshold not yet sealed from benches.
     pub const UNMEASURED: KvSeparationThreshold = KvSeparationThreshold {
         measured_bytes: None,
     };
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Seal a measured threshold from the bench campaign (host/trials only).
     pub(crate) fn from_measured(bytes: u64) -> Self {
         Self {
@@ -303,6 +326,7 @@ impl KvSeparationThreshold {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refusals on the compact path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum CompactRefuse {
@@ -310,6 +334,7 @@ pub enum CompactRefuse {
     #[error("compact: empty MergeProof input set")]
     #[diagnostic(code(store::compact::empty_merge))]
     EmptyMerge,
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Pace coefficients not yet sealed from WA/space-amp benches.
     #[error("compact: pace coefficients unmeasured — refuse until bench campaign seals them")]
     #[diagnostic(code(store::compact::pace_unmeasured))]
@@ -320,6 +345,7 @@ pub enum CompactRefuse {
     TranscriptEncode,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed MergeProof identity = SHA-256(`CanonicalTranscript.as_bytes()`) from
 /// the ONE [`encode_merge_proof_header`] constructor. Hand-rolled field hashing
 /// is Unconstructible.

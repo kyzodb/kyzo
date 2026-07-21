@@ -122,6 +122,7 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     unary_f64_domain("acosh", args, |a| a >= 1.0, f64::acosh)
 }
 
+#[allow(clippy::too_many_arguments)] // fold over typed numeric ops; init/combine/finish stay explicit
 fn fold_num_args(
     op: &'static str,
     args: &[DataValue],

@@ -42,7 +42,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 use super::contract::FormatVersion;
@@ -309,8 +309,10 @@ pub enum ScopeManifestStatus {
     Verified,
     /// Digest not known.
     Unknown,
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Previously accepted, then revoked.
     Revoked,
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Known but incompatible with this replica.
     Incompatible,
 }
@@ -363,6 +365,7 @@ pub struct OriginContinuity {
 }
 
 impl OriginContinuity {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint continuity evidence after origin coordinates are continuous.
     pub(crate) fn mint() -> Self {
         Self { _priv: () }
@@ -416,6 +419,7 @@ impl AdmissionCertificate {
         &self.record_digest
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Optional OperationKey when the admission was composed (§38).
     pub fn operation_key(&self) -> Option<&[u8; 32]> {
         self.operation_key.as_ref()
@@ -431,6 +435,7 @@ impl AdmissionCertificate {
         self.scope_manifest_digest
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Post-state root sealed into the certificate.
     pub fn post_state_root(&self) -> PostStateRoot {
         self.post_state_root
@@ -512,11 +517,13 @@ impl ReplicaKey {
 pub struct TenantId([u8; 32]);
 
 impl TenantId {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven tenant / graph-scope digest.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the tenant digest bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -549,6 +556,7 @@ pub struct NamespacedRecordIdentity {
     content: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl NamespacedRecordIdentity {
     /// Bind the four namespace seats — private fields, one constructor.
     pub fn bind(
@@ -580,11 +588,13 @@ impl NamespacedRecordIdentity {
         )
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Local admitted id bytes (session [`crate::session::record_id::RecordId`]).
     pub fn local_id(&self) -> &[u8; 32] {
         &self.local_id
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Origin authorizing key id — distinct origins never share this seat.
     pub fn origin_authority(&self) -> AuthorizingKeyId {
         self.origin_authority
@@ -658,6 +668,7 @@ impl ReplicaCustody {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Exactly-once custody ledger keyed by [`ReplicaKey`] (§70 / #270 T2).
 ///
 /// At-least-once fabric deliveries admit through [`ReplicaCustodyTable::admit`]:
@@ -668,12 +679,15 @@ pub struct ReplicaCustodyTable {
     by_key: BTreeMap<[u8; 32], ReplicaCustody>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl ReplicaCustodyTable {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty custody ledger.
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Admit custody under its [`ReplicaKey`]. Duplicate key → existing entry
     /// (idempotent). Never reshapes a held custody into a second mint.
     pub fn admit(&mut self, custody: ReplicaCustody) -> &ReplicaCustody {
@@ -691,12 +705,14 @@ impl ReplicaCustodyTable {
         self.by_key.len()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// True when no custody is held.
     pub fn is_empty(&self) -> bool {
         self.by_key.is_empty()
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Local rebuildable projection of origin-schema interpretation (§69).
 ///
 /// A local Catalog produces exactly this (rebuildable cache) or a derived
@@ -714,7 +730,9 @@ pub struct LocalProjection {
     local_schema_cut: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl LocalProjection {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Bind a verified certificate to a local Catalog schema cut.
     pub(crate) fn from_certificate(
         origin: AdmissionCertificate,
@@ -726,6 +744,7 @@ impl LocalProjection {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Origin certificate.
     pub fn origin(&self) -> &AdmissionCertificate {
         &self.origin
@@ -743,6 +762,7 @@ impl LocalProjection {
 /// no reshape exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum ReplicaRefuse {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Retention / custody obligation declined.
     #[error("RetentionDeclined: custody retention refused")]
     #[diagnostic(code(store::replica::retention_declined))]
@@ -751,6 +771,7 @@ pub enum ReplicaRefuse {
     #[error("AuthenticityFailed: certificate signature or binding failed")]
     #[diagnostic(code(store::replica::authenticity_failed))]
     AuthenticityFailed,
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// History / predecessor chain inconsistent.
     #[error("ChainInconsistent: predecessor history digest disagreed")]
     #[diagnostic(code(store::replica::chain_inconsistent))]
@@ -1102,6 +1123,7 @@ pub enum CrossingContext {
 }
 
 impl CrossingContext {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Decode wire form: `0` → Unscoped, `1` + digest → Scoped; else ContextInvalid.
     pub fn from_wire(tag: u8, digest: Option<[u8; 32]>) -> Result<Self, CrossingRefuse> {
         match (tag, digest) {
@@ -1133,6 +1155,7 @@ pub enum CrossingEvidence {
 /// Crossing record status — only [`CrossingStatus::Active`] may lower.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CrossingStatus {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Live certified meaning — may lower after full validation.
     Active,
     /// Semantic invalidation — not lowerable as live meaning.
@@ -1154,11 +1177,13 @@ pub struct CrossingCapabilitySet {
 }
 
 impl CrossingCapabilitySet {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty capability set.
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Insert a claimed / held capability digest.
     pub fn insert(&mut self, digest: [u8; 32]) {
         self.digests.insert(digest, ());
@@ -1169,6 +1194,7 @@ impl CrossingCapabilitySet {
         claimed.digests.keys().all(|d| self.digests.contains_key(d))
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow claimed digests in ascending order.
     pub fn digests(&self) -> impl Iterator<Item = &[u8; 32]> {
         self.digests.keys()
@@ -1313,6 +1339,7 @@ impl CrossingValidated {
         &self.record_content_digest
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Alias for [`Self::record_digest`].
     pub fn record_content_digest(&self) -> &[u8; 32] {
         self.record_digest()
@@ -1354,6 +1381,7 @@ pub enum CrossingRefuse {
     #[error("AuthorityMismatch: envelope authority disagreed with certificate")]
     #[diagnostic(code(store::replica::crossing_authority))]
     AuthorityMismatch,
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Envelope context is not a closed CrossingContext form.
     #[error("ContextInvalid: crossing context refused")]
     #[diagnostic(code(store::replica::crossing_context))]
@@ -1463,6 +1491,7 @@ pub fn validate_crossing_before_lower(
     })
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Explicit refuse for in-place local reinterpretation under a local Catalog cut.
 ///
 /// §69: certified origin meaning is sealed as-of the certificate schema cut.
@@ -1496,17 +1525,20 @@ pub fn view_under_schema_cut(
 pub struct GraphBoundary(TenantId);
 
 impl GraphBoundary {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Bind a tenant / graph-scope as the confinement boundary.
     pub fn from_tenant(tenant: TenantId) -> Self {
         Self(tenant)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the tenant / graph-scope.
     pub fn tenant(self) -> TenantId {
         self.0
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse when a storage key is offered as authority outside its graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum KeyBoundaryRefuse {
@@ -1526,6 +1558,7 @@ pub struct GraphBoundKey {
     key: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl GraphBoundKey {
     /// Confine a [`ReplicaKey`] to a graph boundary.
     pub fn bind(graph: GraphBoundary, key: &ReplicaKey) -> Self {
@@ -1535,11 +1568,13 @@ impl GraphBoundKey {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Confine an already-proven key digest to a graph boundary.
     pub fn bind_digest(graph: GraphBoundary, key: [u8; 32]) -> Self {
         Self { graph, key }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Sealed graph boundary.
     pub fn graph(self) -> GraphBoundary {
         self.graph
@@ -1573,6 +1608,7 @@ pub struct PromotionMeaning {
     schema_cut: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl PromotionMeaning {
     /// Bind the four preserved seats — private fields, one constructor.
     pub fn bind(
@@ -1589,16 +1625,19 @@ impl PromotionMeaning {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Federation identity seat.
     pub fn identity(&self) -> &NamespacedRecordIdentity {
         &self.identity
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Valid-time digest seat.
     pub fn valid_time(&self) -> &[u8; 32] {
         &self.valid_time
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Provenance / source digest seat.
     pub fn provenance(&self) -> &[u8; 32] {
         &self.provenance
@@ -1626,6 +1665,7 @@ impl PromotionMeaning {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse when promotion diverges sealed meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum PromotionRefuse {
@@ -1635,6 +1675,7 @@ pub enum PromotionRefuse {
     MeaningDiverged,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Prove export/import or local-to-hosted promotion preserved meaning (#270 T3).
 ///
 /// Destination StoreId / host may change; the four meaning seats must
@@ -1650,6 +1691,7 @@ pub fn prove_promotion_replay(
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Anchor a PendingAnchor into Queryable once origin coordinates are continuous.
 ///
 /// Requires [`OriginContinuity`] evidence — caller-asserted anchor is Unconstructible.
@@ -1672,6 +1714,7 @@ pub fn anchor_pending(
 
 // ── STH gossip obligation (CT non-equivocation; seats 2/56/58/69/92) ───────
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// JetStream subject that carries compact STH digests for one Store.
 ///
 /// Gossip rides the NATS fabric (seat 92) — cadence publish + designated
@@ -1682,6 +1725,7 @@ pub struct SthGossipSubject {
 }
 
 impl SthGossipSubject {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Subject for one Store identity.
     pub fn for_store(store_id: StoreId) -> Self {
         Self { store_id }
@@ -1692,6 +1736,7 @@ impl SthGossipSubject {
         self.store_id
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Canonical JetStream subject string for compact root-digest gossip.
     pub fn jetstream_subject(self) -> String {
         let mut hex = String::with_capacity(64);
@@ -1703,6 +1748,7 @@ impl SthGossipSubject {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Closed STH gossip carriage — JetStream fabric only (seat 92).
 ///
 /// No peer-dial variant exists; fabric-down is host/`Refuse(FabricUnavailable)`.
@@ -1712,6 +1758,7 @@ pub enum SthGossipCarriage {
     JetStream(SthGossipSubject),
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Enforced signed-state-root-head gossip obligation for one Store.
 ///
 /// Origin publishes signed compact heads on [`SthGossipCarriage::JetStream`];
@@ -1722,6 +1769,7 @@ pub struct SthGossipObligation {
 }
 
 impl SthGossipObligation {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Seat the obligation on the NATS JetStream subject for `store_id`.
     pub fn on_jetstream(store_id: StoreId) -> Self {
         Self {
@@ -1729,6 +1777,7 @@ impl SthGossipObligation {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Fabric carriage (JetStream only).
     pub fn carriage(self) -> SthGossipCarriage {
         self.carriage
@@ -1742,6 +1791,7 @@ impl SthGossipObligation {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Signed state-root head — CT STH analogue under the origin authorizing key.
 ///
 /// The signed body is [`StateRootHead::compact_digest`]: SHA-256 over the ONE
@@ -1755,6 +1805,7 @@ pub struct SignedStateRootHead {
 }
 
 impl SignedStateRootHead {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Sign a compact head under an origin authorizing key.
     ///
     /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
@@ -1774,11 +1825,13 @@ impl SignedStateRootHead {
         self.head
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Authorizing key id bound into the signature.
     pub fn authorizing_key_id(&self) -> AuthorizingKeyId {
         self.authorizing_key_id
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// ed25519 signature bytes.
     pub fn signature(&self) -> &[u8; 64] {
         &self.signature
@@ -1801,6 +1854,7 @@ impl SignedStateRootHead {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Enforce STH gossip non-equivocation between two fabric-observed signed heads.
 ///
 /// Verifies both signatures, then runs [`check_sth_gossip`]. Split-view is
@@ -1834,6 +1888,7 @@ pub fn enforce_sth_gossip(
 #[cfg(test)]
 mod authorizing_key_ed25519_tests {
     use super::*;
+    use ed25519_dalek::Verifier;
 
     /// GUARDIAN RED GATE (#376 T1) -- empirically confirmed against the pinned
     /// ed25519-dalek 3.0.0-rc.1. `verify_signature` uses the PERMISSIVE `.verify()`,

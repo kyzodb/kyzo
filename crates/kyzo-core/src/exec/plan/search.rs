@@ -54,7 +54,7 @@ use kyzo_model::value::{DataValue, SearchHits, Vector};
 /// `NormalFormAtom::Search` and `MagicAtom::Search`; compiled into
 /// `RelAlgebra::Search`.
 #[derive(Clone, Debug)]
-pub(crate) struct SearchAtom {
+pub struct SearchAtom {
     pub(crate) cfg: SearchConfig,
     /// The query expression, evaluated against each PARENT row. Its
     /// variables are this atom's dataflow inputs.

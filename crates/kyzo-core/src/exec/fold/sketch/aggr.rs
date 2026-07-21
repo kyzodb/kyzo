@@ -187,7 +187,7 @@ impl NormalAggrObj for AggrCountMin {
                 self.cms.merge(&other)?;
                 Ok(())
             }
-            other => {
+            other @ (data_value_any!()) => {
                 self.cms.add(other, 1);
                 Ok(())
             }
@@ -221,7 +221,7 @@ impl NormalAggrObj for AggrTDigest {
             match v {
                 // Shard fold: stored digest Bytes decode + merge.
                 DataValue::Bytes(b) => digests.push(TDigest::from_bytes(b)?),
-                other => raw.push(other.clone()),
+                other @ (data_value_any!()) => raw.push(other.clone()),
             }
         }
         let mut acc = TDigest::from_values(&raw, DEFAULT_COMPRESSION)?;

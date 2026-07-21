@@ -316,6 +316,7 @@ impl IntentOrdinal {
     /// First intent ordinal.
     pub const ZERO: IntentOrdinal = IntentOrdinal(0);
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven ordinal (decode / test sites that hold the proof).
     pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -345,6 +346,7 @@ impl CommitOrdinal {
     /// Genesis / pre-first-commit floor (no sealed history yet).
     pub const ZERO: CommitOrdinal = CommitOrdinal(0);
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven ordinal (WAL / seal decode).
     pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -1204,12 +1206,7 @@ impl SweepDoor {
                     request_digest: digest,
                 },
             )
-            .map_err(|e| match e {
-                StoreRefuse::OperationKeyReuse => {
-                    SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse)
-                }
-                _ => SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse),
-            })?;
+            .map_err(|_e| SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse))?;
         Ok(())
     }
 
@@ -1362,6 +1359,7 @@ pub enum SweepSealFailure {
 // wall-clock. This surface publishes sealed `f` and refuses the durability/SLA
 // *claim* when exceeded — never Store open of a recoverable Store.
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed intercept (ns) of `f(bytes_since_last_flush)`.
 ///
 /// Campaign ceiling from `kyzo.recovery_sla.corpus.v2` /
@@ -1369,12 +1367,15 @@ pub enum SweepSealFailure {
 /// Bound, not bit-stable equality to every re-derive.
 pub const RECOVERY_SLA_INTERCEPT_NS: u64 = 811_352;
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed slope numerator (ns per byte) of `f` — corpus.v2 / seal.v2 real-replay.
 pub const RECOVERY_SLA_SLOPE_NUM: u64 = 2;
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed slope denominator of `f` — corpus.v2 / seal.v2 real-replay.
 pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed bound `f(bytes_since_last_flush)` in nanoseconds.
 #[inline]
 pub fn recovery_time_bound_ns(bytes_since_last_flush: u64) -> u64 {
@@ -1382,6 +1383,7 @@ pub fn recovery_time_bound_ns(bytes_since_last_flush: u64) -> u64 {
         + bytes_since_last_flush.saturating_mul(RECOVERY_SLA_SLOPE_NUM) / RECOVERY_SLA_SLOPE_DEN
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Successful bench-lane emit of the §86 recovery SLA claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecoverySlaEmit {
@@ -1393,6 +1395,7 @@ pub struct RecoverySlaEmit {
     pub bound_ns: u64,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Refuse the published durability / SLA *claim* — not Store open (§28).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum RecoverySlaClaimRefuse {
@@ -1412,6 +1415,7 @@ pub enum RecoverySlaClaimRefuse {
     },
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Bench-lane emit for the §86 recovery SLA claim.
 ///
 /// When `recovery_time_p999_ns` exceeds sealed `f(bytes_since_last_flush)`,

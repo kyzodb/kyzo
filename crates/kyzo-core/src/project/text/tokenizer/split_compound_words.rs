@@ -188,7 +188,7 @@ impl<'a> TokenStream for SplitCompoundWordsTokenStream<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer, TokenStream, Tokenizer};
+    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer};
 
     /// Umlaut compounds: cuts are UTF-8 byte offsets, and each part's
     /// `offset_from`/`offset_to` reconstruct that part from the source.

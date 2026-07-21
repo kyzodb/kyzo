@@ -30,6 +30,7 @@ use crate::store::failure::{
     EphemeralEngineState, FailureLattice, OperatorCap, OperatorHealthSurface, TenantBlindRefuse,
 };
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Closed job-system op sum for `::running` / `::kill` (§82).
 ///
 /// Illegal combinations are unconstructable: every variant is exhaustive at
@@ -192,6 +193,7 @@ impl OperatorEphemeralRelations {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Dispatch a closed [`JobSysOp`].
 pub(crate) fn run_job_op(op: JobSysOp) -> Result<NamedRows> {
     match op {
@@ -218,6 +220,7 @@ pub(crate) fn kill_running() -> Result<NamedRows> {
     bail!(JobsRefuse::KillNotLanded)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Build relations from an explicit ephemeral snapshot (observe / tests).
 /// Cap-absent — ephemeral metrics only; quarantine unreachable.
 pub fn relations_from_ephemeral(ephemeral: EphemeralEngineState) -> OperatorEphemeralRelations {
@@ -226,6 +229,7 @@ pub fn relations_from_ephemeral(ephemeral: EphemeralEngineState) -> OperatorEphe
     OperatorEphemeralRelations::for_tenant(surface, IndexStatus::default())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Build Cap-present relations from an ephemeral snapshot (operator / tests).
 pub fn relations_from_ephemeral_for_operator(
     ephemeral: EphemeralEngineState,

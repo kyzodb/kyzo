@@ -89,6 +89,7 @@ impl StableCommitCap {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Optional host witness that a fork-generation changed mid-session.
 ///
 /// Density-local: reminting [`super::authority::IncarnationId`] on generation
@@ -100,11 +101,13 @@ pub struct ForkGenerationWitness {
 }
 
 impl ForkGenerationWitness {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Host-observed generation counter.
     pub fn new(generation: u64) -> Self {
         Self { generation }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// The witnessed generation.
     pub fn generation(self) -> u64 {
         self.generation

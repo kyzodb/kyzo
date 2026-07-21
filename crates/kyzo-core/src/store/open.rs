@@ -307,12 +307,14 @@ impl GenesisSealedView {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse from genesis / open construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum GenesisRefuse {
     #[error(
         "MissingStoreOpenCapability: Store open requires a StoreOpen capability (path-only open is Unconstructible)"
     )]
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     #[diagnostic(code(store::open::missing_store_open))]
     MissingStoreOpenCapability,
     #[error(
@@ -349,6 +351,7 @@ pub fn genesis(params: GenesisParams) -> GenesisSealed {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Open an existing Store by presenting a [`StoreOpen`] capability.
 ///
 /// Path-only open has no constructor — [`open_path_only`] is the typed refuse
@@ -363,6 +366,7 @@ pub fn open_with_capability(capability: &StoreOpen) -> Result<StoreId, GenesisRe
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Path-only open ask — Unconstructible as success; always
 /// [`GenesisRefuse::MissingStoreOpenCapability`].
 pub fn open_path_only(_path: &std::path::Path) -> Result<StoreId, GenesisRefuse> {

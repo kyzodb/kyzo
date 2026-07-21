@@ -50,10 +50,9 @@ use crate::rules::io::constant::Constant;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, KeyspaceKind, RelationHandle, Residency};
 use crate::session::db::{Engine, SessionTx};
-use crate::session::generation::{CatalogGeneration, RelationGeneration};
+use crate::session::generation::CatalogGeneration;
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::FenceEpoch;
-use crate::store::ReadTx;
 use crate::store::authority::WriteAuthority;
 use crate::store::commit_cap::SnapshotFork;
 use crate::store::keys::Secret;
@@ -721,8 +720,7 @@ impl KyzoRecord {
 pub(crate) mod lowering;
 
 pub(crate) use lowering::{
-    OriginSealedLowering, crossing_envelope_from_record, lower_after_crossing,
-    promotion_meaning_from_record,
+    crossing_envelope_from_record, lower_after_crossing,
 };
 
 /// Validate the full crossing contract then lower (#270 T1/T3).
@@ -1044,6 +1042,7 @@ pub(crate) fn admit_sugar_retract(
 /// Wires `construct::{event,state,role,concept,rule,derivation,context_record}`
 /// (and the other kinds) into the monopoly admission seam — no dead surface.
 pub(crate) mod admit_construct {
+    #![allow(clippy::too_many_arguments)] // typed ONTOK admit arity — each param is a named seat
     use super::*;
     use crate::data::statement::construct;
 
@@ -2835,12 +2834,11 @@ mod live_certificate_verifiability {
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(12),
         ));
-        let tip = seats
+        let tip = *seats
             .root_chain()
             .links()
             .last()
-            .expect("genesis seats carry a tip link")
-            .clone();
+            .expect("genesis seats carry a tip link");
         let predecessor_history_digest = *tip.predecessor_root().as_bytes();
         let (record, cert) = admit_record(claim_parts(seats.store_id(), live)).expect("admit");
 

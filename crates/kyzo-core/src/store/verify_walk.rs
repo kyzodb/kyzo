@@ -54,7 +54,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::project::text::tokenizer::TokenStream;
 use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle};
 use crate::store::failure::{KeyspaceId, QuarantineRange};
 use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
@@ -87,12 +86,14 @@ const _: () = assert!(
 );
 
 impl KeyspaceScopedChecksumDigest {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the checksum bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Table/keyspace-scoped checksum identity (§49).
 ///
 /// Binds keyspace identity + logical block so misplaced-but-intact data is
@@ -107,7 +108,9 @@ pub struct KeyspaceScopedChecksum {
     digest: KeyspaceScopedChecksumDigest,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl KeyspaceScopedChecksum {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Compute a scoped checksum over payload bytes.
     pub fn compute(keyspace: KeyspaceId, block: u64, payload: &[u8]) -> Self {
         let mut h = Sha256::new();
@@ -122,6 +125,7 @@ impl KeyspaceScopedChecksum {
         }
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Keyspace identity.
     pub fn keyspace(self) -> KeyspaceId {
         self.keyspace
@@ -143,6 +147,7 @@ impl KeyspaceScopedChecksum {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Mint a quarantine range from a failed scoped-identity check (§50).
 ///
 /// Ordinary tenant queries never see the range; the operator surface and
@@ -347,6 +352,7 @@ impl RelationName {
         Self(name.clone())
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow as `&str`.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -410,6 +416,7 @@ const _: () = assert!(std::mem::size_of::<IndexRowDigest>() == std::mem::size_of
 const _: () = assert!(std::mem::align_of::<IndexRowDigest>() == std::mem::align_of::<[u8; 32]>());
 
 impl IndexRowDigest {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the digest bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -546,13 +553,10 @@ fn load_catalog_handles(
             Ok(t) => t,
             Err(_) => continue,
         };
-        match tup.first() {
-            Some(DataValue::Str(_)) => {
-                let h = RelationHandle::decode(&v).map_err(|e| miette::miette!("{e}"))?;
-                by_name.insert(RelationName::from_handle_name(&h.name), h.id);
-                by_id.insert(h.id, h);
-            }
-            _ => {}
+        if let Some(DataValue::Str(_)) = tup.first() {
+            let h = RelationHandle::decode(&v).map_err(|e| miette::miette!("{e}"))?;
+            by_name.insert(RelationName::from_handle_name(&h.name), h.id);
+            by_id.insert(h.id, h);
         }
     }
     Ok((by_id, by_name))
@@ -728,7 +732,7 @@ fn rederive_fts(
         let text = match crate::exec::expr::eval_expr(&extractor, row.as_slice())? {
             DataValue::Null => continue,
             DataValue::Str(s) => s,
-            other => {
+            other @ (kyzo_model::data_value_any!()) => {
                 bail!("fts deep-verify: extractor returned non-string {other:?}")
             }
         };
@@ -811,7 +815,7 @@ fn rederive_lsh(
                 });
                 HashValues::new(bytes, &perms)
             }
-            other => bail!("lsh deep-verify: unsupported extractor value {other:?}"),
+            other @ (kyzo_model::data_value_any!()) => bail!("lsh deep-verify: unsupported extractor value {other:?}"),
         };
         let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
         expected_inv.insert(digest_tuple_cols(inv_key));
@@ -955,7 +959,7 @@ mod pins {
     use crate::session::catalog::{Catalog, IndexKind};
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
-    use crate::store::verify_walk::{deep_verify_storage, verify_storage};
+    use crate::store::verify_walk::verify_storage;
     use crate::store::{ReadTx, Storage};
 
     #[test]

@@ -1410,6 +1410,11 @@ impl RegularTempStore {
         self.inner.len()
     }
 
+    /// True when the store holds no tuples.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     // Edition-2024 note: the `use<'s>` capture lists on the iterator
     // returns are load-bearing — the bounds are copied into owned values,
     // so the returned iterator borrows the store only, not the bound

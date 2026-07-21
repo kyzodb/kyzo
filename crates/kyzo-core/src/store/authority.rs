@@ -28,6 +28,7 @@ impl OpenOrdinal {
     /// Genesis / first-open ordinal.
     pub const ZERO: OpenOrdinal = OpenOrdinal(0);
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Construct from an already-proven ordinal (WAL / seal decode sites).
     pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -311,6 +312,7 @@ impl RecoveryMatrix {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Process-local address fence: one writer among Engines sharing one token.
 ///
 /// Not protection against `cp -r` — local mutex only → [`AddressFenceRefuse::StoreFenced`].
@@ -320,6 +322,7 @@ pub struct AddressFence {
     token_id: WriteTokenId,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse from the address fence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum AddressFenceRefuse {
@@ -328,6 +331,7 @@ pub enum AddressFenceRefuse {
     StoreFenced,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Process-local registry of held fences (one claim per store address).
 ///
 /// Interior mutability is the stated concurrency need: multiple Engine
@@ -337,12 +341,15 @@ pub struct AddressFenceTable {
     held: std::sync::Mutex<std::collections::BTreeSet<[u8; 32]>>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl AddressFenceTable {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty fence table.
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Claim the local address for this WriteAuthority. Second claim → StoreFenced.
     pub fn claim(&self, authority: &WriteAuthority) -> Result<AddressFence, AddressFenceRefuse> {
         let key = fence_key(authority.store_id(), &authority.write_token_id());
@@ -365,12 +372,14 @@ impl AddressFenceTable {
 }
 
 impl AddressFence {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Store identity under this fence.
     pub fn store_id(&self) -> StoreId {
         self.store_id
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 fn fence_key(store_id: StoreId, token_id: &WriteTokenId) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();

@@ -911,7 +911,12 @@ mod tests {
             VerifyOutcome::Unsupported {
                 reason: VerifyUnsupported::IntervalDerivation { name },
             } => assert_eq!(name, "hist"),
-            other => panic!("expected IntervalDerivation {{ hist }}, got {other:?}"),
+            other @ (VerifyOutcome::Match { .. }
+            | VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::BudgetRefused { .. }
+            | VerifyOutcome::Unsupported { .. }) => {
+                panic!("expected IntervalDerivation {{ hist }}, got {other:?}")
+            }
         }
     }
 

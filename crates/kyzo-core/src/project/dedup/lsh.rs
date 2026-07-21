@@ -204,7 +204,7 @@ impl AsRef<[u8]> for LshPermutationBytes {
 }
 
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) struct MinHashLshIndexManifest {
+pub struct MinHashLshIndexManifest {
     pub(crate) base_relation: SmartString<LazyCompact>,
     pub(crate) index_name: SmartString<LazyCompact>,
     /// The row-extraction expression as a PARSED typed substance (serde

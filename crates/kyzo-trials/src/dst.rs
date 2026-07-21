@@ -1510,7 +1510,7 @@ fn torn_tail_split_at(seed: u64, body_len: usize) -> usize {
     assert!(body_len >= 2, "torn tail needs a multi-byte body");
     let mut split_at = 1 + ((seed as usize).wrapping_mul(31).wrapping_add(7) % (body_len - 1));
     for &block in CRASH_INSTANT_TORN_LANE_BOUNDARIES {
-        if split_at % block == 0 {
+        if split_at.is_multiple_of(block) {
             split_at = if split_at + 1 < body_len {
                 split_at + 1
             } else {
@@ -1528,7 +1528,7 @@ fn torn_tail_split_at(seed: u64, body_len: usize) -> usize {
 /// dense arm so the corpus is not pair-only theater.
 fn crash_instant_segment_count(seed: u64) -> usize {
     // Force 3+ on seed%5==0 (200/1000) and seed==2 (pin).
-    if seed == 2 || seed % 5 == 0 {
+    if seed == 2 || seed.is_multiple_of(5) {
         3 + (seed as usize % 2) // 3 or 4
     } else {
         2 + (seed as usize % 2) // 2 or 3 — still allows some natural 3s
@@ -1538,7 +1538,7 @@ fn crash_instant_segment_count(seed: u64) -> usize {
 /// Seed → whether to byte-tear the unflushed tail record.
 fn crash_instant_torn_tail(seed: u64) -> bool {
     // Force torn on seed%3==0 (~333/1000) and seed==1 (pin).
-    seed == 1 || seed % 3 == 0
+    seed == 1 || seed.is_multiple_of(3)
 }
 
 /// Build one adversarial crash-instant: mint Committed through the door, bind
@@ -1600,7 +1600,7 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
     let n_flushed_segments = n_segments - 1;
     {
         let mut ci = 0usize;
-        for seg_i in 0..n_flushed_segments {
+        for (seg_i, segment) in segments.iter_mut().enumerate().take(n_flushed_segments) {
             let remaining_segs = n_flushed_segments - seg_i;
             let remaining = n_flushed_commits - ci;
             let take = remaining / remaining_segs;
@@ -1613,11 +1613,11 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                 let record = WalRecord::seal(pred, payload).expect("wal seal flushed");
                 pred = record.record_hash();
                 if j == 0 {
-                    segments[seg_i]
+                    segment
                         .append_continuing_head(record)
                         .expect("flushed WAL continuing head");
                 } else {
-                    segments[seg_i].append(record).expect("flushed WAL append");
+                    segment.append(record).expect("flushed WAL append");
                 }
                 ci += 1;
             }
@@ -1674,7 +1674,9 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
         if torn_tail && i + 1 == unflushed_ordinals.len() {
             let full_len = match crash_rec.payload() {
                 WalPayload::Commit { body, .. } => body.len(),
-                _ => panic!("seed {seed}: expected Commit payload"),
+                WalPayload::NonceFloor { .. } | WalPayload::IncarnationSealed { .. } => {
+                    panic!("seed {seed}: expected Commit payload")
+                }
             };
             let split_at = torn_tail_split_at(seed, full_len);
             crash_rec
@@ -1860,9 +1862,11 @@ fn power_cut_at_commit_door_dst() {
 
     // Sealed coefficients are bench-lane truth — DST only consumes them.
     // Do not fiat-assert slope 1/1 or intercept 8; those are campaign-derived.
-    assert!(RECOVERY_SLA_INTERCEPT_NS > 0);
-    assert!(RECOVERY_SLA_SLOPE_NUM > 0);
-    assert!(RECOVERY_SLA_SLOPE_DEN > 0);
+    const {
+        assert!(RECOVERY_SLA_INTERCEPT_NS > 0);
+        assert!(RECOVERY_SLA_SLOPE_NUM > 0);
+        assert!(RECOVERY_SLA_SLOPE_DEN > 0);
+    }
     assert_eq!(recovery_time_bound_ns(0), RECOVERY_SLA_INTERCEPT_NS);
 
     let mut structural_works: Vec<u64> =
@@ -2200,8 +2204,7 @@ pub mod storage_campaign_lanes {
         BackendContract, CanonicalTranscript, CheckpointSealParts, CommitOrdinal, ConfirmedCopies,
         ConsistencyClass, ContentHash, CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm,
         FailureDomains, FailureLattice, FenceEpoch, ForkGrant, FormatVersion, GENESIS_PRIOR_SEAL,
-        GenesisParams, Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification,
-        IntentOrdinal, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
+        GenesisParams, Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectId, ObjectRef,
         ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PermanenceCandidate,
         PermanenceWitness, PriorMaterialization, ReadTx, ReclaimCertificate, RecoveryGrant,
         RecoveryMatrix, Regions, ReplicaCustody, ReplicaKey, RequestDigest, ScopeManifestDigest,
@@ -2265,6 +2268,7 @@ pub mod storage_campaign_lanes {
     ///
     /// `consent_table` must already bind `predecessor` to the verifying key of
     /// `consent_seed` — verify resolves the trust root from the sealed table.
+    #[allow(clippy::too_many_arguments)] // grant seed seats stay named; bag would smear consent binding
     fn fork_grant_with_consent(
         grant_id: GrantId,
         predecessor: StoreId,
@@ -2834,7 +2838,11 @@ pub mod storage_campaign_lanes {
                 !ranges.is_empty(),
                 "poison-over-quarantine must retain quarantine metadata"
             ),
-            other => panic!("chain-meet must poison with retained quarantine, got {other:?}"),
+            other @ (FailureLattice::Healthy
+            | FailureLattice::Quarantined { .. }
+            | FailureLattice::Poisoned {
+                quarantine_retained: None,
+            }) => panic!("chain-meet must poison with retained quarantine, got {other:?}"),
         }
 
         // RecoveryGrant materialize advances domain; orphan write after observed
@@ -2987,12 +2995,12 @@ pub mod storage_campaign_lanes {
         );
         assert_eq!(
             refuse,
-            Err(MaterializeRefuse::QuorumEquivocationPoison {
+            Err(MaterializeRefuse::quorum_equivocation_poison(
                 store_id,
-                predecessor_epoch: pred_epoch,
-                first_grant: g1_id,
-                second_grant: g2_id,
-            }),
+                pred_epoch,
+                g1_id,
+                g2_id,
+            )),
             "second RecoveryGrant for one predecessor epoch must be QuorumEquivocationPoison"
         );
     }
@@ -4107,7 +4115,9 @@ pub mod storage_campaign_lanes {
         // Positive trusted path: out-of-band register pack origin root, then mint
         // via OriginRootRegistry — never pack-cut self-verify (seat 80 / #374 T7).
         let mut registry = OriginRootRegistry::new();
-        registry.insert(pack.claimed_origin_store_id(), pack.recompute_root());
+        registry
+            .insert(pack.claimed_origin_store_id(), pack.recompute_root())
+            .expect("register pack origin root");
         let verified = registry
             .after_chain_root_verify(&pack)
             .expect("registry-trusted import ceremony");
@@ -4449,10 +4459,10 @@ pub mod storage_campaign_lanes {
             push_edge(&mut edge_rows, &mut expected, i, i + 1);
         }
         // Seed-dependent chord so the generator is not a single fixed topology.
-        if seed % 3 == 0 && n > 2 {
+        if seed.is_multiple_of(3) && n > 2 {
             push_edge(&mut edge_rows, &mut expected, 0, n - 1);
         }
-        if seed % 5 == 0 && n > 3 {
+        if seed.is_multiple_of(5) && n > 3 {
             push_edge(&mut edge_rows, &mut expected, 1, n - 1);
         }
         (edge_rows, emb_rows, loc_rows, expected)
@@ -4486,7 +4496,7 @@ pub mod storage_campaign_lanes {
                 !edge_rows.is_empty() && !emb_rows.is_empty() && !loc_rows.is_empty(),
                 "seed {seed}: generator must emit graph+vector+geo facts"
             );
-            let db = SimStorage::new(0xC4_05_B0D0 ^ seed);
+            let db = SimStorage::new(0xC405_B0D0 ^ seed);
             super::stored_relation(&db, "edge", 2, &edge_rows)
                 .unwrap_or_else(|e| panic!("seed {seed}: edge populate: {e}"));
             super::stored_relation(&db, "emb", 2, &emb_rows)
@@ -4531,12 +4541,12 @@ pub mod storage_campaign_lanes {
                 "seed {seed}: single-byte flip must diverge"
             );
             flipped_any = true;
-            match decode(&corrupted) {
-                Ok(v) => assert_ne!(
+            // typed Truncated/BadTag/… is the honest refuse
+            if let Ok(v) = decode(&corrupted) {
+                assert_ne!(
                     v, intact_val,
                     "seed {seed}: single-byte corruption must not decode to intact value"
-                ),
-                Err(_) => {} // typed Truncated/BadTag/… is the honest refuse
+                );
             }
 
             // Seal binding: flip one byte inside a 32-byte digest (not whole replace).
@@ -4652,7 +4662,7 @@ pub mod storage_campaign_lanes {
             let mut split_at = 1 + ((seed as usize).wrapping_mul(31).wrapping_add(7) % (len - 1));
             // Prefer non-aligned offsets; nudge off every listed lane boundary.
             for &block in TORN_LANE_BLOCK_BOUNDARIES {
-                if split_at % block == 0 {
+                if split_at.is_multiple_of(block) {
                     split_at = if split_at + 1 < len {
                         split_at + 1
                     } else {
@@ -4665,7 +4675,7 @@ pub mod storage_campaign_lanes {
             }
             if TORN_LANE_BLOCK_BOUNDARIES
                 .iter()
-                .all(|&b| split_at % b != 0)
+                .all(|&b| !split_at.is_multiple_of(b))
             {
                 saw_non_aligned = true;
             }
@@ -4686,15 +4696,12 @@ pub mod storage_campaign_lanes {
                     ),
                 }
             } else {
-                match decode(torn) {
-                    Ok(v) => {
-                        let intact = intact_decode.expect("value species");
-                        assert_ne!(
-                            &v, intact,
-                            "seed {seed}: torn value bytes must not decode to intact List"
-                        );
-                    }
-                    Err(_) => {}
+                if let Ok(v) = decode(torn) {
+                    let intact = intact_decode.expect("value species");
+                    assert_ne!(
+                        &v, intact,
+                        "seed {seed}: torn value bytes must not decode to intact List"
+                    );
                 }
             }
 
@@ -4718,15 +4725,12 @@ pub mod storage_campaign_lanes {
                             ),
                         }
                     } else {
-                        match decode(aligned_torn) {
-                            Ok(v) => {
-                                let intact = intact_decode.expect("value species");
-                                assert_ne!(
-                                    &v, intact,
-                                    "seed {seed}: aligned torn value bytes must not decode to intact List"
-                                );
-                            }
-                            Err(_) => {}
+                        if let Ok(v) = decode(aligned_torn) {
+                            let intact = intact_decode.expect("value species");
+                            assert_ne!(
+                                &v, intact,
+                                "seed {seed}: aligned torn value bytes must not decode to intact List"
+                            );
                         }
                     }
                 }

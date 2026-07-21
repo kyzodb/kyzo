@@ -828,6 +828,7 @@ impl<S: Storage> Engine<S> {
         registry.operator_health = surface;
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Set the index-status authority (§20).
     pub(crate) fn set_index_status(&self, status: IndexStatus) {
         let mut registry = self
@@ -1196,7 +1197,12 @@ mod deep_verify_schedule {
                 assert_eq!(prev.digest, result.digest);
                 assert!(pending_ordinal > ord);
             }
-            other => panic!("expected Stale with prior result, got {other:?}"),
+            other @ (DeepVerifyStaleness::NeverRun
+            | DeepVerifyStaleness::Fresh { .. }
+            | DeepVerifyStaleness::Stale {
+                last_result: None,
+                ..
+            }) => panic!("expected Stale with prior result, got {other:?}"),
         }
         assert!(db.run_scheduled_deep_verify().unwrap().is_some());
         assert!(db.run_scheduled_deep_verify().unwrap().is_none());

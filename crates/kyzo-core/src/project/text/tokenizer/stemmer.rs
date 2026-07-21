@@ -137,7 +137,7 @@ impl<'a> TokenStream for StemmerTokenStream<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer, TokenStream, Tokenizer};
+    use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer};
 
     fn stem_one(lang: Language, word: &str) -> String {
         let an = TextAnalyzer::from(SimpleTokenizer).filter(Stemmer::new(lang));

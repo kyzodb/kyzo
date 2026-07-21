@@ -22,11 +22,13 @@
 //! exercise that `pub(crate)` internal wall without exposing admission at the
 //! crate door.
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Witness that this module is the named seat-8 wall — not a Record mint door.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreCurrencyOnly;
 
 impl StoreCurrencyOnly {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Bytes / ObjectRef only — never a Record constructor.
     pub const fn seal() -> Self {
         Self

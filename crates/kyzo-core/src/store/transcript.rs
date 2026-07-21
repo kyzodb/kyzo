@@ -48,6 +48,7 @@ const MAX_MAP_DEPTH: u8 = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u64)]
 pub enum SealedArtifactKind {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// CheckpointSeal binding digest (§26).
     CheckpointSeal = 1,
     /// AdmissionCertificate envelope (§69).
@@ -85,6 +86,7 @@ impl SealedArtifactKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FieldId(u16);
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl FieldId {
     /// Artifact-kind discriminant field (always first).
     pub const ARTIFACT_KIND: FieldId = FieldId(1);
@@ -96,6 +98,7 @@ impl FieldId {
     pub const SECONDARY_DIGEST: FieldId = FieldId(4);
     /// Domain label bytes (typed id — never Unicode-normalized text).
     pub const DOMAIN_LABEL: FieldId = FieldId(5);
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// AEAD nonce bytes when the transcript is used as AAD.
     pub const AEAD_NONCE: FieldId = FieldId(6);
     /// Ordered map of typed bindings.
@@ -152,6 +155,7 @@ impl FieldId {
     pub const INPUT_CONTENT_HASH: FieldId = FieldId(30);
     /// Lineage hash.
     pub const LINEAGE_HASH: FieldId = FieldId(31);
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Compact-domain counter.
     pub const COMPACT_COUNTER: FieldId = FieldId(32);
     /// Output packet content hash.
@@ -395,6 +399,7 @@ impl CanonicalTranscriptBuilder {
         Ok(())
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Append an optional field encoded as absent (default encoding).
     pub fn append_optional_absent(&mut self, id: FieldId) -> Result<(), TranscriptRefuse> {
         self.begin_field(id)?;
@@ -510,6 +515,7 @@ impl CanonicalTranscript {
         &self.bytes
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Deep sealed-artifact scrub (§64/§65): refuse if any shredded secret
     /// needle (DEK / KEK / plaintext ShredSalt bytes) is still reachable inside
     /// these sealed transcript bytes.
@@ -605,6 +611,7 @@ fn is_known_version(version: FormatVersion) -> bool {
     version == FormatVersion::CURRENT
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Closed list of sealed artifact kinds the deep reachability campaign must
 /// search. Includes [`SealedArtifactKind::KeyCommit`] (CMT-1 intact). Order is
 /// stable for DST replay.
@@ -623,6 +630,7 @@ pub const SEALED_ARTIFACT_KINDS: &[SealedArtifactKind] = &[
     SealedArtifactKind::AncestorReadGrant,
 ];
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Production scrub over arbitrary sealed-artifact bytes (§64/§65).
 ///
 /// Refuses when any non-empty needle from `shredded_secret_needles` appears as
@@ -648,6 +656,7 @@ pub fn refuse_residual_secret_bytes(
     Ok(())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Deep reachability scrub over caller-supplied sealed transcripts (one per
 /// kind under test). Callers pass real [`CanonicalTranscript`] bytes from the
 /// typed production encoders (golden vectors under `store/golden/`).
@@ -754,43 +763,60 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
     Ok(())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for CMT-1 key-commitment transcripts (seat 59 / confidentiality).
 pub const KEY_COMMIT_DOMAIN_LABEL: &[u8] = b"KEY_COMMIT";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for CheckpointSeal binding digests.
 pub const CHECKPOINT_SEAL_DOMAIN_LABEL: &[u8] = b"kyzo.checkpoint_seal.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for MergeProof sealed identity.
 pub const MERGE_PROOF_DOMAIN_LABEL: &[u8] = b"kyzo.merge_proof.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for ForkGrant payload digests.
 pub const FORK_GRANT_PAYLOAD_DOMAIN_LABEL: &[u8] = b"kyzo.fork_grant.payload.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for RecoveryGrant payload digests.
 pub const RECOVERY_GRANT_PAYLOAD_DOMAIN_LABEL: &[u8] = b"kyzo.recovery_grant.payload.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for RecoveryMatrix digests.
 pub const RECOVERY_MATRIX_DOMAIN_LABEL: &[u8] = b"kyzo.recovery_matrix.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for fork-consent verifying-key digests.
 pub const FORK_CONSENT_KEY_ID_DOMAIN_LABEL: &[u8] = b"kyzo.fork_consent.key_id.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for ancestor-entitlement verifying-key digests.
 pub const ANCESTOR_ENTITLEMENT_KEY_ID_DOMAIN_LABEL: &[u8] = b"kyzo.ancestor_entitlement.key_id.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for AncestorReadGrant payload digests.
 pub const ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN_LABEL: &[u8] = b"kyzo.ancestor_read_grant.payload.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for fork successor StoreId derivation.
 pub const FORK_STORE_ID_DOMAIN_LABEL: &[u8] = b"kyzo.store_id.fork.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for fork WriteAuthority token derivation.
 pub const FORK_WRITE_TOKEN_DOMAIN_LABEL: &[u8] = b"kyzo.write_authority.fork.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for recovery WriteAuthority token derivation.
 pub const RECOVERY_WRITE_TOKEN_DOMAIN_LABEL: &[u8] = b"kyzo.write_authority.recovery.v1";
 /// Domain label for WAL record hashes.
 pub const WAL_RECORD_DOMAIN_LABEL: &[u8] = b"kyzo.wal.record.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for StateRootHead compact digests.
 pub const STATE_ROOT_HEAD_DOMAIN_LABEL: &[u8] = b"kyzo.state_root_head.v1";
 /// Domain label for chained state-root binds.
 pub const CHAINED_STATE_ROOT_DOMAIN_LABEL: &[u8] = b"kyzo.chained_state_root.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for leave-is-free pack content roots.
 pub const LEAVE_IS_FREE_PACK_DOMAIN_LABEL: &[u8] = b"kyzo.leave_is_free.pack.root.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for AuditKeyLeaf subject transcripts.
 pub const AUDIT_KEY_LEAF_DOMAIN_LABEL: &[u8] = b"kyzo.audit_key_leaf.v1";
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Domain label for AdmissionCertificate envelopes.
 pub const ADMISSION_CERTIFICATE_DOMAIN_LABEL: &[u8] = b"kyzo.admission_certificate.v1";
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Independently derived golden for [`SealedArtifactKind::KeyCommit`] (seat 59).
 ///
 /// Hex is hand-derived from the CanonicalTranscript wire format
@@ -821,6 +847,7 @@ fn begin_sealed_artifact(
     Ok(b)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Mint the CMT-1 key-commitment transcript: domain-label + key-id + CryptoDomain.
 ///
 /// This is the ONE sealed-byte constructor for AEAD key-commitment (seat 59).
@@ -844,6 +871,7 @@ pub fn encode_key_commitment(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Real CheckpointSeal field schema (former `digest_parts` / kyzo.checkpoint_seal.v1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckpointSealTranscriptParts {
@@ -889,6 +917,7 @@ pub struct CheckpointSealTranscriptParts {
     pub retention_certificate_digest: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a CheckpointSeal binding under the one CanonicalTranscript constructor.
 pub fn encode_checkpoint_seal(
     parts: &CheckpointSealTranscriptParts,
@@ -946,6 +975,7 @@ pub fn encode_checkpoint_seal(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a MergeProof sealed-identity transcript (former `sealed_identity_digest`).
 pub fn encode_merge_proof_header(
     input_content_hashes: &[[u8; 32]],
@@ -969,6 +999,7 @@ pub fn encode_merge_proof_header(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a ForkGrant payload transcript (former `fork_grant_payload_digest`).
 pub fn encode_fork_grant_payload(
     grant_id: &[u8; 32],
@@ -992,6 +1023,7 @@ pub fn encode_fork_grant_payload(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a RecoveryGrant payload transcript (former `recovery_grant_payload_digest`).
 pub fn encode_recovery_grant_payload(
     grant_id: &[u8; 32],
@@ -1019,6 +1051,7 @@ pub fn encode_recovery_grant_payload(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a RecoveryMatrix digest transcript (former `recovery_matrix_digest`).
 pub fn encode_recovery_matrix(
     threshold: u32,
@@ -1036,6 +1069,7 @@ pub fn encode_recovery_matrix(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a fork-consent verifying-key id transcript (former `consent_key_id_digest`).
 pub fn encode_fork_consent_key_id(
     verifying_key: &[u8; 32],
@@ -1049,6 +1083,7 @@ pub fn encode_fork_consent_key_id(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode an ancestor-entitlement verifying-key id transcript.
 pub fn encode_ancestor_entitlement_key_id(
     verifying_key: &[u8; 32],
@@ -1062,6 +1097,7 @@ pub fn encode_ancestor_entitlement_key_id(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode an AncestorReadGrant payload transcript.
 pub fn encode_ancestor_read_grant_payload(
     store_id: &[u8; 32],
@@ -1083,6 +1119,7 @@ pub fn encode_ancestor_read_grant_payload(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode fork successor StoreId derivation inputs (former `derive_fork_store_id`).
 pub fn encode_fork_store_id(
     grant_id: &[u8; 32],
@@ -1106,6 +1143,7 @@ pub fn encode_fork_store_id(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode fork WriteAuthority token derivation inputs (former `derive_fork_write_token`).
 pub fn encode_fork_write_token(
     store_id: &[u8; 32],
@@ -1125,6 +1163,7 @@ pub fn encode_fork_write_token(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode recovery WriteAuthority token derivation inputs.
 pub fn encode_recovery_write_token(
     store_id: &[u8; 32],
@@ -1215,6 +1254,7 @@ pub fn encode_wal_record(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a StateRootHead compact transcript (former `StateRootHead::compact_digest`).
 pub fn encode_state_root_head(
     store_id: &[u8; 32],
@@ -1255,6 +1295,7 @@ pub fn encode_chained_state_root(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// One wrapped shred salt's sealed fields for [`encode_leave_is_free_pack`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaveIsFreeSaltTranscriptPart {
@@ -1268,6 +1309,7 @@ pub struct LeaveIsFreeSaltTranscriptPart {
     pub ciphertext: Vec<u8>,
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// One incarnation-history entry for [`encode_leave_is_free_pack`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaveIsFreeIncarnationTranscriptPart {
@@ -1277,6 +1319,7 @@ pub struct LeaveIsFreeIncarnationTranscriptPart {
     pub entropy: [u8; 32],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode a leave-is-free pack content-root transcript (former `pack_content_root`).
 ///
 /// `pack_kind` is the former tag bytes: `seal_and_suffix` or `full_wal`.
@@ -1309,6 +1352,7 @@ pub fn encode_leave_is_free_pack(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode an AuditKeyLeaf subject transcript.
 pub fn encode_audit_key_leaf(
     subject_primary: &[u8; 32],
@@ -1327,6 +1371,7 @@ pub fn encode_audit_key_leaf(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Real AdmissionCertificate field schema for [`encode_admission_certificate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmissionCertificateTranscriptParts {
@@ -1358,6 +1403,7 @@ pub struct AdmissionCertificateTranscriptParts {
     pub signature: [u8; 64],
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode an AdmissionCertificate envelope under the one constructor.
 pub fn encode_admission_certificate(
     parts: &AdmissionCertificateTranscriptParts,
@@ -1389,17 +1435,20 @@ pub fn encode_admission_certificate(
     Ok(b.seal())
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Normative StoreId for golden-vector / residual-scrub campaigns
 /// (hand-derived wire law — same pin as `store/golden/*.vec`).
 pub fn normative_golden_store() -> StoreId {
     StoreId::from_digest([0x11; 32])
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Normative digest bytes shared by golden fixtures (hand-derived wire law).
 pub fn normative_golden_digest() -> [u8; 32] {
     [0x22u8; 32]
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Normative CheckpointSeal parts for golden / scrub campaigns.
 pub fn normative_checkpoint_seal_parts() -> CheckpointSealTranscriptParts {
     let store = normative_golden_store();
@@ -1429,6 +1478,7 @@ pub fn normative_checkpoint_seal_parts() -> CheckpointSealTranscriptParts {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Normative AdmissionCertificate parts for golden / scrub campaigns.
 pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
     let store = normative_golden_store();
@@ -1450,6 +1500,7 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// CMT-1 KeyCommit normative key-id (matches [`KEY_COMMIT_GOLDEN_VEC`]).
 pub fn normative_key_commit_key_id() -> [u8; 32] {
     [
@@ -1459,6 +1510,7 @@ pub fn normative_key_commit_key_id() -> [u8; 32] {
     ]
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// CMT-1 KeyCommit normative CryptoDomain (matches [`KEY_COMMIT_GOLDEN_VEC`]).
 pub fn normative_key_commit_domain() -> CryptoDomain {
     let key_store = StoreId::from_digest([
@@ -1469,6 +1521,7 @@ pub fn normative_key_commit_domain() -> CryptoDomain {
     CryptoDomain::new(key_store, FenceEpoch::genesis(key_store))
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encode one sealed kind via production `encode_*` with normative pins.
 ///
 /// Residual-secret campaigns and the production half of the independent-golden
@@ -1531,6 +1584,7 @@ pub fn encode_normative_production_transcript(
     }
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// One production transcript per [`SEALED_ARTIFACT_KINDS`] entry (scrub campaigns).
 pub fn encode_all_normative_production_transcripts()
 -> Result<Vec<CanonicalTranscript>, TranscriptRefuse> {
@@ -1541,6 +1595,7 @@ pub fn encode_all_normative_production_transcripts()
         .collect()
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Parse a golden vector file body (header lines + hex payload).
 pub fn parse_golden_hex(file: &str) -> Result<Vec<u8>, TranscriptRefuse> {
     let mut hex = String::new();
@@ -1570,6 +1625,7 @@ pub fn parse_golden_hex(file: &str) -> Result<Vec<u8>, TranscriptRefuse> {
     Ok(out)
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 fn from_hex(b: u8) -> Result<u8, TranscriptRefuse> {
     match b {
         b'0'..=b'9' => Ok(b - b'0'),

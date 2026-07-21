@@ -32,6 +32,7 @@ impl RecordContentDigest {
 pub struct ContentHash([u8; 32]);
 
 impl ContentHash {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven evidence content hash.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -48,11 +49,13 @@ impl ContentHash {
 pub struct ProvenanceDigest([u8; 32]);
 
 impl ProvenanceDigest {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven provenance digest.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the digest bytes.
     pub fn as_digest(&self) -> &[u8; 32] {
         &self.0
@@ -64,11 +67,13 @@ impl ProvenanceDigest {
 pub struct RegionId([u8; 16]);
 
 impl RegionId {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven region identity.
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the region identity bytes.
     pub fn as_bytes(&self) -> &[u8; 16] {
         &self.0

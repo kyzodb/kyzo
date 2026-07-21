@@ -190,16 +190,19 @@ pub(crate) trait AnnAlgebra: Copy + Clone + PartialEq + Eq + Ord + Debug + Sized
     fn lift_weight(weight: NonZeroU64) -> Self;
 }
 
+#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed boolean annotation: existence bit. Ops are total on this type
 /// alone — a tropical value cannot be passed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct BooleanAnn(bool);
 
 impl BooleanAnn {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     pub(crate) fn new(present: bool) -> Self {
         Self(present)
     }
 
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     pub(crate) fn get(self) -> bool {
         self.0
     }
@@ -233,6 +236,7 @@ impl AnnAlgebra for BooleanAnn {
 pub(crate) struct TropicalAnn(Cost);
 
 impl TropicalAnn {
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     pub(crate) fn new(cost: Cost) -> Self {
         Self(cost)
     }
@@ -581,6 +585,7 @@ impl<K> ProofNode<K> {
             ProofNode::Fact { node } | ProofNode::Step { node, .. } => node,
         }
     }
+    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     pub(crate) fn cost(&self) -> u64 {
         match self {
             ProofNode::Fact { .. } => 0,
