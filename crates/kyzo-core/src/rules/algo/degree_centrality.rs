@@ -92,6 +92,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -104,7 +105,7 @@ mod tests {
     ///             c: out 0, in {a,b} = 2, total 2
     ///             d: touches no edge ⇒ (0,0,0)
     #[test]
-    fn exact_degrees_with_isolated_node() {
+    fn exact_degrees_with_isolated_node() -> Result<()> {
         let i = |v: i64| DataValue::from(v);
         let got = run_fixed_rule(
             &DegreeCentrality,
@@ -130,7 +131,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), i(2), i(2), i(0)]),
             Tuple::from_vec(vec![s("b"), i(2), i(1), i(1)]),
@@ -138,5 +139,6 @@ mod tests {
             Tuple::from_vec(vec![s("d"), i(0), i(0), i(0)]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
