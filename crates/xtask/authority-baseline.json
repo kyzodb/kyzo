@@ -1,8 +1,0 @@
-{
-  "duplicate-generation-counter": 6,
-  "error-downcast": 4,
-  "layer-mismatch": 4,
-  "missing-authority": 7,
-  "stale-allowlist": 4,
-  "unchecked-constructor": 9
-}

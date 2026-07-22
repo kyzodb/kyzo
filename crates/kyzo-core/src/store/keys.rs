@@ -77,7 +77,7 @@ pub fn refuse_if_secret(marking: Option<Secret>) -> Result<(), SecretKeyRefuse> 
 }
 
 #[cfg(test)]
-mod pins {
+mod tests {
     use super::*;
 
     #[test]

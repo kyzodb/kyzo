@@ -19,7 +19,8 @@ case "$head1" in
       echo "GATE VIOLATION — STOP BLOCKED (fast lib tests are RED)."
       echo "$head1"
       echo ""
-      echo "Cut the failing-test detail below the header out of crates/xtask/resonance.log, flip line 1 to \"GATE: PASS\", and post that detail to the development team in CLAUDE-AND-CURSOR.md right now — direct message, NO story, NO board task. Tell them: URGENT — a unit test is failing, fix this now."
+      echo "VIOLATION: Change FAIL to PASS in crates/xtask/resonance.log to acknowledge, then immediately sequence development work. This hook repeats every turn until resolved. Do not disable or modify it without explicit operator approval."
+
     } >&2
     exit 2
     ;;
@@ -28,7 +29,7 @@ case "$head1" in
       echo "GATE VIOLATION — STOP BLOCKED (resonance gate is RED)."
       echo "$head1"
       echo ""
-      echo "Cut the report below the header out of crates/xtask/resonance.log, flip line 1 to \"GATE: PASS\", and post that report to the development team in CLAUDE-AND-CURSOR.md right now — direct message, NO story, NO board task. Tell them: URGENT — fix this now."
+      echo "Instruct the development team, over the real agent-message bus, to pull crates/xtask/resonance.log themselves and fix every violation in it now — URGENT. Never edit resonance.log's own verdict line to fabricate a pass, and never write to CLAUDE-AND-CURSOR.md (deleted, forbidden)."
     } >&2
     exit 2
     ;;

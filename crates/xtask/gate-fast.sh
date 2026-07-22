@@ -51,7 +51,7 @@ fi
 
 test_out="$(cd "$REPO" && docker compose run --rm \
   --name "kyzo-lib-tests-$short" kyzo-dev \
-  cargo test -p kyzo --lib 2>&1)"
+  cargo test --workspace --lib 2>&1)"
 test_rc=$?
 
 if [ "$test_rc" -ne 0 ]; then

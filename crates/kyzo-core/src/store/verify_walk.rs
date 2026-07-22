@@ -946,7 +946,7 @@ pub fn deep_verify_storage<S: Storage>(db: &S) -> Result<DeepVerifyReport> {
 }
 
 #[cfg(test)]
-mod pins {
+mod tests {
     //! verify_storage battery (re-homed from storage/tests.rs).
 
     use crate::session::catalog::{Catalog, IndexKind};

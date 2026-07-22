@@ -14,17 +14,28 @@
 //! IS a second nervous system: the exact "overlay / mesh / object-sync"
 //! second brain those seats delete.
 //!
-//! **Scope: the engine, not the host.** The ban applies to `kyzo-core` and
-//! `kyzo-model` — the pure engine crates that own no IO at all (zone-model
-//! forbids sockets, clocks, and randomness outright). A raw socket there is,
-//! by definition, the second nervous system seats 18/92 delete. The **host**
-//! binary (`kyzo-bin`) is the adapter boundary (seat 74): it legitimately
-//! binds a client-facing HTTP API listener and runs HTTP client utilities —
-//! those are inbound-client / resource-fetch sockets, NOT a Kyzo-node peer
-//! dial, so they are out of this check's scope. The one legal *fabric*
-//! transport (`async-nats`) is a dependency reached through the object/fabric
-//! trait injected by the host — its sockets live in that crate, never
-//! hand-rolled in the engine.
+//! **Scope: the engine, not the host.** The ban applies to every pure engine
+//! crate — `kyzo-core`, `kyzo-model`, `kyzo-trials` (the DST/crash-testing
+//! harness), `kyzo-oracle` (the independent `::verify` judge), `kyzo-crashfs`
+//! (fault injection), `kyzo-lsp`, and `kyzo-arrow-interop` — none of which own
+//! IO at all (zone-model forbids sockets, clocks, and randomness outright). A
+//! raw socket in any of them is, by definition, the second nervous system
+//! seats 18/92 delete. Widened from the original two-crate list after an
+//! audit found the other five engine crates undisclosed and unscanned by
+//! this ban — the same gap `walk_engine_sources` had before it was widened.
+//! The **host** binary (`kyzo-bin`) is the adapter boundary (seat 74): it
+//! legitimately binds a client-facing HTTP API listener and runs HTTP client
+//! utilities — those are inbound-client / resource-fetch sockets, NOT a
+//! Kyzo-node peer dial, so it is out of this check's scope. `xtask` is also
+//! out of scope: it is the gate's own tooling, not engine surface, and its
+//! test fixtures parse synthetic socket-shaped source strings (e.g. this
+//! file's own `TcpStream::connect` fixture) that would otherwise
+//! self-trigger — the same documented reason `walk_engine_sources` blanks
+//! xtask's `#[cfg(test)]` scopes before any check ever sees them, so this
+//! check does not need its own second exclusion mechanism for xtask. The one
+//! legal *fabric* transport (`async-nats`) is a dependency reached through
+//! the object/fabric trait injected by the host — its sockets live in that
+//! crate, never hand-rolled in the engine.
 //!
 //! Within engine scope there is **no allowlist**: seat 92 rules an engine peer
 //! socket *unrepresentable*, so there is no exception to grant. Detection is a
@@ -53,11 +64,22 @@ pub struct Violation {
     pub symbol: String,
 }
 
-/// True for the pure engine crates the ban governs (`kyzo-core`, `kyzo-model`).
-/// The host adapter (`kyzo-bin`) legitimately owns client-facing sockets and
-/// is out of scope (see module docs).
+/// True for every pure engine crate the ban governs. The host adapter
+/// (`kyzo-bin`) legitimately owns client-facing sockets, and `xtask` (the
+/// gate's own tooling, whose test fixtures parse synthetic socket-shaped
+/// source strings) is out of scope — see module docs.
+const ENGINE_CRATES: &[&str] = &[
+    "crates/kyzo-core/",
+    "crates/kyzo-model/",
+    "crates/kyzo-trials/",
+    "crates/kyzo-oracle/",
+    "crates/kyzo-crashfs/",
+    "crates/kyzo-lsp/",
+    "crates/kyzo-arrow-interop/",
+];
+
 fn is_engine_scope(rel_path: &str) -> bool {
-    rel_path.starts_with("crates/kyzo-core/") || rel_path.starts_with("crates/kyzo-model/")
+    ENGINE_CRATES.iter().any(|c| rel_path.starts_with(c))
 }
 
 /// Scan every pure-engine source for a hand-rolled peer/transport socket.
@@ -139,5 +161,29 @@ mod tests {
             check(std::slice::from_ref(&host)).is_empty(),
             "a host-adapter client socket must be out of the engine-only ban"
         );
+    }
+
+    #[test]
+    fn flags_a_raw_socket_in_a_widened_engine_crate() {
+        // kyzo-trials/kyzo-oracle/kyzo-crashfs/kyzo-lsp/kyzo-arrow-interop were
+        // undisclosed before this widen — a raw dial in any of them must now
+        // be caught exactly like kyzo-core/kyzo-model.
+        for rel in [
+            "crates/kyzo-trials/src/campaign.rs",
+            "crates/kyzo-oracle/src/verify.rs",
+            "crates/kyzo-crashfs/src/inject.rs",
+            "crates/kyzo-lsp/src/server.rs",
+            "crates/kyzo-arrow-interop/src/bridge.rs",
+        ] {
+            let src = "fn dial() { let _c = std::net::TcpStream::connect(\"127.0.0.1:4222\"); }";
+            let f = SourceFile {
+                rel_path: rel.to_string(),
+                text: src.to_string(),
+                ast: syn::parse_file(src).expect("fixture parses"),
+            };
+            let v = check(std::slice::from_ref(&f));
+            assert_eq!(v.len(), 1, "{rel}: a raw TcpStream dial must be caught");
+            assert_eq!(v[0].symbol, "TcpStream");
+        }
     }
 }

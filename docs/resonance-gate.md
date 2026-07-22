@@ -142,9 +142,8 @@ shrinking it.
 - Staged follow-ons for this architecture: unify per-check violation
   structs into one `Violation {file, line, seat, reason}` type; lift the
   waiver/ratchet mechanics out of individual checks into declared policy on
-  `GateCheck`; migrate the remaining `checks/*.rs` verbs owned by `gate`/
-  `authority` (e.g. `authority_graph`, `pure_rust`) into registries of the
-  same shape.
+  `GateCheck`; migrate the remaining `checks/*.rs` verbs owned by `gate`
+  (e.g. `pure_rust`) into registries of the same shape.
 
 One sentence: the gate is a registry of uniform, seat-tagged, bite-proven
 checks over one shared context with one forgiveness policy and one frozen

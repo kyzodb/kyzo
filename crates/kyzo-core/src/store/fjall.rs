@@ -1086,7 +1086,7 @@ impl Drop for FjallWriteTx {
 }
 
 #[cfg(test)]
-mod pins {
+mod tests {
     use kyzo_model::TupleT;
     use miette::{IntoDiagnostic, Result, miette};
     /// Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).

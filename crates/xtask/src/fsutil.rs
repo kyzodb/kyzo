@@ -14,6 +14,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use syn::spanned::Spanned;
+
+use crate::synutil::mod_is_test_scope;
 
 /// One parsed source file: its path (relative to `root`), the raw text (for
 /// line lookups), and its `syn` AST.
@@ -26,18 +29,24 @@ pub struct SourceFile {
     pub ast: syn::File,
 }
 
-/// Every `.rs` file under every first-party workspace crate that is not the
-/// gate's own tooling. Widened from the original three (`kyzo-core`,
-/// `kyzo-bin`, `kyzo-model`) after an audit found this list undisclosed and
-/// three real crates — `kyzo-trials` (the DST/crash-testing harness that is
-/// supposed to *prove* crash safety), `kyzo-oracle` (the independent
-/// `::verify` judge), and `kyzo-crashfs` (the fault-injection layer) —
-/// completely invisible to every resonance check. `xtask` itself is
-/// deliberately excluded: its own test fixtures (`DETONATIONS` tables etc.)
-/// contain banned-shape substrings as intentional string-literal samples,
-/// which the line-based matchers cannot distinguish from a live occurrence —
-/// scanning it would self-trigger on its own proof data, not find a real
-/// defect. That gap is named here, not silently dropped.
+/// Every `.rs` file under every first-party workspace crate, including the
+/// gate's own tooling (`xtask` itself). Widened from the original three
+/// (`kyzo-core`, `kyzo-bin`, `kyzo-model`) after an audit found this list
+/// undisclosed and three real crates — `kyzo-trials` (the DST/crash-testing
+/// harness that is supposed to *prove* crash safety), `kyzo-oracle` (the
+/// independent `::verify` judge), and `kyzo-crashfs` (the fault-injection
+/// layer) — completely invisible to every resonance check. A second audit
+/// found `xtask` itself invisible too: its production checks (this file
+/// included) were never scanned by their own law. `xtask`'s `#[cfg(test)]`
+/// scopes hold `DETONATIONS`-style fixture tables whose string-literal
+/// samples intentionally *quote* a banned shape as text data (never execute
+/// it) — a line-based matcher cannot tell that from a live occurrence, so
+/// those scopes are blanked out of both `text` and `ast` for `xtask` files
+/// only (see [`strip_xtask_test_scope`]), the same `mod_is_test_scope`
+/// mechanism `banned_path::scan_banned_idents` already uses to skip test
+/// scaffolding — never a blanket crate-level skip, and never applied to any
+/// other crate (whose test scopes stay in-law per bs_detector's own
+/// no-blanket-test-exemption rule).
 pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
     let mut out = Vec::new();
     for crate_dir in [
@@ -49,6 +58,7 @@ pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
         "crates/kyzo-crashfs/src",
         "crates/kyzo-lsp/src",
         "crates/kyzo-arrow-interop/src",
+        "crates/xtask/src",
     ] {
         let abs = root.join(crate_dir);
         if !abs.exists() {
@@ -71,6 +81,12 @@ pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
                 .unwrap_or(path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            let (text, ast) = if crate_dir == "crates/xtask/src" {
+                strip_xtask_test_scope(&text, &ast)
+                    .with_context(|| format!("stripping test scope from {}", path.display()))?
+            } else {
+                (text, ast)
+            };
             out.push(SourceFile {
                 rel_path,
                 text,
@@ -80,6 +96,49 @@ pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
     }
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     Ok(out)
+}
+
+/// Blank every top-level-or-nested `#[cfg(test)]`/`mod tests` scope's lines
+/// out of `text` (line count preserved — every surviving line's number is
+/// unchanged) and reparse `ast` from the blanked text. `xtask`'s own
+/// fixture/test-data modules (banned-shape string samples, ordinary
+/// `.expect("fixture parses")` test idiom) are not production surface and
+/// not a live occurrence of anything they quote — this is the one crate
+/// where `walk_engine_sources` applies the exclusion, per its own doc.
+fn strip_xtask_test_scope(text: &str, ast: &syn::File) -> Result<(String, syn::File)> {
+    let mut ranges = Vec::new();
+    collect_test_mod_line_ranges(&ast.items, &mut ranges);
+    if ranges.is_empty() {
+        return Ok((text.to_string(), syn::parse_file(text)?));
+    }
+    let mut lines: Vec<&str> = text.lines().collect();
+    for (start, end) in ranges {
+        let lo = start.saturating_sub(1);
+        let hi = end.min(lines.len());
+        for line in lines.iter_mut().take(hi).skip(lo) {
+            *line = "";
+        }
+    }
+    let blanked = lines.join("\n");
+    let ast = syn::parse_file(&blanked).context("reparsing after blanking xtask test scope")?;
+    Ok((blanked, ast))
+}
+
+/// Every `(start_line, end_line)` (1-based, inclusive) covered by a
+/// `mod_is_test_scope` module, found at any nesting depth. A matched module
+/// is not recursed into further — its whole span is already excluded.
+fn collect_test_mod_line_ranges(items: &[syn::Item], out: &mut Vec<(usize, usize)>) {
+    for item in items {
+        let syn::Item::Mod(m) = item else { continue };
+        if mod_is_test_scope(&m.ident, &m.attrs) {
+            let span = m.span();
+            out.push((span.start().line, span.end().line));
+            continue;
+        }
+        if let Some((_, inner)) = &m.content {
+            collect_test_mod_line_ranges(inner, out);
+        }
+    }
 }
 
 /// Load one repo-root-relative `.rs` file for checks that cite seats outside
@@ -134,5 +193,49 @@ pub fn repo_root() -> Result<PathBuf> {
                 "no workspace root (Cargo.toml with [workspace]) found above xtask's manifest dir"
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_xtask_test_scope_blanks_cfg_test_mod_only() {
+        let src = "fn prod() -> u32 { 1 }\n\
+                    #[cfg(test)]\n\
+                    mod tests {\n\
+                    fn f() { let v = maybe.unwrap(); }\n\
+                    }\n\
+                    fn after() -> u32 { 2 }\n";
+        let ast = syn::parse_file(src).expect("fixture parses");
+        let (blanked, reparsed) = strip_xtask_test_scope(src, &ast).expect("strip succeeds");
+        assert!(
+            !blanked.contains(".unwrap()"),
+            "the test-scope fixture body must be blanked: {blanked:?}"
+        );
+        assert!(blanked.contains("fn prod()"));
+        assert!(blanked.contains("fn after()"));
+        assert_eq!(
+            blanked.lines().count(),
+            src.lines().count(),
+            "line count must be preserved so other line numbers stay accurate"
+        );
+        assert_eq!(
+            reparsed.items.len(),
+            2,
+            "the blanked mod produces no items; only prod/after survive"
+        );
+    }
+
+    #[test]
+    fn strip_xtask_test_scope_ignores_bare_tests_ident_without_cfg_and_prod_untouched() {
+        let src = "fn only_prod() -> u32 { 3 }\n";
+        let ast = syn::parse_file(src).expect("fixture parses");
+        let (blanked, _) = strip_xtask_test_scope(src, &ast).expect("strip succeeds");
+        assert_eq!(
+            blanked, src,
+            "a file with no test-scope module is unchanged"
+        );
     }
 }

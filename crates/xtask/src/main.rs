@@ -29,7 +29,7 @@ mod verbs;
 use std::fmt;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 use resonance::ResonanceCheck;
 
@@ -48,7 +48,6 @@ enum XtaskError {
     UnsafeCheck(checks::unsafe_check::UnsafeCheckError),
     PureRust(checks::pure_rust::PureRustError),
     BuildScriptSandbox(checks::build_script_sandbox::BuildScriptSandboxError),
-    Authority(checks::authority_graph::AuthorityError),
 }
 
 impl fmt::Display for XtaskError {
@@ -63,38 +62,6 @@ impl fmt::Display for XtaskError {
             XtaskError::UnsafeCheck(e) => write!(f, "{e}"),
             XtaskError::PureRust(e) => write!(f, "{e}"),
             XtaskError::BuildScriptSandbox(e) => write!(f, "{e}"),
-            XtaskError::Authority(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-/// Authority verb mode — check / write / update-baseline are mutually
-/// exclusive; `(write, update_baseline)` both-true is unconstructable
-/// (clap `authority_mode` group + this enum).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-enum GateMode {
-    /// Self-test + ratchet + artifact freshness (default).
-    #[default]
-    Check,
-    /// Regenerate authority/authority-map.json and authority-report.md.
-    Write,
-    /// Tighten crates/xtask/authority-baseline.json to current finding counts.
-    UpdateBaseline,
-}
-
-impl GateMode {
-    /// Map clap's mutually-exclusive flags onto the closed mode sum.
-    /// `(true, true)` is rejected by clap's `authority_mode` group before
-    /// this runs — the illegal state is unconstructable.
-    fn from_flags(write: bool, update_baseline: bool) -> Self {
-        match (write, update_baseline) {
-            (false, false) => Self::Check,
-            (true, false) => Self::Write,
-            (false, true) => Self::UpdateBaseline,
-            (true, true) => {
-                unreachable!("clap authority_mode group forbids --write with --update-baseline")
-            }
         }
     }
 }
@@ -129,15 +96,6 @@ enum Verb {
     /// Every build-script target, net-isolated and snapshot-diffed for
     /// writes outside its own OUT_DIR.
     BuildScriptSandbox,
-    /// The Type Authority Graph: self-test, ratchet, artifact freshness.
-    Authority {
-        /// Regenerate authority artifacts (`GateMode::Write`).
-        #[arg(long, group = "authority_mode")]
-        write: bool,
-        /// Tighten the authority baseline (`GateMode::UpdateBaseline`).
-        #[arg(long, group = "authority_mode")]
-        update_baseline: bool,
-    },
     /// The resonance-gate registry of seat-tagged ontology checks
     /// (docs/resonance-gate.md).
     Resonance {
@@ -209,16 +167,6 @@ fn main() -> ExitCode {
         Verb::BuildScriptSandbox => {
             verbs::build_script_sandbox().map_err(XtaskError::BuildScriptSandbox)
         }
-        Verb::Authority {
-            write,
-            update_baseline,
-        } => match GateMode::from_flags(write, update_baseline) {
-            GateMode::Check => verbs::authority().map_err(XtaskError::Authority),
-            GateMode::Write => verbs::authority_write().map_err(XtaskError::Authority),
-            GateMode::UpdateBaseline => {
-                verbs::authority_update_baseline().map_err(XtaskError::Authority)
-            }
-        },
         Verb::Resonance {
             only,
             verbose,

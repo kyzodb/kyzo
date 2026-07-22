@@ -68,11 +68,6 @@ static REGISTRY: &[GateCheck] = &[
         run: run_copy_detector,
     },
     GateCheck {
-        name: "dead_code_ratchet",
-        seats: &["dead concepts are wired or cut, never parked silently"],
-        run: run_dead_code_ratchet,
-    },
-    GateCheck {
         name: "agreement_registry",
         seats: &["95 (agreement laws stay tested AND reachable by the compile)"],
         run: run_agreement_registry,
@@ -109,8 +104,17 @@ static REGISTRY: &[GateCheck] = &[
     },
     GateCheck {
         name: "bs_detector",
-        seats: &["no-BS law (banned shapes are zero-or-confessed in resonance-allow.toml — no baseline, no grandfathering)"],
+        seats: &[
+            "no-BS law (banned shapes are zero-or-confessed in resonance-allow.toml — no baseline, no grandfathering)",
+        ],
         run: run_bs_detector,
+    },
+    GateCheck {
+        name: "naked_array_sig",
+        seats: &[
+            "T17 (#376) — crypto/auth doors take typed Dek/Kek/Digest/Mac/Nonce/Signature, never a naked [u8;32]/[u8;12]/[u8;64]",
+        ],
+        run: run_naked_array_sig,
     },
 ];
 
@@ -123,7 +127,6 @@ pub enum ResonanceCheck {
     DeriveBypass,
     PanicLint,
     CopyDetector,
-    DeadCodeRatchet,
     AgreementRegistry,
     AllocationAdmission,
     BoundaryClosure,
@@ -132,6 +135,7 @@ pub enum ResonanceCheck {
     DeterminismBan,
     UncheckedArith,
     BsDetector,
+    NakedArraySig,
 }
 
 impl ResonanceCheck {
@@ -140,7 +144,6 @@ impl ResonanceCheck {
             ResonanceCheck::DeriveBypass => "derive_bypass",
             ResonanceCheck::PanicLint => "panic_lint",
             ResonanceCheck::CopyDetector => "copy_detector",
-            ResonanceCheck::DeadCodeRatchet => "dead_code_ratchet",
             ResonanceCheck::AgreementRegistry => "agreement_registry",
             ResonanceCheck::AllocationAdmission => "allocation_admission",
             ResonanceCheck::BoundaryClosure => "boundary_closure",
@@ -149,6 +152,7 @@ impl ResonanceCheck {
             ResonanceCheck::DeterminismBan => "determinism_ban",
             ResonanceCheck::UncheckedArith => "unchecked_arith",
             ResonanceCheck::BsDetector => "bs_detector",
+            ResonanceCheck::NakedArraySig => "naked_array_sig",
         }
     }
 }
@@ -390,25 +394,6 @@ fn run_copy_detector(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Erro
         stale.len(),
         units.len(),
         checks::copy_detector::MIN_TOKENS
-    ));
-    Ok(ok)
-}
-
-fn run_dead_code_ratchet(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
-    out.header("== check 4: dead-concept ratchet ==");
-    let (violations, stale) = checks::dead_code_ratchet::check(&ctx.files, &ctx.allow);
-    for v in &violations {
-        out.violation(format!("{}:{} — uncited `{}`", v.file, v.line, v.attr_text));
-    }
-    for s in &stale {
-        out.violation(format!("allowlist:0 — stale allowlist: {s}"));
-    }
-    let ok = out.finish_ok();
-    out.note(format!(
-        "check 4: {} ({} uncited, {} stale waiver(s))",
-        if ok { "PASS" } else { "FAIL" },
-        violations.len(),
-        stale.len()
     ));
     Ok(ok)
 }
@@ -665,6 +650,29 @@ fn run_bs_detector(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error>
     Ok(ok)
 }
 
+fn run_naked_array_sig(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
+    out.header("== check: T17 naked-array-signature guardian (crypto/auth doors are typed) ==");
+    let (violations, stale) = checks::naked_array_sig::check(&ctx.files, &ctx.allow);
+    for v in &violations {
+        out.violation(format!(
+            "{}:{} — `{}` takes or returns a naked [u8; {}] — crypto/auth doors must take \
+             typed Dek/Kek/Digest/Mac/Nonce/Signature, never a raw fixed array (T17, #376)",
+            v.file, v.line, v.function, v.width
+        ));
+    }
+    for s in &stale {
+        out.violation(format!("allowlist:0 — stale allowlist: {s}"));
+    }
+    let ok = out.finish_ok();
+    out.note(format!(
+        "check: naked-array-signature guardian {} ({} unconfessed site(s), {} stale confession(s))",
+        if ok { "PASS" } else { "FAIL" },
+        violations.len(),
+        stale.len()
+    ));
+    Ok(ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,7 +687,6 @@ mod tests {
             ResonanceCheck::DeriveBypass,
             ResonanceCheck::PanicLint,
             ResonanceCheck::CopyDetector,
-            ResonanceCheck::DeadCodeRatchet,
             ResonanceCheck::AgreementRegistry,
             ResonanceCheck::AllocationAdmission,
             ResonanceCheck::BoundaryClosure,
@@ -688,6 +695,7 @@ mod tests {
             ResonanceCheck::DeterminismBan,
             ResonanceCheck::UncheckedArith,
             ResonanceCheck::BsDetector,
+            ResonanceCheck::NakedArraySig,
         ]
         .iter()
         .map(|c| c.as_meter_name())

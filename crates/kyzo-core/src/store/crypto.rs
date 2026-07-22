@@ -901,7 +901,7 @@ pub fn shred(wrapped: WrappedShredSalt) -> (ShredReceipt, ShredTombstone) {
 }
 
 #[cfg(test)]
-mod pins {
+mod tests {
     use super::*;
     use crate::store::contract::FormatVersion;
     use crate::store::epoch::FenceEpoch;

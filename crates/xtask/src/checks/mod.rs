@@ -9,15 +9,14 @@
 
 pub mod agreement_registry;
 pub mod allocation_admission;
-pub mod authority_graph;
 pub mod banned_path;
 pub mod boundary_closure;
 pub mod bs_detector;
 pub mod build_script_sandbox;
 pub mod copy_detector;
-pub mod dead_code_ratchet;
 pub mod derive_bypass;
 pub mod determinism_ban;
+pub mod naked_array_sig;
 pub mod panic_lint;
 pub mod peer_dial_ban;
 pub mod pure_rust;

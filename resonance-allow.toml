@@ -201,9 +201,8 @@ why_not_sabotage = "KEEP: run_bounded hang watchdog. A stuck FUSE request parks 
 [[bs_detector]]
 pattern = "process_exit"
 file = "crates/kyzo-trials/src/crash.rs"
-line = 921
+line = 918
 why_not_sabotage = "KEEP: crash_consistency_process_abort child deliberately aborts after staging an uncommitted write — the test subject is process-crash recovery. abort is the simulated crash, not an error swallow; the parent asserts the child did not exit cleanly and checks reopen contents."
-
 [[bs_detector]]
 pattern = "ignore_test"
 file = "crates/kyzo-trials/src/gauntlet.rs"

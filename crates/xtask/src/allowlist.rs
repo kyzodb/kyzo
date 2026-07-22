@@ -26,11 +26,14 @@ pub struct Allowlist {
     pub panic_lint: Vec<PanicLintEntry>,
     #[serde(default)]
     pub copy_detector: Vec<CopyGroupEntry>,
-    #[serde(default)]
-    pub dead_code_ratchet: Vec<DeadCodeEntry>,
     /// The BS-detector register: the one and only way a banned shape is legal.
     #[serde(default)]
     pub bs_detector: Vec<BsDetectorEntry>,
+    /// The T17 naked-array-signature register: the one and only way a
+    /// crypto/auth door's naked `[u8; 32]`/`[u8; 12]`/`[u8; 64]` is legal
+    /// (a documented RustCrypto-primitive-edge boundary function).
+    #[serde(default)]
+    pub naked_array_sig: Vec<NakedArraySigEntry>,
 }
 
 /// One confessed occurrence of a banned shape. There is no baseline — this
@@ -80,9 +83,15 @@ pub struct CopyGroupEntry {
     pub citation: String,
 }
 
+/// One confessed naked-array crypto/auth door — the T17 guardian
+/// (`checks::naked_array_sig`). Keyed by function name + exact line, same
+/// specificity law as [`PanicLintEntry`]: a waiver keyed by function name
+/// alone would blanket-cover any future naked array added next to an
+/// already-waived, provably-safe RustCrypto edge call.
 #[derive(Debug, Deserialize)]
-pub struct DeadCodeEntry {
+pub struct NakedArraySigEntry {
     pub file: String,
+    pub function: String,
     pub line: usize,
     pub citation: String,
 }
@@ -152,15 +161,6 @@ pub fn load(root: &Path) -> Result<Allowlist> {
             );
         }
     }
-    for e in &list.dead_code_ratchet {
-        if !is_cited(&e.citation) {
-            bail!(
-                "resonance-allow.toml: dead_code_ratchet entry {}:{} has no real citation",
-                e.file,
-                e.line
-            );
-        }
-    }
     for e in &list.bs_detector {
         if !is_cited(&e.why_not_sabotage) {
             bail!(
@@ -168,6 +168,16 @@ pub fn load(root: &Path) -> Result<Allowlist> {
                  `why_not_sabotage` confession — every banned shape that survives must \
                  answer why this exact site is not sabotage",
                 e.pattern,
+                e.file,
+                e.line
+            );
+        }
+    }
+    for e in &list.naked_array_sig {
+        if !is_cited(&e.citation) {
+            bail!(
+                "resonance-allow.toml: naked_array_sig entry `{}` {}:{} has no real citation",
+                e.function,
                 e.file,
                 e.line
             );

@@ -336,13 +336,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The fast correctness tier: kyzo-model + kyzo library unit tests in the
-      # debug profile, on EVERY push (not just main/PR). This is the light-tier
-      # counterpart to build-test's whole-workspace release run — it catches a
-      # broken unit test per-commit instead of only at PR. The genuinely-slow
-      # tiers stay heavy and main/PR-gated: kyzo-trials DST/crash campaigns are
-      # NOT in this job, and the 12 #[ignore]'d slow tests auto-skip.
-      - run: cargo test -p kyzo-model -p kyzo --lib
+      # The fast correctness tier: EVERY crate's library unit tests in the
+      # debug profile, on EVERY push (not just main/PR) — widened from the
+      # original two-crate list (kyzo-model, kyzo) after an audit found every
+      # other first-party crate's lib tests uncovered by this tier. This is
+      # the light-tier counterpart to build-test's whole-workspace release
+      # run — it catches a broken unit test per-commit instead of only at PR.
+      # The genuinely-slow campaign tiers stay out of THIS job by construction
+      # (`--ignored` is never passed): kyzo-trials' own DST/crash/fuzz/gauntlet
+      # campaigns are `#[ignore]`-marked and auto-skip under plain `cargo
+      # test`, same as before the widen.
+      - run: cargo test --workspace --lib
 
   actionlint:
     name: actionlint (workflow static lint)

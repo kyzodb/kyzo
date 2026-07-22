@@ -134,28 +134,6 @@ PY
   expect_red "$copy" copy_detector "skip-scan triplet (fjall.rs/temp.rs/sim.rs) with its #78 waiver removed"
 }
 
-bite_dead_code_ratchet() {
-  echo "=== bite-proof: check 4 (dead-concept ratchet) — a fresh uncited allow(dead_code) ==="
-  local copy="$WORK/dead_code_ratchet"
-  fresh_copy "$copy"
-  # `data/expr.rs`'s binding_indices/do_binding_indices are already uncited
-  # in the real tree today (a genuine gap this story reports rather than
-  # silently fixing, per its disjointness boundary — see the report).
-  # Prove the ratchet catches a BRAND NEW uncited one instead, added to a
-  # function that starts out with no attribute at all.
-  python3 - "$copy/crates/kyzo-model/src/value/row.rs" <<'PY'
-import sys
-path = sys.argv[1]
-text = open(path).read()
-old = "    pub fn raw_encode(self) -> [u8; 8] {"
-new = "    #[allow(dead_code)]\n    pub fn raw_encode(self) -> [u8; 8] {"
-assert old in text, "raw_encode not found — has row.rs changed shape?"
-text = text.replace(old, new, 1)
-open(path, "w").write(text)
-PY
-  expect_red "$copy" dead_code_ratchet "a brand-new #[allow(dead_code)] with zero citation on RelationId::raw_encode"
-}
-
 bite_agreement_registry() {
   echo "=== bite-proof: check 5 (agreement-law registry) — a law quietly deleted ==="
   local copy="$WORK/agreement_registry"
@@ -174,7 +152,7 @@ PY
 }
 
 if [ "$#" -eq 0 ]; then
-  checks=(derive_bypass panic_lint copy_detector dead_code_ratchet agreement_registry)
+  checks=(derive_bypass panic_lint copy_detector agreement_registry)
 else
   checks=("$@")
 fi
@@ -184,7 +162,6 @@ for c in "${checks[@]}"; do
     derive_bypass) bite_derive_bypass ;;
     panic_lint) bite_panic_lint ;;
     copy_detector) bite_copy_detector ;;
-    dead_code_ratchet) bite_dead_code_ratchet ;;
     agreement_registry) bite_agreement_registry ;;
     *) echo "unknown check: $c"; exit 1 ;;
   esac

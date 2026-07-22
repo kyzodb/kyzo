@@ -1652,7 +1652,7 @@ fn from_hex(b: u8) -> Result<u8, TranscriptRefuse> {
 }
 
 #[cfg(test)]
-mod pins {
+mod tests {
     use super::*;
     use miette::{IntoDiagnostic, Result, miette};
 

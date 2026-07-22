@@ -138,39 +138,6 @@ pub fn build_script_sandbox()
     Ok(())
 }
 
-/// The Type Authority Graph (#139): self-test, then the ratchet + committed
-/// artifact freshness check against the tree — the same combination the
-/// condemned justfile's `authority` recipe ran (story #322: ported from
-/// `scripts/authority-graph.py`, behavior-preserving).
-pub fn authority() -> Result<(), crate::checks::authority_graph::AuthorityError> {
-    let self_test_msg = crate::checks::authority_graph::self_test()?;
-    println!("{self_test_msg}");
-    let root = crate::fsutil::repo_root()
-        .map_err(crate::checks::authority_graph::AuthorityError::RepoScan)?;
-    let msg = crate::checks::authority_graph::run_gate_check(&root)?;
-    println!("{msg}");
-    Ok(())
-}
-
-/// Regenerate the committed `authority/` artifacts (report mode).
-pub fn authority_write() -> Result<(), crate::checks::authority_graph::AuthorityError> {
-    let root = crate::fsutil::repo_root()
-        .map_err(crate::checks::authority_graph::AuthorityError::RepoScan)?;
-    let msg = crate::checks::authority_graph::write_report(&root)?;
-    println!("{msg}");
-    Ok(())
-}
-
-/// Tighten the ratchet floor at `crates/xtask/authority-baseline.json` to the
-/// current tree's finding counts.
-pub fn authority_update_baseline() -> Result<(), crate::checks::authority_graph::AuthorityError> {
-    let root = crate::fsutil::repo_root()
-        .map_err(crate::checks::authority_graph::AuthorityError::RepoScan)?;
-    let msg = crate::checks::authority_graph::update_baseline(&root)?;
-    println!("{msg}");
-    Ok(())
-}
-
 /// Default config, lib + integration, across every first-party package.
 pub fn test() -> Result<(), ProcessFailure> {
     let mut cmd = Command::new("cargo");

@@ -28,12 +28,14 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use kyzo_crashfs::harness::{mount as harness_mount, require_live_mount, wait_for_mount};
+use kyzo_crashfs::harness::{
+    mount as harness_mount, require_live_mount, wait_for_mount, LiveMount,
+};
 use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
 /// This file's own thin wrapper: build the fault-injecting filesystem and
 /// hand it to the shared [`harness::mount`](kyzo_crashfs::harness::mount).
-fn mount(backing: &Path, mountpoint: &Path, plan: FaultPlan) -> fuser::BackgroundSession {
+fn mount(backing: &Path, mountpoint: &Path, plan: FaultPlan) -> LiveMount {
     harness_mount(PassthroughFs::new(backing, plan), mountpoint)
         .unwrap_or_else(|refuse| panic!("{refuse}"))
 }
@@ -67,7 +69,7 @@ fn clear_cache_implements_the_power_cut_model() {
         // No fsync here — write #2 is the one the trigger wipes.
     } // close: drop the fd, matching a process about to be power-cut
 
-    drop(session); // unmount
+    session.teardown();
 
     // "Unmount/remount the backing view": read the real backing file
     // directly, bypassing FUSE entirely — this is what a fresh process
@@ -127,7 +129,7 @@ fn torn_op_splits_a_write_at_the_seed_dictated_point() {
         f.sync_all()
             .expect("fsync so torn bytes reach the backing file");
     }
-    drop(session);
+    session.teardown();
 
     let backing_file = backing.path().join("data.bin");
     let mut observed = Vec::new();
@@ -185,5 +187,5 @@ fn read_your_own_write_survives_pre_fsync_through_the_live_mount() {
         .expect("read through the same handle");
     assert_eq!(observed, b"unsynced-bytes");
     drop(f);
-    drop(session);
+    session.teardown();
 }

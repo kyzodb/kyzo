@@ -386,7 +386,7 @@ mod fuse_crash_matrix {
              ({JOURNAL_PATH}); observed {journals:?} — shrink rows or seat a \
              multi-segment variant with per-segment triggers"
         );
-        drop(session_a);
+        session_a.teardown();
         // Sanity: strictly increasing, or this class's entire premise (one
         // fsync/write frontier per round on this one path) is void and every
         // assertion below would be meaningless — fail loud here, not by
@@ -443,7 +443,7 @@ mod fuse_crash_matrix {
                         admit(tx.commit_durable(), "faulted commit_durable");
                     }
                 }
-                drop(session_b); // the simulated crash: unmount, nothing more written
+                session_b.teardown(); // simulated crash: fusectl abort then unmount
 
                 // Reopen directly on the backing directory — bypassing FUSE
                 // entirely, exactly as a real process reopening after a crash
@@ -631,7 +631,7 @@ mod fuse_crash_matrix {
              payload) saw {:?}",
             segment_fsync_frontier.keys().collect::<Vec<_>>()
         );
-        drop(session_a);
+        session_a.teardown();
 
         // Pass 2: one ClearCache campaign per recorded journal segment —
         // trigger path is the segment basename; occurrence is the frontier
@@ -676,7 +676,7 @@ mod fuse_crash_matrix {
                     }
                 }
             }
-            drop(session_b);
+            session_b.teardown();
 
             let segment = segment.clone();
             let outcome =
@@ -839,14 +839,11 @@ mod fuse_crash_matrix {
                                     drop(sync_refused);
                                 }
                             }
-                            // Give the background flush thread a moment to
-                            // actually reach disk — confirmed empirically (the
-                            // probe that shaped these constants) to settle
-                            // within ~1s.
-                            std::thread::sleep(std::time::Duration::from_millis(1200));
+                            // `db` drops here — fjall workers quiesce before
+                            // FUSE teardown. No sleep-as-synchronization.
                         }
                     }
-                    drop(session); // the simulated crash
+                    session.teardown(); // simulated crash: fusectl abort then unmount
 
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                         || -> miette::Result<()> {

@@ -959,7 +959,7 @@ pub fn import_leave_is_free(
 }
 
 #[cfg(test)]
-mod pins {
+mod tests {
     use kyzo_model::TupleT;
     use kyzo_model::value::{DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs};
     /// Backup floor law pins (re-homed from storage/tests.rs).
