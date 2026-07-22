@@ -28,6 +28,25 @@ pub struct Allowlist {
     pub copy_detector: Vec<CopyGroupEntry>,
     #[serde(default)]
     pub dead_code_ratchet: Vec<DeadCodeEntry>,
+    /// The BS-detector register: the one and only way a banned shape is legal.
+    #[serde(default)]
+    pub bs_detector: Vec<BsDetectorEntry>,
+}
+
+/// One confessed occurrence of a banned shape. There is no baseline — this
+/// register is the complete list of every occurrence permitted to exist, and
+/// each entry must answer, in writing, why that exact site is not sabotage.
+#[derive(Debug, Deserialize)]
+pub struct BsDetectorEntry {
+    /// The `BANNED` pattern name (e.g. `unwrap`, `catchall_arm`).
+    pub pattern: String,
+    /// Repo-root-relative file the occurrence is in.
+    pub file: String,
+    /// The exact source line of the occurrence.
+    pub line: usize,
+    /// The audit confession — the `WHY THIS ISN'T SABOTAGE:` line. Mandatory,
+    /// and rejected at load if it is not a real written justification.
+    pub why_not_sabotage: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +130,18 @@ pub fn load(root: &Path) -> Result<Allowlist> {
         if !is_cited(&e.citation) {
             bail!(
                 "resonance-allow.toml: dead_code_ratchet entry {}:{} has no real citation",
+                e.file,
+                e.line
+            );
+        }
+    }
+    for e in &list.bs_detector {
+        if !is_cited(&e.why_not_sabotage) {
+            bail!(
+                "resonance-allow.toml: bs_detector entry {} {}:{} has no written \
+                 `why_not_sabotage` confession — every banned shape that survives must \
+                 answer why this exact site is not sabotage",
+                e.pattern,
                 e.file,
                 e.line
             );

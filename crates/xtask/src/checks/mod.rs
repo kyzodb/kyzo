@@ -12,6 +12,7 @@ pub mod allocation_admission;
 pub mod authority_graph;
 pub mod banned_path;
 pub mod boundary_closure;
+pub mod bs_detector;
 pub mod build_script_sandbox;
 pub mod copy_detector;
 pub mod dead_code_ratchet;

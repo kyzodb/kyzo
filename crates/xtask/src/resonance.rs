@@ -107,6 +107,11 @@ static REGISTRY: &[GateCheck] = &[
         seats: &["unchecked arithmetic carries a named INVARIANT proof"],
         run: run_unchecked_arith,
     },
+    GateCheck {
+        name: "bs_detector",
+        seats: &["no-BS law (banned shapes are zero-or-confessed in resonance-allow.toml — no baseline, no grandfathering)"],
+        run: run_bs_detector,
+    },
 ];
 
 /// CLI selector for `--only`. Illegal check names are unconstructable at the
@@ -126,6 +131,7 @@ pub enum ResonanceCheck {
     SerializerAuthority,
     DeterminismBan,
     UncheckedArith,
+    BsDetector,
 }
 
 impl ResonanceCheck {
@@ -142,6 +148,7 @@ impl ResonanceCheck {
             ResonanceCheck::SerializerAuthority => "serializer_authority",
             ResonanceCheck::DeterminismBan => "determinism_ban",
             ResonanceCheck::UncheckedArith => "unchecked_arith",
+            ResonanceCheck::BsDetector => "bs_detector",
         }
     }
 }
@@ -613,6 +620,25 @@ fn run_unchecked_arith(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Er
     Ok(true)
 }
 
+fn run_bs_detector(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
+    out.header("== check: BS detector (banned shapes are zero-or-confessed) ==");
+    let (violations, stale) = checks::bs_detector::check(&ctx.files, &ctx.allow);
+    for v in &violations {
+        out.violation(format!("{}:{} — [{}] {}", v.file, v.line, v.pattern, v.why));
+    }
+    for s in &stale {
+        out.violation(format!("allowlist:0 — stale allowlist: {s}"));
+    }
+    let ok = out.finish_ok();
+    out.note(format!(
+        "check: bs-detector {} ({} unconfessed site(s), {} stale confession(s))",
+        if ok { "PASS" } else { "FAIL" },
+        violations.len(),
+        stale.len()
+    ));
+    Ok(ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,6 +661,7 @@ mod tests {
             ResonanceCheck::SerializerAuthority,
             ResonanceCheck::DeterminismBan,
             ResonanceCheck::UncheckedArith,
+            ResonanceCheck::BsDetector,
         ]
         .iter()
         .map(|c| c.as_meter_name())
