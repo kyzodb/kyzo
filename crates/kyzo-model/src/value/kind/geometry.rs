@@ -199,7 +199,7 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result};
+    use miette::{IntoDiagnostic, Result, miette};
 
     use super::*;
     use crate::value::DataValue;
@@ -226,7 +226,7 @@ mod tests {
             let back = decode(enc.as_bytes()).into_diagnostic()?;
             assert_eq!(back, v, "round-trip changed {g:?}");
             let DataValue::Geometry(g2) = back else {
-                panic!("decoded non-geometry");
+                return Err(miette::miette!("decoded non-geometry"));
             };
             assert_eq!(g2.lat().get(), g.lat().get());
             assert_eq!(g2.lon().get(), g.lon().get());

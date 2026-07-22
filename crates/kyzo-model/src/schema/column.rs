@@ -42,6 +42,66 @@ pub enum ColNullability {
     Optional,
 }
 
+
+/// Soft `f64 → f32 → f64` (IEEE round-ties-to-even) — no numeric `as` cast.
+fn soft_f64_via_f32(f: f64) -> f64 {
+    f64::from(f32::from_bits(f64_bits_to_f32_bits(f.to_bits())))
+}
+
+fn f64_bits_to_f32_bits(a: u64) -> u32 {
+    let sign = match u32::try_from(a >> 63) {
+        Ok(s) => s << 31,
+        Err(_bit) => 0,
+    };
+    let exp = match i32::try_from((a >> 52) & 0x7FF) {
+        Ok(e) => e,
+        Err(_exp_field) => 0,
+    };
+    let frac = a & 0x000F_FFFF_FFFF_FFFF;
+    if exp == 0x7FF {
+        let nan_bit = if frac != 0 { 0x0040_0000u32 } else { 0 };
+        return sign | 0x7F80_0000 | nan_bit;
+    }
+    let mut exp32 = exp - 1023 + 127;
+    if exp == 0 {
+        return sign;
+    }
+    if exp32 >= 0xFF {
+        return sign | 0x7F80_0000;
+    }
+    if exp32 <= 0 {
+        // Flush/subnormal: keep sign only (matches convert.rs softfloat door).
+        return sign;
+    }
+    let mut m32 = match u32::try_from(frac >> 29) {
+        Ok(v) => v,
+        Err(_) => 0,
+    };
+    let round_bit = match u32::try_from((frac >> 28) & 1) {
+        Ok(v) => v,
+        Err(_) => 0,
+    };
+    let sticky = if (frac & ((1u64 << 28) - 1)) != 0 { 1u32 } else { 0 };
+    if round_bit == 1 && (sticky == 1 || m32 & 1 == 1) {
+        // INVARIANT(F64ToF32RoundTieEven): mantissa+1 on round-up; wrap to 0
+        // with m32==0x0080_0000 is handled next (bump exp / clamp inf).
+        m32 = m32.wrapping_add(1);
+        if m32 == 0x0080_0000 {
+            m32 = 0;
+            exp32 += 1;
+            if exp32 >= 0xFF {
+                return sign | 0x7F80_0000;
+            }
+        }
+    }
+    let exp_bits = match u32::try_from(exp32) {
+        Ok(v) => v << 23,
+        Err(_) => 0x7F80_0000,
+    };
+    sign | exp_bits | (m32 & 0x007F_FFFF)
+}
+
+
 impl ColNullability {
     pub fn from_bool(nullable: bool) -> ColNullability {
         if nullable {
@@ -330,7 +390,7 @@ impl NullableColType {
                         .map(|el| {
                             el.get_float()
                                 .map(|f| match eltype {
-                                    VecElementType::F32 => f as f32 as f64,
+                                    VecElementType::F32 => soft_f64_via_f32(f),
                                     VecElementType::F64 => f,
                                 })
                                 .ok_or_else(make_err)
@@ -348,7 +408,7 @@ impl NullableColType {
                         && arr
                             .to_f64s()
                             .iter()
-                            .any(|&f| (f as f32 as f64) != f && !f.is_nan())
+                            .any(|&f| soft_f64_via_f32(f) != f && !f.is_nan())
                     {
                         bail!(make_err())
                     }
@@ -378,7 +438,7 @@ impl NullableColType {
                                 .map(|c| {
                                     let mut arr = [0u8; 4];
                                     arr.copy_from_slice(c);
-                                    f32::from_le_bytes(arr) as f64
+                                    f64::from(f32::from_le_bytes(arr))
                                 })
                                 .collect()
                         }
