@@ -489,6 +489,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -496,7 +497,7 @@ mod tests {
     /// Run the rule and return the maximal cliques as a sorted set of sorted
     /// node-name lists — the canonical shape both the rule output and the
     /// brute-force oracle are compared in.
-    fn run_cliques(edges: &[(&str, &str)], max_cliques: Option<i64>) -> Vec<Vec<String>> {
+    fn run_cliques(edges: &[(&str, &str)], max_cliques: Option<i64>) -> Result<Vec<Vec<String>>> {
         let rows = edges
             .iter()
             .map(|&(a, b)| Tuple::from_vec(vec![s(a), s(b)]))
@@ -514,17 +515,16 @@ mod tests {
         let got = run_fixed_rule(
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
-            opts_map(opts_pairs),
+            opts_map(opts_pairs)?,
             CancelFlag::inert(),
-        )
-        .unwrap();
+        )?;
         // Group rows by clique_id, collect member names.
         let mut by_id: BTreeMap<i64, Vec<String>> = BTreeMap::new();
         for r in got {
             by_id
-                .entry(r[0].get_int().unwrap())
+                .entry(r[0].get_int().ok_or_else(|| miette!("test expected Some"))?)
                 .or_default()
-                .push(r[1].get_str().unwrap().to_string());
+                .push(r[1].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string());
         }
         let mut cliques: Vec<Vec<String>> = by_id
             .into_values()
@@ -534,14 +534,14 @@ mod tests {
             })
             .collect();
         cliques.sort();
-        cliques
+        Ok(cliques)
     }
 
     /// INDEPENDENT ORACLE: exhaustively test every vertex subset. A subset is
     /// a clique iff all its pairs are adjacent; it is maximal iff no outside
     /// vertex is adjacent to all of it. Feasible for ≤ ~16 nodes. Shares no
     /// logic with Bron–Kerbosch.
-    fn brute_maximal_cliques(edges: &[(&str, &str)]) -> Vec<Vec<String>> {
+    fn brute_maximal_cliques(edges: &[(&str, &str)]) -> Result<Vec<Vec<String>>> {
         let mut names: BTreeSet<String> = BTreeSet::new();
         for &(a, b) in edges {
             names.insert(a.to_string());
@@ -549,11 +549,16 @@ mod tests {
         }
         let names: Vec<String> = names.into_iter().collect();
         let n = names.len();
-        let idx = |name: &str| names.iter().position(|x| x == name).unwrap();
+        let idx = |name: &str| -> Result<usize> {
+            names
+                .iter()
+                .position(|x| x == name)
+                .ok_or_else(|| miette!("test expected Some"))
+        };
         let mut adjm = vec![vec![false; n]; n];
         for &(a, b) in edges {
             if a != b {
-                let (ia, ib) = (idx(a), idx(b));
+                let (ia, ib) = (idx(a)?, idx(b)?);
                 adjm[ia][ib] = true;
                 adjm[ib][ia] = true;
             }
@@ -577,13 +582,13 @@ mod tests {
             }
         }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// VALUE ORACLE: two triangles sharing a vertex, plus a pendant. By hand
     /// the maximal cliques are {a,b,c}, {c,d,e}, {e,f}. Pinned exactly.
     #[test]
-    fn two_triangles_sharing_a_vertex() {
+    fn two_triangles_sharing_a_vertex() -> Result<()> {
         let edges = [
             ("a", "b"),
             ("b", "c"),
@@ -594,20 +599,21 @@ mod tests {
             ("e", "f"),
         ];
         assert_eq!(
-            run_cliques(&edges, None),
+            run_cliques(&edges, None)?,
             vec![
                 vec!["a".to_string(), "b".to_string(), "c".to_string()],
                 vec!["c".to_string(), "d".to_string(), "e".to_string()],
                 vec!["e".to_string(), "f".to_string()],
             ]
         );
+        Ok(())
     }
 
     /// VALUE ORACLE vs the exhaustive reference on several hand-picked and
     /// pseudo-random graphs (≤ 14 nodes), including overlapping cliques and a
     /// bipartite graph (only edges are maximal cliques).
     #[test]
-    fn matches_brute_reference() {
+    fn matches_brute_reference() -> Result<()> {
         // A 5-wheel: hub h joined to a 4-cycle a-b-c-d.
         let wheel = [
             ("a", "b"),
@@ -619,7 +625,7 @@ mod tests {
             ("h", "c"),
             ("h", "d"),
         ];
-        assert_eq!(run_cliques(&wheel, None), brute_maximal_cliques(&wheel));
+        assert_eq!(run_cliques(&wheel, None)?, brute_maximal_cliques(&wheel)?);
 
         // K4 with an extra pendant triangle.
         let g = [
@@ -633,7 +639,7 @@ mod tests {
             ("e", "f"),
             ("d", "f"),
         ];
-        assert_eq!(run_cliques(&g, None), brute_maximal_cliques(&g));
+        assert_eq!(run_cliques(&g, None)?, brute_maximal_cliques(&g)?);
 
         // Pseudo-random graphs.
         for seed in 0..40u64 {
@@ -659,11 +665,12 @@ mod tests {
                 .map(|(a, b)| (a.as_str(), b.as_str()))
                 .collect();
             assert_eq!(
-                run_cliques(&edges, None),
-                brute_maximal_cliques(&edges),
+                run_cliques(&edges, None)?,
+                brute_maximal_cliques(&edges)?,
                 "seed {seed}"
             );
         }
+        Ok(())
     }
 
     /// MUTATION PIN — the maximality gate. On two triangles sharing a vertex,
@@ -672,7 +679,7 @@ mod tests {
     /// subsets would be reported. The exact expected set (three maximal
     /// cliques, no 2-subsets of the triangles) fails under that mutant.
     #[test]
-    fn maximality_gate_rejects_subsets() {
+    fn maximality_gate_rejects_subsets() -> Result<()> {
         let got = run_cliques(
             &[
                 ("a", "b"),
@@ -683,7 +690,7 @@ mod tests {
                 ("c", "e"),
             ],
             None,
-        );
+        )?;
         assert_eq!(
             got,
             vec![
@@ -694,13 +701,14 @@ mod tests {
         // No reported clique is a strict subset of another (the maximality
         // property), and none is a bare triangle-edge.
         assert!(got.iter().all(|c| c.len() == 3));
+        Ok(())
     }
 
     /// DETERMINISM: the canonical numbering is a pure function of the graph.
     /// Shuffling the input edge order (which changes interning) must not
     /// change the output.
     #[test]
-    fn deterministic_across_runs() {
+    fn deterministic_across_runs() -> Result<()> {
         let edges = [
             ("a", "b"),
             ("b", "c"),
@@ -712,11 +720,12 @@ mod tests {
         ];
         let mut shuffled = edges;
         shuffled.reverse();
-        let first = run_cliques(&edges, None);
-        assert_eq!(run_cliques(&shuffled, None), first);
+        let first = run_cliques(&edges, None)?;
+        assert_eq!(run_cliques(&shuffled, None)?, first);
         for _ in 0..4 {
-            assert_eq!(run_cliques(&edges, None), first);
+            assert_eq!(run_cliques(&edges, None)?, first);
         }
+        Ok(())
     }
 
     /// BUDGET HONESTY: a graph with more maximal cliques than the cap is a
@@ -725,7 +734,7 @@ mod tests {
     /// here a set of disjoint triangles has one clique each, so `t` triangles
     /// give `t` cliques — cap below `t` must refuse.
     #[test]
-    fn max_cliques_ceiling_refuses() {
+    fn max_cliques_ceiling_refuses() -> Result<()> {
         // 5 disjoint triangles ⇒ 5 maximal cliques.
         let mut edges: Vec<(String, String)> = Vec::new();
         for t in 0..5 {
@@ -752,13 +761,14 @@ mod tests {
                     val: DataValue::from(3i64),
                     span: SourceSpan::default(),
                 },
-            )])),
+            )]))?,
             CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("max_cliques"), "{err}");
         // A cap of 5 is exactly enough.
-        assert_eq!(run_cliques(&eref, Some(5)).len(), 5);
+        assert_eq!(run_cliques(&eref, Some(5))?.len(), 5);
+        Ok(())
     }
 
     /// ADVERSARIAL SHAPE (law 5): a complete graph K_m has a single maximal
@@ -769,7 +779,7 @@ mod tests {
     /// size, hence by the ~m^2/2 edges a clique needs, so m is moderate — the
     /// structural point is the explicit stack, not raw depth.)
     #[test]
-    fn deep_clique_no_overflow() {
+    fn deep_clique_no_overflow() -> Result<()> {
         let m: u32 = 2_000;
         let mut edges: Vec<(u32, u32)> = Vec::new();
         for i in 0..m {
@@ -792,10 +802,11 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         // One clique (id 0) containing all m nodes ⇒ m membership rows.
         assert_eq!(got.len(), crate::rules::convert::usize_from_u32(m));
-        assert!(got.iter().all(|r| r[0].get_int().unwrap() == 0));
+        assert!(got.iter().all(|r| matches!(r[0].get_int(), Some(0))));
+        Ok(())
     }
 
     /// CANCELLATION, degeneracy poll pinned (house exemplar:
@@ -805,7 +816,7 @@ mod tests {
     /// removing more than one. Deleting that poll makes the cancelled run
     /// perform all ~60k removals, so the `<= 1` bound fails.
     #[test]
-    fn honors_cancel_pins_degeneracy_poll() {
+    fn honors_cancel_pins_degeneracy_poll() -> Result<()> {
         use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
@@ -813,7 +824,7 @@ mod tests {
             .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, empty_opts()).unwrap();
+        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, empty_opts())?;
 
         // Baseline: no cancellation. Every vertex is removed.
         take_clique_counters(); // clear any leftover from a reused thread
@@ -837,6 +848,7 @@ mod tests {
              removals, {cancel_steps} expansion steps (deleting the \
              per-removal poll makes removals ~60k)"
         );
+        Ok(())
     }
 
     /// CANCELLATION, expansion poll pinned. A pre-raised flag can never
@@ -847,7 +859,7 @@ mod tests {
     /// exists past degeneracy), so `is_err()` fails; weakening it to
     /// per-frame-push makes the step count overshoot the bound.
     #[test]
-    fn honors_cancel_pins_expansion_poll() {
+    fn honors_cancel_pins_expansion_poll() -> Result<()> {
         use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         // A 2k-node path: ~2k expansion steps, far above the trip point.
@@ -856,7 +868,7 @@ mod tests {
             .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, empty_opts()).unwrap();
+        let prepared = prepare_fixed_rule(&MaximalCliques, inputs, empty_opts())?;
 
         let (auth, flag) = CancelAuthority::arm();
         take_clique_counters();
@@ -879,5 +891,6 @@ mod tests {
              flag: got {steps} steps (deleting the per-step poll lets the \
              run complete instead)"
         );
+        Ok(())
     }
 }
