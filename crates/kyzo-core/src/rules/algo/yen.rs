@@ -236,6 +236,7 @@ mod tests {
     use super::*;
     use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -244,7 +245,7 @@ mod tests {
         Tuple::from_vec(vec![s(a), s(b), DataValue::from(w)])
     }
 
-    fn k_opt(k: i64) -> FixedRuleOptions {
+    fn k_opt(k: i64) -> Result<FixedRuleOptions> {
         opts_map(BTreeMap::from([(
             smartstring::SmartString::from("k"),
             Expr::Const {
@@ -295,30 +296,31 @@ mod tests {
     /// DETERMINISM: the per-(start, goal) Yen map is byte-identical on a
     /// single- and multi-thread rayon pool, across repeated runs.
     #[test]
-    fn parallel_matches_single_thread() {
+    fn parallel_matches_single_thread() -> Result<()> {
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
+            .into_diagnostic()?;
+        let opts = k_opt(3)?;
         let seq = single.install(|| {
             run_fixed_rule(
                 &KShortestPathYen,
                 pseudo_random_inputs(),
-                k_opt(3),
+                opts.clone(),
                 CancelFlag::inert(),
             )
-            .unwrap()
-        });
+        })?;
         for _ in 0..8 {
             let par = run_fixed_rule(
                 &KShortestPathYen,
                 pseudo_random_inputs(),
-                k_opt(3),
+                k_opt(3)?,
                 CancelFlag::inert(),
             )
-            .unwrap();
+            ?;
             assert_eq!(seq, par);
         }
+        Ok(())
     }
 
     /// MULTIGRAPH: the root segment of the 2nd shortest path spans a pair
@@ -329,7 +331,7 @@ mod tests {
     /// keeps parallel edges in input order): a first-match recomputation
     /// reports 12 and fails this test.
     #[test]
-    fn parallel_root_edge_uses_min_weight() {
+    fn parallel_root_edge_uses_min_weight() -> Result<()> {
         let graph = DirectedCsrGraph::from_edges([
             (0u32, 1u32, 10.0f64), // parallel, expensive — listed first
             (0, 1, 1.0),           // parallel, cheap — the one Dijkstra uses
@@ -337,9 +339,10 @@ mod tests {
             (1, 2, 1.0),
             (2, 3, 1.0),
         ])
-        .unwrap();
-        let got = k_shortest_path_yen(2, &graph, 0, 3, CancelFlag::inert()).unwrap();
+        ?;
+        let got = k_shortest_path_yen(2, &graph, 0, 3, CancelFlag::inert())?;
         assert_eq!(got, vec![(2.0, vec![0, 1, 3]), (3.0, vec![0, 1, 2, 3])]);
+        Ok(())
     }
 
     /// CANCELLATION: a raised flag refuses inside the spur search. The first
@@ -347,22 +350,23 @@ mod tests {
     /// `dijkstra` core), so a search that was uninterruptible on a large
     /// graph stops; an unset flag returns the same paths as the oracle above.
     #[test]
-    fn spur_search_honors_cancel() {
+    fn spur_search_honors_cancel() -> Result<()> {
         let graph = DirectedCsrGraph::from_edges([
             (0u32, 1u32, 1.0f64),
             (1, 2, 1.0),
             (2, 3, 1.0),
             (0, 2, 3.0),
         ])
-        .unwrap();
+        ?;
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         assert!(k_shortest_path_yen(3, &graph, 0, 3, flag).is_err());
+        Ok(())
     }
 
     /// k = 2 over a graph with two a→d routes returns both, cheaper first.
     #[test]
-    fn two_shortest_paths() {
+    fn two_shortest_paths() -> Result<()> {
         let got = run_fixed_rule(
             &KShortestPathYen,
             vec![
@@ -384,13 +388,14 @@ mod tests {
                     val: DataValue::from(2i64),
                     span: SourceSpan::default(),
                 },
-            )])),
+            )]))?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(got.len(), 2);
-        let costs: Vec<_> = got.iter().map(|t| t[2].get_float().unwrap()).collect();
+        let costs: Vec<_> = got.iter().map(|t| t[2].get_float().ok_or_else(|| miette!("test expected Some"))).collect::<Result<_>>()?;
         assert!(costs.contains(&2.0) && costs.contains(&4.0));
+        Ok(())
     }
 
     /// VALUE ORACLE: the k paths come back cheapest-FIRST, order pinned
@@ -414,7 +419,7 @@ mod tests {
     ///
     /// ⇒ exactly [(2, [0,1,3]), (4, [0,2,3]), (5, [0,3])], in that order.
     #[test]
-    fn k_shortest_order_is_cheapest_first() {
+    fn k_shortest_order_is_cheapest_first() -> Result<()> {
         let graph = DirectedCsrGraph::from_edges([
             (0u32, 1u32, 1.0f64),
             (1, 3, 1.0),
@@ -422,8 +427,8 @@ mod tests {
             (2, 3, 2.0),
             (0, 3, 5.0),
         ])
-        .unwrap();
-        let got = k_shortest_path_yen(3, &graph, 0, 3, CancelFlag::inert()).unwrap();
+        ?;
+        let got = k_shortest_path_yen(3, &graph, 0, 3, CancelFlag::inert())?;
         assert_eq!(
             got,
             vec![
@@ -432,13 +437,14 @@ mod tests {
                 (5.0, vec![0, 3]),
             ]
         );
+        Ok(())
     }
 
     /// F2: a raised flag refuses at the top of the spur-search loop — one
     /// spur iteration is a full Dijkstra, so a pre-set flag must not run
     /// any of them.
     #[test]
-    fn cancellation_stops_spur_search() {
+    fn cancellation_stops_spur_search() -> Result<()> {
         let (auth, cancel) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         let err = run_fixed_rule(
@@ -462,10 +468,11 @@ mod tests {
                     val: DataValue::from(2i64),
                     span: SourceSpan::default(),
                 },
-            )])),
+            )]))?,
             cancel,
         )
         .unwrap_err();
         assert!(err.to_string().contains("killed"), "{err}");
+        Ok(())
     }
 }
