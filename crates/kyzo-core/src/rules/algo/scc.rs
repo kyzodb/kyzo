@@ -221,7 +221,7 @@ impl TarjanSccG {
 mod tests {
     use super::*;
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
-
+    use miette::{Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -229,7 +229,7 @@ mod tests {
     /// a↔b form one SCC; c (reachable but not returning) is its own; the
     /// isolated node from the second input gets a fresh group id.
     #[test]
-    fn scc_groups() {
+    fn scc_groups() -> Result<()> {
         let got = run_fixed_rule(
             &StronglyConnectedComponent::new(true),
             vec![
@@ -246,17 +246,20 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
-        let group_of = |name: &str| -> i64 {
-            got.iter().find(|t| t[0] == s(name)).unwrap()[1]
+        ?;
+        let group_of = |name: &str| -> Result<i64> {
+            got.iter()
+                .find(|t| t[0] == s(name))
+                .ok_or_else(|| miette!("missing node {name}"))?[1]
                 .get_int()
-                .unwrap()
+                .ok_or_else(|| miette!("group not int"))
         };
-        assert_eq!(group_of("a"), group_of("b"));
-        assert_ne!(group_of("a"), group_of("c"));
-        assert_ne!(group_of("lonely"), group_of("a"));
-        assert_ne!(group_of("lonely"), group_of("c"));
+        assert_eq!(group_of("a")?, group_of("b")?);
+        assert_ne!(group_of("a")?, group_of("c")?);
+        assert_ne!(group_of("lonely")?, group_of("a")?);
+        assert_ne!(group_of("lonely")?, group_of("c")?);
         assert_eq!(got.len(), 4);
+        Ok(())
     }
 
     /// LAW-5: a single cycle 0→1→…→(n−1)→0 is one SCC whose DFS descends to
@@ -267,13 +270,14 @@ mod tests {
     /// answer (one component of every node) also proves the iterative
     /// low-link propagation is correct at depth, not merely non-crashing.
     #[test]
-    fn deep_chain_does_not_overflow() {
+    fn deep_chain_does_not_overflow() -> Result<()> {
         let n: u32 = 300_000;
         let edges = (0..n).map(|i| (i, (i + 1) % n, ()));
-        let graph = DirectedCsrGraph::from_edges(edges).unwrap();
-        let sccs = TarjanSccG::new(graph).run(CancelFlag::inert()).unwrap();
+        let graph = DirectedCsrGraph::from_edges(edges)?;
+        let sccs = TarjanSccG::new(graph).run(CancelFlag::inert())?;
         assert_eq!(sccs.len(), 1);
         assert_eq!(sccs[0].len(), crate::rules::convert::usize_from_u32(n));
+        Ok(())
     }
 
     /// CANCELLATION: `run` no longer polls outside the DFS (the recursive
@@ -282,10 +286,11 @@ mod tests {
     /// SCC — one DFS call spanning many frame steps — must still refuse;
     /// removing the in-DFS poll makes this run complete `Ok` and fail here.
     #[test]
-    fn cancellation_inside_dfs() {
-        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (1, 0, ())]).unwrap();
+    fn cancellation_inside_dfs() -> Result<()> {
+        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (1, 0, ())])?;
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         assert!(TarjanSccG::new(graph).run(flag).is_err());
+        Ok(())
     }
 }
