@@ -318,8 +318,7 @@ impl NegJoin {
                 let mut right_join_vals = BTreeSet::new();
                 for batch in v.iter_batched(tx)? {
                     let batch = batch?;
-                    for i in 0..batch.len() {
-                        let row = batch.row(i).expect("i < batch.len()");
+                    for row in batch.iter_rows() {
                         let to_join: Box<[DataValue]> =
                             right_join_indices.iter().map(|i| row[*i].clone()).collect();
                         right_join_vals.insert(to_join);
@@ -336,8 +335,7 @@ impl NegJoin {
                 let mut right_join_vals = BTreeSet::new();
                 for batch in v.iter_batched(tx)? {
                     let batch = batch?;
-                    for i in 0..batch.len() {
-                        let row = batch.row(i).expect("i < batch.len()");
+                    for row in batch.iter_rows() {
                         let to_join: Box<[DataValue]> =
                             right_join_indices.iter().map(|i| row[*i].clone()).collect();
                         right_join_vals.insert(to_join);
@@ -394,8 +392,7 @@ impl NegBatchFilter<'_> {
                 }
             };
             let tracking = batch.premises().is_some();
-            for i in 0..batch.len() {
-                let row = batch.row(i).expect("i < batch.len()");
+            for (i, row) in batch.iter_rows().enumerate() {
                 match (self.has_match)(row) {
                     Ok(true) => {}
                     Ok(false) => {
