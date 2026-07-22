@@ -1807,31 +1807,3 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
     Ok(())
 }
 
-/// Measurement rig (opt-in): print the filter-aware recall table for the report.
-#[test]
-#[ignore = "measurement rig; run explicitly to print the filter-aware table"]
-fn filter_aware_recall_table() -> Result<()> {
-    let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED)?;
-    let dir = tempfile::tempdir().into_diagnostic()?;
-    let db = new_fjall_storage(dir.path())?;
-    let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows)?;
-    let rtx = db.read_tx()?;
-    let q = seeded_query(P2_DIM, P2_QUERY_SEED)?;
-
-    eprintln!("  sel  match  plan     recall@k  count  | baseline r/c");
-    for (target, br, bc) in PINNED_BASELINE {
-        let f = filter_at_selectivity(
-            target,
-            match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
-                Some(i) => i,
-                None => 0,
-            } % 2
-                == 0,
-        );
-        let matches = f.true_match_count(&rows);
-        let (r, cr, _n_hits, plan) =
-            filter_aware_band_metrics(&rtx, &q, &m, &base, &idx, &rows, target)?;
-        eprintln!("{target:>5.2} {matches:>6}  {plan:?}   {r:>7.3} {cr:>6.3}  |  {br:.3}/{bc:.3}");
-    }
-    Ok(())
-}

@@ -149,7 +149,7 @@ mod whitespace_tokenizer;
 pub(crate) use self::alphanum_only::AlphaNumOnlyFilter;
 pub(crate) use self::ascii_folding_filter::AsciiFoldingFilter;
 pub(crate) use self::lower_caser::LowerCaser;
-pub(crate) use self::ngram_tokenizer::NgramTokenizer;
+pub(crate) use self::ngram_tokenizer::{NgramConfigError, NgramTokenizer};
 pub(crate) use self::raw_tokenizer::RawTokenizer;
 pub(crate) use self::remove_long::RemoveLongFilter;
 pub(crate) use self::simple_tokenizer::SimpleTokenizer;

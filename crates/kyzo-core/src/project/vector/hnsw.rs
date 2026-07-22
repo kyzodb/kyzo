@@ -3701,7 +3701,7 @@ mod tests {
     use super::*;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::value::{TupleT, encode_key_with_suffix};
-    use miette::{IntoDiagnostic, Result, miette};
+    use miette::{IntoDiagnostic, Result, bail, miette};
 
     macro_rules! knn_rows {
         ($tx:expr, $q:expr, $m:expr, $base:expr, $idx:expr, $params:expr, $filter:expr, $cancel:expr $(,)?) => {{
@@ -3922,76 +3922,6 @@ mod tests {
         Ok((elapsed, snap))
     }
 
-    /// Discriminator: is the residual growth `build_time_complexity_probe`
-    /// measures a property of the HNSW GRAPH (fan-out/degree, fixable in
-    /// this file) or of holding the whole backfill in ONE write transaction
-    /// (a storage-layer read-cost property, out of this file's reach)? Same
-    /// build, same seed, same sizes — but one fresh, committed `write_tx`
-    /// PER INSERT instead of one giant transaction for the whole run. If
-    /// per-insert distance-call counts (an algorithmic quantity, not a wall-
-    /// clock one) match `probe_build_dim`'s at the same `n`, the growth is
-    /// intrinsic to the graph algorithm; if they diverge, the single-
-    /// transaction backfill pattern is implicated instead.
-    fn probe_build_dim_per_insert_commit(
-        n: usize,
-        seed: u64,
-        dim: usize,
-    ) -> Result<(f64, probe::Snapshot)> {
-        let dir = tempfile::tempdir().into_diagnostic()?;
-        let db = new_fjall_storage(dir.path())?;
-        let base_meta = StoredRelationMetadata {
-            keys: vec![col("k", ColType::Int)],
-            non_keys: vec![col(
-                "v",
-                ColType::Vec {
-                    eltype: VecElementType::F32,
-                    len: ColLen::new(dim),
-                },
-            )],
-        };
-        let mut m = manifest(HnswDistance::L2)?;
-        m.vec_dim = dim;
-        m.ef_construction = 200;
-        let m16 = MNeighbours::new(16)?;
-        m.m_neighbours = m16;
-        m.m_max = 16;
-        m.m_max0 = 32;
-        m.level_multiplier = m16.level_multiplier();
-
-        let mut setup_tx = db.write_tx()?;
-        let base = create_relation(
-            &mut setup_tx,
-            input_handle("vecs", base_meta),
-            KeyspaceKind::Facts,
-        )?;
-        let idx = create_relation(
-            &mut setup_tx,
-            input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
-            KeyspaceKind::AlgorithmState,
-        )?;
-        setup_tx.commit().map_err(|e| miette!("{e}"))?;
-
-        probe::reset();
-        let mut state = seed;
-        let t0 = std::time::Instant::now();
-        for k in 0..n {
-            let v = probe_vec(dim, &mut state)?;
-            let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
-            let mut tx = db.write_tx()?;
-            base.put_fact(
-                &mut tx,
-                r.as_slice(),
-                kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
-            )?;
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
-            tx.commit().map_err(|e| miette!("{e}"))?;
-        }
-        let elapsed = t0.elapsed().as_secs_f64();
-        let snap = probe::snapshot();
-        Ok((elapsed, snap))
-    }
-
     /// LAW (story #76): per-insert search cost is bounded, not open-ended.
     /// An expansion inside `search_layer` cannot discover more NEW
     /// neighbours than the expanded node has edges, so summed over one
@@ -4038,195 +3968,6 @@ mod tests {
         Ok(())
     }
 
-    /// DIAGNOSTIC, not a correctness assertion: build `n` vectors, then
-    /// scan the WHOLE index relation directly (bypassing `neighbours()`)
-    /// and tabulate: node-row count per layer (is the hierarchy the shape
-    /// theory predicts, or has it collapsed toward layer 0?), and live
-    /// out-degree at layer 0 (min/mean/max — is `m_max0` actually being
-    /// respected, or is some hub node's degree escaping its cap?).
-    /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_graph_shape_probe -- --ignored --nocapture`
-    #[test]
-    #[ignore = "HNSW graph-shape measurement rig; run explicitly with --ignored"]
-    fn build_graph_shape_probe() -> Result<()> {
-        for &n in &[1000usize, 8000] {
-            let dim = 16;
-            let dir = tempfile::tempdir().into_diagnostic()?;
-            let db = new_fjall_storage(dir.path())?;
-            let base_meta = StoredRelationMetadata {
-                keys: vec![col("k", ColType::Int)],
-                non_keys: vec![col(
-                    "v",
-                    ColType::Vec {
-                        eltype: VecElementType::F32,
-                        len: ColLen::new(dim),
-                    },
-                )],
-            };
-            let mut m = manifest(HnswDistance::L2)?;
-            m.vec_dim = dim;
-            m.ef_construction = 200;
-            let m16 = MNeighbours::new(16)?;
-            m.m_neighbours = m16;
-            m.m_max = 16;
-            m.m_max0 = 32;
-            m.level_multiplier = m16.level_multiplier();
-
-            let mut tx = db.write_tx()?;
-            let base = create_relation(
-                &mut tx,
-                input_handle("vecs", base_meta),
-                KeyspaceKind::Facts,
-            )?;
-            let idx = create_relation(
-                &mut tx,
-                input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
-                KeyspaceKind::AlgorithmState,
-            )?;
-            let mut state = 0xA5A5_1234_0000_0000u64;
-            for k in 0..n {
-                let v = probe_vec(dim, &mut state)?;
-                let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
-                base.put_fact(
-                    &mut tx,
-                    r.as_slice(),
-                    kyzo_model::value::ValidityTs::of_micros(0),
-                    SourceSpan(0, 0),
-                )?;
-                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
-            }
-
-            // Every row in the index relation, decoded — a full unfiltered
-            // scan, independent of `neighbours()`/`entry_point()`.
-            let mut layer_node_counts: std::collections::BTreeMap<i64, u64> =
-                std::collections::BTreeMap::new();
-            let mut layer0_out_degree: FxHashMap<VectorId, u64> = FxHashMap::default();
-            let mut total_edges = 0u64;
-            let mut total_ignored_edges = 0u64;
-            for row in idx.scan_prefix(&tx, &Tuple::default()) {
-                let row = row?;
-                match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)?
-                {
-                    HnswRow::Node { layer, .. } => {
-                        *layer_node_counts.entry(layer).or_insert(0) += 1;
-                    }
-                    HnswRow::Edge {
-                        layer,
-                        fr,
-                        ignore_link,
-                        ..
-                    } => {
-                        total_edges += 1;
-                        if ignore_link {
-                            total_ignored_edges += 1;
-                        } else if layer == 0 {
-                            *layer0_out_degree.entry(fr).or_insert(0) += 1;
-                        }
-                    }
-                    HnswRow::Canary { .. } => {}
-                }
-            }
-            eprintln!("n={n} layer node counts (layer -> count):");
-            for (layer, count) in &layer_node_counts {
-                eprintln!("  layer {layer:>3}: {count:>6} nodes");
-            }
-            let degrees: Vec<u64> = layer0_out_degree.values().copied().collect();
-            let min_deg = match degrees.iter().min().copied() {
-                Some(v) => v,
-                None => 0,
-            };
-            let max_deg = match degrees.iter().max().copied() {
-                Some(v) => v,
-                None => 0,
-            };
-            let mean_deg = u64_to_f64(degrees.iter().sum::<u64>()) / usize_to_f64(degrees.len().max(1));
-            eprintln!(
-                "layer-0 live out-degree: min={min_deg} mean={mean_deg:.2} max={max_deg} \
-             (m_max0={}) over {} distinct sources",
-                m.m_max0,
-                degrees.len()
-            );
-            eprintln!(
-                "total edge rows={total_edges} ignored(tombstoned)={total_ignored_edges} \
-             ({:.2}% of all edge rows)",
-                100.0 * u64_to_f64(total_ignored_edges) / u64_to_f64(total_edges.max(1))
-            );
-            tx.commit().map_err(|e| miette!("{e}"))?;
-        }
-        Ok(())
-    }
-
-    /// DIAGNOSTIC, not a correctness assertion: reproduces the bench lane's
-    /// reported ~O(n^1.5) HNSW build (measured there at 1k/3k/10k: 1.85s /
-    /// 9.85s / 50.4s) in-repo, and attributes the growth to distance
-    /// evaluations vs. graph-read (`neighbours`/`entry_point`) time. Run
-    /// explicitly and read the exponents:
-    /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_time_complexity_probe -- --ignored --nocapture`
-    #[test]
-    #[ignore = "HNSW build-time complexity probe; run explicitly with --ignored"]
-    fn build_time_complexity_probe() -> Result<()> {
-        // n=64000 is omitted: it exceeds this suite's `ulimit -v 12582912`
-        // memory cap (observed: a 16 GiB single allocation aborts the
-        // process) — a resource ceiling of this machine-capped harness, not
-        // a finding about the graph. n=32000 is the furthest point measured.
-        let sizes = [1000usize, 2000, 4000, 8000, 16000, 32000];
-        let mut times = vec![];
-        let mut prev: Option<(usize, f64)> = None;
-        for &n in &sizes {
-            let (t, snap) = probe_build(n, 0x5EED_1234_ABCD_0000)?;
-            let ratio_note = if let Some((pn, pt)) = prev {
-                let n_ratio = usize_to_f64(n) / usize_to_f64(pn);
-                let t_ratio = t / pt;
-                format!(
-                    " | vs n={pn}: n x{n_ratio:.2}, time x{t_ratio:.2}, exponent={:.3}",
-                    t_ratio.ln() / n_ratio.ln()
-                )
-            } else {
-                String::new()
-            };
-            eprintln!(
-                "n={n:>5} build={t:>8.3}s dist_calls={:>10} ({:>6.1}/insert) \
-                 v_dist={:>10} ({:>6.1}/insert) k_dist={:>10} ({:>6.1}/insert) \
-                 neighbours_calls={:>9} ({:>6.1}/insert) rows_returned={:>9} \
-                 rows_scanned={:>9} (scanned/returned={:>5.2}x) \
-                 neighbours_dur={:>7.3}s entry_point_calls={:>5} entry_point_dur={:>7.3}s{ratio_note}",
-                snap.dist_calls,
-                u64_to_f64(snap.dist_calls) / usize_to_f64(n),
-                snap.v_dist_calls,
-                u64_to_f64(snap.v_dist_calls) / usize_to_f64(n),
-                snap.k_dist_calls,
-                u64_to_f64(snap.k_dist_calls) / usize_to_f64(n),
-                snap.neighbours_calls,
-                u64_to_f64(snap.neighbours_calls) / usize_to_f64(n),
-                snap.neighbours_rows,
-                snap.neighbours_rows_scanned,
-                u64_to_f64(snap.neighbours_rows_scanned) / u64_to_f64(snap.neighbours_rows.max(1)),
-                snap.neighbours_dur.as_secs_f64(),
-                snap.entry_point_calls,
-                snap.entry_point_dur.as_secs_f64(),
-            );
-            times.push((n, t, u64_to_f64(snap.dist_calls)));
-            prev = Some((n, t));
-        }
-        // A single, decisive number instead of the noisy pairwise ratios
-        // above: least-squares log-log fit across EVERY size, on both the
-        // wall-clock build time (has scheduler/allocator noise) and the
-        // ALGORITHMIC `dist_calls` count (does not — no wall-clock jitter,
-        // no dependence on this machine's load). If a future build campaign
-        // (story #76's DoD: 100k-1M, on the bench lane's real datasets)
-        // wants to know whether the exponent is settling toward 1
-        // (warm-up) or holding above it (genuine superlinearity), this is
-        // the fit to reuse — `fit_power_law` takes any `(n, cost)` series.
-        let (time_exp, time_r2) =
-            fit_power_law(&times.iter().map(|&(n, t, _)| (n, t)).collect::<Vec<_>>());
-        let (dist_exp, dist_r2) =
-            fit_power_law(&times.iter().map(|&(n, _, d)| (n, d)).collect::<Vec<_>>());
-        eprintln!(
-            "GLOBAL FIT over n={:?}: build-time exponent={time_exp:.3} (R²={time_r2:.4}) \
-             dist_calls exponent={dist_exp:.3} (R²={dist_r2:.4})",
-            times.iter().map(|&(n, _, _)| n).collect::<Vec<_>>()
-        );
-        Ok(())
-    }
 
     /// Least-squares fit of `cost = C * n^exponent` via ordinary linear
     /// regression on `(ln(n), ln(cost))`: returns `(exponent, R²)`. `R²`
@@ -4257,41 +3998,6 @@ mod tests {
         (exponent, r_squared)
     }
 
-    /// Discriminator (see [`probe_build_dim_per_insert_commit`]'s doc): does
-    /// the same build, at the same `n`, spend the same per-insert distance
-    /// budget when it holds ONE write transaction for the whole backfill
-    /// (`probe_build_dim`, matching the real `::hnsw create` backfill) vs.
-    /// one fresh committed transaction PER insert (matching the real
-    /// steady-state `hnsw_put`-after-every-base-put path)? Distance-call
-    /// counts are an algorithmic quantity, not a wall-clock one — if they
-    /// match, the residual growth `build_time_complexity_probe` measures
-    /// lives in the HNSW graph (this file's problem); if per-insert commits
-    /// show a flatter profile, growing transaction state was inflating the
-    /// single-transaction number instead.
-    /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_time_transaction_lifetime_probe -- --ignored --nocapture`
-    #[test]
-    #[ignore = "HNSW build-time transaction-lifetime probe; run explicitly with --ignored"]
-    fn build_time_transaction_lifetime_probe() -> Result<()> {
-        for &n in &[1000usize, 4000] {
-            let (t_one, snap_one) = probe_build_dim(n, 0x5EED_1234_ABCD_0000, 16)?;
-            let (t_many, snap_many) =
-                probe_build_dim_per_insert_commit(n, 0x5EED_1234_ABCD_0000, 16)?;
-            eprintln!(
-                "n={n:>5} ONE-TX build={t_one:>8.3}s v_dist={:>9} ({:>6.1}/insert) \
-                 k_dist={:>9} ({:>6.1}/insert) | PER-INSERT-COMMIT build={t_many:>8.3}s \
-                 v_dist={:>9} ({:>6.1}/insert) k_dist={:>9} ({:>6.1}/insert)",
-                snap_one.v_dist_calls,
-                u64_to_f64(snap_one.v_dist_calls) / usize_to_f64(n),
-                snap_one.k_dist_calls,
-                u64_to_f64(snap_one.k_dist_calls) / usize_to_f64(n),
-                snap_many.v_dist_calls,
-                u64_to_f64(snap_many.v_dist_calls) / usize_to_f64(n),
-                snap_many.k_dist_calls,
-                u64_to_f64(snap_many.k_dist_calls) / usize_to_f64(n),
-            );
-        }
-        Ok(())
-    }
 
     /// Recall regression guard for the `shrink_neighbour` tombstone-reclaim
     /// fix: build a real 10k-vector index (the scale the fix targets),
@@ -4343,7 +4049,7 @@ mod tests {
         for k in 0..n {
             let v = probe_vec(dim, &mut state)?;
             let DataValue::Vector(ref arr) = v else {
-                unreachable!()
+                bail!("probe_vec must mint Vector");
             };
             stored.push(arr.to_f64s());
             let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
@@ -4366,7 +4072,7 @@ mod tests {
         for _ in 0..n_queries {
             let q_data = probe_vec(dim, &mut query_state)?;
             let DataValue::Vector(ref q_vec) = q_data else {
-                unreachable!()
+                bail!("probe_vec must mint Vector");
             };
 
             // Independent oracle: brute-force squared L2 over every stored

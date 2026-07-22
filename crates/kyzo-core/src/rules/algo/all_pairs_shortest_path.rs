@@ -203,69 +203,6 @@ mod tests {
     use kyzo_model::value::Tuple;
 
     use miette::{IntoDiagnostic, Result, miette};
-    #[test]
-    #[ignore = "timing-evidence rig; run explicitly with --ignored --nocapture to print APSP timings"]
-    fn zz_timing_evidence() -> Result<()> {
-        let n = 400u32;
-        let mut state = 0x0bad_c0de_dead_beefu64;
-        let mut next = || {
-            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
-            state
-        };
-        let mut rows: Vec<Tuple> = vec![];
-        for _ in 0..6000 {
-            let a = crate::rules::convert::u32_low(next() >> 33) % n;
-            let b = crate::rules::convert::u32_low(next() >> 33) % n;
-            let w = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 97);
-            if a != b {
-                rows.push(Tuple::from_vec(vec![
-                    DataValue::from(format!("n{a}").as_str()),
-                    DataValue::from(format!("n{b}").as_str()),
-                    DataValue::from(w),
-                ]));
-            }
-        }
-        rows.push(Tuple::from_vec(vec![
-            DataValue::from(format!("n{}", n - 1).as_str()),
-            DataValue::from("n0"),
-            DataValue::from(1.0),
-        ]));
-        let opt = || {
-            opts_map(BTreeMap::from([(
-                smartstring::SmartString::from("undirected"),
-                Expr::Const {
-                    val: DataValue::from(true),
-                    span: SourceSpan::default(),
-                },
-            )]))
-        };
-        let run = || -> Result<_> {
-            run_fixed_rule(
-                &BetweennessCentrality,
-                vec![TestInput::new(vec!["fr", "to", "w"], rows.clone())],
-                opt()?,
-                CancelFlag::inert(),
-            )
-        };
-        let single = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .into_diagnostic()?;
-        let t0 = std::time::Instant::now();
-        let seq = single.install(run)?;
-        let seq_t = t0.elapsed();
-        let t1 = std::time::Instant::now();
-        let par = run()?;
-        let par_t = t1.elapsed();
-        assert_eq!(seq, par);
-        let threads = rayon::current_num_threads();
-        eprintln!(
-            "betweenness n={n}: 1-thread {seq_t:?}, default({threads} threads) {par_t:?}, speedup {:.2}x",
-            seq_t.as_secs_f64() / par_t.as_secs_f64()
-        );
-        Ok(())
-    }
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)

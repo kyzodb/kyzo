@@ -36,9 +36,9 @@
 use crate::DataValue;
 use crate::project::text::cangjie::tokenizer::CangJieTokenizer;
 use crate::project::text::tokenizer::{
-    AlphaNumOnlyFilter, AsciiFoldingFilter, BoxTokenFilter, Language, LowerCaser, NgramTokenizer,
-    RawTokenizer, RemoveLongFilter, SimpleTokenizer, SplitCompoundWords, Stemmer, StopWordFilter,
-    TextAnalyzer, Tokenizer, WhitespaceTokenizer,
+    AlphaNumOnlyFilter, AsciiFoldingFilter, BoxTokenFilter, Language, LowerCaser, NgramConfigError,
+    NgramTokenizer, RawTokenizer, RemoveLongFilter, SimpleTokenizer, SplitCompoundWords, Stemmer,
+    StopWordFilter, TextAnalyzer, Tokenizer, WhitespaceTokenizer,
 };
 use jieba_rs::Jieba;
 use kyzo_model::data_value_any;
@@ -324,7 +324,14 @@ impl TokenizerConfig {
                         return Err(TokenizerBuildRefusal::NgramMaxBelowMin.into());
                     }
                 };
-                Box::new(NgramTokenizer::new(min_usize, max_usize, prefix_only))
+                Box::new(NgramTokenizer::try_new(min_usize, max_usize, prefix_only).map_err(
+                    |e| match e {
+                        NgramConfigError::MinGramZero => TokenizerBuildRefusal::NgramMinTooSmall,
+                        NgramConfigError::MinGreaterThanMax => {
+                            TokenizerBuildRefusal::NgramMaxBelowMin
+                        }
+                    },
+                )?)
             }
             "Cangjie" => {
                 let hmm = match self.args().get(1) {
