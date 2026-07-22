@@ -251,11 +251,17 @@ impl TDigest {
         // Semantic absence is empty centroids / Option::None — not a float sentinel.
         let min_wire = match self.min {
             Some(v) => v,
-            None => 0.0,
+            // Wire padding for vacant min slot — semantic absence is empty centroids.
+            None => {
+                0.0
+            }
         };
         let max_wire = match self.max {
             Some(v) => v,
-            None => 0.0,
+            // Wire padding for vacant max slot — semantic absence is empty centroids.
+            None => {
+                0.0
+            }
         };
         out.extend_from_slice(&min_wire.to_le_bytes());
         out.extend_from_slice(&max_wire.to_le_bytes());

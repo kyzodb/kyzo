@@ -213,13 +213,17 @@ pub fn retry_on_conflict<T>(
     let mut last_conflict = match attempt() {
         Ok(v) => return Ok(v),
         Err(RetryError::Conflict(c)) => c,
-        Err(e) => return Err(e.into()),
+        Err(e) => {
+            return Err(e.into());
+        }
     };
     for _ in 1..max {
         match attempt() {
             Ok(v) => return Ok(v),
             Err(RetryError::Conflict(c)) => last_conflict = c,
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                return Err(e.into());
+            }
         }
     }
     Err(last_conflict.into())
@@ -244,7 +248,9 @@ pub fn retry_on_conflict_with_backoff<T>(
             backoff(0);
             c
         }
-        Err(e) => return Err(e.into()),
+        Err(e) => {
+            return Err(e.into());
+        }
     };
     for n in 1..max {
         match attempt() {
@@ -253,7 +259,9 @@ pub fn retry_on_conflict_with_backoff<T>(
                 last_conflict = c;
                 backoff(n);
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                return Err(e.into());
+            }
         }
     }
     Err(last_conflict.into())

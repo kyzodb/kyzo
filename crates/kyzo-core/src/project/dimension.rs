@@ -172,7 +172,9 @@ impl RecordLowering {
             let len = match u64::try_from(payload.len()) {
                 Ok(n) => n,
                 // Only fails if usize > u64 — not a shipped pointer width.
-                Err(_) => return out,
+                Err(_) => {
+                    return out;
+                }
             };
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(payload);

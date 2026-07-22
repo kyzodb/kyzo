@@ -250,7 +250,9 @@ impl SearchBatches<'_> {
                 };
                 let row = match batch.row(self.parent_row) {
                     Ok(r) => r.to_vec(),
-                    Err(e) => return Err(e.into()),
+                    Err(e) => {
+                        return Err(e.into());
+                    }
                 };
                 let left_premises = if self.want_premises {
                     batch.row_premises(self.parent_row)

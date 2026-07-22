@@ -390,9 +390,8 @@ impl Budget {
         if let Some(deadline) = &self.deadline {
             let elapsed = deadline.started.elapsed();
             if elapsed > deadline.allotted {
-                let millis_u64 = |ms: u128| match u64::try_from(ms) {
-                    Ok(v) => v,
-                    Err(_gt_u64) => u64::MAX,
+                let millis_u64 = |ms: u128| {
+                    u64::try_from(ms).expect("INVARIANT(millis_fit_u64): Duration::as_millis fits u64 for query deadlines")
                 };
                 return Err(LimitExceeded {
                     dimension: BudgetDimension::Deadline,
@@ -570,13 +569,18 @@ impl InterruptTicker<'_> {
         if self.countdown.tick() {
             self.budget.check_interrupt()?;
             if let Some(ceiling) = self.ceiling {
-                let in_flight_u64 = match u64::try_from(in_flight) {
-                    Ok(v) => v,
-                    Err(_gt_u64) => u64::MAX,
-                };
-                let spent = match self.baseline.checked_add(in_flight_u64) {
-                    Some(v) => v,
-                    None => u64::MAX,
+                let in_flight_u64 = u64::try_from(in_flight)
+                    .expect("INVARIANT(usize_fits_u64): in_flight count fits u64");
+                let Some(spent) = self.baseline.checked_add(in_flight_u64) else {
+                    let symb = self.rule.as_plain_symbol();
+                    return Err(LimitExceeded {
+                        dimension: BudgetDimension::InFlightDerivations,
+                        spent: u64::MAX,
+                        ceiling,
+                        rule: Some(self.rule.clone()),
+                        span: Some(symb.span),
+                    }
+                    .into());
                 };
                 if spent > ceiling {
                     let symb = self.rule.as_plain_symbol();
@@ -1245,10 +1249,8 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                 }
                 None => epoch_store.merge_in(out, &mut ())?,
             };
-            epoch_admitted += match u64::try_from(admitted.0) {
-                Ok(v) => v,
-                Err(_gt_u64) => u64::MAX,
-            };
+            epoch_admitted += u64::try_from(admitted.0)
+                .expect("INVARIANT(admitted_fits_u64): merge admission count fits u64");
             changed |= epoch_store.has_delta();
         }
         *spent_derived += epoch_admitted;
@@ -1565,10 +1567,8 @@ fn incremental_meet_eval<R: RuleBody>(
                 if out.meet_put_admission_faithful(&item, &total_meet)? {
                     effective += 1;
                 }
-                let effective_usize = match usize::try_from(effective) {
-                    Ok(v) => v,
-                    Err(_gt_usize) => usize::MAX,
-                };
+                let effective_usize = usize::try_from(effective)
+                    .expect("INVARIANT(effective_fits_usize): meet admission count fits usize");
                 ticker.tick(effective_usize)?;
                 Ok(ControlFlow::Continue(()))
             };

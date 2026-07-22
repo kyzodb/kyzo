@@ -178,7 +178,9 @@ impl<'a> PrefixProbeBatchJoin<'a> {
                     self.cur = None;
                     return Ok(false);
                 }
-                Some(Err(e)) => return Err(e),
+                Some(Err(e)) => {
+                    return Err(e);
+                }
                 Some(Ok(b)) => {
                     // An operator never yields an empty batch, but a
                     // defensive skip costs nothing and keeps this correct
@@ -207,7 +209,9 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     match self.advance_left_batch() {
                         Ok(false) => return if out.is_empty() { None } else { Some(Ok(out)) },
                         Ok(true) => {}
-                        Err(e) => return Some(Err(e)),
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
                 }
                 let left_row = {
@@ -219,12 +223,16 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     };
                     match b.row(*idx) {
                         Ok(r) => r,
-                        Err(e) => return Some(Err(e.into())),
+                        Err(e) => {
+                            return Some(Err(e.into()));
+                        }
                     }
                 };
                 match (self.probe)(left_row) {
                     Ok(it) => self.active = Some(it),
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => {
+                        return Some(Err(e));
+                    }
                 }
             }
 
@@ -237,7 +245,9 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
             let left_idx = *idx;
             let left_owned = match b.row(left_idx) {
                 Ok(r) => r.to_vec(),
-                Err(e) => return Some(Err(e.into())),
+                Err(e) => {
+                    return Some(Err(e.into()));
+                }
             };
             let left_premises = if self.want_premises {
                 b.row_premises(left_idx)
@@ -257,7 +267,9 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                         exhausted = true;
                         break;
                     }
-                    Some(Err(e)) => return Some(Err(e)),
+                    Some(Err(e)) => {
+                        return Some(Err(e));
+                    }
                     Some(Ok(found)) => {
                         let mut keep = true;
                         for p in self.filters.iter() {
@@ -267,7 +279,9 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                                     keep = false;
                                     break;
                                 }
-                                Err(e) => return Some(Err(e)),
+                                Err(e) => {
+                                    return Some(Err(e));
+                                }
                             }
                         }
                         if keep {
@@ -766,7 +780,9 @@ impl MaterializedBatchJoin<'_> {
             }
             let left = match batch.row(self.left_row) {
                 Ok(r) => r.to_vec(),
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    return Err(e.into());
+                }
             };
             let left_premises = if self.want_premises {
                 batch.row_premises(self.left_row)

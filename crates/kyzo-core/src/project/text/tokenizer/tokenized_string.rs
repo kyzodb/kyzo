@@ -95,10 +95,8 @@ impl From<PreTokenizedString> for PreTokenizedStream {
 impl TokenStream for PreTokenizedStream {
     fn advance(&mut self) -> bool {
         self.current_token += 1;
-        let len = match i64::try_from(self.tokenized_string.tokens.len()) {
-            Ok(n) => n,
-            Err(_gt_i64) => i64::MAX,
-        };
+        let len = i64::try_from(self.tokenized_string.tokens.len())
+            .expect("INVARIANT(token_len_fits_i64): token count fits i64");
         self.current_token < len
     }
 

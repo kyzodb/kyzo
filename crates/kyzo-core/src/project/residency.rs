@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::project::projection::{Generation, ResidentIndexKey};
 use crate::session::generation::RelationGeneration;
@@ -56,12 +56,21 @@ impl Residency {
         }
     }
 
+    fn marks_lock(&self) -> MutexGuard<'_, BTreeMap<ResidentIndexKey, Arc<AtomicU64>>> {
+        self.marks
+            .lock()
+            .expect("residency marks mutex poisoned — refuse silent continue")
+    }
+
+    fn misses_lock(&self) -> MutexGuard<'_, BTreeMap<ResidentIndexKey, (Generation, u32)>> {
+        self.misses
+            .lock()
+            .expect("residency misses mutex poisoned — refuse silent continue")
+    }
+
     fn slot(&self, relation: RelationId) -> Arc<AtomicU64> {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut marks = self
-            .marks
-            .lock()
-            .expect("residency marks mutex poisoned — refuse silent continue");
+        let mut marks = self.marks_lock();
         marks.entry(key).or_default().clone()
     }
 
@@ -102,10 +111,7 @@ impl Residency {
     /// serving — the cache is never a source of truth.
     pub(crate) fn should_build(&self, relation: RelationId, live: Generation) -> bool {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut misses = self
-            .misses
-            .lock()
-            .expect("residency misses mutex poisoned — refuse silent continue");
+        let mut misses = self.misses_lock();
         match misses.get_mut(&key) {
             Some((recorded, count)) if *recorded == live => {
                 *count = match count.checked_add(1) {
@@ -124,23 +130,14 @@ impl Residency {
     /// Clear the miss streak after a successful install.
     pub(crate) fn clear_miss(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses
-            .lock()
-            .expect("residency misses mutex poisoned — refuse silent continue")
-            .remove(&key);
+        self.misses_lock().remove(&key);
     }
 
     /// Drop miss streak and write-counter slot (destructive schema ops).
     pub(crate) fn forget(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses
-            .lock()
-            .expect("residency misses mutex poisoned — refuse silent continue")
-            .remove(&key);
-        self.marks
-            .lock()
-            .expect("residency marks mutex poisoned — refuse silent continue")
-            .remove(&key);
+        self.misses_lock().remove(&key);
+        self.marks_lock().remove(&key);
     }
 }
 
@@ -219,10 +216,13 @@ mod tests {
     fn poisoned_marks_mutex_refuses_silent_continue() {
         let residency = Residency::new();
         let relation = RelationId::new(1).expect("below cap");
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _g = residency.marks.lock().unwrap();
-            panic!("deliberate poison");
+        // Adversary: panic while the marks mutex is held to poison it.
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let guard = residency.marks.lock().expect("fresh mutex");
+            // Hold the guard across the panic so the mutex becomes poisoned.
+            std::panic::panic_any((guard, "deliberate poison"));
         }));
+        assert!(poison.is_err(), "poison setup must panic while holding the guard");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             residency.bump_before_commit(relation);
         }));

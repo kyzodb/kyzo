@@ -286,14 +286,18 @@ impl<I: Iterator<Item = Result<Tuple>>> Iterator for BatchTupleFilter<I> {
             }
             if batch.is_empty() {
                 match self.pending_err.take() {
-                    Some(e) => return Some(Err(e)),
+                    Some(e) => {
+                        return Some(Err(e));
+                    }
                     None => return None,
                 }
             }
             match refine_batch(&self.pred, batch) {
                 // A predicate error in the accumulated prefix precedes the
                 // pending stream error in row order.
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    return Some(Err(e));
+                }
                 // Wholly rejected: surface the pending error or pull the
                 // next chunk (an operator never yields an empty batch).
                 Ok(b) if b.is_empty() => continue,
@@ -363,12 +367,16 @@ impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I>
             }
             if batch.is_empty() {
                 match self.pending_err.take() {
-                    Some(e) => return Some(Err(e)),
+                    Some(e) => {
+                        return Some(Err(e));
+                    }
                     None => return None,
                 }
             }
             match refine_batch(&self.pred, batch) {
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    return Some(Err(e));
+                }
                 Ok(b) if b.is_empty() => continue,
                 Ok(b) => return Some(Ok(b)),
             }
