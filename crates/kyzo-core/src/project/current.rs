@@ -118,7 +118,10 @@ impl SegmentEngine {
         live: Generation,
     ) -> Result<SegmentHandle, SegmentMiss> {
         let key = ResidentIndexKey::for_relation(relation);
-        let segments = self.segments.lock().expect("segment lock poisoned");
+        let segments = match self.segments.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let Some(sealed) = segments.get(&key) else {
             return Err(SegmentMiss::Absent);
         };
@@ -152,10 +155,11 @@ impl SegmentEngine {
         let key = ResidentIndexKey::for_relation(relation);
         let handle = SegmentHandle(Arc::new(segment));
         let sealed = ProjectionBuilder::new(handle.clone()).seal(generation);
-        self.segments
-            .lock()
-            .expect("segment lock poisoned")
-            .insert(key, sealed);
+        match self.segments.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+        .insert(key, sealed);
         self.residency.clear_miss(relation);
         handle
     }
@@ -165,10 +169,11 @@ impl SegmentEngine {
     /// being reused or destroyed).
     pub(crate) fn evict(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.segments
-            .lock()
-            .expect("segment lock poisoned")
-            .remove(&key);
+        match self.segments.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+        .remove(&key);
         self.residency.forget(relation);
     }
 }
@@ -291,6 +296,8 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
     use crate::store::Storage;
     use crate::store::sim::SimStorage;
@@ -300,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn prefix_ranges_match_linear_scan_across_types() {
+    fn prefix_ranges_match_linear_scan_across_types() -> Result<()> {
         let mut rows: Vec<Tuple> = (0..7)
             .flat_map(|a| (0..5).map(move |b| row(&[a, b * 2])))
             .collect();
@@ -312,7 +319,8 @@ mod tests {
             DataValue::from(7),
             DataValue::from("y"),
         ]));
-        let s = Segment::build(rows.clone().into_iter()).unwrap();
+        let s = Segment::build(rows.clone().into_iter())
+            .ok_or_else(|| miette!("segment"))?;
         for a in -1..9 {
             let probe = [DataValue::from(a)];
             let got = s.prefix_range(&probe);
@@ -329,13 +337,15 @@ mod tests {
                 assert_eq!(s.row(i), Some(rows[i].as_slice()));
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn empty_segment_probes_cleanly() {
-        let s = Segment::build(std::iter::empty()).unwrap();
+    fn empty_segment_probes_cleanly() -> Result<()> {
+        let s = Segment::build(std::iter::empty()).ok_or_else(|| miette!("segment"))?;
         assert_eq!(s.len(), 0);
         assert!(s.prefix_range(&[DataValue::from(1)]).is_empty());
+        Ok(())
     }
 
     /// F7: the row-offset boundary arithmetic, isolated from the ~4.3
@@ -354,15 +364,16 @@ mod tests {
     }
 
     #[test]
-    fn classify_serves_matching_generation_and_rejects_stale() {
+    fn classify_serves_matching_generation_and_rejects_stale() -> Result<()> {
         let db = SimStorage::new(3);
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx().into_diagnostic()?;
         let engine = SegmentEngine::new();
-        let relation = RelationId::new(1).expect("below cap");
+        let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
         let live = engine.witness_after_snapshot(&rtx, relation);
         let handle = engine.install(
             relation,
-            Segment::build(std::iter::once(row(&[1, 2]))).unwrap(),
+            Segment::build(std::iter::once(row(&[1, 2])))
+                .ok_or_else(|| miette!("segment"))?,
             live,
         );
         assert_eq!(
@@ -377,18 +388,20 @@ mod tests {
             engine.get(relation, after),
             Err(SegmentMiss::Stale(_))
         ));
+        Ok(())
     }
 
     #[test]
-    fn orphan_evict_held_arc_still_serves() {
+    fn orphan_evict_held_arc_still_serves() -> Result<()> {
         let db = SimStorage::new(3);
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx().into_diagnostic()?;
         let engine = SegmentEngine::new();
-        let relation = RelationId::new(5).expect("below cap");
+        let relation = RelationId::new(5).ok_or_else(|| miette!("below cap"))?;
         let live = engine.witness_after_snapshot(&rtx, relation);
         let handle = engine.install(
             relation,
-            Segment::build(std::iter::once(row(&[9]))).unwrap(),
+            Segment::build(std::iter::once(row(&[9])))
+                .ok_or_else(|| miette!("segment"))?,
             live,
         );
         engine.evict(relation);
@@ -398,5 +411,6 @@ mod tests {
             engine.get(relation, live),
             Err(SegmentMiss::Absent)
         ));
+        Ok(())
     }
 }
