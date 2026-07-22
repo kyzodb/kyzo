@@ -443,7 +443,7 @@ impl<S: Storage> Engine<S> {
             return Err(StandingRegisterRefusal::Mutation.into());
         }
 
-        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
         let view = SessionView {
             store: &tx.store,
             temp: &tx.temp,

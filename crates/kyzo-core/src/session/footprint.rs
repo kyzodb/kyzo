@@ -347,7 +347,7 @@ pub enum LiveInsert {
 }
 
 /// Session-memory live footprint table — no durable lock organ.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LiveFootprintTable {
     live: std::collections::BTreeMap<FootprintIndexKey, AskShape>,
 }
@@ -355,7 +355,9 @@ pub struct LiveFootprintTable {
 impl LiveFootprintTable {
     /// Empty table.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            live: std::collections::BTreeMap::new(),
+        }
     }
 
     /// Register a live footprint for the owning incarnation.

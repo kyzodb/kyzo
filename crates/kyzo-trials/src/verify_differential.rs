@@ -391,7 +391,7 @@ fn verify_matches_on_a_real_recursive_query() {
         SEEDED_TC_ROWS,
         "fixture mint drifted — seeded TC must stay six pairs"
     );
-    assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, ScriptOptions::default());
+    assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, ScriptOptions::new());
 }
 
 /// Store-side sabotage: retract edge (3,4). `::verify` must Match the
@@ -400,7 +400,7 @@ fn verify_matches_on_a_real_recursive_query() {
 #[test]
 fn verify_catches_a_deliberately_sabotaged_oracle_fact() {
     let db = seeded_db();
-    let before = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
+    let before = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new())
         .expect("::verify before sabotage");
     assert_eq!(match_row_count(&before), SEEDED_TC_ROWS);
     assert_eq!(
@@ -425,7 +425,7 @@ fn verify_catches_a_deliberately_sabotaged_oracle_fact() {
         reduced_eval, REDUCED_TC_ROWS,
         "retract (3,4) must leave exactly the 1→2→3 closure"
     );
-    let after = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default())
+    let after = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new())
         .expect("::verify after store sabotage");
     assert_eq!(
         match_row_count(&after),
@@ -503,7 +503,7 @@ fn verify_matches_filtered_edges_against_eval_count() {
     assert_eq!(all, 3, "seeded edge relation");
     assert_eq!(want, 2, "y > 2 keeps (2,3) and (3,4)");
     assert!(want < all, "filter must shrink the answer");
-    assert_verify_matches_eval(&db, filtered, ScriptOptions::default());
+    assert_verify_matches_eval(&db, filtered, ScriptOptions::new());
 }
 
 /// Production `::verify` via `run_script` must bit-agree with the
@@ -513,7 +513,7 @@ fn verify_matches_filtered_edges_against_eval_count() {
 fn verify_directive_runs_through_run_script() {
     let db = seeded_db();
     let via_wrap =
-        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::default()).expect("wrap ::verify");
+        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new()).expect("wrap ::verify");
     let via_directive = db
         .run_script(
             "::verify { path[x, y] := *edge[x, y]
@@ -539,7 +539,7 @@ fn verify_directive_runs_through_run_script() {
 fn verify_directive_names_unsupported_constructs() {
     let db = seeded_db();
     let honest = "?[x, y] := *edge[x, y]";
-    assert_verify_matches_eval(&db, honest, ScriptOptions::default());
+    assert_verify_matches_eval(&db, honest, ScriptOptions::new());
 
     let rows = db
         .run_script("::verify { ?[x, y] := *edge[x, y] :order x }", no_params())
@@ -590,7 +590,7 @@ fn verify_matches_across_a_generated_corpus() {
                     continue;
                 }
             };
-            match run_verify(&db, &script, ScriptOptions::default()) {
+            match run_verify(&db, &script, ScriptOptions::new()) {
                 Ok(rows) if status_of(&rows) == "match" => {
                     let n = match_row_count(&rows);
                     if n != eval_n {
@@ -629,7 +629,7 @@ fn verify_matches_a_hand_written_aggregation_query() {
     let db = seeded_db();
     let q = "?[y, count(x)] := *edge[x, y]";
     assert_eq!(eval_answer_count(&db, q), 3, "one count row per target");
-    assert_verify_matches_eval(&db, q, ScriptOptions::default());
+    assert_verify_matches_eval(&db, q, ScriptOptions::new());
 }
 
 /// Unstratifiable corpus must never Match. Anti-vacuity: at least one
@@ -665,7 +665,7 @@ fn verify_never_matches_the_unstratifiable_corpus() {
             let line = entry_line(&rel, &vec![None; arity]);
             let script = format!("{rules_text}\n{line}");
             exercised += 1;
-            match run_verify(&db, &script, ScriptOptions::default()) {
+            match run_verify(&db, &script, ScriptOptions::new()) {
                 Err(_) => {}
                 Ok(rows) if status_of(&rows) == "match" => failures.push(format!(
                     "{name}/{rel}: provenance ::verify silently matched an unstratifiable program"
@@ -726,7 +726,7 @@ fn verify_matches_a_point_in_time_historical_read() {
         ("?[k, v] := *hist[k, v @ 50]", 0),
     ] {
         assert_eq!(eval_answer_count(&db, q), expect, "plain eval drift at {q}");
-        let rows = run_verify(&db, q, ScriptOptions::default()).expect("::verify historical");
+        let rows = run_verify(&db, q, ScriptOptions::new()).expect("::verify historical");
         assert_eq!(match_row_count(&rows), expect, "query {q}");
     }
     // Ghost-future check: @50 must stay empty even though @200 exists.
@@ -773,8 +773,8 @@ fn verify_matches_a_negated_historical_read() {
     let live_hist = "?[k, v] := *probe[k, v], not *hist[k, v @ 100]";
     assert_eq!(eval_answer_count(&db, empty_hist), 2);
     assert_eq!(eval_answer_count(&db, live_hist), 1);
-    assert_verify_matches_eval(&db, empty_hist, ScriptOptions::default());
-    assert_verify_matches_eval(&db, live_hist, ScriptOptions::default());
+    assert_verify_matches_eval(&db, empty_hist, ScriptOptions::new());
+    assert_verify_matches_eval(&db, live_hist, ScriptOptions::new());
     assert_ne!(
         eval_answer_count(&db, empty_hist),
         eval_answer_count(&db, live_hist),
@@ -807,12 +807,12 @@ fn verify_refuses_a_spans_read_by_name() {
     );
 
     let unlimited = "?[x, y] := *edge[x, y]";
-    assert_verify_matches_eval(&db, unlimited, ScriptOptions::default());
+    assert_verify_matches_eval(&db, unlimited, ScriptOptions::new());
 
     let rows = run_verify(
         &db,
         "?[x, y] := *edge[x, y] :limit 1",
-        ScriptOptions::default(),
+        ScriptOptions::new(),
     )
     .expect("::verify returns NamedRows for :limit");
     assert_eq!(status_of(&rows), "unsupported");
@@ -834,12 +834,12 @@ fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
     let starved = ScriptOptions {
         derived_tuple_ceiling: Some(500),
         epoch_ceiling: Some(1_000_000),
-        ..ScriptOptions::default()
+        ..ScriptOptions::new()
     };
     let generous = ScriptOptions {
         derived_tuple_ceiling: Some(10_000_000),
         epoch_ceiling: Some(1_000_000),
-        ..ScriptOptions::default()
+        ..ScriptOptions::new()
     };
 
     let refused = run_verify(&db, DENSE_SELF_JOIN_PATH, starved)
@@ -895,7 +895,7 @@ fn verify_still_matches_under_a_generous_budget() {
     let options = ScriptOptions {
         epoch_ceiling: Some(1_000),
         derived_tuple_ceiling: Some(10_000),
-        ..ScriptOptions::default()
+        ..ScriptOptions::new()
     };
     assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, options);
     assert_eq!(eval_answer_count(&db, TRANSITIVE_CLOSURE), SEEDED_TC_ROWS);
@@ -908,11 +908,11 @@ fn verify_still_matches_under_a_generous_budget() {
 fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
     let db = seeded_db();
     assert!(
-        ScriptOptions::default().derived_tuple_ceiling.is_none(),
+        ScriptOptions::new().derived_tuple_ceiling.is_none(),
         "default ScriptOptions leaves derived_tuple_ceiling unset so production \
          applies its finite default at the door"
     );
-    assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, ScriptOptions::default());
+    assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, ScriptOptions::new());
 
     let dense = dense_path_db();
     let refused = run_verify(
@@ -921,7 +921,7 @@ fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
         ScriptOptions {
             derived_tuple_ceiling: Some(500),
             epoch_ceiling: Some(1_000_000),
-            ..ScriptOptions::default()
+            ..ScriptOptions::new()
         },
     )
     .expect("override ceiling returns NamedRows");

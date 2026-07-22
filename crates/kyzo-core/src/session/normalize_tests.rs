@@ -180,7 +180,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
         Script::Query(p) => p,
         Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
     };
-    let tx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::default());
+    let tx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::new());
     let view = SessionView {
         store: &tx.store,
         temp: &tx.temp,

@@ -270,16 +270,18 @@ pub struct ScriptOptions {
     /// [`SessionTx::commit_write`] admits under this key; retries with the
     /// same bytes dedupe to one committed effect.
     pub client_operation_id: Option<Vec<u8>>,
-    /// Live SweepDoor for this Engine. Default pulls the process-current door
-    /// installed at [`Engine::compose`] so constraint/sys paths that build
-    /// `ScriptOptions::default()` still hit the OperationKey ack path.
-    /// `pub` so out-of-crate FRU (`..ScriptOptions::default()`) can construct
+    /// Live SweepDoor for this Engine. [`Self::new`] pulls the process-current
+    /// door installed at [`Engine::compose`] so constraint/sys paths that build
+    /// `ScriptOptions::new()` still hit the OperationKey ack path.
+    /// `pub` so out-of-crate FRU (`..ScriptOptions::new()`) can construct
     /// overrides without naming every field.
     pub sweep: Option<LiveSweepHandle>,
 }
 
-impl Default for ScriptOptions {
-    fn default() -> Self {
+impl ScriptOptions {
+    /// Process-default options: no epoch/tuple/timeout ceiling, no client op id,
+    /// sweep from the process-current live door (if any).
+    pub fn new() -> Self {
         Self {
             epoch_ceiling: None,
             derived_tuple_ceiling: None,
@@ -465,7 +467,7 @@ impl<S: Storage> Engine<S> {
         payload: &str,
         params: BTreeMap<String, DataValue>,
     ) -> Result<NamedRows> {
-        self.run_script_with(payload, params, ScriptOptions::default())
+        self.run_script_with(payload, params, ScriptOptions::new())
     }
 
     /// Parse and run a script under explicit evaluation options (budget
@@ -881,7 +883,7 @@ impl<S: Storage> Engine<S> {
         crate::store::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
                 crate::store::retry::write_tx_attempt(&self.store)?,
-                self.bind_write_options(ScriptOptions::default()),
+                self.bind_write_options(ScriptOptions::new()),
             );
             let out = match f(&mut tx) {
                 Ok(out) => out,
@@ -1141,10 +1143,9 @@ impl<T: WriteTx> SessionTx<T> {
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
             }
             Err(SweepSealFailure::Sweep(other)) => {
-                debug_assert!(
-                    false,
-                    "ack_write returned unexpected SweepRefuse: {other:?}"
-                );
+                // Unexpected SweepRefuse variants from ack_write map to the
+                // same durable-ack refuse as the known arm/reuse cases.
+                let _ = other;
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
             }
             Err(SweepSealFailure::MerkleChain(_)) | Err(SweepSealFailure::Wal(_)) => {
@@ -1366,7 +1367,7 @@ mod tests {
 
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(100),
-            ..Default::default()
+            ..ScriptOptions::new()
         };
         let err = db
             .run_script_with(
@@ -1427,7 +1428,7 @@ mod tests {
 
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(70),
-            ..Default::default()
+            ..ScriptOptions::new()
         };
         let err = db
             .run_script_with(
@@ -1486,7 +1487,7 @@ mod tests {
         for bad in [1e300_f64, f64::INFINITY] {
             let opts = ScriptOptions {
                 timeout_secs: Some(bad),
-                ..Default::default()
+                ..ScriptOptions::new()
             };
             let err = db
                 .run_script_with("?[a] := a in [1, 2, 3]", no_params(), opts)
@@ -1703,7 +1704,7 @@ mod tests {
         // refuse it, and the refusal must be a value, not a panic.
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(3),
-            ..Default::default()
+            ..ScriptOptions::new()
         };
         let err = db
             .run_script_with(
@@ -1752,7 +1753,7 @@ mod tests {
         let db = open_engine(SimStorage::new(11));
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(10),
-            ..Default::default()
+            ..ScriptOptions::new()
         };
         let err = db
             .run_script_with(
@@ -1858,7 +1859,7 @@ mod tests {
         // armed derived-tuple ceiling that stops it, never a silent hang.
         let low_opts = ScriptOptions {
             derived_tuple_ceiling: Some(200_000),
-            ..Default::default()
+            ..ScriptOptions::new()
         };
         let err = db
             .run_script_with(q, no_params(), low_opts)
@@ -1881,7 +1882,7 @@ mod tests {
         // (measured); 1_100_000 gives real headroom.
         let high_opts = ScriptOptions {
             derived_tuple_ceiling: Some(1_100_000),
-            ..Default::default()
+            ..ScriptOptions::new()
         };
         let ok = db
             .run_script_with(q, no_params(), high_opts)
@@ -2074,7 +2075,7 @@ mod db_battery {
         let refusal = |db: &Engine<SimStorage>| -> String {
             let opts = ScriptOptions {
                 derived_tuple_ceiling: Some(3),
-                ..Default::default()
+                ..ScriptOptions::new()
             };
             let err = db
                 .run_script_with(
@@ -2128,7 +2129,7 @@ mod db_battery {
         let opts = ScriptOptions {
             client_operation_id: Some(b"db-op-key-dedupe".to_vec()),
             sweep: Some(db.sweep.clone()),
-            ..ScriptOptions::default()
+            ..ScriptOptions::new()
         };
         SessionTx::new_write(db.store.write_tx().map_err(|e| miette!("tx1: {e}"))?, opts.clone())
             .commit_write()

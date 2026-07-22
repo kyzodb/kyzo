@@ -1986,7 +1986,7 @@ fn operation_key_production_commit_write_dedupes_same_process() {
     let opts = ScriptOptions {
         client_operation_id: Some(b"dst-op-key-same-proc".to_vec()),
         sweep: Some(db.sweep.clone()),
-        ..ScriptOptions::default()
+        ..ScriptOptions::new()
     };
 
     let tx1 = SessionTx::new_write(db.store.write_tx().expect("write tx 1"), opts.clone());
@@ -2043,7 +2043,7 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
     let opts = ScriptOptions {
         client_operation_id: Some(client_op.clone()),
         sweep: Some(db.sweep.clone()),
-        ..ScriptOptions::default()
+        ..ScriptOptions::new()
     };
 
     SessionTx::new_write(db.store.write_tx().expect("write tx"), opts.clone())
@@ -2095,7 +2095,7 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
     let retry_opts = ScriptOptions {
         client_operation_id: Some(client_op),
         sweep: Some(restored_handle.clone()),
-        ..ScriptOptions::default()
+        ..ScriptOptions::new()
     };
     SessionTx::new_write(db.store.write_tx().expect("retry write tx"), retry_opts)
         .commit_write()

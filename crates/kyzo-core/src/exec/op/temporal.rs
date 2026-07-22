@@ -1211,7 +1211,7 @@ mod tests {
         name: &str,
     ) -> (RelationHandle, RelationHandle) {
         let mut stx =
-            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::default());
+            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::new());
         let input = kyzo_model::program::query::InputRelationHandle {
             name: sym(name),
             metadata: StoredRelationMetadata {
@@ -1246,7 +1246,7 @@ mod tests {
         val: Option<i64>,
     ) {
         let mut stx =
-            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::default());
+            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::new());
         let sys = stx.store.system_stamp();
         let key_cols = vec![v(key)];
         match val {

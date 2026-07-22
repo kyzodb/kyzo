@@ -727,7 +727,7 @@ impl<S: Storage> Engine<S> {
 
     /// `::indices` — list index names and kinds on a relation.
     pub(crate) fn sys_list_indices(&self, name: &Symbol) -> Result<NamedRows> {
-        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
         let handle = get_relation(&tx.store, &name.name)?;
         let rows = handle
             .indices
@@ -852,7 +852,7 @@ mod temporal_index_tests {
     }
 
     fn open_session(db: &Engine<SimStorage>) -> SessionTx<<SimStorage as Storage>::WriteTx> {
-        SessionTx::new_write(db.store.write_tx()?, ScriptOptions::default())
+        SessionTx::new_write(db.store.write_tx()?, ScriptOptions::new())
     }
 
     /// Write one base point event directly (bypassing `execute_relation`,
@@ -1229,7 +1229,7 @@ mod temporal_index_tests {
         db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
             .map_err(|e| miette!("remove: {e}"))?;
 
-        let rtx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::default());
+        let rtx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::new());
         let base = rtx.get_relation("po")?;
         let idx_handle = rtx.get_relation("po:t")?;
         let mut base_rows = scan_base_rows(&rtx.store, &base);

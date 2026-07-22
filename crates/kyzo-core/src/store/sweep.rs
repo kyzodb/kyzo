@@ -226,7 +226,7 @@ struct LiveSweepState {
 }
 
 /// Process-local current live door — fallback when [`ScriptOptions`] carries none
-/// (constraint / sys paths that build `ScriptOptions::default()`).
+/// (constraint / sys paths that build `ScriptOptions::new()`).
 static LIVE_SWEEP_CURRENT: Mutex<Option<LiveSweepHandle>> = Mutex::new(None);
 
 /// Install the Engine's live SweepDoor as the process-current door.

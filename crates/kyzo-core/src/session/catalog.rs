@@ -143,7 +143,7 @@ use kyzo_model::value::{
 /// Owns no bytes, no fsync path, no counters. Schema Records are Store
 /// facts; Catalog is their interpreter. Sealed — no public common
 /// super-type with Store or Engine.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Catalog {
     _sealed: (),
 }
@@ -668,9 +668,9 @@ impl RelationHandle {
             put_triggers: vec![],
             rm_triggers: vec![],
             replace_triggers: vec![],
-            access_level: AccessLevel::default(),
+            access_level: AccessLevel::Normal,
             indices: vec![],
-            description: Default::default(),
+            description: SmartString::new(),
             constraints: vec![],
             keyspace_kind,
         }
@@ -1285,7 +1285,7 @@ impl RelationHandle {
         cols: &[usize],
     ) -> Result<Option<Tuple>> {
         let len = self.metadata.keys.len();
-        debug_assert!(cols.len() >= len, "point probe under key width");
+        ensure!(cols.len() >= len, "point probe under key width");
         let cols = &cols[..len];
         let lower = scan_key_lower_projected(self.id, row, cols, &[]);
         let upper = scan_key_upper_projected(self.id, row, cols, &[]);
@@ -1578,7 +1578,7 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
 impl<S: Storage> Engine<S> {
     /// `::relations` — list stored relations.
     pub(crate) fn sys_list_relations(&self) -> Result<NamedRows> {
-        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
         let mut rows = vec![];
         for handle in list_relations(&tx.store)? {
             rows.push(Tuple::from_vec(vec![
@@ -1595,7 +1595,7 @@ impl<S: Storage> Engine<S> {
 
     /// `::columns` — list key/non-key columns of a relation.
     pub(crate) fn sys_list_columns(&self, name: &Symbol) -> Result<NamedRows> {
-        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
         let handle = get_relation(&tx.store, &name.name)?;
         let mut rows = vec![];
         for col in handle
@@ -1628,7 +1628,7 @@ impl<S: Storage> Engine<S> {
 
     /// `::show_triggers` — put/rm/replace trigger sources on a relation.
     pub(crate) fn sys_show_trigger(&self, name: &Symbol) -> Result<NamedRows> {
-        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
         let handle = get_relation(&tx.store, &name.name)?;
         let mut rows = vec![];
         for (kind, src) in handle

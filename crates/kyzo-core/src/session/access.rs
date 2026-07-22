@@ -38,7 +38,6 @@ use crate::parse::sys::AccessLevel as ParseAccessLevel;
     PartialEq,
     serde_derive::Serialize,
     serde_derive::Deserialize,
-    Default,
     Ord,
     PartialOrd,
 )]
@@ -46,7 +45,6 @@ pub enum AccessLevel {
     Hidden,
     ReadOnly,
     Protected,
-    #[default]
     Normal,
 }
 

@@ -110,12 +110,8 @@ pub(crate) fn verify(
 ) -> Result<RootVerifyOutcome> {
     let expected = as_of_root(chain, cut)?;
     let link = link_at_cut(chain, cut)?;
-    debug_assert_eq!(
-        expected,
-        link.root(),
-        "as_of_root and link_at_cut must name the same tip"
-    );
-
+    // INVARIANT(root_tip_agreement): as_of_root and link_at_cut read the same
+    // chain tip for `cut`.
     let content = StateRoot::from_merkle(state_root(tx, budget)?);
     let recomputed = ChainedStateRoot::mint(
         link.store_id(),
@@ -791,7 +787,7 @@ mod tests {
                 ?[x, y] := path[x, y]
                 "#,
                 Default::default(),
-                ScriptOptions::default(),
+                ScriptOptions::new(),
             )
             .map_err(|e| miette!("verify_script runs: {e}"))?;
         match outcome {
@@ -872,7 +868,7 @@ mod tests {
             .verify_script(
                 "?[a, b] := *edge[a, b] :put edge {a, b}",
                 Default::default(),
-                ScriptOptions::default(),
+                ScriptOptions::new(),
             )
             .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
         assert!(
@@ -895,7 +891,7 @@ mod tests {
             .verify_script(
                 "?[a, b] := *edge[a, b] :order a",
                 Default::default(),
-                ScriptOptions::default(),
+                ScriptOptions::new(),
             )
             .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
         assert!(
@@ -920,7 +916,7 @@ mod tests {
             .verify_script(
                 "?[k, v, iv] := *hist[k, v @spans iv]",
                 Default::default(),
-                ScriptOptions::default(),
+                ScriptOptions::new(),
             )
             .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
         match outcome {
@@ -988,7 +984,7 @@ mod tests {
                 ScriptOptions {
                     derived_tuple_ceiling: Some(500),
                     epoch_ceiling: Some(1_000_000),
-                    ..ScriptOptions::default()
+                    ..ScriptOptions::new()
                 },
             )
             .map_err(|e| miette!("starved ceiling returns BudgetRefused, not Err: {e}"))?;

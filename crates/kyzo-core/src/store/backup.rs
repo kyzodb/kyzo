@@ -968,7 +968,7 @@ mod pins {
             put_triggers: vec![],
             rm_triggers: vec![],
             replace_triggers: vec![],
-            access_level: AccessLevel::default(),
+            access_level: AccessLevel::Normal,
             indices: vec![],
             description: SmartString::default(),
             constraints: vec![],

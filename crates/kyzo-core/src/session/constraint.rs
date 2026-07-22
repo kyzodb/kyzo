@@ -470,7 +470,7 @@ impl<S: Storage> Engine<S> {
         crate::store::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
                 crate::store::retry::write_tx_attempt(&self.store)?,
-                ScriptOptions::default(),
+                ScriptOptions::new(),
             );
             match Self::detach_constraint(&mut tx, name) {
                 Ok(rows) => {
@@ -519,7 +519,7 @@ impl<S: Storage> Engine<S> {
     /// triple, in catalog order — a mirrored constraint appears once per
     /// relation it reads.
     pub(crate) fn sys_list_constraints(&self) -> Result<NamedRows> {
-        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::default());
+        let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
         let mut rows = vec![];
         for handle in list_relations(&tx.store)? {
             for c in &handle.constraints {
@@ -804,7 +804,7 @@ mod tests {
         // aborted.
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(6),
-            ..Default::default()
+            ..ScriptOptions::new()
         };
         let err = db
             .run_script_with("?[a, b] <- [[9, 9]] :put edge {a, b}", no_params(), opts)
