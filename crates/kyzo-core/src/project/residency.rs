@@ -58,7 +58,10 @@ impl Residency {
 
     fn slot(&self, relation: RelationId) -> Arc<AtomicU64> {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut marks = self.marks.lock().expect("generation lock poisoned");
+        let mut marks = match self.marks.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         marks.entry(key).or_default().clone()
     }
 
@@ -99,7 +102,10 @@ impl Residency {
     /// serving — the cache is never a source of truth.
     pub(crate) fn should_build(&self, relation: RelationId, live: Generation) -> bool {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut misses = self.misses.lock().expect("miss lock poisoned");
+        let mut misses = match self.misses.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         match misses.get_mut(&key) {
             Some((recorded, count)) if *recorded == live => {
                 *count = count.saturating_add(1);
@@ -115,32 +121,43 @@ impl Residency {
     /// Clear the miss streak after a successful install.
     pub(crate) fn clear_miss(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses.lock().expect("miss lock poisoned").remove(&key);
+        match self.misses.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+        .remove(&key);
     }
 
     /// Drop miss streak and write-counter slot (destructive schema ops).
     pub(crate) fn forget(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.misses.lock().expect("miss lock poisoned").remove(&key);
-        self.marks
-            .lock()
-            .expect("generation lock poisoned")
-            .remove(&key);
+        match self.misses.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+        .remove(&key);
+        match self.marks.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+        .remove(&key);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
+
     use super::*;
     use crate::store::Storage;
     use crate::store::sim::SimStorage;
 
     #[test]
-    fn rebuild_gated_by_stable_miss_streak() {
+    fn rebuild_gated_by_stable_miss_streak() -> Result<()> {
         let db = SimStorage::new(5);
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let residency = Residency::new();
-        let relation = RelationId::new(2).expect("below cap");
+        let relation = RelationId::new(2).ok_or_else(|| miette!("below cap"))?;
         let live = residency.witness_after_snapshot(&rtx, relation);
 
         assert!(
@@ -158,38 +175,41 @@ mod tests {
             !residency.should_build(relation, next),
             "write resets the streak"
         );
+        Ok(())
     }
 
     /// Issue #82: alternating write+read never crosses the rebuild gate.
     #[test]
-    fn alternating_writes_never_cross_rebuild_gate() {
+    fn alternating_writes_never_cross_rebuild_gate() -> Result<()> {
         let db = SimStorage::new(7);
         let residency = Residency::new();
-        let relation = RelationId::new(3).expect("below cap");
+        let relation = RelationId::new(3).ok_or_else(|| miette!("below cap"))?;
         for _ in 0..20 {
             residency.bump_before_commit(relation);
-            let rtx = db.read_tx().unwrap();
+            let rtx = db.read_tx()?;
             let live = residency.witness_after_snapshot(&rtx, relation);
             assert!(
                 !residency.should_build(relation, live),
                 "write-interleaved single miss must never admit a build"
             );
         }
+        Ok(())
     }
 
     /// Miss-map loss only delays rebuild — clearing the streak never makes
     /// a stale serve possible (serving is witness equality in current.rs).
     #[test]
-    fn miss_map_loss_only_delays_rebuild() {
+    fn miss_map_loss_only_delays_rebuild() -> Result<()> {
         let db = SimStorage::new(3);
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let residency = Residency::new();
-        let relation = RelationId::new(4).expect("below cap");
+        let relation = RelationId::new(4).ok_or_else(|| miette!("below cap"))?;
         let live = residency.witness_after_snapshot(&rtx, relation);
         assert!(!residency.should_build(relation, live));
         residency.clear_miss(relation);
         // After loss, the next miss starts a fresh streak — declines again.
         assert!(!residency.should_build(relation, live));
         assert!(residency.should_build(relation, live));
+        Ok(())
     }
 }
