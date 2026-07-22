@@ -1023,6 +1023,7 @@ impl Debug for RelAlgebra {
 
 #[cfg(test)]
 mod tests {
+    use miette::miette;
     /// Test view of the one machine: batches flattened to owned rows
     /// (errors surface at their exact row position, like the old stream).
     fn rows_of<'a>(
@@ -1055,10 +1056,7 @@ mod tests {
                 match batches.next()? {
                     Err(e) => return Some(Err(e)),
                     Ok(b) => {
-                        current = (0..b.len())
-                            .map(|i| b.row(i).expect("i < batch.len()").to_vec())
-                            .map(Tuple::from_vec)
-                            .collect();
+                        current = b.into_rows();
                         idx = 0;
                     }
                 }
@@ -1119,7 +1117,7 @@ mod tests {
     /// The three inline-join strategies of `InlineFixedRA` (null,
     /// singleton, fixed) against a two-row left stream.
     #[test]
-    fn inline_fixed_join_branches() {
+    fn inline_fixed_join_branches() -> Result<()> {
         let left_rows = [Tuple::from_vec(vec![v(1)]), Tuple::from_vec(vec![v(2)])];
         let mk_left = || -> TupleIter<'_> { Box::new(left_rows.iter().map(|t| Ok(t.clone()))) };
 
@@ -1131,10 +1129,8 @@ mod tests {
         };
         assert_eq!(null.join_type(), "null_join");
         let got: Vec<Tuple> = null
-            .join(mk_left(), (vec![0], vec![0]), Default::default())
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+            .join(mk_left(), (vec![0], vec![0]), Default::default())?
+            .collect::<Result<Vec<_>>>()?;
         assert!(got.is_empty());
 
         let singleton = InlineFixedRA {
@@ -1145,10 +1141,8 @@ mod tests {
         };
         assert_eq!(singleton.join_type(), "singleton_join");
         let got: Vec<Tuple> = singleton
-            .join(mk_left(), (vec![0], vec![0]), Default::default())
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+            .join(mk_left(), (vec![0], vec![0]), Default::default())?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(got, vec![Tuple::from_vec(vec![v(2), v(2)])]);
 
         let fixed = InlineFixedRA {
@@ -1159,10 +1153,8 @@ mod tests {
         };
         assert_eq!(fixed.join_type(), "fixed_join");
         let got: Vec<Tuple> = fixed
-            .join(mk_left(), (vec![0], vec![0]), Default::default())
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+            .join(mk_left(), (vec![0], vec![0]), Default::default())?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(
             got,
             vec![
@@ -1170,6 +1162,7 @@ mod tests {
                 Tuple::from_vec(vec![v(1), v(1), v(11)])
             ]
         );
+        Ok(())
     }
 
     /// `InnerJoin::iter_batched`'s unit-left fast path must NOT fire for a
@@ -1184,10 +1177,10 @@ mod tests {
     /// Join(singleton Fixed, spread-unify) must be identical on both paths,
     /// i.e. a real join, not a right passthrough.
     #[test]
-    fn batched_join_singleton_fixed_left_is_not_unit() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let rtx = db.read_tx().unwrap();
+    fn batched_join_singleton_fixed_left_is_not_unit() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
 
         let right = RelAlgebra::unit(sp()).unify(
             sym("x"),
@@ -1206,16 +1199,14 @@ mod tests {
         });
         assert!(!left.is_unit(), "a data-bearing singleton must not be unit");
         let mut ra = left
-            .join(right, vec![sym("y")], vec![sym("x")], sp())
-            .unwrap();
-        ra.fill_binding_indices_and_compile().unwrap();
+            .join(right, vec![sym("y")], vec![sym("x")], sp())?;
+        ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
-        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
+            .collect::<Result<Vec<_>>>()?;
         // The independently known answer: y=2 joins x=2 exactly once.
         assert_eq!(got, vec![Tuple::from_vec(vec![v(2), v(2)])]);
+        Ok(())
     }
 
     /// The general (non-prefix) join's batch executor, judged by an
@@ -1225,16 +1216,15 @@ mod tests {
     /// output-batch boundary twice), and the expected set is computed by
     /// hand, never by a second run of the machine under test.
     #[test]
-    fn materialized_batch_join_matches_analytic_oracle_across_boundaries() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn materialized_batch_join_matches_analytic_oracle_across_boundaries() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let left_handle = create_relation(
             &mut tx,
             input_handle("ml", vec![col("j", ColType::Int)], vec![]),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let right_handle = create_relation(
             &mut tx,
             input_handle(
@@ -1243,53 +1233,46 @@ mod tests {
                 vec![col("j", ColType::Int)],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let stamp = kyzo_model::value::ValidityTs::from_raw(0);
         // left: j ∈ {7, 8, 9(no match)}; right rows (i, j): j=7 has 2000
         // rows, j=8 has 3.
         for j in [7i64, 8, 9] {
-            left_handle.put_fact(&mut tx, &[v(j)], stamp, sp()).unwrap();
+            left_handle.put_fact(&mut tx, &[v(j)], stamp, sp())?;
         }
         for i in 0..2000i64 {
             right_handle
-                .put_fact(&mut tx, &[v(i), v(7)], stamp, sp())
-                .unwrap();
+                .put_fact(&mut tx, &[v(i), v(7)], stamp, sp())?;
         }
         for i in 5000..5003i64 {
             right_handle
-                .put_fact(&mut tx, &[v(i), v(8)], stamp, sp())
-                .unwrap();
+                .put_fact(&mut tx, &[v(i), v(8)], stamp, sp())?;
         }
-        tx.commit().unwrap();
-        let rtx = db.read_tx().unwrap();
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
         // The right side's join column gets its own symbol (`j2`), as the
         // compiler guarantees before any join is minted: InnerJoin::bindings
         // asserts (debug) that output bindings are duplicate-free.
-        let mut ra = RelAlgebra::relation(vec![sym("j")], left_handle, sp(), None)
-            .unwrap()
+        let mut ra = RelAlgebra::relation(vec![sym("j")], left_handle, sp(), None)?
             .join(
-                RelAlgebra::relation(vec![sym("i"), sym("j2")], right_handle, sp(), None).unwrap(),
+                RelAlgebra::relation(vec![sym("i"), sym("j2")], right_handle, sp(), None)?,
                 vec![sym("j")],
                 vec![sym("j2")],
                 sp(),
-            )
-            .unwrap();
+            )?;
         if let RelAlgebra::Join(j) = &ra {
             assert_eq!(
-                j.join_type().unwrap(),
+                j.join_type()?,
                 "stored_mat_join",
                 "the shape must route through the materialized join"
             );
         } else {
             panic!("plan root must be the join");
         }
-        ra.fill_binding_indices_and_compile().unwrap();
+        ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
-        let mut got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let mut got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
+            .collect::<Result<Vec<_>>>()?;
         got.sort();
         let mut expected: Vec<Tuple> = (0..2000i64)
             .map(|i| vec![v(7), v(i), v(7)])
@@ -1298,15 +1281,16 @@ mod tests {
             .collect();
         expected.sort();
         assert_eq!(got, expected, "materialized batch join vs analytic oracle");
+        Ok(())
     }
 
     /// Spread unification (`binding in list`) emits one row per element;
     /// a non-list right side is a typed error, not a panic.
     #[test]
-    fn spread_unification() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let rtx = db.read_tx().unwrap();
+    fn spread_unification() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
 
         let mut ra = RelAlgebra::unit(sp()).unify(
             sym("x"),
@@ -1317,12 +1301,10 @@ mod tests {
             UnificationKind::Spread,
             sp(),
         );
-        ra.fill_binding_indices_and_compile().unwrap();
+        ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
-        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(
             got,
             vec![
@@ -1341,13 +1323,13 @@ mod tests {
             UnificationKind::Spread,
             sp(),
         );
-        bad.fill_binding_indices_and_compile().unwrap();
-        let err = rows_of(&bad, &rtx, &stores)
-            .unwrap()
+        bad.fill_binding_indices_and_compile()?;
+        let err = rows_of(&bad, &rtx, &stores)?
             .next()
-            .unwrap()
+            .ok_or_else(|| miette!("expected an error item"))?
             .unwrap_err();
         assert!(err.to_string().contains("Invalid spread unification"));
+        Ok(())
     }
 
     /// A time-travel scan through the operator: only the newest asserted
@@ -1355,10 +1337,10 @@ mod tests {
     /// infrastructure — the operator binds user columns only, and any
     /// facts relation time-travels (no schema opt-in exists).
     #[test]
-    fn stored_with_validity_scan() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn stored_with_validity_scan() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let handle = create_relation(
             &mut tx,
             input_handle(
@@ -1367,8 +1349,7 @@ mod tests {
                 vec![col("v", ColType::String)],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         for (ts, val) in [(10i64, "ten"), (20, "twenty")] {
             let row = vec![v(1), DataValue::from(val)];
             handle
@@ -1377,43 +1358,39 @@ mod tests {
                     &row,
                     kyzo_model::value::ValidityTs::from_raw(ts),
                     sp(),
-                )
-                .unwrap();
+                )?;
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
         let stores = no_stores();
-        let scan_at = |ts: i64| -> Vec<Tuple> {
+        let scan_at = |ts: i64| -> Result<Vec<Tuple>> {
             let ra = RelAlgebra::relation(
                 vec![sym("k"), sym("v")],
                 handle.clone(),
                 sp(),
                 Some(ValidityClause::At(AsOf::current(ValidityTs::from_raw(ts)))),
-            )
-            .unwrap();
-            rows_of(&ra, &rtx, &stores)
-                .unwrap()
-                .map(Result::unwrap)
-                .collect()
+            )?;
+            rows_of(&ra, &rtx, &stores)?.collect()
         };
-        let at_15 = scan_at(15);
+        let at_15 = scan_at(15)?;
         assert_eq!(at_15.len(), 1);
         assert_eq!(at_15[0][1], DataValue::from("ten"));
-        let at_25 = scan_at(25);
+        let at_25 = scan_at(25)?;
         assert_eq!(at_25.len(), 1);
         assert_eq!(at_25[0][1], DataValue::from("twenty"));
-        let at_5 = scan_at(5);
+        let at_5 = scan_at(5)?;
         assert!(at_5.is_empty());
+        Ok(())
     }
 
     /// The join-RHS refusals are typed and fire at CONSTRUCTION — the
     /// original `panic!`d/`unreachable!()`d at iteration time.
     #[test]
-    fn join_rhs_refusals_are_typed() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn join_rhs_refusals_are_typed() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let handle = create_relation(
             &mut tx,
             input_handle(
@@ -1422,9 +1399,8 @@ mod tests {
                 vec![],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
-        tx.commit().unwrap();
+        )?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
         // Reorder as inner-join RHS.
         let reordered = RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(0), sp())
@@ -1441,8 +1417,7 @@ mod tests {
                 vec![sym("x")],
                 vec![sym("x")],
                 sp(),
-            )
-            .unwrap();
+            )?;
         let err = RelAlgebra::unit(sp())
             .join(neg, vec![], vec![], sp())
             .unwrap_err();
@@ -1463,15 +1438,14 @@ mod tests {
             handle,
             sp(),
             Some(ValidityClause::At(AsOf::current(ValidityTs::from_raw(0)))),
-        )
-        .unwrap();
+        )?;
         let neg = RelAlgebra::unit(sp())
-            .neg_join(vld_scan, vec![], vec![], sp())
-            .unwrap();
+            .neg_join(vld_scan, vec![], vec![], sp())?;
         assert!(matches!(
             neg,
             RelAlgebra::NegJoin(ref b) if matches!(b.right, NegRight::StoredWithValidity(_))
         ));
+        Ok(())
     }
 
     fn entry() -> MagicSymbol {
@@ -1495,17 +1469,16 @@ mod tests {
     /// miss path is exercised too. Iterator and batched outputs must be
     /// `Vec`-equal (order-sensitive).
     #[test]
-    fn general_join_batched_matches_iterator_at_batch_boundaries() {
+    fn general_join_batched_matches_iterator_at_batch_boundaries() -> Result<()> {
         for n in [BATCH_ROWS - 1, BATCH_ROWS, BATCH_ROWS + 1] {
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
-            let mut tx = db.write_tx().unwrap();
+            let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+            let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+            let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
             let left_handle = create_relation(
                 &mut tx,
                 input_handle("bl", vec![col("k", ColType::Int)], vec![]),
                 KeyspaceKind::Facts,
-            )
-            .unwrap();
+            )?;
             let right_handle = create_relation(
                 &mut tx,
                 input_handle(
@@ -1514,8 +1487,7 @@ mod tests {
                     vec![col("v", ColType::Int)],
                 ),
                 KeyspaceKind::Facts,
-            )
-            .unwrap();
+            )?;
             let mut expected_matches = 0usize;
             for i in 0..n {
                 let k = match i64::try_from(i) {
@@ -1529,8 +1501,7 @@ mod tests {
                         &lrow,
                         kyzo_model::value::ValidityTs::from_raw(0),
                         sp(),
-                    )
-                    .unwrap();
+                    )?;
                 if k % 2 == 0 {
                     let rrow = vec![v(k), v(k * 10)];
                     right_handle
@@ -1539,37 +1510,33 @@ mod tests {
                             &rrow,
                             kyzo_model::value::ValidityTs::from_raw(0),
                             sp(),
-                        )
-                        .unwrap();
+                        )?;
                     expected_matches += 1;
                 }
             }
-            tx.commit().unwrap();
+            tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
-            let rtx = db.read_tx().unwrap();
+            let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
             // Right side's join column carries its own symbol (`k2`), per the
             // compiler-guaranteed duplicate-free-bindings invariant.
-            let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)
-                .unwrap()
+            let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)?
                 .join(
                     RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)
-                        .unwrap(),
+                        ?,
                     vec![sym("k")],
                     vec![sym("k2")],
                     sp(),
-                )
-                .unwrap();
-            ra.fill_binding_indices_and_compile().unwrap();
+                )?;
+            ra.fill_binding_indices_and_compile()?;
             let stores = no_stores();
 
-            let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)
-                .unwrap()
-                .map(Result::unwrap)
-                .collect();
+            let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
+                .collect::<Result<Vec<_>>>()?;
             // Judged against the independently accumulated analytic count,
             // never against a second run of the same machine.
             assert_eq!(got.len(), expected_matches, "n={n}: wrong match count");
         }
+        Ok(())
     }
 
     /// The same shape, but with `to_eliminate` covering one column from
@@ -1577,10 +1544,10 @@ mod tests {
     /// `push_joined_row`'s elimination must drop exactly those two
     /// positions on both paths alike.
     #[test]
-    fn general_join_batched_with_eliminate_indices() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn general_join_batched_with_eliminate_indices() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let left_handle = create_relation(
             &mut tx,
             input_handle(
@@ -1589,8 +1556,7 @@ mod tests {
                 vec![col("extra", ColType::Int)],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let right_handle = create_relation(
             &mut tx,
             input_handle(
@@ -1599,8 +1565,7 @@ mod tests {
                 vec![col("v", ColType::Int)],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         for k in 1..=5i64 {
             let lrow = vec![v(k), v(k * 100)];
             left_handle
@@ -1609,8 +1574,7 @@ mod tests {
                     &lrow,
                     kyzo_model::value::ValidityTs::from_raw(0),
                     sp(),
-                )
-                .unwrap();
+                )?;
             let rrow = vec![v(k), v(k + 1000)];
             right_handle
                 .put_fact(
@@ -1618,16 +1582,15 @@ mod tests {
                     &rrow,
                     kyzo_model::value::ValidityTs::from_raw(0),
                     sp(),
-                )
-                .unwrap();
+                )?;
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
         let left =
-            RelAlgebra::relation(vec![sym("k"), sym("extra")], left_handle, sp(), None).unwrap();
+            RelAlgebra::relation(vec![sym("k"), sym("extra")], left_handle, sp(), None)?;
         let right =
-            RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None).unwrap();
+            RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)?;
         let mut ra = RelAlgebra::Join(Box::new(InnerJoin {
             left,
             right,
@@ -1639,18 +1602,17 @@ mod tests {
             span: sp(),
             capture_right_as_premise: false,
         }));
-        ra.fill_binding_indices_and_compile().unwrap();
+        ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
 
-        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
+            .collect::<Result<Vec<_>>>()?;
         let expected: Vec<Tuple> = (1..=5i64)
             .map(|k| vec![v(k), v(k + 1000)])
             .map(Tuple::from_vec)
             .collect();
         assert_eq!(got, expected, "eliminate_indices: wrong surviving columns");
+        Ok(())
     }
 
     /// Delta threading: the join's right side is a `TempStore` whose delta
@@ -1659,22 +1621,22 @@ mod tests {
     /// BOTH paths alike, proving `prefix_join_batched` threads `delta_rule`
     /// exactly as `TempStoreRA::prefix_join` does (`scan_epoch`).
     #[test]
-    fn general_join_batched_delta_threading_matches_iterator() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let rtx = db.read_tx().unwrap();
+    fn general_join_batched_delta_threading_matches_iterator() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
 
         let mut store = EpochStore::new_normal(2);
         let mut baseline = RegularTempStore::new();
         baseline.put(Tuple::from_vec(vec![v(0), DataValue::from("a")]));
         baseline.put(Tuple::from_vec(vec![v(1), DataValue::from("b")]));
-        store.merge_in(baseline.wrap(), &mut ()).unwrap();
+        store.merge_in(baseline.wrap(), &mut ())?;
         // First merge into an empty total swaps the whole store in (the
         // `use_total_for_delta` fast path) — so this second merge is the
         // one that actually narrows the delta to what's fresh.
         let mut fresh = RegularTempStore::new();
         fresh.put(Tuple::from_vec(vec![v(2), DataValue::from("c")]));
-        store.merge_in(fresh.wrap(), &mut ()).unwrap();
+        store.merge_in(fresh.wrap(), &mut ())?;
         assert!(store.has_delta(), "the second merge must have a delta");
 
         let storage_key = entry();
@@ -1697,28 +1659,25 @@ mod tests {
             span: sp(),
         });
         let mut ra = left
-            .join(right, vec![sym("k")], vec![sym("k2")], sp())
-            .unwrap();
-        ra.fill_binding_indices_and_compile().unwrap();
+            .join(right, vec![sym("k")], vec![sym("k2")], sp())?;
+        ra.fill_binding_indices_and_compile()?;
 
         // Sanity: against the TOTAL (no delta_rule), every left row matches.
-        let total_it: Vec<Tuple> = rows_of(&ra, &rtx, &stores)
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let total_it: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(total_it.len(), 3, "the total must join all three keys");
 
         // Against the DELTA, only key 2 (this epoch's fresh row) may join.
         let it: Vec<Tuple> = ra
-            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF, false)
-            .unwrap()
-            .map(Result::unwrap)
+            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF, false)?
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
             .flat_map(Batch::into_rows)
             .collect();
         let ba: Vec<Tuple> = ra
-            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF, false)
-            .unwrap()
-            .map(Result::unwrap)
+            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF, false)?
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
             .flat_map(Batch::into_rows)
             .collect();
         assert_eq!(it, ba, "delta-threaded batched join diverged from iterator");
@@ -1727,6 +1686,7 @@ mod tests {
             vec![Tuple::from_vec(vec![v(2), v(2), DataValue::from("c")])],
             "delta threading must narrow the join to the fresh row only"
         );
+        Ok(())
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1745,16 +1705,15 @@ mod tests {
     /// column): segments ON and OFF must produce the identical row stream,
     /// and both must equal the hand-computed join.
     #[test]
-    fn stored_point_lookup_join_segments_match_oracle_and_storage() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn stored_point_lookup_join_segments_match_oracle_and_storage() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let left_handle = create_relation(
             &mut tx,
             input_handle("plj_l", vec![col("k", ColType::Int)], vec![]),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let right_handle = create_relation(
             &mut tx,
             input_handle(
@@ -1763,8 +1722,7 @@ mod tests {
                 vec![col("v", ColType::Int)],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         // Past one batch boundary, so a served segment must also resume
         // correctly across output-batch edges, not just within one.
         let n = BATCH_ROWS + 37;
@@ -1775,44 +1733,36 @@ mod tests {
                 Err(_gt_i64) => continue,
             };
             left_handle
-                .put_fact(&mut tx, &[v(k)], ValidityTs::from_raw(0), sp())
-                .unwrap();
+                .put_fact(&mut tx, &[v(k)], ValidityTs::from_raw(0), sp())?;
             if k % 3 == 0 {
                 right_handle
-                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::from_raw(0), sp())
-                    .unwrap();
+                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::from_raw(0), sp())?;
                 expected.push(Tuple::from_vec(vec![v(k), v(k), v(k * 10)]));
             }
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
-        let rtx = db.read_tx().unwrap();
-        let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)
-            .unwrap()
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
+        let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)?
             .join(
-                RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None).unwrap(),
+                RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)?,
                 vec![sym("k")],
                 vec![sym("k2")],
                 sp(),
-            )
-            .unwrap();
-        ra.fill_binding_indices_and_compile().unwrap();
+            )?;
+        ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
 
-        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(
             off, expected,
             "storage probe diverged from hand-computed join"
         );
 
         let engine = SegmentEngine::new();
-        let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(
             on, expected,
             "segment-served point-lookup probe diverged from hand-computed join"
@@ -1821,6 +1771,7 @@ mod tests {
             on, off,
             "segment path must be byte-identical to storage path"
         );
+        Ok(())
     }
 
     /// The plain-prefix probe (right relation's key is TWO columns, the
@@ -1830,16 +1781,15 @@ mod tests {
     /// stream, in the identical (key) order, and both must equal the
     /// hand-computed cross join.
     #[test]
-    fn stored_prefix_join_segments_match_oracle_and_storage() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn stored_prefix_join_segments_match_oracle_and_storage() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let left_handle = create_relation(
             &mut tx,
             input_handle("ppj_l", vec![col("z", ColType::Int)], vec![]),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let right_handle = create_relation(
             &mut tx,
             input_handle(
@@ -1848,52 +1798,43 @@ mod tests {
                 vec![],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         // n left keys, each with a handful of right neighbours at
         // increasing width — past one batch boundary in total match count.
         let n = 200;
         let mut expected: Vec<Tuple> = Vec::new();
         for z in 0..n {
             left_handle
-                .put_fact(&mut tx, &[v(z)], ValidityTs::from_raw(0), sp())
-                .unwrap();
+                .put_fact(&mut tx, &[v(z)], ValidityTs::from_raw(0), sp())?;
             for w in 0..(z % 7) {
                 right_handle
-                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())
-                    .unwrap();
+                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())?;
                 expected.push(Tuple::from_vec(vec![v(z), v(z), v(w)]));
             }
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
-        let rtx = db.read_tx().unwrap();
-        let mut ra = RelAlgebra::relation(vec![sym("z")], left_handle, sp(), None)
-            .unwrap()
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
+        let mut ra = RelAlgebra::relation(vec![sym("z")], left_handle, sp(), None)?
             .join(
-                RelAlgebra::relation(vec![sym("z2"), sym("w")], right_handle, sp(), None).unwrap(),
+                RelAlgebra::relation(vec![sym("z2"), sym("w")], right_handle, sp(), None)?,
                 vec![sym("z")],
                 vec![sym("z2")],
                 sp(),
-            )
-            .unwrap();
-        ra.fill_binding_indices_and_compile().unwrap();
+            )?;
+        ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
 
-        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(
             off, expected,
             "storage probe diverged from hand-computed join"
         );
 
         let engine = SegmentEngine::new();
-        let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
+        let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(
             on, expected,
             "segment-served prefix probe diverged from hand-computed join"
@@ -1902,6 +1843,7 @@ mod tests {
             on, off,
             "segment path must be byte-identical to storage path"
         );
+        Ok(())
     }
 
     /// DIAGNOSTIC, not a correctness assertion: reproduces issue #75's
@@ -1919,10 +1861,10 @@ mod tests {
     /// `cargo test -p kyzo --release exec::op::tests::stored_prefix_join_segment_probe_cost_vs_storage -- --ignored --nocapture`
     #[test]
     #[ignore = "cost probe; run explicitly to compare segment vs storage prefix-join cost"]
-    fn stored_prefix_join_segment_probe_cost_vs_storage() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn stored_prefix_join_segment_probe_cost_vs_storage() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         // No left relation: the left side is synthetic probe rows fed
         // straight in, below — only the probed (right) relation needs to
         // exist in storage.
@@ -1934,19 +1876,17 @@ mod tests {
                 vec![],
             ),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         const N_NODES: i64 = 2000;
         const M_EDGES: i64 = 6000;
         for i in 0..M_EDGES {
             let z = i % N_NODES;
             let w = (i * 7 + 3) % N_NODES;
             right_handle
-                .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())
-                .unwrap();
+                .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())?;
         }
-        tx.commit().unwrap();
-        let rtx = db.read_tx().unwrap();
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
 
         const N_PROBES: usize = 200_000;
         let probe_rows: Vec<Tuple> = (0..N_PROBES)
@@ -1987,10 +1927,9 @@ mod tests {
                 Segments::OFF,
                 false,
                 false,
-            )
-            .unwrap()
+            )?
         {
-            n_rows += b.unwrap().len();
+            n_rows += b?.len();
         }
         let nanos_f64 = |ns: u128| {
             let u = match u64::try_from(ns) {
@@ -2017,10 +1956,9 @@ mod tests {
                 segments,
                 false,
                 false,
-            )
-            .unwrap()
+            )?
         {
-            b.unwrap();
+            let _ = b?;
         }
         let t1 = std::time::Instant::now();
         let mut n_rows_seg = 0usize;
@@ -2033,10 +1971,9 @@ mod tests {
                 segments,
                 false,
                 false,
-            )
-            .unwrap()
+            )?
         {
-            n_rows_seg += b.unwrap().len();
+            n_rows_seg += b?.len();
         }
         let segment_ns_per_probe =
             nanos_f64(t1.elapsed().as_nanos()) / crate::exec::fold::sketch::usize_to_f64(N_PROBES);
@@ -2047,6 +1984,7 @@ mod tests {
              speedup={:.2}x",
             storage_ns_per_probe / segment_ns_per_probe
         );
+        Ok(())
     }
 
     /// A stream/decode error met DURING accumulation must not outrank an
@@ -2054,7 +1992,7 @@ mod tests {
     /// decode and predicate per row, and the batched path must report the
     /// identical first failure (hostile-review reproducer).
     #[test]
-    fn batched_filter_reports_earlier_predicate_error_before_stream_error() {
+    fn batched_filter_reports_earlier_predicate_error_before_stream_error() -> Result<()> {
         use kyzo_model::program::op::OP_GT;
         let gt_zero = Expr::Apply {
             op: OP_GT,
@@ -2097,10 +2035,11 @@ mod tests {
                 }
             }
         }
-        let err = saw_error.expect("the stream errors");
+        let err = saw_error.ok_or_else(|| miette!("the stream errors"))?;
         assert!(
             !err.contains("simulated decode error"),
             "the LATER stream error must not outrank the earlier predicate poison: {err}"
         );
+        Ok(())
     }
 }
