@@ -240,7 +240,7 @@ pub fn parse_expressions(
         KyzoScriptParser::parse(Rule::expression_script, src).map_err(pest_to_parse_error)?,
         "an expression_script root",
     )?;
-    let expr_pair = parsed.children().expect("the expression")?;
+    let expr_pair = parsed.children().need("the expression")?;
     expr::build_expr(expr_pair, param_pool)
 }
 
@@ -278,7 +278,7 @@ pub fn parse_type(src: &str) -> Result<crate::schema::NullableColType> {
         KyzoScriptParser::parse(Rule::col_type_with_term, src).map_err(pest_to_parse_error)?,
         "a col_type_with_term root",
     )?;
-    let type_pair = parsed.children().expect("the column type")?;
+    let type_pair = parsed.children().need("the column type")?;
     schema::parse_nullable_type(type_pair)
 }
 
@@ -359,7 +359,7 @@ pub(crate) struct GrammarChildren<'a> {
 impl<'a> GrammarChildren<'a> {
     /// The next child, which the grammar guarantees to exist here.
     /// `expected` names it for the drift diagnostic.
-    pub(crate) fn expect(&mut self, expected: &'static str) -> Result<Pair<'a>> {
+    pub(crate) fn need(&mut self, expected: &'static str) -> Result<Pair<'a>> {
         self.inner.next().ok_or_else(|| {
             GrammarShapeError {
                 expected,
@@ -371,14 +371,14 @@ impl<'a> GrammarChildren<'a> {
     }
 
     /// The next `N` children at once, each named for diagnostics:
-    /// `let [k, v] = pair.children().expect_n(["a key", "a value"])?;`
-    pub(crate) fn expect_n<const N: usize>(
+    /// `let [k, v] = pair.children().need_n(["a key", "a value"])?;`
+    pub(crate) fn need_n<const N: usize>(
         &mut self,
         expected: [&'static str; N],
     ) -> Result<[Pair<'a>; N]> {
         let mut out = Vec::with_capacity(N);
         for what in expected {
-            out.push(self.expect(what)?);
+            out.push(self.need(what)?);
         }
         match out.try_into() {
             Ok(arr) => Ok(arr),

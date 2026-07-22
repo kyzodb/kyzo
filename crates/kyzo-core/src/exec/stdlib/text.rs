@@ -138,7 +138,9 @@ pub(crate) fn op_regex_replace_all(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
             compile_regex_value(r)?.replace_all(s, rp).into_owned(),
         )),
-        (data_value_any!(), data_value_any!(), data_value_any!()) => bail!("'regex_replace' requires strings"),
+        (data_value_any!(), data_value_any!(), data_value_any!()) => {
+            bail!("'regex_replace_all' requires strings")
+        }
     }
 }
 

@@ -592,7 +592,7 @@ fn build_term(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<FtsE
 fn build_phrase(pair: Pair<'_>) -> Result<FtsLiteral> {
     let span = pair.extract_span();
     let mut inner = pair.children();
-    let kernel = inner.expect("the phrase kernel")?;
+    let kernel = inner.need("the phrase kernel")?;
     let core_text = match kernel.as_rule() {
         Rule::fts_phrase_group => SmartString::from(kernel.as_str().trim()),
         Rule::quoted_string | Rule::s_quoted_string | Rule::raw_string => parse_string(kernel)?,
@@ -604,7 +604,7 @@ fn build_phrase(pair: Pair<'_>) -> Result<FtsLiteral> {
         match pair.as_rule() {
             Rule::fts_prefix_marker => is_prefix = true,
             Rule::fts_booster => {
-                let boosted = pair.children().expect("the booster value")?;
+                let boosted = pair.children().need("the booster value")?;
                 match boosted.as_rule() {
                     Rule::dot_float => {
                         let span = boosted.extract_span();

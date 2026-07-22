@@ -86,7 +86,7 @@ fn parse_imperative_stmt(
                     Rule::query_script_inner => {
                         let mut src = p.children();
                         let prog = parse_query(
-                            src.expect("the returned query")?.into_inner(),
+                            src.need("the returned query")?.into_inner(),
                             param_pool,
                             cur_vld,
                         )?;
@@ -104,7 +104,7 @@ fn parse_imperative_stmt(
         Rule::if_chain | Rule::if_not_chain => {
             let negated = pair.as_rule() == Rule::if_not_chain;
             let mut inner = pair.children();
-            let condition = inner.expect("the condition")?;
+            let condition = inner.need("the condition")?;
             let cond = match condition.as_rule() {
                 Rule::underscore_ident => {
                     QueryOrRelation::Relation(SmartString::from(condition.as_str()))
@@ -112,7 +112,7 @@ fn parse_imperative_stmt(
                 Rule::imperative_clause => {
                     let mut src = condition.children();
                     let prog = parse_query(
-                        src.expect("the condition query")?.into_inner(),
+                        src.need("the condition query")?.into_inner(),
                         param_pool,
                         cur_vld,
                     )?;
@@ -122,7 +122,7 @@ fn parse_imperative_stmt(
                 _other => return Err(unexpected("an if-condition", &condition)),
             };
             let then_branch =
-                parse_stmt_children(inner.expect("the then-branch")?, param_pool, cur_vld)?;
+                parse_stmt_children(inner.need("the then-branch")?, param_pool, cur_vld)?;
             let else_branch = match inner.next() {
                 None => Vec::new(),
                 Some(rest) => parse_stmt_children(rest, param_pool, cur_vld)?,
@@ -137,10 +137,10 @@ fn parse_imperative_stmt(
         Rule::loop_block => {
             let mut inner = pair.children();
             let mut mark = None;
-            let mut nxt = inner.expect("the loop label or body")?;
+            let mut nxt = inner.need("the loop label or body")?;
             if nxt.as_rule() == Rule::ident {
                 mark = Some(SmartString::from(nxt.as_str()));
-                nxt = inner.expect("the loop body")?;
+                nxt = inner.need("the loop body")?;
             }
             let body = parse_imperative_block(nxt, param_pool, cur_vld)?;
             ImperativeStmt::Loop { label: mark, body }
@@ -148,14 +148,14 @@ fn parse_imperative_stmt(
         Rule::temp_swap => {
             let [left, right] = pair
                 .children()
-                .expect_n(["the left relation", "the right relation"])?;
+                .need_n(["the left relation", "the right relation"])?;
             ImperativeStmt::TempSwap {
                 left: SmartString::from(left.as_str()),
                 right: SmartString::from(right.as_str()),
             }
         }
         Rule::debug_stmt => {
-            let name_p = pair.children().expect("the relation to debug")?;
+            let name_p = pair.children().need("the relation to debug")?;
             ImperativeStmt::TempDebug {
                 temp: SmartString::from(name_p.as_str()),
             }
@@ -163,7 +163,7 @@ fn parse_imperative_stmt(
         Rule::imperative_sysop => {
             let mut src = pair.children();
             let sysop = parse_sys(
-                src.expect("the system operation")?.into_inner(),
+                src.need("the system operation")?.into_inner(),
                 param_pool,
                 cur_vld,
             )?;
@@ -174,16 +174,16 @@ fn parse_imperative_stmt(
         }
         Rule::imperative_clause => {
             let mut src = pair.children();
-            let prog = parse_query(src.expect("the query")?.into_inner(), param_pool, cur_vld)?;
+            let prog = parse_query(src.need("the query")?.into_inner(), param_pool, cur_vld)?;
             let store_as = src.next().map(|p| SmartString::from(p.as_str().trim()));
             ImperativeStmt::Program {
                 prog: ImperativeStmtClause { prog, store_as },
             }
         }
         Rule::ignore_error_script => {
-            let pair = pair.children().expect("the guarded clause")?;
+            let pair = pair.children().need("the guarded clause")?;
             let mut src = pair.children();
-            let prog = parse_query(src.expect("the query")?.into_inner(), param_pool, cur_vld)?;
+            let prog = parse_query(src.need("the query")?.into_inner(), param_pool, cur_vld)?;
             let store_as = src.next().map(|p| SmartString::from(p.as_str().trim()));
             ImperativeStmt::IgnoreErrorProgram {
                 prog: ImperativeStmtClause { prog, store_as },

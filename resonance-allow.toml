@@ -146,10 +146,17 @@ citation = "Expr walkers: collect_bindings vs do_binding_indices — one collect
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@448",
-  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@452",
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@450",
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@454",
 ]
 citation = "stratified_magic_compile: nested map closures over strata then (symbol, body) — Rules vs Fixed arms of MagicRulesOrFixed. Line-adjacent closures of one compile pass, not two compilers. Detector pairs the map layers; independence is the Rules/Fixed dispatch inside."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/exec/stdlib/text.rs::op_regex_replace",
+  "crates/kyzo-core/src/exec/stdlib/text.rs::op_regex_replace_all",
+]
+citation = "deliberate twin wrappers over regex crate, differ in the one call"
 
 [[copy_detector]]
 members = [

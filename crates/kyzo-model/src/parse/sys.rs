@@ -328,7 +328,7 @@ pub(crate) fn parse_sys(
         Rule::compact_op => SysScript::Compact,
         Rule::running_op => SysScript::ListRunning,
         Rule::kill_op => {
-            let i_expr = inner.children().expect("the process id expression")?;
+            let i_expr = inner.children().need("the process id expression")?;
             let span = i_expr.extract_span();
             let i_val = build_expr(i_expr, param_pool)?;
             let i_val = i_val.eval_to_const()?;
@@ -341,7 +341,7 @@ pub(crate) fn parse_sys(
             let prog = parse_query(
                 inner
                     .children()
-                    .expect("the query to explain")?
+                    .need("the query to explain")?
                     .into_inner(),
                 param_pool,
                 cur_vld,
@@ -350,7 +350,7 @@ pub(crate) fn parse_sys(
         }
         Rule::verify_op => {
             let prog = parse_query(
-                inner.children().expect("the query to verify")?.into_inner(),
+                inner.children().need("the query to verify")?.into_inner(),
                 param_pool,
                 cur_vld,
             )?;
@@ -358,7 +358,7 @@ pub(crate) fn parse_sys(
         }
         Rule::describe_relation_op => {
             let mut inner = inner.children();
-            let rels_p = inner.expect("the relation's name")?;
+            let rels_p = inner.need("the relation's name")?;
             let rel = Symbol::new(rels_p.as_str(), rels_p.extract_span());
             let description = match inner.next() {
                 None => Default::default(),
@@ -375,12 +375,12 @@ pub(crate) fn parse_sys(
             SysScript::RemoveRelation(rel)
         }
         Rule::list_columns_op => {
-            let rels_p = inner.children().expect("the relation's name")?;
+            let rels_p = inner.children().need("the relation's name")?;
             let rel = Symbol::new(rels_p.as_str(), rels_p.extract_span());
             SysScript::ListColumns(rel)
         }
         Rule::list_indices_op => {
-            let rels_p = inner.children().expect("the relation's name")?;
+            let rels_p = inner.children().need("the relation's name")?;
             let rel = Symbol::new(rels_p.as_str(), rels_p.extract_span());
             SysScript::ListIndices(rel)
         }
@@ -390,7 +390,7 @@ pub(crate) fn parse_sys(
                 .map(|pair| -> Result<(Symbol, Symbol)> {
                     let [old_p, new_p] = pair
                         .children()
-                        .expect_n(["the old relation name", "the new relation name"])?;
+                        .need_n(["the old relation name", "the new relation name"])?;
                     let rel = Symbol::new(old_p.as_str(), old_p.extract_span());
                     let new_rel = Symbol::new(new_p.as_str(), new_p.extract_span());
                     Ok((rel, new_rel))
@@ -400,7 +400,7 @@ pub(crate) fn parse_sys(
         }
         Rule::access_level_op => {
             let mut ps = inner.children();
-            let level_p = ps.expect("the access level")?;
+            let level_p = ps.need("the access level")?;
             let access_level = match level_p.as_str() {
                 "normal" => AccessLevel::Normal,
                 "protected" => AccessLevel::Protected,
@@ -416,13 +416,13 @@ pub(crate) fn parse_sys(
             SysScript::SetAccessLevel(rels, access_level)
         }
         Rule::trigger_relation_show_op => {
-            let rels_p = inner.children().expect("the relation's name")?;
+            let rels_p = inner.children().need("the relation's name")?;
             let rel = Symbol::new(rels_p.as_str(), rels_p.extract_span());
             SysScript::ShowTrigger(rel)
         }
         Rule::trigger_relation_op => {
             let mut src = inner.children();
-            let rels_p = src.expect("the relation's name")?;
+            let rels_p = src.need("the relation's name")?;
             let rel = Symbol::new(rels_p.as_str(), rels_p.extract_span());
             let mut puts = vec![];
             let mut rms = vec![];
@@ -430,7 +430,7 @@ pub(crate) fn parse_sys(
             for clause in src {
                 let [op, script] = clause
                     .children()
-                    .expect_n(["the trigger kind", "the trigger body"])?;
+                    .need_n(["the trigger kind", "the trigger body"])?;
                 let script_str = script.as_str();
                 // Validation parse only: the body is stored as source text and
                 // re-parsed at fire time (inherited convention). Parameters
@@ -446,12 +446,12 @@ pub(crate) fn parse_sys(
             SysScript::SetTriggers(rel, puts, rms, replaces)
         }
         Rule::constraint_op => {
-            let op = inner.children().expect("the constraint operation")?;
+            let op = inner.children().need("the constraint operation")?;
             match op.as_rule() {
                 Rule::constraint_create => {
                     let [name_p, script] = op
                         .children()
-                        .expect_n(["the constraint's name", "the constraint body"])?;
+                        .need_n(["the constraint's name", "the constraint body"])?;
                     let name = Symbol::new(name_p.as_str(), name_p.extract_span());
                     let script_str = script.as_str();
                     // Validation parse only: the body is stored as source
@@ -463,7 +463,7 @@ pub(crate) fn parse_sys(
                     SysScript::CreateConstraint(name, script_str.to_string())
                 }
                 Rule::constraint_drop => {
-                    let name_p = op.children().expect("the constraint's name")?;
+                    let name_p = op.children().need("the constraint's name")?;
                     SysScript::RemoveConstraint(Symbol::new(name_p.as_str(), name_p.extract_span()))
                 }
                 Rule::constraint_list => SysScript::ListConstraints,
@@ -471,13 +471,13 @@ pub(crate) fn parse_sys(
             }
         }
         Rule::lsh_idx_op => {
-            let inner = inner.children().expect("the index operation")?;
+            let inner = inner.children().need("the index operation")?;
             match inner.as_rule() {
                 Rule::index_create_adv => {
                     let create_span = inner.extract_span();
                     let mut inner = inner.children();
-                    let rel = inner.expect("the relation's name")?;
-                    let name = inner.expect("the index's name")?;
+                    let rel = inner.need("the relation's name")?;
+                    let name = inner.need("the index's name")?;
                     let mut filters = vec![];
                     let mut tokenizer = TokenizerSpec::simple(create_span);
                     let mut extractor: Option<Expr> = None;
@@ -499,7 +499,7 @@ pub(crate) fn parse_sys(
                     for opt_pair in inner {
                         let [opt_name, opt_val] = opt_pair
                             .children()
-                            .expect_n(["the option's name", "the option's value"])?;
+                            .need_n(["the option's name", "the option's value"])?;
                         let name_span = opt_name.extract_span();
                         let val_span = opt_val.extract_span();
                         match opt_name.as_str() {
@@ -682,13 +682,13 @@ pub(crate) fn parse_sys(
             }
         }
         Rule::fts_idx_op => {
-            let inner = inner.children().expect("the index operation")?;
+            let inner = inner.children().need("the index operation")?;
             match inner.as_rule() {
                 Rule::index_create_adv => {
                     let create_span = inner.extract_span();
                     let mut inner = inner.children();
-                    let rel = inner.expect("the relation's name")?;
-                    let name = inner.expect("the index's name")?;
+                    let rel = inner.need("the relation's name")?;
+                    let name = inner.need("the index's name")?;
                     let mut filters = vec![];
                     let mut tokenizer = TokenizerSpec::simple(create_span);
                     let mut extractor: Option<Expr> = None;
@@ -696,7 +696,7 @@ pub(crate) fn parse_sys(
                     for opt_pair in inner {
                         let [opt_name, opt_val] = opt_pair
                             .children()
-                            .expect_n(["the option's name", "the option's value"])?;
+                            .need_n(["the option's name", "the option's value"])?;
                         let name_span = opt_name.extract_span();
                         match opt_name.as_str() {
                             "extractor" => {
@@ -741,13 +741,13 @@ pub(crate) fn parse_sys(
             }
         }
         Rule::vec_idx_op => {
-            let inner = inner.children().expect("the index operation")?;
+            let inner = inner.children().need("the index operation")?;
             match inner.as_rule() {
                 Rule::index_create_adv => {
                     let create_span = inner.extract_span();
                     let mut inner = inner.children();
-                    let rel = inner.expect("the relation's name")?;
-                    let name = inner.expect("the index's name")?;
+                    let rel = inner.need("the relation's name")?;
+                    let name = inner.need("the index's name")?;
                     // The three required numeric fields are collected as
                     // `Option` (a user may omit them — that refusal is runtime)
                     // and validated below before the spec is built.
@@ -764,7 +764,7 @@ pub(crate) fn parse_sys(
                     for opt_pair in inner {
                         let [opt_name, opt_val] = opt_pair
                             .children()
-                            .expect_n(["the option's name", "the option's value"])?;
+                            .need_n(["the option's name", "the option's value"])?;
                         let opt_val_str = opt_val.as_str();
                         let name_span = opt_name.extract_span();
                         let val_span = opt_val.extract_span();
@@ -916,13 +916,13 @@ pub(crate) fn parse_sys(
             }
         }
         Rule::index_op => {
-            let inner = inner.children().expect("the index operation")?;
+            let inner = inner.children().need("the index operation")?;
             match inner.as_rule() {
                 Rule::index_create => {
                     let span = inner.extract_span();
                     let mut inner = inner.children();
-                    let rel = inner.expect("the relation's name")?;
-                    let name = inner.expect("the index's name")?;
+                    let rel = inner.need("the relation's name")?;
+                    let name = inner.need("the index's name")?;
                     let cols = inner
                         .map(|p| Symbol::new(p.as_str(), p.extract_span()))
                         .collect::<Vec<_>>();
@@ -955,7 +955,7 @@ pub(crate) fn parse_sys(
 fn parse_index_drop(inner: super::Pair<'_>) -> Result<SysScript> {
     let [rel, name] = inner
         .children()
-        .expect_n(["the relation's name", "the index's name"])?;
+        .need_n(["the relation's name", "the index's name"])?;
     Ok(SysScript::RemoveIndex(
         Symbol::new(rel.as_str(), rel.extract_span()),
         Symbol::new(name.as_str(), name.extract_span()),
