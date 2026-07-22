@@ -577,7 +577,11 @@ mod tests {
                 .into_iter()
                 .collect()
         );
-        assert!(sq.current(&sym("?"))?.is_empty());
+        assert!(
+            sq.current(&sym("?"))
+                .ok_or_else(|| miette!("current"))?
+                .is_empty()
+        );
 
         // The mirror: retracting r(1) makes q(1) hold again.
         db.run_script("?[x] <- [[1]] :rm r {x}", no_params())
@@ -974,7 +978,7 @@ mod tests {
         let cols = (0..arity)
             .map(|i| format!("k{i}: Int"))
             .collect::<Vec<_>>()
-            .join(", ")?;
+            .join(", ");
         db.run_script(&format!(":create {name} {{{cols} =>}}"), no_params())?;
         Ok(())
     }
