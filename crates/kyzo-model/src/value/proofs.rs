@@ -242,7 +242,7 @@ mod tests {
     /// big-endian. Pinned here so the unbounded campaign can prove
     /// unbounded ends are NOT this encoding of `i64::MIN`/`MAX`.
     fn asc_ts_key(ts: i64) -> [u8; 8] {
-        ((ts ^ i64::MIN) as u64).to_be_bytes()
+        (ts ^ i64::MIN).cast_unsigned().to_be_bytes()
     }
 
     fn pinned_tag_byte(tag: Tag) -> u8 {
