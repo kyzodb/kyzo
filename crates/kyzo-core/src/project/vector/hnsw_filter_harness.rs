@@ -1062,19 +1062,22 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
 
 
 /// Parameterized near/far cluster corpus (shared by Phase-2 and T13).
+/// Near half is the plain [`seeded_rows`] stream; far half is the same
+/// vectors translated by +40 on every component.
 fn near_far_cluster_corpus_n(dim: usize, n: i64) -> Result<(i64, i64, Vec<Tuple>)> {
     let half = n / 2;
-    let mut state = P2_CORPUS_SEED ^ 0xA5A5_5A5A_1234_9876;
-    let mut rows = Vec::new();
-    for k in 0..n {
-        let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-        let v = if k < half {
-            comps
-        } else {
-            comps.iter().map(|c| c + 40.0).collect()
+    let mut rows = seeded_rows(n, dim, P2_CORPUS_SEED)?;
+    let far_start = usize::try_from(half).unwrap_or(0);
+    for row in rows.iter_mut().skip(far_start) {
+        let comps = match row.get(1) {
+            Some(DataValue::Vector(v)) => v.to_f64s().into_iter().map(|c| c + 40.0).collect(),
+            _ => bail!("near_far: expected key,vector row"),
         };
-        let vec = Vector::try_new(v).ok_or_else(|| miette!("near_far: Vector::try_new refused"))?;
-        rows.push(Tuple::from_vec(vec![DataValue::from(k), DataValue::Vector(vec)]));
+        let vec =
+            Vector::try_new(comps).ok_or_else(|| miette!("near_far: Vector::try_new refused"))?;
+        *row.get_mut(1)
+            .ok_or_else(|| miette!("near_far: row missing vector slot"))? =
+            DataValue::Vector(vec);
     }
     Ok((n, half, rows))
 }
@@ -1134,6 +1137,58 @@ fn min_k_matches_disconnected_from_entry_region() -> Result<()> {
     Ok(())
 }
 
+/// Graph walk alone (no exact-scan fallback) must reach the far cluster
+/// when the filter excludes the entry neighbourhood. Shared by Phase-2
+/// routing proof and T13 ACORN adversary — one door, two corpus sizes.
+fn assert_graph_walk_alone_reaches_far_cluster(dim: usize, n: i64, label: &str) -> Result<()> {
+    let (_n, half, rows) = near_far_cluster_corpus_n(dim, n)?;
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
+    let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows)?;
+    let rtx = db.read_tx()?;
+    let q = seeded_query(dim, P2_QUERY_SEED)?;
+    let f = FilterSpec::AtLeast { threshold: half };
+    let matches = f.true_match_count(&rows);
+    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
+
+    let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
+    let params = knn_params_p2(P2_K, P2_EF);
+    let fb = f.filter_expr();
+    let hits = hnsw_knn_forced(
+        &rtx,
+        HnswPlanQuery {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            params: &params,
+            filter: &fb,
+        },
+        plan,
+        false,
+    )?;
+    let ekeys = keys_of(&hits)?;
+
+    assert_eq!(
+        hits.len(),
+        P2_K.min(matches),
+        "{label}: must seat min(k, matches) rows without fallback, got {}",
+        hits.len()
+    );
+    for k in &ekeys {
+        assert!(
+            *k >= half,
+            "{label}: returned key {k} is not in the far (matching) cluster"
+        );
+    }
+    assert_eq!(
+        count_recall(&ekeys, &truth, P2_K),
+        1.0,
+        "{label}: unaided graph walk must find the full disconnected match set"
+    );
+    Ok(())
+}
+
 /// The GRAPH WALK ITSELF (fallback disabled, ordinary — not artificially
 /// starved — beam width) must cross from the near cluster it enters through
 /// to the disconnected far cluster and find matches there. This isolates the
@@ -1146,46 +1201,7 @@ fn min_k_matches_disconnected_from_entry_region() -> Result<()> {
 /// with `fallback: false` removes that safety net so THIS test bites.
 #[test]
 fn graph_walk_alone_crosses_to_disconnected_matches_without_fallback() -> Result<()> {
-    let dim = 16;
-    let (_n, half, rows) = near_far_cluster_corpus_n(dim, P2_N)?;
-    let dir = tempfile::tempdir().into_diagnostic()?;
-    let db = new_fjall_storage(dir.path())?;
-    let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows)?;
-    let rtx = db.read_tx()?;
-    let q = seeded_query(dim, P2_QUERY_SEED)?;
-    let f = FilterSpec::AtLeast { threshold: half };
-    let matches = f.true_match_count(&rows);
-    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-
-    // An ordinary beam width (the selector would pick something in this
-    // ballpark at 50% selectivity) — no artificial starvation, so ANY
-    // shortfall here comes from the routing itself, not a beam too narrow to
-    // finish the job.
-    let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
-    let params = knn_params_p2(P2_K, P2_EF);
-    let fb = f.filter_expr();
-    let hits = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, plan, false)?;
-    let ekeys = keys_of(&hits)?;
-
-    assert_eq!(
-        hits.len(),
-        P2_K.min(matches),
-        "the graph walk alone (no fallback) must reach the disconnected far \
-         cluster and seat min(k, matches) rows, got {}",
-        hits.len()
-    );
-    for k in &ekeys {
-        assert!(
-            *k >= half,
-            "returned key {k} is not in the far cluster — the walk never crossed"
-        );
-    }
-    assert_eq!(
-        count_recall(&ekeys, &truth, P2_K),
-        1.0,
-        "the unaided graph walk must find the full disconnected match set"
-    );
-    Ok(())
+    assert_graph_walk_alone_reaches_far_cluster(16, P2_N, "graph_walk_alone")
 }
 
 /// Adversarial: zero matches. The filter rejects every row; the search must
@@ -1573,40 +1589,7 @@ fn t13_remove_committed(
 /// live only in a translated far cluster. Graph walk alone must FIND them.
 #[test]
 fn t13_acorn_entry_neighbourhood_excluded_still_finds_matches() -> Result<()> {
-    let dim = T13_DIM;
-    let (_n, half, rows) = near_far_cluster_corpus_n(dim, T13_N)?;
-    let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e:?}"))?;
-    let db = new_fjall_storage(dir.path()).map_err(|e| miette!("open store: {e:?}"))?;
-    let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows)?;
-    let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e:?}"))?;
-    let q = seeded_query(dim, P2_QUERY_SEED)?;
-    let f = FilterSpec::AtLeast { threshold: half };
-    let matches = f.true_match_count(&rows);
-    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-
-    let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
-    let params = knn_params_p2(P2_K, P2_EF);
-    let fb = f.filter_expr();
-    let hits = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, plan, false)?;
-    let ekeys = keys_of(&hits)?;
-
-    assert_eq!(
-        hits.len(),
-        P2_K.min(matches),
-        "ACORN: filter-excluded entry neighbourhood must still seat min(k, matches)"
-    );
-    for k in &ekeys {
-        assert!(
-            *k >= half,
-            "ACORN: returned key {k} is not in the far (matching) cluster"
-        );
-    }
-    assert_eq!(
-        count_recall(&ekeys, &truth, P2_K),
-        1.0,
-        "ACORN: unaided graph walk must find the full disconnected match set"
-    );
-    Ok(())
+    assert_graph_walk_alone_reaches_far_cluster(T13_DIM, T13_N, "ACORN")
 }
 
 /// Adversary 2 — delete-then-search never returns a deleted id through the
