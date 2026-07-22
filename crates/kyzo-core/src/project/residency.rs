@@ -215,4 +215,23 @@ mod tests {
         assert!(residency.should_build(relation, live));
         Ok(())
     }
+
+    /// Adversary: a poisoned marks mutex must refuse silent continue
+    /// (panic/expect), never into_inner and proceed.
+    #[test]
+    fn poisoned_marks_mutex_refuses_silent_continue() {
+        let residency = Residency::new();
+        let relation = RelationId::new(1).expect("below cap");
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = residency.marks.lock().unwrap();
+            panic!("deliberate poison");
+        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            residency.bump_before_commit(relation);
+        }));
+        assert!(
+            result.is_err(),
+            "poisoned mutex must panic, not into_inner and continue"
+        );
+    }
 }

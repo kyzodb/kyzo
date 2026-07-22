@@ -859,12 +859,11 @@ mod tests {
     }
 
     #[test]
-    fn encode_stream_refuses_a_name_count_mismatch() {
-        let batch = match ColumnBatch::from_rows(vec![Tuple::from_vec(vec![v_int(1)])], 1) {
-            Ok(b) => b,
-            Err(_e) => return,
-        };
+    fn encode_stream_refuses_a_name_count_mismatch() -> Result<()> {
+        let batch = ColumnBatch::from_rows(vec![Tuple::from_vec(vec![v_int(1)])], 1)
+            .expect("lawful width");
         let err = encode_stream(&batch, &[]).unwrap_err();
         assert!(err.to_string().contains("column names"));
+        Ok(())
     }
 }

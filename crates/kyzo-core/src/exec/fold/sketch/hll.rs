@@ -579,6 +579,32 @@ mod tests {
         Ok(())
     }
 
+    /// Adversary: rank from leading_zeros+1 always fits u8 — register values
+    /// must stay ≤ 65. A MAX costume would hide a broken rank path.
+    #[test]
+    fn add_hash_register_values_stay_within_rank_ceiling() {
+        let mut hll = HyperLogLog::<DEFAULT_M>::new();
+        for i in 0..5_000 {
+            hll.add(&val(i));
+        }
+        for h in [
+            0u64,
+            1,
+            u64::MAX,
+            0x8000_0000_0000_0000,
+            0xFFFF_FFFF_FFFF_FFFF,
+            0x0000_0000_0000_0001,
+        ] {
+            hll.add_hash(h);
+        }
+        for &r in hll.registers.iter() {
+            assert!(
+                r <= 65,
+                "register value {r} exceeds rank ceiling — MAX costume was a lie"
+            );
+        }
+    }
+
     /// PINNED-LITERAL sketch bytes for a fixed input and seed: format or
     /// hash drift fails loudly here. The digest of registers is asserted (a
     /// full 16384-byte register dump would be unwieldy), together with the

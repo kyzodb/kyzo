@@ -351,4 +351,59 @@ mod tests {
             );
         }
     }
+
+    /// Adversary: duplicate keys refuse at the plane door — never Ok, never
+    /// a Null costume standing in for refusal.
+    #[test]
+    fn json_obj_duplicate_key_refuses_not_null() {
+        let dup = JsonObj::new(vec![
+            ("k".into(), Json::Null),
+            ("k".into(), Json::Bool(false)),
+        ]);
+        assert!(dup.is_err(), "duplicate key must refuse, got {dup:?}");
+        assert!(
+            !matches!(dup, Ok(_)),
+            "duplicate key must not succeed as Ok/Null costume"
+        );
+    }
+
+    /// Adversary: a serde Number that is neither i64 nor f64 must surface as
+    /// Str (or refuse) — never invent Json::Num(0.0).
+    #[test]
+    fn json_from_serde_number_never_invents_zero_on_unparseable() {
+        let digits = "9".repeat(400);
+        let v: JsonValue = serde_json::from_str(&digits).expect("big int parses as Number");
+        let JsonValue::Number(n) = &v else {
+            panic!("expected Number, got {v:?}");
+        };
+        assert!(n.as_i64().is_none(), "fixture must not fit i64");
+        assert!(n.as_f64().is_none(), "fixture must not fit f64");
+        let j = json_from_serde(&v);
+        assert!(
+            matches!(j, Json::Str(_)),
+            "unparseable Number must become Str, never invent Num(0); got {j:?}"
+        );
+        assert!(
+            !matches!(j, Json::Num(_)),
+            "must not invent a Num costume (esp. zero); got {j:?}"
+        );
+        assert!(
+            !matches!(j, Json::Null),
+            "must not swallow as Null; got {j:?}"
+        );
+    }
+
+    /// Adversary: pins the JsonNum door the Null costume used to swallow.
+    #[test]
+    fn json_num_non_finite_refuses() {
+        assert_eq!(JsonNum::new(Num::float(f64::NAN)), Err(NonFiniteJsonNumber));
+        assert_eq!(
+            JsonNum::new(Num::float(f64::INFINITY)),
+            Err(NonFiniteJsonNumber)
+        );
+        assert_eq!(
+            JsonNum::new(Num::float(f64::NEG_INFINITY)),
+            Err(NonFiniteJsonNumber)
+        );
+    }
 }

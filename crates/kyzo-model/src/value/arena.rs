@@ -171,6 +171,13 @@ impl Span {
     fn end_off(self) -> usize {
         self.off.as_usize() + self.len.as_usize()
     }
+
+    /// Test-only mint of a forged span (including absurd chunk ids).
+    /// Production spans come only from [`Heap::push`].
+    #[cfg(test)]
+    fn forge_for_test(chunk: ChunkId, off: ByteOff, len: ByteLen) -> Span {
+        Span { chunk, off, len }
+    }
 }
 
 impl Heap {
@@ -1793,6 +1800,25 @@ mod tests {
     use miette::{IntoDiagnostic, Result, miette};
 
     use super::*;
+
+    /// Adversary: a forged non-zero span naming an unknown chunk must fail
+    /// closed (panic/expect) — never return empty-slice success.
+    #[test]
+    fn unknown_chunk_non_zero_span_fails_closed_not_empty() {
+        let heap = Heap::new();
+        let bad = Span::forge_for_test(
+            ChunkId::from_usize(999).expect("chunk id fits"),
+            ByteOff::ZERO,
+            ByteLen::from_usize(1).expect("len 1 fits"),
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = heap.get(bad);
+        }));
+        assert!(
+            result.is_err(),
+            "unknown chunk must fail closed, not return empty success"
+        );
+    }
 
     /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
     struct Rng(u64);

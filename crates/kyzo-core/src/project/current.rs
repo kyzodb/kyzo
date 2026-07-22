@@ -412,4 +412,24 @@ mod tests {
         ));
         Ok(())
     }
+
+    /// Adversary: a poisoned segments mutex must refuse silent continue
+    /// (panic/expect), never into_inner and proceed.
+    #[test]
+    fn poisoned_segments_mutex_refuses_silent_continue() {
+        let engine = SegmentEngine::new();
+        let relation = RelationId::new(1).expect("below cap");
+        let live = Generation::new(0);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = engine.segments.lock().unwrap();
+            panic!("deliberate poison");
+        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = engine.get(relation, live);
+        }));
+        assert!(
+            result.is_err(),
+            "poisoned mutex must panic, not into_inner and continue"
+        );
+    }
 }
