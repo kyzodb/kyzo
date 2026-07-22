@@ -231,6 +231,7 @@ impl CountMinSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use miette::Result;
     use std::collections::BTreeMap;
 
     fn val(i: i64) -> DataValue {
@@ -239,30 +240,41 @@ mod tests {
 
     /// A seeded Zipf-ish stream: element `i` appears `weight(i)` times, for a
     /// spread of frequencies to test the overestimate bound against.
-    fn build(distinct: i64, dims: (usize, usize)) -> (CountMinSketch, BTreeMap<i64, u64>, u64) {
-        let mut cms = CountMinSketch::new(dims.0, dims.1).unwrap();
+    fn build(distinct: i64, dims: (usize, usize)) -> Result<(CountMinSketch, BTreeMap<i64, u64>, u64)> {
+        let mut cms = CountMinSketch::new(dims.0, dims.1)?;
         let mut exact = BTreeMap::new();
         let mut total = 0u64;
         for i in 0..distinct {
-            let w = 1 + (match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 } * 2654435761 % 37);
+            let w = 1 + (match u64::try_from(i) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            } * 2654435761
+                % 37);
             cms.add(&val(i), w);
             *exact.entry(i).or_insert(0) += w;
             total += w;
         }
-        (cms, exact, total)
+        Ok((cms, exact, total))
     }
 
     /// ACCURACY vs EXACT: the estimate never underestimates, and the number
     /// of items whose overestimate exceeds `ε·N` stays within the `δ`
     /// failure probability. Dimensions and stream are pinned.
     #[test]
-    fn overestimate_bound_holds() {
+    fn overestimate_bound_holds() -> Result<()> {
         let (width, depth) = (2048usize, 5usize);
-        let (cms, exact, total) = build(5_000, (width, depth));
+        let (cms, exact, total) = build(5_000, (width, depth))?;
         let epsilon = std::f64::consts::E / crate::exec::fold::sketch::usize_to_f64(width);
         let delta = (-(crate::exec::fold::sketch::usize_to_f64(depth))).exp();
-        let bound = match kyzo_model::value::Num::float((epsilon * crate::exec::fold::sketch::u64_to_f64(total)).ceil()).to_int_coerced() {
-            Some(i) => match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+        let bound = match kyzo_model::value::Num::float(
+            (epsilon * crate::exec::fold::sketch::u64_to_f64(total)).ceil(),
+        )
+        .to_int_coerced()
+        {
+            Some(i) => match u64::try_from(i) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            },
             None => 0,
         };
 
@@ -279,24 +291,32 @@ mod tests {
         }
         // With probability >= 1-delta each item is within the bound; over
         // `exact.len()` items the expected violations are <= delta*len.
-        let allowed = match kyzo_model::value::Num::float((delta * crate::exec::fold::sketch::usize_to_f64(exact.len())).ceil()).to_int_coerced() {
-            Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+        let allowed = match kyzo_model::value::Num::float(
+            (delta * crate::exec::fold::sketch::usize_to_f64(exact.len())).ceil(),
+        )
+        .to_int_coerced()
+        {
+            Some(i) => match usize::try_from(i) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            },
             None => 0,
         } + 1;
         assert!(
             violations <= allowed,
             "{violations} items exceeded the eps*N bound (allowed {allowed})"
         );
+        Ok(())
     }
 
     /// MONOID LAWS for the merge: commutative, associative, identity. Merge
     /// then estimate must equal summing the streams.
     #[test]
-    fn merge_is_a_commutative_monoid() {
-        let a = build(300, (256, 4)).0;
-        let b = build(300, (256, 4)).0;
+    fn merge_is_a_commutative_monoid() -> Result<()> {
+        let a = build(300, (256, 4))?.0;
+        let b = build(300, (256, 4))?.0;
         // shift b's stream so it differs
-        let mut b2 = CountMinSketch::new(256, 4).unwrap();
+        let mut b2 = CountMinSketch::new(256, 4)?;
         for i in 1000..1300 {
             b2.add(&val(i), 3);
         }
@@ -304,25 +324,26 @@ mod tests {
 
         // Identity.
         let mut ai = a.clone();
-        ai.merge(&CountMinSketch::new(256, 4).unwrap()).unwrap();
+        ai.merge(&CountMinSketch::new(256, 4)?)?;
         assert_eq!(ai, a, "merge(a, empty) != a");
 
         // Commutative.
         let mut ab = a.clone();
-        ab.merge(&b).unwrap();
+        ab.merge(&b)?;
         let mut ba = b.clone();
-        ba.merge(&a).unwrap();
+        ba.merge(&a)?;
         assert_eq!(ab, ba, "merge not commutative");
 
         // Associative.
         let mut lhs = a.clone();
-        lhs.merge(&b).unwrap();
-        lhs.merge(&c).unwrap();
+        lhs.merge(&b)?;
+        lhs.merge(&c)?;
         let mut bc = b.clone();
-        bc.merge(&c).unwrap();
+        bc.merge(&c)?;
         let mut rhs = a.clone();
-        rhs.merge(&bc).unwrap();
+        rhs.merge(&bc)?;
         assert_eq!(lhs, rhs, "merge not associative");
+        Ok(())
     }
 
     /// NOT A MEET: the merge is deliberately not idempotent — `merge(a, a)`
@@ -330,22 +351,23 @@ mod tests {
     /// aggregation and must never be registered as a meet. Pinning this
     /// stops a future refactor from silently promoting it.
     #[test]
-    fn merge_is_not_idempotent() {
-        let a = build(100, (128, 3)).0;
+    fn merge_is_not_idempotent() -> Result<()> {
+        let a = build(100, (128, 3))?.0;
         let mut aa = a.clone();
-        aa.merge(&a).unwrap();
+        aa.merge(&a)?;
         assert_ne!(aa, a, "merge(a, a) == a: Count-Min must not be idempotent");
         // Concretely, the counter for a present item doubles.
         assert_eq!(aa.estimate(&val(0)), 2 * a.estimate(&val(0)));
+        Ok(())
     }
 
     /// Merging shard sketches equals sketching the concatenated stream —
     /// the property that makes Count-Min useful across partitions.
     #[test]
-    fn merge_equals_concatenated_stream() {
-        let mut left = CountMinSketch::new(512, 4).unwrap();
-        let mut right = CountMinSketch::new(512, 4).unwrap();
-        let mut whole = CountMinSketch::new(512, 4).unwrap();
+    fn merge_equals_concatenated_stream() -> Result<()> {
+        let mut left = CountMinSketch::new(512, 4)?;
+        let mut right = CountMinSketch::new(512, 4)?;
+        let mut whole = CountMinSketch::new(512, 4)?;
         for i in 0..500i64 {
             left.add(&val(i % 50), 1);
             whole.add(&val(i % 50), 1);
@@ -354,41 +376,44 @@ mod tests {
             right.add(&val(i % 70), 2);
             whole.add(&val(i % 70), 2);
         }
-        left.merge(&right).unwrap();
+        left.merge(&right)?;
         assert_eq!(left, whole, "merged shards != whole-stream sketch");
+        Ok(())
     }
 
     /// BYTE IDENTITY across fold orders: counter add is order-free, so the
     /// same multiset in any order gives byte-identical tables.
     #[test]
-    fn byte_identical_across_fold_orders() {
-        let mut asc = CountMinSketch::new(256, 4).unwrap();
+    fn byte_identical_across_fold_orders() -> Result<()> {
+        let mut asc = CountMinSketch::new(256, 4)?;
         for i in 0..1000i64 {
             asc.add(&val(i % 123), 1);
         }
-        let mut desc = CountMinSketch::new(256, 4).unwrap();
+        let mut desc = CountMinSketch::new(256, 4)?;
         for i in (0..1000i64).rev() {
             desc.add(&val(i % 123), 1);
         }
         assert_eq!(asc.to_bytes(), desc.to_bytes());
+        Ok(())
     }
 
     /// Round-trip through the stored form, and reject corruption.
     #[test]
-    fn serialization_round_trips_and_rejects_corruption() {
-        let (cms, _, _) = build(400, (128, 3));
-        assert_eq!(CountMinSketch::from_bytes(&cms.to_bytes()).unwrap(), cms);
+    fn serialization_round_trips_and_rejects_corruption() -> Result<()> {
+        let (cms, _, _) = build(400, (128, 3))?;
+        assert_eq!(CountMinSketch::from_bytes(&cms.to_bytes())?, cms);
         assert!(CountMinSketch::from_bytes(&[]).is_err());
         assert!(CountMinSketch::from_bytes(&[0x02, 3, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
         let mut short = cms.to_bytes();
         short.pop();
         assert!(CountMinSketch::from_bytes(&short).is_err());
+        Ok(())
     }
 
     /// PINNED-LITERAL fingerprint for a fixed input: hash-seed or layout
     /// drift fails loudly.
     #[test]
-    fn pinned_sketch_fingerprint() {
+    fn pinned_sketch_fingerprint() -> Result<()> {
         // INPUT ANCHOR. The sketch buckets each value by hashing its
         // CANONICAL encoding. Pin that encoding to the format law by hand
         // (value tag 0x10 = Tag::Num, then the Num key pinned by
@@ -417,12 +442,13 @@ mod tests {
         // width_le, counters_le...] produced by folding the anchored input
         // above through the (unchanged) Count-Min bucket hash. A drift in
         // the counter layout or the bucket hash changes it.
-        let mut cms = CountMinSketch::new(2048, 5).unwrap();
+        let mut cms = CountMinSketch::new(2048, 5)?;
         for i in 0..1000i64 {
             cms.add(&val(i), 1);
         }
         assert_eq!(cms.to_bytes()[..2], [FORMAT_TAG, 5]);
         let fingerprint = super::super::xxh64(&cms.to_bytes(), 0);
         assert_eq!(fingerprint, 0x73CC_4C21_CD68_9237);
+        Ok(())
     }
 }
