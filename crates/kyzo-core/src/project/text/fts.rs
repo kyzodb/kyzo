@@ -288,9 +288,9 @@ pub(crate) fn fts_put<T: WriteTx>(
     while let Some(token) = token_stream.next() {
         let term = SmartString::<LazyCompact>::from(&token.text);
         let (fr, to, position) = collector.entry(term).or_default();
-        fr.push(DataValue::from(token.offset_from() as i64));
-        to.push(DataValue::from(token.offset_to() as i64));
-        position.push(DataValue::from(token.position as i64));
+        fr.push(DataValue::from(i64::try_from(token.offset_from()).map_err(|_| miette!("token offset_from overflow"))?));
+        to.push(DataValue::from(i64::try_from(token.offset_to()).map_err(|_| miette!("token offset_to overflow"))?));
+        position.push(DataValue::from(i64::try_from(token.position).map_err(|_| miette!("token position overflow"))?));
         count += 1;
     }
 
@@ -428,7 +428,7 @@ fn literal_postings(
         let positions = positions
             .iter()
             .map(|p| {
-                p.get_int().map(|i| i as u32).ok_or_else(|| {
+                p.get_int().and_then(|i| u32::try_from(i).ok()).ok_or_else(|| {
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
                         row.as_slice(),
@@ -453,12 +453,31 @@ fn compute_score(
     booster: f64,
     score_kind: FtsScoreKind,
 ) -> f64 {
-    let tf = tf as f64;
+    let tf = match u32::try_from(tf) {
+        Ok(v) => f64::from(v),
+        Err(_gt_u32) => match i64::try_from(tf) {
+            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+            Err(_gt_i64) => 0.0,
+        },
+    };
     match score_kind {
         FtsScoreKind::Tf => tf * booster,
         FtsScoreKind::TfIdf => {
-            let n_found_docs = n_found_docs as f64;
-            let idf = (1.0 + (n_total as f64 - n_found_docs + 0.5) / (n_found_docs + 0.5)).ln();
+            let n_found_docs = match u32::try_from(n_found_docs) {
+        Ok(v) => f64::from(v),
+        Err(_gt_u32) => match i64::try_from(n_found_docs) {
+            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+            Err(_gt_i64) => 0.0,
+        },
+    };
+            let n_total_f = match u32::try_from(n_total) {
+        Ok(v) => f64::from(v),
+        Err(_gt_u32) => match i64::try_from(n_total) {
+            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+            Err(_gt_i64) => 0.0,
+        },
+    };
+            let idf = (1.0 + (n_total_f - n_found_docs + 0.5) / (n_found_docs + 0.5)).ln();
             tf * idf * booster
         }
     }

@@ -135,6 +135,34 @@ use kyzo_model::value::{DataValue, Tuple};
 /// is the UFCS alias into that door.
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
+
+
+pub(crate) fn f64_to_f32(f: f64) -> f32 {
+    f32::from_bits({
+        let a = f.to_bits();
+        let sign = match u32::try_from(a >> 63) { Ok(s) => s << 31, Err(_) => 0 };
+        let exp = match i32::try_from((a >> 52) & 0x7FF) { Ok(e) => e, Err(_) => 0 };
+        let frac = a & 0x000F_FFFF_FFFF_FFFF;
+        if exp == 0x7FF {
+            sign | 0x7F80_0000 | if frac != 0 { 0x0040_0000 } else { 0 }
+        } else if exp == 0 {
+            sign
+        } else {
+            let exp32 = exp - 1023 + 127;
+            if exp32 >= 0xFF {
+                sign | 0x7F80_0000
+            } else if exp32 <= 0 {
+                sign
+            } else {
+                let mant = frac >> 29;
+                let m32 = match u32::try_from(mant) { Ok(m) => m, Err(_) => 0 };
+                let e_bits = match u32::try_from(exp32) { Ok(e) => e << 23, Err(_) => 0 };
+                sign | e_bits | (m32 & 0x007F_FFFF)
+            }
+        }
+    })
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Sparse;
 
@@ -301,9 +329,9 @@ pub(crate) fn sparse_put<T: WriteTx>(
     let tail = posting_src_tail(base_key_len, tuple);
     for (dim, weight) in vector {
         let mut key = Tuple::with_capacity(1 + base_key_len);
-        key.push(DataValue::from(dim as i64));
+        key.push(DataValue::from(i64::from(dim)));
         key.extend(tail.as_slice().iter().cloned());
-        let val = [DataValue::from(weight as f64)];
+        let val = [DataValue::from(f64::from(weight))];
         let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
         tx.put(&key_bytes, &val_bytes)?;
@@ -340,7 +368,7 @@ pub(crate) fn sparse_del<T: WriteTx>(
     let tail = posting_src_tail(base_key_len, tuple);
     for (dim, _weight) in vector {
         let mut key = Tuple::with_capacity(1 + base_key_len);
-        key.push(DataValue::from(dim as i64));
+        key.push(DataValue::from(i64::from(dim)));
         key.extend(tail.as_slice().iter().cloned());
         let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         tx.del(&key_bytes)?;
@@ -387,7 +415,8 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
             row,
             IndexCorruptReason::SparseWeightNotFloat,
         ))
-    })? as f32;
+    });
+    let weight = f64_to_f32(weight);
     if !weight.is_finite() || weight < 0.0 {
         bail!(IndexRowCorrupt::new(
             idx_name,
@@ -510,7 +539,7 @@ fn sparse_search_body(
     // term to a given document).
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
-        let prefix = Tuple::from_vec(vec![DataValue::from(dim as i64)]);
+        let prefix = Tuple::from_vec(vec![DataValue::from(i64::from(dim))]);
         for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
             let row = row?;
             let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, row.as_slice())?;
@@ -558,7 +587,7 @@ fn sparse_search_body(
             ))
         })?;
         if matches!(params.bind_score, SparseBindScore::Append) {
-            cand.push(DataValue::from(score as f64));
+            cand.push(DataValue::from(f64::from(score)));
         }
         if let Some(code) = filter_code
             && !crate::exec::expr::eval_pred(code, &cand)?
@@ -683,7 +712,7 @@ mod tests {
             .map(|t| {
                 (
                     t[0].get_int().unwrap(),
-                    t.last().unwrap().get_float().unwrap() as f32,
+                    f64_to_f32(t.last().unwrap().get_float().unwrap()),
                 )
             })
             .collect()

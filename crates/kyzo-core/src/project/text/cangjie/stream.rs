@@ -48,12 +48,12 @@ impl<'a> CangjieTokenStream<'a> {
     /// address offsets). Position length is always 1 (upstream); the old
     /// vendored stream used `result.len()` for every token.
     pub(crate) fn new(src: &'a str, result: Vec<&'a str>) -> Self {
-        let base = src.as_ptr() as usize;
+        let base = src.as_ptr().addr();
         let end = base + src.len();
         let result = result
             .into_iter()
             .map(|word| {
-                let word_start = word.as_ptr() as usize;
+                let word_start = word.as_ptr().addr();
                 let word_end = word_start + word.len();
                 assert!(
                     base <= word_start && word_end <= end,

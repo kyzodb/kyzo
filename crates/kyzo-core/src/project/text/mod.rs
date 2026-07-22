@@ -312,11 +312,19 @@ impl TokenizerConfig {
                     max_gram >= min_gram,
                     TokenizerBuildRefusal::NgramMaxBelowMin
                 );
-                Box::new(NgramTokenizer::new(
-                    min_gram as usize,
-                    max_gram as usize,
-                    prefix_only,
-                ))
+                let min_usize = match usize::try_from(min_gram) {
+                    Ok(v) => v,
+                    Err(_neg_or_overflow) => {
+                        return Err(TokenizerBuildRefusal::NgramMinTooSmall.into());
+                    }
+                };
+                let max_usize = match usize::try_from(max_gram) {
+                    Ok(v) => v,
+                    Err(_neg_or_overflow) => {
+                        return Err(TokenizerBuildRefusal::NgramMaxBelowMin.into());
+                    }
+                };
+                Box::new(NgramTokenizer::new(min_usize, max_usize, prefix_only))
             }
             "Cangjie" => {
                 let hmm = match self.args().get(1) {
@@ -367,7 +375,13 @@ impl TokenizerConfig {
                     .get_int()
                     .ok_or(TokenizerBuildRefusal::RemoveLongNotInt)?;
                 ensure!(limit > 0, NonPositiveRemoveLong(limit));
-                RemoveLongFilter::limit(limit as usize).into()
+                let limit_usize = match usize::try_from(limit) {
+                    Ok(v) => v,
+                    Err(_neg_or_overflow) => {
+                        return Err(NonPositiveRemoveLong(limit).into());
+                    }
+                };
+                RemoveLongFilter::limit(limit_usize).into()
             }
             "SplitCompoundWords" => {
                 let mut list_values = Vec::new();

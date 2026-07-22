@@ -95,7 +95,11 @@ impl From<PreTokenizedString> for PreTokenizedStream {
 impl TokenStream for PreTokenizedStream {
     fn advance(&mut self) -> bool {
         self.current_token += 1;
-        self.current_token < self.tokenized_string.tokens.len() as i64
+        let len = match i64::try_from(self.tokenized_string.tokens.len()) {
+            Ok(n) => n,
+            Err(_gt_i64) => i64::MAX,
+        };
+        self.current_token < len
     }
 
     fn token(&self) -> &Token {
@@ -103,7 +107,11 @@ impl TokenStream for PreTokenizedStream {
             self.current_token >= 0,
             "TokenStream not initialized. You should call advance() at least once."
         );
-        &self.tokenized_string.tokens[self.current_token as usize]
+        let idx = match usize::try_from(self.current_token) {
+            Ok(i) => i,
+            Err(_negative) => 0,
+        };
+        &self.tokenized_string.tokens[idx]
     }
 
     fn token_mut(&mut self) -> &mut Token {
@@ -111,7 +119,11 @@ impl TokenStream for PreTokenizedStream {
             self.current_token >= 0,
             "TokenStream not initialized. You should call advance() at least once."
         );
-        &mut self.tokenized_string.tokens[self.current_token as usize]
+        let idx = match usize::try_from(self.current_token) {
+            Ok(i) => i,
+            Err(_negative) => 0,
+        };
+        &mut self.tokenized_string.tokens[idx]
     }
 }
 

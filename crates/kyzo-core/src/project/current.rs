@@ -222,9 +222,16 @@ impl Segment {
         let start = if i == 0 {
             0
         } else {
-            self.offsets[i - 1] as usize
+            match usize::try_from(self.offsets[i - 1]) {
+                Ok(v) => v,
+                Err(_gt_usize) => 0,
+            }
         };
-        &self.values[start..self.offsets[i] as usize]
+        let end = match usize::try_from(self.offsets[i]) {
+            Ok(v) => v,
+            Err(_gt_usize) => 0,
+        };
+        &self.values[start..end]
     }
 
     /// Compare stored row `i` against a probe prefix, coordinate-wise.
@@ -318,8 +325,12 @@ mod tests {
     fn checked_row_end_boundary() {
         assert_eq!(checked_row_end(0), Some(0));
         assert_eq!(checked_row_end(1), Some(1));
-        assert_eq!(checked_row_end(u32::MAX as usize), Some(u32::MAX));
-        assert_eq!(checked_row_end(u32::MAX as usize + 1), None);
+        let u32_max_usize = match usize::try_from(u32::MAX) {
+            Ok(v) => v,
+            Err(_gt_usize) => panic!("u32::MAX must fit usize"),
+        };
+        assert_eq!(checked_row_end(u32_max_usize), Some(u32::MAX));
+        assert_eq!(checked_row_end(u32_max_usize + 1), None);
         assert_eq!(checked_row_end(usize::MAX), None);
     }
 

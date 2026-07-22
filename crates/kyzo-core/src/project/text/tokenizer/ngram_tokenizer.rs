@@ -325,8 +325,8 @@ const CODEPOINT_UTF8_WIDTH: [u8; 16] = [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2
 //
 // To do that we count the number of higher significant bits set to `1`.
 fn utf8_codepoint_width(b: u8) -> usize {
-    let higher_4_bits = (b as usize) >> 4;
-    CODEPOINT_UTF8_WIDTH[higher_4_bits] as usize
+    let higher_4_bits = usize::from(b) >> 4;
+    usize::from(CODEPOINT_UTF8_WIDTH[higher_4_bits])
 }
 
 #[cfg(test)]
@@ -358,7 +358,11 @@ mod tests {
         }
         // 1111xx
         for i in (128 | 64 | 32 | 16)..256 {
-            assert_eq!(utf8_codepoint_width(i as u8), 4);
+            let b = match u8::try_from(i) {
+                Ok(v) => v,
+                Err(_gt_u8) => continue,
+            };
+            assert_eq!(utf8_codepoint_width(b), 4);
         }
     }
 

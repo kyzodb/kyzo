@@ -663,6 +663,11 @@ impl LshParams {
     }
 
     fn false_negative_probability(threshold: f64, b: usize, r: usize) -> f64 {
+        let r_i32 = match i32::try_from(r) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        };
+        let b_f = usize_to_f64(b);
         let probability =
             |s| -> f64 { 1. - (1. - f64::powf(1. - f64::powi(s, r_i32), b_f)) };
         integrate(probability, threshold, 1.0, ALLOWED_INTEGRATE_ERR).integral

@@ -104,7 +104,7 @@ fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> V
         .map(|t| {
             (
                 t[0].get_int().unwrap(),
-                (t.last().unwrap().get_float().unwrap() as f32).to_bits(),
+                super::sparse::f64_to_f32(t.last().unwrap().get_float().unwrap()).to_bits(),
             )
         })
         .collect()
@@ -182,7 +182,7 @@ fn naive_dot_f64(docs: &[Doc], query: &[(u32, f32)]) -> Vec<(i64, f64)> {
         let mut score = 0.0f64;
         for &(qd, qw) in &q {
             if let Some(&dw) = dmap.get(&qd) {
-                score += qw as f64 * dw as f64;
+                score += f64::from(qw) * f64::from(dw);
             }
         }
         if score > 0.0 {
