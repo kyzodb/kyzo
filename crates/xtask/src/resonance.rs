@@ -620,9 +620,35 @@ fn run_unchecked_arith(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Er
     Ok(true)
 }
 
+/// Publish the per-pattern unconfessed counts as a one-line machine artifact
+/// (`crates/xtask/bs-counts.txt`, gitignored), written on EVERY gate run —
+/// pass or fail. This is the only count surface downstream tooling (prompt
+/// hooks, dashboards) may read; recounting the tree elsewhere would seat a
+/// second meter authority.
+fn write_bs_counts(
+    root: &std::path::Path,
+    violations: &[checks::bs_detector::Violation],
+) -> Result<(), anyhow::Error> {
+    let mut counts: std::collections::BTreeMap<&'static str, usize> =
+        std::collections::BTreeMap::new();
+    for v in violations {
+        *counts.entry(v.pattern).or_insert(0) += 1;
+    }
+    let mut pairs: Vec<(&'static str, usize)> = counts.into_iter().collect();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let mut line = String::new();
+    for (name, n) in &pairs {
+        line.push_str(&format!("{name}:{n} "));
+    }
+    line.push_str(&format!("= {} unconfessed\n", violations.len()));
+    std::fs::write(root.join("crates/xtask/bs-counts.txt"), line)
+        .map_err(|e| anyhow::anyhow!("writing crates/xtask/bs-counts.txt: {e}"))
+}
+
 fn run_bs_detector(ctx: &Ctx, out: &mut CheckOut) -> Result<bool, anyhow::Error> {
     out.header("== check: BS detector (banned shapes are zero-or-confessed) ==");
     let (violations, stale) = checks::bs_detector::check(&ctx.files, &ctx.allow);
+    write_bs_counts(&ctx.root, &violations)?;
     for v in &violations {
         out.violation(format!("{}:{} — [{}] {}", v.file, v.line, v.pattern, v.why));
     }
