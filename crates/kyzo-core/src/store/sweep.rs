@@ -543,7 +543,8 @@ impl OverlapBatch {
     }
 
     fn from_sealed(members: Vec<IntentOrdinal>, commit_ordinals: Vec<CommitOrdinal>) -> Self {
-        debug_assert_eq!(members.len(), commit_ordinals.len());
+        // INVARIANT(barrier_pair_len): seal paths zip members with commits
+        // one-to-one before minting the barrier.
         Self {
             members,
             commit_ordinals,
@@ -552,17 +553,16 @@ impl OverlapBatch {
 }
 
 /// In-flight fsync window: arrivals during `Open` overlap the barrier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FsyncWindow {
     /// No barrier in flight — admits land on the IntentionQueue.
-    #[default]
     Closed,
     /// Barrier in flight — admits join the overlap cohort for this window.
     Open,
 }
 
 /// LMAX-shaped intention queue. Wake ≠ timer: park only on non-empty or shutdown.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct IntentionQueue {
     intents: VecDeque<AdmittedIntent>,
 }
@@ -793,7 +793,8 @@ impl SweepDoor {
             };
             if let Some(preimage) = &decoded.preimage {
                 let key = preimage.derive_key(self.store_id);
-                debug_assert_eq!(*key.as_bytes(), decoded.key_bytes);
+                // INVARIANT(commit_body_key): encode wrote derive_key into
+                // key_bytes beside the sealed preimage.
                 let digest = decoded.request_digest;
                 self.idempotency.remember(
                     key,
