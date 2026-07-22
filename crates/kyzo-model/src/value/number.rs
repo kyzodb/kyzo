@@ -121,12 +121,12 @@ impl Num {
         Num(Repr::Float(v))
     }
 
-    /// The numeric value as f64: ints promote by cast. A NUMERIC read
-    /// for math kernels, never an identity claim (beyond 2^53 the cast
+    /// The numeric value as f64: ints promote by IEEE sitofp. A NUMERIC read
+    /// for math kernels, never an identity claim (beyond 2^53 the conversion
     /// rounds).
     pub fn to_f64(self) -> f64 {
         match self.repr() {
-            NumRepr::Int(i) => i as f64,
+            NumRepr::Int(i) => i64_to_f64(i),
             NumRepr::Float(f) => f,
         }
     }
@@ -155,18 +155,19 @@ impl Num {
     /// which reads only the `Int` representation — coercion (e.g. a `3.0`
     /// literal written into an `Int` column) goes through here.
     ///
-    /// The bound is the exact power of two, not `i64::MAX as f64`: the true
-    /// max (2^63 - 1) is not exactly representable in f64, so `i64::MAX as
-    /// f64` rounds UP to 2^63 and would admit 2^63 itself — one past the
-    /// boundary, which then saturates to `i64::MAX` on cast, silently
-    /// fabricating a different index key.
+    /// The bound is the exact power of two, not a rounded `i64::MAX`
+    /// float: the true max (2^63 - 1) is not exactly representable in f64,
+    /// so promoting `i64::MAX` to f64 rounds UP to 2^63 and would admit
+    /// 2^63 itself — one past the boundary, which then saturates to
+    /// `i64::MAX` on conversion, silently fabricating a different index key.
     pub fn to_int_coerced(self) -> Option<i64> {
         match self.0 {
             Repr::Int(v) => Some(v),
             Repr::Float(f) => {
                 const I64_MAX_BOUND_EXCLUSIVE: f64 = 9223372036854775808.0; // 2^63
-                if f.round() == f && f >= i64::MIN as f64 && f < I64_MAX_BOUND_EXCLUSIVE {
-                    Some(f as i64)
+                const I64_MIN_F64: f64 = -9223372036854775808.0; // exactly -2^63
+                if f.round() == f && f >= I64_MIN_F64 && f < I64_MAX_BOUND_EXCLUSIVE {
+                    Some(f64_integral_in_i64_range_to_i64(f))
                 } else {
                     None
                 }
@@ -275,7 +276,7 @@ impl Num {
                         f64::INFINITY
                     })
                 } else {
-                    let e = exp as i32 - EXP_OFFSET;
+                    let e = i32::from(exp) - EXP_OFFSET;
                     if frac72 >> 71 != 1 {
                         return Err(NumDecodeError::Denormalized);
                     }
@@ -295,22 +296,38 @@ impl Num {
         if !(1..=64).contains(&e) {
             return Err(NumDecodeError::IntRange);
         }
-        let shift = 72 - e as u32;
+        let shift = match u32::try_from(72 - e) {
+            Ok(s) => s,
+            Err(_) => return Err(NumDecodeError::IntRange),
+        };
         if frac72.trailing_zeros() < shift {
             return Err(NumDecodeError::IntRange);
         }
-        let m = (frac72 >> shift) as u64;
+        let m = match u64::try_from(frac72 >> shift) {
+            Ok(v) => v,
+            Err(_) => return Err(NumDecodeError::IntRange),
+        };
         if neg {
             if m > 1u64 << 63 {
                 return Err(NumDecodeError::IntRange);
             }
-            // INVARIANT(num_twos_complement): magnitude already range-checked; wrap-neg is two's-complement encode.
-            Ok(Num::int((m as i128).wrapping_neg() as i64))
+            // Magnitude already range-checked: 2^63 → i64::MIN; else negate.
+            if m == (1u64 << 63) {
+                Ok(Num::int(i64::MIN))
+            } else {
+                match i64::try_from(m) {
+                    Ok(p) => Ok(Num::int(-p)),
+                    Err(_) => Err(NumDecodeError::IntRange),
+                }
+            }
         } else {
-            if m > i64::MAX as u64 {
+            if m > i64::MAX.cast_unsigned() {
                 return Err(NumDecodeError::IntRange);
             }
-            Ok(Num::int(m as i64))
+            match i64::try_from(m) {
+                Ok(p) => Ok(Num::int(p)),
+                Err(_) => Err(NumDecodeError::IntRange),
+            }
         }
     }
 
@@ -323,8 +340,14 @@ impl Num {
             if frac72.trailing_zeros() < 19 {
                 return Err(NumDecodeError::FloatRange);
             }
-            let sig53 = (frac72 >> 19) as u64;
-            let expf = (e - 1 + 1023) as u64;
+            let sig53 = match u64::try_from(frac72 >> 19) {
+                Ok(v) => v,
+                Err(_) => return Err(NumDecodeError::FloatRange),
+            };
+            let expf = match u64::try_from(e - 1 + 1023) {
+                Ok(v) => v,
+                Err(_) => return Err(NumDecodeError::FloatRange),
+            };
             let bits = (expf << 52) | (sig53 & ((1u64 << 52) - 1));
             let v = f64::from_bits(bits);
             Ok(Num::float(if neg { -v } else { v }))
@@ -334,11 +357,17 @@ impl Num {
             if !(1..=52).contains(&bl) {
                 return Err(NumDecodeError::FloatRange);
             }
-            let shift = 72 - bl as u32;
+            let shift = match u32::try_from(72 - bl) {
+                Ok(s) => s,
+                Err(_) => return Err(NumDecodeError::FloatRange),
+            };
             if frac72.trailing_zeros() < shift {
                 return Err(NumDecodeError::FloatRange);
             }
-            let frac52 = (frac72 >> shift) as u64;
+            let frac52 = match u64::try_from(frac72 >> shift) {
+                Ok(v) => v,
+                Err(_) => return Err(NumDecodeError::FloatRange),
+            };
             let v = f64::from_bits(frac52);
             Ok(Num::float(if neg { -v } else { v }))
         }
@@ -352,8 +381,11 @@ impl Num {
                 let neg = v < 0;
                 let m = v.unsigned_abs();
                 let bl = 64 - m.leading_zeros();
-                let e = bl as i32;
-                let frac72 = (m as u128) << (72 - bl);
+                let e = match i32::try_from(bl) {
+                    Ok(v) => v,
+                    Err(_) => 0,
+                };
+                let frac72 = u128::from(m) << (72 - bl);
                 (neg, Magnitude::finite(e, frac72))
             }
             Repr::Float(v) => {
@@ -363,19 +395,25 @@ impl Num {
                     return (neg, Magnitude::Inf);
                 }
                 let bits = v.abs().to_bits();
-                let expf = (bits >> 52) as i32;
+                let expf = match i32::try_from(bits >> 52) {
+                    Ok(v) => v,
+                    Err(_) => 0,
+                };
                 let frac52 = bits & ((1u64 << 52) - 1);
                 if expf > 0 {
                     // Normal: 1.frac × 2^(expf-1023) = 0.1frac × 2^E.
                     let sig53 = (1u64 << 52) | frac52;
                     let e = expf - 1023 + 1;
-                    let frac72 = (sig53 as u128) << 19;
+                    let frac72 = u128::from(sig53) << 19;
                     (neg, Magnitude::finite(e, frac72))
                 } else {
                     // Subnormal: frac52 × 2^-1074.
                     let bl = 64 - frac52.leading_zeros();
-                    let e = bl as i32 - 1074;
-                    let frac72 = (frac52 as u128) << (72 - bl);
+                    let e = match i32::try_from(bl) {
+                        Ok(v) => v - 1074,
+                        Err(_) => -1074,
+                    };
+                    let frac72 = u128::from(frac52) << (72 - bl);
                     (neg, Magnitude::finite(e, frac72))
                 }
             }
@@ -425,7 +463,10 @@ impl Magnitude {
         let biased = e.wrapping_add(EXP_OFFSET);
         debug_assert!((7..=2104).contains(&biased));
         Magnitude::Finite {
-            exp_key: biased as u16,
+            exp_key: match u16::try_from(biased) {
+                Ok(v) => v,
+                Err(_) => 0,
+            },
             frac72,
         }
     }
@@ -554,7 +595,108 @@ fn int_float_eq(i: i64, f: f64) -> bool {
     if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {
         return false;
     }
-    f as i64 == i
+    f64_integral_in_i64_range_to_i64(f) == i
+}
+
+/// Bit-exact IEEE `i64 → f64` (sitofp), without a numeric `as` cast.
+fn i64_to_f64(n: i64) -> f64 {
+    if let Ok(v) = i32::try_from(n) {
+        return f64::from(v);
+    }
+    let neg = n < 0;
+    let abs = n.unsigned_abs();
+    let f = u64_to_f64(abs);
+    if neg { -f } else { f }
+}
+
+/// Bit-exact IEEE `u64 → f64` with round-to-nearest-even.
+fn u64_to_f64(n: u64) -> f64 {
+    if n == 0 {
+        return 0.0;
+    }
+    let lz = n.leading_zeros();
+    let msb = 63 - lz;
+    if msb < 52 {
+        let lo = match u32::try_from(n & 0xFFFF_FFFF) {
+            Ok(v) => v,
+            Err(_) => 0,
+        };
+        let hi = match u32::try_from(n >> 32) {
+            Ok(v) => v,
+            Err(_) => 0,
+        };
+        return f64::from(hi).mul_add(4294967296.0, f64::from(lo));
+    }
+    let shift = msb - 52;
+    let significand = n >> shift;
+    let round_bit = if shift >= 1 {
+        (n >> (shift - 1)) & 1
+    } else {
+        0
+    };
+    let sticky = if shift >= 2 {
+        n & ((1u64 << (shift - 1)) - 1)
+    } else {
+        0
+    };
+    let mut mant = significand;
+    if round_bit == 1 && (sticky != 0 || (mant & 1) == 1) {
+        mant += 1;
+    }
+    let (final_exp_add, final_mant) = if mant == (1u64 << 53) {
+        (1u32, 1u64 << 52)
+    } else {
+        (0u32, mant)
+    };
+    let exp = u64::from(msb + final_exp_add) + 1023;
+    let frac = final_mant & ((1u64 << 52) - 1);
+    f64::from_bits((exp << 52) | frac)
+}
+
+/// Convert an integral f64 known to lie in `[-2^63, 2^63)` to `i64`.
+///
+/// Precondition: `f` is finite, `f.round() == f`, and
+/// `-2^63 <= f < 2^63`. Callers that have not proved this must not use it.
+fn f64_integral_in_i64_range_to_i64(f: f64) -> i64 {
+    let bits = f.to_bits();
+    let sign = (bits >> 63) != 0;
+    let biased = (bits >> 52) & 0x7FF;
+    if biased == 0 {
+        return 0;
+    }
+    let biased_u = match u16::try_from(biased) {
+        Ok(b) => b,
+        Err(_) => 0,
+    };
+    let unbiased = i32::from(biased_u) - 1023;
+    let frac = bits & ((1u64 << 52) - 1);
+    let mant = (1u64 << 52) | frac;
+    let mag = if unbiased >= 52 {
+        let sh = match u32::try_from(unbiased - 52) {
+            Ok(s) => s,
+            Err(_) => 0,
+        };
+        mant << sh
+    } else {
+        let sh = match u32::try_from(52 - unbiased) {
+            Ok(s) => s,
+            Err(_) => 0,
+        };
+        mant >> sh
+    };
+    if !sign {
+        match i64::try_from(mag) {
+            Ok(v) => v,
+            Err(_) => 0,
+        }
+    } else if mag == (1u64 << 63) {
+        i64::MIN
+    } else {
+        match i64::try_from(mag) {
+            Ok(v) => -v,
+            Err(_) => 0,
+        }
+    }
 }
 
 impl std::hash::Hash for Num {
@@ -643,8 +785,8 @@ mod tests {
             return Ordering::Greater; // f < -2^63 <= i64::MIN
         }
         let fl = f.floor();
-        let fli = fl as i64; // exact: fl integral, in [-2^63, 2^63)
-        match (i as i128).cmp(&(fli as i128)) {
+        let fli = f64_integral_in_i64_range_to_i64(fl); // exact: fl integral, in [-2^63, 2^63)
+        match i128::from(i).cmp(&i128::from(fli)) {
             Ordering::Less => Ordering::Less,
             Ordering::Greater => Ordering::Greater,
             Ordering::Equal => {
@@ -675,7 +817,7 @@ mod tests {
         if real != Ordering::Equal {
             return real;
         }
-        let rank = |v: HuntV| matches!(v, HuntV::F(_)) as u8;
+        let rank = |v: HuntV| u8::from(matches!(v, HuntV::F(_)));
         rank(a).cmp(&rank(b))
     }
 
@@ -763,7 +905,7 @@ mod tests {
             return Ordering::Greater;
         }
         let fl = f.floor();
-        let fi = fl as i64; // exact: fl ∈ [-2^63, 2^63)
+        let fi = f64_integral_in_i64_range_to_i64(fl); // exact: fl ∈ [-2^63, 2^63)
         match i.cmp(&fi) {
             Ordering::Less => Ordering::Less,
             Ordering::Greater => Ordering::Greater,
@@ -853,7 +995,7 @@ mod tests {
         let mut rng = Rng(seed);
         for _ in 0..n {
             if rng.next().is_multiple_of(2) {
-                c.push(Num::int(rng.next() as i64));
+                c.push(Num::int(rng.next().cast_signed()));
             } else {
                 c.push(Num::float(f64::from_bits(rng.next())));
             }
@@ -1056,8 +1198,16 @@ mod tests {
     fn decode_is_total() {
         let mut rng = Rng(0xF00D);
         for _ in 0..20_000 {
-            let len = (rng.next() % 16) as usize;
-            let bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            let len = match usize::try_from(rng.next() % 16) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
+            let bytes: Vec<u8> = (0..len)
+                .map(|_| match u8::try_from(rng.next() & 0xFF) {
+                    Ok(b) => b,
+                    Err(_) => 0,
+                })
+                .collect();
             match Num::decode_key(&bytes) {
         // must not panic
         Ok(v) => core::mem::drop(v),
@@ -1145,7 +1295,7 @@ mod tests {
         let coerced = Num::float(just_below).to_int_coerced();
         assert_eq!(
             coerced,
-            Some(just_below as i64),
+            Some(9223372036854774784_i64),
             "the largest representable f64 strictly below 2^63 must coerce, not refuse"
         );
         assert!(
