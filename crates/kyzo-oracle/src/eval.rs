@@ -409,30 +409,36 @@ pub struct HeadClass {
     pub is_meet: bool,
 }
 
+/// Per-head aggregation profile for stratification and naive eval.
+///
+/// Independent derivation from the engine's `aggregation_character`: that
+/// helper runs `any`/`all` over a pre-bucketed ruleset; here we stream each
+/// head slot once and demote meet-ness as non-meet folds appear. Same facts,
+/// different shape — required by zone-oracle differential law.
 pub fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
-    let mut per_head: HashMap<Rel, Vec<&Rule>> = HashMap::new();
+    let mut classes: HashMap<Rel, HeadClass> = HashMap::new();
     for rule in &program.rules {
-        per_head
+        let entry = classes
             .entry(rule.head_rel.clone())
-            .or_default()
-            .push(rule);
+            .or_insert(HeadClass {
+                has_aggr: false,
+                is_meet: false,
+            });
+        for slot in &rule.aggr {
+            let Some((fold, _)) = slot.as_aggregated() else {
+                continue;
+            };
+            if !entry.has_aggr {
+                // First aggregated slot stamps the head: meet iff that fold is.
+                entry.has_aggr = true;
+                entry.is_meet = fold.is_meet();
+            } else if entry.is_meet && !fold.is_meet() {
+                // A single non-meet fold demotes the whole head permanently.
+                entry.is_meet = false;
+            }
+        }
     }
-    per_head
-        .into_iter()
-        .map(|(rel, rules)| {
-            let has_aggr = rules
-                .iter()
-                .any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
-            let is_meet = has_aggr
-                && rules.iter().all(|r| {
-                    r.aggr.iter().all(|a| match a.as_aggregated() {
-                        None => true,
-                        Some((fold, _)) => fold.is_meet(),
-                    })
-                });
-            (rel, HeadClass { has_aggr, is_meet })
-        })
-        .collect()
+    classes
 }
 
 pub fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
