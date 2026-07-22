@@ -848,7 +848,7 @@ impl ShredTombstone {
 }
 
 /// Ledger of shredded segments consulted on unwrap / leave-is-free restore.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ShredLedger {
     /// (store_id, fence_epoch, segment) keys revoked by shred.
     keys: HashSet<([u8; 32], u64, u64)>,
@@ -857,7 +857,9 @@ pub struct ShredLedger {
 impl ShredLedger {
     /// Empty ledger — no segments shredded.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            keys: HashSet::new(),
+        }
     }
 
     /// Record a tombstone from [`shred`].

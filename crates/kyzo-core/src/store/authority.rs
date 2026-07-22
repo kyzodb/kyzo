@@ -335,7 +335,7 @@ pub enum AddressFenceRefuse {
 ///
 /// Interior mutability is the stated concurrency need: multiple Engine
 /// handles in one process share the fence table.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AddressFenceTable {
     held: std::sync::Mutex<std::collections::BTreeSet<[u8; 32]>>,
 }
@@ -343,7 +343,9 @@ pub struct AddressFenceTable {
 impl AddressFenceTable {
     /// Empty fence table.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            held: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+        }
     }
 
     /// Claim the local address for this WriteAuthority. Second claim → StoreFenced.

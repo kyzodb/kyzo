@@ -1016,7 +1016,7 @@ impl<T: ReadTx> SessionTx<T> {
     pub fn new_read(store: T, options: ScriptOptions) -> Self {
         Self {
             store,
-            temp: TempTx::default(),
+            temp: TempTx::new(),
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),
@@ -1077,7 +1077,7 @@ impl<T: WriteTx> SessionTx<T> {
     pub(crate) fn new_write(store: T, options: ScriptOptions) -> Self {
         Self {
             store,
-            temp: TempTx::default(),
+            temp: TempTx::new(),
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),

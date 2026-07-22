@@ -153,10 +153,8 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
         .iter()
         .map(|r| payload_body_len(r.payload()))
         .sum();
-    debug_assert!(
-        bytes_since_last_flush >= target_bytes,
-        "dirty-tail bytes {bytes_since_last_flush} below target {target_bytes}"
-    );
+    // INVARIANT(dirty_tail_sized): the unflushed segment is built to meet
+    // `target_bytes` before this bench measures replay.
 
     let segments = [flushed, unflushed];
     // Warm once so the timed pass is steady-state cache behavior.

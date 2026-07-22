@@ -149,7 +149,7 @@ pub struct CorruptEntry {
 }
 
 /// The result of a full-store verification walk.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct VerifyReport {
     /// Total key-value pairs examined.
     pub checked: u64,
@@ -162,6 +162,16 @@ pub struct VerifyReport {
 }
 
 impl VerifyReport {
+    /// Empty report — nothing examined yet.
+    pub fn empty() -> Self {
+        Self {
+            checked: 0,
+            corrupt: Vec::new(),
+            ordering_violations: 0,
+            truncated: false,
+        }
+    }
+
     /// A store passes verification iff nothing was found.
     pub fn is_clean(&self) -> bool {
         self.corrupt.is_empty() && self.ordering_violations == 0 && !self.truncated
@@ -231,7 +241,7 @@ fn verify_catalog_entry(
 /// the walk continues — one bad page must not hide the rest of the damage.
 pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
     let tx = db.read_tx()?;
-    let mut report = VerifyReport::default();
+    let mut report = VerifyReport::empty();
     let mut prev_key: Option<Slice> = None;
 
     // The typed taxonomy, reconstructed from the catalog as the ordered scan
@@ -401,7 +411,7 @@ fn index_kind_digest_tag(kind: &IndexKind) -> &'static [u8] {
 }
 
 /// Outcome of a deep-verify: decode/order walk plus per-kind re-derivation diffs.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DeepVerifyReport {
     /// Catalog-aware decode + ascending-order walk (unchanged pins).
     pub walk: VerifyReport,
@@ -412,6 +422,15 @@ pub struct DeepVerifyReport {
 }
 
 impl DeepVerifyReport {
+    /// Empty deep-verify report.
+    pub fn empty() -> Self {
+        Self {
+            walk: VerifyReport::empty(),
+            index_mismatches: Vec::new(),
+            indices_checked: 0,
+        }
+    }
+
     /// Clean iff the walk is clean and no index re-derivation disagreed.
     pub fn is_clean(&self) -> bool {
         self.walk.is_clean() && self.index_mismatches.is_empty()

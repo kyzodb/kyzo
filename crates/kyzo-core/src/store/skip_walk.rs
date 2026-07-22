@@ -404,10 +404,18 @@ mod tests {
     /// `open_skip_cursor` calls — the counter
     /// `skip_walk_opens_exactly_one_cursor_per_walk` pins to exactly one
     /// per walk, however many version steps the walk takes internally.
-    #[derive(Default)]
     struct MapSeek {
         map: BTreeMap<Vec<u8>, Vec<u8>>,
         opens: Cell<usize>,
+    }
+
+    impl MapSeek {
+        fn empty() -> Self {
+            Self {
+                map: BTreeMap::new(),
+                opens: Cell::new(0),
+            }
+        }
     }
 
     struct MapSeekCursor<'a> {
@@ -579,7 +587,7 @@ mod tests {
             }
             rows.sort_unstable_by_key(|r| (r.0, r.1, r.2));
             rows.dedup_by_key(|r| (r.0, r.1, r.2));
-            let mut store = MapSeek::default();
+            let mut store = MapSeek::empty();
             for (f, v, s, p) in &rows {
                 store.map.insert(bikey(*f, *v, *s), bval(*p));
             }
@@ -633,7 +641,7 @@ mod tests {
             ],
         ];
         for rows in &scenarios {
-            let mut store = MapSeek::default();
+            let mut store = MapSeek::empty();
             for (k, v) in rows {
                 store.map.insert(k.clone(), v.clone());
             }
@@ -666,7 +674,7 @@ mod tests {
     /// boundary case the fuzz-shaped test above samples only by chance.
     #[test]
     fn skip_walk_terminates_on_min_ts_retraction() -> Result<()> {
-        let mut store = MapSeek::default();
+        let mut store = MapSeek::empty();
         store
             .map
             .insert(bikey(1, 5, 1), bval(ClaimPolarity::Assert));
@@ -684,7 +692,7 @@ mod tests {
     /// returns `None` before calling `seek` when `next_bound >= upper`.
     #[test]
     fn skip_walk_degenerate_bounds_are_empty() -> Result<()> {
-        let mut store = MapSeek::default();
+        let mut store = MapSeek::empty();
         store
             .map
             .insert(bikey(1, 5, 1), bval(ClaimPolarity::Assert));
@@ -711,7 +719,7 @@ mod tests {
     /// after the walk runs.
     #[test]
     fn skip_walk_opens_exactly_one_cursor_per_walk() -> Result<()> {
-        let mut store = MapSeek::default();
+        let mut store = MapSeek::empty();
         for f in 0..100i64 {
             for v in 0..10i64 {
                 store
@@ -753,7 +761,7 @@ mod tests {
     }
 
     fn unary_store(keys: &[&[u8]]) -> MapSeek {
-        let mut store = MapSeek::default();
+        let mut store = MapSeek::empty();
         for k in keys {
             store.map.insert(k.to_vec(), vec![1]);
         }

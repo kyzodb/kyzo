@@ -104,8 +104,9 @@ pub struct TempTx {
     stamp: ValidityTs,
 }
 
-impl Default for TempTx {
-    fn default() -> Self {
+impl TempTx {
+    /// Open empty temp map with a fresh logical stamp.
+    pub fn new() -> Self {
         static TEMP_CLOCK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
         TempTx {
             map: Some(BTreeMap::new()),
@@ -114,9 +115,7 @@ impl Default for TempTx {
             ),
         }
     }
-}
 
-impl TempTx {
     fn open_map(&self) -> Result<&BTreeMap<Vec<u8>, Vec<u8>>> {
         self.map
             .as_ref()
@@ -384,7 +383,7 @@ mod tests {
 
     #[test]
     fn basic_kv_and_ranges() -> Result<()> {
-        let mut t = TempTx::default();
+        let mut t = TempTx::new();
         assert!(t.is_empty());
         t.put(b"a", b"1")?;
         t.put(b"b", b"2")?;
@@ -408,7 +407,7 @@ mod tests {
     /// (Kills the `entry().or_insert_with` mutant that keeps the first.)
     #[test]
     fn put_overwrites_last_write_wins() -> Result<()> {
-        let mut t = TempTx::default();
+        let mut t = TempTx::new();
         t.put(b"k", b"first")?;
         t.put(b"k", b"second")?;
         assert_eq!(t.get(b"k")?, Some(Slice::from(b"second")));
@@ -428,7 +427,7 @@ mod tests {
     /// mutant that ignores `valid_at` dies here.
     #[test]
     fn skip_scan_honors_validity_with_asserted_values() -> Result<()> {
-        let mut t = TempTx::default();
+        let mut t = TempTx::new();
         for (k, v) in [
             (bk(1, 10, 1), bv(ClaimPolarity::Assert)),
             (bk(1, 20, 1), bv(ClaimPolarity::Retract)),
@@ -453,7 +452,7 @@ mod tests {
     /// `Bound::Included -> Excluded` re-seek mutant, a silent wrong answer.)
     #[test]
     fn skip_scan_returns_version_at_exact_query_ts() -> Result<()> {
-        let mut t = TempTx::default();
+        let mut t = TempTx::new();
         for k in [bk(1, 20, 1), bk(1, 10, 1)] {
             t.put(&k, &bv(ClaimPolarity::Assert))?;
         }
@@ -468,7 +467,7 @@ mod tests {
         assert_eq!(scan_at(&t, 15)?, vec![(1, 10)], "newest at or before 15");
         // The SYSTEM axis is inclusive the same way: two system versions
         // of one instant, queried exactly at the older one's stamp.
-        let mut t = TempTx::default();
+        let mut t = TempTx::new();
         t.put(&bk(1, 10, 10), &bv(ClaimPolarity::Assert))?;
         t.put(&bk(1, 10, 20), &bv(ClaimPolarity::Retract))?;
         assert_eq!(
@@ -494,7 +493,7 @@ mod tests {
     /// `storage/tests.rs` pins the fjall backend.)
     #[test]
     fn skip_scan_terminates_on_min_ts_retraction() -> Result<()> {
-        let mut t = TempTx::default();
+        let mut t = TempTx::new();
         t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert))?;
         t.put(&bk(9, i64::MIN, i64::MIN), &bv(ClaimPolarity::Retract))?;
         assert_eq!(scan_at(&t, 10)?, vec![(1, 5)]);
@@ -507,7 +506,7 @@ mod tests {
     /// upper-guard mutant.)
     #[test]
     fn skip_scan_degenerate_bounds_are_empty() -> Result<()> {
-        let mut t = TempTx::default();
+        let mut t = TempTx::new();
         t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert))?;
         let (lo, hi) = rel_bounds();
         let at = AsOf::current(ValidityTs::from_raw(10));
@@ -665,7 +664,7 @@ mod tests {
             let mut fjall_tx = fjall_store.write_tx()?;
             let sim_store = SimStorage::new(seed);
             let mut sim_tx = sim_store.write_tx()?;
-            let mut temp_tx = TempTx::default();
+            let mut temp_tx = TempTx::new();
 
             let mut rng = SimRng::new(seed ^ 0x00D1_FFEE);
             for step in 0..120 {
@@ -732,7 +731,7 @@ mod tests {
         for (lo, hi) in &probes {
             let mut fjall_tx = fjall_store.write_tx()?;
             let mut sim_tx = sim_store.write_tx()?;
-            let mut temp_tx = TempTx::default();
+            let mut temp_tx = TempTx::new();
             for tx in [&mut temp_tx as &mut dyn DynW, &mut fjall_tx, &mut sim_tx] {
                 tx.dput(b"a", b"1")?;
                 tx.dput(b"a\x00", b"2")?;
@@ -840,7 +839,7 @@ mod tests {
             let mut fjall_tx = fjall_store.write_tx()?;
             let sim_store = SimStorage::new(2);
             let mut sim_tx = sim_store.write_tx()?;
-            let mut temp_tx = TempTx::default();
+            let mut temp_tx = TempTx::new();
             for (k, v) in rows {
                 temp_tx.put(k, v)?;
                 fjall_tx.put(k, v)?;

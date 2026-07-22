@@ -154,7 +154,7 @@ const SYSTEM_CLOCK_WATERMARK_KEY: &[u8] = b"system_clock_watermark";
 /// Resource configuration for a fjall store. A database engine does not get
 /// to inherit invisible defaults: the knobs that govern memory and
 /// parallelism are explicit, and `None` means fjall's documented default.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct StorageOptions {
     /// Block/blob cache size in bytes. `None` means a 25%-of-system-RAM
     /// floor on Linux (`quarter_system_ram_bytes`), not fjall's own tiny
@@ -179,6 +179,19 @@ pub struct StorageOptions {
     /// at this boundary as [`FjallRefuse::JournalingSizeBelowFloor`] —
     /// never the vendor builder panic.
     pub max_journaling_size_bytes: Option<u64>,
+}
+
+impl StorageOptions {
+    /// All knobs unset — fjall / platform documented defaults apply.
+    pub fn empty() -> Self {
+        Self {
+            cache_size_bytes: None,
+            worker_threads: None,
+            max_memtable_size_bytes: None,
+            table_target_size_bytes: None,
+            max_journaling_size_bytes: None,
+        }
+    }
 }
 
 /// Point-in-time observability counters, straight from the storage engine.
@@ -368,7 +381,7 @@ mod tuning {
 /// A fresh store is stamped with the on-disk format version; opening a store
 /// written with a different format version is an error, not silent corruption.
 pub fn new_fjall_storage(path: impl AsRef<Path>) -> Result<FjallStorage> {
-    new_fjall_storage_with(path, StorageOptions::default())
+    new_fjall_storage_with(path, StorageOptions::empty())
 }
 
 /// A cache floor of 25% of total system RAM, for when
@@ -1421,7 +1434,7 @@ mod pins {
             dir.path(),
             StorageOptions {
                 max_journaling_size_bytes: Some(MIN_JOURNALING_SIZE_BYTES),
-                ..StorageOptions::default()
+                ..StorageOptions::empty()
             },
         )?;
         drop(db);
@@ -1436,7 +1449,7 @@ mod pins {
             dir.path(),
             StorageOptions {
                 max_journaling_size_bytes: Some(MIN_JOURNALING_SIZE_BYTES - 1),
-                ..StorageOptions::default()
+                ..StorageOptions::empty()
             },
         ) {
             Err(e) => e,

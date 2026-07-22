@@ -1512,7 +1512,7 @@ mod composition_tests {
         let wrong = StableCommitCap::PlatformTransactionProof {
             snapshot_fork: SnapshotFork::No,
         };
-        let refused = SweepDoor::ack_native_fsync_barrier(wrong, TempTx::default());
+        let refused = SweepDoor::ack_native_fsync_barrier(wrong, TempTx::new());
         assert!(
             matches!(
                 refused,
@@ -1525,7 +1525,7 @@ mod composition_tests {
         let fork_yes = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::Yes,
         };
-        let refused_fork = SweepDoor::ack_native_fsync_barrier(fork_yes, TempTx::default());
+        let refused_fork = SweepDoor::ack_native_fsync_barrier(fork_yes, TempTx::new());
         assert!(
             matches!(
                 refused_fork,
@@ -1539,7 +1539,7 @@ mod composition_tests {
         let ruled = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
-        SweepDoor::ack_native_fsync_barrier(ruled, TempTx::default())?;
+        SweepDoor::ack_native_fsync_barrier(ruled, TempTx::new())?;
     
         Ok(())
     }
@@ -1562,7 +1562,7 @@ mod composition_tests {
         let intent = door
             .admit(incarnation, &session, key1, dig1)?;
         let proof = door
-            .seal_durable(intent, TempTx::default(), content_root(0xA1), &session)?;
+            .seal_durable(intent, TempTx::new(), content_root(0xA1), &session)?;
 
         let cut = door
             .last_durable_cut()?;
@@ -1641,7 +1641,7 @@ mod composition_tests {
         let intent2 = door
             .admit(incarnation, &session, key2, dig2)?;
         door
-            .seal_durable(intent2, TempTx::default(), content_root(0xC3), &session)?;
+            .seal_durable(intent2, TempTx::new(), content_root(0xC3), &session)?;
         let cut2 = door.last_durable_cut()?;
         assert!(!cuts_equal(cut, cut2), "second cut must differ from first");
         assert_eq!(door.root_chain().links().len(), 2);
@@ -1679,7 +1679,7 @@ mod composition_tests {
         );
 
         let proof = door
-            .seal_durable(first, TempTx::default(), content_root(0xD1), &session)?;
+            .seal_durable(first, TempTx::new(), content_root(0xD1), &session)?;
         assert_eq!(proof.commit_ordinal().get(), 1);
         assert_eq!(door.highest_commit_ordinal().get(), 1);
 
@@ -1691,7 +1691,7 @@ mod composition_tests {
             door.idempotency().lookup(&key),
             OperationOutcome::Committed { .. }
         ));
-        let reseal = door.seal_durable(after_seal, TempTx::default(), content_root(0xD2), &session);
+        let reseal = door.seal_durable(after_seal, TempTx::new(), content_root(0xD2), &session);
         assert!(
             matches!(
                 reseal,
@@ -1756,7 +1756,7 @@ mod composition_tests {
             key,
             digest,
             preimage.clone(),
-            TempTx::default(),
+            TempTx::new(),
         )?;
         assert_eq!(door.highest_commit_ordinal().get(), 1);
 
@@ -1766,7 +1766,7 @@ mod composition_tests {
             key,
             digest,
             preimage.clone(),
-            TempTx::default(),
+            TempTx::new(),
         )?;
         assert_eq!(
             door.highest_commit_ordinal().get(),
@@ -1807,7 +1807,7 @@ mod composition_tests {
                 key,
                 digest,
                 preimage,
-                TempTx::default(),
+                TempTx::new(),
             )?;
         assert_eq!(
             reopened.highest_commit_ordinal().get(),

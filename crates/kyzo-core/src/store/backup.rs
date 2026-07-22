@@ -243,7 +243,7 @@ pub fn admit_complete_store<S: Storage>(db: &S) -> Result<()> {
 /// Prefer this over bare [`new_fjall_storage`] when admitting a path that may
 /// have been a restore target — bare open alone cannot see the mark's meaning.
 pub fn open_complete_store(path: impl AsRef<Path>) -> Result<FjallStorage> {
-    open_complete_store_with(path, StorageOptions::default())
+    open_complete_store_with(path, StorageOptions::empty())
 }
 
 /// Open a fjall store with resource options and refuse if a restore-in-progress
@@ -705,7 +705,7 @@ impl LeaveIsFreePack {
 /// same root re-register is idempotent; a different root refuses
 /// [`PackRefuse::TrustRootAlreadySealed`] (rotation is a separate explicit
 /// verb, not insert).
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct OriginRootRegistry {
     /// origin StoreId bytes → trusted chain root at the known cut.
     roots: BTreeMap<[u8; 32], StateRoot>,
@@ -714,7 +714,9 @@ pub struct OriginRootRegistry {
 impl OriginRootRegistry {
     /// Empty sealed origin-root registry.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            roots: BTreeMap::new(),
+        }
     }
 
     /// Register the trusted chain root for an origin StoreId (operator/genesis door).

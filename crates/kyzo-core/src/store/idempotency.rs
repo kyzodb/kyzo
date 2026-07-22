@@ -138,7 +138,7 @@ impl IdempotencyEntry {
 }
 
 /// In-memory OperationKey memo (Store-scoped).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct IdempotencyMemo {
     entries: std::collections::BTreeMap<[u8; 32], IdempotencyEntry>,
 }
@@ -146,7 +146,9 @@ pub struct IdempotencyMemo {
 impl IdempotencyMemo {
     /// Empty memo.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            entries: std::collections::BTreeMap::new(),
+        }
     }
 
     /// Digest of a request envelope (canonical bytes the caller already sealed).

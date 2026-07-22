@@ -385,7 +385,7 @@ pub fn truncate(
 
 /// Durable truncate-authority ledger — records spent seal digests so crash
 /// retry converges without double-truncation.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TruncateLedger {
     spent: std::collections::BTreeSet<SealDigest>,
 }
@@ -393,7 +393,9 @@ pub struct TruncateLedger {
 impl TruncateLedger {
     /// Empty ledger (no seals consumed yet).
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            spent: std::collections::BTreeSet::new(),
+        }
     }
 
     /// Whether `digest` was already consumed.
