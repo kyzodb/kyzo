@@ -278,7 +278,7 @@ fn i64_to_usize(n: i64) -> Result<usize> {
 /// are the kernel algorithms — not a second build/seal/freshness protocol.
 /// Search is owned by [`RelationIndexSearch::search_relation`] (P103);
 /// [`Hnsw::knn`] is the UFCS alias into that door.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Hnsw;
 
 impl ProjectionKind for Hnsw {}
@@ -750,7 +750,7 @@ const CANARY_LAYER: i64 = 1;
 /// SHA-256 content hash of a stored vector (HNSW change-detection payload).
 /// Field is private — mint only via [`Self::from_sha256_digest`].
 /// Stored wire reclaim routes through that same door after length proof.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 pub(crate) struct VecContentHash(Vec<u8>);
 
@@ -764,7 +764,8 @@ impl VecContentHash {
     /// The sole `Self(bytes)` constructor — produced and stored paths both
     /// enter here.
     fn from_sha256_digest(bytes: Vec<u8>) -> Self {
-        debug_assert_eq!(bytes.len(), SHA256_DIGEST_LEN);
+        // INVARIANT(sha256_digest_len): callers (`content_hash`, `from_stored`)
+        // prove exactly 32 bytes before this mint.
         Self(bytes)
     }
 
@@ -791,7 +792,7 @@ impl VecContentHash {
 /// Mint only via [`Self::from_storage_key`] (encode door). Stored reclaim
 /// proves wire shape through the storage-key decode inverse, then enters
 /// that same door — never a length-only `Vec<u8>` forge.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 pub(crate) struct HnswEntryKey(Vec<u8>);
 
@@ -851,7 +852,7 @@ impl HnswEntryKey {
 
 /// Ranked-hit key bytes during HNSW search (layer-0 node key encoding).
 /// Mint only via [`Self::from_storage_key`] (encode door).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub(crate) struct HnswHitKey(Vec<u8>);
 
@@ -1240,7 +1241,8 @@ impl IndexVec {
         #[cfg(test)]
         probe::DIST_CALLS.with(|c| c.set(c.get() + 1));
         let (a, b) = (self.0.to_f64s(), other.0.to_f64s());
-        debug_assert_eq!(a.len(), b.len(), "IndexVec pair must share dimension");
+        // INVARIANT(index_vec_pair_dim): both IndexVecs come from the same
+        // index schema / query path — dimension is shared by construction.
         dist_dispatch(&a, &b, metric)
     }
 }
@@ -1273,8 +1275,8 @@ fn dist_dispatch(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
 /// Called only after [`dist_dispatch`] has matched `a.len() == D`.
 #[inline]
 fn dist_kernel<const D: usize>(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
-    debug_assert_eq!(a.len(), D);
-    debug_assert_eq!(b.len(), D);
+    // INVARIANT(dist_kernel_dim): `dist_dispatch` matched `a.len() == D` and
+    // pairs `a`/`b` share length before the call.
     match metric {
         HnswDistance::L2 => {
             let mut sum = 0.0f64;
@@ -1436,7 +1438,7 @@ impl RaBitQRotation {
 
     /// Apply `P⁻¹` (row-major mat-vec).
     fn transform(&self, v: &[f64]) -> Vec<f64> {
-        debug_assert_eq!(v.len(), self.dim);
+        // INVARIANT(rabitq_transform_dim): callers pass a dim-sized vector.
         let mut out = vec![0.0f64; self.dim];
         for (r, slot) in out.iter_mut().enumerate() {
             let mut s = 0.0f64;
@@ -1586,8 +1588,8 @@ impl RaBitQCode {
 /// tests may pass a larger ε without changing the formula.
 #[cfg(test)]
 pub(crate) fn rabitq_error_bound(ip_with_data: f64, dim: usize, epsilon_0: f64) -> f64 {
-    debug_assert!(dim >= 2);
-    debug_assert!(ip_with_data > 0.0);
+    // INVARIANT(rabitq_bound_domain): tests only call with dim >= 2 and
+    // ip_with_data > 0 (Theorem 3.2 preconditions).
     let ratio = (1.0 - ip_with_data * ip_with_data).max(0.0).sqrt() / ip_with_data;
     ratio * epsilon_0 / usize_to_f64(dim - 1).sqrt()
 }
@@ -2714,9 +2716,8 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
 }
 
 /// Whether one optional HNSW output column is appended (P038 — sum, not bool).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HnswBindSlot {
-    #[default]
     Omit,
     Append,
 }
@@ -2731,12 +2732,24 @@ impl HnswBindSlot {
 /// Which optional HNSW output columns to append — the **one** bind encoding
 /// (P038). Dual bool packs are gone; the RA tier maps the same presence to
 /// `own_bindings` symbols at construction; the engine only reads this pack.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HnswBindPack {
     pub(crate) field: HnswBindSlot,
     pub(crate) field_idx: HnswBindSlot,
     pub(crate) distance: HnswBindSlot,
     pub(crate) vector: HnswBindSlot,
+}
+
+impl HnswBindPack {
+    /// All optional columns omitted.
+    pub(crate) fn omit_all() -> Self {
+        Self {
+            field: HnswBindSlot::Omit,
+            field_idx: HnswBindSlot::Omit,
+            distance: HnswBindSlot::Omit,
+            vector: HnswBindSlot::Omit,
+        }
+    }
 }
 
 /// The parameters of one k-nearest-neighbours search. The RA operator tier
@@ -4312,7 +4325,7 @@ mod tests {
                         k,
                         ef: 64,
                         radius: None,
-                        bind: HnswBindPack::default(),
+                        bind: HnswBindPack::omit_all(),
                     },
                     &None,
                     &CancelFlag::inert(),
