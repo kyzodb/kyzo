@@ -604,11 +604,13 @@ mod tests {
                 },
                 // Named exhaustiveness arm: `choice` is `next % 3` or `% 6`.
                 // A residue ≥6 is outside the generator contract — emit a
-                // leaf Const so the differential still has a value to judge
-                // rather than `_ =>` swallowing the impossible case.
-                modulus_overflow @ 6..=u64::MAX => Expr::Const {
-                    val: DataValue::from(modulus_overflow as i64),
-                    span: Default::default(),
+                // leaf Const the differential can still judge. Never `_ =>`.
+                modulus_overflow @ 6..=u64::MAX => {
+                    let _named_overflow = modulus_overflow;
+                    Expr::Const {
+                        val: DataValue::Null,
+                        span: Default::default(),
+                    }
                 },
             }
         }
