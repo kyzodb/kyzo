@@ -76,12 +76,11 @@ impl Handle {
     fn logical_len(&self, backing_len: u64) -> u64 {
         self.pending
             .iter()
-            .map(|pw| pw.offset + pw.data.len() as u64)
+            .map(|pw| pw.offset + u64_from_usize(pw.data.len()))
             .fold(backing_len, u64::max)
     }
 }
 
-#[derive(Default)]
 struct InodeTable {
     path_to_ino: HashMap<PathBuf, u64>,
     ino_to_path: HashMap<u64, PathBuf>,
@@ -138,12 +137,30 @@ pub struct FaultCounters(Arc<Mutex<Counters>>);
 impl FaultCounters {
     /// The current fsync count for `rel_path` (`0` if it has never fired).
     pub fn fsync_count(&self, rel_path: &str) -> u64 {
-        self.0.lock().unwrap().count(rel_path, OpKind::Fsync)
+        match self.0.lock() {
+            Ok(c) => c.count(rel_path, OpKind::Fsync),
+            Err(_) => {
+                assert!(
+                    false,
+                    "INVARIANT(FaultCounterLive): counter mutex poisoned"
+                );
+                0
+            }
+        }
     }
 
     /// The current write count for `rel_path` (`0` if it has never fired).
     pub fn write_count(&self, rel_path: &str) -> u64 {
-        self.0.lock().unwrap().count(rel_path, OpKind::Write)
+        match self.0.lock() {
+            Ok(c) => c.count(rel_path, OpKind::Write),
+            Err(_) => {
+                assert!(
+                    false,
+                    "INVARIANT(FaultCounterLive): counter mutex poisoned"
+                );
+                0
+            }
+        }
     }
 }
 
@@ -159,6 +176,68 @@ pub struct PassthroughFs {
     counters: Arc<Mutex<Counters>>,
 }
 
+fn io_errno(err: std::io::Error) -> Errno {
+    err.into()
+}
+
+fn lock<'a, T>(m: &'a Mutex<T>) -> Result<std::sync::MutexGuard<'a, T>, Errno> {
+    m.lock().map_err(|_| Errno::EIO)
+}
+
+/// FUSE success reply — `Reply*::ok` is the kernel-success door, not `Result::ok`.
+macro_rules! fuse_ok {
+    ($reply:expr) => {
+        $reply.ok()
+    };
+}
+
+fn usize_from_u64(n: u64) -> Result<usize, Errno> {
+    usize::try_from(n).map_err(|_| Errno::EINVAL)
+}
+
+fn u64_from_usize(n: usize) -> u64 {
+    match u64::try_from(n) {
+        Ok(v) => v,
+        Err(_) => {
+            assert!(
+                false,
+                "INVARIANT(UsizeFitsU64): every supported host has usize ≤ 64 bits"
+            );
+            u64::MAX
+        }
+    }
+}
+
+fn u32_from_u64(n: u64) -> u32 {
+    match u32::try_from(n) {
+        Ok(v) => v,
+        Err(_) => {
+            assert!(
+                false,
+                "INVARIANT(FuseFieldWidth): value exceeds FUSE u32 field width"
+            );
+            u32::MAX
+        }
+    }
+}
+
+fn u16_from_u32(n: u32) -> u16 {
+    match u16::try_from(n) {
+        Ok(v) => v,
+        Err(_) => {
+            assert!(
+                false,
+                "INVARIANT(ModeFitsU16): mode & 0o7777 always fits u16"
+            );
+            0
+        }
+    }
+}
+
+fn u32_from_usize(n: usize) -> Result<u32, Errno> {
+    u32::try_from(n).map_err(|_| Errno::EIO)
+}
+
 impl PassthroughFs {
     pub fn new(backing_root: impl Into<PathBuf>, plan: FaultPlan) -> Self {
         PassthroughFs {
@@ -167,7 +246,7 @@ impl PassthroughFs {
             inodes: Mutex::new(InodeTable::new()),
             handles: Mutex::new(HashMap::new()),
             next_fh: AtomicU64::new(1),
-            counters: Arc::new(Mutex::new(Counters::default())),
+            counters: Arc::new(Mutex::new(Counters::fresh())),
         }
     }
 
@@ -206,16 +285,28 @@ impl PassthroughFs {
             ino: INodeNo(ino),
             size: logical_size,
             blocks: logical_size.div_ceil(512),
-            atime: meta.accessed().unwrap_or(UNIX_EPOCH),
-            mtime: meta.modified().unwrap_or(UNIX_EPOCH),
-            ctime: meta.modified().unwrap_or(UNIX_EPOCH),
-            crtime: meta.created().unwrap_or(UNIX_EPOCH),
+            atime: match meta.accessed() {
+                Ok(t) => t,
+                Err(_) => UNIX_EPOCH,
+            },
+            mtime: match meta.modified() {
+                Ok(t) => t,
+                Err(_) => UNIX_EPOCH,
+            },
+            ctime: match meta.modified() {
+                Ok(t) => t,
+                Err(_) => UNIX_EPOCH,
+            },
+            crtime: match meta.created() {
+                Ok(t) => t,
+                Err(_) => UNIX_EPOCH,
+            },
             kind,
-            perm: (meta.mode() & 0o7777) as u16,
-            nlink: meta.nlink() as u32,
+            perm: u16_from_u32(meta.mode() & 0o7777),
+            nlink: u32_from_u64(meta.nlink()),
             uid: meta.uid(),
             gid: meta.gid(),
-            rdev: meta.rdev() as u32,
+            rdev: u32_from_u64(meta.rdev()),
             blksize: 4096,
             flags: 0,
         }
@@ -225,20 +316,57 @@ impl PassthroughFs {
         let meta = fs::symlink_metadata(self.real_path(rel)).map_err(io_errno)?;
         Ok(Self::attr_from_metadata(ino, &meta, meta.len()))
     }
-}
 
-fn io_errno(err: std::io::Error) -> Errno {
-    err.into()
+    fn inodes_lock(&self) -> Result<std::sync::MutexGuard<'_, InodeTable>, Errno> {
+        lock(&self.inodes)
+    }
+
+    fn handles_lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<u64, Handle>>, Errno> {
+        lock(&self.handles)
+    }
+
+    fn counters_lock(&self) -> Result<std::sync::MutexGuard<'_, Counters>, Errno> {
+        lock(&self.counters)
+    }
+
+    /// One door for `rmdir` / `unlink`: resolve parent, apply `remove` on the child path.
+    fn remove_child(
+        &self,
+        parent: INodeNo,
+        name: &OsStr,
+        reply: ReplyEmpty,
+        remove: fn(&Path) -> std::io::Result<()>,
+    ) {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(parent_rel) = inodes.path_for(parent.0) else {
+            reply.error(Errno::ENOENT);
+            return;
+        };
+        match remove(&self.real_path(&parent_rel.join(name))) {
+            Ok(()) => fuse_ok!(reply),
+            Err(e) => reply.error(io_errno(e)),
+        }
+    }
 }
 
 impl Filesystem for PassthroughFs {
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(parent_rel) = inodes.path_for(parent.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
         let child_rel = parent_rel.join(name);
-        let mut inodes = self.inodes.lock().unwrap();
+        let Ok(mut inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
         let ino = inodes.ino_for(&child_rel);
         drop(inodes);
         match self.stat_entry(ino, &child_rel) {
@@ -248,7 +376,11 @@ impl Filesystem for PassthroughFs {
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(rel) = inodes.path_for(ino.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -259,14 +391,17 @@ impl Filesystem for PassthroughFs {
                 return;
             }
         };
-        let logical_size = match fh.and_then(|fh| {
-            self.handles
-                .lock()
-                .unwrap()
-                .get(&fh.0)
-                .map(|h| h.logical_len(meta.len()))
-        }) {
-            Some(size) => size,
+        let logical_size = match fh {
+            Some(fh) => match self.handles_lock() {
+                Ok(handles) => match handles.get(&fh.0) {
+                    Some(h) => h.logical_len(meta.len()),
+                    None => meta.len(),
+                },
+                Err(_) => {
+                    reply.error(Errno::EIO);
+                    return;
+                }
+            },
             None => meta.len(),
         };
         reply.attr(
@@ -293,7 +428,11 @@ impl Filesystem for PassthroughFs {
         _flags: Option<fuser::BsdFileFlags>,
         reply: ReplyAttr,
     ) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(rel) = inodes.path_for(ino.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -308,10 +447,14 @@ impl Filesystem for PassthroughFs {
                 reply.error(io_errno(e));
                 return;
             }
-            if let Some(fh) = fh
-                && let Some(handle) = self.handles.lock().unwrap().get_mut(&fh.0)
-            {
-                handle.pending.retain(|pw| pw.offset < new_len);
+            if let Some(fh) = fh {
+                let Ok(mut handles) = self.handles_lock() else {
+                    reply.error(Errno::EIO);
+                    return;
+                };
+                if let Some(handle) = handles.get_mut(&fh.0) {
+                    handle.pending.retain(|pw| pw.offset < new_len);
+                }
             }
         }
         match self.stat_entry(ino.0, &rel) {
@@ -330,7 +473,11 @@ impl Filesystem for PassthroughFs {
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(parent_rel) = inodes.path_for(parent.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -349,7 +496,11 @@ impl Filesystem for PassthroughFs {
                 return;
             }
         };
-        let ino = self.inodes.lock().unwrap().ino_for(&child_rel);
+        let Ok(mut inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let ino = inodes.ino_for(&child_rel);
         let attr = match self.stat_entry(ino, &child_rel) {
             Ok(a) => a,
             Err(errno) => {
@@ -358,14 +509,20 @@ impl Filesystem for PassthroughFs {
             }
         };
         let fh = self.alloc_fh();
-        self.handles.lock().unwrap().insert(
-            fh,
-            Handle {
-                rel_path: child_rel,
-                file,
-                pending: Vec::new(),
-            },
-        );
+        {
+            let Ok(mut handles) = self.handles_lock() else {
+                reply.error(Errno::EIO);
+                return;
+            };
+            handles.insert(
+                fh,
+                Handle {
+                    rel_path: child_rel,
+                    file,
+                    pending: Vec::new(),
+                },
+            );
+        }
         reply.created(
             &TTL_ZERO,
             &attr,
@@ -376,7 +533,11 @@ impl Filesystem for PassthroughFs {
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, _flags: fuser::OpenFlags, reply: ReplyOpen) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(rel) = inodes.path_for(ino.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -392,14 +553,20 @@ impl Filesystem for PassthroughFs {
             }
         };
         let fh = self.alloc_fh();
-        self.handles.lock().unwrap().insert(
-            fh,
-            Handle {
-                rel_path: rel,
-                file,
-                pending: Vec::new(),
-            },
-        );
+        {
+            let Ok(mut handles) = self.handles_lock() else {
+                reply.error(Errno::EIO);
+                return;
+            };
+            handles.insert(
+                fh,
+                Handle {
+                    rel_path: rel,
+                    file,
+                    pending: Vec::new(),
+                },
+            );
+        }
         reply.opened(FileHandle(fh), FopenFlags::FOPEN_DIRECT_IO);
     }
 
@@ -414,22 +581,44 @@ impl Filesystem for PassthroughFs {
         _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyData,
     ) {
-        let handles = self.handles.lock().unwrap();
+        let Ok(handles) = self.handles_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
         let Some(handle) = handles.get(&fh.0) else {
             reply.error(Errno::EBADF);
             return;
         };
         let want_end = offset + u64::from(size);
-        let mut buf = vec![0u8; size as usize];
-        let mut filled = handle.file.read_at(&mut buf, offset).unwrap_or(0);
+        let buf_len = match usize::try_from(size) {
+            Ok(n) => n,
+            Err(_) => {
+                reply.error(Errno::EINVAL);
+                return;
+            }
+        };
+        let mut buf = vec![0u8; buf_len];
+        let mut filled = match handle.file.read_at(&mut buf, offset) {
+            Ok(n) => n,
+            Err(_) => 0,
+        };
         for pw in &handle.pending {
-            let pw_end = pw.offset + pw.data.len() as u64;
+            let pw_end = pw.offset + u64_from_usize(pw.data.len());
             let ov_start = pw.offset.max(offset);
             let ov_end = pw_end.min(want_end);
             if ov_start < ov_end {
-                let dst = (ov_start - offset) as usize;
-                let src = (ov_start - pw.offset) as usize;
-                let len = (ov_end - ov_start) as usize;
+                let Ok(dst) = usize_from_u64(ov_start - offset) else {
+                    reply.error(Errno::EINVAL);
+                    return;
+                };
+                let Ok(src) = usize_from_u64(ov_start - pw.offset) else {
+                    reply.error(Errno::EINVAL);
+                    return;
+                };
+                let Ok(len) = usize_from_u64(ov_end - ov_start) else {
+                    reply.error(Errno::EINVAL);
+                    return;
+                };
                 buf[dst..dst + len].copy_from_slice(&pw.data[src..src + len]);
                 filled = filled.max(dst + len);
             }
@@ -450,14 +639,22 @@ impl Filesystem for PassthroughFs {
         _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyWrite,
     ) {
-        let mut handles = self.handles.lock().unwrap();
+        let Ok(mut handles) = self.handles_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
         let Some(handle) = handles.get_mut(&fh.0) else {
             reply.error(Errno::EBADF);
             return;
         };
         let rel_key = Self::rel_key(&handle.rel_path);
-        let count = self.counters.lock().unwrap().bump(&rel_key, OpKind::Write);
-        let outcome = decide_write_outcome(&self.plan, &rel_key, offset, data.len() as u64, count);
+        let Ok(mut counters) = self.counters_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let count = counters.bump(&rel_key, OpKind::Write);
+        drop(counters);
+        let outcome = decide_write_outcome(&self.plan, &rel_key, offset, u64_from_usize(data.len()), count);
         handle.pending.push(PendingWrite {
             offset,
             data: data.to_vec(),
@@ -469,7 +666,10 @@ impl Filesystem for PassthroughFs {
         if resolve_trigger(&self.plan, &rel_key, OpKind::Write, count) == Some(Fault::ClearCache) {
             handle.pending.clear();
         }
-        reply.written(data.len() as u32);
+        match u32_from_usize(data.len()) {
+            Ok(n) => reply.written(n),
+            Err(e) => reply.error(e),
+        }
     }
 
     fn fsync(
@@ -480,27 +680,39 @@ impl Filesystem for PassthroughFs {
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
-        let mut handles = self.handles.lock().unwrap();
+        let Ok(mut handles) = self.handles_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
         let Some(handle) = handles.get_mut(&fh.0) else {
             reply.error(Errno::EBADF);
             return;
         };
         let rel_key = Self::rel_key(&handle.rel_path);
-        let count = self.counters.lock().unwrap().bump(&rel_key, OpKind::Fsync);
+        let Ok(mut counters) = self.counters_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let count = counters.bump(&rel_key, OpKind::Fsync);
+        drop(counters);
         if resolve_trigger(&self.plan, &rel_key, OpKind::Fsync, count) == Some(Fault::ClearCache) {
             // The power cut lands at this fsync boundary: nothing queued
             // since the last real fsync reaches the backing file.
             handle.pending.clear();
-            reply.ok();
+            fuse_ok!(reply);
             return;
         }
         for pw in handle.pending.drain(..) {
             let write_result = match pw.outcome {
                 WriteOutcome::Clean => handle.file.write_at(&pw.data, pw.offset),
                 WriteOutcome::Dropped => Ok(0),
-                WriteOutcome::Split { split_at } => handle
-                    .file
-                    .write_at(&pw.data[..split_at as usize], pw.offset),
+                WriteOutcome::Split { split_at } => {
+                    let Ok(n) = usize_from_u64(split_at) else {
+                        reply.error(Errno::EINVAL);
+                        return;
+                    };
+                    handle.file.write_at(&pw.data[..n], pw.offset)
+                }
             };
             if let Err(e) = write_result {
                 reply.error(io_errno(e));
@@ -511,7 +723,7 @@ impl Filesystem for PassthroughFs {
             reply.error(io_errno(e));
             return;
         }
-        reply.ok();
+        fuse_ok!(reply);
     }
 
     fn flush(
@@ -524,7 +736,7 @@ impl Filesystem for PassthroughFs {
     ) {
         // flush() (close(2)/dup path) carries no durability guarantee in
         // POSIX and none in this model either: only fsync materializes.
-        reply.ok();
+        fuse_ok!(reply);
     }
 
     fn release(
@@ -556,19 +768,29 @@ impl Filesystem for PassthroughFs {
         // performs, just without the `sync_all` (release claims no
         // power-cut durability, only "the bytes are on the backing file
         // now," matching a real close).
-        let mut handles = self.handles.lock().unwrap();
+        let Ok(mut handles) = self.handles_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
         if let Some(mut handle) = handles.remove(&fh.0) {
             for pw in handle.pending.drain(..) {
-                let _ = match pw.outcome {
+                let write_result = match pw.outcome {
                     WriteOutcome::Clean => handle.file.write_at(&pw.data, pw.offset),
                     WriteOutcome::Dropped => Ok(0),
-                    WriteOutcome::Split { split_at } => handle
-                        .file
-                        .write_at(&pw.data[..split_at as usize], pw.offset),
+                    WriteOutcome::Split { split_at } => {
+                        let Ok(n) = usize_from_u64(split_at) else {
+                            continue;
+                        };
+                        handle.file.write_at(&pw.data[..n], pw.offset)
+                    }
                 };
+                match write_result {
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
             }
         }
-        reply.ok();
+        fuse_ok!(reply);
     }
 
     fn opendir(&self, _req: &Request, _ino: INodeNo, _flags: fuser::OpenFlags, reply: ReplyOpen) {
@@ -583,7 +805,11 @@ impl Filesystem for PassthroughFs {
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(rel) = inodes.path_for(ino.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -600,15 +826,29 @@ impl Filesystem for PassthroughFs {
         let parent_ino = if rel.as_os_str().is_empty() {
             ROOT_INO
         } else {
-            self.inodes
-                .lock()
-                .unwrap()
-                .ino_for(rel.parent().unwrap_or(Path::new("")))
+            let parent = match rel.parent() {
+                Some(p) => p,
+                None => Path::new(""),
+            };
+            let Ok(mut inodes) = self.inodes_lock() else {
+                reply.error(Errno::EIO);
+                return;
+            };
+            inodes.ino_for(parent)
         };
         all.push((parent_ino, FileType::Directory, "..".into()));
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
             let child_rel = rel.join(entry.file_name());
-            let child_ino = self.inodes.lock().unwrap().ino_for(&child_rel);
+            let Ok(mut inodes) = self.inodes_lock() else {
+                reply.error(Errno::EIO);
+                return;
+            };
+            let child_ino = inodes.ino_for(&child_rel);
+            drop(inodes);
             let kind = if entry.path().is_dir() {
                 FileType::Directory
             } else {
@@ -616,12 +856,23 @@ impl Filesystem for PassthroughFs {
             };
             all.push((child_ino, kind, entry.file_name()));
         }
-        for (idx, (ino, kind, name)) in all.into_iter().enumerate().skip(offset as usize) {
-            if reply.add(INodeNo(ino), (idx + 1) as u64, kind, &name) {
+        let Ok(skip) = usize_from_u64(offset) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+        for (idx, (ino, kind, name)) in all.into_iter().enumerate().skip(skip) {
+            let next_off = match u64::try_from(idx + 1) {
+                Ok(n) => n,
+                Err(_) => {
+                    reply.error(Errno::EINVAL);
+                    return;
+                }
+            };
+            if reply.add(INodeNo(ino), next_off, kind, &name) {
                 break;
             }
         }
-        reply.ok();
+        fuse_ok!(reply);
     }
 
     fn mkdir(
@@ -633,7 +884,11 @@ impl Filesystem for PassthroughFs {
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(parent_rel) = inodes.path_for(parent.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -642,7 +897,11 @@ impl Filesystem for PassthroughFs {
             reply.error(io_errno(e));
             return;
         }
-        let ino = self.inodes.lock().unwrap().ino_for(&child_rel);
+        let Ok(mut inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let ino = inodes.ino_for(&child_rel);
         match self.stat_entry(ino, &child_rel) {
             Ok(attr) => reply.entry(&TTL_ZERO, &attr, Generation(0)),
             Err(errno) => reply.error(errno),
@@ -650,25 +909,11 @@ impl Filesystem for PassthroughFs {
     }
 
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
-            reply.error(Errno::ENOENT);
-            return;
-        };
-        match fs::remove_dir(self.real_path(&parent_rel.join(name))) {
-            Ok(()) => reply.ok(),
-            Err(e) => reply.error(io_errno(e)),
-        }
+        self.remove_child(parent, name, reply, |p| fs::remove_dir(p));
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
-            reply.error(Errno::ENOENT);
-            return;
-        };
-        match fs::remove_file(self.real_path(&parent_rel.join(name))) {
-            Ok(()) => reply.ok(),
-            Err(e) => reply.error(io_errno(e)),
-        }
+        self.remove_child(parent, name, reply, |p| fs::remove_file(p));
     }
 
     /// Atomic rename — the pointer-swap pattern a real LSM keyspace uses to
@@ -688,11 +933,19 @@ impl Filesystem for PassthroughFs {
         _flags: fuser::RenameFlags,
         reply: ReplyEmpty,
     ) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(parent_rel) = inodes.path_for(parent.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
-        let Some(newparent_rel) = self.inodes.lock().unwrap().path_for(newparent.0) else {
+        let Ok(inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        let Some(newparent_rel) = inodes.path_for(newparent.0) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -702,8 +955,12 @@ impl Filesystem for PassthroughFs {
             reply.error(io_errno(e));
             return;
         }
-        self.inodes.lock().unwrap().rename(&old_rel, &new_rel);
-        reply.ok();
+        let Ok(mut inodes) = self.inodes_lock() else {
+            reply.error(Errno::EIO);
+            return;
+        };
+        inodes.rename(&old_rel, &new_rel);
+        fuse_ok!(reply);
     }
 
     /// Grant every lock/unlock request unconditionally. This injector's
@@ -726,6 +983,6 @@ impl Filesystem for PassthroughFs {
         _sleep: bool,
         reply: ReplyEmpty,
     ) {
-        reply.ok();
+        fuse_ok!(reply);
     }
 }

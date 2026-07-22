@@ -209,3 +209,31 @@ pattern = "ignore_test"
 file = "crates/kyzo-trials/src/gauntlet.rs"
 line = 1442
 why_not_sabotage = "KEEP: disclosed open seat `demand-rewriter-generative-gap`. Cap1's RuleBody seam is post-stratification and cannot exercise magic-set demand rewriting; the ignored test names the missing public door (`stratified_magic_compile` / Engine generative magic-vs-bypass) and fails loud if un-ignored before that door exists. Not a soft-green skip — the reason string is the standing obligation."
+
+# ---------------------------------------------------------------------------
+# check: bs_detector — kyzo-crashfs true KEEPs (seed/mix + FUSE API doors)
+# ---------------------------------------------------------------------------
+
+[[bs_detector]]
+pattern = "wrapping_arith"
+file = "crates/kyzo-crashfs/src/identity.rs"
+line = 20
+why_not_sabotage = "KEEP: wrap_mul is the sole SeedMix door for FNV-1a / splitmix identity hashing. Wrap is the published mix contract (not overflow loss); adjacent INVARIANT(SeedMix) names it. Every fault/sim identity and ppm draw routes through this one line."
+
+[[bs_detector]]
+pattern = "wrapping_arith"
+file = "crates/kyzo-crashfs/src/identity.rs"
+line = 27
+why_not_sabotage = "KEEP: wrap_add is the sole SeedMix step-add door for splitmix64 PRNG advance. Wrap is the published mix contract; adjacent INVARIANT(SeedMix) names it."
+
+[[bs_detector]]
+pattern = "ok_drop"
+file = "crates/kyzo-crashfs/src/passthrough.rs"
+line = 190
+why_not_sabotage = "KEEP: fuse_ok! expands to fuser Reply*::ok — the FUSE kernel-success reply door, not Result::ok error-drop. One macro, every success path."
+
+[[bs_detector]]
+pattern = "default_impl"
+file = "crates/kyzo-crashfs/src/sim.rs"
+line = 179
+why_not_sabotage = "KEEP: FaultConfig::default is FaultConfig::none — all ppm rates zero, pure MVCC/SSI. Trials DST uses Default as the no-fault pole of the ppm dial; not a domain sentinel inventing meaning."
