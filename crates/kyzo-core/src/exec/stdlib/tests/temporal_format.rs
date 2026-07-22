@@ -20,7 +20,7 @@ use kyzo_model::value::{DataValue, ValidityTs};
 fn test_pre_epoch_timestamps() -> Result<()>  {
     let secs = op_parse_timestamp(&[DataValue::from("1969-07-20T20:17:00Z")])?
         .get_float()
-        ?;
+        .ok_or_else(|| miette!("float"))?;
     assert!(secs < 0.);
 
     let vld = str2vld("1969-07-20T20:17:00Z")?;

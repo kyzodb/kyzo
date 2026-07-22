@@ -30,7 +30,7 @@ fn test_rand() -> Result<()>  {
     assert!(op_rand_bernoulli(&[DataValue::from(2)]).is_err());
     let n = op_rand_int(&[DataValue::from(100), DataValue::from(200)])?
         .get_int()
-        ?;
+        .ok_or_else(|| miette!("int"))?;
     assert!(n >= 100);
     assert!(n <= 200);
     // An empty range is an error, not a panic.

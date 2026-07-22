@@ -26,7 +26,7 @@ fn test_haversine() -> Result<()>  {
         DataValue::from(180),
     ])?
     .get_float()
-    ?;
+    .ok_or_else(|| miette!("float"))?;
     assert!(close(d, PI));
 
     let d = op_haversine_deg_input(&[
@@ -36,7 +36,7 @@ fn test_haversine() -> Result<()>  {
         DataValue::from(123),
     ])?
     .get_float()
-    ?;
+    .ok_or_else(|| miette!("float"))?;
     assert!(close(d, PI / 2.));
 
     let d = op_haversine(&[
@@ -46,7 +46,7 @@ fn test_haversine() -> Result<()>  {
         DataValue::from(PI),
     ])?
     .get_float()
-    ?;
+    .ok_or_else(|| miette!("float"))?;
     assert!(close(d, PI));
     Ok(())
 }
