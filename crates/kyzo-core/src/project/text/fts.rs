@@ -507,11 +507,13 @@ fn eval_ast(
             res
         }
         FtsExpr::And(children) => {
-            // NonEmptyFtsExprs: at least one child.
-            let mut iter = children.iter();
-            let first = iter.next().expect("NonEmptyFtsExprs");
+            // NonEmptyFtsExprs: at least one child by construction.
+            let (first, rest) = children
+                .as_slice()
+                .split_first()
+                .ok_or_else(|| miette!("NonEmptyFtsExprs invariant violated"))?;
             let mut res = eval_ast(tx, first, idx, base_key_len, score_kind, n_total)?;
-            for child in iter {
+            for child in rest {
                 let next = eval_ast(tx, child, idx, base_key_len, score_kind, n_total)?;
                 res = res
                     .into_iter()
@@ -806,13 +808,12 @@ mod tests {
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
+    use miette::{IntoDiagnostic, Result, miette};
 
     macro_rules! fts_rows {
-        ($($arg:expr),* $(,)?) => {
-            crate::project::contract::search_rows(
-                Fts::search_index($($arg),*).unwrap()
-            ).unwrap()
-        };
+        ($($arg:expr),* $(,)?) => {{
+            crate::project::contract::search_rows(Fts::search_index($($arg),*)?)?
+        }};
     }
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
@@ -852,11 +853,9 @@ mod tests {
 
     /// Simple whitespace-ish tokenizer, lowercased: the same analyzer used to
     /// build and to query.
-    fn analyzer() -> TextAnalyzer {
-        TokenizerConfig::admit("Simple", vec![])
-            .unwrap()
-            .build(&[TokenizerConfig::admit("Lowercase", vec![]).unwrap()])
-            .unwrap()
+    fn analyzer() -> Result<TextAnalyzer> {
+        TokenizerConfig::admit("Simple", vec![])?
+            .build(&[TokenizerConfig::admit("Lowercase", vec![])?])
     }
 
     /// The compiled extractor: project the text column (position 1).
@@ -874,23 +873,21 @@ mod tests {
         extractor: Expr,
     }
 
-    fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
+    fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Result<Fixture> {
         let meta = base_meta();
-        let analyzer = analyzer();
+        let analyzer = analyzer()?;
         let extractor = extractor();
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("docs", meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("docs:fts", fts_index_metadata(&meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         for (k, text) in rows {
             let row = vec![DataValue::from(*k), DataValue::from(*text)];
             base.put_fact(
@@ -898,17 +895,16 @@ mod tests {
                 &row,
                 kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            fts_put(&mut tx, &row, &extractor, &analyzer, &base, &idx).unwrap();
+            )?;
+            fts_put(&mut tx, &row, &extractor, &analyzer, &base, &idx)?;
         }
-        tx.commit().unwrap();
-        Fixture {
+        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok(Fixture {
             base,
             idx,
             analyzer,
             extractor,
-        }
+        })
     }
 
     fn params(k: usize, score_kind: FtsScoreKind) -> FtsSearchParams {
@@ -919,10 +915,15 @@ mod tests {
         }
     }
 
-    fn run(db: &impl Storage, f: &Fixture, q: &str, p: FtsSearchParams) -> Vec<(i64, f64)> {
-        let rtx = db.read_tx().unwrap();
+    fn run(
+        db: &impl Storage,
+        f: &Fixture,
+        q: &str,
+        p: FtsSearchParams,
+    ) -> Result<Vec<(i64, f64)>> {
+        let rtx = db.read_tx()?;
         let n = if p.score_kind == FtsScoreKind::TfIdf {
-            fts_total_docs(&rtx, &f.base).unwrap()
+            fts_total_docs(&rtx, &f.base)?
         } else {
             0
         };
@@ -937,14 +938,16 @@ mod tests {
             &f.analyzer,
             n,
         );
-        hits.iter()
-            .map(|t| {
-                (
-                    t[0].get_int().unwrap(),
-                    t.last().unwrap().get_float().unwrap(),
-                )
-            })
-            .collect()
+        let mut out = Vec::with_capacity(hits.len());
+        for t in &hits {
+            let key = t[0].get_int().ok_or_else(|| miette!("expected int key"))?;
+            let score_dv = t.last().ok_or_else(|| miette!("expected score"))?;
+            let score = score_dv
+                .get_float()
+                .ok_or_else(|| miette!("expected float score"))?;
+            out.push((key, score));
+        }
+        Ok(out)
     }
 
     /// Naive reference: scan the base relation, tokenize each doc, and score a
@@ -966,42 +969,43 @@ mod tests {
     }
 
     #[test]
-    fn tf_scoring_matches_naive_reference() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn tf_scoring_matches_naive_reference() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows = [
             (1, "the cat sat on the mat"),
             (2, "the cat chased the cat away"), // cat twice
             (3, "a dog barked loudly"),
         ];
-        let f = setup(&db, &rows);
+        let f = setup(&db, &rows)?;
 
-        let got: Vec<i64> = run(&db, &f, "cat", params(10, FtsScoreKind::Tf))
+        let got: Vec<i64> = run(&db, &f, "cat", params(10, FtsScoreKind::Tf))?
             .into_iter()
             .map(|(k, _)| k)
             .collect();
         assert_eq!(got, naive_tf(&rows, "cat"), "doc 2 (tf=2) outranks doc 1");
         // Its score is exactly tf * booster = 2.0.
-        let scored = run(&db, &f, "cat", params(10, FtsScoreKind::Tf));
+        let scored = run(&db, &f, "cat", params(10, FtsScoreKind::Tf))?;
         assert_eq!(scored[0].0, 2);
         assert!((scored[0].1 - 2.0).abs() < 1e-9, "tf score is 2.0");
         assert!((scored[1].1 - 1.0).abs() < 1e-9, "tf score is 1.0");
 
         // A term nobody has: no hits.
-        assert!(run(&db, &f, "elephant", params(10, FtsScoreKind::Tf)).is_empty());
+        assert!(run(&db, &f, "elephant", params(10, FtsScoreKind::Tf))?.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn boolean_and_or_not_and_prefix() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn boolean_and_or_not_and_prefix() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows = [
             (1, "quick brown fox"),
             (2, "quick red fox"),
             (3, "slow brown bear"),
             (4, "quicksand trap"),
         ];
-        let f = setup(&db, &rows);
+        let f = setup(&db, &rows)?;
         let keys = |v: Vec<(i64, f64)>| {
             let mut k: Vec<i64> = v.into_iter().map(|(k, _)| k).collect();
             k.sort();
@@ -1009,35 +1013,36 @@ mod tests {
         };
 
         assert_eq!(
-            keys(run(&db, &f, "quick AND fox", params(10, FtsScoreKind::Tf))),
+            keys(run(&db, &f, "quick AND fox", params(10, FtsScoreKind::Tf))?),
             vec![1, 2]
         );
         assert_eq!(
-            keys(run(&db, &f, "brown OR red", params(10, FtsScoreKind::Tf))),
+            keys(run(&db, &f, "brown OR red", params(10, FtsScoreKind::Tf))?),
             vec![1, 2, 3]
         );
         assert_eq!(
-            keys(run(&db, &f, "fox NOT red", params(10, FtsScoreKind::Tf))),
+            keys(run(&db, &f, "fox NOT red", params(10, FtsScoreKind::Tf))?),
             vec![1],
             "doc 2 has red, excluded"
         );
         // Prefix: quick* matches quick and quicksand.
         assert_eq!(
-            keys(run(&db, &f, "quick*", params(10, FtsScoreKind::Tf))),
+            keys(run(&db, &f, "quick*", params(10, FtsScoreKind::Tf))?),
             vec![1, 2, 4]
         );
+        Ok(())
     }
 
     #[test]
-    fn near_respects_distance() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn near_respects_distance() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows = [
             (1, "alpha beta gamma delta"), // alpha..delta distance 3
             (2, "alpha gamma beta delta"),
             (3, "alpha one two three four five delta"), // distance 6
         ];
-        let f = setup(&db, &rows);
+        let f = setup(&db, &rows)?;
         let keys = |v: Vec<(i64, f64)>| {
             let mut k: Vec<i64> = v.into_iter().map(|(k, _)| k).collect();
             k.sort();
@@ -1050,7 +1055,7 @@ mod tests {
                 &f,
                 "NEAR/3(alpha delta)",
                 params(10, FtsScoreKind::Tf)
-            )),
+            )?),
             vec![1, 2]
         );
         // Widen to 6: doc 3 joins.
@@ -1060,15 +1065,16 @@ mod tests {
                 &f,
                 "NEAR/6(alpha delta)",
                 params(10, FtsScoreKind::Tf)
-            )),
+            )?),
             vec![1, 2, 3]
         );
+        Ok(())
     }
 
     #[test]
-    fn tfidf_prefers_rare_terms_and_uses_n() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn tfidf_prefers_rare_terms_and_uses_n() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // "common" is in every doc; "rare" in one.
         let rows = [
             (1, "common rare"),
@@ -1076,9 +1082,9 @@ mod tests {
             (3, "common thing"),
             (4, "common again"),
         ];
-        let f = setup(&db, &rows);
-        let rare = run(&db, &f, "rare", params(10, FtsScoreKind::TfIdf));
-        let common = run(&db, &f, "common", params(10, FtsScoreKind::TfIdf));
+        let f = setup(&db, &rows)?;
+        let rare = run(&db, &f, "rare", params(10, FtsScoreKind::TfIdf))?;
+        let common = run(&db, &f, "common", params(10, FtsScoreKind::TfIdf))?;
         // rare (df=1) scores strictly higher than common (df=4) at equal tf.
         assert!(
             rare[0].1 > common[0].1,
@@ -1089,57 +1095,57 @@ mod tests {
         // And the exact idf formula: N=4, df=1 -> ln(1 + (4-1+0.5)/(1+0.5)).
         let expect = (1.0f64 + (4.0 - 1.0 + 0.5) / (1.0 + 0.5)).ln();
         assert!((rare[0].1 - expect).abs() < 1e-9, "tfidf formula pinned");
+        Ok(())
     }
 
     #[test]
-    fn delete_withdraws_postings() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn delete_withdraws_postings() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows = [(1, "findme keep"), (2, "findme also")];
-        let f = setup(&db, &rows);
+        let f = setup(&db, &rows)?;
         assert_eq!(
-            run(&db, &f, "findme", params(10, FtsScoreKind::Tf)).len(),
+            run(&db, &f, "findme", params(10, FtsScoreKind::Tf))?.len(),
             2
         );
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let row1 = vec![DataValue::from(1), DataValue::from("findme keep")];
-        fts_del(&mut tx, &row1, &f.extractor, &f.analyzer, &f.base, &f.idx).unwrap();
-        tx.commit().unwrap();
+        fts_del(&mut tx, &row1, &f.extractor, &f.analyzer, &f.base, &f.idx)?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let got = run(&db, &f, "findme", params(10, FtsScoreKind::Tf));
+        let got = run(&db, &f, "findme", params(10, FtsScoreKind::Tf))?;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, 2, "only the surviving doc remains");
         // The deleted doc's other term is gone too.
-        assert!(run(&db, &f, "keep", params(10, FtsScoreKind::Tf)).is_empty());
+        assert!(run(&db, &f, "keep", params(10, FtsScoreKind::Tf))?.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn non_string_extraction_is_typed_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn non_string_extraction_is_typed_error() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let meta = base_meta();
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("docs", meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("docs:fts", fts_index_metadata(&meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
-        let a = analyzer();
+        )?;
+        let a = analyzer()?;
         // Extractor projects the INT key column (position 0): not a string.
         let bad_extractor = Expr::Binding {
             var: Symbol::new("k", SourceSpan(0, 0)),
             tuple_pos: BindingPos::Resolved(0),
         };
         let row = vec![DataValue::from(1), DataValue::from("text")];
-        let err = fts_put(&mut tx, &row, &bad_extractor, &a, &base, &idx).unwrap_err();
+        let err = fts_put(&mut tx, &row, &bad_extractor, &a, &base, &idx).err().ok_or_else(|| miette!("expected error"))?;
         assert!(
             err.downcast_ref::<FtsExtractorType>().is_some(),
             "typed extractor error, got: {err:?}"
@@ -1147,32 +1153,32 @@ mod tests {
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     #[test]
-    fn corrupt_posting_is_typed_error_not_panic() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, &[(1, "hello world")]);
+    fn corrupt_posting_is_typed_error_not_panic() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, &[(1, "hello world")])?;
 
         // Byte-flip every index row's value to reserved-msgpack garbage.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
             let lower = kyzo_model::value::encode_key_with_suffix(f.idx.id, &[], &[]);
             let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
-                .collect::<Result<Vec<_>>>()
-                .unwrap()
+                .collect::<Result<Vec<_>>>()?
         };
         assert!(!kvs.is_empty());
         for (k, _) in &kvs {
             let mut garbage = vec![0u8; 8];
             garbage.push(0xc1); // reserved, never-valid msgpack byte
-            tx.put(k, &garbage).unwrap();
+            tx.put(k, &garbage)?;
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let err = Fts::search_index(
             &CancelFlag::inert(),
             &rtx,
@@ -1184,12 +1190,13 @@ mod tests {
             &f.analyzer,
             0,
         )
-        .expect_err("corrupt postings must error, not panic");
+        .err().ok_or_else(|| miette!("corrupt postings must error, not panic"))?;
         assert!(
             err.downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );
+        Ok(())
     }
 
     /// A query that PARSES but tokenizes to nothing (every term is a
@@ -1197,51 +1204,45 @@ mod tests {
     /// an error and not a panic. (An unparseable query — e.g. all whitespace —
     /// is a different, error path.)
     #[test]
-    fn stopword_only_query_returns_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn stopword_only_query_returns_nothing() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let meta = base_meta();
         // Analyzer with a stopword filter: "the"/"a" tokenize away.
-        let a = TokenizerConfig::admit("Simple", vec![])
-            .unwrap()
+        let a = TokenizerConfig::admit("Simple", vec![])?
             .build(&[
-                TokenizerConfig::admit("Lowercase", vec![]).unwrap(),
+                TokenizerConfig::admit("Lowercase", vec![])?,
                 TokenizerConfig::admit(
                     "Stopwords",
                     vec![DataValue::List(vec![
                         DataValue::from("the"),
                         DataValue::from("a"),
                     ])],
-                )
-                .unwrap(),
-            ])
-            .unwrap();
+                )?,
+            ])?;
         let ex = extractor();
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("docs", meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("docs:fts", fts_index_metadata(&meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         let row = vec![DataValue::from(1), DataValue::from("the cat sat")];
         base.put_fact(
             &mut tx,
             &row,
             kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
-        )
-        .unwrap();
-        fts_put(&mut tx, &row, &ex, &a, &base, &idx).unwrap();
-        tx.commit().unwrap();
+        )?;
+        fts_put(&mut tx, &row, &ex, &a, &base, &idx)?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         // "the" and "a" are stopwords: the query tokenizes to nothing.
         let hits = fts_rows!(
             &CancelFlag::inert(),
@@ -1271,6 +1272,7 @@ mod tests {
             0,
         );
         assert_eq!(hits.len(), 1);
+        Ok(())
     }
 
     /// One-law surface: CJK / multi-byte text indexed under Cangjie must be
@@ -1278,30 +1280,26 @@ mod tests {
     /// ranges that reconstruct the term — a wrong Cangjie offset stream
     /// would index garbage and miss the prefix hit.
     #[test]
-    fn cjk_multibyte_index_and_prefix_search() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn cjk_multibyte_index_and_prefix_search() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let meta = base_meta();
         // ForSearch: jieba-rs keeps 南京长江大桥 as one Default dict entry;
         // search mode emits 南京/长江/大桥 (+ whole) so prefix is meaningful.
-        let a = TokenizerConfig::admit("Cangjie", vec![DataValue::from("search")])
-            .unwrap()
-            .build(&[])
-            .unwrap();
+        let a = TokenizerConfig::admit("Cangjie", vec![DataValue::from("search")])?
+            .build(&[])?;
         let ex = extractor();
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("docs", meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("docs:fts", fts_index_metadata(&meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         let rows = [(1i64, "南京长江大桥"), (2i64, "北京天安门")];
         for (k, text) in rows {
             let row = vec![DataValue::from(k), DataValue::from(text)];
@@ -1310,11 +1308,10 @@ mod tests {
                 &row,
                 kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            fts_put(&mut tx, &row, &ex, &a, &base, &idx).unwrap();
+            )?;
+            fts_put(&mut tx, &row, &ex, &a, &base, &idx)?;
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
         let f = Fixture {
             base,
@@ -1323,16 +1320,17 @@ mod tests {
             extractor: ex,
         };
         // Exact multi-byte term.
-        let hit = run(&db, &f, "南京", params(10, FtsScoreKind::Tf));
+        let hit = run(&db, &f, "南京", params(10, FtsScoreKind::Tf))?;
         assert_eq!(hit.len(), 1, "exact CJK term: {hit:?}");
         assert_eq!(hit[0].0, 1);
         // Prefix over a multi-byte term: 南* matches 南京, not 北京.
-        let pref = run(&db, &f, "南*", params(10, FtsScoreKind::Tf));
+        let pref = run(&db, &f, "南*", params(10, FtsScoreKind::Tf))?;
         assert_eq!(pref.len(), 1, "CJK prefix: {pref:?}");
         assert_eq!(pref[0].0, 1);
-        let other = run(&db, &f, "北京", params(10, FtsScoreKind::Tf));
+        let other = run(&db, &f, "北京", params(10, FtsScoreKind::Tf))?;
         assert_eq!(other.len(), 1);
         assert_eq!(other[0].0, 2);
+        Ok(())
     }
 
     /// `k == 0` must bound the filtered path exactly like the unfiltered
@@ -1343,11 +1341,11 @@ mod tests {
     /// entirely at k=0). Fixed by checking before pushing, in both this
     /// engine and the identical shape in `project/sparse/sparse.rs::sparse_search`.
     #[test]
-    fn k_zero_filter_path_returns_zero_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, &[(1, "cat sat")]);
-        let rtx = db.read_tx().unwrap();
+    fn k_zero_filter_path_returns_zero_rows() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, &[(1, "cat sat")])?;
+        let rtx = db.read_tx()?;
         // Always-true filter: the constant `true`.
         let filter = Expr::Const {
             val: DataValue::from(true),
@@ -1382,5 +1380,6 @@ mod tests {
             0,
         );
         assert!(without.is_empty(), "k=0 without filter returns 0 rows");
+        Ok(())
     }
 }
