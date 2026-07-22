@@ -153,7 +153,7 @@ impl Tokenizer for NgramTokenizer {
             ),
             prefix_only: self.prefix_only,
             text,
-            token: Token::default(),
+            token: Token::empty(),
         })
     }
 }

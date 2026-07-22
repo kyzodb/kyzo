@@ -39,8 +39,9 @@ pub(crate) struct Token {
     pub(crate) position_length: usize,
 }
 
-impl Default for Token {
-    fn default() -> Token {
+impl Token {
+    /// Blank reusable token buffer — offsets zero, position unset, text reserved.
+    pub(crate) fn empty() -> Token {
         Token {
             offset_from: 0,
             offset_to: 0,
@@ -49,9 +50,7 @@ impl Default for Token {
             position_length: 1,
         }
     }
-}
 
-impl Token {
     /// Mint a token with a proven offset range (`from <= to`).
     /// `None` refuses `from > to` — never an assert.
     pub(crate) fn new(
@@ -125,12 +124,6 @@ pub(crate) struct TextAnalyzer {
     pub(crate) token_filters: Vec<BoxTokenFilter>,
 }
 
-impl Default for TextAnalyzer {
-    fn default() -> TextAnalyzer {
-        TextAnalyzer::from(EmptyTokenizer)
-    }
-}
-
 impl<T: Tokenizer> From<T> for TextAnalyzer {
     fn from(tokenizer: T) -> Self {
         TextAnalyzer::new(tokenizer, Vec::new())
@@ -138,6 +131,11 @@ impl<T: Tokenizer> From<T> for TextAnalyzer {
 }
 
 impl TextAnalyzer {
+    /// Analyzer with an empty tokenizer and no filters.
+    pub(crate) fn empty() -> TextAnalyzer {
+        TextAnalyzer::from(EmptyTokenizer)
+    }
+
     /// Creates a new `TextAnalyzer` given a tokenizer and a vector of `BoxTokenFilter`.
     ///
     /// When creating a `TextAnalyzer` from a `Tokenizer` alone, prefer using
@@ -165,7 +163,7 @@ impl TextAnalyzer {
     /// let en_stem = TextAnalyzer::from(SimpleTokenizer)
     ///     .filter(RemoveLongFilter::limit(40))
     ///     .filter(LowerCaser)
-    ///     .filter(Stemmer::default());
+    ///     .filter(Stemmer::new(Language::English));
     /// ```
     #[cfg(test)]
     pub(crate) fn filter<F: Into<BoxTokenFilter>>(mut self, token_filter: F) -> Self {

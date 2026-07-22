@@ -27,7 +27,7 @@ impl Tokenizer for WhitespaceTokenizer {
         BoxTokenStream::from(WhitespaceTokenStream {
             text,
             chars: text.char_indices(),
-            token: Token::default(),
+            token: Token::empty(),
         })
     }
 }

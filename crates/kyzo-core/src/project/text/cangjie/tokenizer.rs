@@ -21,8 +21,9 @@ pub(crate) struct CangJieTokenizer {
     pub(crate) option: TokenizerOption,
 }
 
-impl Default for CangJieTokenizer {
-    fn default() -> Self {
+impl CangJieTokenizer {
+    /// Empty Jieba worker with the default cut option (no HMM).
+    pub(crate) fn empty() -> Self {
         CangJieTokenizer {
             worker: Arc::new(Jieba::empty()),
             option: TokenizerOption::Default { hmm: false },

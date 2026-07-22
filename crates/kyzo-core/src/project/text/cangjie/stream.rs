@@ -66,7 +66,7 @@ impl<'a> CangjieTokenStream<'a> {
         CangjieTokenStream {
             result,
             index: 0,
-            token: Token::default(),
+            token: Token::empty(),
         }
     }
 }

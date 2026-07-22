@@ -83,13 +83,6 @@ impl Stemmer {
     }
 }
 
-impl Default for Stemmer {
-    /// Creates a new `Stemmer` [`TokenFilter`] for [`Language::English`].
-    fn default() -> Self {
-        Stemmer::new(Language::English)
-    }
-}
-
 impl TokenFilter for Stemmer {
     fn transform<'a>(&self, token_stream: BoxTokenStream<'a>) -> BoxTokenStream<'a> {
         let inner_stemmer = rust_stemmers::Stemmer::create(self.stemmer_algorithm);

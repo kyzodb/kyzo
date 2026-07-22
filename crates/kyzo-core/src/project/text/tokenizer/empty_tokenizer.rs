@@ -15,13 +15,20 @@ pub(crate) struct EmptyTokenizer;
 
 impl Tokenizer for EmptyTokenizer {
     fn token_stream<'a>(&self, _text: &'a str) -> BoxTokenStream<'a> {
-        EmptyTokenStream::default().into()
+        EmptyTokenStream::empty().into()
     }
 }
 
-#[derive(Default)]
 struct EmptyTokenStream {
     token: Token,
+}
+
+impl EmptyTokenStream {
+    fn empty() -> Self {
+        Self {
+            token: Token::empty(),
+        }
+    }
 }
 
 impl TokenStream for EmptyTokenStream {

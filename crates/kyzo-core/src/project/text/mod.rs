@@ -518,7 +518,6 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
 #[cfg(test)]
 /// The per-database analyzer cache: index name → analyzer, and config hash →
 /// analyzer, so N indices sharing one pipeline share one live instance.
-#[derive(Default)]
 pub(crate) struct TokenizerCache {
     pub(crate) named_cache: RwLock<HashMap<SmartString<LazyCompact>, Arc<TextAnalyzer>>>,
     pub(crate) hashed_cache: RwLock<HashMap<Vec<u8>, Arc<TextAnalyzer>>>,
@@ -540,6 +539,14 @@ fn write_lock<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
 
 #[cfg(test)]
 impl TokenizerCache {
+    /// Empty named + hashed analyzer caches.
+    pub(crate) fn empty() -> Self {
+        Self {
+            named_cache: RwLock::new(HashMap::new()),
+            hashed_cache: RwLock::new(HashMap::new()),
+        }
+    }
+
     pub(crate) fn get(
         &self,
         tokenizer_name: &str,
@@ -654,7 +661,7 @@ mod tests {
     /// `Arc`.
     #[test]
     fn cache_is_deterministic() {
-        let cache = TokenizerCache::default();
+        let cache = TokenizerCache::empty();
         let tk = cfg("Simple", vec![]);
         let filters = vec![cfg("Lowercase", vec![])];
 

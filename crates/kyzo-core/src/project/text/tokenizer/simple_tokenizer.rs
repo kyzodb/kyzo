@@ -27,7 +27,7 @@ impl Tokenizer for SimpleTokenizer {
         BoxTokenStream::from(SimpleTokenStream {
             text,
             chars: text.char_indices(),
-            token: Token::default(),
+            token: Token::empty(),
         })
     }
 }

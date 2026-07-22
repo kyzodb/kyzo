@@ -134,7 +134,7 @@ use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 /// is the UFCS alias into that door.
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Fts;
 
 impl ProjectionKind for Fts {}
