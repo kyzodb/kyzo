@@ -312,7 +312,9 @@ fn alpha(m: usize) -> f64 {
         other => {
             let m32 = match u32::try_from(other) {
                 Ok(v) => v,
-                Err(_) => return 0.7213,
+                Err(_) => {
+                    return 0.7213;
+                }
             };
             0.7213 / (1.0 + 1.079 / f64::from(m32))
         }
@@ -338,7 +340,10 @@ mod tests {
         let mut hll = HyperLogLog::<M>::new();
         for i in 0..n {
             // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-            hll.add(&val((std::num::Wrapping(salt) * std::num::Wrapping(1_000_003) + std::num::Wrapping(i)).0));
+            hll.add(&val((std::num::Wrapping(salt)
+                * std::num::Wrapping(1_000_003)
+                + std::num::Wrapping(i))
+            .0));
         }
         hll
     }
@@ -494,7 +499,9 @@ mod tests {
         let mut state = 0x9E37_79B9_7F4A_7C15u64;
         let mut next = move || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             state >> 33
         };
         for trial in 0..6u64 {
@@ -559,10 +566,7 @@ mod tests {
         assert_eq!(HyperLogLog::<M>::decode(&bytes)?, s);
 
         assert!(HyperLogLog::<M>::decode(&[]).is_err());
-        assert!(
-            HyperLogLog::<M>::decode(&[0x02, 10]).is_err(),
-            "bad tag"
-        );
+        assert!(HyperLogLog::<M>::decode(&[0x02, 10]).is_err(), "bad tag");
         // Wrong precision for this type (wire says 14, type is p=10).
         assert!(
             HyperLogLog::<M>::decode(&[FORMAT_TAG, 14]).is_err(),
@@ -570,10 +574,7 @@ mod tests {
         );
         let mut wrong_len = bytes.clone();
         wrong_len.pop();
-        assert!(
-            HyperLogLog::<M>::decode(&wrong_len).is_err(),
-            "bad length"
-        );
+        assert!(HyperLogLog::<M>::decode(&wrong_len).is_err(), "bad length");
         Ok(())
     }
 

@@ -188,8 +188,12 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     // The dump carries the store's on-disk format version: a dump of one
     // format can never silently restore into a store of another.
     let version = FormatVersion::CURRENT.as_bytes();
-    w.write_all(&(u64::try_from(version.len()).map_err(|_| miette!("format version length does not fit u64"))?).to_be_bytes())
-        .into_diagnostic()?;
+    w.write_all(
+        &(u64::try_from(version.len())
+            .map_err(|_| miette!("format version length does not fit u64"))?)
+        .to_be_bytes(),
+    )
+    .into_diagnostic()?;
     w.write_all(&version).into_diagnostic()?;
     // SNAPSHOT FIRST, FLOOR SECOND — see `floor_after_snapshot`'s doc
     // comment for the full proof. Reversing this order (floor, then
@@ -215,11 +219,17 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
         {
             verify_stamp_within_floor(id, &k, floor)?;
         }
-        w.write_all(&(u64::try_from(k.len()).map_err(|_| miette!("dump key length does not fit u64"))?).to_be_bytes())
-            .into_diagnostic()?;
+        w.write_all(
+            &(u64::try_from(k.len()).map_err(|_| miette!("dump key length does not fit u64"))?)
+                .to_be_bytes(),
+        )
+        .into_diagnostic()?;
         w.write_all(&k).into_diagnostic()?;
-        w.write_all(&(u64::try_from(v.len()).map_err(|_| miette!("dump value length does not fit u64"))?).to_be_bytes())
-            .into_diagnostic()?;
+        w.write_all(
+            &(u64::try_from(v.len()).map_err(|_| miette!("dump value length does not fit u64"))?)
+                .to_be_bytes(),
+        )
+        .into_diagnostic()?;
         w.write_all(&v).into_diagnostic()?;
     }
     w.flush().into_diagnostic()?;
@@ -377,9 +387,9 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     let mut floor_bytes = [0u8; 8];
     r.read_exact(&mut floor_bytes)
         .map_err(|_| miette!("truncated dump: missing clock floor"))?;
-    db.raise_clock_floor(kyzo_model::value::ValidityTs::of_micros(i64::from_be_bytes(
-        floor_bytes,
-    )))?;
+    db.raise_clock_floor(kyzo_model::value::ValidityTs::of_micros(
+        i64::from_be_bytes(floor_bytes),
+    ))?;
     // Mark durable *before* any dump pair — crash after this point leaves a
     // store that admit_complete_store refuses, not a costume-complete prefix.
     mark_restore_in_progress(db)?;
@@ -426,8 +436,12 @@ fn read_len_prefixed(r: &mut impl Read) -> Result<Option<(Vec<u8>, u64)>> {
     let mut len_buf = [0u8; 8];
     match r.read_exact(&mut len_buf) {
         Ok(()) => {}
-        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(miette!("reading dump: {e}")),
+        Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+            return Ok(None);
+        }
+        Err(e) => {
+            return Err(miette!("reading dump: {e}"));
+        }
     }
     let len = u64::from_be_bytes(len_buf);
     let mut buf = Vec::new();
@@ -652,9 +666,7 @@ impl LeaveIsFreePack {
     /// Crate-visible recompute only — unusable as the ceremony `local` anchor
     /// ([`ImportCapability::after_chain_root_verify`] always refuses bare cuts).
     /// Mint via [`OriginRootRegistry::after_chain_root_verify`].
-    pub(crate) fn replica_cut_recompute(
-        &self,
-    ) -> Result<ReplicaCutRecompute, PackRefuse> {
+    pub(crate) fn replica_cut_recompute(&self) -> Result<ReplicaCutRecompute, PackRefuse> {
         let content = self
             .pack_content_root()
             .map_err(|_| PackRefuse::ForeignHistoryUnverified)?;
@@ -682,7 +694,10 @@ impl LeaveIsFreePack {
     ///
     /// [`import_verify`] gates admission on `observed == capability.bound_root()`.
     pub fn recompute_root(&self) -> Result<StateRoot, PackRefuse> {
-        Ok(self.replica_cut_recompute()?.recompute().map_err(|_| PackRefuse::ForeignHistoryUnverified)?)
+        Ok(self
+            .replica_cut_recompute()?
+            .recompute()
+            .map_err(|_| PackRefuse::ForeignHistoryUnverified)?)
     }
 }
 
@@ -945,10 +960,10 @@ pub fn import_leave_is_free(
 
 #[cfg(test)]
 mod pins {
-    /// Backup floor law pins (re-homed from storage/tests.rs).
-    use miette::{IntoDiagnostic, Result, miette};
     use kyzo_model::TupleT;
     use kyzo_model::value::{DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs};
+    /// Backup floor law pins (re-homed from storage/tests.rs).
+    use miette::{IntoDiagnostic, Result, miette};
 
     use crate::session::access::AccessLevel;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, SystemKey};
@@ -1018,7 +1033,7 @@ mod pins {
             err.downcast_ref::<DumpClockFloorViolation>().is_some(),
             "expected a typed DumpClockFloorViolation, got: {err}"
         );
-    
+
         Ok(())
     }
 
@@ -1070,10 +1085,8 @@ mod pins {
         assert!(!pack.wrapped_shred_salts().is_empty());
         let empty_ledger = ShredLedger::new();
         let mut registry = OriginRootRegistry::new();
-        registry
-            .insert(pack.claimed_origin_store_id()?, pack.recompute_root()?)?;
-        let verified = registry
-            .after_chain_root_verify(&pack)?;
+        registry.insert(pack.claimed_origin_store_id()?, pack.recompute_root()?)?;
+        let verified = registry.after_chain_root_verify(&pack)?;
         assert!(
             import_verify(
                 &pack,
@@ -1101,7 +1114,7 @@ mod pins {
             import_verify(&pack, verified, ObjectsCompleteness::Complete, &shredded),
             Err(PackRefuse::Shredded)
         ));
-    
+
         Ok(())
     }
 }
@@ -1113,7 +1126,6 @@ mod pins {
 /// silent import Unconstructible (no free Verified mint from pack self-cut).
 #[cfg(test)]
 mod import_verify {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::{
         ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
         OriginRootRegistry, PackRefuse, import_leave_is_free, import_verify,
@@ -1127,6 +1139,7 @@ mod import_verify {
     use crate::store::merkle::{ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot};
     use crate::store::open::StoreId;
     use crate::store::sweep::CommitOrdinal;
+    use miette::{IntoDiagnostic, Result, miette};
 
     fn sample_pack() -> Result<(LeaveIsFreePack, crate::store::crypto::WrappedShredSalt)> {
         let store = StoreId::from_digest([0x80; 32]);
@@ -1194,7 +1207,7 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
-    
+
         Ok(())
     }
 
@@ -1220,7 +1233,7 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
-    
+
         Ok(())
     }
 
@@ -1233,7 +1246,7 @@ mod import_verify {
             empty.after_chain_root_verify(&pack),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
-    
+
         Ok(())
     }
 
@@ -1242,11 +1255,10 @@ mod import_verify {
     fn wrong_registered_root_refuses_foreign_history() -> Result<()> {
         let (pack, _) = sample_pack()?;
         let mut registry = OriginRootRegistry::new();
-        registry
-            .insert(
-                pack.claimed_origin_store_id()?,
-                StateRoot::from_digest([0xAD; 32]),
-            )?;
+        registry.insert(
+            pack.claimed_origin_store_id()?,
+            StateRoot::from_digest([0xAD; 32]),
+        )?;
         assert_ne!(
             registry.get(pack.claimed_origin_store_id()?),
             Some(pack.recompute_root()?),
@@ -1256,7 +1268,7 @@ mod import_verify {
             registry.after_chain_root_verify(&pack),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
-    
+
         Ok(())
     }
 
@@ -1276,13 +1288,11 @@ mod import_verify {
         );
 
         let mut registry = OriginRootRegistry::new();
-        registry
-            .insert(victim, root_a)?;
+        registry.insert(victim, root_a)?;
         assert_eq!(registry.get(victim), Some(root_a));
 
         // Same root re-register → idempotent Ok.
-        registry
-            .insert(victim, root_a)?;
+        registry.insert(victim, root_a)?;
         assert_eq!(registry.get(victim), Some(root_a));
 
         assert_eq!(
@@ -1294,7 +1304,7 @@ mod import_verify {
             Some(root_a),
             "sealed root A must survive the refused overwrite attempt"
         );
-    
+
         Ok(())
     }
 
@@ -1303,8 +1313,7 @@ mod import_verify {
     fn trusted_origin_matching_root_admits() -> Result<()> {
         let (pack, _) = sample_pack()?;
         let registry = registry_trusting(&pack)?;
-        let cap = registry
-            .after_chain_root_verify(&pack)?;
+        let cap = registry.after_chain_root_verify(&pack)?;
         assert!(cap.is_verified());
         assert_eq!(cap.bound_root(), Some(pack.recompute_root()?));
         let ledger = ShredLedger::new();
@@ -1316,7 +1325,7 @@ mod import_verify {
             import_leave_is_free(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
             "production import_leave_is_free door must admit after ceremony"
         );
-    
+
         Ok(())
     }
 
@@ -1335,7 +1344,7 @@ mod import_verify {
         ));
         assert!(!ImportCapability::unverified().is_verified());
         assert_eq!(ImportCapability::unverified().bound_root(), None);
-    
+
         Ok(())
     }
 
@@ -1360,7 +1369,7 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
-    
+
         Ok(())
     }
 
@@ -1382,7 +1391,7 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
-    
+
         Ok(())
     }
 
@@ -1396,7 +1405,7 @@ mod import_verify {
             import_verify(&pack, cap, ObjectsCompleteness::Incomplete, &ledger),
             Err(PackRefuse::IncompleteRestore)
         ));
-    
+
         Ok(())
     }
 
@@ -1412,7 +1421,7 @@ mod import_verify {
             import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger),
             Err(PackRefuse::Shredded)
         ));
-    
+
         Ok(())
     }
 
@@ -1433,7 +1442,7 @@ mod import_verify {
             store_tag.contains("ForeignHistoryUnverified"),
             "store refuse must name ForeignHistoryUnverified: {store_tag}"
         );
-    
+
         Ok(())
     }
 }
@@ -1441,7 +1450,6 @@ mod import_verify {
 /// Seat 26 / #374 T11 — partial restore distinguishable from a complete store.
 #[cfg(test)]
 mod restore_integrity {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::{
         IncompleteRestore, admit_complete_store, dump_storage, open_complete_store,
         restore_pairs_for_test, restore_storage,
@@ -1449,6 +1457,7 @@ mod restore_integrity {
     use crate::store::fjall::new_fjall_storage;
     use crate::store::{ReadTx, Storage, WriteTx};
     use miette::miette;
+    use miette::{IntoDiagnostic, Result, miette};
 
     /// NASTY (#374 T11): interrupt mid-pair put after the in-progress mark is
     /// durable; reopen via plain complete-store open and assert typed refuse —
@@ -1516,7 +1525,7 @@ mod restore_integrity {
             reopen_err.downcast_ref::<IncompleteRestore>().is_some(),
             "open_complete_store must typed-refuse IncompleteRestore, got: {reopen_err}"
         );
-    
+
         Ok(())
     }
 
@@ -1539,13 +1548,12 @@ mod restore_integrity {
         restore_storage(&tgt, &dump)?;
         admit_complete_store(&tgt)?;
         assert!(
-            !tgt.read_tx()?
-                .exists(super::RESTORE_IN_PROGRESS_KEY)?,
+            !tgt.read_tx()?.exists(super::RESTORE_IN_PROGRESS_KEY)?,
             "in-progress mark must be cleared after successful restore"
         );
         drop(tgt);
         open_complete_store(&tgt_path)?;
-    
+
         Ok(())
     }
 }

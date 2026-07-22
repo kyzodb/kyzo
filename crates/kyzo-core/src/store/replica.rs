@@ -1131,7 +1131,7 @@ impl CrossingKind {
             9 => Ok(Self::Rule),
             10 => Ok(Self::Derivation),
             11 => Ok(Self::Invalidation),
-            12..=u8::MAX => Err(CrossingRefuse::KindInvalid),
+            other => Err(CrossingRefuse::KindInvalid),
         }
     }
 
@@ -1162,7 +1162,8 @@ impl CrossingContext {
         match (tag, digest) {
             (0, None) => Ok(Self::Unscoped),
             (1, Some(d)) => Ok(Self::Scoped(d)),
-            (0, Some(_)) | (1, None) | (2..=u8::MAX, _) => Err(CrossingRefuse::ContextInvalid),
+            (0, Some(_)) | (1, None) => Err(CrossingRefuse::ContextInvalid),
+            other => Err(CrossingRefuse::ContextInvalid),
         }
     }
 }
@@ -1960,10 +1961,7 @@ mod authorizing_key_ed25519_tests {
             identity_key,
         )?;
         assert!(
-            !weak.verify_signature(
-                &Digest::admit([0x99u8; 32]),
-                &Signature::admit(forged_sig),
-            ),
+            !weak.verify_signature(&Digest::admit([0x99u8; 32]), &Signature::admit(forged_sig),),
             "FORGERY ACCEPTED: verify_signature admits a signature under a small-order \
              (identity) authorizing key over an arbitrary body -- the permissive \
              .verify() must become verify_strict"
@@ -2157,7 +2155,17 @@ mod crossing_contract_tests {
     }
 
     fn matching_envelope(cert: &AdmissionCertificate) -> CrossingEnvelope {
-        CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Claim, schema_version: *cert.protocol_version(), schema_cut: *cert.schema_cut(), issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::DeclaredRequired, evidence: CrossingEvidence::Present([0xEE; 32]), status: CrossingStatus::Active, shared_capabilities: CrossingCapabilitySet::new() })
+        CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Claim,
+            schema_version: *cert.protocol_version(),
+            schema_cut: *cert.schema_cut(),
+            issuing_authority: cert.authorizing_key_id(),
+            context: CrossingContext::Unscoped,
+            evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
+            evidence: CrossingEvidence::Present([0xEE; 32]),
+            status: CrossingStatus::Active,
+            shared_capabilities: CrossingCapabilitySet::new(),
+        })
     }
 
     #[test]
@@ -2171,10 +2179,29 @@ mod crossing_contract_tests {
         let cert = mint_signed(&key, scope, [0x51; 32])?;
         let local = StoreId::from_digest([0xD1; 32]);
 
-        let envelope = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Claim, schema_version: *cert.protocol_version(), schema_cut: *cert.schema_cut(), issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::DeclaredRequired, evidence: CrossingEvidence::Absent, status: CrossingStatus::Active, shared_capabilities: CrossingCapabilitySet::new() });
+        let envelope = CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Claim,
+            schema_version: *cert.protocol_version(),
+            schema_cut: *cert.schema_cut(),
+            issuing_authority: cert.authorizing_key_id(),
+            context: CrossingContext::Unscoped,
+            evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
+            evidence: CrossingEvidence::Absent,
+            status: CrossingStatus::Active,
+            shared_capabilities: CrossingCapabilitySet::new(),
+        });
 
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &envelope,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &scopes,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &CrossingCapabilitySet::new()
+            }),
             Err(CrossingRefuse::DeclaredEvidenceMissing),
             "missing declared evidence must typed-refuse, not silent drop"
         );
@@ -2195,21 +2222,48 @@ mod crossing_contract_tests {
 
         let empty_scopes = ScopeManifestTable::new();
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &empty_scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &held }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &envelope,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &empty_scopes,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &held
+            }),
             Err(CrossingRefuse::Replica(ReplicaRefuse::ScopeUnknown))
         );
 
         let mut revoked = ScopeManifestTable::new();
         revoked.set(scope, ScopeManifestStatus::Revoked);
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &revoked, continuity: Some(&OriginContinuity::mint()), held_capabilities: &held }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &envelope,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &revoked,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &held
+            }),
             Err(CrossingRefuse::Replica(ReplicaRefuse::ScopeRevoked))
         );
 
         let mut denied = ScopeManifestTable::new();
         denied.set(scope, ScopeManifestStatus::Incompatible);
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &denied, continuity: Some(&OriginContinuity::mint()), held_capabilities: &held }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &envelope,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &denied,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &held
+            }),
             Err(CrossingRefuse::Replica(ReplicaRefuse::ScopeDenied))
         );
 
@@ -2242,11 +2296,30 @@ mod crossing_contract_tests {
         let local = StoreId::from_digest([0xD3; 32]);
         let mut claimed = CrossingCapabilitySet::new();
         claimed.insert([0xCA; 32]);
-        let envelope = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Claim, schema_version: *cert.protocol_version(), schema_cut: *cert.schema_cut(), issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Scoped([0xC0; 32]), evidence_demand: CrossingEvidenceDemand::DeclaredRequired, evidence: CrossingEvidence::Present([0xEE; 32]), status: CrossingStatus::Active, shared_capabilities: claimed.clone() });
+        let envelope = CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Claim,
+            schema_version: *cert.protocol_version(),
+            schema_cut: *cert.schema_cut(),
+            issuing_authority: cert.authorizing_key_id(),
+            context: CrossingContext::Scoped([0xC0; 32]),
+            evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
+            evidence: CrossingEvidence::Present([0xEE; 32]),
+            status: CrossingStatus::Active,
+            shared_capabilities: claimed.clone(),
+        });
         let mut held = CrossingCapabilitySet::new();
         held.insert([0xCA; 32]);
 
-        let validated = validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &held })?;
+        let validated = validate_crossing_before_lower(CrossingValidationSeats {
+            certificate: &cert,
+            envelope: &envelope,
+            local_store: local,
+            local_commit: CommitOrdinal::ZERO,
+            authorizing_keys: &keys,
+            scopes: &scopes,
+            continuity: Some(&OriginContinuity::mint()),
+            held_capabilities: &held,
+        })?;
         assert_eq!(validated.kind(), CrossingKind::Claim);
         assert_eq!(validated.origin_schema_cut(), cert.schema_cut());
         assert!(matches!(
@@ -2255,13 +2328,41 @@ mod crossing_contract_tests {
         ));
 
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &envelope,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &scopes,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &CrossingCapabilitySet::new()
+            }),
             Err(CrossingRefuse::CapabilityMissing)
         );
 
-        let tombstoned = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Claim, schema_version: *cert.protocol_version(), schema_cut: *cert.schema_cut(), issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::NotRequired, evidence: CrossingEvidence::Absent, status: CrossingStatus::Tombstoned, shared_capabilities: CrossingCapabilitySet::new() });
+        let tombstoned = CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Claim,
+            schema_version: *cert.protocol_version(),
+            schema_cut: *cert.schema_cut(),
+            issuing_authority: cert.authorizing_key_id(),
+            context: CrossingContext::Unscoped,
+            evidence_demand: CrossingEvidenceDemand::NotRequired,
+            evidence: CrossingEvidence::Absent,
+            status: CrossingStatus::Tombstoned,
+            shared_capabilities: CrossingCapabilitySet::new(),
+        });
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &tombstoned, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &tombstoned,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &scopes,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &CrossingCapabilitySet::new()
+            }),
             Err(CrossingRefuse::StatusNotLowerable)
         );
 
@@ -2284,21 +2385,78 @@ mod crossing_contract_tests {
         let cert = mint_signed(&key, scope, [0x51; 32])?;
         let local = StoreId::from_digest([0xD4; 32]);
 
-        let bad_schema = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Entity, schema_version: *b"bad.vers", schema_cut: *cert.schema_cut(), issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::NotRequired, evidence: CrossingEvidence::Absent, status: CrossingStatus::Active, shared_capabilities: CrossingCapabilitySet::new() });
+        let bad_schema = CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Entity,
+            schema_version: *b"bad.vers",
+            schema_cut: *cert.schema_cut(),
+            issuing_authority: cert.authorizing_key_id(),
+            context: CrossingContext::Unscoped,
+            evidence_demand: CrossingEvidenceDemand::NotRequired,
+            evidence: CrossingEvidence::Absent,
+            status: CrossingStatus::Active,
+            shared_capabilities: CrossingCapabilitySet::new(),
+        });
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &bad_schema, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &bad_schema,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &scopes,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &CrossingCapabilitySet::new()
+            }),
             Err(CrossingRefuse::SchemaVersionMismatch)
         );
 
-        let bad_cut = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Entity, schema_version: *cert.protocol_version(), schema_cut: [0xFF; 32], issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::NotRequired, evidence: CrossingEvidence::Absent, status: CrossingStatus::Active, shared_capabilities: CrossingCapabilitySet::new() });
+        let bad_cut = CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Entity,
+            schema_version: *cert.protocol_version(),
+            schema_cut: [0xFF; 32],
+            issuing_authority: cert.authorizing_key_id(),
+            context: CrossingContext::Unscoped,
+            evidence_demand: CrossingEvidenceDemand::NotRequired,
+            evidence: CrossingEvidence::Absent,
+            status: CrossingStatus::Active,
+            shared_capabilities: CrossingCapabilitySet::new(),
+        });
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &bad_cut, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &bad_cut,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &scopes,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &CrossingCapabilitySet::new()
+            }),
             Err(CrossingRefuse::SchemaCutMismatch)
         );
 
-        let bad_auth = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Entity, schema_version: *cert.protocol_version(), schema_cut: *cert.schema_cut(), issuing_authority: AuthorizingKeyId::from_digest([0x00; 32]), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::NotRequired, evidence: CrossingEvidence::Absent, status: CrossingStatus::Active, shared_capabilities: CrossingCapabilitySet::new() });
+        let bad_auth = CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Entity,
+            schema_version: *cert.protocol_version(),
+            schema_cut: *cert.schema_cut(),
+            issuing_authority: AuthorizingKeyId::from_digest([0x00; 32]),
+            context: CrossingContext::Unscoped,
+            evidence_demand: CrossingEvidenceDemand::NotRequired,
+            evidence: CrossingEvidence::Absent,
+            status: CrossingStatus::Active,
+            shared_capabilities: CrossingCapabilitySet::new(),
+        });
         assert_eq!(
-            validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &bad_auth, local_store: local, local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() }),
+            validate_crossing_before_lower(CrossingValidationSeats {
+                certificate: &cert,
+                envelope: &bad_auth,
+                local_store: local,
+                local_commit: CommitOrdinal::ZERO,
+                authorizing_keys: &keys,
+                scopes: &scopes,
+                continuity: Some(&OriginContinuity::mint()),
+                held_capabilities: &CrossingCapabilitySet::new()
+            }),
             Err(CrossingRefuse::AuthorityMismatch)
         );
 

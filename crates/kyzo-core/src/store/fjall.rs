@@ -398,7 +398,9 @@ pub fn new_fjall_storage(path: impl AsRef<Path>) -> Result<FjallStorage> {
 pub(crate) fn quarter_system_ram_bytes() -> Option<u64> {
     let meminfo = match std::fs::read_to_string("/proc/meminfo") {
         Ok(s) => s,
-        Err(_io) => return None,
+        Err(_io) => {
+            return None;
+        }
     };
     let kib = meminfo
         .lines()
@@ -762,10 +764,7 @@ fn raw_range<'a, R: Readable>(
 /// Arc-backed, so this is a refcount bump per field, never a heap copy.
 fn materialize_row(guard: Guard) -> Result<(Slice, Slice)> {
     let (k, v) = guard.into_inner_if(|_| true).map_err(FjallRefuse::Read)?;
-    Ok((
-        k,
-        v.ok_or(FjallRefuse::ValueElided)?,
-    ))
+    Ok((k, v.ok_or(FjallRefuse::ValueElided)?))
 }
 
 /// A key alone, filtering the guard on `key()` and never loading the value
@@ -926,11 +925,11 @@ impl ReadTx for FjallWriteTx {
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         {
-        let Ok(tx) = self.open_tx() else {
-            return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
-        };
-        Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_row))
-    }
+            let Ok(tx) = self.open_tx() else {
+                return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
+            };
+            Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_row))
+        }
     }
 
     fn range_scan_keys<'a>(
@@ -939,11 +938,11 @@ impl ReadTx for FjallWriteTx {
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
         {
-        let Ok(tx) = self.open_tx() else {
-            return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
-        };
-        Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_key))
-    }
+            let Ok(tx) = self.open_tx() else {
+                return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
+            };
+            Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_key))
+        }
     }
 
     fn range_skip_scan_tuple<'a>(
@@ -962,11 +961,11 @@ impl ReadTx for FjallWriteTx {
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         {
-        let Ok(tx) = self.open_tx() else {
-            return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
-        };
-        read_total_scan(tx, &self.ks)
-    }
+            let Ok(tx) = self.open_tx() else {
+                return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
+            };
+            read_total_scan(tx, &self.ks)
+        }
     }
 }
 
@@ -1088,8 +1087,8 @@ impl Drop for FjallWriteTx {
 
 #[cfg(test)]
 mod pins {
-    use miette::{IntoDiagnostic, Result, miette};
     use kyzo_model::TupleT;
+    use miette::{IntoDiagnostic, Result, miette};
     /// Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).
     use std::collections::BTreeMap;
 
@@ -1174,7 +1173,11 @@ mod pins {
         tx.commit()?;
 
         let lower = rel.raw_encode().to_vec();
-        let upper = rel.next().ok_or_else(|| miette!("next rel"))?.raw_encode().to_vec();
+        let upper = rel
+            .next()
+            .ok_or_else(|| miette!("next rel"))?
+            .raw_encode()
+            .to_vec();
         let tx = db.read_tx()?;
         for at in 0..=10i64 {
             let got: Vec<(String, i64)> = tx
@@ -1223,7 +1226,7 @@ mod pins {
             let want = as_of_oracle(history, at);
             assert_eq!(got, want, "as-of {at}");
         }
-    
+
         Ok(())
     }
 
@@ -1261,7 +1264,7 @@ mod pins {
         assert_eq!(r.get(b"m")?, Some(Slice::from(b"2")));
         assert_eq!(r.get(b"mine")?, Some(Slice::from(b"x")));
         assert_eq!(r.get(b"after")?, Some(Slice::from(b"ok")));
-    
+
         Ok(())
     }
 
@@ -1297,7 +1300,7 @@ mod pins {
         w.put(b"ww", b"3")?;
         w.commit()?;
         ro.commit()?;
-    
+
         Ok(())
     }
 
@@ -1309,7 +1312,11 @@ mod pins {
         let db = std::sync::Arc::new(new_fjall_storage(dir.path())?);
         let rel = RelationId::new(7).ok_or_else(|| miette!("relation id"))?;
         let lower = rel.raw_encode().to_vec();
-        let upper = rel.next().ok_or_else(|| miette!("next rel"))?.raw_encode().to_vec();
+        let upper = rel
+            .next()
+            .ok_or_else(|| miette!("next rel"))?
+            .raw_encode()
+            .to_vec();
 
         let val_of = |v: i64| -> Vec<u8> {
             let mut out = Vec::new();
@@ -1363,7 +1370,9 @@ mod pins {
                                     break;
                                 }
                                 Err(e) if e.is_conflict() => continue,
-                                Err(e) => return Err(miette!("unexpected commit error: {e:?}")),
+                                Err(e) => {
+                                    return Err(miette!("unexpected commit error: {e:?}"));
+                                }
                             }
                         }
                     }
@@ -1386,7 +1395,7 @@ mod pins {
             "every Ok commit observed ({} commits)",
             commits.load(Ordering::SeqCst)
         );
-    
+
         Ok(())
     }
 
@@ -1396,8 +1405,7 @@ mod pins {
         // reopen guard can NAME them in the mismatch Err.
         assert!(FormatVersion::parse(b"6").is_ok());
         assert!(FormatVersion::parse(b"06").is_err());
-        let older =
-            FormatVersion::parse(b"4")?;
+        let older = FormatVersion::parse(b"4")?;
         assert_ne!(older, FormatVersion::CURRENT);
 
         let dir = tempfile::tempdir().into_diagnostic()?;
@@ -1409,17 +1417,19 @@ mod pins {
         // Adversary: rewrite the meta stamp to an older-but-parseable version.
         {
             use fjall::{KeyspaceCreateOptions, OptimisticTxDatabase, PersistMode};
-            let raw = OptimisticTxDatabase::builder(dir.path())
-                .open()?;
-            let meta = raw
-                .keyspace(super::META_KEYSPACE_NAME, KeyspaceCreateOptions::default)?;
+            let raw = OptimisticTxDatabase::builder(dir.path()).open()?;
+            let meta = raw.keyspace(super::META_KEYSPACE_NAME, KeyspaceCreateOptions::default)?;
             meta.insert(super::FORMAT_VERSION_KEY, older.as_bytes())?;
             raw.persist(PersistMode::SyncAll).into_diagnostic()?;
         }
 
         let err = match new_fjall_storage(dir.path()) {
             Err(e) => e,
-            Ok(_) => return Err(miette!("production open must refuse older-but-parseable stamp")),
+            Ok(_) => {
+                return Err(miette!(
+                    "production open must refuse older-but-parseable stamp"
+                ));
+            }
         };
         let msg = format!("{err:#}");
         let found = older.to_string();
@@ -1430,7 +1440,7 @@ mod pins {
                 && msg.contains(&expected),
             "mismatch Err must name both versions (store={found}, build={expected}), got: {msg}"
         );
-    
+
         Ok(())
     }
 
@@ -1445,7 +1455,7 @@ mod pins {
             },
         )?;
         drop(db);
-    
+
         Ok(())
     }
 
@@ -1460,10 +1470,13 @@ mod pins {
             },
         ) {
             Err(e) => e,
-            Ok(_) => return Err(miette!("one byte under the vendor floor must refuse at our boundary")),
+            Ok(_) => {
+                return Err(miette!(
+                    "one byte under the vendor floor must refuse at our boundary"
+                ));
+            }
         };
-        let refuse = err
-            .downcast_ref::<FjallRefuse>()?;
+        let refuse = err.downcast_ref::<FjallRefuse>()?;
         assert!(
             matches!(
                 refuse,
@@ -1474,7 +1487,7 @@ mod pins {
             ),
             "expected JournalingSizeBelowFloor, got {refuse:?}"
         );
-    
+
         Ok(())
     }
 }

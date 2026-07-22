@@ -152,7 +152,10 @@ impl TempStoreRA {
             .map(|(a, _)| left_join_indices[a])
             .collect_vec();
         let scan_epoch = delta_rule == Some(self.occurrence);
-        let other_bindings = match self.bindings.get(right_join_indices.len()..) { Some(b) => b, None => &[] };
+        let other_bindings = match self.bindings.get(right_join_indices.len()..) {
+            Some(b) => b,
+            None => &[],
+        };
         let (l_bound, u_bound) = if self.filters.is_empty() {
             Default::default()
         } else {
@@ -211,7 +214,9 @@ impl<'a> TempStorePrefixBatchJoin<'a> {
                     self.cur = None;
                     return Ok(false);
                 }
-                Some(Err(e)) => return Err(e),
+                Some(Err(e)) => {
+                    return Err(e);
+                }
                 Some(Ok(b)) => {
                     if !b.is_empty() {
                         self.cur = Some((b, 0));
@@ -271,7 +276,9 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                     match self.advance_left_batch() {
                         Ok(false) => return if out.is_empty() { None } else { Some(Ok(out)) },
                         Ok(true) => {}
-                        Err(e) => return Some(Err(e)),
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
                 }
                 let left_row = {
@@ -283,12 +290,16 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                     };
                     match b.row(*idx) {
                         Ok(r) => r,
-                        Err(e) => return Some(Err(e.into())),
+                        Err(e) => {
+                            return Some(Err(e.into()));
+                        }
                     }
                 };
                 match self.probe(left_row) {
                     Ok(it) => self.active = Some(it),
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => {
+                        return Some(Err(e));
+                    }
                 }
             }
 
@@ -301,7 +312,9 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
             let left_idx = *idx;
             let left_owned = match b.row(left_idx) {
                 Ok(r) => r.to_vec(),
-                Err(e) => return Some(Err(e.into())),
+                Err(e) => {
+                    return Some(Err(e.into()));
+                }
             };
             let left_premises = if self.want_premises {
                 b.row_premises(left_idx)
@@ -324,7 +337,9 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                     Some(found) => {
                         let found_tuple = match found.try_into_tuple() {
                             Ok(t) => t,
-                            Err(e) => return Some(Err(e.into())),
+                            Err(e) => {
+                                return Some(Err(e.into()));
+                            }
                         };
                         let mut keep = true;
                         if !self.inner.filters.is_empty() {
@@ -335,7 +350,9 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                                         keep = false;
                                         break;
                                     }
-                                    Err(e) => return Some(Err(e)),
+                                    Err(e) => {
+                                        return Some(Err(e));
+                                    }
                                 }
                             }
                         }

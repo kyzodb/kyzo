@@ -443,19 +443,19 @@ impl DeepVerifyReport {
         h.update(u64::to_be_bytes(self.walk.checked));
         h.update(u64::to_be_bytes(self.walk.ordering_violations));
         h.update([u8::from(self.walk.truncated)]);
-        h.update(u64::to_be_bytes(match u64::try_from(self.walk.corrupt.len()) {
-            Ok(n) => n,
-            Err(_) => u64::MAX,
-        }));
+        h.update(u64::to_be_bytes(
+            u64::try_from(self.walk.corrupt.len())
+                .expect("INVARIANT(verify_corrupt_len_fits_u64): corrupt.len fits u64"),
+        ));
         for c in &self.walk.corrupt {
             h.update(c.key_hex.as_bytes());
             h.update(c.error.as_bytes());
         }
         h.update(u64::to_be_bytes(self.indices_checked));
-        h.update(u64::to_be_bytes(match u64::try_from(self.index_mismatches.len()) {
-            Ok(n) => n,
-            Err(_) => u64::MAX,
-        }));
+        h.update(u64::to_be_bytes(
+            u64::try_from(self.index_mismatches.len())
+                .expect("INVARIANT(verify_mismatch_len_fits_u64): mismatches.len fits u64"),
+        ));
         for m in &self.index_mismatches {
             h.update(m.index_name.as_bytes());
             h.update(index_kind_digest_tag(&m.kind));
@@ -949,12 +949,12 @@ pub fn deep_verify_storage<S: Storage>(db: &S) -> Result<DeepVerifyReport> {
 mod pins {
     //! verify_storage battery (re-homed from storage/tests.rs).
 
-    use miette::{IntoDiagnostic, Result, miette};
     use crate::session::catalog::{Catalog, IndexKind};
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::verify_walk::verify_storage;
     use crate::store::{ReadTx, Storage};
+    use miette::{IntoDiagnostic, Result, miette};
 
     #[test]
     fn verify_storage_catches_a_corrupt_value() -> Result<()> {
@@ -975,8 +975,7 @@ mod pins {
         };
         {
             let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
-            let ks = raw
-                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
+            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
             ks.insert(data_key, [0xFFu8])?;
             raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
@@ -987,7 +986,7 @@ mod pins {
             !report.corrupt.is_empty(),
             "corrupt polarity value must be caught: {report:?}"
         );
-    
+
         Ok(())
     }
 
@@ -1009,8 +1008,7 @@ mod pins {
         }
         {
             let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
-            let ks = raw
-                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
+            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
             ks.insert([0u8, 0, 0, 0, 0, 0, 0, 7, 0xEE, 0xEE], b"?")?;
             raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
@@ -1027,7 +1025,7 @@ mod pins {
             "names BadTag: {}",
             report.corrupt[0].error
         );
-    
+
         Ok(())
     }
 
@@ -1104,27 +1102,24 @@ mod pins {
                 }
                 found?
             };
-            let key = handle
-                .encode_bitemporal_key_for_store(
-                    &phantom_key_cols,
-                    stamp,
-                    stamp,
-                    kyzo_model::SourceSpan::empty(),
-                )?;
-            let val = handle
-                .encode_bitemporal_val_for_store(
-                    &phantom_key_cols,
-                    crate::store::time::ClaimPolarity::Assert,
-                    kyzo_model::SourceSpan::empty(),
-                )?;
+            let key = handle.encode_bitemporal_key_for_store(
+                &phantom_key_cols,
+                stamp,
+                stamp,
+                kyzo_model::SourceSpan::empty(),
+            )?;
+            let val = handle.encode_bitemporal_val_for_store(
+                &phantom_key_cols,
+                crate::store::time::ClaimPolarity::Assert,
+                kyzo_model::SourceSpan::empty(),
+            )?;
             drop(idx_id);
             (key.as_ref().to_vec(), val)
         };
 
         {
             let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
-            let ks = raw
-                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
+            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
             ks.insert(&phantom_kv.0, &phantom_kv.1)?;
             raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
@@ -1147,7 +1142,7 @@ mod pins {
             "expected a plain-index mismatch: {:?}",
             deep.index_mismatches
         );
-    
+
         Ok(())
     }
 }

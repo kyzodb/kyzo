@@ -1653,8 +1653,8 @@ fn from_hex(b: u8) -> Result<u8, TranscriptRefuse> {
 
 #[cfg(test)]
 mod pins {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
+    use miette::{IntoDiagnostic, Result, miette};
 
     /// Wire field tags from the CanonicalTranscript format spec (not production API).
     const TAG_U64: u8 = 1;
@@ -1701,10 +1701,8 @@ mod pins {
         fn bytes(&mut self, id: u16, bytes: &[u8]) {
             self.begin(id);
             self.buf.push(TAG_BYTES);
-            let len = match u32::try_from(bytes.len()) {
-                Ok(n) => n,
-                Err(_) => u32::MAX,
-            };
+            let len = u32::try_from(bytes.len())
+                .expect("INVARIANT(transcript_len_fits_u32): bytes.len fits u32");
             self.buf.extend_from_slice(&len.to_be_bytes());
             self.buf.extend_from_slice(bytes);
         }
@@ -1945,7 +1943,7 @@ mod pins {
             let parsed = CanonicalTranscript::parse(&expected)?;
             assert_eq!(parsed.as_bytes(), expected.as_slice());
         }
-    
+
         Ok(())
     }
 
@@ -2044,7 +2042,7 @@ mod pins {
                 rest = &after[marker.len()..];
             }
         }
-    
+
         Ok(())
     }
 
@@ -2125,7 +2123,7 @@ mod pins {
                 "normative production encode must seal for {kind:?}"
             );
         }
-    
+
         Ok(())
     }
 
@@ -2141,7 +2139,7 @@ mod pins {
             CanonicalTranscript::parse(&bytes),
             Err(TranscriptRefuse::UnknownVersion)
         );
-    
+
         Ok(())
     }
 
@@ -2156,7 +2154,7 @@ mod pins {
             b.append_map(FieldId::BINDINGS_MAP, &entries),
             Err(TranscriptRefuse::DuplicateMapKey)
         );
-    
+
         Ok(())
     }
 
@@ -2174,7 +2172,7 @@ mod pins {
             b.append_bytes(FieldId::DOMAIN_LABEL, &huge),
             Err(TranscriptRefuse::LengthBoundExceeded)
         );
-    
+
         Ok(())
     }
 }

@@ -35,7 +35,7 @@
 use std::collections::BTreeSet;
 
 use itertools::Itertools;
-use miette::{ensure, Diagnostic, Result, WrapErr, bail};
+use miette::{Diagnostic, Result, WrapErr, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -55,12 +55,12 @@ use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::FenceEpoch;
 use crate::store::authority::WriteAuthority;
 use crate::store::commit_cap::SnapshotFork;
+use crate::store::crypto::Signature;
 use crate::store::keys::Secret;
 use crate::store::merkle::{ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, StateRoot};
 use crate::store::open::{
     EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
 };
-use crate::store::crypto::Signature;
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
     AuthorizingKeyTable, PostStateRoot, ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus,
@@ -367,7 +367,16 @@ impl LiveAdmissionSeats {
         };
         match root_chain.append(genesis_link) {
             Ok(()) => {}
-            Err(crate::store::merkle::MerkleChainRefuse::PredecessorMismatch | crate::store::merkle::MerkleChainRefuse::CutBeforeGenesis | crate::store::merkle::MerkleChainRefuse::PathUrlSameness | crate::store::merkle::MerkleChainRefuse::ConsistencyProofFailed | crate::store::merkle::MerkleChainRefuse::SplitViewDetected | crate::store::merkle::MerkleChainRefuse::ConsistencyProofRequired | crate::store::merkle::MerkleChainRefuse::SthStoreMismatch | crate::store::merkle::MerkleChainRefuse::Transcript(_)) => {
+            Err(
+                crate::store::merkle::MerkleChainRefuse::PredecessorMismatch
+                | crate::store::merkle::MerkleChainRefuse::CutBeforeGenesis
+                | crate::store::merkle::MerkleChainRefuse::PathUrlSameness
+                | crate::store::merkle::MerkleChainRefuse::ConsistencyProofFailed
+                | crate::store::merkle::MerkleChainRefuse::SplitViewDetected
+                | crate::store::merkle::MerkleChainRefuse::ConsistencyProofRequired
+                | crate::store::merkle::MerkleChainRefuse::SthStoreMismatch
+                | crate::store::merkle::MerkleChainRefuse::Transcript(_),
+            ) => {
                 // Empty chain + GENESIS_ROOT predecessor is the only genesis
                 // shape; exhaust the refuse enum without silent `let _`.
             }
@@ -779,7 +788,7 @@ pub(crate) struct ValidateAndLowerCrossingSeats<'a> {
 pub(crate) fn validate_and_lower_crossing(
     seats: ValidateAndLowerCrossingSeats<'_>,
 ) -> Result<lowering::OriginSealedLowering, AdmitRefuse> {
-    use crate::store::replica::{validate_crossing_before_lower, CrossingValidationSeats};
+    use crate::store::replica::{CrossingValidationSeats, validate_crossing_before_lower};
     let ValidateAndLowerCrossingSeats {
         record,
         certificate,
@@ -1156,13 +1165,9 @@ pub(crate) mod admit_construct {
         cert: OntokCertSeats<'_>,
         stmt: OntokEntityStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) = construct::entity(
-            stmt.subject,
-            stmt.validity_time,
-            stmt.context,
-            stmt.source,
-        )
-        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        let (kind, statement) =
+            construct::entity(stmt.subject, stmt.validity_time, stmt.context, stmt.source)
+                .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
         admit_kind(cert, kind, statement)
     }
 
@@ -1508,7 +1513,14 @@ impl<T: WriteTx> SessionTx<T> {
                     // The trigger substance is already parsed — fire the
                     // stored program directly, never a re-parse of source.
                     let program = trigger.program().clone();
-                    db.run_query(RunQuerySeats { tx: self, program: program, cur_vld: cur_vld, callback_targets: callback_targets, callback_collector: callback_collector, trigger_depth: trigger_depth + 1 })
+                    db.run_query(RunQuerySeats {
+                        tx: self,
+                        program: program,
+                        cur_vld: cur_vld,
+                        callback_targets: callback_targets,
+                        callback_collector: callback_collector,
+                        trigger_depth: trigger_depth + 1,
+                    })
                     .map_err(|err| {
                         if err.source_code().is_some() {
                             err
@@ -2145,7 +2157,14 @@ impl<T: WriteTx> SessionTx<T> {
                     make_const_rule(&mut program, "_new", k_bindings.clone(), &new_tuples)?;
                     make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
 
-                    db.run_query(RunQuerySeats { tx: self, program: program, cur_vld: cur_vld, callback_targets: callback_targets, callback_collector: callback_collector, trigger_depth: trigger_depth + 1 })
+                    db.run_query(RunQuerySeats {
+                        tx: self,
+                        program: program,
+                        cur_vld: cur_vld,
+                        callback_targets: callback_targets,
+                        callback_collector: callback_collector,
+                        trigger_depth: trigger_depth + 1,
+                    })
                     .map_err(|err| {
                         if err.source_code().is_some() {
                             err
@@ -2410,7 +2429,14 @@ impl<T: WriteTx> SessionTx<T> {
                 make_const_rule(&mut program, "_new", kv_bindings.clone(), &new_tuples)?;
                 make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
 
-                db.run_query(RunQuerySeats { tx: self, program: program, cur_vld: cur_vld, callback_targets: callback_targets, callback_collector: callback_collector, trigger_depth: trigger_depth + 1 })
+                db.run_query(RunQuerySeats {
+                    tx: self,
+                    program: program,
+                    cur_vld: cur_vld,
+                    callback_targets: callback_targets,
+                    callback_collector: callback_collector,
+                    trigger_depth: trigger_depth + 1,
+                })
                 .map_err(|err| {
                     if err.source_code().is_some() {
                         err
@@ -2586,10 +2612,7 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// One plain-index mirror row: the base row projected through the
     /// mapper.
-    pub(crate) fn plain_index_write(
-        &mut self,
-        seats: PlainIndexWriteSeats<'_>,
-    ) -> Result<()> {
+    pub(crate) fn plain_index_write(&mut self, seats: PlainIndexWriteSeats<'_>) -> Result<()> {
         let PlainIndexWriteSeats {
             base,
             idx_handle,
@@ -2808,7 +2831,6 @@ pub(crate) fn make_const_rule(
 
 #[cfg(test)]
 mod live_certificate_verifiability {
-    use miette::{ensure, Result, miette};
     use super::*;
     use crate::data::statement::{
         ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
@@ -2823,6 +2845,7 @@ mod live_certificate_verifiability {
     };
     use crate::store::sweep::CommitOrdinal;
     use kyzo_model::value::DataValue;
+    use miette::{Result, ensure, miette};
 
     fn claim_parts(store: StoreId, live: LiveCertificateInputs) -> AdmitRecordParts {
         claim_parts_with_digest(store, live, [0xE4; 32])
@@ -2836,7 +2859,8 @@ mod live_certificate_verifiability {
         let digest = RecordContentDigest::from_digest(digest_bytes);
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("live-subject")),
-            crate::data::statement::StatementPredicate::new("about").map_err(|e| miette!("predicate: {e}"))?,
+            crate::data::statement::StatementPredicate::new("about")
+                .map_err(|e| miette!("predicate: {e}"))?,
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
             StatementContext::Scoped(ContextId::from_digest([0xC4; 32])),
@@ -2854,7 +2878,7 @@ mod live_certificate_verifiability {
     /// #374 T4 nasty: admit via the live door with a registered authorizing key,
     /// then verify the certificate against that same key table — must succeed.
     #[test]
-    fn live_admission_certificate_verifies_against_registered_key_table() -> Result<()>  {
+    fn live_admission_certificate_verifies_against_registered_key_table() -> Result<()> {
         let store = StoreId::from_digest([0x74; 32]);
         let authority = WriteAuthority::mint(store, [0xD4; 32]);
         let chain = RootChain::empty();
@@ -2876,24 +2900,24 @@ mod live_certificate_verifiability {
         )
         .map_err(|e| miette!("registered key must open the live door: {e}"))?;
 
-        let (_record, cert) =
-            admit_record(claim_parts(store, live)).map_err(|e| miette!("admit through live door: {e}"))?;
+        let (_record, cert) = admit_record(claim_parts(store, live))
+            .map_err(|e| miette!("admit through live door: {e}"))?;
 
         verify_replica(&cert, store, CommitOrdinal::ZERO, &keys, &scopes, None)
             .map_err(|e| miette!("receiver must verify against the store key table: {e}"))?;
-            Ok(())
+        Ok(())
     }
 
     /// Seats genesis path: certificate_inputs signs with the store-registered
     /// origin key; attach_verified / verify_replica against seats' table succeed.
     #[test]
-    fn seats_live_certificate_verifies_against_store_key_table() -> Result<()>  {
+    fn seats_live_certificate_verifies_against_store_key_table() -> Result<()> {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(2),
         ))?;
-        let (_record, cert) =
-            admit_record(claim_parts(seats.store_id(), live)).map_err(|e| miette!("admit via seats: {e}"))?;
+        let (_record, cert) = admit_record(claim_parts(seats.store_id(), live))
+            .map_err(|e| miette!("admit via seats: {e}"))?;
 
         verify_replica(
             &cert,
@@ -2908,17 +2932,17 @@ mod live_certificate_verifiability {
         let live2 = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(3),
         ))?;
-        let (record2, cert2) =
-            admit_record(claim_parts(seats.store_id(), live2)).map_err(|e| miette!("second admit: {e}"))?;
+        let (record2, cert2) = admit_record(claim_parts(seats.store_id(), live2))
+            .map_err(|e| miette!("second admit: {e}"))?;
         seats
             .attach_verified(&record2, cert2)
             .map_err(|e| miette!("attach_verified uses store key table: {e}"))?;
-            Ok(())
+        Ok(())
     }
 
     /// Negative: unregistered / non-signing key — refuse, never mint ephemeral.
     #[test]
-    fn from_live_refuses_without_registered_signing_key() -> Result<()>  {
+    fn from_live_refuses_without_registered_signing_key() -> Result<()> {
         let store = StoreId::from_digest([0x75; 32]);
         let authority = WriteAuthority::mint(store, [0xD5; 32]);
         let chain = RootChain::empty();
@@ -2941,7 +2965,10 @@ mod live_certificate_verifiability {
         // Public-only table material cannot sign — refuse, do not mint ephemeral.
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
-        let public_only = keys.lookup(&key.id()).map_err(|e| miette!("lookup: {e}"))?.map_err(|e| miette!("public install: {e}"))?;
+        let public_only = keys
+            .lookup(&key.id())
+            .map_err(|e| miette!("lookup: {e}"))?
+            .map_err(|e| miette!("public install: {e}"))?;
         assert!(
             !public_only.can_sign(),
             "table lookup must not reconstitute signing"
@@ -2963,7 +2990,7 @@ mod live_certificate_verifiability {
     /// #376 SEAT-59-GOLDENS fix-order item 3: certificate bound to a different
     /// record digest must refuse at attach_verified (digest gate before verify).
     #[test]
-    fn attach_verified_refuses_cert_minted_for_different_record() -> Result<()>  {
+    fn attach_verified_refuses_cert_minted_for_different_record() -> Result<()> {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live_a = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(10),
@@ -3003,7 +3030,7 @@ mod live_certificate_verifiability {
 
     /// #376: flipped signature byte must fail verify_replica inside attach_verified.
     #[test]
-    fn attach_verified_refuses_flipped_signature_bit() -> Result<()>  {
+    fn attach_verified_refuses_flipped_signature_bit() -> Result<()> {
         use crate::store::replica::{AdmissionCertificateParts, mint_admission_certificate};
 
         let seats = LiveAdmissionSeats::mint_genesis();
@@ -3016,7 +3043,8 @@ mod live_certificate_verifiability {
             .last()
             .map_err(|e| miette!("genesis seats carry a tip link: {e}"))?;
         let predecessor_history_digest = *tip.predecessor_root().as_bytes();
-        let (record, cert) = admit_record(claim_parts(seats.store_id(), live)).map_err(|e| miette!("admit: {e}"))?;
+        let (record, cert) =
+            admit_record(claim_parts(seats.store_id(), live)).map_err(|e| miette!("admit: {e}"))?;
 
         let mut flipped = *cert.signature().as_bytes();
         flipped[0] ^= 0x01;
@@ -3034,7 +3062,9 @@ mod live_certificate_verifiability {
             operation_key: cert.operation_key().copied(),
             signature: Signature::admit(flipped),
         })
-        .map_err(|e| miette!("mint seals flipped-signature parts without re-checking authenticity: {e}"))?;
+        .map_err(|e| {
+            miette!("mint seals flipped-signature parts without re-checking authenticity: {e}")
+        })?;
 
         let err = seats
             .attach_verified(&record, bad)
@@ -3051,7 +3081,7 @@ mod live_certificate_verifiability {
     /// #376: replaying a certificate onto a different store's seats refuses
     /// (foreign authorizing key / store binding — not a second mint door).
     #[test]
-    fn attach_verified_refuses_cross_store_replay() -> Result<()>  {
+    fn attach_verified_refuses_cross_store_replay() -> Result<()> {
         let origin = LiveAdmissionSeats::mint_genesis();
         let foreign = LiveAdmissionSeats::mint_genesis();
         assert_ne!(
@@ -3063,8 +3093,8 @@ mod live_certificate_verifiability {
         let live = origin.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(13),
         ))?;
-        let (record, cert) =
-            admit_record(claim_parts(origin.store_id(), live)).map_err(|e| miette!("admit on origin: {e}"))?;
+        let (record, cert) = admit_record(claim_parts(origin.store_id(), live))
+            .map_err(|e| miette!("admit on origin: {e}"))?;
 
         let err = foreign
             .attach_verified(&record, cert)
@@ -3083,7 +3113,7 @@ mod live_certificate_verifiability {
 
 #[cfg(test)]
 mod access_level_mutation_refuse {
-    use miette::{ensure, Result, miette};
+    use miette::{Result, ensure, miette};
     use std::collections::BTreeMap;
 
     use crate::session::access::InsufficientAccessLevel;
@@ -3111,7 +3141,7 @@ mod access_level_mutation_refuse {
     /// Production Ord law: put/rm/update require `>= Protected`, so Hidden
     /// (below that floor) refuses every mutation door and commits nothing.
     #[test]
-    fn hidden_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()>  {
+    fn hidden_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()> {
         let db = open_engine(SimStorage::new(0xACC5_0001));
         db.run_script("?[k, v] <- [] :create h {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
@@ -3154,7 +3184,7 @@ mod access_level_mutation_refuse {
     /// ReadOnly is the other rung below Protected — same put/rm/update refuse
     /// + commit-nothing contract as Hidden (production `< Protected` gate).
     #[test]
-    fn read_only_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()>  {
+    fn read_only_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()> {
         let db = open_engine(SimStorage::new(0xACC5_0002));
         db.run_script("?[k, v] <- [] :create r {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
@@ -3197,7 +3227,7 @@ mod access_level_mutation_refuse {
 
 #[cfg(test)]
 mod bulk_write_tests {
-    use miette::{ensure, Result, miette};
+    use miette::{Result, ensure, miette};
     use std::collections::BTreeMap;
 
     use fjall::Slice;
@@ -3231,7 +3261,8 @@ mod bulk_write_tests {
             fresh.push_str(&format!("[{i},{}],", i * 3));
         }
         fresh.push_str("] :put w {k => v}");
-        db.run_script(&fresh, no_params()).map_err(|e| miette!("bulk insert: {e}"))?;
+        db.run_script(&fresh, no_params())
+            .map_err(|e| miette!("bulk insert: {e}"))?;
 
         // Re-put 200 of those keys with a different value: exercises the
         // probe's FOUND branch (`current_row` returns `Some`) through the
@@ -3241,7 +3272,8 @@ mod bulk_write_tests {
             updates.push_str(&format!("[{i},{}],", i * 7));
         }
         updates.push_str("] :put w {k => v}");
-        db.run_script(&updates, no_params()).map_err(|e| miette!("re-put: {e}"))?;
+        db.run_script(&updates, no_params())
+            .map_err(|e| miette!("re-put: {e}"))?;
 
         // Retract 100 keys: exercises `remove_from_relation`'s use of the
         // same key encoder for a Retract row.
@@ -3250,7 +3282,8 @@ mod bulk_write_tests {
             removals.push_str(&format!("[{i}],"));
         }
         removals.push_str("] :rm w {k}");
-        db.run_script(&removals, no_params()).map_err(|e| miette!("bulk remove: {e}"))?;
+        db.run_script(&removals, no_params())
+            .map_err(|e| miette!("bulk remove: {e}"))?;
     }
 
     /// The bulk-write allocation fix (`encode_key_with_suffix` replacing
@@ -3263,12 +3296,15 @@ mod bulk_write_tests {
     /// proves it end to end, through the real mutation pipeline (extract,
     /// probe, put/remove, commit).
     #[test]
-    fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() -> Result<()>  {
+    fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() -> Result<()> {
         let db = open_engine(SimStorage::new(0xB01C_0001));
         run_seeded_workload(&db);
 
         let tx = db.store.read_tx().map_err(|e| miette!("read tx: {e}"))?;
-        let scan: Vec<(Slice, Slice)> = tx.total_scan().collect::<Result<_, _>>().map_err(|e| miette!("scan: {e}"))?;
+        let scan: Vec<(Slice, Slice)> = tx
+            .total_scan()
+            .collect::<Result<_, _>>()
+            .map_err(|e| miette!("scan: {e}"))?;
         assert_eq!(
             scan.len(),
             802,
@@ -3294,7 +3330,10 @@ mod bulk_write_tests {
         assert_eq!(live.len(), 400, "200 re-put + 200 untouched, 100 retracted");
         let mut by_key: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         for row in &live {
-            by_key.insert(row[0].get_int().ok_or_else(|| miette!("get_int"))?, row[1].get_int().ok_or_else(|| miette!("get_int"))?);
+            by_key.insert(
+                row[0].get_int().ok_or_else(|| miette!("get_int"))?,
+                row[1].get_int().ok_or_else(|| miette!("get_int"))?,
+            );
         }
         assert_eq!(by_key.get(&0), Some(&0)); // re-put i*7 = 0
         assert_eq!(by_key.get(&1), Some(&7)); // re-put 1*7
@@ -3310,15 +3349,17 @@ mod bulk_write_tests {
         // or land a FormatVersion bump explaining why it cannot.
         let mut hasher_input = Vec::new();
         for (k, v) in &scan {
-            hasher_input.extend_from_slice(&match u64::try_from(k.len()) {
-                    Ok(n) => n,
-                    Err(_) => u64::MAX,
-                }.to_le_bytes());
+            hasher_input.extend_from_slice(
+                &u64::try_from(k.len())
+                    .expect("INVARIANT(admit_key_len_fits_u64): key len fits u64")
+                .to_le_bytes(),
+            );
             hasher_input.extend_from_slice(k);
-            hasher_input.extend_from_slice(&match u64::try_from(v.len()) {
-                    Ok(n) => n,
-                    Err(_) => u64::MAX,
-                }.to_le_bytes());
+            hasher_input.extend_from_slice(
+                &u64::try_from(v.len())
+                    .expect("INVARIANT(admit_val_len_fits_u64): val len fits u64")
+                .to_le_bytes(),
+            );
             hasher_input.extend_from_slice(v);
         }
         use sha2::Digest;
@@ -3351,7 +3392,7 @@ mod bulk_write_tests {
     /// committing that transaction on error, not of the loop stopping
     /// early.
     #[test]
-    fn per_row_write_validity_at_terminal_instant_refuses_whole_mutation() -> Result<()>  {
+    fn per_row_write_validity_at_terminal_instant_refuses_whole_mutation() -> Result<()> {
         let db = open_engine(SimStorage::new(0xB01C_0002));
         db.run_script("?[k, v] <- [] :create w3 {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
@@ -3390,7 +3431,7 @@ mod bulk_write_tests {
     /// nothing — the first row's value stays what the successful insert
     /// wrote, not the value the refused one tried to place.
     #[test]
-    fn insert_of_an_existing_key_refuses_and_commits_nothing() -> Result<()>  {
+    fn insert_of_an_existing_key_refuses_and_commits_nothing() -> Result<()> {
         let db = open_engine(SimStorage::new(0xB01C_0003));
         db.run_script("?[k, v] <- [] :create wi {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
@@ -3425,7 +3466,7 @@ mod bulk_write_tests {
     /// exist")`) was reached by no test — every existing `:update` script
     /// updates a key it just wrote. Updating an absent key must refuse.
     #[test]
-    fn update_of_a_missing_key_refuses() -> Result<()>  {
+    fn update_of_a_missing_key_refuses() -> Result<()> {
         let db = open_engine(SimStorage::new(0xB01C_0004));
         db.run_script("?[k, v] <- [] :create wu {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
@@ -3451,7 +3492,7 @@ mod bulk_write_tests {
     /// relation is updated naming only ONE of its two non-key columns; the
     /// omitted one must retain its prior stored value, untouched.
     #[test]
-    fn update_carries_forward_an_omitted_non_key_column() -> Result<()>  {
+    fn update_carries_forward_an_omitted_non_key_column() -> Result<()> {
         let db = open_engine(SimStorage::new(0xB01C_0005));
         db.run_script("?[k, a, b] <- [] :create wc {k => a, b}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
@@ -3484,7 +3525,7 @@ mod bulk_write_tests {
 
 #[cfg(test)]
 mod trigger_cache_battery {
-    use miette::{ensure, Result, miette};
+    use miette::{Result, ensure, miette};
     use std::collections::BTreeMap;
 
     use crate::data::json::NamedRows;
@@ -3505,7 +3546,11 @@ mod trigger_cache_battery {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
+            .map(|r| {
+                r.iter()
+                    .map(|v| v.get_int().ok_or_else(|| miette!("int"))?)
+                    .collect()
+            })
             .collect();
         out.sort();
         out
@@ -3515,7 +3560,7 @@ mod trigger_cache_battery {
     /// its own program (the trigger-parse cache must key by source). Also proves
     /// the trigger pipeline works at all — nothing else in the tree tests it.
     #[test]
-    fn rs3_two_put_triggers_fire_distinctly_in_one_session() -> Result<()>  {
+    fn rs3_two_put_triggers_fire_distinctly_in_one_session() -> Result<()> {
         let db = open_engine(SimStorage::new(41));
         db.run_script("?[a, b] <- [[0, 0]] :create src {a => b}", no_params())
             .map_err(|e| miette!("create src: {e}"))?;
@@ -3557,7 +3602,7 @@ mod trigger_cache_battery {
     /// inside one transaction — the kernel `del_range` and the puts commit
     /// together.
     #[test]
-    fn replace_is_atomic_clear_and_insert() -> Result<()>  {
+    fn replace_is_atomic_clear_and_insert() -> Result<()> {
         let db = open_engine(SimStorage::new(3));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4]] :create edge {a, b}",

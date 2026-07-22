@@ -21,7 +21,6 @@ use crate::exec::stdlib::errors::vec_value;
 use crate::exec::stdlib::text::val2str;
 use kyzo_model::schema::VecElementType;
 
-
 /// Truncate a float toward zero into an `i64`, refusing non-finite and
 /// values outside the exact i64 range (typed — never saturating `as`).
 fn f64_trunc_to_i64(f: f64) -> Result<i64> {
@@ -130,12 +129,18 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
         // Align so the implicit 1 falls into the subnormal window
         let shift = match u32::try_from(1 - exp32) {
             Ok(s) => s,
-            Err(_) => return sign,
+            Err(_) => {
+                return sign;
+            }
         };
         let mut mant = frac | 0x0010_0000_0000_0000; // explicit leading 1
         // Keep round bit
         let round_bit = (mant >> (shift + 28)) & 1;
-        let sticky = if mant & ((1u64 << (shift + 28)) - 1) != 0 { 1u64 } else { 0 };
+        let sticky = if mant & ((1u64 << (shift + 28)) - 1) != 0 {
+            1u64
+        } else {
+            0
+        };
         mant >>= shift + 29;
         let mut m32 = match u32::try_from(mant) {
             Ok(m) => m,
@@ -179,7 +184,6 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
     };
     sign | e_bits | (m32 & 0x007F_FFFF)
 }
-
 
 pub(crate) fn op_decode_base64(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {

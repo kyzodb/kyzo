@@ -334,16 +334,22 @@ impl<C: SkipCursor> Iterator for SkipWalk<C> {
             }
             let (k, v) = match self.cursor.seek(&self.next_bound) {
                 None => return None,
-                Some(Err(e)) => return Some(Err(e)),
+                Some(Err(e)) => {
+                    return Some(Err(e));
+                }
                 Some(Ok(kv)) => kv,
             };
             let polarity = match claim_polarity_of_value(&v) {
                 Ok(p) => p,
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    return Some(Err(e));
+                }
             };
             let (ret, nxt_bound) = match check_key_for_bitemporal(&k, polarity, self.as_of, None) {
                 Ok(pair) => pair,
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    return Some(Err(e));
+                }
             };
             self.next_bound = advance_past(&k, nxt_bound);
             if let Some(mut tup) = ret {
@@ -398,7 +404,7 @@ mod tests {
             "genuine advance is trusted as-is"
         );
         assert_eq!(advance_past(b"", Vec::new()), vec![0], "empty key edge");
-    
+
         Ok(())
     }
 
@@ -490,9 +496,7 @@ mod tests {
             .iter()
             .map(|t| match &t[0] {
                 DataValue::Num(n) => n.as_int().ok_or_else(|| miette!("int-domain column")),
-                other @ (data_value_any!()) => {
-                    Err(miette!("non-integer fact column: {other:?}"))
-                }
+                other @ (data_value_any!()) => Err(miette!("non-integer fact column: {other:?}")),
             })
             .collect()
     }
@@ -567,8 +571,13 @@ mod tests {
         let mut state: u64 = 0x5EED_9E52_5E15_C0DE;
         let mut next = move |m: usize| -> usize {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
-            match usize::try_from(state >> 33) { Ok(v) => v % m, Err(_) => 0 }
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
+            match usize::try_from(state >> 33) {
+                Ok(v) => v % m,
+                Err(_) => 0,
+            }
         };
         let valids = [-30i64, -10, -3, 0, 10, 20, 30];
         let syss = [-25i64, -5, 0, 5, 15, 25];
@@ -577,7 +586,10 @@ mod tests {
             let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
             for _ in 0..n_rows {
                 rows.push((
-                    match i64::try_from(next(3)) { Ok(v) => v, Err(_) => 0 },
+                    match i64::try_from(next(3)) {
+                        Ok(v) => v,
+                        Err(_) => 0,
+                    },
                     valids[next(valids.len())],
                     syss[next(syss.len())],
                     [
@@ -604,7 +616,7 @@ mod tests {
                 }
             }
         }
-    
+
         Ok(())
     }
 
@@ -665,7 +677,7 @@ mod tests {
             // Polling again re-yields (does not silently move past) the error.
             assert!(w.next()?.is_err());
         }
-    
+
         Ok(())
     }
 
@@ -685,7 +697,7 @@ mod tests {
             .insert(bikey(9, i64::MIN, i64::MIN), bval(ClaimPolarity::Retract));
         let got = facts_of(&walk(&store, i64::MAX, 10)?)?;
         assert_eq!(got, vec![1]);
-    
+
         Ok(())
     }
 
@@ -708,7 +720,7 @@ mod tests {
             SkipWalk::new(store.open_skip_cursor(&lo, &lo), &lo, &lo, as_of).count(),
             0
         );
-    
+
         Ok(())
     }
 
@@ -734,8 +746,7 @@ mod tests {
         assert_eq!(store.opens.get(), 1, "opening the walk's cursor");
 
         let as_of = AsOf::current(vts(1_000));
-        let results: Vec<_> = SkipWalk::new(cursor, &lo, &hi, as_of)
-            .collect::<Result<Vec<_>>>()?;
+        let results: Vec<_> = SkipWalk::new(cursor, &lo, &hi, as_of).collect::<Result<Vec<_>>>()?;
 
         assert_eq!(facts_of(&results)?.len(), 100, "every fact resolved");
         assert_eq!(
@@ -743,7 +754,7 @@ mod tests {
             1,
             "the walk drove ONE cursor across all 100 facts' version steps, never reopened"
         );
-    
+
         Ok(())
     }
 
@@ -809,7 +820,7 @@ mod tests {
             seeks_s.get(),
             seeks_t.get()
         );
-    
+
         Ok(())
     }
 
@@ -828,7 +839,7 @@ mod tests {
             t.open_skip_cursor(&[], &upper),
         )?;
         assert!(got.is_empty(), "no common key across R∩S∩T");
-    
+
         Ok(())
     }
 }

@@ -46,7 +46,7 @@
 
 use super::*;
 
-use miette::{bail, IntoDiagnostic, Result, miette};
+use miette::{IntoDiagnostic, Result, bail, miette};
 use proptest::prelude::*;
 
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation, get_relation};
@@ -57,7 +57,6 @@ use kyzo_model::program::InputRelationHandle;
 use kyzo_model::program::expr::BindingPos;
 use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
 use kyzo_model::program::symbol::Symbol;
-
 
 // ---------------------------------------------------------------------------
 // Local schema helpers (the draft's live in `mod tests`; kept private there).
@@ -94,7 +93,10 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Result<Vec<Tuple>> {
     for k in 0..n {
         let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
         let v = Vector::try_new(comps).ok_or_else(|| miette!("seeded_rows vector refused"))?;
-        out.push(Tuple::from_vec(vec![DataValue::from(k), DataValue::Vector(v)]));
+        out.push(Tuple::from_vec(vec![
+            DataValue::from(k),
+            DataValue::Vector(v),
+        ]));
     }
     Ok(out)
 }
@@ -112,9 +114,15 @@ fn seeded_permutation(rows: &[Tuple], seed: u64) -> Vec<Tuple> {
     let mut out = rows.to_vec();
     let mut state = seed ^ 0x5EED_0F0F_A11C_0DE5;
     for i in (1..out.len()).rev() {
-        let i_u64 = match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 };
+        let i_u64 = match u64::try_from(i) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        };
         let j_u64 = crate::rules::rng::splitmix64_step(&mut state) % (i_u64 + 1);
-        let j = match usize::try_from(j_u64) { Ok(v) => v, Err(_e) => 0 };
+        let j = match usize::try_from(j_u64) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        };
         out.swap(i, j);
     }
     out
@@ -490,7 +498,14 @@ fn sweep_generator_hits_its_bands() -> Result<()> {
     for target in SELECTIVITY_BANDS {
         // Alternate the accepted-set shape across the sweep: half the
         // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
+        let f = filter_at_selectivity(
+            target,
+            match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
+                Some(i) => i,
+                None => 0,
+            } % 2
+                == 0,
+        );
         let s = f.true_selectivity(&rows);
         assert!(
             (s - target).abs() <= 0.01,
@@ -509,24 +524,34 @@ fn oracle_is_exact_and_total_ordered() -> Result<()> {
     let rows: Vec<Tuple> = vec![
         Tuple::from_vec(vec![
             DataValue::from(0),
-            DataValue::Vector(Vector::try_new(vec![3.0, 0.0]).ok_or_else(|| miette!("vector refused"))?),
+            DataValue::Vector(
+                Vector::try_new(vec![3.0, 0.0]).ok_or_else(|| miette!("vector refused"))?,
+            ),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(1),
-            DataValue::Vector(Vector::try_new(vec![0.1, 0.0]).ok_or_else(|| miette!("vector refused"))?),
+            DataValue::Vector(
+                Vector::try_new(vec![0.1, 0.0]).ok_or_else(|| miette!("vector refused"))?,
+            ),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(2),
-            DataValue::Vector(Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?),
+            DataValue::Vector(
+                Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?,
+            ),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(3),
-            DataValue::Vector(Vector::try_new(vec![0.2, 0.0]).ok_or_else(|| miette!("vector refused"))?),
+            DataValue::Vector(
+                Vector::try_new(vec![0.2, 0.0]).ok_or_else(|| miette!("vector refused"))?,
+            ),
         ]),
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
         Tuple::from_vec(vec![
             DataValue::from(4),
-            DataValue::Vector(Vector::try_new(vec![-1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?),
+            DataValue::Vector(
+                Vector::try_new(vec![-1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?,
+            ),
         ]),
     ];
     let q = Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
@@ -565,8 +590,14 @@ fn seeded_permutation_preserves_the_set_and_reorders() -> Result<()> {
     let shuffled = seeded_permutation(&rows, 42);
     assert_eq!(shuffled.len(), rows.len());
     // Same set of keys.
-    let mut a: Vec<i64> = rows.iter().map(|r| r[0].get_int().ok_or_else(|| miette!("expected int"))?).collect();
-    let mut b: Vec<i64> = shuffled.iter().map(|r| r[0].get_int().ok_or_else(|| miette!("expected int"))?).collect();
+    let mut a: Vec<i64> = rows
+        .iter()
+        .map(|r| r[0].get_int().ok_or_else(|| miette!("expected int"))?)
+        .collect();
+    let mut b: Vec<i64> = shuffled
+        .iter()
+        .map(|r| r[0].get_int().ok_or_else(|| miette!("expected int"))?)
+        .collect();
     assert_ne!(a, b, "the shuffle must actually reorder");
     a.sort_unstable();
     b.sort_unstable();
@@ -605,8 +636,30 @@ fn filter_aware_band_metrics(
             == 0,
     );
     let truth = brute_force_filtered_knn(q, P2_K, &f, rows, m)?;
-    let plan = selected_plan(rtx, FilteredSearchSpec { q: q, manifest: m, base: base, idx: idx, k: P2_K, ef: P2_EF, filter: &f })?;
-    let hits = filtered_search(rtx, FilteredSearchSpec { q: q, manifest: m, base: base, idx: idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let plan = selected_plan(
+        rtx,
+        FilteredSearchSpec {
+            q: q,
+            manifest: m,
+            base: base,
+            idx: idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
+    let hits = filtered_search(
+        rtx,
+        FilteredSearchSpec {
+            q: q,
+            manifest: m,
+            base: base,
+            idx: idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
     let ekeys = keys_of(&hits)?;
     let r = recall_at_k(&ekeys, &truth, P2_K);
     let cr = count_recall(&ekeys, &truth, P2_K);
@@ -662,8 +715,26 @@ fn selector_chooses_scan_when_selective_graph_otherwise() -> Result<()> {
     for target in SELECTIVITY_BANDS {
         // Alternate the accepted-set shape across the sweep: half the
         // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
-        let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+        let f = filter_at_selectivity(
+            target,
+            match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
+                Some(i) => i,
+                None => 0,
+            } % 2
+                == 0,
+        );
+        let plan = selected_plan(
+            &rtx,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                k: P2_K,
+                ef: P2_EF,
+                filter: &f,
+            },
+        )?;
         let is_scan = matches!(plan, SearchPlan::Scan);
         assert_eq!(
             is_scan,
@@ -717,8 +788,30 @@ fn filtered_search_is_byte_deterministic() -> Result<()> {
     let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows)?;
     let rtx = db.read_tx()?;
     let f = filter_at_selectivity(0.10, true);
-    let h1 = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
-    let h2 = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let h1 = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
+    let h2 = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
     assert_eq!(h1, h2, "repeat search on one store must be identical");
     Ok(())
 }
@@ -744,8 +837,30 @@ fn order_invariant_strategy_and_scan_results() -> Result<()> {
             .iter()
             .map(|&t| {
                 let f = filter_at_selectivity(t, true);
-                let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
-                let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+                let plan = selected_plan(
+                    &rtx,
+                    FilteredSearchSpec {
+                        q: &q,
+                        manifest: &m,
+                        base: &base,
+                        idx: &idx,
+                        k: P2_K,
+                        ef: P2_EF,
+                        filter: &f,
+                    },
+                )?;
+                let hits = filtered_search(
+                    &rtx,
+                    FilteredSearchSpec {
+                        q: &q,
+                        manifest: &m,
+                        base: &base,
+                        idx: &idx,
+                        k: P2_K,
+                        ef: P2_EF,
+                        filter: &f,
+                    },
+                )?;
                 (plan, hits)
             })
             .collect();
@@ -794,8 +909,32 @@ fn fallback_is_load_bearing_and_exact() -> Result<()> {
     let params = knn_params_p2(P2_K, P2_EF);
     let fb = f.filter_expr();
     let starved = SearchPlan::Graph { ef2: 1 };
-    let no_fb = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, starved, false)?;
-    let with_fb = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, starved, true)?;
+    let no_fb = hnsw_knn_forced(
+        &rtx,
+        HnswPlanQuery {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            params: &params,
+            filter: &fb,
+        },
+        starved,
+        false,
+    )?;
+    let with_fb = hnsw_knn_forced(
+        &rtx,
+        HnswPlanQuery {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            params: &params,
+            filter: &fb,
+        },
+        starved,
+        true,
+    )?;
 
     assert!(
         no_fb.len() < P2_K,
@@ -844,13 +983,35 @@ fn production_fallback_repairs_starved_real_search() -> Result<()> {
     let f = filter_at_selectivity(0.50, true); // graph band, so the selector picks Graph
     // ef = 1 forces the inflated beam ef2 = ceil(1/ŝ) ≈ 2 — far below k = 10, so
     // the real graph walk under-delivers and the production fallback must fire.
-    let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: 1, filter: &f })?;
+    let plan = selected_plan(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: 1,
+            filter: &f,
+        },
+    )?;
     assert!(
         matches!(plan, SearchPlan::Graph { .. }),
         "precondition: selector must pick Graph here, got {plan:?}"
     );
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: 1, filter: &f })?;
+    let hits = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: 1,
+            filter: &f,
+        },
+    )?;
     assert_eq!(
         hits.len(),
         P2_K,
@@ -898,9 +1059,15 @@ fn engine_ordering_is_total_under_ties() -> Result<()> {
     let mut rows: Vec<Tuple> = Vec::new();
     for i in 0..n {
         let mut comps = vec![0.0f64; dim];
-        comps[match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 } % dim] = 1.0; // a distinct axis unit vector
+        comps[match usize::try_from(i) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        } % dim] = 1.0; // a distinct axis unit vector
         let v = Vector::try_new(comps).ok_or_else(|| miette!("vector refused"))?;
-        rows.push(Tuple::from_vec(vec![DataValue::from(i), DataValue::Vector(v)]));
+        rows.push(Tuple::from_vec(vec![
+            DataValue::from(i),
+            DataValue::Vector(v),
+        ]));
     }
     let dir = tempfile::tempdir().into_diagnostic()?;
     let db = new_fjall_storage(dir.path())?;
@@ -912,7 +1079,18 @@ fn engine_ordering_is_total_under_ties() -> Result<()> {
         modulus: 1,
         accept: 1,
     };
-    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: 5, ef: 32, filter: &f })?;
+    let hits = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: 5,
+            ef: 32,
+            filter: &f,
+        },
+    )?;
     assert_eq!(
         keys_of(&hits)?,
         vec![0, 1, 2, 3, 4],
@@ -958,15 +1136,37 @@ fn min_k_matches_law_generative() -> Result<()> {
     {
         let pinned_ef = 1usize;
         let pinned_f = filter_at_selectivity(0.50, true);
-        let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: pinned_ef, filter: &pinned_f })?;
+        let plan = selected_plan(
+            &rtx,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                k: P2_K,
+                ef: pinned_ef,
+                filter: &pinned_f,
+            },
+        )?;
         assert!(
             matches!(plan, SearchPlan::Graph { .. }),
             "pinned band precondition: selector must pick Graph, got {plan:?}"
         );
         let fb = pinned_f.filter_expr();
         let params = knn_params_p2(P2_K, pinned_ef);
-        let partial =
-            hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, plan, false)?;
+        let partial = hnsw_knn_forced(
+            &rtx,
+            HnswPlanQuery {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                params: &params,
+                filter: &fb,
+            },
+            plan,
+            false,
+        )?;
         assert!(
             !partial.is_empty() && partial.len() < P2_K,
             "pinned band precondition: the raw graph walk must be a NON-EMPTY \
@@ -977,7 +1177,18 @@ fn min_k_matches_law_generative() -> Result<()> {
         );
 
         let truth = brute_force_filtered_knn(&q, P2_K, &pinned_f, &rows, &m)?;
-        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: pinned_ef, filter: &pinned_f })?;
+        let hits = filtered_search(
+            &rtx,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                k: P2_K,
+                ef: pinned_ef,
+                filter: &pinned_f,
+            },
+        )?;
         assert_eq!(
             hits.len(),
             P2_K,
@@ -1042,9 +1253,27 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
     for threshold in [1i64, 2, 3] {
         let f = FilterSpec::LessThan { threshold };
         let matches = f.true_match_count(&rows);
-        assert_eq!(matches, match usize::try_from(threshold) { Ok(v) => v, Err(_e) => 0 }, "keys are dense 0..n");
+        assert_eq!(
+            matches,
+            match usize::try_from(threshold) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            },
+            "keys are dense 0..n"
+        );
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+        let hits = filtered_search(
+            &rtx,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                k: P2_K,
+                ef: P2_EF,
+                filter: &f,
+            },
+        )?;
         let ekeys = keys_of(&hits)?;
         assert_eq!(
             hits.len(),
@@ -1060,24 +1289,24 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
     }
 }
 
-
 /// Parameterized near/far cluster corpus (shared by Phase-2 and T13).
 /// Near half is the plain [`seeded_rows`] stream; far half is the same
 /// vectors translated by +40 on every component.
 fn near_far_cluster_corpus_n(dim: usize, n: i64) -> Result<(i64, i64, Vec<Tuple>)> {
     let half = n / 2;
     let mut rows = seeded_rows(n, dim, P2_CORPUS_SEED)?;
-    let far_start = usize::try_from(half).unwrap_or(0);
+    let far_start = usize::try_from(half)
+        .expect("INVARIANT(near_far_half_fits_usize): corpus half fits usize");
     for row in rows.iter_mut().skip(far_start) {
         let comps = match row.get(1) {
             Some(DataValue::Vector(v)) => v.to_f64s().into_iter().map(|c| c + 40.0).collect(),
-            _ => bail!("near_far: expected key,vector row"),
+            Some(other) => bail!("near_far: expected key,vector row; got {other:?}"),
+            None => bail!("near_far: expected key,vector row; missing vector"),
         };
         let vec =
             Vector::try_new(comps).ok_or_else(|| miette!("near_far: Vector::try_new refused"))?;
         *row.get_mut(1)
-            .ok_or_else(|| miette!("near_far: row missing vector slot"))? =
-            DataValue::Vector(vec);
+            .ok_or_else(|| miette!("near_far: row missing vector slot"))? = DataValue::Vector(vec);
     }
     Ok((n, half, rows))
 }
@@ -1112,7 +1341,18 @@ fn min_k_matches_disconnected_from_entry_region() -> Result<()> {
         n - half
     );
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let hits = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
     let ekeys = keys_of(&hits)?;
 
     assert_eq!(
@@ -1217,7 +1457,18 @@ fn min_k_matches_zero_matches() -> Result<()> {
 
     let f = FilterSpec::LessThan { threshold: 0 }; // keys are 0..n, so nothing passes
     assert_eq!(f.true_match_count(&rows), 0);
-    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let hits = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
     assert!(hits.is_empty(), "zero matches must yield an empty result");
     Ok(())
 }
@@ -1244,10 +1495,30 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() -> Result<()> {
     assert_eq!(f.true_match_count(&rows), rows.len());
 
     let params = knn_params_p2(P2_K, P2_EF);
-    let unfiltered = crate::project::contract::search_rows(
-        Hnsw::knn(&rtx, HnswSearchRequest { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter_expr: &None, cancel: &crate::rules::contract::CancelFlag::inert() })?,
+    let unfiltered = crate::project::contract::search_rows(Hnsw::knn(
+        &rtx,
+        HnswSearchRequest {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            params: &params,
+            filter_expr: &None,
+            cancel: &crate::rules::contract::CancelFlag::inert(),
+        },
+    )?)?;
+    let filtered = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
     )?;
-    let filtered = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
 
     assert_eq!(
         keys_of(&filtered)?,
@@ -1333,7 +1604,10 @@ fn filtered_search_is_thread_count_invariant() -> Result<()> {
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().map_err(|e| miette!("join: {e:?}"))?).collect()
+        handles
+            .into_iter()
+            .map(|h| h.join().map_err(|e| miette!("join: {e:?}"))?)
+            .collect()
     });
     assert_eq!(
         baseline, concurrent,
@@ -1364,7 +1638,18 @@ fn min_k_matches_k_exceeds_entire_population() -> Result<()> {
         "sanity: the filter must be a proper subset of the corpus"
     );
     let truth = brute_force_filtered_knn(&q, k, &f, &rows, &m)?;
-    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f })?;
+    let hits = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: k,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
     let mut ekeys = keys_of(&hits)?;
 
     assert_eq!(
@@ -1395,7 +1680,18 @@ fn min_k_matches_k_exceeds_entire_population() -> Result<()> {
         modulus: 1,
         accept: 1,
     };
-    let hits_all = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f_all })?;
+    let hits_all = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: k,
+            ef: P2_EF,
+            filter: &f_all,
+        },
+    )?;
     let mut all_keys = keys_of(&hits_all)?;
     assert_eq!(
         hits_all.len(),
@@ -1433,7 +1729,10 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
     let rows: Vec<Tuple> = (0..n)
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
-            comps[match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 } % dim] = 1.0; // a distinct axis unit vector per residue class
+            comps[match usize::try_from(i) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            } % dim] = 1.0; // a distinct axis unit vector per residue class
             Tuple::from_vec(vec![
                 DataValue::from(i),
                 DataValue::Vector(Vector::try_new(comps).ok_or_else(|| miette!("vector refused"))?),
@@ -1456,13 +1755,35 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
         accept: 1,
     };
 
-    let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let plan = selected_plan(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
     assert!(
         matches!(plan, SearchPlan::Graph { .. }),
         "precondition: this corpus/filter must select Graph, got {plan:?}"
     );
 
-    let baseline = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let baseline = filtered_search(
+        &rtx,
+        FilteredSearchSpec {
+            q: &q,
+            manifest: &m,
+            base: &base,
+            idx: &idx,
+            k: P2_K,
+            ef: P2_EF,
+            filter: &f,
+        },
+    )?;
 
     // LAWFULNESS. HNSW is an APPROXIMATE index. This corpus is adversarial:
     // `comps[i % dim] = 1.0` makes every residue class an identical vector,
@@ -1493,7 +1814,18 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
         let db2 = new_fjall_storage(dir2.path())?;
         let (base2, idx2, m2) = hsetup(&db2, dim, HnswDistance::L2, &rows)?;
         let rtx2 = db2.read_tx()?;
-        filtered_search(&rtx2, FilteredSearchSpec { q: &q, manifest: &m2, base: &base2, idx: &idx2, k: P2_K, ef: P2_EF, filter: &f })?
+        filtered_search(
+            &rtx2,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m2,
+                base: &base2,
+                idx: &idx2,
+                k: P2_K,
+                ef: P2_EF,
+                filter: &f,
+            },
+        )?
     };
     assert_eq!(
         keys_of(&rebuilt)?,
@@ -1508,7 +1840,20 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(n_threads)
             .build()?;
-        pool.install(|| filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f }))
+        pool.install(|| {
+            filtered_search(
+                &rtx,
+                FilteredSearchSpec {
+                    q: &q,
+                    manifest: &m,
+                    base: &base,
+                    idx: &idx,
+                    k: P2_K,
+                    ef: P2_EF,
+                    filter: &f,
+                },
+            )
+        })
     };
     for n_threads in [1usize, 2, 4, 8] {
         let got = run_under_pool(n_threads);
@@ -1527,10 +1872,26 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
                 let base = &base;
                 let idx = &idx;
                 let f = &f;
-                scope.spawn(move || filtered_search(rtx, FilteredSearchSpec { q: q, manifest: m, base: base, idx: idx, k: P2_K, ef: P2_EF, filter: f })?)
+                scope.spawn(move || {
+                    filtered_search(
+                        rtx,
+                        FilteredSearchSpec {
+                            q: q,
+                            manifest: m,
+                            base: base,
+                            idx: idx,
+                            k: P2_K,
+                            ef: P2_EF,
+                            filter: f,
+                        },
+                    )?
+                })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().map_err(|e| miette!("join: {e:?}"))?).collect()
+        handles
+            .into_iter()
+            .map(|h| h.join().map_err(|e| miette!("join: {e:?}"))?)
+            .collect()
     });
     for got in concurrent {
         assert_eq!(
@@ -1549,7 +1910,9 @@ const T13_N: i64 = 200;
 const T13_DIM: usize = 16;
 
 fn t13_row_key(row: &Tuple) -> Result<i64> {
-    row[0].get_int().ok_or_else(|| miette!("T13: key column must be Int"))
+    row[0]
+        .get_int()
+        .ok_or_else(|| miette!("T13: key column must be Int"))
 }
 
 fn t13_vector(comps: Vec<f64>) -> Result<Vector> {
@@ -1569,7 +1932,6 @@ fn t13_band_accept(target: f64, n: i64) -> Result<i64> {
         bail!("T13: unknown selectivity band {target}")
     }
 }
-
 
 /// Commit-per-remove: batching many `hnsw_remove` calls in one write TX hits
 /// "neighbour has no node row" when two deleted vectors share an edge.
@@ -1616,7 +1978,9 @@ fn t13_delete_then_search_never_returns_deleted_id_after_reopen() -> Result<()> 
     };
 
     let db = new_fjall_storage(&path).map_err(|e| miette!("reopen store after deletes: {e:?}"))?;
-    let rtx = db.read_tx().map_err(|e| miette!("read_tx after reopen: {e:?}"))?;
+    let rtx = db
+        .read_tx()
+        .map_err(|e| miette!("read_tx after reopen: {e:?}"))?;
     let base = get_relation(&rtx, "corpus").map_err(|e| miette!("get corpus: {e:?}"))?;
     let idx = get_relation(&rtx, "corpus:by_v").map_err(|e| miette!("get corpus:by_v: {e:?}"))?;
     let m = hmanifest(T13_DIM, HnswDistance::L2)?;
@@ -1639,7 +2003,18 @@ fn t13_delete_then_search_never_returns_deleted_id_after_reopen() -> Result<()> 
         };
         let matches = f.true_match_count(&live);
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &live, &m)?;
-        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+        let hits = filtered_search(
+            &rtx,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                k: P2_K,
+                ef: P2_EF,
+                filter: &f,
+            },
+        )?;
         let ekeys = keys_of(&hits)?;
 
         assert_eq!(
@@ -1687,7 +2062,9 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
 
     for wave in 0i64..3 {
         let db = new_fjall_storage(&path).map_err(|e| miette!("reopen for wave: {e:?}"))?;
-        let rtx = db.read_tx().map_err(|e| miette!("read before mutate: {e:?}"))?;
+        let rtx = db
+            .read_tx()
+            .map_err(|e| miette!("read before mutate: {e:?}"))?;
         let base = get_relation(&rtx, "corpus").map_err(|e| miette!("corpus: {e:?}"))?;
         let idx = get_relation(&rtx, "corpus:by_v").map_err(|e| miette!("corpus:by_v: {e:?}"))?;
         drop(rtx);
@@ -1704,14 +2081,14 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
         for r in &removed_this_wave {
             let gone = t13_row_key(r)?;
             {
-            let mut next = Vec::new();
-            for x in live_rows {
-                if t13_row_key(&x)? != gone {
-                    next.push(x);
+                let mut next = Vec::new();
+                for x in live_rows {
+                    if t13_row_key(&x)? != gone {
+                        next.push(x);
+                    }
                 }
+                live_rows = next;
             }
-            live_rows = next;
-        }
         }
 
         let new_key = n + wave + 1;
@@ -1727,13 +2104,15 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
             DataValue::Vector(t13_vector(comps)?),
         ]);
         {
-            let mut tx = db.write_tx().map_err(|e| miette!("wave insert tx: {e:?}"))?;
+            let mut tx = db
+                .write_tx()
+                .map_err(|e| miette!("wave insert tx: {e:?}"))?;
             base.put_fact(
-                    &mut tx,
-                    new_row.as_slice(),
-                    kyzo_model::value::ValidityTs::of_micros(0),
-                    SourceSpan(0, 0),
-                )?;
+                &mut tx,
+                new_row.as_slice(),
+                kyzo_model::value::ValidityTs::of_micros(0),
+                SourceSpan(0, 0),
+            )?;
             hnsw_put(&mut tx, &m, &base, &idx, None, new_row.as_slice())?;
             tx.commit().map_err(|e| miette!("commit insert: {e:?}"))?;
         }
@@ -1742,12 +2121,25 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
 
         let db = new_fjall_storage(&path).map_err(|e| miette!("reopen after wave: {e:?}"))?;
         let rtx = db.read_tx().map_err(|e| miette!("search read_tx: {e:?}"))?;
-        let base = get_relation(&rtx, "corpus").map_err(|e| miette!("corpus after reopen: {e:?}"))?;
-        let idx = get_relation(&rtx, "corpus:by_v").map_err(|e| miette!("idx after reopen: {e:?}"))?;
+        let base =
+            get_relation(&rtx, "corpus").map_err(|e| miette!("corpus after reopen: {e:?}"))?;
+        let idx =
+            get_relation(&rtx, "corpus:by_v").map_err(|e| miette!("idx after reopen: {e:?}"))?;
 
         let matches = f.true_match_count(&live_rows);
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &live_rows, &m)?;
-        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+        let hits = filtered_search(
+            &rtx,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                k: P2_K,
+                ef: P2_EF,
+                filter: &f,
+            },
+        )?;
         let ekeys = keys_of(&hits)?;
 
         assert_eq!(
@@ -1778,4 +2170,3 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
     }
     Ok(())
 }
-

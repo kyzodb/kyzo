@@ -323,14 +323,18 @@ impl TokenizerConfig {
                         return Err(TokenizerBuildRefusal::NgramMaxBelowMin.into());
                     }
                 };
-                Box::new(NgramTokenizer::try_new(min_usize, max_usize, prefix_only).map_err(
-                    |e| match e {
-                        NgramConfigError::MinGramZero => TokenizerBuildRefusal::NgramMinTooSmall,
-                        NgramConfigError::MinGreaterThanMax => {
-                            TokenizerBuildRefusal::NgramMaxBelowMin
-                        }
-                    },
-                )?)
+                Box::new(
+                    NgramTokenizer::try_new(min_usize, max_usize, prefix_only).map_err(
+                        |e| match e {
+                            NgramConfigError::MinGramZero => {
+                                TokenizerBuildRefusal::NgramMinTooSmall
+                            }
+                            NgramConfigError::MinGreaterThanMax => {
+                                TokenizerBuildRefusal::NgramMaxBelowMin
+                            }
+                        },
+                    )?,
+                )
             }
             "Cangjie" => {
                 let hmm = match self.args().get(1) {
@@ -364,7 +368,10 @@ impl TokenizerConfig {
                 })
             }
             _other => {
-                return Err(TokenizerBuildRefusal::UnknownTokenizer(SmartString::from(self.name())).into());
+                return Err(TokenizerBuildRefusal::UnknownTokenizer(SmartString::from(
+                    self.name(),
+                ))
+                .into());
             }
         })
     }
@@ -470,7 +477,10 @@ impl TokenizerConfig {
                 }
             }
             _other => {
-                return Err(TokenizerBuildRefusal::UnknownTokenFilter(SmartString::from(self.name())).into());
+                return Err(TokenizerBuildRefusal::UnknownTokenFilter(SmartString::from(
+                    self.name(),
+                ))
+                .into());
             }
         })
     }
@@ -499,14 +509,12 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
                     match key.as_str() {
                         "name" => name = Some(map.next_value()?),
                         "args" => args = Some(map.next_value()?),
-                        _other => {
-                            match map.next_value()? {
-                                value => {
-                                    let typed: serde::de::IgnoredAny = value;
-                                    core::mem::drop(typed);
-                                }
+                        _other => match map.next_value()? {
+                            value => {
+                                let typed: serde::de::IgnoredAny = value;
+                                core::mem::drop(typed);
                             }
-                        }
+                        },
                     }
                 }
                 Ok((

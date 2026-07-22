@@ -562,11 +562,7 @@ impl HnswIndexManifest {
         let bits = crate::rules::rng::splitmix64_step(&mut state) >> 12;
         let u = {
             let unit = f64::from_bits(0x3FF0_0000_0000_0000 | bits) - 1.0;
-            if unit == 0.0 {
-                1.0
-            } else {
-                unit
-            }
+            if unit == 0.0 { 1.0 } else { unit }
         };
         let r = -u.ln() * self.level_multiplier;
         // level = -floor(r), clamped via the loop bound. r ≥ 0 always.
@@ -582,7 +578,11 @@ impl HnswIndexManifest {
     /// Derive Vamana build params: R = m_max0, L >= R from ef_construction, α = 1.2.
     fn vamana_build_params(&self) -> Result<VamanaBuildParams> {
         let r = self.m_max0;
-        let l = if self.ef_construction < r { r } else { self.ef_construction };
+        let l = if self.ef_construction < r {
+            r
+        } else {
+            self.ef_construction
+        };
         VamanaBuildParams::admit(r, l, VAMANA_DEFAULT_ALPHA)
     }
 }
@@ -1368,9 +1368,12 @@ impl RaBitQRotation {
             // bit mixer for deterministic rotation identity, not a counted
             // quantity; saturating/checked mul would change the seeded
             // orthogonal family.
-            let attempt_seed = seed
-                ^ (std::num::Wrapping(match u64::try_from(dim) { Ok(v) => v, Err(_d) => 0 }) * std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0
-                ^ (std::num::Wrapping(attempt) * std::num::Wrapping(0xD1B5_4A32_D192_ED03)).0;
+            let attempt_seed =
+                seed ^ (std::num::Wrapping(match u64::try_from(dim) {
+                    Ok(v) => v,
+                    Err(_d) => 0,
+                }) * std::num::Wrapping(0x9E37_79B9_7F4A_7C15))
+                .0 ^ (std::num::Wrapping(attempt) * std::num::Wrapping(0xD1B5_4A32_D192_ED03)).0;
             if let Some(rot) = Self::try_orthogonal(dim, attempt_seed)
                 && rot.orthonormality_error() < 1e-10
             {
@@ -1455,7 +1458,8 @@ impl RaBitQRotation {
 /// Standard normal via Box–Muller over the house [`splitmix64`] stream.
 #[cfg(test)]
 fn rabitq_gauss(state: &mut u64) -> f64 {
-    let u1 = (u64_to_f64(crate::rules::rng::splitmix64_step(state)) + 1.0) / (u64_to_f64(u64::MAX) + 2.0);
+    let u1 = (u64_to_f64(crate::rules::rng::splitmix64_step(state)) + 1.0)
+        / (u64_to_f64(u64::MAX) + 2.0);
     let u2 = u64_to_f64(crate::rules::rng::splitmix64_step(state)) / (u64_to_f64(u64::MAX) + 1.0);
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
 }
@@ -1803,7 +1807,13 @@ fn neighbours(
     }
     #[cfg(test)]
     {
-        probe::NEIGHBOURS_ROWS.with(|c| c.set(c.get() + match u64::try_from(ret.len()) { Ok(v) => v, Err(_l) => u64::MAX }));
+        probe::NEIGHBOURS_ROWS.with(|c| {
+            c.set(
+                c.get()
+                    + u64::try_from(ret.len())
+                        .expect("INVARIANT(hnsw_ret_len_fits_u64): ret.len fits u64"),
+            )
+        });
         probe::NEIGHBOURS_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
     }
     Ok(ret)
@@ -1856,7 +1866,6 @@ impl Beam {
         self.dist.get()
     }
 }
-
 
 /// Shared graph-walk seats for layer search / neighbour selection.
 struct HnswWalkCtx<'w, 'c, T: ReadTx> {
@@ -2279,12 +2288,17 @@ fn put_vector<T: WriteTx>(
     let ep_beam = Beam::of(ep_distance, &ep_id);
     found_nn.push(ep_id, ep_beam);
     search_layer(
-            &mut HnswWalkCtx { tx, base, idx, cache },
-            q,
-            params.l(),
-            layer,
-            &mut found_nn,
-        )?;
+        &mut HnswWalkCtx {
+            tx,
+            base,
+            idx,
+            cache,
+        },
+        q,
+        params.l(),
+        layer,
+        &mut found_nn,
+    )?;
 
     let mut candidates: Vec<(VectorId, f64)> = found_nn
         .iter()
@@ -2295,7 +2309,14 @@ fn put_vector<T: WriteTx>(
     }
 
     let selected = vamana_robust_prune(
-        tx, at, &candidates, params.alpha(), params.r(), base, idx, cache,
+        tx,
+        at,
+        &candidates,
+        params.alpha(),
+        params.r(),
+        base,
+        idx,
+        cache,
     )?;
 
     HnswRow::Node {
@@ -2331,12 +2352,21 @@ fn put_vector<T: WriteTx>(
         let new_degree = degree + 1;
         if new_degree > params.r() {
             let mut nbr_cands: Vec<(VectorId, f64)> =
-                neighbours(tx, base, idx, neighbour, layer, false)?.into_iter().collect();
+                neighbours(tx, base, idx, neighbour, layer, false)?
+                    .into_iter()
+                    .collect();
             if !nbr_cands.iter().any(|(id, _)| id == at) {
                 nbr_cands.push((at.clone(), *dist));
             }
             let pruned = vamana_robust_prune(
-                tx, neighbour, &nbr_cands, params.alpha(), params.r(), base, idx, cache,
+                tx,
+                neighbour,
+                &nbr_cands,
+                params.alpha(),
+                params.r(),
+                base,
+                idx,
+                cache,
             )?;
             vamana_set_out_neighbours(tx, neighbour, &pruned, base, idx, &neighbour_hash)?;
         } else {
@@ -2367,8 +2397,7 @@ fn remove_vec<T: WriteTx>(
     for neg_layer in 0i64.. {
         let layer = -neg_layer;
         let self_key_tuple = node_key(layer, at)?;
-        let self_key =
-            idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::empty())?;
+        let self_key = idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::empty())?;
         if tx.exists(&self_key)? {
             tx.del(&self_key)?;
         } else {
@@ -2461,21 +2490,31 @@ const VAMANA_DEFAULT_ALPHA: f64 = 1.2;
 pub(crate) struct VamanaAlpha(f64);
 impl VamanaAlpha {
     pub(crate) fn admit(alpha: f64) -> Result<Self> {
-        if !alpha.is_finite() { bail!(VamanaParamsRefused::NonFiniteAlpha); }
-        if alpha < 1.0 { bail!(VamanaParamsRefused::AlphaBelowOne { got: alpha }); }
+        if !alpha.is_finite() {
+            bail!(VamanaParamsRefused::NonFiniteAlpha);
+        }
+        if alpha < 1.0 {
+            bail!(VamanaParamsRefused::AlphaBelowOne { got: alpha });
+        }
         Ok(Self(alpha))
     }
-    pub(crate) fn get(self) -> f64 { self.0 }
+    pub(crate) fn get(self) -> f64 {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct VamanaCandidateList(usize);
 impl VamanaCandidateList {
     pub(crate) fn admit(l: usize) -> Result<Self> {
-        if l == 0 { bail!(VamanaParamsRefused::ZeroCandidateList); }
+        if l == 0 {
+            bail!(VamanaParamsRefused::ZeroCandidateList);
+        }
         Ok(Self(l))
     }
-    pub(crate) fn get(self) -> usize { self.0 }
+    pub(crate) fn get(self) -> usize {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2489,13 +2528,26 @@ impl VamanaBuildParams {
         let r = MNeighbours::new(r)?;
         let l = VamanaCandidateList::admit(l)?;
         if l.get() < r.get() {
-            bail!(VamanaParamsRefused::CandidateListBelowDegree { l: l.get(), r: r.get() });
+            bail!(VamanaParamsRefused::CandidateListBelowDegree {
+                l: l.get(),
+                r: r.get()
+            });
         }
-        Ok(Self { r, l, alpha: VamanaAlpha::admit(alpha)? })
+        Ok(Self {
+            r,
+            l,
+            alpha: VamanaAlpha::admit(alpha)?,
+        })
     }
-    pub(crate) fn r(self) -> usize { self.r.get() }
-    pub(crate) fn l(self) -> usize { self.l.get() }
-    pub(crate) fn alpha(self) -> VamanaAlpha { self.alpha }
+    pub(crate) fn r(self) -> usize {
+        self.r.get()
+    }
+    pub(crate) fn l(self) -> usize {
+        self.l.get()
+    }
+    pub(crate) fn alpha(self) -> VamanaAlpha {
+        self.alpha
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Error, Diagnostic)]
@@ -2524,11 +2576,15 @@ fn vamana_robust_prune(
     idx: &RelationHandle,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<(VectorId, f64)>> {
-    match idx { value => core::mem::drop(value) };
+    match idx {
+        value => core::mem::drop(value),
+    };
     let mut working: Vec<(VectorId, f64)> = Vec::with_capacity(candidates.len());
     let mut seen: FxHashSet<VectorId> = FxHashSet::default();
     for (id, dist) in candidates {
-        if id == center || !seen.insert(id.clone()) { continue; }
+        if id == center || !seen.insert(id.clone()) {
+            continue;
+        }
         working.push((id.clone(), *dist));
     }
     working.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
@@ -2564,21 +2620,31 @@ fn vamana_set_out_neighbours<T: WriteTx>(
     let base_key_len = base.metadata.keys.len();
     let layer = VAMANA_LAYER;
     let mut new_set: FxHashSet<VectorId> = FxHashSet::default();
-    for (to, _) in selected { new_set.insert(to.clone()); }
+    for (to, _) in selected {
+        new_set.insert(to.clone());
+    }
     for (old, _, ignore_link) in neighbours_tagged(tx, base, idx, of, layer)? {
         if !new_set.contains(&old) || ignore_link {
-            let key = idx.encode_key_for_store(edge_key(layer, of, &old)?.as_slice(), SourceSpan::empty())?;
+            let key = idx
+                .encode_key_for_store(edge_key(layer, of, &old)?.as_slice(), SourceSpan::empty())?;
             tx.del(&key)?;
         }
     }
     for (to, dist) in selected {
         HnswRow::Edge {
-            layer, fr: of.clone(), to: Box::new(to.clone()), dist: *dist, ignore_link: false,
+            layer,
+            fr: of.clone(),
+            to: Box::new(to.clone()),
+            dist: *dist,
+            ignore_link: false,
         }
         .write(tx, idx, base_key_len)?;
     }
     HnswRow::Node {
-        layer, at: of.clone(), degree: selected.len(), vec_hash: vec_hash.clone(),
+        layer,
+        at: of.clone(),
+        degree: selected.len(),
+        vec_hash: vec_hash.clone(),
     }
     .write(tx, idx, base_key_len)?;
     Ok(())
@@ -3004,7 +3070,10 @@ fn hnsw_knn_body(tx: &impl ReadTx, request: HnswSearchRequest<'_>) -> Result<Vec
         if params.bind.field_idx.append() {
             cand_tuple.push(match cand.sub {
                 None => DataValue::Null,
-                Some(s) => DataValue::from(match usize_to_i64(s) { Ok(i) => i, Err(_e) => 0 }),
+                Some(s) => DataValue::from(match usize_to_i64(s) {
+                    Ok(i) => i,
+                    Err(_e) => 0,
+                }),
             });
         }
         if params.bind.distance.append() {
@@ -3197,7 +3266,10 @@ fn build_cand_tuple(
     if params.bind.field_idx.append() {
         cand_tuple.push(match cand.sub {
             None => DataValue::Null,
-            Some(s) => DataValue::from(match usize_to_i64(s) { Ok(i) => i, Err(_e) => 0 }),
+            Some(s) => DataValue::from(match usize_to_i64(s) {
+                Ok(i) => i,
+                Err(_e) => 0,
+            }),
         });
     }
     if params.bind.distance.append() {
@@ -3327,9 +3399,15 @@ fn select_strategy<T: ReadTx>(
         if reservoir.len() < HNSW_SAMPLE_SIZE {
             reservoir.push(id);
         } else {
-            let n_u64 = match u64::try_from(n) { Ok(v) => v, Err(_e) => 0 };
+            let n_u64 = match u64::try_from(n) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            };
             let j_u64 = crate::rules::rng::splitmix64_step(&mut state) % (n_u64 + 1);
-            let j = match usize::try_from(j_u64) { Ok(v) => v, Err(_e) => 0 };
+            let j = match usize::try_from(j_u64) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            };
             if j < HNSW_SAMPLE_SIZE {
                 reservoir[j] = id;
             }
@@ -3349,8 +3427,12 @@ fn select_strategy<T: ReadTx>(
     }
     let sampled = reservoir.len();
     let s = usize_to_f64(pass) / usize_to_f64(sampled);
-    let m_hat = match kyzo_model::value::Num::float((s * usize_to_f64(n)).round()).to_int_coerced() {
-        Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+    let m_hat = match kyzo_model::value::Num::float((s * usize_to_f64(n)).round()).to_int_coerced()
+    {
+        Some(i) => match usize::try_from(i) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        },
         None => 0,
     };
     let d_bar = manifest.m_max0.max(1);
@@ -3364,8 +3446,13 @@ fn select_strategy<T: ReadTx>(
     let graph_work = if s <= 0.0 {
         usize::MAX
     } else {
-        match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s) * usize_to_f64(d_bar)).to_int_coerced() {
-            Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+        match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s) * usize_to_f64(d_bar))
+            .to_int_coerced()
+        {
+            Some(i) => match usize::try_from(i) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            },
             None => 0,
         }
     };
@@ -3378,8 +3465,13 @@ fn select_strategy<T: ReadTx>(
         }
         .min(n)
         .max(ctx.params.ef);
-        let ef2 = match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s).ceil()).to_int_coerced() {
-            Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+        let ef2 = match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s).ceil())
+            .to_int_coerced()
+        {
+            Some(i) => match usize::try_from(i) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            },
             None => 0,
         }
         .clamp(ctx.params.ef, ef_max);
@@ -3893,7 +3985,13 @@ mod tests {
         let t0 = std::time::Instant::now();
         for k in 0..n {
             let v = probe_vec(dim, &mut state)?;
-            let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
+            let r = vec![
+                DataValue::from(match usize_to_i64(k) {
+                    Ok(i) => i,
+                    Err(_e) => 0,
+                }),
+                v,
+            ];
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
@@ -3954,7 +4052,6 @@ mod tests {
         Ok(())
     }
 
-
     /// Least-squares fit of `cost = C * n^exponent` via ordinary linear
     /// regression on `(ln(n), ln(cost))`: returns `(exponent, R²)`. `R²`
     /// close to 1 means the whole series is well-described by ONE exponent
@@ -3983,7 +4080,6 @@ mod tests {
         let r_squared = (s_xy * s_xy) / (s_xx * s_yy);
         (exponent, r_squared)
     }
-
 
     /// Recall regression guard for the `shrink_neighbour` tombstone-reclaim
     /// fix: build a real 10k-vector index (the scale the fix targets),
@@ -4038,7 +4134,13 @@ mod tests {
                 bail!("probe_vec must mint Vector");
             };
             stored.push(arr.to_f64s());
-            let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
+            let r = vec![
+                DataValue::from(match usize_to_i64(k) {
+                    Ok(i) => i,
+                    Err(_e) => 0,
+                }),
+                v,
+            ];
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
@@ -4077,20 +4179,35 @@ mod tests {
                             diff * diff
                         })
                         .sum();
-                    (d, match usize_to_i64(id) { Ok(i) => i, Err(_e) => 0 })
+                    (
+                        d,
+                        match usize_to_i64(id) {
+                            Ok(i) => i,
+                            Err(_e) => 0,
+                        },
+                    )
                 })
                 .collect();
             truth.sort_by(|a, b| a.0.total_cmp(&b.0));
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
-            let hits = crate::project::contract::search_rows(
-                Hnsw::knn(&rtx, HnswSearchRequest { q: q_vec, manifest: &m, base: &base, idx: &idx, params: &HnswKnnParams {
+            let hits = crate::project::contract::search_rows(Hnsw::knn(
+                &rtx,
+                HnswSearchRequest {
+                    q: q_vec,
+                    manifest: &m,
+                    base: &base,
+                    idx: &idx,
+                    params: &HnswKnnParams {
                         k,
                         ef: 64,
                         radius: None,
                         bind: HnswBindPack::omit_all(),
-                    }, filter_expr: &None, cancel: &CancelFlag::inert() })?,
-            )?;
+                    },
+                    filter_expr: &None,
+                    cancel: &CancelFlag::inert(),
+                },
+            )?)?;
             let engine_ids: FxHashSet<i64> = hits
                 .iter()
                 .map(|row| row[0].get_int().ok_or_else(|| miette!("expected int")))
@@ -4146,8 +4263,12 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0][0], DataValue::from(2), "nearest first");
         assert_eq!(hits[1][0], DataValue::from(1));
-        let d0 = hits[0][2].get_float().ok_or_else(|| miette!("expected float"))?;
-        let d1 = hits[1][2].get_float().ok_or_else(|| miette!("expected float"))?;
+        let d0 = hits[0][2]
+            .get_float()
+            .ok_or_else(|| miette!("expected float"))?;
+        let d1 = hits[1][2]
+            .get_float()
+            .ok_or_else(|| miette!("expected float"))?;
         assert!((d0 - 0.02).abs() < 1e-6, "L2 is SQUARED: got {d0}");
         assert!((d1 - 0.82).abs() < 1e-6, "L2 is SQUARED: got {d1}");
 
@@ -4171,8 +4292,7 @@ mod tests {
         );
         assert_eq!(hits.len(), 4);
         assert_eq!(
-            hits
-                .iter()
+            hits.iter()
                 .map(|t| t[0].get_int().ok_or_else(|| miette!("expected int")))
                 .collect::<Result<Vec<_>>>()?,
             vec![2, 1, 3, 4]
@@ -4206,13 +4326,15 @@ mod tests {
             &CancelFlag::inert(),
         );
         assert_eq!(
-            hits
-                .iter()
+            hits.iter()
                 .map(|t| t[0].get_int().ok_or_else(|| miette!("expected int")))
                 .collect::<Result<Vec<_>>>()?,
             vec![1, 2, 3]
         );
-        let dists: Vec<f64> = hits.iter().map(|t| t[2].get_float().ok_or_else(|| miette!("expected float"))).collect::<Result<Vec<_>>>()?;
+        let dists: Vec<f64> = hits
+            .iter()
+            .map(|t| t[2].get_float().ok_or_else(|| miette!("expected float")))
+            .collect::<Result<Vec<_>>>()?;
         assert!((dists[0] - 0.0).abs() < 1e-6, "aligned: {}", dists[0]);
         assert!((dists[1] - 1.0).abs() < 1e-6, "orthogonal: {}", dists[1]);
         assert!((dists[2] - 2.0).abs() < 1e-6, "opposite: {}", dists[2]);
@@ -4241,7 +4363,18 @@ mod tests {
         }
         // Query refusal.
         let rtx = db.read_tx()?;
-        let err = Hnsw::knn(&rtx, HnswSearchRequest { q: &Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("vector refused"))?, manifest: &m, base: &base, idx: &idx, params: &knn_params(1), filter_expr: &None, cancel: &CancelFlag::inert() })
+        let err = Hnsw::knn(
+            &rtx,
+            HnswSearchRequest {
+                q: &Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("vector refused"))?,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                params: &knn_params(1),
+                filter_expr: &None,
+                cancel: &CancelFlag::inert(),
+            },
+        )
         .unwrap_err();
         assert!(err.downcast_ref::<ZeroVectorRefused>().is_some());
 
@@ -4264,14 +4397,20 @@ mod tests {
         };
         let mut tx = db.write_tx()?;
         let zrow = row(1, 0.0, 0.0)?;
-        base2
-            .put_fact(
-                &mut tx,
-                zrow.as_slice(),
-                kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
-            )?;
-        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, zrow.as_slice())?);
+        base2.put_fact(
+            &mut tx,
+            zrow.as_slice(),
+            kyzo_model::value::ValidityTs::of_micros(0),
+            SourceSpan(0, 0),
+        )?;
+        assert!(hnsw_put(
+            &mut tx,
+            &m2,
+            &base2,
+            &idx2,
+            None,
+            zrow.as_slice()
+        )?);
         tx.commit().map_err(|e| miette!("{e}"))?;
 
         // Non-finite components are refused under every metric.
@@ -4282,7 +4421,9 @@ mod tests {
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
-            DataValue::Vector(Vector::try_new(vec![1.0, 2.0, 3.0]).ok_or_else(|| miette!("vector refused"))?),
+            DataValue::Vector(
+                Vector::try_new(vec![1.0, 2.0, 3.0]).ok_or_else(|| miette!("vector refused"))?,
+            ),
         ];
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
@@ -4354,7 +4495,14 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
         // Unchanged put.
         let mut tx = db.write_tx()?;
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, rows[0].as_slice())?);
+        assert!(hnsw_put(
+            &mut tx,
+            &m,
+            &base,
+            &idx,
+            None,
+            rows[0].as_slice()
+        )?);
         tx.commit().map_err(|e| miette!("{e}"))?;
 
         // Changed vector: base row rewritten, index follows.
@@ -4542,7 +4690,18 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let q = Vector::try_new(vec![0.5, 0.5]).ok_or_else(|| miette!("query vector refused"))?;
-        let err = Hnsw::knn(&rtx, HnswSearchRequest { q: &q, manifest: &m, base: &base, idx: &idx, params: &knn_params(1), filter_expr: &None, cancel: &CancelFlag::inert() })
+        let err = Hnsw::knn(
+            &rtx,
+            HnswSearchRequest {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                params: &knn_params(1),
+                filter_expr: &None,
+                cancel: &CancelFlag::inert(),
+            },
+        )
         .err()
         .ok_or_else(|| miette!("corrupt rows must be errors, not panics"))?;
         assert!(
@@ -4562,7 +4721,8 @@ mod tests {
         let mut bytes = vec![];
         m.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
             .map_err(|e| miette!("{e}"))?;
-        let decoded: HnswIndexManifest = rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
+        let decoded: HnswIndexManifest =
+            rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
         assert_eq!(decoded, m, "wire round trip");
 
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -4850,12 +5010,23 @@ mod tests {
             k += 1;
         }
         let mut tx = db.write_tx()?;
-        let base = create_relation(&mut tx, input_handle("vecs", base_metadata()), KeyspaceKind::Facts)?;
+        let base = create_relation(
+            &mut tx,
+            input_handle("vecs", base_metadata()),
+            KeyspaceKind::Facts,
+        )?;
         let idx = create_relation(
-            &mut tx, input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)), KeyspaceKind::AlgorithmState,
+            &mut tx,
+            input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
+            KeyspaceKind::AlgorithmState,
         )?;
         for r in &rows {
-            base.put_fact(&mut tx, r.as_slice(), kyzo_model::value::ValidityTs::of_micros(0), SourceSpan(0, 0))?;
+            base.put_fact(
+                &mut tx,
+                r.as_slice(),
+                kyzo_model::value::ValidityTs::of_micros(0),
+                SourceSpan(0, 0),
+            )?;
             if !hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())? {
                 bail!("hnsw_put refused a finite L2 vector");
             }
@@ -4869,21 +5040,33 @@ mod tests {
         for scanned in crate::project::contract::index_rows(&idx.name, idx.scan_all(&rtx)) {
             let scanned = scanned?;
             match HnswRow::decode(scanned.as_slice(), kl, &idx.name)? {
-                HnswRow::Node { layer, at, degree, .. } => {
+                HnswRow::Node {
+                    layer, at, degree, ..
+                } => {
                     assert_eq!(layer, VAMANA_LAYER);
                     node_count += 1;
                     node_degree.insert(at, degree);
                 }
-                HnswRow::Edge { layer, fr, ignore_link, .. } => {
+                HnswRow::Edge {
+                    layer,
+                    fr,
+                    ignore_link,
+                    ..
+                } => {
                     assert_eq!(layer, VAMANA_LAYER);
-                    if !ignore_link { *live_out.entry(fr).or_insert(0) += 1; }
+                    if !ignore_link {
+                        *live_out.entry(fr).or_insert(0) += 1;
+                    }
                 }
                 HnswRow::Canary { bottom_layer, .. } => assert_eq!(bottom_layer, VAMANA_LAYER),
             }
         }
         assert_eq!(node_count, rows.len());
         for (at, deg) in &node_degree {
-            let counted = match live_out.get(at) { Some(n) => *n, None => 0 };
+            let counted = match live_out.get(at) {
+                Some(n) => *n,
+                None => 0,
+            };
             assert!(counted <= r_cap);
             assert_eq!(*deg, counted);
             assert!(*deg <= r_cap);
@@ -4901,11 +5084,28 @@ mod tests {
                 Some(v) => v.get_int().ok_or_else(|| miette!("key not int"))?,
                 None => bail!("fixture missing key"),
             };
-            let hits = crate::project::contract::search_rows(Hnsw::knn(&rtx, HnswSearchRequest { q: &q, manifest: &m, base: &base, idx: &idx, params: &knn_params(1), filter_expr: &None, cancel: &CancelFlag::inert() })?)?;
+            let hits = crate::project::contract::search_rows(Hnsw::knn(
+                &rtx,
+                HnswSearchRequest {
+                    q: &q,
+                    manifest: &m,
+                    base: &base,
+                    idx: &idx,
+                    params: &knn_params(1),
+                    filter_expr: &None,
+                    cancel: &CancelFlag::inert(),
+                },
+            )?)?;
             assert_eq!(hits.len(), 1);
-            let got_key = hits[0].first().and_then(|v| v.get_int()).ok_or_else(|| miette!("missing key"))?;
+            let got_key = hits[0]
+                .first()
+                .and_then(|v| v.get_int())
+                .ok_or_else(|| miette!("missing key"))?;
             assert_eq!(got_key, expected_key);
-            let dist = hits[0].get(2).and_then(|v| v.get_float()).ok_or_else(|| miette!("missing dist"))?;
+            let dist = hits[0]
+                .get(2)
+                .and_then(|v| v.get_float())
+                .ok_or_else(|| miette!("missing dist"))?;
             assert!(dist.abs() < 1e-9);
         }
         Ok(())
@@ -4953,7 +5153,9 @@ mod tests {
         let run = || -> Result<Vec<i64>> {
             let dir = tempfile::tempdir().into_diagnostic()?;
             let db = new_fjall_storage(dir.path())?;
-            let rows: Vec<Tuple> = (1..=6).map(|k| row(k, 1.0, 0.0)).collect::<Result<Vec<_>>>()?;
+            let rows: Vec<Tuple> = (1..=6)
+                .map(|k| row(k, 1.0, 0.0))
+                .collect::<Result<Vec<_>>>()?;
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
             let rtx = db.read_tx()?;
             let q = Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
@@ -4969,7 +5171,13 @@ mod tests {
             );
             // Every hit is at distance 0 (identical vectors).
             for h in &hits {
-                assert!(h[2].get_float().ok_or_else(|| miette!("expected float"))?.abs() < 1e-9, "all equidistant");
+                assert!(
+                    h[2].get_float()
+                        .ok_or_else(|| miette!("expected float"))?
+                        .abs()
+                        < 1e-9,
+                    "all equidistant"
+                );
             }
             Ok(hits
                 .iter()
@@ -4993,7 +5201,8 @@ mod tests {
         // ⟨ō,o⟩ ≈ 0.8 (paper concentration), D = 100, ε₀ = 1.9.
         let ip = 0.8f64;
         let dim = 100usize;
-        let expected = ((1.0 - ip * ip).sqrt() / ip) * RABITQ_EPSILON_0 / usize_to_f64(dim - 1).sqrt();
+        let expected =
+            ((1.0 - ip * ip).sqrt() / ip) * RABITQ_EPSILON_0 / usize_to_f64(dim - 1).sqrt();
         assert_eq!(
             rabitq_error_bound(ip, dim, RABITQ_EPSILON_0).to_bits(),
             expected.to_bits(),
@@ -5008,8 +5217,7 @@ mod tests {
     /// fails this at D=128 and was the prior Check-red root cause.
     #[test]
     fn rabitq_rotation_is_orthonormal() -> Result<()> {
-        let rot = RaBitQRotation::from_seed(128, 0x0AB1_7000)
-            .ok_or_else(|| miette!("rotation"))?;
+        let rot = RaBitQRotation::from_seed(128, 0x0AB1_7000).ok_or_else(|| miette!("rotation"))?;
         assert!(
             rot.orthonormality_error() < 1e-10,
             "P⁻¹ columns must be orthonormal, err={}",
@@ -5125,12 +5333,19 @@ mod tests {
     #[test]
     fn rabitq_is_accelerator_exact_float_remains_authority() -> Result<()> {
         let dim = 32usize;
-        let rot = RaBitQRotation::from_seed(dim, 0x0AB1_A07B)
-            .ok_or_else(|| miette!("rotation"))?;
-        let o =
-            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 1.0).sin()).collect::<Vec<_>>()).ok_or_else(|| miette!("normalize_unit refused"))?;
-        let q =
-            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 2.0).cos()).collect::<Vec<_>>()).ok_or_else(|| miette!("normalize_unit refused"))?;
+        let rot = RaBitQRotation::from_seed(dim, 0x0AB1_A07B).ok_or_else(|| miette!("rotation"))?;
+        let o = normalize_unit(
+            &(0..dim)
+                .map(|i| (usize_to_f64(i) + 1.0).sin())
+                .collect::<Vec<_>>(),
+        )
+        .ok_or_else(|| miette!("normalize_unit refused"))?;
+        let q = normalize_unit(
+            &(0..dim)
+                .map(|i| (usize_to_f64(i) + 2.0).cos())
+                .collect::<Vec<_>>(),
+        )
+        .ok_or_else(|| miette!("normalize_unit refused"))?;
         let code = RaBitQCode::encode(&o, &rot).ok_or_else(|| miette!("encode"))?;
         let est = code
             .estimate_inner_product(&q, &rot)

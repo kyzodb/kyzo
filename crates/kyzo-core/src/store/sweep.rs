@@ -128,10 +128,8 @@ fn encode_commit_body(
 }
 
 fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
-    let len = match u32::try_from(bytes.len()) {
-        Ok(n) => n,
-        Err(_) => u32::MAX,
-    };
+    let len = u32::try_from(bytes.len())
+        .expect("INVARIANT(sweep_len_fits_u32): bytes.len fits u32");
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(bytes);
 }
@@ -144,7 +142,9 @@ fn take_len_bytes(input: &mut &[u8]) -> Option<Vec<u8>> {
     len_bytes.copy_from_slice(&input[..4]);
     let n = match usize::try_from(u32::from_be_bytes(len_bytes)) {
         Ok(n) => n,
-        Err(_overflow) => return None,
+        Err(_overflow) => {
+            return None;
+        }
     };
     *input = &input[4..];
     if input.len() < n {
@@ -235,7 +235,9 @@ static LIVE_SWEEP_CURRENT: Mutex<Option<LiveSweepHandle>> = Mutex::new(None);
 
 /// Install the Engine's live SweepDoor as the process-current door.
 pub fn install_live_sweep(handle: LiveSweepHandle) {
-    *LIVE_SWEEP_CURRENT.lock().expect("live-sweep mutex poisoned — refuse silent continue") = Some(handle);
+    *LIVE_SWEEP_CURRENT
+        .lock()
+        .expect("live-sweep mutex poisoned — refuse silent continue") = Some(handle);
 }
 
 /// Current process-local live SweepDoor, if any Engine has installed one.
@@ -300,12 +302,19 @@ impl LiveSweepHandle {
 
     /// Store identity this live door is bound to.
     pub fn store_id(&self) -> StoreId {
-        self.inner.lock().expect("live-sweep mutex poisoned — refuse silent continue").session.store_id()
+        self.inner
+            .lock()
+            .expect("live-sweep mutex poisoned — refuse silent continue")
+            .session
+            .store_id()
     }
 
     /// Allocate a unique anonymous client-operation id (non-retry path).
     pub fn next_anon_operation_id(&self) -> Vec<u8> {
-        let mut g = self.inner.lock().expect("live-sweep mutex poisoned — refuse silent continue");
+        let mut g = self
+            .inner
+            .lock()
+            .expect("live-sweep mutex poisoned — refuse silent continue");
         let n = g.anon_seq;
         g.anon_seq = match g.anon_seq.checked_add(1) {
             Some(n) => n,
@@ -321,7 +330,10 @@ impl LiveSweepHandle {
         &self,
         f: impl FnOnce(&mut SweepDoor, &SweepSession, IncarnationId) -> R,
     ) -> R {
-        let mut g = self.inner.lock().expect("live-sweep mutex poisoned — refuse silent continue");
+        let mut g = self
+            .inner
+            .lock()
+            .expect("live-sweep mutex poisoned — refuse silent continue");
         let session = g.session;
         let incarnation = g.incarnation;
         f(&mut g.door, &session, incarnation)
@@ -963,7 +975,9 @@ impl SweepDoor {
             Err(StoreRefuse::OperationKeyReuse) => {
                 return Err(SweepRefuse::OperationKeyReuse);
             }
-            Err(_) => return Err(SweepRefuse::OperationKeyReuse),
+            Err(_) => {
+                return Err(SweepRefuse::OperationKeyReuse);
+            }
             Ok(Some(_)) => {
                 // Sealed terminal under this key+digest — replay prior intent.
                 return self
@@ -1405,10 +1419,12 @@ pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 #[inline]
 pub fn recovery_time_bound_ns(bytes_since_last_flush: u64) -> u64 {
     match bytes_since_last_flush.checked_mul(RECOVERY_SLA_SLOPE_NUM) {
-        Some(scaled) => match RECOVERY_SLA_INTERCEPT_NS.checked_add(scaled / RECOVERY_SLA_SLOPE_DEN) {
-            Some(n) => n,
-            None => u64::MAX,
-        },
+        Some(scaled) => {
+            match RECOVERY_SLA_INTERCEPT_NS.checked_add(scaled / RECOVERY_SLA_SLOPE_DEN) {
+                Some(n) => n,
+                None => u64::MAX,
+            }
+        }
         None => u64::MAX,
     }
 }
@@ -1473,7 +1489,6 @@ pub fn emit_recovery_sla_claim(
 mod composition_tests {
     //! Prove RootChain × WAL byte-chain meet at [`SweepDoor::seal_durable`].
 
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
     use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
@@ -1486,6 +1501,7 @@ mod composition_tests {
     };
     use crate::store::scratch::TempTx;
     use crate::store::wal::{GENESIS_PREDECESSOR, WalPayload, WalRecord, replay};
+    use miette::{IntoDiagnostic, Result, miette};
 
     fn open_live_door() -> Result<(SweepDoor, IncarnationId, SweepSession)> {
         let sealed = genesis(GenesisParams {
@@ -1552,7 +1568,7 @@ mod composition_tests {
             snapshot_fork: SnapshotFork::No,
         };
         SweepDoor::ack_native_fsync_barrier(ruled, TempTx::new())?;
-    
+
         Ok(())
     }
 
@@ -1571,13 +1587,10 @@ mod composition_tests {
         let store_id = session.store_id();
 
         let (key1, dig1) = op_key(store_id, b"compose-1");
-        let intent = door
-            .admit(incarnation, &session, key1, dig1)?;
-        let proof = door
-            .seal_durable(intent, TempTx::new(), content_root(0xA1), &session)?;
+        let intent = door.admit(incarnation, &session, key1, dig1)?;
+        let proof = door.seal_durable(intent, TempTx::new(), content_root(0xA1), &session)?;
 
-        let cut = door
-            .last_durable_cut()?;
+        let cut = door.last_durable_cut()?;
         assert_eq!(cut.commit_ordinal(), proof.commit_ordinal());
         assert_eq!(cut.wal_final_hash(), door.wal_final_hash());
         assert_eq!(
@@ -1587,8 +1600,7 @@ mod composition_tests {
         );
 
         // Replay of the door's WAL segment reproduces final_hash.
-        let recovered =
-            replay(store_id, std::slice::from_ref(door.wal_segment()))?;
+        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(
             recovered.final_hash,
             door.wal_final_hash(),
@@ -1650,17 +1662,15 @@ mod composition_tests {
 
         // Second durable seal advances both chains again (cross-commit chain).
         let (key2, dig2) = op_key(store_id, b"compose-2");
-        let intent2 = door
-            .admit(incarnation, &session, key2, dig2)?;
-        door
-            .seal_durable(intent2, TempTx::new(), content_root(0xC3), &session)?;
+        let intent2 = door.admit(incarnation, &session, key2, dig2)?;
+        door.seal_durable(intent2, TempTx::new(), content_root(0xC3), &session)?;
         let cut2 = door.last_durable_cut()?;
         assert!(!cuts_equal(cut, cut2), "second cut must differ from first");
         assert_eq!(door.root_chain().links().len(), 2);
         let recovered2 = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(recovered2.final_hash, door.wal_final_hash());
         assert_eq!(recovered2.commit_bodies.len(), 2);
-    
+
         Ok(())
     }
 
@@ -1672,12 +1682,10 @@ mod composition_tests {
         let store_id = session.store_id();
         let (key, digest) = op_key(store_id, b"retry-once");
 
-        let first = door
-            .admit(incarnation, &session, key, digest)?;
+        let first = door.admit(incarnation, &session, key, digest)?;
         assert_eq!(first.intent_ordinal(), IntentOrdinal::ZERO);
 
-        let replayed = door
-            .admit(incarnation, &session, key, digest)?;
+        let replayed = door.admit(incarnation, &session, key, digest)?;
         assert_eq!(
             replayed.intent_ordinal(),
             first.intent_ordinal(),
@@ -1690,14 +1698,12 @@ mod composition_tests {
             "replay must not re-queue a second intent"
         );
 
-        let proof = door
-            .seal_durable(first, TempTx::new(), content_root(0xD1), &session)?;
+        let proof = door.seal_durable(first, TempTx::new(), content_root(0xD1), &session)?;
         assert_eq!(proof.commit_ordinal().get(), 1);
         assert_eq!(door.highest_commit_ordinal().get(), 1);
 
         // Post-seal retry: same key+digest replays; reseal cannot advance cut.
-        let after_seal = door
-            .admit(incarnation, &session, key, digest)?;
+        let after_seal = door.admit(incarnation, &session, key, digest)?;
         assert_eq!(after_seal.intent_ordinal(), IntentOrdinal::ZERO);
         assert!(matches!(
             door.idempotency().lookup(&key),
@@ -1716,14 +1722,13 @@ mod composition_tests {
             1,
             "exactly one committed effect after two admits with the same operation identity"
         );
-        let recovered =
-            replay(store_id, std::slice::from_ref(door.wal_segment()))?;
+        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(
             recovered.commit_bodies.len(),
             1,
             "WAL must carry exactly one Commit record"
         );
-    
+
         Ok(())
     }
 
@@ -1743,7 +1748,7 @@ mod composition_tests {
             Err(SweepRefuse::OperationKeyReuse),
             "same key + changed digest must return typed OperationKeyReuse"
         );
-    
+
         Ok(())
     }
 
@@ -1786,8 +1791,7 @@ mod composition_tests {
             "same-process retry must not mint a second CommitOrdinal"
         );
 
-        let recovered =
-            replay(store_id, std::slice::from_ref(door.wal_segment()))?;
+        let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(recovered.commit_bodies.len(), 1);
         let decoded = decode_commit_body(&recovered.commit_bodies[0].1)?;
         assert_eq!(decoded.key_bytes, *key.as_bytes());
@@ -1804,23 +1808,20 @@ mod composition_tests {
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
-        let mut reopened =
-            SweepDoor::open(store_id, fence, session2, auth, cap)?;
-        reopened
-            .restore_from_wal_replay(&recovered)?;
+        let mut reopened = SweepDoor::open(store_id, fence, session2, auth, cap)?;
+        reopened.restore_from_wal_replay(&recovered)?;
         assert!(matches!(
             reopened.idempotency().lookup(&key),
             OperationOutcome::Committed { .. }
         ));
-        reopened
-            .ack_write(
-                incarnation2,
-                &session2,
-                key,
-                digest,
-                preimage,
-                TempTx::new(),
-            )?;
+        reopened.ack_write(
+            incarnation2,
+            &session2,
+            key,
+            digest,
+            preimage,
+            TempTx::new(),
+        )?;
         assert_eq!(
             reopened.highest_commit_ordinal().get(),
             1,
@@ -1831,7 +1832,7 @@ mod composition_tests {
             0,
             "post-crash retry must not append a second WAL Commit"
         );
-    
+
         Ok(())
     }
 }

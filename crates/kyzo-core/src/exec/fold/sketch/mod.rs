@@ -127,14 +127,23 @@ pub(crate) fn xxh64(data: &[u8], seed: u64) -> u64 {
             idx += 32;
         }
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-        h = (W(v1.rotate_left(1)) + W(v2.rotate_left(7)) + W(v3.rotate_left(12)) + W(v4.rotate_left(18))).0;
-        h = merge_round(h, v1); h = merge_round(h, v2); h = merge_round(h, v3); h = merge_round(h, v4);
+        h = (W(v1.rotate_left(1))
+            + W(v2.rotate_left(7))
+            + W(v3.rotate_left(12))
+            + W(v4.rotate_left(18)))
+        .0;
+        h = merge_round(h, v1);
+        h = merge_round(h, v2);
+        h = merge_round(h, v3);
+        h = merge_round(h, v4);
     } else {
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
         h = (W(seed) + W(PRIME64_5)).0;
     }
     // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-    h = (W(h) + W(match u64::try_from(len) { Ok(n) => n, Err(_) => u64::MAX })).0;
+    h = (W(h)
+        + W(u64::try_from(len).expect("INVARIANT(width_fit): u64::MAX door — try_from must succeed on supported widths")))
+    .0;
     while idx + 8 <= len {
         h ^= round(0, read_u64_le(&data[idx..]));
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
@@ -215,11 +224,8 @@ mod tests {
     #[test]
     fn xxh64_all_length_paths_deterministic() {
         for len in 0..80usize {
-            let data: Vec<u8> = (0..match u8::try_from(len) {
-                Ok(n) => n,
-                Err(_len_lt_80) => u8::MAX,
-            })
-            .collect();
+            let data: Vec<u8> = (0..u8::try_from(len).expect("INVARIANT(width_fit): u8::MAX door — try_from must succeed on supported widths"))
+                .collect();
             assert_eq!(xxh64(&data, 7), xxh64(&data, 7), "len {len}");
         }
     }

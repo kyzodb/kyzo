@@ -210,7 +210,9 @@ impl Iterator for BatchFilter<'_> {
         loop {
             let batch = match self.parent.next()? {
                 Ok(b) => b,
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    return Some(Err(e));
+                }
             };
             let tracking = batch.premises().is_some();
             let mut out = Batch::new();
@@ -224,7 +226,9 @@ impl Iterator for BatchFilter<'_> {
                             keep = false;
                             break;
                         }
-                        Err(e) => return Some(Err(e)),
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
                 }
                 if keep {
@@ -1008,7 +1012,9 @@ mod tests {
                     return Some(Ok(t));
                 }
                 match batches.next()? {
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => {
+                        return Some(Err(e));
+                    }
                     Ok(b) => {
                         current = b.into_rows();
                         idx = 0;
@@ -1152,12 +1158,10 @@ mod tests {
             span: sp(),
         });
         assert!(!left.is_unit(), "a data-bearing singleton must not be unit");
-        let mut ra = left
-            .join(right, vec![sym("y")], vec![sym("x")], sp())?;
+        let mut ra = left.join(right, vec![sym("y")], vec![sym("x")], sp())?;
         ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
-        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
-            .collect::<Result<Vec<_>>>()?;
+        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?.collect::<Result<Vec<_>>>()?;
         // The independently known answer: y=2 joins x=2 exactly once.
         assert_eq!(got, vec![Tuple::from_vec(vec![v(2), v(2)])]);
         Ok(())
@@ -1195,25 +1199,22 @@ mod tests {
             left_handle.put_fact(&mut tx, &[v(j)], stamp, sp())?;
         }
         for i in 0..2000i64 {
-            right_handle
-                .put_fact(&mut tx, &[v(i), v(7)], stamp, sp())?;
+            right_handle.put_fact(&mut tx, &[v(i), v(7)], stamp, sp())?;
         }
         for i in 5000..5003i64 {
-            right_handle
-                .put_fact(&mut tx, &[v(i), v(8)], stamp, sp())?;
+            right_handle.put_fact(&mut tx, &[v(i), v(8)], stamp, sp())?;
         }
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
         let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
         // The right side's join column gets its own symbol (`j2`), as the
         // compiler guarantees before any join is minted: InnerJoin::bindings
         // asserts (debug) that output bindings are duplicate-free.
-        let mut ra = RelAlgebra::relation(vec![sym("j")], left_handle, sp(), None)?
-            .join(
-                RelAlgebra::relation(vec![sym("i"), sym("j2")], right_handle, sp(), None)?,
-                vec![sym("j")],
-                vec![sym("j2")],
-                sp(),
-            )?;
+        let mut ra = RelAlgebra::relation(vec![sym("j")], left_handle, sp(), None)?.join(
+            RelAlgebra::relation(vec![sym("i"), sym("j2")], right_handle, sp(), None)?,
+            vec![sym("j")],
+            vec![sym("j2")],
+            sp(),
+        )?;
         if let RelAlgebra::Join(j) = &ra {
             assert_eq!(
                 j.join_type()?,
@@ -1225,8 +1226,7 @@ mod tests {
         }
         ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
-        let mut got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
-            .collect::<Result<Vec<_>>>()?;
+        let mut got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?.collect::<Result<Vec<_>>>()?;
         got.sort();
         let mut expected: Vec<Tuple> = (0..2000i64)
             .map(|i| vec![v(7), v(i), v(7)])
@@ -1257,8 +1257,7 @@ mod tests {
         );
         ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
-        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
-            .collect::<Result<Vec<_>>>()?;
+        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?.collect::<Result<Vec<_>>>()?;
         assert_eq!(
             got,
             vec![
@@ -1306,13 +1305,12 @@ mod tests {
         )?;
         for (ts, val) in [(10i64, "ten"), (20, "twenty")] {
             let row = vec![v(1), DataValue::from(val)];
-            handle
-                .put_fact(
-                    &mut tx,
-                    &row,
-                    kyzo_model::value::ValidityTs::of_micros(ts),
-                    sp(),
-                )?;
+            handle.put_fact(
+                &mut tx,
+                &row,
+                kyzo_model::value::ValidityTs::of_micros(ts),
+                sp(),
+            )?;
         }
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
@@ -1365,13 +1363,12 @@ mod tests {
         assert!(err.downcast_ref::<PlanInvariantError>().is_some());
 
         // NegJoin as inner-join RHS.
-        let neg = RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(0), sp())
-            .neg_join(
-                RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(1), sp()),
-                vec![sym("x")],
-                vec![sym("x")],
-                sp(),
-            )?;
+        let neg = RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(0), sp()).neg_join(
+            RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(1), sp()),
+            vec![sym("x")],
+            vec![sym("x")],
+            sp(),
+        )?;
         let err = RelAlgebra::unit(sp())
             .join(neg, vec![], vec![], sp())
             .unwrap_err();
@@ -1393,8 +1390,7 @@ mod tests {
             sp(),
             Some(ValidityClause::At(AsOf::current(ValidityTs::of_micros(0)))),
         )?;
-        let neg = RelAlgebra::unit(sp())
-            .neg_join(vld_scan, vec![], vec![], sp())?;
+        let neg = RelAlgebra::unit(sp()).neg_join(vld_scan, vec![], vec![], sp())?;
         assert!(matches!(
             neg,
             RelAlgebra::NegJoin(ref b) if matches!(b.right, NegRight::StoredWithValidity(_))
@@ -1449,22 +1445,20 @@ mod tests {
                     Err(_gt_i64) => continue,
                 };
                 let lrow = vec![v(k)];
-                left_handle
-                    .put_fact(
+                left_handle.put_fact(
+                    &mut tx,
+                    &lrow,
+                    kyzo_model::value::ValidityTs::of_micros(0),
+                    sp(),
+                )?;
+                if k % 2 == 0 {
+                    let rrow = vec![v(k), v(k * 10)];
+                    right_handle.put_fact(
                         &mut tx,
-                        &lrow,
+                        &rrow,
                         kyzo_model::value::ValidityTs::of_micros(0),
                         sp(),
                     )?;
-                if k % 2 == 0 {
-                    let rrow = vec![v(k), v(k * 10)];
-                    right_handle
-                        .put_fact(
-                            &mut tx,
-                            &rrow,
-                            kyzo_model::value::ValidityTs::of_micros(0),
-                            sp(),
-                        )?;
                     expected_matches += 1;
                 }
             }
@@ -1473,19 +1467,16 @@ mod tests {
             let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
             // Right side's join column carries its own symbol (`k2`), per the
             // compiler-guaranteed duplicate-free-bindings invariant.
-            let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)?
-                .join(
-                    RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)
-                        ?,
-                    vec![sym("k")],
-                    vec![sym("k2")],
-                    sp(),
-                )?;
+            let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)?.join(
+                RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)?,
+                vec![sym("k")],
+                vec![sym("k2")],
+                sp(),
+            )?;
             ra.fill_binding_indices_and_compile()?;
             let stores = no_stores();
 
-            let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
-                .collect::<Result<Vec<_>>>()?;
+            let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?.collect::<Result<Vec<_>>>()?;
             // Judged against the independently accumulated analytic count,
             // never against a second run of the same machine.
             assert_eq!(got.len(), expected_matches, "n={n}: wrong match count");
@@ -1522,29 +1513,25 @@ mod tests {
         )?;
         for k in 1..=5i64 {
             let lrow = vec![v(k), v(k * 100)];
-            left_handle
-                .put_fact(
-                    &mut tx,
-                    &lrow,
-                    kyzo_model::value::ValidityTs::of_micros(0),
-                    sp(),
-                )?;
+            left_handle.put_fact(
+                &mut tx,
+                &lrow,
+                kyzo_model::value::ValidityTs::of_micros(0),
+                sp(),
+            )?;
             let rrow = vec![v(k), v(k + 1000)];
-            right_handle
-                .put_fact(
-                    &mut tx,
-                    &rrow,
-                    kyzo_model::value::ValidityTs::of_micros(0),
-                    sp(),
-                )?;
+            right_handle.put_fact(
+                &mut tx,
+                &rrow,
+                kyzo_model::value::ValidityTs::of_micros(0),
+                sp(),
+            )?;
         }
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
         let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
-        let left =
-            RelAlgebra::relation(vec![sym("k"), sym("extra")], left_handle, sp(), None)?;
-        let right =
-            RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)?;
+        let left = RelAlgebra::relation(vec![sym("k"), sym("extra")], left_handle, sp(), None)?;
+        let right = RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)?;
         let mut ra = RelAlgebra::Join(Box::new(InnerJoin {
             left,
             right,
@@ -1559,8 +1546,7 @@ mod tests {
         ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
 
-        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
-            .collect::<Result<Vec<_>>>()?;
+        let got: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?.collect::<Result<Vec<_>>>()?;
         let expected: Vec<Tuple> = (1..=5i64)
             .map(|k| vec![v(k), v(k + 1000)])
             .map(Tuple::from_vec)
@@ -1612,13 +1598,11 @@ mod tests {
             filters: vec![],
             span: sp(),
         });
-        let mut ra = left
-            .join(right, vec![sym("k")], vec![sym("k2")], sp())?;
+        let mut ra = left.join(right, vec![sym("k")], vec![sym("k2")], sp())?;
         ra.fill_binding_indices_and_compile()?;
 
         // Sanity: against the TOTAL (no delta_rule), every left row matches.
-        let total_it: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?
-            .collect::<Result<Vec<_>>>()?;
+        let total_it: Vec<Tuple> = rows_of(&ra, &rtx, &stores)?.collect::<Result<Vec<_>>>()?;
         assert_eq!(total_it.len(), 3, "the total must join all three keys");
 
         // Against the DELTA, only key 2 (this epoch's fresh row) may join.
@@ -1686,29 +1670,31 @@ mod tests {
                 Ok(v) => v,
                 Err(_gt_i64) => continue,
             };
-            left_handle
-                .put_fact(&mut tx, &[v(k)], ValidityTs::of_micros(0), sp())?;
+            left_handle.put_fact(&mut tx, &[v(k)], ValidityTs::of_micros(0), sp())?;
             if k % 3 == 0 {
-                right_handle
-                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::of_micros(0), sp())?;
+                right_handle.put_fact(
+                    &mut tx,
+                    &[v(k), v(k * 10)],
+                    ValidityTs::of_micros(0),
+                    sp(),
+                )?;
                 expected.push(Tuple::from_vec(vec![v(k), v(k), v(k * 10)]));
             }
         }
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
         let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
-        let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)?
-            .join(
-                RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)?,
-                vec![sym("k")],
-                vec![sym("k2")],
-                sp(),
-            )?;
+        let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)?.join(
+            RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)?,
+            vec![sym("k")],
+            vec![sym("k2")],
+            sp(),
+        )?;
         ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
 
-        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)?
-            .collect::<Result<Vec<_>>>()?;
+        let off: Vec<Tuple> =
+            rows_of_seg(&ra, &rtx, &stores, Segments::OFF)?.collect::<Result<Vec<_>>>()?;
         assert_eq!(
             off, expected,
             "storage probe diverged from hand-computed join"
@@ -1758,29 +1744,26 @@ mod tests {
         let n = 200;
         let mut expected: Vec<Tuple> = Vec::new();
         for z in 0..n {
-            left_handle
-                .put_fact(&mut tx, &[v(z)], ValidityTs::of_micros(0), sp())?;
+            left_handle.put_fact(&mut tx, &[v(z)], ValidityTs::of_micros(0), sp())?;
             for w in 0..(z % 7) {
-                right_handle
-                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::of_micros(0), sp())?;
+                right_handle.put_fact(&mut tx, &[v(z), v(w)], ValidityTs::of_micros(0), sp())?;
                 expected.push(Tuple::from_vec(vec![v(z), v(z), v(w)]));
             }
         }
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
         let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
-        let mut ra = RelAlgebra::relation(vec![sym("z")], left_handle, sp(), None)?
-            .join(
-                RelAlgebra::relation(vec![sym("z2"), sym("w")], right_handle, sp(), None)?,
-                vec![sym("z")],
-                vec![sym("z2")],
-                sp(),
-            )?;
+        let mut ra = RelAlgebra::relation(vec![sym("z")], left_handle, sp(), None)?.join(
+            RelAlgebra::relation(vec![sym("z2"), sym("w")], right_handle, sp(), None)?,
+            vec![sym("z")],
+            vec![sym("z2")],
+            sp(),
+        )?;
         ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
 
-        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)?
-            .collect::<Result<Vec<_>>>()?;
+        let off: Vec<Tuple> =
+            rows_of_seg(&ra, &rtx, &stores, Segments::OFF)?.collect::<Result<Vec<_>>>()?;
         assert_eq!(
             off, expected,
             "storage probe diverged from hand-computed join"
@@ -1799,7 +1782,6 @@ mod tests {
         );
         Ok(())
     }
-
 
     /// A stream/decode error met DURING accumulation must not outrank an
     /// earlier accumulated row's predicate error: the row path interleaves

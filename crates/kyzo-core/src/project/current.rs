@@ -92,6 +92,14 @@ impl SegmentEngine {
         }
     }
 
+    fn segments_lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, BTreeMap<ResidentIndexKey, Sealed<SegmentHandle>>> {
+        self.segments
+            .lock()
+            .expect("segments mutex poisoned — refuse silent continue")
+    }
+
     /// Live generation for `relation` — see [`Residency::witness_after_snapshot`].
     pub(crate) fn witness_after_snapshot(
         &self,
@@ -118,10 +126,7 @@ impl SegmentEngine {
         live: Generation,
     ) -> Result<SegmentHandle, SegmentMiss> {
         let key = ResidentIndexKey::for_relation(relation);
-        let segments = self
-            .segments
-            .lock()
-            .expect("segments mutex poisoned — refuse silent continue");
+        let segments = self.segments_lock();
         let Some(sealed) = segments.get(&key) else {
             return Err(SegmentMiss::Absent);
         };
@@ -155,10 +160,7 @@ impl SegmentEngine {
         let key = ResidentIndexKey::for_relation(relation);
         let handle = SegmentHandle(Arc::new(segment));
         let sealed = ProjectionBuilder::new(handle.clone()).seal(generation);
-        self.segments
-            .lock()
-            .expect("segments mutex poisoned — refuse silent continue")
-            .insert(key, sealed);
+        self.segments_lock().insert(key, sealed);
         self.residency.clear_miss(relation);
         handle
     }
@@ -168,10 +170,7 @@ impl SegmentEngine {
     /// being reused or destroyed).
     pub(crate) fn evict(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        self.segments
-            .lock()
-            .expect("segments mutex poisoned — refuse silent continue")
-            .remove(&key);
+        self.segments_lock().remove(&key);
         self.residency.forget(relation);
     }
 }
@@ -317,8 +316,7 @@ mod tests {
             DataValue::from(7),
             DataValue::from("y"),
         ]));
-        let s = Segment::build(rows.clone().into_iter())
-            .ok_or_else(|| miette!("segment"))?;
+        let s = Segment::build(rows.clone().into_iter()).ok_or_else(|| miette!("segment"))?;
         for a in -1..9 {
             let probe = [DataValue::from(a)];
             let got = s.prefix_range(&probe);
@@ -352,8 +350,8 @@ mod tests {
     fn checked_row_end_boundary() -> Result<()> {
         assert_eq!(checked_row_end(0), Some(0));
         assert_eq!(checked_row_end(1), Some(1));
-        let u32_max_usize = usize::try_from(u32::MAX)
-            .map_err(|_| miette!("u32::MAX must fit usize"))?;
+        let u32_max_usize =
+            usize::try_from(u32::MAX).map_err(|_| miette!("u32::MAX must fit usize"))?;
         assert_eq!(checked_row_end(u32_max_usize), Some(u32::MAX));
         assert_eq!(checked_row_end(u32_max_usize + 1), None);
         assert_eq!(checked_row_end(usize::MAX), None);
@@ -369,8 +367,7 @@ mod tests {
         let live = engine.witness_after_snapshot(&rtx, relation);
         let handle = engine.install(
             relation,
-            Segment::build(std::iter::once(row(&[1, 2])))
-                .ok_or_else(|| miette!("segment"))?,
+            Segment::build(std::iter::once(row(&[1, 2]))).ok_or_else(|| miette!("segment"))?,
             live,
         );
         assert_eq!(
@@ -397,8 +394,7 @@ mod tests {
         let live = engine.witness_after_snapshot(&rtx, relation);
         let handle = engine.install(
             relation,
-            Segment::build(std::iter::once(row(&[9])))
-                .ok_or_else(|| miette!("segment"))?,
+            Segment::build(std::iter::once(row(&[9]))).ok_or_else(|| miette!("segment"))?,
             live,
         );
         engine.evict(relation);
@@ -418,12 +414,13 @@ mod tests {
         let engine = SegmentEngine::new();
         let relation = RelationId::new(1).expect("below cap");
         let live = Generation::stamp_from_counter(0);
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _g = engine.segments.lock().unwrap();
-            panic!("deliberate poison");
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let guard = engine.segments.lock().expect("fresh mutex");
+            std::panic::panic_any((guard, "deliberate poison"));
         }));
+        assert!(poison.is_err(), "poison setup must panic while holding the guard");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = engine.get(relation, live);
+            let _miss = engine.get(relation, live);
         }));
         assert!(
             result.is_err(),

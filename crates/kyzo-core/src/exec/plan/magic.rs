@@ -1295,19 +1295,18 @@ mod tests {
         stratum.prog.keys().map(|k| format!("{k:?}")).collect()
     }
 
+    const NO_INLINE_RULES: &[MagicInlineRule] = &[];
+
     fn rules_of<'a>(stratum: &'a MagicProgram, key: &str) -> &'a [MagicInlineRule] {
-        let found = stratum
-            .prog
-            .iter()
-            .find(|(k, _)| format!("{k:?}") == key);
+        let found = stratum.prog.iter().find(|(k, _)| format!("{k:?}") == key);
         assert!(found.is_some(), "store '{key}' not found");
         match found.map(|(_, v)| v) {
             Some(MagicRulesOrFixed::Rules { rules }) => rules,
             Some(MagicRulesOrFixed::Fixed { .. }) => {
                 assert!(false, "store '{key}' is a fixed rule");
-                &[]
+                NO_INLINE_RULES
             }
-            None => &[],
+            None => NO_INLINE_RULES,
         }
     }
 
@@ -1350,7 +1349,7 @@ mod tests {
     /// end-to-end row assertion re-lands with `DbInstance`, and the
     /// naive-oracle differential covers the answer itself.
     #[test]
-    fn strange_case_with_disabled_rewrite_is_identity() -> Result<()>  {
+    fn strange_case_with_disabled_rewrite_is_identity() -> Result<()> {
         // Normal form of the program above (head dedup makes y's first rule
         // `y[A, ***0] := A = 1, ***0 = A`; `_` becomes an ignored binding).
         let make_strata = || {
@@ -1433,7 +1432,7 @@ mod tests {
     /// reads only `tc|Mbf[s, …]` with `s` demanded — so `?` derives exactly
     /// the rows the unrewritten program derives, from fewer facts.
     #[test]
-    fn bound_entry_transitive_closure_rewrites_demand_only() -> Result<()>  {
+    fn bound_entry_transitive_closure_rewrites_demand_only() -> Result<()> {
         let strata = vec![stratum(vec![
             (
                 "tc",
@@ -1529,7 +1528,7 @@ mod tests {
     /// never rewritten — structurally, by `SymbolKind::Entry`, not via a
     /// seeded `?` symbol.
     #[test]
-    fn entry_is_always_exempt() -> Result<()>  {
+    fn entry_is_always_exempt() -> Result<()> {
         let strata = vec![stratum(vec![
             ("r", vec![nf_rule(&["x"], vec![stored_app("e", &["x"])])]),
             ("?", vec![nf_rule(&["x"], vec![rule_app("r", &["x"])])]),
@@ -1556,7 +1555,7 @@ mod tests {
     /// an aggregate over a demand-restricted subset would be a different
     /// value, which the law forbids.
     #[test]
-    fn aggregation_rules_are_exempt() -> Result<()>  {
+    fn aggregation_rules_are_exempt() -> Result<()> {
         let count = parse_aggr("count")?.ok_or_else(|| miette!("count exists"))?;
         let mut agg_rule = nf_rule(&["a", "n"], vec![stored_app("e", &["a", "n"])]);
         agg_rule.aggr[1] = HeadAggrSlot::Aggregated {
@@ -1598,7 +1597,7 @@ mod tests {
     /// Exemption: `:disable_magic_rewrite`. The flag lives once on the tier
     /// (not per stratum) and must exempt every rule in every stratum.
     #[test]
-    fn disable_magic_rewrite_exempts_every_stratum() -> Result<()>  {
+    fn disable_magic_rewrite_exempts_every_stratum() -> Result<()> {
         let strata = vec![
             stratum(vec![(
                 "r",
@@ -1636,7 +1635,7 @@ mod tests {
     /// evaluation would then read an empty store — silently wrong answers.
     /// This test is the standing regression for an inverted walk.
     #[test]
-    fn cross_stratum_consumers_keep_producers_unrewritten() -> Result<()>  {
+    fn cross_stratum_consumers_keep_producers_unrewritten() -> Result<()> {
         let strata = vec![
             stratum(vec![(
                 "r",
@@ -1675,7 +1674,7 @@ mod tests {
     /// and `w` bound by unifications and `y` free must adorn as `bfb`, and
     /// the input relation must carry exactly the bound positions.
     #[test]
-    fn adornment_marks_bound_and_free_positions() -> Result<()>  {
+    fn adornment_marks_bound_and_free_positions() -> Result<()> {
         let strata = vec![stratum(vec![
             (
                 "r",
@@ -1727,7 +1726,7 @@ mod tests {
     /// newly-introduced binding free) is a demand-shape change to make
     /// deliberately, against the naive oracle — never silently in a port.
     #[test]
-    fn repeated_variable_adorns_later_positions_bound() -> Result<()>  {
+    fn repeated_variable_adorns_later_positions_bound() -> Result<()> {
         let strata = vec![stratum(vec![
             (
                 "r",
@@ -1783,7 +1782,7 @@ mod tests {
     /// resolve to positional bindings against the declared schema, with
     /// digit-named fillers for unbound columns; unknown fields are refused.
     #[test]
-    fn named_stored_fixed_rule_args_resolve_positionally() -> Result<()>  {
+    fn named_stored_fixed_rule_args_resolve_positionally() -> Result<()> {
         let schema = FixedSchema(StoredRelationMetadata {
             keys: vec![column("a", ColType::Int), column("b", ColType::Int)],
             non_keys: vec![column("c", ColType::Int)],
@@ -1805,8 +1804,8 @@ mod tests {
             trivia: Trivia::empty(),
         };
 
-        let adorned =
-            adorn_fixed_rule_apply(&apply(&[("b", "x"), ("c", "y")]), &schema).map_err(|e| miette!("resolves: {e}"))?;
+        let adorned = adorn_fixed_rule_apply(&apply(&[("b", "x"), ("c", "y")]), &schema)
+            .map_err(|e| miette!("resolves: {e}"))?;
         match &adorned.rule_args[0] {
             MagicFixedRuleRuleArg::Stored { bindings, .. } => {
                 let names: Vec<_> = bindings.iter().map(|s| s.name.as_str()).collect();
@@ -1830,7 +1829,7 @@ mod tests {
     /// non-nullable `Validity` — including the keyless-relation shape the
     /// original panicked on.
     #[test]
-    fn time_travel_requires_a_validity_keyed_relation() -> Result<()>  {
+    fn time_travel_requires_a_validity_keyed_relation() -> Result<()> {
         use kyzo_model::value::ValidityTs;
 
         let apply = FixedRuleApply {
@@ -1856,7 +1855,8 @@ mod tests {
             keys: vec![column("a", ColType::Int)],
             non_keys: vec![],
         });
-        adorn_fixed_rule_apply(&apply, &plain).map_err(|e| miette!("any facts relation time-travels: {e}"))?;
+        adorn_fixed_rule_apply(&apply, &plain)
+            .map_err(|e| miette!("any facts relation time-travels: {e}"))?;
 
         let keyless = FixedSchema(StoredRelationMetadata {
             keys: vec![],
@@ -1864,6 +1864,6 @@ mod tests {
         });
         adorn_fixed_rule_apply(&apply, &keyless)
             .map_err(|e| miette!("a keyless relation adorns without panicking: {e}"))?;
-            Ok(())
+        Ok(())
     }
 }

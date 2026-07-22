@@ -143,7 +143,6 @@ use kyzo_model::value::{DataValue, Tuple, append_canonical};
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
 
-
 use crate::exec::stdlib::convert::{f64_to_f32, usize_to_f64};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,7 +350,12 @@ impl HashPermutations {
         for _ in 0..n_perms {
             // High 32 bits of a splitmix64 word (the finalizer diffuses the
             // whole word, so the high half is equidistributed).
-            perms.push(match u32::try_from(crate::rules::rng::splitmix64_step(&mut state) >> 32) { Ok(v) => v, Err(_e) => 0 });
+            perms.push(
+                match u32::try_from(crate::rules::rng::splitmix64_step(&mut state) >> 32) {
+                    Ok(v) => v,
+                    Err(_e) => 0,
+                },
+            );
         }
         Self(perms)
     }
@@ -381,9 +385,7 @@ impl HashPermutations {
     /// The inverse of [`to_bytes`](Self::to_bytes). Safe and fallible: a
     /// length that is not a multiple of 4 is corrupt, not silently
     /// truncated (and the original's unaligned `*const u32` read was UB).
-    pub(crate) fn decode(
-        bytes: &[u8],
-    ) -> std::result::Result<Self, LshPermutationDecodeRefused> {
+    pub(crate) fn decode(bytes: &[u8]) -> std::result::Result<Self, LshPermutationDecodeRefused> {
         if !bytes.len().is_multiple_of(4) {
             return Err(LshPermutationDecodeRefused::LengthNotMultipleOfFour { len: bytes.len() });
         }
@@ -467,7 +469,10 @@ impl HashValues {
             for (i, seed) in perms.0.iter().enumerate() {
                 let mut hasher = XxHash32::with_seed(*seed);
                 hasher.write(&v);
-                let hash = match u32::try_from(hasher.finish() & 0xFFFF_FFFF) { Ok(v) => v, Err(_e) => 0 };
+                let hash = match u32::try_from(hasher.finish() & 0xFFFF_FFFF) {
+                    Ok(v) => v,
+                    Err(_e) => 0,
+                };
                 self.0[i] = min(self.0[i], hash);
             }
         }
@@ -543,7 +548,10 @@ impl HashValues {
         Ok((0..n_bands)
             .map(|i| {
                 let mut byte_range = bytes[i * chunk_size..(i + 1) * chunk_size].to_vec();
-                byte_range.extend_from_slice(&match u16::try_from(i) { Ok(v) => v, Err(_e) => u16::MAX }.to_le_bytes());
+                byte_range.extend_from_slice(
+                    &u16::try_from(i).expect("INVARIANT(width_fit): u16::MAX door — try_from must succeed on supported widths")
+                    .to_le_bytes(),
+                );
                 byte_range
             })
             .collect())
@@ -594,7 +602,10 @@ impl LshParams {
     }
 
     fn false_positive_probability(threshold: f64, b: usize, r: usize) -> f64 {
-        let r_i32 = match i32::try_from(r) { Ok(v) => v, Err(_e) => 0 };
+        let r_i32 = match i32::try_from(r) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        };
         let b_f = usize_to_f64(b);
         let probability = |s| -> f64 { 1. - f64::powf(1. - f64::powi(s, r_i32), b_f) };
         integrate(probability, 0.0, threshold, ALLOWED_INTEGRATE_ERR).integral
@@ -606,8 +617,7 @@ impl LshParams {
             Err(_e) => 0,
         };
         let b_f = usize_to_f64(b);
-        let probability =
-            |s| -> f64 { 1. - (1. - f64::powf(1. - f64::powi(s, r_i32), b_f)) };
+        let probability = |s| -> f64 { 1. - (1. - f64::powf(1. - f64::powi(s, r_i32), b_f)) };
         integrate(probability, threshold, 1.0, ALLOWED_INTEGRATE_ERR).integral
     }
 }
@@ -992,7 +1002,10 @@ mod tests {
         // And through the manifest it is the typed corruption error.
         let mut m = manifest_with_perms(vec![1, 2, 3, 4], 4)?;
         m.perms.corrupt_truncate_last_byte_for_test();
-        let err = m.get_hash_perms().err().ok_or_else(|| miette!("expected error"))?;
+        let err = m
+            .get_hash_perms()
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
         Ok(())
     }
@@ -1082,8 +1095,7 @@ mod tests {
         );
         assert_eq!(
             perms.as_slice(),
-            HashPermutations::decode(&perms.to_bytes())?
-                .as_slice()
+            HashPermutations::decode(&perms.to_bytes())?.as_slice()
         );
         Ok(())
     }
@@ -1093,15 +1105,28 @@ mod tests {
     /// [`LshParams::false_positive_probability`] /
     /// [`false_negative_probability`].
     fn predicted_collision_rate(s: f64, b: usize, r: usize) -> f64 {
-        1.0 - (1.0 - s.powi(match i32::try_from(r) { Ok(v) => v, Err(_e) => 0 }))
-            .powi(match i32::try_from(b) { Ok(v) => v, Err(_e) => 0 })
+        1.0 - (1.0
+            - s.powi(match i32::try_from(r) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            }))
+        .powi(match i32::try_from(b) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        })
     }
 
     /// Two equal-sized integer sets with exact Jaccard `inter / (2n - inter)`.
     fn jaccard_pair(n: usize, inter: usize, offset: i64) -> (Vec<i64>, Vec<i64>, f64) {
         assert!(inter <= n);
-        let n_i = match i64::try_from(n) { Ok(v) => v, Err(_e) => 0 };
-        let inter_i = match i64::try_from(inter) { Ok(v) => v, Err(_e) => 0 };
+        let n_i = match i64::try_from(n) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        };
+        let inter_i = match i64::try_from(inter) {
+            Ok(v) => v,
+            Err(_e) => 0,
+        };
         let a: Vec<i64> = (0..n_i).map(|i| offset + i).collect();
         let mut b: Vec<i64> = (0..inter_i).map(|i| offset + i).collect();
         b.extend((0..(n_i - inter_i)).map(|i| offset + n_i + i));
@@ -1124,7 +1149,14 @@ mod tests {
         let mut hits = 0usize;
         let mut s_sum = 0.0;
         for t in 0..trials {
-            let (a, bset, s) = jaccard_pair(n, inter, match i64::try_from(t) { Ok(v) => v, Err(_e) => 0 } * 10_000);
+            let (a, bset, s) = jaccard_pair(
+                n,
+                inter,
+                match i64::try_from(t) {
+                    Ok(v) => v,
+                    Err(_e) => 0,
+                } * 10_000,
+            );
             s_sum += s;
             // INVARIANT(trial_seed_mix): trial index mixes into seed0 by modular add; wrap is intentional diffusion.
             let perms = HashPermutations::new(
@@ -1353,7 +1385,19 @@ mod tests {
                     kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
                 )?;
-                lsh_put(&mut tx, LshPutSpec { tuple: &row, extractor: &extractor, tokenizer: &tokenizer, base: &base, idx: &idx, inv_idx: &inv, manifest: &m, perms: &perms })?;
+                lsh_put(
+                    &mut tx,
+                    LshPutSpec {
+                        tuple: &row,
+                        extractor: &extractor,
+                        tokenizer: &tokenizer,
+                        base: &base,
+                        idx: &idx,
+                        inv_idx: &inv,
+                        manifest: &m,
+                        perms: &perms,
+                    },
+                )?;
             }
             tx.commit().map_err(|e| miette!("{e}"))?;
             let rtx = db.read_tx()?;
@@ -1412,7 +1456,10 @@ mod tests {
         }
     }
 
-    fn manifest_with_perms(perm_seeds: Vec<u32>, n_bands: usize) -> Result<MinHashLshIndexManifest> {
+    fn manifest_with_perms(
+        perm_seeds: Vec<u32>,
+        n_bands: usize,
+    ) -> Result<MinHashLshIndexManifest> {
         let params = LshParams {
             b: n_bands,
             r: perm_seeds.len() / n_bands,
@@ -1494,7 +1541,19 @@ mod tests {
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
-            lsh_put(&mut tx, LshPutSpec { tuple: &row, extractor: &extractor, tokenizer: &tokenizer, base: &base, idx: &idx, inv_idx: &inv, manifest: &manifest, perms: &perms })?;
+            lsh_put(
+                &mut tx,
+                LshPutSpec {
+                    tuple: &row,
+                    extractor: &extractor,
+                    tokenizer: &tokenizer,
+                    base: &base,
+                    idx: &idx,
+                    inv_idx: &inv,
+                    manifest: &manifest,
+                    perms: &perms,
+                },
+            )?;
         }
         tx.commit().map_err(|e| miette!("{e}"))?;
         Ok(Fixture {
@@ -1547,11 +1606,37 @@ mod tests {
 
         // A Null query yields nothing; a non-indexable query is an error.
         assert!(
-            Lsh::search_index(&rtx, LshSearchRequest { cancel: &CancelFlag::inert(), q: &DataValue::Null, manifest: &f.manifest, base: &f.base, idx: &f.idx, params: &LshSearchParams { k: None }, filter_code: &None, perms: &perms, tokenizer: &f.tokenizer })?
+            Lsh::search_index(
+                &rtx,
+                LshSearchRequest {
+                    cancel: &CancelFlag::inert(),
+                    q: &DataValue::Null,
+                    manifest: &f.manifest,
+                    base: &f.base,
+                    idx: &f.idx,
+                    params: &LshSearchParams { k: None },
+                    filter_code: &None,
+                    perms: &perms,
+                    tokenizer: &f.tokenizer
+                }
+            )?
             .is_empty()
         );
         assert!(
-            Lsh::search_index(&rtx, LshSearchRequest { cancel: &CancelFlag::inert(), q: &DataValue::from(42), manifest: &f.manifest, base: &f.base, idx: &f.idx, params: &LshSearchParams { k: None }, filter_code: &None, perms: &perms, tokenizer: &f.tokenizer })
+            Lsh::search_index(
+                &rtx,
+                LshSearchRequest {
+                    cancel: &CancelFlag::inert(),
+                    q: &DataValue::from(42),
+                    manifest: &f.manifest,
+                    base: &f.base,
+                    idx: &f.idx,
+                    params: &LshSearchParams { k: None },
+                    filter_code: &None,
+                    perms: &perms,
+                    tokenizer: &f.tokenizer
+                }
+            )
             .is_err()
         );
         drop(rtx);
@@ -1628,14 +1713,29 @@ mod tests {
             DataValue::from(1),
             DataValue::from("some indexed text here"),
         ];
-        let err = lsh_del(&mut tx, &row, None, &f.idx, &f.inv).err().ok_or_else(|| miette!("expected error"))?;
+        let err = lsh_del(&mut tx, &row, None, &f.idx, &f.inv)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption, got: {err:?}"
         );
         // Re-put hits the same guard on its remove-first path.
-        let err = lsh_put(&mut tx, LshPutSpec { tuple: &row, extractor: &f.extractor, tokenizer: &f.tokenizer, base: &f.base, idx: &f.idx, inv_idx: &f.inv, manifest: &f.manifest, perms: &perms })
-        .err().ok_or_else(|| miette!("expected error"))?;
+        let err = lsh_put(
+            &mut tx,
+            LshPutSpec {
+                tuple: &row,
+                extractor: &f.extractor,
+                tokenizer: &f.tokenizer,
+                base: &f.base,
+                idx: &f.idx,
+                inv_idx: &f.inv,
+                manifest: &f.manifest,
+                perms: &perms,
+            },
+        )
+        .err()
+        .ok_or_else(|| miette!("expected error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 
         // Byte-level garbage in the value is an error too (kernel decode).
@@ -1659,7 +1759,8 @@ mod tests {
         let mut bytes = vec![];
         m.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
             .map_err(|e| miette!("{e}"))?;
-        let decoded: MinHashLshIndexManifest = rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
+        let decoded: MinHashLshIndexManifest =
+            rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
         assert_eq!(decoded, m, "wire round trip");
 
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();

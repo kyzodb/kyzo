@@ -199,7 +199,10 @@ impl ReadTx for TempTx {
                 "TempTx used after commit/abort"
             ))));
         };
-        Box::new(map.iter().map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))))
+        Box::new(
+            map.iter()
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+        )
     }
 }
 
@@ -318,11 +321,11 @@ impl Drop for TempTx {
 #[cfg(test)]
 mod tests {
 
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::time::ClaimPolarity;
     use kyzo_model::value::{DataValue, ValiditySlot, ValidityTs};
     use kyzo_model::value::{RelationId, TupleT};
+    use miette::{IntoDiagnostic, Result, miette};
 
     const REL: RelationId = match RelationId::new(7) {
         Some(id) => id,
@@ -366,9 +369,7 @@ mod tests {
             .take(1000)
             .map(|r| {
                 let tup = r.map_err(|e| miette!("engine-shaped rows decode cleanly: {e}"))?;
-                let x = tup[0]
-                    .get_int()
-                    .ok_or_else(|| miette!("int key column"))?;
+                let x = tup[0].get_int().ok_or_else(|| miette!("int key column"))?;
                 let version_ts = match &tup[1] {
                     DataValue::Validity(v) => v.timestamp().raw(),
                     other @ (data_value_any!()) => {
@@ -403,7 +404,7 @@ mod tests {
         assert_eq!(t.total_scan().count(), 1);
         t.del(b"c")?;
         assert!(t.is_empty());
-    
+
         Ok(())
     }
 
@@ -417,7 +418,7 @@ mod tests {
         assert_eq!(t.get(b"k")?, Some(Slice::from(b"second")));
         let rows: Vec<_> = t.total_scan().map(|kv| kv?).collect();
         assert_eq!(rows, vec![(Slice::from(b"k"), Slice::from(b"second"))]);
-    
+
         Ok(())
     }
 
@@ -447,7 +448,7 @@ mod tests {
             "both live; newest version of 1 at or before 15 is ts=10"
         );
         assert_eq!(scan_at(&t, 25)?, vec![(2, 8)], "tuple 1 retracted at 20");
-    
+
         Ok(())
     }
 
@@ -484,7 +485,7 @@ mod tests {
             vec![],
             "the sys=20 correction retracts it"
         );
-    
+
         Ok(())
     }
 
@@ -501,7 +502,7 @@ mod tests {
         t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert))?;
         t.put(&bk(9, i64::MIN, i64::MIN), &bv(ClaimPolarity::Retract))?;
         assert_eq!(scan_at(&t, 10)?, vec![(1, 5)]);
-    
+
         Ok(())
     }
 
@@ -516,7 +517,7 @@ mod tests {
         let at = AsOf::current(ValidityTs::of_micros(10));
         assert_eq!(t.range_skip_scan_tuple(&hi, &lo, at).count(), 0, "inverted");
         assert_eq!(t.range_skip_scan_tuple(&lo, &lo, at).count(), 0, "equal");
-    
+
         Ok(())
     }
 
@@ -557,7 +558,9 @@ mod tests {
             );
             match kv {
                 Ok(kv) => rows.push(kv),
-                Err(_) => return Obs::Err,
+                Err(_) => {
+                    return Obs::Err;
+                }
             }
         }
         Obs::Rows(rows)
@@ -720,7 +723,7 @@ mod tests {
             drop(fjall_tx.abort());
             drop(sim_tx.abort());
         }
-    
+
         Ok(())
     }
 
@@ -776,7 +779,7 @@ mod tests {
             drop(fjall_tx.abort());
             drop(sim_tx.abort());
         }
-    
+
         Ok(())
     }
 
@@ -886,7 +889,7 @@ mod tests {
             drop(fjall_tx.abort());
             drop(sim_tx.abort());
         }
-    
+
         Ok(())
     }
 }

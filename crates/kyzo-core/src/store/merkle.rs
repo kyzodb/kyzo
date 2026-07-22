@@ -134,10 +134,11 @@ impl MerkleHash {
 fn leaf_hash(key: &[u8], value: &[u8]) -> MerkleHash {
     let mut h = Sha256::new();
     h.update([LEAF_TAG]);
-    h.update(match u64::try_from(key.len()) {
-        Ok(n) => n,
-        Err(_) => u64::MAX,
-    }.to_be_bytes());
+    h.update(
+        u64::try_from(key.len())
+            .expect("INVARIANT(merkle_key_len_fits_u64): key len fits u64")
+        .to_be_bytes(),
+    );
     h.update(key);
     h.update(value);
     MerkleHash(h.finalize().into())
@@ -1250,10 +1251,10 @@ mod tests {
         let mut opened_pairs = Vec::with_capacity(logical.len());
         for (i, (k, plaintext)) in logical.iter().enumerate() {
             let mut nonce_bytes = [0u8; 12];
-            nonce_bytes[..4].copy_from_slice(&match u32::try_from(i) {
-                Ok(n) => n,
-                Err(_) => u32::MAX,
-            }.to_be_bytes());
+            nonce_bytes[..4].copy_from_slice(
+                &u32::try_from(i).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths")
+                .to_be_bytes(),
+            );
             let nonce = Nonce::admit(nonce_bytes);
             let ct = compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)?;
             assert_ne!(
@@ -2023,7 +2024,9 @@ mod tests {
             let mut s = 0u64;
             for b in k {
                 // INVARIANT(djb2): classic djb2 string hash; wrap is the published mix.
-                s = (std::num::Wrapping(s) * std::num::Wrapping(131) + std::num::Wrapping(u64::from(*b))).0;
+                s = (std::num::Wrapping(s) * std::num::Wrapping(131)
+                    + std::num::Wrapping(u64::from(*b)))
+                .0;
             }
             s
         });

@@ -297,10 +297,7 @@ fn quantize(v: f64, lo: f64, hi: f64) -> u32 {
         u32::MAX
     } else {
         match kyzo_model::value::Num::float(scaled).to_int_coerced() {
-            Some(i) => match u32::try_from(i) {
-                Ok(u) => u,
-                Err(_scaled_in_u32_range) => u32::MAX,
-            },
+            Some(i) => u32::try_from(i).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths"),
             None => 0,
         }
     }
@@ -574,14 +571,8 @@ fn cell_range(level: u32, x0: u64, y0: u64) -> (u64, u64) {
     if span_bits >= 64 {
         (0, u64::MAX)
     } else {
-        let x0_u32 = match u32::try_from(x0) {
-            Ok(v) => v,
-            Err(_cell_corner_fits_u32) => u32::MAX,
-        };
-        let y0_u32 = match u32::try_from(y0) {
-            Ok(v) => v,
-            Err(_cell_corner_fits_u32) => u32::MAX,
-        };
+        let x0_u32 = u32::try_from(x0).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths");
+        let y0_u32 = u32::try_from(y0).expect("INVARIANT(width_fit): u32::MAX door — try_from must succeed on supported widths");
         let base = morton_encode(x0_u32, y0_u32);
         (base, base + ((1u64 << span_bits) - 1))
     }
@@ -1187,12 +1178,7 @@ mod tests {
         Ok(out)
     }
 
-    fn knn_ids(
-        db: &impl Storage,
-        f: &Fixture,
-        q: &GeoPoint,
-        k: usize,
-    ) -> Result<Vec<(i64, f64)>> {
+    fn knn_ids(db: &impl Storage, f: &Fixture, q: &GeoPoint, k: usize) -> Result<Vec<(i64, f64)>> {
         let rtx = db.read_tx()?;
         let hits = crate::project::contract::search_rows(Spatial::knn(
             &rtx,
@@ -1390,22 +1376,34 @@ mod tests {
     fn admit_rejects_nan_and_out_of_range() -> Result<()> {
         // NaN is a TYPED refusal (NonFiniteCoord), never a silent sort: assert
         // the concrete error type, not merely is_err().
-        let nan_err = GeoPoint::admit(f64::NAN, 0.0).err().ok_or_else(|| miette!("expected error"))?;
+        let nan_err = GeoPoint::admit(f64::NAN, 0.0)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(
             nan_err.downcast_ref::<NonFiniteCoord>().is_some(),
             "NaN lat must refuse typed as NonFiniteCoord, got: {nan_err}"
         );
-        let nan_lon_err = GeoPoint::admit(0.0, f64::NAN).err().ok_or_else(|| miette!("expected error"))?;
+        let nan_lon_err = GeoPoint::admit(0.0, f64::NAN)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(nan_lon_err.downcast_ref::<NonFiniteCoord>().is_some());
-        let inf_err = GeoPoint::admit(0.0, f64::INFINITY).err().ok_or_else(|| miette!("expected error"))?;
+        let inf_err = GeoPoint::admit(0.0, f64::INFINITY)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(inf_err.downcast_ref::<NonFiniteCoord>().is_some());
-        let range_err = GeoPoint::admit(90.1, 0.0).err().ok_or_else(|| miette!("expected error"))?;
+        let range_err = GeoPoint::admit(90.1, 0.0)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(range_err.downcast_ref::<GeoCoordOutOfRange>().is_some());
-        let lon_range_err = GeoPoint::admit(0.0, -180.001).err().ok_or_else(|| miette!("expected error"))?;
+        let lon_range_err = GeoPoint::admit(0.0, -180.001)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(lon_range_err.downcast_ref::<GeoCoordOutOfRange>().is_some());
         assert!(GeoPoint::admit(90.0, 180.0).is_ok());
         // A wrapping box is refused typed.
-        let err = BoundingBox::admit(0.0, 170.0, 10.0, -170.0).err().ok_or_else(|| miette!("expected error"))?;
+        let err = BoundingBox::admit(0.0, 170.0, 10.0, -170.0)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(err.downcast_ref::<AntimeridianBoxRefused>().is_some());
         Ok(())
     }
@@ -1655,7 +1653,8 @@ mod tests {
         let rtx = db.read_tx()?;
         let bbox = BoundingBox::admit(9.0, 19.0, 11.0, 21.0)?;
         let err = Spatial::range_query(&rtx, &f.base, &f.idx, &bbox)
-            .err().ok_or_else(|| miette!("corrupt posting must error, not panic"))?;
+            .err()
+            .ok_or_else(|| miette!("corrupt posting must error, not panic"))?;
         assert!(
             err.downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
@@ -1692,7 +1691,8 @@ mod tests {
     fn manifest_roundtrips() -> Result<()> {
         let m = manifest();
         let bytes = rmp_serde::to_vec_named(&m).map_err(|e| miette!("{e}"))?;
-        let back: SpatialIndexManifest = rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
+        let back: SpatialIndexManifest =
+            rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
         assert_eq!(m, back, "manifest survives its wire form");
         Ok(())
     }

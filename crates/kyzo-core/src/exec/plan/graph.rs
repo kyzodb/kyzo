@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn scc_on_a_known_graph() -> Result<()>  {
+    fn scc_on_a_known_graph() -> Result<()> {
         // Two 2-cycles bridged by a one-way edge, plus a free-standing node.
         let g = graph_of(&[(0, 1), (1, 0), (1, 2), (2, 3), (3, 2)], 5);
         let want: BTreeSet<BTreeSet<usize>> = [
@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn scc_single_node_with_and_without_self_loop() -> Result<()>  {
+    fn scc_single_node_with_and_without_self_loop() -> Result<()> {
         // A self-loop and its absence both yield the singleton component:
         // the stratifier distinguishes them by the edge, not the SCC.
         assert_eq!(
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn scc_ignores_edges_to_undefined_nodes() -> Result<()>  {
+    fn scc_ignores_edges_to_undefined_nodes() -> Result<()> {
         // Node 0 points at a name that is not a key (the stratifier's
         // graphs mention undefined rules); it must simply not count.
         let mut g: Graph<usize> = BTreeMap::from([(0, vec![7]), (1, vec![0])]);
@@ -501,7 +501,9 @@ mod tests {
             let g = graph_of(&edges, n);
             let got = match scc_partition(&g) {
                 Ok(v) => v,
-                Err(e) => return Err(TestCaseError::fail(format!("{e}"))),
+                Err(e) => {
+                    return Err(TestCaseError::fail(format!("{e}")));
+                }
             };
             prop_assert_eq!(got, naive_scc(&g, n));
         }
@@ -520,7 +522,9 @@ mod tests {
             }
             let iterative = match TarjanScc::new(&idx_graph) {
                 Ok(t) => t.run(),
-                Err(e) => return Err(TestCaseError::fail(format!("validated targets: {e}"))),
+                Err(e) => {
+                    return Err(TestCaseError::fail(format!("validated targets: {e}")));
+                }
             };
             let recursive = RecursiveTarjan::new(&idx_graph).run();
             prop_assert_eq!(iterative, recursive);
@@ -547,7 +551,9 @@ mod tests {
             }
             let strata = match generalized_kahn(&g, n) {
                 Ok(s) => s,
-                Err(e) => return Err(TestCaseError::fail(format!("a DAG stratifies: {e}"))),
+                Err(e) => {
+                    return Err(TestCaseError::fail(format!("a DAG stratifies: {e}")));
+                }
             };
             let mut stratum_of: BTreeMap<usize, usize> = BTreeMap::new();
             for (idx, stratum) in strata.iter().enumerate() {
@@ -571,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn kahn_poisoned_edges_split_strata() -> Result<()>  {
+    fn kahn_poisoned_edges_split_strata() -> Result<()> {
         // 0 → 1 poisoned, 0 → 2 clean: 1 must wait a stratum, 2 need not.
         let g: StratifiedGraph<usize> =
             BTreeMap::from([(0, BTreeMap::from([(1, true), (2, false)]))]);
@@ -581,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn kahn_refuses_a_cyclic_graph() -> Result<()>  {
+    fn kahn_refuses_a_cyclic_graph() -> Result<()> {
         // The condensation the stratifier feeds in is always a DAG; a cycle
         // here means corrupt bookkeeping. The original release-absent assert let a
         // release build return a truncated stratification for this input.
@@ -595,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn kahn_refuses_out_of_range_nodes() -> Result<()>  {
+    fn kahn_refuses_out_of_range_nodes() -> Result<()> {
         let g: StratifiedGraph<usize> = BTreeMap::from([(0, BTreeMap::from([(9, false)]))]);
         assert!(generalized_kahn(&g, 2).is_err());
         let g: StratifiedGraph<usize> = BTreeMap::from([(9, BTreeMap::new())]);
@@ -607,7 +613,7 @@ mod tests {
     /// overflow the stack. Run in a deliberately small-stack thread — the
     /// original recursive formulations overflow it.
     #[test]
-    fn deep_chain_does_not_overflow_the_stack() -> Result<()>  {
+    fn deep_chain_does_not_overflow_the_stack() -> Result<()> {
         let handle = std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(|| -> Result<()> {

@@ -669,7 +669,9 @@ pub fn unwrap_shred_salt(
         Err(CryptoRefuse::KeyCommitmentMismatch) => {
             return Err(CryptoRefuse::KeyCommitmentMismatch);
         }
-        Err(_) => return Err(CryptoRefuse::UnwrapFailed),
+        Err(_) => {
+            return Err(CryptoRefuse::UnwrapFailed);
+        }
     };
     if pt.len() != 32 {
         return Err(CryptoRefuse::UnwrapFailed);
@@ -900,7 +902,6 @@ pub fn shred(wrapped: WrappedShredSalt) -> (ShredReceipt, ShredTombstone) {
 
 #[cfg(test)]
 mod pins {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::contract::FormatVersion;
     use crate::store::epoch::FenceEpoch;
@@ -909,6 +910,7 @@ mod pins {
         CanonicalTranscriptBuilder, FieldId, SealedArtifactKind, WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC,
         encode_wrapped_shred_salt_aad, parse_golden_hex,
     };
+    use miette::{IntoDiagnostic, Result, miette};
 
     /// GUARDIAN GATE (#376 T2) — CMT-1 key-commitment over the Gcm collision.
     /// Empirically constructed (invisible-salamanders / Partitioning Oracle Attacks): ONE
@@ -965,7 +967,7 @@ mod pins {
             "production open_arm_kek must refuse the K1-committed collision under K2 with \
              KeyCommitmentMismatch (got {o2:?})"
         );
-    
+
         Ok(())
     }
 
@@ -998,7 +1000,7 @@ mod pins {
         let (receipt, tombstone) = shred(wrapped);
         assert_eq!(receipt.segment(), seg);
         assert!(tombstone.covers(&WrappedShredSalt::from_persisted(vec![0], seg, domain)));
-    
+
         Ok(())
     }
 
@@ -1019,7 +1021,7 @@ mod pins {
             unwrap_shred_salt(&cap, &stale_copy, &ledger),
             Err(CryptoRefuse::Shredded)
         ));
-    
+
         Ok(())
     }
 
@@ -1068,7 +1070,7 @@ mod pins {
             "CROSS-STORE REINTERPRETATION: a wrapped salt sealed for store A must NOT unwrap \
              under a forged store B on the same KEK"
         );
-    
+
         Ok(())
     }
 
@@ -1087,19 +1089,14 @@ mod pins {
             plaintext,
             "compress must not be a silent identity no-op"
         );
-        let ct = compress_then_encrypt(
-            plaintext,
-            &dek,
-            Nonce::admit([9u8; 12]),
-            AeadArm::Siv,
-            &aad,
-        )?;
+        let ct =
+            compress_then_encrypt(plaintext, &dek, Nonce::admit([9u8; 12]), AeadArm::Siv, &aad)?;
         assert_eq!(ct.arm(), AeadArm::Siv);
         assert!(!ct.body().is_empty());
         let opened = decrypt(&ct, &dek, &aad)?;
         let round = decompress(&opened)?;
         assert_eq!(round, plaintext);
-    
+
         Ok(())
     }
 
@@ -1121,7 +1118,7 @@ mod pins {
         assert_eq!(ct.arm(), AeadArm::Gcm);
         let opened = decrypt(&ct, &dek, &aad)?;
         assert_eq!(decompress(&opened)?, b"gcm-arm");
-    
+
         Ok(())
     }
 
@@ -1169,7 +1166,7 @@ mod pins {
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let ct = compress_then_encrypt(b"typed-nonce", &dek, n, AeadArm::Siv, &aad)?;
         assert_eq!(ct.nonce(), &n);
-    
+
         Ok(())
     }
 
@@ -1256,11 +1253,20 @@ mod pins {
             ("fn seal_arm_kek(", "key_commitment_kek("),
         ] {
             let start = crypto_prod
-                .find(door).ok_or_else(|| miette!("missing door"))?;
+                .find(door)
+                .ok_or_else(|| miette!("missing door"))?;
             let body = &crypto_prod[start..];
-            let end = match body.find("
-fn ").or_else(|| body.find("
-pub fn ")) {
+            let end = match body
+                .find(
+                    "
+fn ",
+                )
+                .or_else(|| {
+                    body.find(
+                        "
+pub fn ",
+                    )
+                }) {
                 Some(i) => i,
                 None => body.len(),
             }
@@ -1326,7 +1332,9 @@ pub fn ")) {
             None => replica,
         };
         assert!(
-            replica_prod.contains("pub(crate) fn sign(&self, body: &Digest) -> Result<Signature, ReplicaRefuse>"),
+            replica_prod.contains(
+                "pub(crate) fn sign(&self, body: &Digest) -> Result<Signature, ReplicaRefuse>"
+            ),
             "AuthorizingKey::sign must take Digest and return Signature"
         );
         assert!(
@@ -1340,7 +1348,7 @@ pub fn ")) {
                 && replica_prod.contains("fn signing_body_digest("),
             "signing_body_digest must return Digest"
         );
-    
+
         Ok(())
     }
 
@@ -1398,7 +1406,7 @@ pub fn ")) {
         let n1 = wrap_nonce(&aad);
         let n2 = wrap_nonce(&aad);
         assert_eq!(n1, n2);
-    
+
         Ok(())
     }
 }

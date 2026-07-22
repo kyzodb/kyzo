@@ -730,3 +730,243 @@ line = 99
 pattern = "expect"
 why_not_sabotage = "KEEP: INVARIANT(token_len_fits_i64) — token count TryFrom.expect."
 
+[[bs_detector]]
+file = "crates/kyzo-core/src/exec/fold/sketch/count_min.rs"
+line = 182
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/exec/fold/sketch/hll.rs"
+line = 202
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/exec/fold/sketch/hll.rs"
+line = 209
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/exec/fold/sketch/hll.rs"
+line = 211
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/exec/fold/sketch/mod.rs"
+line = 145
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/exec/fold/sketch/mod.rs"
+line = 227
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/current.rs"
+line = 100
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/current.rs"
+line = 415
+pattern = "expect"
+why_not_sabotage = "KEEP: test RelationId::new premise — expect fails loud if below-cap door refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/current.rs"
+line = 418
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/dedup/lsh.rs"
+line = 552
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/spatial/index.rs"
+line = 300
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/spatial/index.rs"
+line = 574
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/spatial/index.rs"
+line = 575
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/text/mod.rs"
+line = 545
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/text/mod.rs"
+line = 550
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/vector/hnsw.rs"
+line = 1814
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs"
+line = 1299
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 410
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 418
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 427
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 436
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 462
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 3354
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/admit.rs"
+line = 3360
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/db.rs"
+line = 406
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/db.rs"
+line = 417
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/db.rs"
+line = 431
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/db.rs"
+line = 447
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/normalize_tests.rs"
+line = 427
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 139
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/merkle.rs"
+line = 1255
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/sweep.rs"
+line = 132
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/sweep.rs"
+line = 240
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/sweep.rs"
+line = 247
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/sweep.rs"
+line = 307
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/sweep.rs"
+line = 317
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/sweep.rs"
+line = 336
+pattern = "expect"
+why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/transcript.rs"
+line = 1705
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/verify_walk.rs"
+line = 448
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/store/verify_walk.rs"
+line = 457
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
+

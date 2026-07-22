@@ -105,9 +105,15 @@ impl CountMinSketch {
     #[inline]
     fn column(&self, value: &DataValue, row: usize) -> usize {
         {
-            let width_u = match u64::try_from(self.width) { Ok(v) => v, Err(_e) => 0 };
+            let width_u = match u64::try_from(self.width) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            };
             let slot = super::hash_value(value, ROW_SEEDS[row]) % width_u;
-            match usize::try_from(slot) { Ok(v) => v, Err(_e) => 0 }
+            match usize::try_from(slot) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            }
         }
     }
 
@@ -173,10 +179,7 @@ impl CountMinSketch {
         let mut out = Vec::with_capacity(2 + 8 + self.counters.len() * 8);
         out.extend_from_slice(&[
             FORMAT_TAG,
-            match u8::try_from(self.depth) {
-                Ok(v) => v,
-                Err(_e) => u8::MAX,
-            },
+            u8::try_from(self.depth).expect("INVARIANT(width_fit): u8::MAX door — try_from must succeed on supported widths"),
         ]);
         out.extend_from_slice(
             &(match u64::try_from(self.width) {
@@ -203,10 +206,11 @@ impl CountMinSketch {
             (1..=ROW_SEEDS.len()).contains(&depth),
             "Count-Min depth out of range: {depth}"
         );
-        let width = match usize::try_from(u64::from_le_bytes([*w0, *w1, *w2, *w3, *w4, *w5, *w6, *w7])) {
-            Ok(v) => v,
-            Err(_width_fits_usize) => bail!("Count-Min width does not fit usize"),
-        };
+        let width =
+            match usize::try_from(u64::from_le_bytes([*w0, *w1, *w2, *w3, *w4, *w5, *w6, *w7])) {
+                Ok(v) => v,
+                Err(_width_fits_usize) => bail!("Count-Min width does not fit usize"),
+            };
         ensure!(width > 0, "Count-Min width must be positive");
         ensure!(
             rest.len() == width * depth * 8,
@@ -246,16 +250,20 @@ mod tests {
 
     /// A seeded Zipf-ish stream: element `i` appears `weight(i)` times, for a
     /// spread of frequencies to test the overestimate bound against.
-    fn build(distinct: i64, dims: (usize, usize)) -> Result<(CountMinSketch, BTreeMap<i64, u64>, u64)> {
+    fn build(
+        distinct: i64,
+        dims: (usize, usize),
+    ) -> Result<(CountMinSketch, BTreeMap<i64, u64>, u64)> {
         let mut cms = CountMinSketch::new(dims.0, dims.1)?;
         let mut exact = BTreeMap::new();
         let mut total = 0u64;
         for i in 0..distinct {
-            let w = 1 + (match u64::try_from(i) {
-                Ok(v) => v,
-                Err(_e) => 0,
-            } * 2654435761
-                % 37);
+            let w = 1
+                + (match u64::try_from(i) {
+                    Ok(v) => v,
+                    Err(_e) => 0,
+                } * 2654435761
+                    % 37);
             cms.add(&val(i), w);
             *exact.entry(i).or_insert(0) += w;
             total += w;
