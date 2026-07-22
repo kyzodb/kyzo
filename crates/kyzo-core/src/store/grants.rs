@@ -1231,7 +1231,9 @@ fn derive_fork_store_id(fork: &ForkGrant) -> Result<StoreId, TranscriptRefuse> {
         fork.identity_seed().as_bytes(),
         fork.key_material_commitment().as_bytes(),
     )?;
-    Ok(StoreId::from_digest(*hash_transcript(&transcript).as_bytes()))
+    Ok(StoreId::from_digest(
+        *hash_transcript(&transcript).as_bytes(),
+    ))
 }
 
 /// Fork WriteAuthority token — hash of [`encode_fork_write_token`] bytes once.
@@ -1245,13 +1247,13 @@ fn derive_fork_write_token(
         fork.identity_seed().as_bytes(),
         fork.key_material_commitment().as_bytes(),
     )?;
-    Ok(WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes()))
+    Ok(WriteTokenId::from_digest(
+        *hash_transcript(&transcript).as_bytes(),
+    ))
 }
 
 /// Recovery WriteAuthority token — hash of [`encode_recovery_write_token`] bytes once.
-fn derive_recovery_write_token(
-    recovery: &RecoveryGrant,
-) -> Result<WriteTokenId, TranscriptRefuse> {
+fn derive_recovery_write_token(recovery: &RecoveryGrant) -> Result<WriteTokenId, TranscriptRefuse> {
     let pred = recovery.predecessor_epoch();
     let transcript = encode_recovery_write_token(
         recovery.store_id().as_bytes(),
@@ -1261,7 +1263,9 @@ fn derive_recovery_write_token(
         recovery.successor_identity_seed().as_bytes(),
         recovery.key_material_commitment().as_bytes(),
     )?;
-    Ok(WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes()))
+    Ok(WriteTokenId::from_digest(
+        *hash_transcript(&transcript).as_bytes(),
+    ))
 }
 
 /// Ancestor-entitlement verifying-key id via [`encode_ancestor_entitlement_key_id`].
@@ -1286,6 +1290,9 @@ fn ancestor_read_grant_payload_digest(
     Ok(hash_transcript(&transcript))
 }
 
+#[cfg(test)]
+use miette::{IntoDiagnostic, Result, miette};
+
 /// Test-only: mint a FROST 2-of-3 recovery matrix + one aggregate signature
 /// over the quorum domain via `frost-ed25519` (trusted dealer + threshold sign).
 ///
@@ -1294,7 +1301,7 @@ fn ancestor_read_grant_payload_digest(
 pub(crate) fn frost_sign_recovery_quorum(
     dealer_seed: [u8; 32],
     payload_digest: &Digest,
-) -> (RecoveryMatrix, Vec<u8>) {
+) -> Result<(RecoveryMatrix, Vec<u8>)> {
     frost_recovery_aggregate(dealer_seed, 3, 2, 2, payload_digest)
 }
 
@@ -1309,7 +1316,7 @@ fn frost_recovery_aggregate(
     min_signers: u16,
     participating: u16,
     payload_digest: &Digest,
-) -> (RecoveryMatrix, Vec<u8>) {
+) -> Result<(RecoveryMatrix, Vec<u8>)> {
     use std::collections::BTreeMap;
 
     use frost_ed25519 as frost;
@@ -1324,18 +1331,19 @@ fn frost_recovery_aggregate(
         IdentifierList::Default,
         &mut rng,
     )
-    .expect("FROST dealer keygen");
+    .map_err(|e| miette!("FROST dealer keygen: {e}"))?;
 
     let mut key_packages = BTreeMap::new();
     for (identifier, secret_share) in shares {
-        let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
+        let key_package = frost::keys::KeyPackage::try_from(secret_share)
+            .map_err(|e| miette!("key package: {e}"))?;
         key_packages.insert(identifier, key_package);
     }
 
     let vk_bytes = pubkey_package
         .verifying_key()
         .serialize()
-        .expect("serialize group verifying key");
+        .map_err(|e| miette!("serialize group verifying key: {e}"))?;
     assert_eq!(vk_bytes.len(), 32, "FROST Ed25519 group VK is 32 bytes");
     let mut group_vk = [0u8; 32];
     group_vk.copy_from_slice(&vk_bytes);
@@ -1344,7 +1352,7 @@ fn frost_recovery_aggregate(
         u32::from(max_signers),
         super::authority::RecoveryPublicKey::from_bytes(group_vk),
     )
-    .expect("FROST matrix");
+    .into_diagnostic()?;
 
     let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
     message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
@@ -1353,7 +1361,9 @@ fn frost_recovery_aggregate(
     let mut nonces_map = BTreeMap::new();
     let mut commitments_map = BTreeMap::new();
     for participant_index in 1..=participating {
-        let participant_identifier = participant_index.try_into().expect("nonzero id");
+        let participant_identifier = participant_index
+            .try_into()
+            .map_err(|_| miette!("nonzero id"))?;
         let key_package = &key_packages[&participant_identifier];
         let (nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
         nonces_map.insert(participant_identifier, nonces);
@@ -1365,15 +1375,17 @@ fn frost_recovery_aggregate(
     for participant_identifier in nonces_map.keys() {
         let key_package = &key_packages[participant_identifier];
         let nonces = &nonces_map[participant_identifier];
-        let signature_share =
-            frost::round2::sign(&signing_package, nonces, key_package).expect("FROST round2 share");
+        let signature_share = frost::round2::sign(&signing_package, nonces, key_package)
+            .map_err(|e| miette!("FROST round2 share: {e}"))?;
         signature_shares.insert(*participant_identifier, signature_share);
     }
 
     let group_signature = frost::aggregate(&signing_package, &signature_shares, &pubkey_package)
-        .expect("FROST aggregate");
-    let aggregate_bytes = group_signature.serialize().expect("serialize aggregate");
-    (matrix, aggregate_bytes)
+        .map_err(|e| miette!("FROST aggregate: {e}"))?;
+    let aggregate_bytes = group_signature
+        .serialize()
+        .map_err(|e| miette!("serialize aggregate: {e}"))?;
+    Ok((matrix, aggregate_bytes))
 }
 
 /// Test-only: attempt FROST aggregate with fewer than min_signers signature shares.
@@ -1385,7 +1397,7 @@ fn frost_recovery_aggregate(
 fn frost_try_aggregate_below_threshold(
     dealer_seed: [u8; 32],
     payload_digest: &Digest,
-) -> Result<Vec<u8>, frost_ed25519::Error> {
+) -> Result<Vec<u8>> {
     use std::collections::BTreeMap;
 
     use frost_ed25519 as frost;
@@ -1404,11 +1416,12 @@ fn frost_try_aggregate_below_threshold(
         IdentifierList::Default,
         &mut rng,
     )
-    .expect("FROST dealer keygen");
+    .map_err(|e| miette!("FROST dealer keygen: {e}"))?;
 
     let mut key_packages = BTreeMap::new();
     for (identifier, secret_share) in shares {
-        let key_package = frost::keys::KeyPackage::try_from(secret_share).expect("key package");
+        let key_package = frost::keys::KeyPackage::try_from(secret_share)
+            .map_err(|e| miette!("key package: {e}"))?;
         key_packages.insert(identifier, key_package);
     }
 
@@ -1420,7 +1433,9 @@ fn frost_try_aggregate_below_threshold(
     let mut nonces_map = BTreeMap::new();
     let mut commitments_map = BTreeMap::new();
     for participant_index in 1..=min_signers {
-        let participant_identifier = participant_index.try_into().expect("nonzero id");
+        let participant_identifier = participant_index
+            .try_into()
+            .map_err(|_| miette!("nonzero id"))?;
         let key_package = &key_packages[&participant_identifier];
         let (nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
         nonces_map.insert(participant_identifier, nonces);
@@ -1431,16 +1446,21 @@ fn frost_try_aggregate_below_threshold(
     // Produce fewer signature shares than min_signers — refuse lands at aggregate.
     let mut signature_shares = BTreeMap::new();
     for participant_index in 1..=share_count {
-        let participant_identifier = participant_index.try_into().expect("nonzero id");
+        let participant_identifier = participant_index
+            .try_into()
+            .map_err(|_| miette!("nonzero id"))?;
         let key_package = &key_packages[&participant_identifier];
         let nonces = &nonces_map[&participant_identifier];
         let signature_share = frost::round2::sign(&signing_package, nonces, key_package)
-            .expect("FROST round2 share with valid package");
+            .map_err(|e| miette!("FROST round2 share with valid package: {e}"))?;
         signature_shares.insert(participant_identifier, signature_share);
     }
 
-    frost::aggregate(&signing_package, &signature_shares, &pubkey_package)
-        .map(|sig| sig.serialize().expect("serialize"))
+    let group_signature = frost::aggregate(&signing_package, &signature_shares, &pubkey_package)
+        .map_err(|e| miette!("FROST aggregate below threshold: {e}"))?;
+    group_signature
+        .serialize()
+        .map_err(|e| miette!("serialize: {e}"))
 }
 
 /// Test-only: one ed25519 signer scaffold; domain label is the independence.
@@ -1476,8 +1496,8 @@ pub(crate) fn sign_fork_consent(
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use ed25519_dalek::{Signer, SigningKey};
+    use miette::{IntoDiagnostic, Result, miette};
 
     use super::*;
     use crate::store::authority::RecoveryMatrix;
@@ -1517,7 +1537,7 @@ mod tests {
             "small-order / invalid bytes must not seal as a FROST group verifying key"
         );
 
-        let (matrix, _sig) = frost_sign_recovery_quorum([0xA1; 32], &payload);
+        let (matrix, _sig) = frost_sign_recovery_quorum([0xA1; 32], &payload)?;
         let mut forged = vec![0u8; 64];
         forged[0] = 1;
         assert_eq!(
@@ -1528,7 +1548,7 @@ mod tests {
             }),
             "FORGED AGGREGATE: garbage FROST bytes must not mint RecoveryQuorumProof"
         );
-    
+
         Ok(())
     }
 
@@ -1539,8 +1559,7 @@ mod tests {
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = PredecessorConsentTable::new();
-        table
-            .insert(store, weak)?;
+        table.insert(store, weak)?;
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
@@ -1554,7 +1573,7 @@ mod tests {
             "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
              at PredecessorConsentProof::verify (verify_strict)"
         );
-    
+
         Ok(())
     }
 
@@ -1565,8 +1584,7 @@ mod tests {
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = AncestorEntitlementTable::new();
-        table
-            .insert(store, weak)?;
+        table.insert(store, weak)?;
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
@@ -1580,7 +1598,7 @@ mod tests {
             "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
              at AncestorEntitlementProof::verify (verify_strict)"
         );
-    
+
         Ok(())
     }
     // -----------------------------------------------------------------------
@@ -1602,7 +1620,7 @@ mod tests {
             &commitment,
         );
 
-        let (store_matrix, _store_sig) = frost_sign_recovery_quorum([0xA1; 32], &payload);
+        let (store_matrix, _store_sig) = frost_sign_recovery_quorum([0xA1; 32], &payload)?;
 
         // Empty aggregate — no proof, no grant power.
         assert_eq!(
@@ -1625,7 +1643,7 @@ mod tests {
 
         // Attacker mints a real FROST aggregate against a *different* matrix,
         // names the victim, then materializes against the victim store matrix.
-        let (attacker_matrix, attacker_sig) = frost_sign_recovery_quorum([0xB1; 32], &payload);
+        let (attacker_matrix, attacker_sig) = frost_sign_recovery_quorum([0xB1; 32], &payload)?;
         let forged_proof = RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sig)?;
         let grant = RecoveryGrant::new(
             grant_id,
@@ -1649,7 +1667,7 @@ mod tests {
             None,
         );
         assert_eq!(wrong, Err(MaterializeRefuse::QuorumUnverified));
-    
+
         Ok(())
     }
 
@@ -1667,7 +1685,7 @@ mod tests {
             &successor_seed,
             &commitment,
         );
-        let (matrix, aggregate) = frost_sign_recovery_quorum([0xC1; 32], &payload);
+        let (matrix, aggregate) = frost_sign_recovery_quorum([0xC1; 32], &payload)?;
         let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)?;
         // Sealed proof carries only digests — signer subset is not recoverable
         // from proof bytes (no custodian id / share index field exists).
@@ -1693,7 +1711,7 @@ mod tests {
         assert_ne!(matured.crypto_domain().fence_epoch(), pred_epoch);
         assert_eq!(matured.write_authority().store_id(), store_id);
         assert_eq!(matured.key_material_commitment(), &commitment);
-    
+
         Ok(())
     }
 
@@ -1702,8 +1720,8 @@ mod tests {
     #[test]
     fn frost_recovery_wrong_group_aggregate_refuses() -> Result<()> {
         let payload = Digest::from_bytes([0x44u8; 32]);
-        let (matrix_a, sig_a) = frost_sign_recovery_quorum([0x11; 32], &payload);
-        let (matrix_b, _sig_b) = frost_sign_recovery_quorum([0x22; 32], &payload);
+        let (matrix_a, sig_a) = frost_sign_recovery_quorum([0x11; 32], &payload)?;
+        let (matrix_b, _sig_b) = frost_sign_recovery_quorum([0x22; 32], &payload)?;
         assert_ne!(
             matrix_a.group_verifying_key(),
             matrix_b.group_verifying_key(),
@@ -1717,7 +1735,7 @@ mod tests {
             }),
             "wrong-group FROST aggregate must refuse at RecoveryQuorumProof::verify"
         );
-    
+
         Ok(())
     }
 
@@ -1731,7 +1749,7 @@ mod tests {
         // over its payload under that same group key (re-deal with fixed seed so
         // the group verifying key matches).
         let probe_payload = Digest::from_bytes([0u8; 32]);
-        let (matrix, _) = frost_sign_recovery_quorum([0xE1; 32], &probe_payload);
+        let (matrix, _) = frost_sign_recovery_quorum([0xE1; 32], &probe_payload)?;
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
             let successor_seed = IdentitySeed::from_digest(seed);
@@ -1744,7 +1762,7 @@ mod tests {
                 &commitment,
             );
             // Same dealer seed → same group VK as `matrix`.
-            let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xE1; 32], &payload);
+            let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xE1; 32], &payload)?;
             assert_eq!(
                 signed_matrix.group_verifying_key(),
                 matrix.group_verifying_key()
@@ -1773,8 +1791,7 @@ mod tests {
         assert_eq!(first.store_id(), store_id);
 
         let mut prior = PriorRecoveryTable::new();
-        prior
-            .record(&first, pred_epoch)?;
+        prior.record(&first, pred_epoch)?;
 
         // Same grant rediscovery with prior shot → still ok (idempotent).
         let again = materialize(
@@ -1802,7 +1819,7 @@ mod tests {
                 g2.grant_id(),
             ))
         );
-    
+
         Ok(())
     }
 
@@ -1817,7 +1834,7 @@ mod tests {
         let store_id = StoreId::from_digest([0xF0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
         let probe_payload = Digest::from_bytes([0u8; 32]);
-        let (matrix, _) = frost_sign_recovery_quorum([0xF1; 32], &probe_payload);
+        let (matrix, _) = frost_sign_recovery_quorum([0xF1; 32], &probe_payload)?;
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
             let successor_seed = IdentitySeed::from_digest(seed);
@@ -1829,7 +1846,7 @@ mod tests {
                 &successor_seed,
                 &commitment,
             );
-            let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xF1; 32], &payload);
+            let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xF1; 32], &payload)?;
             assert_eq!(
                 signed_matrix.group_verifying_key(),
                 matrix.group_verifying_key()
@@ -1867,14 +1884,13 @@ mod tests {
         assert_eq!(matured.grant_id(), legit.grant_id());
         assert_eq!(matured.store_id(), store_id);
 
-        prior
-            .record(&matured, pred_epoch)?;
+        prior.record(&matured, pred_epoch)?;
         assert_eq!(
             prior.shot_for(store_id, pred_epoch),
             Some(legit.grant_id()),
             "one-shot must bind the legitimate materialized grant, not a fabricated id"
         );
-    
+
         Ok(())
     }
 
@@ -1898,8 +1914,7 @@ mod tests {
 
         let consent = ConsentSigningKey::from_seed([0xF1; 32]);
         let mut table = PredecessorConsentTable::new();
-        table
-            .insert(victim, *consent.verifying_key())?;
+        table.insert(victim, *consent.verifying_key())?;
 
         // Forged signature bytes — no proof, no grant power.
         assert_eq!(
@@ -1922,8 +1937,7 @@ mod tests {
             &identity,
             &commitment,
         );
-        table
-            .insert(other, *consent.verifying_key())?;
+        table.insert(other, *consent.verifying_key())?;
         let other_sig = consent.sign_consent(other, &other_payload);
         let wrong_store_proof =
             PredecessorConsentProof::verify(&table, other, &other_payload, &other_sig)?;
@@ -1966,7 +1980,7 @@ mod tests {
             ),
             Err(MaterializeRefuse::ConsentUnverified)
         );
-    
+
         Ok(())
     }
 
@@ -1994,8 +2008,7 @@ mod tests {
 
         // Sealed store authority: only the legitimate key is registered.
         let mut sealed_table = PredecessorConsentTable::new();
-        sealed_table
-            .insert(victim, *legitimate.verifying_key())?;
+        sealed_table.insert(victim, *legitimate.verifying_key())?;
 
         // Attacker signs with their own keypair — must not verify against sealed table.
         let attacker_sig = attacker.sign_consent(victim, &payload);
@@ -2016,8 +2029,7 @@ mod tests {
         // binds their own key to the victim StoreId, then materializes against
         // the real sealed store table — key_id mismatch must refuse.
         let mut attacker_table = PredecessorConsentTable::new();
-        attacker_table
-            .insert(victim, *attacker.verifying_key())?;
+        attacker_table.insert(victim, *attacker.verifying_key())?;
         let forged_proof =
             PredecessorConsentProof::verify(&attacker_table, victim, &payload, &attacker_sig)?;
         let grant = ForkGrant::new(
@@ -2038,7 +2050,7 @@ mod tests {
             materialize(&Grant::Fork(grant), None, None, Some(&sealed_table), None),
             Err(MaterializeRefuse::ConsentUnverified)
         );
-    
+
         Ok(())
     }
 
@@ -2060,11 +2072,9 @@ mod tests {
         );
         let consent = ConsentSigningKey::from_seed([0xF2; 32]);
         let mut table = PredecessorConsentTable::new();
-        table
-            .insert(predecessor, *consent.verifying_key())?;
+        table.insert(predecessor, *consent.verifying_key())?;
         let sig = consent.sign_consent(predecessor, &payload);
-        let proof =
-            PredecessorConsentProof::verify(&table, predecessor, &payload, &sig)?;
+        let proof = PredecessorConsentProof::verify(&table, predecessor, &payload, &sig)?;
         let grant = ForkGrant::new(
             grant_id,
             predecessor,
@@ -2078,7 +2088,7 @@ mod tests {
         assert_ne!(matured.store_id(), predecessor);
         assert_eq!(matured.write_authority().store_id(), matured.store_id());
         assert_eq!(matured.key_material_commitment(), &commitment);
-    
+
         Ok(())
     }
 
@@ -2143,8 +2153,7 @@ mod tests {
 
         let entitlement = EntitlementSigningKey::from_seed([0xE1; 32]);
         let mut table = AncestorEntitlementTable::new();
-        table
-            .insert(store_id, *entitlement.verifying_key())?;
+        table.insert(store_id, *entitlement.verifying_key())?;
 
         let sig = entitlement.sign_entitlement(store_id, &payload);
         let proof = AncestorEntitlementProof::verify(&table, store_id, &payload, &sig)?;
@@ -2157,9 +2166,8 @@ mod tests {
         assert_eq!(grant.entitlement_proof().payload_digest(), &payload);
 
         let domain = CryptoDomain::new(store_id, from_epoch);
-        grant
-            .authorize(domain)?;
-    
+        grant.authorize(domain)?;
+
         Ok(())
     }
 
@@ -2177,8 +2185,7 @@ mod tests {
 
         // Sealed store authority: only the legitimate key is registered.
         let mut sealed_table = AncestorEntitlementTable::new();
-        sealed_table
-            .insert(victim, *legitimate.verifying_key())?;
+        sealed_table.insert(victim, *legitimate.verifying_key())?;
 
         // Attacker signs with their own keypair — must not verify against sealed table.
         let attacker_sig = attacker.sign_entitlement(victim, &payload);
@@ -2199,8 +2206,7 @@ mod tests {
         // binds their own key to the victim StoreId, then constructs against
         // the real sealed store table — key_id mismatch must refuse.
         let mut attacker_table = AncestorEntitlementTable::new();
-        attacker_table
-            .insert(victim, *attacker.verifying_key())?;
+        attacker_table.insert(victim, *attacker.verifying_key())?;
         let forged_proof =
             AncestorEntitlementProof::verify(&attacker_table, victim, &payload, &attacker_sig)?;
         assert_eq!(
@@ -2218,7 +2224,7 @@ mod tests {
             ),
             Err(AncestorReadRefuse::EntitlementUnverified)
         );
-    
+
         Ok(())
     }
 
@@ -2240,13 +2246,11 @@ mod tests {
         );
 
         let mut table = PredecessorConsentTable::new();
-        table
-            .insert(victim, *key_a.verifying_key())?;
+        table.insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
         // Same key re-register → idempotent Ok (seal-once, not one-shot grief).
-        table
-            .insert(victim, *key_a.verifying_key())?;
+        table.insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
         // Attacker key B for the already-sealed StoreId → TrustRootAlreadySealed.
@@ -2259,7 +2263,7 @@ mod tests {
             Some(key_a.verifying_key()),
             "sealed key A must survive the refused overwrite attempt"
         );
-    
+
         Ok(())
     }
 
@@ -2279,12 +2283,10 @@ mod tests {
         );
 
         let mut table = AncestorEntitlementTable::new();
-        table
-            .insert(victim, *key_a.verifying_key())?;
+        table.insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
-        table
-            .insert(victim, *key_a.verifying_key())?;
+        table.insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
         assert_eq!(
@@ -2296,7 +2298,7 @@ mod tests {
             Some(key_a.verifying_key()),
             "sealed key A must survive the refused overwrite attempt"
         );
-    
+
         Ok(())
     }
 }
