@@ -163,7 +163,7 @@ impl From<[u8; 32]> for KeyMaterialCommitment {
 /// same key re-register is idempotent; a different key refuses
 /// [`MaterializeRefuse::TrustRootAlreadySealed`] (rotation is a separate
 /// explicit verb, not insert).
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PredecessorConsentTable {
     /// store_id bytes → ed25519 verifying key bytes (32).
     keys: BTreeMap<[u8; 32], [u8; 32]>,
@@ -172,7 +172,9 @@ pub struct PredecessorConsentTable {
 impl PredecessorConsentTable {
     /// Empty sealed consent-key registry.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            keys: BTreeMap::new(),
+        }
     }
 
     /// Register the consent verifying key for a StoreId (operator/genesis door).
@@ -715,7 +717,7 @@ impl PriorMaterialization {
 /// Pure [`materialize`] consults this evidence; a second distinct RecoveryGrant
 /// naming the same predecessor epoch refuses
 /// [`MaterializeRefuse::QuorumEquivocationPoison`] — never a second lineage.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PriorRecoveryTable {
     /// predecessor FenceEpoch → GrantId that took the one-shot.
     shots: BTreeMap<FenceEpoch, GrantId>,
@@ -724,7 +726,9 @@ pub struct PriorRecoveryTable {
 impl PriorRecoveryTable {
     /// Empty one-shot ledger (no recovery yet observed).
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            shots: BTreeMap::new(),
+        }
     }
 
     /// Record that recovery already materialized for `predecessor_epoch`.
@@ -917,7 +921,7 @@ fn materialize_recovery(
 /// same key re-register is idempotent; a different key refuses
 /// [`AncestorReadRefuse::TrustRootAlreadySealed`] (rotation is a separate
 /// explicit verb, not insert).
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct AncestorEntitlementTable {
     /// store_id bytes → ed25519 verifying key bytes (32).
     keys: BTreeMap<[u8; 32], [u8; 32]>,
@@ -926,7 +930,9 @@ pub struct AncestorEntitlementTable {
 impl AncestorEntitlementTable {
     /// Empty sealed entitlement-key registry.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            keys: BTreeMap::new(),
+        }
     }
 
     /// Register the entitlement verifying key for a StoreId (operator/genesis door).
