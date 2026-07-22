@@ -998,20 +998,19 @@ mod tests {
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
+    use miette::{IntoDiagnostic, Result, miette};
 
     macro_rules! lsh_rows {
-        ($($arg:expr),* $(,)?) => {
-            crate::project::contract::search_rows(
-                Lsh::search_index($($arg),*).unwrap()
-            ).unwrap()
-        };
+        ($($arg:expr),* $(,)?) => {{
+            crate::project::contract::search_rows(Lsh::search_index($($arg),*)?)?
+        }};
     }
 
     /// The ratified LE format, byte for byte: known seeds encode to their
     /// little-endian bytes on EVERY platform, and decoding asserts the
     /// same layout.
     #[test]
-    fn permutation_bytes_are_little_endian_and_round_trip() {
+    fn permutation_bytes_are_little_endian_and_round_trip() -> Result<()> {
         let perms = HashPermutations::from_seeds_for_test(vec![1, 0x0102_0304, u32::MAX]);
         let bytes = perms.to_bytes();
         assert_eq!(
@@ -1023,24 +1022,25 @@ mod tests {
             ],
             "explicit little-endian, independent of the host"
         );
-        let back = HashPermutations::from_bytes(&bytes).unwrap();
+        let back = HashPermutations::from_bytes(&bytes)?;
         assert_eq!(back.as_slice(), perms.as_slice(), "round trip");
 
         // A length that is not a multiple of 4 is corrupt, not truncated.
         assert!(HashPermutations::from_bytes(&bytes[..7]).is_err());
         // And through the manifest it is the typed corruption error.
-        let mut m = manifest_with_perms(vec![1, 2, 3, 4], 4);
+        let mut m = manifest_with_perms(vec![1, 2, 3, 4], 4)?;
         m.perms.corrupt_truncate_last_byte_for_test();
-        let err = m.get_hash_perms().unwrap_err();
+        let err = m.get_hash_perms().err().ok_or_else(|| miette!("expected error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
+        Ok(())
     }
 
     /// Band chunks: LE hash bytes plus an LE u16 band tag, and the
     /// arithmetic is checked instead of sliced blind.
     #[test]
-    fn band_chunks_are_little_endian_and_checked() {
+    fn band_chunks_are_little_endian_and_checked() -> Result<()> {
         let sig = HashValues::from_hashes_for_test(vec![0x0102_0304, 5, 6, 7]);
-        let chunks = sig.band_chunks(2, 2).unwrap();
+        let chunks = sig.band_chunks(2, 2)?;
         assert_eq!(chunks.len(), 2);
         assert_eq!(
             chunks[0],
@@ -1063,12 +1063,13 @@ mod tests {
             sig.band_chunks(1, 3).is_err(),
             "product 3 < len 4 must error"
         );
+        Ok(())
     }
 
     /// `find_optimal_params` is deterministic: same inputs, same bands and
     /// rows — and the result respects its own constraints.
     #[test]
-    fn find_optimal_params_is_deterministic() {
+    fn find_optimal_params_is_deterministic() -> Result<()> {
         let cases = [
             (0.5, 200, Weights(0.5, 0.5)),
             (0.9, 128, Weights(0.1, 0.9)),
@@ -1081,6 +1082,7 @@ mod tests {
             assert!(a.b >= 1 && a.r >= 1, "non-degenerate: {a:?}");
             assert!(a.b * a.r <= num_perm, "fits the permutation budget: {a:?}");
         }
+        Ok(())
     }
 
     /// Encode a set of integers as canonical element bytes, the way `lsh_put`
@@ -1097,7 +1099,7 @@ mod tests {
     /// A "< 1.0" assert would green on any drift; this pin fails if the
     /// estimator (or the element hash) is silently wrong.
     #[test]
-    fn minhash_jaccard() {
+    fn minhash_jaccard() -> Result<()> {
         let perms = HashPermutations::new(20000, DEFAULT_PERM_SEED);
         let mut m1 = HashValues::new(int_bytes(&[1, 2, 3, 4, 5, 6]).into_iter(), &perms);
         let m2 = HashValues::new(int_bytes(&[4, 3, 2, 1, 5, 6]).into_iter(), &perms);
@@ -1118,10 +1120,10 @@ mod tests {
         );
         assert_eq!(
             perms.as_slice(),
-            HashPermutations::from_bytes(&perms.to_bytes())
-                .unwrap()
+            HashPermutations::from_bytes(&perms.to_bytes())?
                 .as_slice()
         );
+        Ok(())
     }
 
     /// Theoretical band-collision probability for Jaccard similarity `s`
@@ -1181,7 +1183,7 @@ mod tests {
     /// that prediction within ±10 percentage points — ground truth the
     /// numeric integration never had.
     #[test]
-    fn lsh_collision_rate_matches_prediction_within_10pp() {
+    fn lsh_collision_rate_matches_prediction_within_10pp() -> Result<()> {
         // Params a real create would pick near threshold 0.5 / 128 perms.
         let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5));
         assert!(params.b >= 1 && params.r >= 1);
@@ -1209,6 +1211,7 @@ mod tests {
                  predicted={pred:.3} |Δ|={delta:.3} exceeds ±{TOL_PP} ({TRIALS} trials)"
             );
         }
+        Ok(())
     }
 
     /// Threshold-boundary discrimination: under `find_optimal_params` at
@@ -1216,7 +1219,7 @@ mod tests {
     /// pairs at ~0.55 — the curve the FP/FN weights optimize against must
     /// actually separate the two sides of the declared threshold.
     #[test]
-    fn lsh_threshold_boundary_pairs_discriminate() {
+    fn lsh_threshold_boundary_pairs_discriminate() -> Result<()> {
         let params = LshParams::find_optimal_params(0.5, 128, &Weights(0.5, 0.5));
         let (b, r) = (params.b, params.r);
         // n=100: inter=62 → s≈0.449; inter=71 → s≈0.550.
@@ -1251,13 +1254,14 @@ mod tests {
             (emp_hi - pred_hi).abs() <= 0.10,
             "hi band off prediction: emp={emp_hi} pred={pred_hi}"
         );
+        Ok(())
     }
 
     /// Determinism (obligation): the permutation draw is a pure function of its
     /// seed — two fresh draws with the same seed are byte-identical, a
     /// different seed diverges, and NO OS entropy is involved.
     #[test]
-    fn permutations_are_seeded_and_deterministic() {
+    fn permutations_are_seeded_and_deterministic() -> Result<()> {
         let a = HashPermutations::new(64, DEFAULT_PERM_SEED);
         let b = HashPermutations::new(64, DEFAULT_PERM_SEED);
         assert_eq!(
@@ -1272,6 +1276,7 @@ mod tests {
             "a different seed draws a different projection"
         );
         assert_eq!(a.len(), 64);
+        Ok(())
     }
 
     /// Portability + pin (obligation): a fixed input under fixed seeds produces
@@ -1282,7 +1287,7 @@ mod tests {
     /// is. Independently reproducible: encode `Int(1)`, `Int(2)`, `Int(3)` with
     /// the memcmp encoder and xxHash32 under seeds 10/20/30, take the min.
     #[test]
-    fn signature_bytes_are_pinned_and_portable() {
+    fn signature_bytes_are_pinned_and_portable() -> Result<()> {
         // INDEPENDENT ANCHOR. The element bytes are the canonical encoding
         // of `Int(1..3)`, derived from the format law by hand (the value
         // tag `0x10` = `Tag::Num`, then the 13-byte Num key pinned
@@ -1313,6 +1318,7 @@ mod tests {
             "the MinHash signature wire value drifted; this is an on-disk \
              format event (the hash algorithm changed), not a test to bump"
         );
+        Ok(())
     }
 
     /// Pinned signature of `{Int(1), Int(2), Int(3)}` under seeds `[10, 20, 30]`
@@ -1325,9 +1331,9 @@ mod tests {
     /// rebuild from a shared manifest — produce byte-identical index and inverse
     /// relations. This is what "replicas provably interchangeable" requires.
     #[test]
-    fn two_fresh_builds_are_byte_identical() {
+    fn two_fresh_builds_are_byte_identical() -> Result<()> {
         // A manifest whose permutations come from the seeded draw.
-        let seeded_manifest = || {
+        let seeded_manifest = || -> Result<MinHashLshIndexManifest> {
             let perms = HashPermutations::new(64, DEFAULT_PERM_SEED);
             manifest_with_perms(perms.as_slice().to_vec(), 16)
         };
@@ -1339,39 +1345,36 @@ mod tests {
         ];
         // Compare structure independent of relation-id allocation: strip the
         // 8-byte id prefix (key) and header (value).
-        let build_and_dump = || -> Vec<(Vec<u8>, Vec<u8>)> {
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
-            let m = seeded_manifest();
+        let build_and_dump = || -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let db = new_fjall_storage(dir.path())?;
+            let m = seeded_manifest()?;
             let base_meta = StoredRelationMetadata {
                 keys: vec![col("k", ColType::Int)],
                 non_keys: vec![col("v", ColType::String)],
             };
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             let base = create_relation(
                 &mut tx,
                 input_handle("docs", base_meta.clone()),
                 KeyspaceKind::Facts,
-            )
-            .unwrap();
+            )?;
             let idx = create_relation(
                 &mut tx,
                 input_handle("docs:by_text", lsh_index_metadata(&base_meta)),
                 KeyspaceKind::AlgorithmState,
-            )
-            .unwrap();
+            )?;
             let inv = create_relation(
                 &mut tx,
                 input_handle("docs:by_text:inv", lsh_inv_index_metadata(&base_meta)),
                 KeyspaceKind::AlgorithmState,
-            )
-            .unwrap();
-            let tokenizer = m.tokenizer.build(&m.filters).unwrap();
+            )?;
+            let tokenizer = m.tokenizer.build(&m.filters)?;
             let extractor = Expr::Binding {
                 var: Symbol::new("v", SourceSpan(0, 0)),
                 tuple_pos: BindingPos::Resolved(1),
             };
-            let perms = m.get_hash_perms().unwrap();
+            let perms = m.get_hash_perms()?;
             for (k, text) in &rows {
                 let row = vec![DataValue::from(*k), DataValue::from(*text)];
                 base.put_fact(
@@ -1379,21 +1382,19 @@ mod tests {
                     &row,
                     kyzo_model::value::ValidityTs::from_raw(0),
                     SourceSpan(0, 0),
-                )
-                .unwrap();
+                )?;
                 lsh_put(
                     &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &m, &perms,
-                )
-                .unwrap();
+                )?;
             }
-            tx.commit().unwrap();
-            let rtx = db.read_tx().unwrap();
+            tx.commit().map_err(|e| miette!("{e}"))?;
+            let rtx = db.read_tx()?;
             let mut out = vec![];
             for rel in [&idx, &inv] {
                 let lower = kyzo_model::value::encode_key_with_suffix(rel.id, &[], &[]);
                 let upper = (rel.id.raw() + 1).to_be_bytes();
                 for kv in rtx.range_scan(lower.as_bytes(), &upper) {
-                    let (k, v) = kv.unwrap();
+                    let (k, v) = kv.map_err(|e| miette!("{e}"))?;
                     let val_tail = match v.get(8..) {
                         Some(t) => t,
                         None => &[],
@@ -1401,15 +1402,16 @@ mod tests {
                     out.push((k[8..].to_vec(), val_tail.to_vec()));
                 }
             }
-            out
+            Ok(out)
         };
-        let a = build_and_dump();
-        let b = build_and_dump();
+        let a = build_and_dump()?;
+        let b = build_and_dump()?;
         assert!(!a.is_empty());
         assert_eq!(
             a, b,
             "two fresh builds of the same index must be byte-identical"
         );
+        Ok(())
     }
 
     // -- end to end against a real store ---------------------------------
@@ -1442,18 +1444,17 @@ mod tests {
         }
     }
 
-    fn manifest_with_perms(perm_seeds: Vec<u32>, n_bands: usize) -> MinHashLshIndexManifest {
+    fn manifest_with_perms(perm_seeds: Vec<u32>, n_bands: usize) -> Result<MinHashLshIndexManifest> {
         let params = LshParams {
             b: n_bands,
             r: perm_seeds.len() / n_bands,
         };
-        MinHashLshIndexManifest {
+        Ok(MinHashLshIndexManifest {
             base_relation: SmartString::from("docs"),
             index_name: SmartString::from("by_text"),
-            extractor: crate::parse::parse_expressions("v", &std::collections::BTreeMap::new())
-                .unwrap(),
+            extractor: crate::parse::parse_expressions("v", &std::collections::BTreeMap::new())?,
             n_gram: 3,
-            tokenizer: TokenizerConfig::admit("Simple", vec![]).unwrap(),
+            tokenizer: TokenizerConfig::admit("Simple", vec![])?,
             filters: vec![],
             num_perm: perm_seeds.len(),
             n_bands: params.b,
@@ -1462,14 +1463,14 @@ mod tests {
             perms: LshPermutationBytes::from_perms(&HashPermutations::from_seeds_for_test(
                 perm_seeds,
             )),
-        }
+        })
     }
 
     /// Deterministic seeds so the end-to-end test is replayable. 16 bands
     /// of 4 rows: a ~0.75-Jaccard near-duplicate collides with
     /// overwhelming probability (1 - (1 - 0.75^4)^16 ≈ 0.998), and the
     /// fixed seeds make the outcome the SAME on every run.
-    fn test_manifest() -> MinHashLshIndexManifest {
+    fn test_manifest() -> Result<MinHashLshIndexManifest> {
         // INVARIANT(test_perm_mix): fixture permutation tags use modular golden-ratio mix.
         manifest_with_perms((0u32..64).map(|i| i.wrapping_mul(2654435761)).collect(), 16)
     }
@@ -1483,38 +1484,35 @@ mod tests {
         extractor: Expr,
     }
 
-    fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
-        let manifest = test_manifest();
+    fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Result<Fixture> {
+        let manifest = test_manifest()?;
         let base_meta = StoredRelationMetadata {
             keys: vec![col("k", ColType::Int)],
             non_keys: vec![col("v", ColType::String)],
         };
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("docs", base_meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("docs:by_text", lsh_index_metadata(&base_meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         let inv = create_relation(
             &mut tx,
             input_handle("docs:by_text:inv", lsh_inv_index_metadata(&base_meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
-        let tokenizer = manifest.tokenizer.build(&manifest.filters).unwrap();
+        )?;
+        let tokenizer = manifest.tokenizer.build(&manifest.filters)?;
         // The compiled extractor: project the text column (position 1).
         let extractor = Expr::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
             tuple_pos: BindingPos::Resolved(1),
         };
-        let perms = manifest.get_hash_perms().unwrap();
+        let perms = manifest.get_hash_perms()?;
         for (k, text) in rows {
             let row = vec![DataValue::from(*k), DataValue::from(*text)];
             base.put_fact(
@@ -1522,30 +1520,28 @@ mod tests {
                 &row,
                 kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
+            )?;
             lsh_put(
                 &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &manifest, &perms,
-            )
-            .unwrap();
+            )?;
         }
-        tx.commit().unwrap();
-        Fixture {
+        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok(Fixture {
             base,
             idx,
             inv,
             manifest,
             tokenizer,
             extractor,
-        }
+        })
     }
 
     /// Put, search, and delete on a real store: near-duplicates collide,
     /// unrelated text does not, deletion withdraws the postings.
     #[test]
-    fn put_search_del_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn put_search_del_round_trip() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let f = setup(
             &db,
             &[
@@ -1553,10 +1549,10 @@ mod tests {
                 (2, "the quick brown fox jumps over the lazy cat"),
                 (3, "entirely unrelated text about database engines"),
             ],
-        );
-        let perms = f.manifest.get_hash_perms().unwrap();
+        )?;
+        let perms = f.manifest.get_hash_perms()?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let hits = lsh_rows!(
             &CancelFlag::inert(),
             &rtx,
@@ -1569,7 +1565,10 @@ mod tests {
             &perms,
             &f.tokenizer,
         );
-        let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
+        let mut keys = Vec::new();
+        for t in &hits {
+            keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);
+        }
         assert!(keys.contains(&1), "the row itself is a candidate");
         assert!(keys.contains(&2), "the near-duplicate collides");
         assert!(!keys.contains(&3), "unrelated text does not collide");
@@ -1588,8 +1587,7 @@ mod tests {
                 &None,
                 &perms,
                 &f.tokenizer,
-            )
-            .unwrap()
+            )?
             .is_empty()
         );
         assert!(
@@ -1611,15 +1609,15 @@ mod tests {
 
         // Delete row 1: it stops being a candidate; its inverse row and
         // postings are gone.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let row1 = vec![
             DataValue::from(1),
             DataValue::from("the quick brown fox jumps over the lazy dog"),
         ];
-        lsh_del(&mut tx, &row1, None, &f.idx, &f.inv).unwrap();
-        tx.commit().unwrap();
+        lsh_del(&mut tx, &row1, None, &f.idx, &f.inv)?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let hits = lsh_rows!(
             &CancelFlag::inert(),
             &rtx,
@@ -1632,55 +1630,56 @@ mod tests {
             &perms,
             &f.tokenizer,
         );
-        let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
+        let mut keys = Vec::new();
+        for t in &hits {
+            keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);
+        }
         assert!(!keys.contains(&1), "deleted row withdrawn");
         assert!(keys.contains(&2), "the near-duplicate remains");
-        assert!(f.inv.get_val_only(&rtx, &row1[..1]).unwrap().is_none());
+        assert!(f.inv.get_val_only(&rtx, &row1[..1])?.is_none());
         // Deleting a row that was never indexed is a quiet no-op.
         drop(rtx);
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         lsh_del(
             &mut tx,
             &[DataValue::from(99), DataValue::from("ghost")],
             None,
             &f.idx,
             &f.inv,
-        )
-        .unwrap();
+        )?;
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     /// A corrupt inverse-index row is a typed error with key context,
     /// never the original's `unreachable!()` panic.
     #[test]
-    fn corrupt_inverse_row_is_typed_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, &[(1, "some indexed text here")]);
-        let perms = f.manifest.get_hash_perms().unwrap();
+    fn corrupt_inverse_row_is_typed_error() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, &[(1, "some indexed text here")])?;
+        let perms = f.manifest.get_hash_perms()?;
 
         // Overwrite the inverse row's value with a wrong-shaped (but
         // well-formed) tuple: a string where the chunk list belongs.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let inv_key = f
             .inv
-            .encode_key_for_store(&[DataValue::from(1)], SourceSpan(0, 0))
-            .unwrap();
+            .encode_key_for_store(&[DataValue::from(1)], SourceSpan(0, 0))?;
         let bad_val = f
             .inv
-            .encode_val_only_for_store(&[DataValue::from("not a chunk list")], SourceSpan(0, 0))
-            .unwrap();
-        tx.put(&inv_key, &bad_val).unwrap();
-        tx.commit().unwrap();
+            .encode_val_only_for_store(&[DataValue::from("not a chunk list")], SourceSpan(0, 0))?;
+        tx.put(&inv_key, &bad_val).map_err(|e| miette!("{e}"))?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let row = vec![
             DataValue::from(1),
             DataValue::from("some indexed text here"),
         ];
-        let err = lsh_del(&mut tx, &row, None, &f.idx, &f.inv).unwrap_err();
+        let err = lsh_del(&mut tx, &row, None, &f.idx, &f.inv).err().ok_or_else(|| miette!("expected error"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption, got: {err:?}"
@@ -1697,30 +1696,31 @@ mod tests {
             &f.manifest,
             &perms,
         )
-        .unwrap_err();
+        .err().ok_or_else(|| miette!("expected error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 
         // Byte-level garbage in the value is an error too (kernel decode).
         let mut garbage = vec![0u8; 8];
         garbage.push(0xc1);
-        tx.put(&inv_key, &garbage).unwrap();
+        tx.put(&inv_key, &garbage).map_err(|e| miette!("{e}"))?;
         assert!(lsh_del(&mut tx, &row, None, &f.idx, &f.inv).is_err());
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     /// The manifest's wire form round-trips and its bytes are pinned: it
     /// is persisted inside the base relation's catalog row, so any change
     /// is a format migration, not a refactor.
     #[test]
-    fn manifest_wire_format_round_trips_and_is_pinned() {
+    fn manifest_wire_format_round_trips_and_is_pinned() -> Result<()> {
         use serde::Serialize;
-        let m = manifest_with_perms(vec![1, 0x0102_0304, 7, 8], 4);
+        let m = manifest_with_perms(vec![1, 0x0102_0304, 7, 8], 4)?;
         let mut bytes = vec![];
         m.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
-            .unwrap();
-        let decoded: MinHashLshIndexManifest = rmp_serde::from_slice(&bytes).unwrap();
+            .map_err(|e| miette!("{e}"))?;
+        let decoded: MinHashLshIndexManifest = rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
         assert_eq!(decoded, m, "wire round trip");
 
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -1732,6 +1732,7 @@ mod tests {
         assert!(
             rmp_serde::from_slice::<MinHashLshIndexManifest>(&bytes[..bytes.len() / 2]).is_err()
         );
+        Ok(())
     }
 
     /// The pinned wire bytes of the canonical manifest above (msgpack,
