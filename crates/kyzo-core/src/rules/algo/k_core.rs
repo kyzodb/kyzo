@@ -216,6 +216,7 @@ mod tests {
     use super::*;
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -294,7 +295,7 @@ mod tests {
         (nodes, adj)
     }
 
-    fn run(edges: &[(&str, &str)]) -> BTreeMap<String, u32> {
+    fn run(edges: &[(&str, &str)]) -> Result<BTreeMap<String, u32>> {
         let rows = edges
             .iter()
             .map(|&(a, b)| Tuple::from_vec(vec![s(a), s(b)]))
@@ -304,20 +305,17 @@ mod tests {
             vec![TestInput::new(vec!["fr", "to"], rows)],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        .unwrap();
+        )?;
         got.into_iter()
-            .map(|r| {
-                (
-                    r[0].get_str().unwrap().to_string(),
-                    match r[1].get_int() {
-                        Some(i) => match u32::try_from(i) {
-                            Ok(u) => u,
-                            Err(_) => panic!("test core number fits u32"),
-                        },
-                        None => panic!("test core column must be int"),
-                    },
-                )
+            .map(|r| -> Result<_> {
+                let core = match r[1].get_int() {
+                    Some(i) => u32::try_from(i).map_err(|_| miette!("test core number fits u32"))?,
+                    None => return Err(miette!("test core column must be int")),
+                };
+                Ok((
+                    r[0].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string(),
+                    core,
+                ))
             })
             .collect()
     }
@@ -327,18 +325,19 @@ mod tests {
     /// a's *degree* is 3 but its *coreness* is 2, so this pins that the peel
     /// actually decrements degrees rather than reporting raw degree.
     #[test]
-    fn coreness_differs_from_degree() {
-        let got = run(&[("a", "b"), ("b", "c"), ("a", "c"), ("a", "d")]);
+    fn coreness_differs_from_degree() -> Result<()> {
+        let got = run(&[("a", "b"), ("b", "c"), ("a", "c"), ("a", "d")])?;
         assert_eq!(got[&"a".to_string()], 2);
         assert_eq!(got[&"b".to_string()], 2);
         assert_eq!(got[&"c".to_string()], 2);
         assert_eq!(got[&"d".to_string()], 1);
+        Ok(())
     }
 
     /// VALUE ORACLE vs the naive reference on a hand-picked graph with a
     /// 3-core (K4 on {a,b,c,d}), a 2-core rim, and 1-core tails.
     #[test]
-    fn matches_naive_reference() {
+    fn matches_naive_reference() -> Result<()> {
         let edges = [
             ("a", "b"),
             ("a", "c"),
@@ -353,35 +352,37 @@ mod tests {
             ("a", "h"), // pendant ⇒ h core 1
         ];
         let (nodes, adj) = adjacency(&edges);
-        let expected = naive_coreness(&nodes, &adj).unwrap();
-        assert_eq!(run(&edges), expected);
+        let expected = naive_coreness(&nodes, &adj)?;
+        assert_eq!(run(&edges)?, expected);
+        Ok(())
     }
 
     /// The undirected/simple interpretation: a self-loop on a node and a
     /// doubled parallel edge must not change any core number. Two runs — one
     /// clean, one with a self-loop and a parallel edge added — agree.
     #[test]
-    fn self_loops_and_parallel_edges_ignored() {
-        let clean = run(&[("a", "b"), ("b", "c"), ("a", "c")]);
+    fn self_loops_and_parallel_edges_ignored() -> Result<()> {
+        let clean = run(&[("a", "b"), ("b", "c"), ("a", "c")])?;
         let noisy = run(&[
             ("a", "b"),
             ("b", "c"),
             ("a", "c"),
             ("a", "a"), // self-loop
             ("a", "b"), // parallel edge
-        ]);
+        ])?;
         assert_eq!(clean, noisy);
         // The clean triangle is a 2-core throughout.
         for v in ["a", "b", "c"] {
             assert_eq!(clean[&v.to_string()], 2);
         }
+        Ok(())
     }
 
     /// DETERMINISM: coreness is an invariant, so the output is byte-identical
     /// across repeated runs (and, being an invariant, independent of any
     /// peel-order choice). A pseudo-random graph, run several times.
     #[test]
-    fn deterministic_across_runs() {
+    fn deterministic_across_runs() -> Result<()> {
         let mut state = 0x51ed_2701_dead_c0deu64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
@@ -401,10 +402,11 @@ mod tests {
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect();
-        let first = run(&edges);
+        let first = run(&edges)?;
         for _ in 0..5 {
-            assert_eq!(run(&edges), first);
+            assert_eq!(run(&edges)?, first);
         }
+        Ok(())
     }
 
     /// ADVERSARIAL SHAPE / SCALE: a 200k-node cycle. Every node has exactly
@@ -414,7 +416,7 @@ mod tests {
     /// the bucket arithmetic holds at scale. The exact answer (all 2s) also
     /// proves correctness, not merely non-crashing.
     #[test]
-    fn large_cycle_is_two_core() {
+    fn large_cycle_is_two_core() -> Result<()> {
         let n: u32 = 200_000;
         let owned: Vec<(String, String)> = (0..n)
             .map(|i| (format!("n{i}"), format!("n{}", (i + 1) % n)))
@@ -423,7 +425,7 @@ mod tests {
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect();
-        let got = run(&edges);
+        let got = run(&edges)?;
         assert_eq!(
             match u32::try_from(got.len()) {
                 Ok(u) => u,
@@ -432,6 +434,7 @@ mod tests {
             n
         );
         assert!(got.values().all(|&c| c == 2));
+        Ok(())
     }
 
     /// CANCELLATION, inner-poll pinned (house exemplar:
@@ -442,7 +445,7 @@ mod tests {
     /// so the `<= 1` bound fails. Load-independent: counts peeled vertices,
     /// not wall-clock.
     #[test]
-    fn honors_cancel_pins_inner_poll() {
+    fn honors_cancel_pins_inner_poll() -> Result<()> {
         use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
@@ -450,13 +453,13 @@ mod tests {
             .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
-        let prepared = prepare_fixed_rule(&KCoreDecomposition, inputs, empty_opts()).unwrap();
+        let prepared = prepare_fixed_rule(&KCoreDecomposition, inputs, empty_opts())?;
 
         // Baseline: no cancellation. Every vertex is peeled.
         take_kcore_verts_peeled(); // clear any leftover from a reused thread
-        let full = prepared.run(&KCoreDecomposition, CancelFlag::inert());
+        let full = prepared.run(&KCoreDecomposition, CancelFlag::inert())?;
         let full_peeled = take_kcore_verts_peeled();
-        assert!(full.is_ok());
+        let _ = full; // baseline completed
         assert!(
             full_peeled >= u64::from(n),
             "baseline should peel every vertex, got {full_peeled}"
@@ -473,5 +476,6 @@ mod tests {
             "inner poll did not refuse before peeling the graph: peeled \
              {cancel_peeled} vertices (deleting the per-vertex poll makes this ~60k)"
         );
+        Ok(())
     }
 }
