@@ -75,6 +75,8 @@ pub enum RetrievalRefuse {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
     use crate::data::digest::RecordContentDigest;
     use crate::data::statement::{
@@ -93,12 +95,13 @@ mod tests {
     use crate::store::sweep::CommitOrdinal;
     use kyzo_model::value::DataValue;
 
-    fn admit_one_record_id() -> RecordId {
+    fn admit_one_record_id() -> Result<RecordId> {
         let store = StoreId::from_digest([0x52; 32]);
         let digest = RecordContentDigest::from_digest([0xE1; 32]);
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("span-subject")),
-            crate::data::statement::StatementPredicate::new("about").expect("predicate"),
+            crate::data::statement::StatementPredicate::new("about")
+                .map_err(|e| miette!("predicate: {e}"))?,
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
             StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
@@ -118,17 +121,17 @@ mod tests {
             CommitOrdinal::ZERO,
             ScopeManifestDigest::from_digest([0x61; 32]),
         )
-        .expect("registered key must open the live door");
-        admit_record(AdmitRecordParts::new(
+        .into_diagnostic()?;
+        Ok(admit_record(AdmitRecordParts::new(
             RecordCore::new(store, digest, SemanticSurface::None, None, kind, statement),
             Placement::Unrestricted,
             None,
             IngestShape::Record,
             live,
         ))
-        .expect("admit")
+        .into_diagnostic()?
         .0
-        .record_id()
+        .record_id())
     }
 
     #[test]
@@ -141,9 +144,10 @@ mod tests {
     }
 
     #[test]
-    fn sourced_retrieval_span_resolves() {
-        let id = admit_one_record_id();
+    fn sourced_retrieval_span_resolves() -> Result<()> {
+        let id = admit_one_record_id()?;
         let span = RetrievalSpan::from_source(id, 1, 2);
         assert_eq!(span.resolve_source(), Ok(id));
+        Ok(())
     }
 }
