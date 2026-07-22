@@ -58,10 +58,10 @@ impl Residency {
 
     fn slot(&self, relation: RelationId) -> Arc<AtomicU64> {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut marks = match self.marks.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut marks = self
+            .marks
+            .lock()
+            .expect("residency marks mutex poisoned — refuse silent continue");
         marks.entry(key).or_default().clone()
     }
 
@@ -102,10 +102,10 @@ impl Residency {
     /// serving — the cache is never a source of truth.
     pub(crate) fn should_build(&self, relation: RelationId, live: Generation) -> bool {
         let key = ResidentIndexKey::for_relation(relation);
-        let mut misses = match self.misses.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut misses = self
+            .misses
+            .lock()
+            .expect("residency misses mutex poisoned — refuse silent continue");
         match misses.get_mut(&key) {
             Some((recorded, count)) if *recorded == live => {
                 *count = match count.checked_add(1) {
@@ -124,26 +124,23 @@ impl Residency {
     /// Clear the miss streak after a successful install.
     pub(crate) fn clear_miss(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        match self.misses.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-        .remove(&key);
+        self.misses
+            .lock()
+            .expect("residency misses mutex poisoned — refuse silent continue")
+            .remove(&key);
     }
 
     /// Drop miss streak and write-counter slot (destructive schema ops).
     pub(crate) fn forget(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        match self.misses.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-        .remove(&key);
-        match self.marks.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-        .remove(&key);
+        self.misses
+            .lock()
+            .expect("residency misses mutex poisoned — refuse silent continue")
+            .remove(&key);
+        self.marks
+            .lock()
+            .expect("residency marks mutex poisoned — refuse silent continue")
+            .remove(&key);
     }
 }
 

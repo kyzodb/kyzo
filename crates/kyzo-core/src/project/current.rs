@@ -118,10 +118,10 @@ impl SegmentEngine {
         live: Generation,
     ) -> Result<SegmentHandle, SegmentMiss> {
         let key = ResidentIndexKey::for_relation(relation);
-        let segments = match self.segments.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let segments = self
+            .segments
+            .lock()
+            .expect("segments mutex poisoned — refuse silent continue");
         let Some(sealed) = segments.get(&key) else {
             return Err(SegmentMiss::Absent);
         };
@@ -155,11 +155,10 @@ impl SegmentEngine {
         let key = ResidentIndexKey::for_relation(relation);
         let handle = SegmentHandle(Arc::new(segment));
         let sealed = ProjectionBuilder::new(handle.clone()).seal(generation);
-        match self.segments.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-        .insert(key, sealed);
+        self.segments
+            .lock()
+            .expect("segments mutex poisoned — refuse silent continue")
+            .insert(key, sealed);
         self.residency.clear_miss(relation);
         handle
     }
@@ -169,11 +168,10 @@ impl SegmentEngine {
     /// being reused or destroyed).
     pub(crate) fn evict(&self, relation: RelationId) {
         let key = ResidentIndexKey::for_relation(relation);
-        match self.segments.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-        .remove(&key);
+        self.segments
+            .lock()
+            .expect("segments mutex poisoned — refuse silent continue")
+            .remove(&key);
         self.residency.forget(relation);
     }
 }
@@ -419,7 +417,7 @@ mod tests {
     fn poisoned_segments_mutex_refuses_silent_continue() {
         let engine = SegmentEngine::new();
         let relation = RelationId::new(1).expect("below cap");
-        let live = Generation::new(0);
+        let live = Generation::stamp_from_counter(0);
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _g = engine.segments.lock().unwrap();
             panic!("deliberate poison");

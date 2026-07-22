@@ -529,18 +529,17 @@ pub(crate) struct TokenizerCache {
     pub(crate) hashed_cache: RwLock<HashMap<Vec<u8>, Arc<TextAnalyzer>>>,
 }
 
-// KYZO DEVIATION from the CozoDB original: lock acquisition recovers from
-// poisoning instead of `unwrap()`ing. The cache holds no invariant a
-// panicked writer could have half-applied (entries are inserted whole), so
-// continuing with the underlying data is sound, and a panicking thread
-// elsewhere can no longer cascade into every later FTS query.
+// Poisoned cache locks refuse silent continue — same loud-poison law as
+// residency/current (admit.rs wording).
 #[cfg(test)]
 fn read_lock<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    (match l.read() { Ok(g) => g, Err(poisoned) => poisoned.into_inner() })
+    l.read()
+        .expect("tokenizer-cache rwlock poisoned — refuse silent continue")
 }
 #[cfg(test)]
 fn write_lock<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    (match l.write() { Ok(g) => g, Err(poisoned) => poisoned.into_inner() })
+    l.write()
+        .expect("tokenizer-cache rwlock poisoned — refuse silent continue")
 }
 
 #[cfg(test)]

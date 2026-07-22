@@ -269,9 +269,11 @@ impl Store for Heap {
         } else if c == self.frozen.len() {
             &self.live[off..end]
         } else {
-            // Span names a chunk that never existed — empty rather than
-            // aliasing a foreign live buffer.
-            &[]
+            // Span names a chunk that never existed — fail closed, never
+            // empty-slice success that invents "no payload".
+            Option::<&[u8]>::None.expect(
+                "INVARIANT(heap_span): non-zero span names an unknown chunk",
+            )
         }
     }
 

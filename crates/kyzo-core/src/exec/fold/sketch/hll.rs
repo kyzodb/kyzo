@@ -197,20 +197,18 @@ impl<const M: usize> HyperLogLog<M> {
     /// register value always fits in a byte).
     fn add_hash(&mut self, h: u64) {
         let p = u32::from(Self::PRECISION);
-        let idx = match usize::try_from(h >> (64 - p)) {
-            Ok(v) => v,
-            Err(_gt_usize) => 0,
-        };
+        // Top-p bits of a u64 are at most 2^p-1 (p ≤ 18) — always fit usize.
+        let idx = usize::try_from(h >> (64 - p))
+            .expect("INVARIANT(hll_idx): top-p bits of u64 always fit usize");
         // Left-align the remaining 64-p bits; OR in a sentinel at bit p-1 so
         // that leading_zeros is at most 64-p and the rank at most 64-p+1.
         let remaining = (h << p) | (1u64 << (p - 1));
-        let rank = match remaining.leading_zeros().checked_add(1) {
-            Some(n) => match u8::try_from(n) {
-                Ok(v) => v,
-                Err(_gt_u8) => u8::MAX,
-            },
-            None => u8::MAX,
-        };
+        let rank_u32 = remaining
+            .leading_zeros()
+            .checked_add(1)
+            .expect("INVARIANT(hll_rank): leading_zeros+1 never overflows u32");
+        let rank = u8::try_from(rank_u32)
+            .expect("INVARIANT(hll_rank): rank from leading_zeros+1 always fits u8");
         if rank > self.registers[idx] {
             self.registers[idx] = rank;
         }
