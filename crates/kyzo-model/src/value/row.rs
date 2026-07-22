@@ -569,7 +569,10 @@ mod tests {
     #[test]
     fn written_form_is_durable_across_seals_while_codes_move() -> Result<()> {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let mut rows = Rows::new_in(
+            Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?,
+            &arena.frame(),
+        );
         for i in 0..30i64 {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(i * 7 % 13)))?;
             let b = stamp_of(
@@ -619,7 +622,10 @@ mod tests {
     #[test]
     fn encoded_key_order_is_tuple_semantic_order() -> Result<()> {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let mut rows = Rows::new_in(
+            Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?,
+            &arena.frame(),
+        );
         let tuples: [(i64, &str); 5] = [(3, "b"), (1, "zzz"), (3, "a"), (-5, "x"), (1, "a")];
         for (n, s) in tuples {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(n)))?;
@@ -647,7 +653,10 @@ mod tests {
     #[test]
     fn push_encoded_round_trips_and_refuses_totally() -> Result<()> {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let mut rows = Rows::new_in(
+            Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?,
+            &arena.frame(),
+        );
         let a = stamp_of(&mut arena, Datum::Num(Num::int(42)))?;
         let b = stamp_of(&mut arena, Datum::Str("hello"))?;
         rows.push_row(&[a, b]).into_diagnostic()?;
@@ -659,8 +668,13 @@ mod tests {
                 .into_diagnostic()?
         };
         // Re-enter through the bytes door.
-        let mut rows2 = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
-        rows2.push_encoded(&key, &mut arena).map_err(|e| miette!("{e:?}"))?;
+        let mut rows2 = Rows::new_in(
+            Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?,
+            &arena.frame(),
+        );
+        rows2
+            .push_encoded(&key, &mut arena)
+            .map_err(|e| miette!("{e:?}"))?;
         {
             let f = arena.frame();
             let adm2 = rows2.admit(&f).into_diagnostic()?;
@@ -710,7 +724,9 @@ mod tests {
             for bytes in frontier.drain(..) {
                 let (datum, _) = decode_one(&bytes).into_diagnostic()?;
                 let n = match datum {
-                    super::super::DataValue::Num(n) => n.as_int().ok_or_else(|| miette!("int domain"))?,
+                    super::super::DataValue::Num(n) => {
+                        n.as_int().ok_or_else(|| miette!("int domain"))?
+                    }
                     other @ (data_value_any!()) => panic!("wrong kind: {other:?}"),
                 };
                 if n + 3 <= 12 {
@@ -732,7 +748,11 @@ mod tests {
                 total.push_row(&[*sc]).into_diagnostic()?;
                 let f = arena.frame();
                 let adm = total.admit(&f).into_diagnostic()?;
-                frontier.push(adm.resolve_cell(adm.len() - 1, 0).into_diagnostic()?.to_vec());
+                frontier.push(
+                    adm.resolve_cell(adm.len() - 1, 0)
+                        .into_diagnostic()?
+                        .to_vec(),
+                );
             }
             assert_eq!(arena.epoch(), epoch0, "no seal mid-fixpoint");
             assert!(rounds < 32, "fixpoint diverged");
@@ -765,7 +785,10 @@ mod tests {
     #[test]
     fn from_stored_is_a_validating_door() -> Result<()> {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let mut rows = Rows::new_in(
+            Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?,
+            &arena.frame(),
+        );
         let a = stamp_of(&mut arena, Datum::Num(Num::int(1)))?;
         let b = stamp_of(&mut arena, Datum::Str("s"))?;
         rows.push_row(&[a, b]).into_diagnostic()?;
@@ -856,7 +879,7 @@ mod tests {
     #[test]
     fn scan_keys_bracket_matching_rows() -> Result<()> {
         use super::super::ScanBound;
-        let rel = RelationId::new(7).ok_or_else(|| miette!("RelationId"))?;
+        let rel = RelationId::new(7).ok_or_else(|| miette!("below cap"))?;
         let rows: Vec<Vec<DataValue>> = vec![
             vec![DataValue::from(0i64), DataValue::from("a")],
             vec![DataValue::from(0i64), DataValue::from("zz")],
@@ -878,7 +901,9 @@ mod tests {
             assert!(lo.as_slice() <= k.as_slice() && k.as_slice() <= hi.as_slice());
         }
         // Next relation's keys fall outside.
-        let foreign = rows[0].encode_as_key(RelationId::new(8).ok_or_else(|| miette!("RelationId"))?);
+        let foreign = rows[0].encode_as_key(
+            RelationId::new(8).ok_or_else(|| miette!("below cap"))?,
+        );
         assert!(foreign.as_bytes() > hi.as_slice());
         // Projected == materialized.
         let row = vec![DataValue::from("x"), DataValue::from(0i64)];
@@ -915,7 +940,10 @@ mod tests {
     fn arity_is_enforced_at_the_write_door() -> Result<()> {
         let mut arena = Arena::new();
         let sc = stamp_of(&mut arena, Datum::Null)?;
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let mut rows = Rows::new_in(
+            Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?,
+            &arena.frame(),
+        );
         assert!(
             matches!(
                 rows.push_row(&[sc]),
