@@ -123,20 +123,24 @@ impl<W: Copy> DirectedCsrGraph<W> {
             out_offsets[i + 1] += out_offsets[i];
             in_offsets[i + 1] += in_offsets[i];
         }
-        // Placement via per-node write cursors.
-        let mut out_edges: Vec<Option<(u32, W)>> = vec![None; edges.len()];
+        // Placement via per-node write cursors. Seed out_edges with the first
+        // edge's weight as a overwriteable placeholder so every slot is a real
+        // `(target, weight)` — no Option intermediate, no unwrap. Empty edge
+        // lists stay empty; non-empty lists overwrite every slot exactly once
+        // (cursors advance one per edge within disjoint segments).
+        let mut out_edges: Vec<(u32, W)> = match edges.first() {
+            None => Vec::new(),
+            Some((_, _, w)) => vec![(0, *w); edges.len()],
+        };
         let mut in_edges: Vec<u32> = vec![0; edges.len()];
         let mut out_cursor = out_offsets.clone();
         let mut in_cursor = in_offsets.clone();
         for (f, t, w) in &edges {
-            out_edges[out_cursor[crate::rules::convert::usize_from_u32(*f)]] = Some((*t, *w));
+            out_edges[out_cursor[crate::rules::convert::usize_from_u32(*f)]] = (*t, *w);
             out_cursor[crate::rules::convert::usize_from_u32(*f)] += 1;
             in_edges[in_cursor[crate::rules::convert::usize_from_u32(*t)]] = *f;
             in_cursor[crate::rules::convert::usize_from_u32(*t)] += 1;
         }
-        // Placement fills every slot exactly once (cursors advance one per
-        // edge within disjoint segments) — the `None`s cannot survive.
-        let mut out_edges: Vec<(u32, W)> = out_edges.into_iter().map(|e| e.unwrap()).collect();
 
         // `CsrLayout::Sorted` parity: each adjacency segment sorted by
         // target id; parallel edges kept.
@@ -319,12 +323,13 @@ pub(crate) fn as_directed_weighted_graph(
 mod tests {
     use super::*;
 
+    use miette::{IntoDiagnostic, Result, miette};
     #[test]
-    fn csr_shape_and_iteration() {
+    fn csr_shape_and_iteration() -> Result<()> {
         // 0→1, 0→2 (parallel ×2), 2→0; node 1 is a sink.
         let g: DirectedCsrGraph<f64> =
             DirectedCsrGraph::from_edges([(0, 2, 1.0), (0, 1, 2.0), (2, 0, 3.0), (0, 2, 4.0)])
-                .unwrap();
+                ?;
         assert_eq!(g.node_count(), 3);
         assert_eq!(g.out_degree(0), 3);
         assert_eq!(g.out_degree(1), 0);
@@ -339,12 +344,14 @@ mod tests {
         let in2: Vec<_> = g.in_neighbors(2).collect();
         assert_eq!(in2, vec![0, 0]);
         assert_eq!(g.in_neighbors(0).collect::<Vec<_>>(), vec![2]);
+        Ok(())
     }
 
     #[test]
-    fn empty_graph() {
-        let g: DirectedCsrGraph = DirectedCsrGraph::from_edges([]).unwrap();
+    fn empty_graph() -> Result<()> {
+        let g: DirectedCsrGraph = DirectedCsrGraph::from_edges([])?;
         assert_eq!(g.node_count(), 0);
+        Ok(())
     }
 
     /// F3: the node-count derivation refuses, typed, at the 2^32 bound
@@ -356,10 +363,10 @@ mod tests {
     ///   - max id u32::MAX - 1 → u32::MAX nodes (the last representable)
     ///   - max id u32::MAX     → GraphTooLargeError (the `+ 1` would wrap)
     #[test]
-    fn node_count_refuses_at_u32_bound() {
-        assert_eq!(checked_node_count(None).unwrap(), 0);
-        assert_eq!(checked_node_count(Some(0)).unwrap(), 1);
-        assert_eq!(checked_node_count(Some(u32::MAX - 1)).unwrap(), u32::MAX);
+    fn node_count_refuses_at_u32_bound() -> Result<()> {
+        assert_eq!(checked_node_count(None)?, 0);
+        assert_eq!(checked_node_count(Some(0))?, 1);
+        assert_eq!(checked_node_count(Some(u32::MAX - 1))?, u32::MAX);
         let err = checked_node_count(Some(u32::MAX)).unwrap_err();
         assert!(
             err.downcast_ref::<GraphTooLargeError>().is_some(),
@@ -370,15 +377,16 @@ mod tests {
         // The same refusal surfaces through `from_edges` itself.
         let err = DirectedCsrGraph::<()>::from_edges([(0, u32::MAX, ())]).unwrap_err();
         assert!(err.downcast_ref::<GraphTooLargeError>().is_some(), "{err}");
+        Ok(())
     }
 
     /// F3: the intern site refuses, typed, at the 2^32-node bound instead
     /// of truncating `indices.len() as u32`.
     #[test]
-    fn intern_site_refuses_at_u32_bound() {
-        assert_eq!(checked_node_id(0).unwrap(), 0);
+    fn intern_site_refuses_at_u32_bound() -> Result<()> {
+        assert_eq!(checked_node_id(0)?, 0);
         assert_eq!(
-            checked_node_id(crate::rules::convert::usize_from_u32(u32::MAX - 1)).unwrap(),
+            checked_node_id(crate::rules::convert::usize_from_u32(u32::MAX - 1))?,
             u32::MAX - 1
         );
         let err = checked_node_id(crate::rules::convert::usize_from_u32(u32::MAX)).unwrap_err();
@@ -387,5 +395,6 @@ mod tests {
             "expected the typed GraphTooLargeError, got: {err}"
         );
         assert!(err.to_string().contains("2^32"), "{err}");
+        Ok(())
     }
 }
