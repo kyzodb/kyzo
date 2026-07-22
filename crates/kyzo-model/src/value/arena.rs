@@ -2118,7 +2118,7 @@ mod tests {
         // Every snapshot still answers exactly as the world stood when it
         // was pinned.
         for (snap, frozen) in &pinned {
-            check_snapshot(snap, frozen);
+            check_snapshot(snap, frozen)?;
         }
         Ok(())
     }
@@ -2129,7 +2129,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn laws_exhaustive_small_universe_all_seal_placements() {
+    fn laws_exhaustive_small_universe_all_seal_placements() -> Result<()> {
         let a = [0x00u8, 0x61, 0xff];
         let mut universe: Vec<Vec<u8>> = vec![vec![]];
         for &x in &a {
@@ -2154,17 +2154,18 @@ mod tests {
                         if mask & 8 != 0 {
                             ops.push(Op::Seal);
                         }
-                        drive(&ops, 1);
+                        drive(&ops, 1)?;
                     }
                 }
             }
         }
+        Ok(())
     }
 
     /// The same exhaustive core with a snapshot pinned at every possible
     /// position, verified after the drive has moved past it.
     #[test]
-    fn laws_exhaustive_snapshot_placements() {
+    fn laws_exhaustive_snapshot_placements() -> Result<()> {
         let universe: [&[u8]; 5] = [b"", b"\x00", b"a", b"ab", b"\xff"];
         let n = universe.len();
         for i0 in 0..n {
@@ -2186,12 +2187,13 @@ mod tests {
                                 ops.push(Op::Snapshot);
                             }
                             ops.push(Op::Seal);
-                            drive(&ops, 2);
+                            drive(&ops, 2)?;
                         }
                     }
                 }
             }
         }
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -2200,7 +2202,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn laws_random_differential_multi_epoch() {
+    fn laws_random_differential_multi_epoch() -> Result<()> {
         for seed in 1u64..=9 {
             // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
@@ -2226,8 +2228,9 @@ mod tests {
                 }
             }
             ops.push(Op::Seal);
-            drive(&ops, 149);
+            drive(&ops, 149)?;
         }
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -2807,33 +2810,36 @@ mod tests {
     }
 
     #[test]
-    fn stress_ascending_100k_multi_epoch() {
+    fn stress_ascending_100k_multi_epoch() -> Result<()> {
         stress(
             (0u32..100_000).map(|i| i.to_be_bytes().to_vec()).collect(),
             9_973,
-        );
+        )?;
+        Ok(())
     }
 
     #[test]
-    fn stress_descending_100k_multi_epoch() {
+    fn stress_descending_100k_multi_epoch() -> Result<()> {
         stress(
             (0u32..100_000)
                 .rev()
                 .map(|i| i.to_be_bytes().to_vec())
                 .collect(),
             9_973,
-        );
+        )?;
+        Ok(())
     }
 
     #[test]
-    fn stress_random_dups_100k_multi_epoch() {
+    fn stress_random_dups_100k_multi_epoch() -> Result<()> {
         let mut rng = Rng(0x5EED);
         stress(
             (0..100_000)
                 .map(|_| (rng.next() % 60_000).to_be_bytes().to_vec())
                 .collect(),
             7_919,
-        );
+        )?;
+        Ok(())
     }
 
     // ------------------------------------------------------------------
