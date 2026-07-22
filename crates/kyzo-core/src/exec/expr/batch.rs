@@ -113,7 +113,10 @@ impl Selection {
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.0.iter().map(|&r| r as usize)
+        self.0.iter().map(|&r| match usize::try_from(r) {
+            Ok(v) => v,
+            Err(_gt_usize) => 0,
+        })
     }
 
     pub(crate) fn len(&self) -> usize {

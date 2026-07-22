@@ -345,7 +345,17 @@ fn take_pos_int(
                     span
                 ));
             }
-            Ok(Some(i as usize))
+            let n = match usize::try_from(i) {
+                Ok(v) => v,
+                Err(_neg_or_overflow) => {
+                    bail!(SearchParamInvalid(
+                        Symbol::new(name, span),
+                        SearchParamInvalidReason::MustBePositiveInteger,
+                        span
+                    ));
+                }
+            };
+            Ok(Some(n))
         }
         Some(_) => bail!(SearchParamInvalid(
             Symbol::new(name, span),

@@ -61,7 +61,9 @@ pub(crate) const DEFAULT_PRECISION: u8 = 14;
 
 /// Default register count: `2^DEFAULT_PRECISION`. The production sketch type
 /// is [`HyperLogLog`] / [`HyperLogLog::<DEFAULT_M>`].
-pub(crate) const DEFAULT_M: usize = 1 << DEFAULT_PRECISION as usize;
+/// `2^DEFAULT_PRECISION` — written as a literal so the const stays `as`-free
+/// (const `From`/`TryFrom` are not yet stable).
+pub(crate) const DEFAULT_M: usize = 16_384;
 
 /// A byte tag leading the serialized form, so a stored sketch names its own
 /// format; bump on any layout change.
@@ -123,7 +125,10 @@ impl HllEstimate {
 
     /// Round to a non-negative integer distinct count.
     pub(crate) fn round_count(self) -> i64 {
-        self.as_f64().round() as i64
+        match kyzo_model::value::Num::float(self.as_f64().round()).to_int_coerced() {
+            Some(i) => i,
+            None => 0,
+        }
     }
 }
 
@@ -153,7 +158,25 @@ impl<const M: usize> HyperLogLog<M> {
         );
         let p = M.trailing_zeros();
         assert!(p >= 4 && p <= 18, "HyperLogLog precision must be in 4..=18");
-        p as u8
+        // Const `TryFrom` is not yet stable; exhaust the asserted range.
+        match p {
+            4 => 4,
+            5 => 5,
+            6 => 6,
+            7 => 7,
+            8 => 8,
+            9 => 9,
+            10 => 10,
+            11 => 11,
+            12 => 12,
+            13 => 13,
+            14 => 14,
+            15 => 15,
+            16 => 16,
+            17 => 17,
+            18 => 18,
+            _ => 0,
+        }
     };
 
     /// An empty sketch — the identity element of [`Self::merge`].
@@ -174,12 +197,18 @@ impl<const M: usize> HyperLogLog<M> {
     /// zeros among the remaining bits (a sentinel bit bounds the rank so a
     /// register value always fits in a byte).
     fn add_hash(&mut self, h: u64) {
-        let p = Self::PRECISION as u32;
-        let idx = (h >> (64 - p)) as usize;
+        let p = u32::from(Self::PRECISION);
+        let idx = match usize::try_from(h >> (64 - p)) {
+            Ok(v) => v,
+            Err(_gt_usize) => 0,
+        };
         // Left-align the remaining 64-p bits; OR in a sentinel at bit p-1 so
         // that leading_zeros is at most 64-p and the rank at most 64-p+1.
         let remaining = (h << p) | (1u64 << (p - 1));
-        let rank = (remaining.leading_zeros() + 1) as u8;
+        let rank = match u8::try_from(remaining.leading_zeros().saturating_add(1)) {
+            Ok(v) => v,
+            Err(_gt_u8) => u8::MAX,
+        };
         if rank > self.registers[idx] {
             self.registers[idx] = rank;
         }
@@ -208,13 +237,13 @@ impl<const M: usize> HyperLogLog<M> {
     /// The estimated number of distinct elements seen. A pure function of
     /// the register bytes: equal sketches always return the same estimate.
     pub(crate) fn estimate(&self) -> HllEstimate {
-        let m = self.num_registers() as f64;
+        let m = super::usize_to_f64(self.num_registers());
         let alpha = alpha(self.num_registers());
 
         let mut sum = 0.0f64;
         let mut zeros = 0usize;
         for &r in self.registers.iter() {
-            sum += 2.0f64.powi(-(r as i32));
+            sum += 2.0f64.powi(-i32::from(r));
             if r == 0 {
                 zeros += 1;
             }
@@ -224,7 +253,7 @@ impl<const M: usize> HyperLogLog<M> {
         // Small-range correction: when many registers are still empty the
         // raw estimate is biased, and linear counting is more accurate.
         if raw <= 2.5 * m && zeros != 0 {
-            HllEstimate::mint(m * (m / zeros as f64).ln())
+            HllEstimate::mint(m * (m / super::usize_to_f64(zeros)).ln())
         } else {
             HllEstimate::mint(raw)
         }
@@ -300,7 +329,7 @@ mod tests {
 
     /// The relative standard error of HyperLogLog at precision `p`.
     fn std_error(precision: u8) -> f64 {
-        1.04 / ((1u64 << precision) as f64).sqrt()
+        1.04 / super::u64_to_f64(1u64 << precision).sqrt()
     }
 
     /// Insert `n` distinct integers offset by `salt` into a fresh sketch.
@@ -329,11 +358,12 @@ mod tests {
             let mut worst = 0.0f64;
             for salt in 0..TRIALS {
                 let est = sketch_of::<M>(n, salt + 1).estimate().as_f64();
-                let rel = (est - n as f64) / n as f64;
+                let n_f = kyzo_model::value::Num::int(n).to_f64();
+                let rel = (est - n_f) / n_f;
                 sq_sum += rel * rel;
                 worst = worst.max(rel.abs());
             }
-            let rmse = (sq_sum / TRIALS as f64).sqrt();
+            let rmse = (sq_sum / kyzo_model::value::Num::int(TRIALS).to_f64()).sqrt();
             // The RMS relative error should be close to the standard error;
             // allow generous slack for the small trial count.
             assert!(
@@ -475,11 +505,18 @@ mod tests {
                 let mut h = HyperLogLog::<M>::new();
                 let n = 200 + next() % 800;
                 for _ in 0..n {
-                    h.add(&val((next() % 2_000) as i64));
+                    let v = match i64::try_from(next() % 2_000) {
+                        Ok(i) => i,
+                        Err(_gt_i64) => 0,
+                    };
+                    h.add(&val(v));
                 }
                 parts.push(h);
             }
-            let dup = (next() % 4) as usize;
+            let dup = match usize::try_from(next() % 4) {
+                Ok(v) => v,
+                Err(_gt_usize) => 0,
+            };
 
             // Reference fold: order 0,1,2,3 plus the duplicate at the end.
             let fold = |order: &[usize]| {

@@ -162,9 +162,21 @@ pub(crate) fn op_slice_string(args: &[DataValue]) -> Result<DataValue> {
         n >= m,
         "third argument to 'slice_string' mut be a positive integer greater than the second argument"
     );
-    Ok(DataValue::Str(
-        s.chars().skip(m as usize).take((n - m) as usize).collect(),
-    ))
+    let skip = match usize::try_from(m) {
+        Ok(v) => v,
+        Err(_neg) => {
+            bail!("second argument to 'slice_string' mut be a positive integer");
+        }
+    };
+    let take = match usize::try_from(n - m) {
+        Ok(v) => v,
+        Err(_neg) => {
+            bail!(
+                "third argument to 'slice_string' mut be a positive integer greater than the second argument"
+            );
+        }
+    };
+    Ok(DataValue::Str(s.chars().skip(skip).take(take).collect()))
 }
 
 pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {

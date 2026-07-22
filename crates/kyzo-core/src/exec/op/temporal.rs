@@ -1423,21 +1423,33 @@ mod tests {
         const N_EVENTS: usize = 60;
         const N_KEYS: i64 = 5;
         const MAX_VALID: i64 = 40;
+        let n_keys_u = match u64::try_from(N_KEYS) {
+            Ok(v) => v,
+            Err(_neg) => 1,
+        };
+        let max_valid_u = match u64::try_from(MAX_VALID) {
+            Ok(v) => v,
+            Err(_neg) => 1,
+        };
+        let to_i64 = |u: u64| match i64::try_from(u) {
+            Ok(v) => v,
+            Err(_gt_i64) => 0,
+        };
         for _ in 0..N_EVENTS {
-            let key = next_range(N_KEYS as u64) as i64;
-            let valid = next_range(MAX_VALID as u64) as i64;
+            let key = to_i64(next_range(n_keys_u));
+            let valid = to_i64(next_range(max_valid_u));
             if next_range(4) == 0 {
                 write_indexed_event(&db, &base, key, valid, None);
             } else {
-                let payload = next_range(1000) as i64;
+                let payload = to_i64(next_range(1000));
                 write_indexed_event(&db, &base, key, valid, Some(payload));
             }
         }
 
         const N_PAIRS: usize = 40;
         for _ in 0..N_PAIRS {
-            let from = next_range(MAX_VALID as u64 + 2) as i64;
-            let to = next_range(MAX_VALID as u64 + 2) as i64;
+            let from = to_i64(next_range(max_valid_u + 2));
+            let to = to_i64(next_range(max_valid_u + 2));
             assert_paths_agree(
                 &db,
                 &base,

@@ -750,8 +750,14 @@ mod segment_gate_tests {
         let mut model: BTreeMap<i64, i64> = BTreeMap::new();
         for round in 0..40u32 {
             let r = next_u64();
-            let key = (r % 12) as i64;
-            let val = ((r >> 16) % 1000) as i64;
+            let key = match i64::try_from(r % 12) {
+                Ok(v) => v,
+                Err(_gt_i64) => 0,
+            };
+            let val = match i64::try_from((r >> 16) % 1000) {
+                Ok(v) => v,
+                Err(_gt_i64) => 0,
+            };
             put(&db, &handle, &engine, key, val);
             model.insert(key, val);
 

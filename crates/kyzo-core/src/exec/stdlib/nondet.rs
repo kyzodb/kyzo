@@ -111,7 +111,7 @@ pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
     let mut rng = rand::rng();
     let components: Vec<f64> = (0..len)
         .map(|_| match t {
-            VecElementType::F32 => rng.random::<f64>() as f32 as f64,
+            VecElementType::F32 => crate::exec::stdlib::convert::via_f32_precision(rng.random::<f64>()),
             VecElementType::F64 => rng.random::<f64>(),
         })
         .collect();

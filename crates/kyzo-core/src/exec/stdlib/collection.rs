@@ -51,7 +51,10 @@ fn list_window_op(
         .get_int()
         .ok_or_else(|| miette!("second argument of '{op}' must be an integer"))?;
     ensure!(n > 0, "second argument to '{op}' must be positive");
-    Ok(DataValue::List(windows(arg, n as usize)))
+    Ok(DataValue::List(windows(
+        arg,
+        usize::try_from(n).map_err(|_| miette!("'{op}' window size does not fit usize: {n}"))?,
+    )))
 }
 
 pub(crate) fn op_chunks(args: &[DataValue]) -> Result<DataValue> {
@@ -280,11 +283,11 @@ pub(crate) fn op_last(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
-        DataValue::Set(s) => s.len() as i64,
-        DataValue::List(l) => l.len() as i64,
-        DataValue::Str(s) => s.chars().count() as i64,
-        DataValue::Bytes(b) => b.len() as i64,
-        DataValue::Vector(v) => v.len() as i64,
+        DataValue::Set(s) => i64::try_from(s.len()).map_err(|_| miette!("'length' overflow"))?,
+        DataValue::List(l) => i64::try_from(l.len()).map_err(|_| miette!("'length' overflow"))?,
+        DataValue::Str(s) => i64::try_from(s.chars().count()).map_err(|_| miette!("'length' overflow"))?,
+        DataValue::Bytes(b) => i64::try_from(b.len()).map_err(|_| miette!("'length' overflow"))?,
+        DataValue::Vector(v) => i64::try_from(v.len()).map_err(|_| miette!("'length' overflow"))?,
         data_value_any!() => bail!("'length' requires lists"),
     }))
 }
@@ -513,10 +516,11 @@ fn deep_merge_json(value1: JsonValue, value2: JsonValue) -> JsonValue {
 
 fn get_index(mut i: i64, total: usize, is_upper: bool) -> Result<usize> {
     if i < 0 {
-        i += total as i64;
+        let total_i = i64::try_from(total).map_err(|_| miette!("collection length does not fit i64"))?;
+        i += total_i;
     }
     Ok(if i >= 0 {
-        let i = i as usize;
+        let i = usize::try_from(i).map_err(|_| miette!("index {i} out of bound"))?;
         if i > total || (!is_upper && i == total) {
             bail!("index {} out of bound", i)
         } else {
@@ -547,7 +551,8 @@ fn get_impl(args: &[DataValue]) -> Result<DataValue> {
                     let i = i
                         .as_int()
                         .ok_or_else(|| miette!("index '{:?}' not found in json", i))?;
-                    json.get(i as usize)
+                    let idx = usize::try_from(i).map_err(|_| miette!("index '{i}' not found in json"))?;
+                    json.get(idx)
                         .ok_or_else(|| miette!("index '{}' not found in json", i))?
                         .clone()
                 }

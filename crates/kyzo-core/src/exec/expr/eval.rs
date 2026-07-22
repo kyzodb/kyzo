@@ -55,8 +55,13 @@ use kyzo_model::value::{DataValue, ValidityTs};
 use kyzo_model::program::expr::LazyOp;
 #[inline]
 fn row_sel(row: usize) -> u32 {
-    debug_assert!(u32::try_from(row).is_ok());
-    row as u32
+    match u32::try_from(row) {
+        Ok(v) => v,
+        Err(_gt_u32) => {
+            debug_assert!(false, "row index exceeds u32");
+            u32::MAX
+        }
+    }
 }
 
 fn bound_of(op: OpDecl) -> Result<&'static crate::exec::stdlib::BoundOp> {
@@ -559,12 +564,18 @@ mod tests {
             let choice = next(rng) % if depth == 0 { 3 } else { 6 };
             match choice {
                 0 => Expr::Const {
-                    val: DataValue::from((next(rng) % 7) as i64),
+                    val: DataValue::from(match i64::try_from(next(rng) % 7) {
+                        Ok(v) => v,
+                        Err(_gt_i64) => 0,
+                    }),
                     span: Default::default(),
                 },
                 1 | 2 => Expr::Binding {
                     var: kyzo_model::program::symbol::Symbol::new("c", Default::default()),
-                    tuple_pos: BindingPos::Resolved((next(rng) % 2) as usize),
+                    tuple_pos: BindingPos::Resolved(match usize::try_from(next(rng) % 2) {
+                        Ok(v) => v,
+                        Err(_gt_usize) => 0,
+                    }),
                 },
                 3 => Expr::Apply {
                     op: if next(rng).is_multiple_of(2) {
@@ -620,7 +631,13 @@ mod tests {
                 1 => DataValue::Null,
                 2 => DataValue::from(true),
                 3 => DataValue::from(false),
-                n => DataValue::from(n as i64 - 4),
+                n => {
+                    let ni = match i64::try_from(n) {
+                        Ok(v) => v,
+                        Err(_gt_i64) => 0,
+                    };
+                    DataValue::from(ni - 4)
+                }
             }
         }
         for _case in 0..500 {

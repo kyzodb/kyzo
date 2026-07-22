@@ -390,10 +390,14 @@ impl Budget {
         if let Some(deadline) = &self.deadline {
             let elapsed = deadline.started.elapsed();
             if elapsed > deadline.allotted {
+                let millis_u64 = |ms: u128| match u64::try_from(ms) {
+                    Ok(v) => v,
+                    Err(_gt_u64) => u64::MAX,
+                };
                 return Err(LimitExceeded {
                     dimension: BudgetDimension::Deadline,
-                    spent: elapsed.as_millis() as u64,
-                    ceiling: deadline.allotted.as_millis() as u64,
+                    spent: millis_u64(elapsed.as_millis()),
+                    ceiling: millis_u64(deadline.allotted.as_millis()),
                     rule: None,
                     span: None,
                 }
@@ -566,7 +570,11 @@ impl InterruptTicker<'_> {
         if self.countdown.tick() {
             self.budget.check_interrupt()?;
             if let Some(ceiling) = self.ceiling {
-                let spent = self.baseline.saturating_add(in_flight as u64);
+                let in_flight_u64 = match u64::try_from(in_flight) {
+                    Ok(v) => v,
+                    Err(_gt_u64) => u64::MAX,
+                };
+                let spent = self.baseline.saturating_add(in_flight_u64);
                 if spent > ceiling {
                     let symb = self.rule.as_plain_symbol();
                     return Err(LimitExceeded {
@@ -1223,7 +1231,10 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                 }
                 None => epoch_store.merge_in(out, &mut ())?,
             };
-            epoch_admitted += admitted.0 as u64;
+            epoch_admitted += match u64::try_from(admitted.0) {
+                Ok(v) => v,
+                Err(_gt_u64) => u64::MAX,
+            };
             changed |= epoch_store.has_delta();
         }
         *spent_derived += epoch_admitted;
@@ -1523,7 +1534,11 @@ fn incremental_meet_eval<R: RuleBody>(
                 if out.meet_put_admission_faithful(&item, &total_meet)? {
                     effective += 1;
                 }
-                ticker.tick(effective as usize)?;
+                let effective_usize = match usize::try_from(effective) {
+                    Ok(v) => v,
+                    Err(_gt_usize) => usize::MAX,
+                };
+                ticker.tick(effective_usize)?;
                 Ok(ControlFlow::Continue(()))
             };
         for (occurrence, store_name) in body.contained_rules() {

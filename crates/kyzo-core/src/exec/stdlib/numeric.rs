@@ -162,7 +162,7 @@ pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
             if f == 0.0 {
                 DataValue::Num(Num::int(i))
             } else {
-                DataValue::Num(Num::float(i as f64 + f))
+                DataValue::Num(Num::float(Num::int(i).to_f64() + f))
             }
         },
         add_vecs,
@@ -411,7 +411,7 @@ pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
             if f == 1.0 {
                 DataValue::Num(Num::int(i))
             } else {
-                DataValue::Num(Num::float(i as f64 * f))
+                DataValue::Num(Num::float(Num::int(i).to_f64() * f))
             }
         },
         mul_vecs,
@@ -429,7 +429,7 @@ pub(crate) fn op_negate(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
     if let DataValue::List(v) = &args[0] {
-        let l = (v.len() as f64 / 8.).ceil() as usize;
+        let l = v.len().div_ceil(8);
         let mut res = vec![0u8; l];
         for (i, b) in v.iter().enumerate() {
             match b {
@@ -535,8 +535,12 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
                 None => bail!(IntegerOverflow { op: "sub" }),
             },
             (NumRepr::Float(a), NumRepr::Float(b)) => DataValue::Num(Num::float(a - b)),
-            (NumRepr::Int(a), NumRepr::Float(b)) => DataValue::Num(Num::float((a as f64) - b)),
-            (NumRepr::Float(a), NumRepr::Int(b)) => DataValue::Num(Num::float(a - (b as f64))),
+            (NumRepr::Int(a), NumRepr::Float(b)) => {
+                DataValue::Num(Num::float(Num::int(a).to_f64() - b))
+            }
+            (NumRepr::Float(a), NumRepr::Int(b)) => {
+                DataValue::Num(Num::float(a - Num::int(b).to_f64()))
+            }
         },
         (DataValue::Vector(a), DataValue::Vector(b)) => {
             if a.len() != b.len() {

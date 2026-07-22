@@ -13,9 +13,31 @@ use jiff::tz::{Offset, TimeZone};
 use miette::{Result, miette};
 
 use kyzo_model::data_value_any;
-use kyzo_model::value::DataValue;
+use kyzo_model::value::{DataValue, Num};
 
 use crate::exec::stdlib::errors::TimestampFormatRefused;
+
+/// Approximate i128 as f64 without a numeric `as` cast.
+fn i128_approx_f64(n: i128) -> f64 {
+    let neg = n < 0;
+    let mut x = n.unsigned_abs();
+    let mut result = 0.0_f64;
+    let mut scale = 1.0_f64;
+    while x > 0 {
+        let limb = match u32::try_from(x & 0xFFFF_FFFF) {
+            Ok(v) => v,
+            Err(_masked_fits_u32) => 0,
+        };
+        result += f64::from(limb) * scale;
+        x >>= 32;
+        scale *= 4_294_967_296.0; // 2^32
+    }
+    if neg {
+        -result
+    } else {
+        result
+    }
+}
 
 pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     let millis = match &args[0] {
@@ -24,7 +46,9 @@ pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
             let f = v
                 .get_float()
                 .ok_or_else(|| miette!("'format_timestamp' expects a number"))?;
-            (f * 1000.) as i64
+            Num::float(f * 1000.)
+                .to_int_coerced()
+                .ok_or_else(|| miette!("'format_timestamp' millis out of i64 range"))?
         }
     };
     let ts =
@@ -57,9 +81,9 @@ pub(crate) fn op_parse_timestamp(args: &[DataValue]) -> Result<DataValue> {
     // a FLOORED whole second plus a non-negative subsecond nanosecond count —
     // so the lossy f64 result is bit-identical across the epoch boundary.
     let nanos = ts.as_nanosecond();
-    let secs =
-        nanos.div_euclid(1_000_000_000) as f64 + (nanos.rem_euclid(1_000_000_000) as f64) / 1e9;
-    Ok(DataValue::from(secs))
+    let whole = i128_approx_f64(nanos.div_euclid(1_000_000_000));
+    let frac = i128_approx_f64(nanos.rem_euclid(1_000_000_000)) / 1e9;
+    Ok(DataValue::from(whole + frac))
 }
 
 fn autosi_precision(subsec_nanos: i32) -> Option<u8> {

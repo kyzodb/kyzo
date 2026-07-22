@@ -1518,7 +1518,10 @@ mod tests {
             .unwrap();
             let mut expected_matches = 0usize;
             for i in 0..n {
-                let k = i as i64;
+                let k = match i64::try_from(i) {
+                    Ok(v) => v,
+                    Err(_gt_i64) => continue,
+                };
                 let lrow = vec![v(k)];
                 left_handle
                     .put_fact(
@@ -1767,7 +1770,10 @@ mod tests {
         let n = BATCH_ROWS + 37;
         let mut expected: Vec<Tuple> = Vec::new();
         for i in 0..n {
-            let k = i as i64;
+            let k = match i64::try_from(i) {
+                Ok(v) => v,
+                Err(_gt_i64) => continue,
+            };
             left_handle
                 .put_fact(&mut tx, &[v(k)], ValidityTs::from_raw(0), sp())
                 .unwrap();
@@ -1944,7 +1950,13 @@ mod tests {
 
         const N_PROBES: usize = 200_000;
         let probe_rows: Vec<Tuple> = (0..N_PROBES)
-            .map(|i| vec![v((i as i64) % N_NODES)])
+            .map(|i| {
+                let i64v = match i64::try_from(i) {
+                    Ok(v) => v,
+                    Err(_gt_i64) => 0,
+                };
+                vec![v(i64v % N_NODES)]
+            })
             .map(Tuple::from_vec)
             .collect();
         let left_of = |rows: Vec<Tuple>| -> BatchIter<'static> {
@@ -1980,7 +1992,15 @@ mod tests {
         {
             n_rows += b.unwrap().len();
         }
-        let storage_ns_per_probe = t0.elapsed().as_nanos() as f64 / N_PROBES as f64;
+        let nanos_f64 = |ns: u128| {
+            let u = match u64::try_from(ns) {
+                Ok(v) => v,
+                Err(_gt_u64) => u64::MAX,
+            };
+            crate::exec::fold::sketch::u64_to_f64(u)
+        };
+        let storage_ns_per_probe =
+            nanos_f64(t0.elapsed().as_nanos()) / crate::exec::fold::sketch::usize_to_f64(N_PROBES);
 
         // Segment path: prime the segment with a throwaway probe first, so
         // the timed run pays zero build cost (the production call site
@@ -2018,7 +2038,8 @@ mod tests {
         {
             n_rows_seg += b.unwrap().len();
         }
-        let segment_ns_per_probe = t1.elapsed().as_nanos() as f64 / N_PROBES as f64;
+        let segment_ns_per_probe =
+            nanos_f64(t1.elapsed().as_nanos()) / crate::exec::fold::sketch::usize_to_f64(N_PROBES);
 
         eprintln!(
             "storage={storage_ns_per_probe:.1} ns/probe ({n_rows} rows) \

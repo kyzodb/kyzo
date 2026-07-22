@@ -392,9 +392,15 @@ impl NormalLevel {
         let start = if i == 0 {
             0
         } else {
-            self.offsets[i - 1] as usize
+            match usize::try_from(self.offsets[i - 1]) {
+                Ok(v) => v,
+                Err(_gt_usize) => 0,
+            }
         };
-        let end = self.offsets[i] as usize;
+        let end = match usize::try_from(self.offsets[i]) {
+            Ok(v) => v,
+            Err(_gt_usize) => 0,
+        };
         LevelRowRef(&self.values.as_bytes()[start..end])
     }
 

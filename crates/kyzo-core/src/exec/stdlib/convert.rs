@@ -36,7 +36,7 @@ fn f64_trunc_to_i64(f: f64) -> Result<i64> {
 
 /// Round through IEEE754 binary32 precision, then widen back to f64.
 /// Soft conversion — no `as f32` (bs_detector).
-fn via_f32_precision(f: f64) -> f64 {
+pub(crate) fn via_f32_precision(f: f64) -> f64 {
     f64::from(f32::from_bits(f64_bits_to_f32_bits(f.to_bits())))
 }
 

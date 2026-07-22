@@ -102,7 +102,11 @@ impl CountMinSketch {
     /// The column a value maps to in a given row.
     #[inline]
     fn column(&self, value: &DataValue, row: usize) -> usize {
-        (super::hash_value(value, ROW_SEEDS[row]) % self.width as u64) as usize
+        {
+            let width_u = match u64::try_from(self.width) { Ok(v) => v, Err(_e) => 0 };
+            let slot = super::hash_value(value, ROW_SEEDS[row]) % width_u;
+            match usize::try_from(slot) { Ok(v) => v, Err(_e) => 0 }
+        }
     }
 
     /// Add `count` occurrences of `value`.
@@ -159,8 +163,8 @@ impl CountMinSketch {
     /// encoding makes the bytes identical on every platform.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(2 + 8 + self.counters.len() * 8);
-        out.write_all(&[FORMAT_TAG, self.depth as u8]).unwrap();
-        out.write_all(&(self.width as u64).to_le_bytes()).unwrap();
+        out.write_all(&[FORMAT_TAG, match u8::try_from(self.depth) { Ok(v) => v, Err(_e) => u8::MAX }]).unwrap();
+        out.write_all(&(match u64::try_from(self.width) { Ok(v) => v, Err(_e) => 0 }).to_le_bytes()).unwrap();
         for c in &self.counters {
             out.write_all(&c.to_le_bytes()).unwrap();
         }
@@ -174,12 +178,15 @@ impl CountMinSketch {
             bail!("Count-Min bytes too short: {} bytes", bytes.len());
         };
         ensure!(*tag == FORMAT_TAG, "unknown Count-Min format tag {tag:#x}");
-        let depth = *depth as usize;
+        let depth = usize::from(*depth);
         ensure!(
             (1..=ROW_SEEDS.len()).contains(&depth),
             "Count-Min depth out of range: {depth}"
         );
-        let width = u64::from_le_bytes([*w0, *w1, *w2, *w3, *w4, *w5, *w6, *w7]) as usize;
+        let width = match usize::try_from(u64::from_le_bytes([*w0, *w1, *w2, *w3, *w4, *w5, *w6, *w7])) {
+            Ok(v) => v,
+            Err(_width_fits_usize) => bail!("Count-Min width does not fit usize"),
+        };
         ensure!(width > 0, "Count-Min width must be positive");
         ensure!(
             rest.len() == width * depth * 8,
@@ -219,7 +226,7 @@ mod tests {
         let mut exact = BTreeMap::new();
         let mut total = 0u64;
         for i in 0..distinct {
-            let w = 1 + (i as u64 * 2654435761 % 37);
+            let w = 1 + (match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 } * 2654435761 % 37);
             cms.add(&val(i), w);
             *exact.entry(i).or_insert(0) += w;
             total += w;
@@ -234,9 +241,12 @@ mod tests {
     fn overestimate_bound_holds() {
         let (width, depth) = (2048usize, 5usize);
         let (cms, exact, total) = build(5_000, (width, depth));
-        let epsilon = std::f64::consts::E / width as f64;
-        let delta = (-(depth as f64)).exp();
-        let bound = (epsilon * total as f64).ceil() as u64;
+        let epsilon = std::f64::consts::E / super::usize_to_f64(width);
+        let delta = (-(super::usize_to_f64(depth))).exp();
+        let bound = match kyzo_model::value::Num::float((epsilon * super::u64_to_f64(total)).ceil()).to_int_coerced() {
+            Some(i) => match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+            None => 0,
+        };
 
         let mut violations = 0usize;
         for (&item, &true_count) in &exact {
@@ -251,7 +261,10 @@ mod tests {
         }
         // With probability >= 1-delta each item is within the bound; over
         // `exact.len()` items the expected violations are <= delta*len.
-        let allowed = (delta * exact.len() as f64).ceil() as usize + 1;
+        let allowed = match kyzo_model::value::Num::float((delta * super::usize_to_f64(exact.len())).ceil()).to_int_coerced() {
+            Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+            None => 0,
+        } + 1;
         assert!(
             violations <= allowed,
             "{violations} items exceeded the eps*N bound (allowed {allowed})"
