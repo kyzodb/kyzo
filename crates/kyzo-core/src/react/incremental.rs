@@ -1149,7 +1149,9 @@ mod tests {
             "edge",
             SignedFact::Plus(Tuple::from_vec(vec![v(2), v(3)])),
         )]);
-        let err = incremental_eval(&program, &state, &patch).unwrap_err();
+        let err = incremental_eval(&program, &state, &patch)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(err.to_string().contains("recursive"));
         Ok(())
     }
