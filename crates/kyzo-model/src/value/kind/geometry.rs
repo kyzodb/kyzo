@@ -199,6 +199,8 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result};
+
     use super::*;
     use crate::value::DataValue;
     use crate::value::canonical::{decode, encode_owned};
@@ -207,7 +209,7 @@ mod tests {
 
     /// Round-trip through the canonical codec: cells survive encode/decode.
     #[test]
-    fn encode_decode_round_trip() {
+    fn encode_decode_round_trip() -> Result<()> {
         let cases = [
             Geometry::from_cells(0, 0),
             Geometry::from_cells(1, 0),
@@ -221,7 +223,7 @@ mod tests {
             let enc = encode_owned(&v);
             assert_eq!(enc.as_bytes()[0], Tag::Geometry.byte());
             assert_eq!(enc.len(), 9, "tag + 8 curve bytes");
-            let back = decode(enc.as_bytes()).expect("lawful");
+            let back = decode(enc.as_bytes()).into_diagnostic()?;
             assert_eq!(back, v, "round-trip changed {g:?}");
             let DataValue::Geometry(g2) = back else {
                 panic!("decoded non-geometry");
@@ -230,6 +232,7 @@ mod tests {
             assert_eq!(g2.lon().get(), g.lon().get());
             assert_eq!(g2.curve_index(), g.curve_index());
         }
+        Ok(())
     }
 
     /// THE one-law property for geometry: Ord == Hilbert-index order ==
@@ -340,7 +343,7 @@ mod tests {
     /// distinct identities with distinct Hilbert keys — no float floor
     /// can collapse them. Exact cell recovery through the codec.
     #[test]
-    fn rounding_free_at_cell_boundaries() {
+    fn rounding_free_at_cell_boundaries() -> Result<()> {
         let lon = 42u32;
         let mut prev = Geometry::from_cells(0, lon);
         for lat in 1u32..64 {
@@ -355,7 +358,7 @@ mod tests {
             assert_eq!(cur.lat().get(), lat);
             assert_eq!(cur.lon().get(), lon);
             let enc = encode_owned(&DataValue::Geometry(cur));
-            let back = decode(enc.as_bytes()).expect("lawful");
+            let back = decode(enc.as_bytes()).into_diagnostic()?;
             assert_eq!(back, DataValue::Geometry(cur));
             // Ord mirrors the curve key (not axis order — Hilbert snakes).
             assert_eq!(prev.cmp(&cur), prev.curve_index().cmp(&cur.curve_index()));
@@ -369,6 +372,7 @@ mod tests {
         // PartialOrd is total (no hole).
         assert_eq!(below.partial_cmp(&top), Some(below.cmp(&top)));
         assert_ne!(Ordering::Equal, below.cmp(&top));
+        Ok(())
     }
 
     /// Hilbert codec is a bijection on the cell pair.
