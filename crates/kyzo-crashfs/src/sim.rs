@@ -84,12 +84,10 @@
 //! [`sim_crash`]: SimStorage::sim_crash
 //! [`sim_powercut`]: SimStorage::sim_powercut
 
-#![allow(dead_code)] // sim test double; campaign doors wired from trials
-use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use fjall::Slice;
 use miette::{Result, miette};
@@ -100,7 +98,24 @@ use crate::store::{Aborted, CommitFailure, CommitIo, ConflictError, ReadTx, Stor
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 
-const POISONED: &str = "sim lock poisoned: a holder panicked";
+#[path = "identity.rs"]
+mod identity;
+use identity::{op_identity, wrap_add, wrap_mul, usize_as_u64};
+
+const POISONED: &str = "sim lock poisoned: a prior holder panicked";
+
+fn lock<'a, T>(m: &'a Mutex<T>) -> std::sync::MutexGuard<'a, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(p) => {
+            assert!(
+                false,
+                "INVARIANT(SimLockLive): {POISONED}"
+            );
+            p.into_inner()
+        }
+    }
+}
 
 // ---------- seed-reproducible randomness ----------
 
@@ -117,16 +132,16 @@ impl SimRng {
 
     pub(crate) fn next_u64(&mut self) -> u64 {
         // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        self.state = wrap_add(self.state, 0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z = wrap_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+        z = wrap_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
 
     /// A value in `[0, n)`. Modulo bias is irrelevant at test scales.
     pub(crate) fn below(&mut self, n: u64) -> u64 {
-        debug_assert!(n > 0);
+        assert!(n > 0, "INVARIANT(SimRngBelow): n must be positive");
         self.next_u64() % n
     }
 }
@@ -134,8 +149,8 @@ impl SimRng {
 // ---------- the fault plan: a pure function of (seed, op-identity, attempt) ----------
 
 /// Injection rates in parts-per-million. `1_000_000` = always fire;
-/// `Default` = no faults, pure semantics.
-#[derive(Debug, Clone, Copy, Default)]
+/// [`FaultConfig::none`] = no faults, pure semantics.
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct FaultConfig {
     /// Reads and scans fail transiently (IO error) at this rate.
     pub(crate) read_fail_ppm: u32,
@@ -148,6 +163,23 @@ pub(crate) struct FaultConfig {
     /// rate. A failed `commit_durable` leaves the commit applied but not
     /// power-cut durable, matching the real backend's commit-then-persist.
     pub(crate) sync_fail_ppm: u32,
+}
+
+impl FaultConfig {
+    /// No faults — pure MVCC/SSI semantics.
+    pub(crate) const fn none() -> Self {
+        FaultConfig {
+            read_fail_ppm: 0,
+            spurious_conflict_ppm: 0,
+            sync_fail_ppm: 0,
+        }
+    }
+}
+
+impl Default for FaultConfig {
+    fn default() -> Self {
+        Self::none()
+    }
 }
 
 /// Salts keep the read/conflict/sync fault streams independent.
@@ -164,28 +196,6 @@ const TAG_TOTAL: u64 = 0xFA04;
 const TAG_COMMIT: u64 = 0xFA05;
 const TAG_SYNC: u64 = 0xFA06;
 
-/// The identity of a faultable operation: FNV-1a 64 over the op-kind tag and
-/// the operation's semantic content, length-delimited so distinct part lists
-/// never collide by concatenation. Identity captures WHAT an operation is —
-/// never when it runs, what ran before it, or which thread carries it.
-fn op_identity(tag: u64, parts: &[&[u8]]) -> u64 {
-    const OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01B3;
-    fn eat(h: &mut u64, bytes: &[u8]) {
-        for &b in bytes {
-            // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
-            *h = (*h ^ u64::from(b)).wrapping_mul(PRIME);
-        }
-    }
-    let mut h = OFFSET;
-    eat(&mut h, &tag.to_be_bytes());
-    for part in parts {
-        eat(&mut h, &(part.len() as u64).to_be_bytes());
-        eat(&mut h, part);
-    }
-    h
-}
-
 /// The fault decision: splitmix-style finalizer over
 /// (seed, identity, attempt, salt), where `seed` is the crash-epoch-salted
 /// seed from [`SimCtx::fault_seed`] and `attempt` is the per-identity
@@ -197,11 +207,11 @@ fn fault_hit(seed: u64, identity: u64, attempt: u64, salt: u64, ppm: u32) -> boo
     }
     // INVARIANT(fault_ppm): deterministic fault draw mixes identity/attempt/salt via wrap.
     let mut z = seed
-        ^ identity.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ attempt.wrapping_mul(0xA24B_AED4_963E_E407)
-        ^ salt.wrapping_mul(0xD6E8_FEB8_6659_FD93);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ^ wrap_mul(identity, 0x9E37_79B9_7F4A_7C15)
+        ^ wrap_mul(attempt, 0xA24B_AED4_963E_E407)
+        ^ wrap_mul(salt, 0xD6E8_FEB8_6659_FD93);
+    z = wrap_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+    z = wrap_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
     z ^= z >> 31;
     z % 1_000_000 < u64::from(ppm)
 }
@@ -240,8 +250,6 @@ struct SimState {
     /// Resets on crash/power-cut reopen, matching `attempts`.
     total_puts: u64,
     total_dels: u64,
-    /// Installed by [`run_interleaved`] for the duration of a drive.
-    sched: Option<Arc<Scheduler>>,
 }
 
 fn snapshot_at(st: &SimState, seq: u64) -> BTreeMap<Vec<u8>, Vec<u8>> {
@@ -291,140 +299,22 @@ fn map_range<'m, V>(
     map.range::<[u8], _>(bounds)
 }
 
-// ---------- the deterministic scheduler ----------
-
-thread_local! {
-    /// Set by [`run_interleaved`] in each participant thread; ops on sim
-    /// transactions yield at this identity. Non-participant threads (test
-    /// setup, assertions) pass through untouched.
-    static PARTICIPANT: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-struct SchedState {
-    /// Registered participants not yet finished.
-    live: usize,
-    /// Participants parked at a yield point, waiting for a turn.
-    parked: BTreeSet<usize>,
-    /// The one participant currently allowed to run.
-    current: Option<usize>,
-    rng: SimRng,
-}
-
-/// Token-barrier scheduler: a turn is granted only when **every** live
-/// participant is parked, so from each participant's first yield point
-/// onward exactly one thread runs at a time and the parked set at each
-/// decision is deterministic — which makes the seeded pick the *only*
-/// source of interleaving order. (Before its first sim op a participant
-/// has never parked and runs unserialized; bodies must reach shared state
-/// only through sim ops.) Real threads, replayable schedules.
-pub(crate) struct Scheduler {
-    st: Mutex<SchedState>,
-    cv: Condvar,
-}
-
-impl Scheduler {
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    fn new(seed: u64, participants: usize) -> Self {
-        Scheduler {
-            st: Mutex::new(SchedState {
-                live: participants,
-                parked: BTreeSet::new(),
-                current: None,
-                rng: SimRng::new(seed),
-            }),
-            cv: Condvar::new(),
-        }
-    }
-
-    /// Park at a yield point; return when granted the next turn.
-    fn yield_here(&self, id: usize) {
-        let mut st = self.st.lock().expect(POISONED);
-        if st.current == Some(id) {
-            st.current = None; // release the turn we were running on
-        }
-        st.parked.insert(id);
-        Self::dispatch(&mut st);
-        self.cv.notify_all();
-        while st.current != Some(id) {
-            st = self.cv.wait(st).expect(POISONED);
-        }
-        st.parked.remove(&id);
-    }
-
-    /// A participant finished (or died — called from a drop guard, so a
-    /// panicking body cannot hang the other participants).
-    fn done(&self, id: usize) {
-        let mut st = self.st.lock().expect(POISONED);
-        st.live -= 1;
-        st.parked.remove(&id);
-        if st.current == Some(id) {
-            st.current = None;
-        }
-        Self::dispatch(&mut st);
-        self.cv.notify_all();
-    }
-
-    fn dispatch(st: &mut SchedState) {
-        if st.current.is_none() && st.live > 0 && st.parked.len() == st.live {
-            let k = st.rng.below(st.parked.len() as u64) as usize;
-            let id = *st.parked.iter().nth(k).expect("parked set is non-empty");
-            st.current = Some(id);
-        }
-    }
-}
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-struct DoneGuard<'a> {
-    sched: &'a Scheduler,
-    id: usize,
-}
-
-impl Drop for DoneGuard<'_> {
-    fn drop(&mut self) {
-        self.sched.done(self.id);
-    }
-}
-
-/// One transaction body for the interleaving driver.
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) type TxBody<'a> = Box<dyn FnOnce() + Send + 'a>;
-
-/// The adversarial schedule driver: run `bodies` on real threads, with every
-/// sim-storage operation as a yield point, interleaved deterministically
-/// from `seed`. A body that panics propagates its panic out of this call
-/// (via `std::thread::scope`) after the other bodies are released.
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) fn run_interleaved(db: &SimStorage, seed: u64, bodies: Vec<TxBody<'_>>) {
-    let sched = Arc::new(Scheduler::new(seed, bodies.len()));
-    db.ctx.state.lock().expect(POISONED).sched = Some(Arc::clone(&sched));
-    std::thread::scope(|s| {
-        for (id, body) in bodies.into_iter().enumerate() {
-            let sched = Arc::clone(&sched);
-            s.spawn(move || {
-                PARTICIPANT.with(|c| c.set(Some(id)));
-                let _done = DoneGuard { sched: &sched, id };
-                body();
-            });
-        }
-    });
-    db.ctx.state.lock().expect(POISONED).sched = None;
-}
-
 /// Campaign harness: run `f` once per seed; on failure, re-panic with the
 /// seed stamped on the report, so the exact schedule and fault plan can be
 /// replayed by rerunning with that one seed.
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn for_each_seed(seeds: std::ops::Range<u64>, f: impl Fn(u64)) {
     for seed in seeds {
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(seed))) {
-            let msg = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("<non-string panic payload>");
-            panic!(
-                "[sim] FAILING SEED = {seed} — rerun this test with the loop pinned to \
-                 seed {seed} to replay the schedule and fault plan exactly.\n{msg}"
+            let msg = match payload.downcast_ref::<String>() {
+                Some(s) => s.as_str(),
+                None => match payload.downcast_ref::<&str>() {
+                    Some(s) => *s,
+                    None => "<non-string panic payload>",
+                },
+            };
+            assert!(
+                false,
+                "[sim] FAILING SEED = {seed} — rerun this test with the loop pinned to                  seed {seed} to replay the schedule and fault plan exactly.\n{msg}"
             );
         }
     }
@@ -452,19 +342,7 @@ impl SimCtx {
     /// are unchanged by the salting.
     fn fault_seed(&self) -> u64 {
         // INVARIANT(epoch_salt): epoch salt is a modular mix into the fault seed stream.
-        self.seed ^ self.epoch.wrapping_mul(0xE703_37A9_D9C8_2D95)
-    }
-
-    /// Yield point: no-op unless this thread is a registered participant of
-    /// an installed scheduler.
-    fn yield_turn(&self) {
-        let Some(id) = PARTICIPANT.with(Cell::get) else {
-            return;
-        };
-        let sched = self.state.lock().expect(POISONED).sched.clone();
-        if let Some(sched) = sched {
-            sched.yield_here(id);
-        }
+        self.seed ^ wrap_mul(self.epoch, 0xE703_37A9_D9C8_2D95)
     }
 
     /// Advance `identity`'s attempt counter and consult the fault plan.
@@ -478,7 +356,7 @@ impl SimCtx {
 
     /// Consult the read arm of the fault plan for the operation `identity`.
     fn check_read_fault(&self, identity: u64) -> Result<()> {
-        let mut st = self.state.lock().expect(POISONED);
+        let mut st = lock(&self.state);
         if self.roll_fault(&mut st, identity, SALT_READ, self.faults.read_fail_ppm) {
             return Err(StorageOpFailure::SimInjectedReadFault.into());
         }
@@ -496,7 +374,7 @@ pub(crate) struct SimStorage {
 impl SimStorage {
     /// A fault-free simulator: pure MVCC/SSI semantics, seeded schedules.
     pub(crate) fn new(seed: u64) -> Self {
-        Self::with_faults(seed, FaultConfig::default())
+        Self::with_faults(seed, FaultConfig::none())
     }
 
     pub(crate) fn with_faults(seed: u64, faults: FaultConfig) -> Self {
@@ -535,7 +413,6 @@ impl SimStorage {
                     attempts: BTreeMap::new(),
                     total_puts: 0,
                     total_dels: 0,
-                    sched: None,
                 })),
                 seed,
                 epoch,
@@ -556,9 +433,8 @@ impl SimStorage {
     /// cut simulated on the reopened store must still see only the TRUE
     /// pre-crash fsync frontier, not everything this crash's commit_seq
     /// happens to cover.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn sim_crash(&self) -> SimStorage {
-        let st = self.ctx.state.lock().expect(POISONED);
+        let st = lock(&self.ctx.state);
         Self::reopen(
             st.versions.clone(),
             st.commit_seq,
@@ -588,19 +464,19 @@ impl SimStorage {
     /// of this module, reachable only from `#[cfg(test)]` code: `sim.rs`
     /// itself is declared `#[cfg(test)]` in `storage/mod.rs`.)
     pub(crate) fn put_call_count(&self) -> u64 {
-        self.ctx.state.lock().expect(POISONED).total_puts
+        lock(&self.ctx.state).total_puts
     }
 
     /// The `del`/`del_range` counterpart of [`put_call_count`].
     ///
     /// [`put_call_count`]: SimStorage::put_call_count
     pub(crate) fn del_call_count(&self) -> u64 {
-        self.ctx.state.lock().expect(POISONED).total_dels
+        lock(&self.ctx.state).total_dels
     }
 
     /// [`sim_crash`]: SimStorage::sim_crash
     pub(crate) fn sim_powercut(&self) -> SimStorage {
-        let st = self.ctx.state.lock().expect(POISONED);
+        let st = lock(&self.ctx.state);
         let mut versions = VersionMap::new();
         for (k, vs) in &st.versions {
             let kept: Vec<_> = vs
@@ -636,19 +512,18 @@ impl Storage for SimStorage {
     }
 
     fn clock_floor(&self) -> Result<ValidityTs> {
-        let st = self.ctx.state.lock().expect(POISONED);
+        let st = lock(&self.ctx.state);
         Ok(ValidityTs::of_micros(st.next_system_stamp))
     }
 
     fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
-        let mut st = self.ctx.state.lock().expect(POISONED);
+        let mut st = lock(&self.ctx.state);
         st.next_system_stamp = st.next_system_stamp.max(floor.raw());
         Ok(())
     }
 
     fn read_tx(&self) -> Result<SimReadTx> {
-        self.ctx.yield_turn();
-        let st = self.ctx.state.lock().expect(POISONED);
+        let st = lock(&self.ctx.state);
         Ok(SimReadTx {
             snapshot: snapshot_at(&st, st.commit_seq),
             ctx: self.ctx.clone(),
@@ -656,8 +531,7 @@ impl Storage for SimStorage {
     }
 
     fn write_tx(&self) -> Result<SimWriteTx> {
-        self.ctx.yield_turn();
-        let mut st = self.ctx.state.lock().expect(POISONED);
+        let mut st = lock(&self.ctx.state);
         st.next_system_stamp += 1;
         let stamp = ValidityTs::of_micros(st.next_system_stamp);
         Ok(SimWriteTx {
@@ -666,7 +540,7 @@ impl Storage for SimStorage {
                 stamp,
                 start_seq: st.commit_seq,
                 writes: BTreeMap::new(),
-                reads: Mutex::new(ReadSet::default()),
+                reads: Mutex::new(ReadSet::empty()),
                 put_calls: 0,
                 del_calls: 0,
                 ctx: self.ctx.clone(),
@@ -684,7 +558,7 @@ impl Storage for SimStorage {
         // exactly as fjall's range probe sees it (tombstones must not
         // make the test double stricter than reality).
         {
-            let st = self.ctx.state.lock().expect(POISONED);
+            let st = lock(&self.ctx.state);
             let has_live = st
                 .versions
                 .iter()
@@ -712,8 +586,7 @@ impl Storage for SimStorage {
     }
 
     fn sync(&self) -> Result<()> {
-        self.ctx.yield_turn();
-        let mut st = self.ctx.state.lock().expect(POISONED);
+        let mut st = lock(&self.ctx.state);
         if self.ctx.roll_fault(
             &mut st,
             op_identity(TAG_SYNC, &[]),
@@ -737,11 +610,19 @@ pub(crate) struct SimReadTx {
     ctx: SimCtx,
 }
 
-#[derive(Default)]
 struct ReadSet {
     keys: BTreeSet<Vec<u8>>,
     /// `(lower, upper)`; `None` upper = unbounded (total scans).
     ranges: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+}
+
+impl ReadSet {
+    fn empty() -> Self {
+        ReadSet {
+            keys: BTreeSet::new(),
+            ranges: Vec::new(),
+        }
+    }
 }
 
 /// A write transaction: snapshot + overlay write set + tracked read set.
@@ -774,15 +655,33 @@ pub(crate) struct SimWriteTx {
 
 impl SimWriteTx {
     fn open(&self) -> &SimWriteInner {
-        self.inner
-            .as_ref()
-            .expect("SimWriteTx used after commit/abort")
+        match self.inner.as_ref() {
+            Some(inner) => inner,
+            None => {
+                assert!(
+                    false,
+                    "INVARIANT(WriteTxOpen): SimWriteTx used after commit/abort"
+                );
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        }
     }
 
     fn open_mut(&mut self) -> &mut SimWriteInner {
-        self.inner
-            .as_mut()
-            .expect("SimWriteTx used after commit/abort")
+        match self.inner.as_mut() {
+            Some(inner) => inner,
+            None => {
+                assert!(
+                    false,
+                    "INVARIANT(WriteTxOpen): SimWriteTx used after commit/abort"
+                );
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        }
     }
 
     /// The transaction's visible view of `[lower, upper)`, LAZY: a
@@ -818,12 +717,24 @@ impl SimWriteTx {
                     (None, None) => None,
                     // Only the snapshot has keys left: yield as is.
                     (Some(_), None) => {
-                        let (k, v) = snap.next().expect("peeked Some");
+                        let (k, v) = match snap.next() {
+                            Some(kv) => kv,
+                            None => {
+                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
+                                continue;
+                            }
+                        };
                         Some((k.clone(), v.clone()))
                     }
                     // Only the write set has keys left.
                     (None, Some(_)) => {
-                        let (k, w) = writes.next().expect("peeked Some");
+                        let (k, w) = match writes.next() {
+                            Some(kv) => kv,
+                            None => {
+                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
+                                continue;
+                            }
+                        };
                         match w {
                             Some(v) => Some((k.clone(), v.clone())),
                             None => continue,
@@ -833,14 +744,26 @@ impl SimWriteTx {
                         // The snapshot's next key is strictly before the
                         // write set's: not shadowed, yield it as is.
                         Ordering::Less => {
-                            let (k, v) = snap.next().expect("peeked Some");
+                            let (k, v) = match snap.next() {
+                            Some(kv) => kv,
+                            None => {
+                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
+                                continue;
+                            }
+                        };
                             Some((k.clone(), v.clone()))
                         }
                         // The write set's next key is strictly before the
                         // snapshot's (an insert with nothing shadowed, or a
                         // tombstone over a key the snapshot never had).
                         Ordering::Greater => {
-                            let (k, w) = writes.next().expect("peeked Some");
+                            let (k, w) = match writes.next() {
+                            Some(kv) => kv,
+                            None => {
+                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
+                                continue;
+                            }
+                        };
                             match w {
                                 Some(v) => Some((k.clone(), v.clone())),
                                 None => continue,
@@ -851,7 +774,13 @@ impl SimWriteTx {
                         // the write isn't a tombstone.
                         Ordering::Equal => {
                             snap.next();
-                            let (k, w) = writes.next().expect("peeked Some");
+                            let (k, w) = match writes.next() {
+                            Some(kv) => kv,
+                            None => {
+                                assert!(false, "INVARIANT(PeekedSome): peek was Some");
+                                continue;
+                            }
+                        };
                             match w {
                                 Some(v) => Some((k.clone(), v.clone())),
                                 None => continue,
@@ -873,31 +802,39 @@ impl SimWriteTx {
     }
 
     fn track_key(&self, key: &[u8]) {
-        self.open()
-            .reads
-            .lock()
-            .expect(POISONED)
-            .keys
-            .insert(key.to_vec());
+        lock(&self.open().reads).keys.insert(key.to_vec());
     }
 
     fn track_range(&self, lower: &[u8], upper: Option<&[u8]>) {
-        self.open()
-            .reads
-            .lock()
-            .expect(POISONED)
+        lock(&self.open().reads)
             .ranges
             .push((lower.to_vec(), upper.map(<[u8]>::to_vec)));
     }
 
     fn commit_inner(mut self, durable: bool) -> std::result::Result<(), CommitFailure> {
-        let mut inner = self.inner.take().expect("SimWriteTx commit after spend");
-        inner.ctx.yield_turn();
+        let mut inner = match self.inner.take() {
+            Some(inner) => inner,
+            None => {
+                assert!(
+                    false,
+                    "INVARIANT(WriteTxOpen): SimWriteTx commit after spend"
+                );
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        };
         let start_seq = inner.start_seq;
         let writes = std::mem::take(&mut inner.writes);
-        let reads = std::mem::replace(&mut inner.reads, Mutex::new(ReadSet::default()))
+        let reads = match std::mem::replace(&mut inner.reads, Mutex::new(ReadSet::empty()))
             .into_inner()
-            .expect(POISONED);
+        {
+            Ok(r) => r,
+            Err(p) => {
+                assert!(false, "INVARIANT(SimLockLive): {POISONED}");
+                p.into_inner()
+            }
+        };
         let put_calls = inner.put_calls;
         let del_calls = inner.del_calls;
         let ctx = inner.ctx.clone();
@@ -910,7 +847,7 @@ impl SimWriteTx {
             op_identity(TAG_COMMIT, &keys)
         };
         let sync_identity = op_identity(TAG_SYNC, &[]);
-        let mut st = ctx.state.lock().expect(POISONED);
+        let mut st = lock(&ctx.state);
 
         // An empty write set commits vacuously, matching the real backend
         // exactly: fjall returns Ok before its oracle ever runs, so a
@@ -1002,7 +939,6 @@ pub(crate) struct SimReadSkipCursor<'a> {
 
 impl SkipCursor for SimReadSkipCursor<'_> {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        self.tx.ctx.yield_turn();
         if let Err(e) = self
             .tx
             .ctx
@@ -1041,7 +977,6 @@ pub(crate) struct SimWriteSkipCursor<'a> {
 impl SkipCursor for SimWriteSkipCursor<'_> {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
         let open = self.tx.open();
-        open.ctx.yield_turn();
         self.tx.track_range(target, Some(&self.upper));
         if let Err(e) = open
             .ctx
@@ -1069,13 +1004,11 @@ impl OpenSkipCursor for SimWriteTx {
 
 impl ReadTx for SimReadTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        self.ctx.yield_turn();
         self.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
         Ok(self.snapshot.get(key).map(Slice::from))
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        self.ctx.yield_turn();
         self.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
         Ok(self.snapshot.contains_key(key))
     }
@@ -1085,7 +1018,6 @@ impl ReadTx for SimReadTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        self.ctx.yield_turn();
         if let Err(e) = self
             .ctx
             .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
@@ -1121,7 +1053,6 @@ impl ReadTx for SimReadTx {
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        self.ctx.yield_turn();
         if let Err(e) = self.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
         }
@@ -1137,7 +1068,6 @@ impl ReadTx for SimReadTx {
 impl ReadTx for SimWriteTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
         let open = self.open();
-        open.ctx.yield_turn();
         self.track_key(key);
         open.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
         Ok(match open.writes.get(key) {
@@ -1148,7 +1078,6 @@ impl ReadTx for SimWriteTx {
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
         let open = self.open();
-        open.ctx.yield_turn();
         self.track_key(key);
         open.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
         Ok(match open.writes.get(key) {
@@ -1163,7 +1092,6 @@ impl ReadTx for SimWriteTx {
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         let open = self.open();
-        open.ctx.yield_turn();
         // Track the whole requested range even if iteration stops early:
         // conservative (more false conflicts) and therefore legal under SSI.
         self.track_range(lower, Some(upper));
@@ -1195,7 +1123,6 @@ impl ReadTx for SimWriteTx {
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         let open = self.open();
-        open.ctx.yield_turn();
         self.track_range(&[], None);
         if let Err(e) = open.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
@@ -1214,7 +1141,6 @@ impl WriteTx for SimWriteTx {
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         let open = self.open_mut();
-        open.ctx.yield_turn();
         open.writes.insert(key.to_vec(), Some(val.to_vec()));
         open.put_calls += 1;
         Ok(())
@@ -1222,14 +1148,12 @@ impl WriteTx for SimWriteTx {
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
         let open = self.open_mut();
-        open.ctx.yield_turn();
         open.writes.insert(key.to_vec(), None);
         open.del_calls += 1;
         Ok(())
     }
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
-        self.open().ctx.yield_turn();
         // Deleting "everything visible" reads the range: tracked, so a
         // concurrent insert into it is a conflict (matching the real
         // backend, whose del_range scans through the transaction).
@@ -1242,7 +1166,7 @@ impl WriteTx for SimWriteTx {
         // Each doomed key is its own del CALL for the write-count law, same
         // as a caller looping `del` over the same keys one at a time.
         let open = self.open_mut();
-        open.del_calls += doomed.len() as u64;
+        open.del_calls += usize_as_u64(doomed.len());
         for k in doomed {
             open.writes.insert(k, None);
         }
@@ -1258,7 +1182,13 @@ impl WriteTx for SimWriteTx {
     }
 
     fn abort(mut self) -> Aborted {
-        let _ = self.inner.take().expect("SimWriteTx abort after spend");
+        match self.inner.take() {
+            Some(_) => {}
+            None => assert!(
+                false,
+                "INVARIANT(WriteTxOpen): SimWriteTx abort after spend"
+            ),
+        }
         Aborted
     }
 }
@@ -1266,19 +1196,22 @@ impl WriteTx for SimWriteTx {
 impl Drop for SimWriteTx {
     fn drop(&mut self) {
         if self.inner.is_some() && !std::thread::panicking() {
-            panic!("Open WriteTx dropped without commit() or abort(self)");
+            assert!(
+                false,
+                "INVARIANT(WriteTxDrop): Open WriteTx dropped without commit() or abort(self)"
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod battery {
-    use kyzo_model::TupleT;
     /// DST instrument proof battery (re-homed from storage/tests.rs).
     use std::collections::BTreeMap;
     use std::num::NonZeroUsize;
 
     use fjall::Slice;
+    use kyzo_model::TupleT;
     use kyzo_model::value::{
         AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
     };
@@ -1286,7 +1219,35 @@ mod battery {
     use crate::store::retry::{get_attempt, put_attempt, retry_on_conflict, write_tx_attempt};
     use crate::store::sim::{FaultConfig, SimStorage};
     use crate::store::time::ClaimPolarity;
-    use crate::store::{ConflictError, ReadTx, Storage, WriteTx};
+    use crate::store::{ReadTx, Storage, WriteTx};
+
+    fn must<T, E: std::fmt::Debug>(r: Result<T, E>, what: &str) -> T {
+        match r {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "{what}: {e:?}");
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+    }
+
+    fn retry_cap() -> NonZeroUsize {
+        match NonZeroUsize::new(10_000) {
+            Some(n) => n,
+            None => {
+                assert!(false, "INVARIANT(NonZero): 10_000 is non-zero");
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+    }
+
+    fn must_put(tx: &mut impl WriteTx, k: &[u8], v: &[u8]) {
+        must(tx.put(k, v), "put");
+    }
 
     /// Naive as-of oracle — same reference the fjall pin uses.
     fn as_of_oracle(history: &[(&str, i64, bool)], at: i64) -> Vec<(String, i64)> {
@@ -1329,21 +1290,44 @@ mod battery {
         (bitemp_key(rel, name, ts, 1), pol_val(assert))
     }
 
+    fn relation(id: u64) -> RelationId {
+        match RelationId::new(id) {
+            Some(r) => r,
+            None => {
+                assert!(false, "INVARIANT(RelationIdCap): id {id} below cap");
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+    }
+
     #[test]
     fn write_write_race_aborts_second_committer() {
         let db = SimStorage::new(1);
-        let mut tx1 = db.write_tx().unwrap();
-        let mut tx2 = db.write_tx().unwrap();
-        tx1.put(b"ww", b"1").unwrap();
-        tx2.put(b"ww", b"2").unwrap();
-        tx1.commit().expect("the FIRST committer must never abort");
-        let err = tx2
-            .commit()
-            .expect_err("a write-write race must abort the second committer");
+        let mut tx1 = must(db.write_tx(), "write_tx");
+        let mut tx2 = must(db.write_tx(), "write_tx");
+        must_put(&mut tx1, b"ww", b"1");
+        must_put(&mut tx2, b"ww", b"2");
+        match tx1.commit() {
+            Ok(()) => {}
+            Err(e) => assert!(false, "the FIRST committer must never abort: {e:?}"),
+        }
+        let err = match tx2.commit() {
+            Err(e) => e,
+            Ok(()) => {
+                assert!(
+                    false,
+                    "a write-write race must abort the second committer"
+                );
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        };
         assert!(err.is_conflict(), "typed conflict, got {err:?}");
-        let _ = ConflictError;
         assert_eq!(
-            db.read_tx().unwrap().get(b"ww").unwrap(),
+            must(must(db.read_tx(), "read_tx").get(b"ww"), "get"),
             Some(Slice::from(b"1"))
         );
     }
@@ -1358,53 +1342,50 @@ mod battery {
             ("b", 2, true),
             ("b", 6, false),
         ];
-        let rel = RelationId::new(7).expect("below cap");
+        let rel = relation(7);
         let db = SimStorage::new(2);
-        let mut tx = db.write_tx().unwrap();
-        for (name, ts, assert) in history {
-            let (k, v) = vld_row(rel, name, *ts, *assert);
-            tx.put(&k, &v).unwrap();
+        let mut tx = must(db.write_tx(), "write_tx");
+        for (name, ts, assert_flag) in history {
+            let (k, v) = vld_row(rel, name, *ts, *assert_flag);
+            must_put(&mut tx, &k, &v);
         }
-        tx.commit().unwrap();
+        match tx.commit() {
+            Ok(()) => {}
+            Err(e) => assert!(false, "commit: {e:?}"),
+        }
         let lower = rel.raw_encode().to_vec();
-        let upper = rel.next().expect("below cap").raw_encode().to_vec();
-        let tx = db.read_tx().unwrap();
+        let upper = match rel.next() {
+            Some(r) => r.raw_encode().to_vec(),
+            None => {
+                assert!(false, "INVARIANT(RelationIdCap): next below cap");
+                loop {
+                    std::hint::spin_loop();
+                }
+            }
+        };
+        let tx = must(db.read_tx(), "read_tx");
         for at in 0..=8i64 {
             let got: Vec<(String, i64)> = tx
                 .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::of_micros(at)))
                 .map(|r| {
-                    let t = r.unwrap();
+                    let t = must(r, "range row");
                     let name = match &t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
-                        other @ DataValue::Null
-                        | other @ DataValue::Bool(_)
-                        | other @ DataValue::Num(_)
-                        | other @ DataValue::Bytes(_)
-                        | other @ DataValue::Uuid(_)
-                        | other @ DataValue::Regex(_)
-                        | other @ DataValue::Json(_)
-                        | other @ DataValue::Vector(_)
-                        | other @ DataValue::List(_)
-                        | other @ DataValue::Set(_)
-                        | other @ DataValue::Validity(_)
-                        | other @ DataValue::Interval(_)
-                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
+                        other => {
+                            assert!(false, "unexpected {other:?}");
+                            loop {
+                                std::hint::spin_loop();
+                            }
+                        }
                     };
                     let ts = match &t.as_slice()[1] {
                         DataValue::Validity(v) => v.ts_micros(),
-                        other @ DataValue::Null
-                        | other @ DataValue::Bool(_)
-                        | other @ DataValue::Num(_)
-                        | other @ DataValue::Str(_)
-                        | other @ DataValue::Bytes(_)
-                        | other @ DataValue::Uuid(_)
-                        | other @ DataValue::Regex(_)
-                        | other @ DataValue::Json(_)
-                        | other @ DataValue::Vector(_)
-                        | other @ DataValue::List(_)
-                        | other @ DataValue::Set(_)
-                        | other @ DataValue::Interval(_)
-                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
+                        other => {
+                            assert!(false, "unexpected {other:?}");
+                            loop {
+                                std::hint::spin_loop();
+                            }
+                        }
                     };
                     (name, ts)
                 })
@@ -1428,7 +1409,7 @@ mod battery {
                     sync_fail_ppm: 0,
                 },
             );
-            retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+            match retry_on_conflict(retry_cap(), || {
                 let mut tx = write_tx_attempt(&db)?;
                 for i in 0..KEYS {
                     put_attempt(&mut tx, format!("r{i:02}").as_bytes(), b"v")?;
@@ -1437,8 +1418,10 @@ mod battery {
                     tx.commit()?;
                     Ok(())
                 }
-            })
-            .unwrap();
+            }) {
+                Ok(()) => {}
+                Err(e) => assert!(false, "seed load: {e:?}"),
+            }
 
             let mut reads: Matrix = vec![vec![]; KEYS];
             let mut commits: Matrix = vec![vec![]; KEYS];
@@ -1448,15 +1431,15 @@ mod battery {
                         let db = db.clone();
                         s.spawn(move || {
                             let mut out = Vec::new();
-                            let tx = db.read_tx().unwrap();
+                            let tx = must(db.read_tx(), "read_tx");
                             for i in (t..KEYS).step_by(threads) {
                                 let key = format!("r{i:02}").into_bytes();
                                 let r: Vec<bool> =
                                     (0..ATTEMPTS).map(|_| tx.get(&key).is_err()).collect();
                                 let c: Vec<bool> = (0..ATTEMPTS)
                                     .map(|_| {
-                                        let mut w = db.write_tx().unwrap();
-                                        w.put(format!("c{i:02}").as_bytes(), b"v").unwrap();
+                                        let mut w = must(db.write_tx(), "write_tx");
+                                        must_put(&mut w, format!("c{i:02}").as_bytes(), b"v");
                                         w.commit().is_err()
                                     })
                                     .collect();
@@ -1467,7 +1450,19 @@ mod battery {
                     })
                     .collect();
                 for h in handles {
-                    for (i, r, c) in h.join().unwrap() {
+                    let items = match h.join() {
+                        Ok(items) => items,
+                        Err(_) => {
+                            assert!(
+                                false,
+                                "INVARIANT(ThreadJoin): participant panicked"
+                            );
+                            loop {
+                                std::hint::spin_loop();
+                            }
+                        }
+                    };
+                    for (i, r, c) in items {
                         reads[i] = r;
                         commits[i] = c;
                     }
@@ -1499,13 +1494,20 @@ mod battery {
                 sync_fail_ppm: 0,
             },
         );
-        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+        match retry_on_conflict(retry_cap(), || {
             let mut tx = write_tx_attempt(&db)?;
             put_attempt(&mut tx, b"k", b"v")?;
             tx.commit()?;
             Ok(())
-        })
-        .expect("90% storms must not pin a bounded retry forever");
-        let _ = get_attempt(&db.read_tx().unwrap(), b"k");
+        }) {
+            Ok(()) => {}
+            Err(e) => assert!(
+                false,
+                "90% storms must not pin a bounded retry forever: {e:?}"
+            ),
+        }
+        match get_attempt(&must(db.read_tx(), "read_tx"), b"k") {
+            Ok(_) | Err(_) => {}
+        }
     }
 }

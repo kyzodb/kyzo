@@ -37,6 +37,15 @@
 
 use std::collections::HashMap;
 
+#[path = "identity.rs"]
+mod identity;
+use identity::{op_identity, wrap_add, wrap_mul};
+
+// Both mix doors are live in the identity module (sim uses wrap_add; fault uses wrap_mul).
+// Name the pair here so the crashfs lib unit keeps the full door set reachable.
+const _: fn(u64, u64) -> u64 = wrap_add;
+const _: fn(u64, u64) -> u64 = wrap_mul;
+
 /// The kind of operation a trigger or identity is keyed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OpKind {
@@ -86,17 +95,27 @@ impl Trigger {
 }
 
 /// Ambient, rate-based fault injection in parts-per-million — the
-/// `sim.rs`-style knob for broad seed-swept campaigns. `0` (the default)
-/// means no ambient faults: only exact [`Trigger`]s act.
-#[derive(Debug, Clone, Copy, Default)]
+/// `sim.rs`-style knob for broad seed-swept campaigns. Zero rates mean no
+/// ambient faults: only exact [`Trigger`]s act.
+#[derive(Debug, Clone, Copy)]
 pub struct AmbientRates {
     pub torn_seq_ppm: u32,
     pub torn_op_ppm: u32,
 }
 
+impl AmbientRates {
+    /// No ambient faults — exact [`Trigger`]s only.
+    pub const fn none() -> Self {
+        AmbientRates {
+            torn_seq_ppm: 0,
+            torn_op_ppm: 0,
+        }
+    }
+}
+
 /// The full plan: a campaign seed plus the trigger list plus ambient rates.
 /// Everything downstream of these three fields is a pure function of them.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct FaultPlan {
     pub seed: u64,
     pub triggers: Vec<Trigger>,
@@ -108,7 +127,7 @@ impl FaultPlan {
         FaultPlan {
             seed,
             triggers: Vec::new(),
-            ambient: AmbientRates::default(),
+            ambient: AmbientRates::none(),
         }
     }
 
@@ -126,14 +145,21 @@ impl FaultPlan {
 /// Per-(path, op-kind) occurrence counters. Not part of the pure-function
 /// core: this is the caller-side state that turns "the Nth occurrence" into
 /// a concrete number to feed the pure decision functions below. Restart it
-/// (a fresh `Counters::default()`) on every simulated crash reopen, exactly
+/// (a fresh [`Counters::fresh`]) on every simulated crash reopen, exactly
 /// as `sim.rs`'s `attempts` map restarts on `sim_crash`/`sim_powercut`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Counters {
     counts: HashMap<(String, OpKind), u64>,
 }
 
 impl Counters {
+    /// Empty counters — campaign start or post-crash reopen.
+    pub fn fresh() -> Self {
+        Counters {
+            counts: HashMap::new(),
+        }
+    }
+
     /// Bump and return the new (1-indexed) count for `(path, op)`.
     pub fn bump(&mut self, path: &str, op: OpKind) -> u64 {
         let entry = self.counts.entry((path.to_string(), op)).or_insert(0);
@@ -148,10 +174,10 @@ impl Counters {
     /// barrier, then arm an exact [`Trigger`] for that count in a later,
     /// faulted run.
     pub fn count(&self, path: &str, op: OpKind) -> u64 {
-        self.counts
-            .get(&(path.to_string(), op))
-            .copied()
-            .unwrap_or(0)
+        match self.counts.get(&(path.to_string(), op)) {
+            Some(&n) => n,
+            None => 0,
+        }
     }
 }
 
@@ -186,27 +212,6 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     pi == pat.len()
 }
 
-/// FNV-1a 64 over the op-kind tag and the operation's semantic content,
-/// length-delimited so distinct part lists never collide by concatenation.
-/// Mirrors `sim.rs::op_identity` exactly (same construction, independently
-/// implemented so this crate carries no dependency on `kyzo-core`).
-fn op_identity(tag: u64, parts: &[&[u8]]) -> u64 {
-    const OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01B3;
-    fn eat(h: &mut u64, bytes: &[u8]) {
-        for &b in bytes {
-            *h = (*h ^ u64::from(b)).wrapping_mul(PRIME);
-        }
-    }
-    let mut h = OFFSET;
-    eat(&mut h, &tag.to_be_bytes());
-    for part in parts {
-        eat(&mut h, &(part.len() as u64).to_be_bytes());
-        eat(&mut h, part);
-    }
-    h
-}
-
 const TAG_WRITE: u64 = 0xFA01;
 
 /// The identity of a write: a pure function of the op kind, its path, and
@@ -227,16 +232,16 @@ pub fn write_identity(rel_path: &str, offset: u64, len: u64) -> u64 {
 
 /// Splitmix-style finalizer over `(seed, identity, attempt, salt)` —
 /// deterministic, stateless, replayable, and identical at any thread count.
-/// Mirrors `sim.rs::fault_hit`'s construction.
+/// Shares the mix door with `sim.rs::fault_hit` via [`identity::wrap_mul`].
 fn finalize(seed: u64, identity: u64, attempt: u64, salt: u64) -> u64 {
+    // INVARIANT(fault_ppm): deterministic fault draw mixes identity/attempt/salt via wrap.
     let mut z = seed
-        ^ identity.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ attempt.wrapping_mul(0xA24B_AED4_963E_E407)
-        ^ salt.wrapping_mul(0xD6E8_FEB8_6659_FD93);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^= z >> 31;
-    z
+        ^ wrap_mul(identity, 0x9E37_79B9_7F4A_7C15)
+        ^ wrap_mul(attempt, 0xA24B_AED4_963E_E407)
+        ^ wrap_mul(salt, 0xD6E8_FEB8_6659_FD93);
+    z = wrap_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+    z = wrap_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 const SALT_AMBIENT_TORN_SEQ: u64 = 0xFA5E_0001;
@@ -458,10 +463,14 @@ mod tests {
                 1,
                 Fault::TornOp,
             ));
-            if let WriteOutcome::Split { split_at } = decide_write_outcome(&plan, "f", 0, 10, 1) {
-                assert!((1..10).contains(&split_at));
-            } else {
-                panic!("expected a split outcome");
+            match decide_write_outcome(&plan, "f", 0, 10, 1) {
+                WriteOutcome::Split { split_at } => {
+                    assert!((1..10).contains(&split_at));
+                }
+                other => assert!(
+                    false,
+                    "INVARIANT(TornOpSplit): exact TornOp trigger on len≥2 must Split, got {other:?}"
+                ),
             }
         }
     }
@@ -482,7 +491,7 @@ mod tests {
 
     #[test]
     fn counters_bump_per_path_and_op_independently() {
-        let mut c = Counters::default();
+        let mut c = Counters::fresh();
         assert_eq!(c.bump("a", OpKind::Write), 1);
         assert_eq!(c.bump("a", OpKind::Write), 2);
         assert_eq!(c.bump("a", OpKind::Fsync), 1);
