@@ -254,37 +254,7 @@ use kyzo_model::value::{
     encode_owned,
 };
 
-/// usize → f64 without `as` (prefer u32, else i64 via Num).
-fn usize_to_f64(n: usize) -> f64 {
-    match u32::try_from(n) {
-        Ok(v) => f64::from(v),
-        Err(_gt_u32) => match i64::try_from(n) {
-            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-            Err(_gt_i64) => match u64::try_from(n) {
-                Ok(u) => u64_to_f64(u),
-                Err(_impossible) => 0.0,
-            },
-        },
-    }
-}
-
-/// u64 → f64 without `as` (limb widen when above i64::MAX).
-fn u64_to_f64(n: u64) -> f64 {
-    match i64::try_from(n) {
-        Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-        Err(_above_i64_max) => {
-            let lo = match u32::try_from(n & 0xFFFF_FFFF) {
-                Ok(v) => v,
-                Err(_masked) => 0,
-            };
-            let hi = match u32::try_from(n >> 32) {
-                Ok(v) => v,
-                Err(_shift) => 0,
-            };
-            f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
-        }
-    }
-}
+use crate::exec::stdlib::convert::{u64_to_f64, usize_to_f64};
 
 /// usize → i64 with typed refusal.
 fn usize_to_i64(n: usize) -> Result<i64> {

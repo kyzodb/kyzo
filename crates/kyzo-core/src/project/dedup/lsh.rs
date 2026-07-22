@@ -144,41 +144,7 @@ use kyzo_model::value::{DataValue, Tuple, append_canonical};
 use kyzo_model::program::expr::BindingPos;
 
 
-fn f64_to_f32(ratio: f64) -> f32 {
-    f32::from_bits({
-        let a = ratio.to_bits();
-        let sign = match u32::try_from(a >> 63) { Ok(s) => s << 31, Err(_) => 0 };
-        let exp = match i32::try_from((a >> 52) & 0x7FF) { Ok(e) => e, Err(_) => 0 };
-        let frac = a & 0x000F_FFFF_FFFF_FFFF;
-        if exp == 0x7FF {
-            sign | 0x7F80_0000 | if frac != 0 { 0x0040_0000 } else { 0 }
-        } else if exp == 0 {
-            sign
-        } else {
-            let mut exp32 = exp - 1023 + 127;
-            if exp32 >= 0xFF {
-                sign | 0x7F80_0000
-            } else if exp32 <= 0 {
-                sign
-            } else {
-                let mant = frac >> 29;
-                let m32 = match u32::try_from(mant) { Ok(m) => m, Err(_) => 0 };
-                let e_bits = match u32::try_from(exp32) { Ok(e) => e << 23, Err(_) => 0 };
-                sign | e_bits | (m32 & 0x007F_FFFF)
-            }
-        }
-    })
-}
-
-fn usize_to_f64(n: usize) -> f64 {
-    match u32::try_from(n) {
-        Ok(v) => f64::from(v),
-        Err(_) => match i64::try_from(n) {
-            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-            Err(_) => 0.0,
-        },
-    }
-}
+use crate::exec::stdlib::convert::{f64_to_f32, usize_to_f64};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Lsh;

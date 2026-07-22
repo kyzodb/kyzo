@@ -31,25 +31,9 @@ fn count_to_f64(count: i64) -> f64 {
     kyzo_model::value::Num::int(count).to_f64()
 }
 
-/// Approximate i128 as f64 without an `as` cast (limb widen).
-fn i128_approx_f64(n: i128) -> f64 {
-    let neg = n < 0;
-    let mut x = n.unsigned_abs();
-    let mut result = 0.0_f64;
-    let mut scale = 1.0_f64;
-    while x > 0 {
-        let limb = match u32::try_from(x & 0xFFFF_FFFF) {
-            Ok(v) => v,
-            Err(_masked_fits_u32) => 0,
-        };
-        result += f64::from(limb) * scale;
-        x >>= 32;
-        scale *= 4_294_967_296.0; // 2^32
-    }
-    if neg { -result } else { result }
-}
-
 use miette::{Result, bail, ensure, miette};
+
+use crate::exec::stdlib::convert::i128_approx_f64;
 
 use kyzo_model::data_value_any;
 use kyzo_model::program::aggregate::Aggregation;

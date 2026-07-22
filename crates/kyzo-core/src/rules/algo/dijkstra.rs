@@ -55,8 +55,28 @@ use crate::rules::graph_view::DirectedCsrGraph;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::DataValue;
-use kyzo_model::value::Tuple;
+use kyzo_model::value::{DataValue, Tuple};
+
+/// One Dijkstra/Yen output row: `(start, end, cost, path)` with dense ids
+/// remapped through the algorithm's `indices` table.
+pub(crate) fn weighted_path_out_row(
+    indices: &[DataValue],
+    start: u32,
+    end: u32,
+    cost: f64,
+    path: impl IntoIterator<Item = u32>,
+) -> Tuple {
+    Tuple::from_vec(vec![
+        indices[crate::rules::convert::usize_from_u32(start)].clone(),
+        indices[crate::rules::convert::usize_from_u32(end)].clone(),
+        DataValue::from(cost),
+        DataValue::List(
+            path.into_iter()
+                .map(|u| indices[crate::rules::convert::usize_from_u32(u)].clone())
+                .collect(),
+        ),
+    ])
+}
 
 #[cfg(test)]
 use crate::rules::contract::{CancelAuthority, Cancelled};
@@ -138,16 +158,7 @@ impl FixedRule for ShortestPathDijkstra {
             Ok(res
                 .into_iter()
                 .map(|(target, cost, path)| {
-                    Tuple::from_vec(vec![
-                        indices[crate::rules::convert::usize_from_u32(start)].clone(),
-                        indices[crate::rules::convert::usize_from_u32(target)].clone(),
-                        DataValue::from(cost),
-                        DataValue::List(
-                            path.into_iter()
-                                .map(|u| indices[crate::rules::convert::usize_from_u32(u)].clone())
-                                .collect_vec(),
-                        ),
-                    ])
+                    weighted_path_out_row(&indices, start, target, cost, path)
                 })
                 .collect())
         })?;

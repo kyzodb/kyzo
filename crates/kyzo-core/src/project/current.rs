@@ -188,6 +188,27 @@ fn checked_row_end(values_len: usize) -> Option<u32> {
     }
 }
 
+/// Byte/value span of row `i` in an end-exclusive `u32` offset table
+/// (`offsets[i]` ends row `i`; row 0 starts at 0). Shared by
+/// [`Segment::row_at`] and the fixpoint level arena's identical layout.
+///
+/// INVARIANT(offset_row_in_bounds): `i < offsets.len()`.
+pub(crate) fn offset_row_span(offsets: &[u32], i: usize) -> (usize, usize) {
+    let start = if i == 0 {
+        0
+    } else {
+        match usize::try_from(offsets[i - 1]) {
+            Ok(v) => v,
+            Err(_gt_usize) => 0,
+        }
+    };
+    let end = match usize::try_from(offsets[i]) {
+        Ok(v) => v,
+        Err(_gt_usize) => 0,
+    };
+    (start, end)
+}
+
 impl Segment {
     /// Build from the rows a plain current-state scan produced, in the
     /// scan's own (key) order.
@@ -219,18 +240,7 @@ impl Segment {
     /// INVARIANT(segment_row_in_bounds): `i < self.len()`.
     fn row_at(&self, i: usize) -> &[DataValue] {
         debug_assert!(i < self.len());
-        let start = if i == 0 {
-            0
-        } else {
-            match usize::try_from(self.offsets[i - 1]) {
-                Ok(v) => v,
-                Err(_gt_usize) => 0,
-            }
-        };
-        let end = match usize::try_from(self.offsets[i]) {
-            Ok(v) => v,
-            Err(_gt_usize) => 0,
-        };
+        let (start, end) = offset_row_span(&self.offsets, i);
         &self.values[start..end]
     }
 

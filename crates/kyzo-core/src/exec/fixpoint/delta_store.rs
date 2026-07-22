@@ -389,18 +389,7 @@ impl NormalLevel {
     /// The sole mint of [`LevelRowRef`] — foreign `&[u8]` cannot enter the arena.
     fn row_at(&self, i: usize) -> LevelRowRef<'_> {
         debug_assert!(i < self.len());
-        let start = if i == 0 {
-            0
-        } else {
-            match usize::try_from(self.offsets[i - 1]) {
-                Ok(v) => v,
-                Err(_gt_usize) => 0,
-            }
-        };
-        let end = match usize::try_from(self.offsets[i]) {
-            Ok(v) => v,
-            Err(_gt_usize) => 0,
-        };
+        let (start, end) = crate::project::current::offset_row_span(&self.offsets, i);
         LevelRowRef(&self.values.as_bytes()[start..end])
     }
 

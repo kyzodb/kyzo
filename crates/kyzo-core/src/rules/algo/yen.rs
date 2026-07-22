@@ -31,10 +31,9 @@
 
 use std::collections::BTreeSet;
 
-use itertools::Itertools;
 use miette::Result;
 
-use crate::rules::algo::dijkstra::dijkstra;
+use crate::rules::algo::dijkstra::{dijkstra, weighted_path_out_row};
 use crate::rules::contract::par_try_map;
 use crate::rules::contract::{
     CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
@@ -103,18 +102,7 @@ impl FixedRule for KShortestPathYen {
             let paths = k_shortest_path_yen(k, &graph, start, goal, cancel.clone())?;
             Ok(paths
                 .into_iter()
-                .map(|(cost, path)| {
-                    Tuple::from_vec(vec![
-                        indices[crate::rules::convert::usize_from_u32(start)].clone(),
-                        indices[crate::rules::convert::usize_from_u32(goal)].clone(),
-                        DataValue::from(cost),
-                        DataValue::List(
-                            path.into_iter()
-                                .map(|u| indices[crate::rules::convert::usize_from_u32(u)].clone())
-                                .collect_vec(),
-                        ),
-                    ])
-                })
+                .map(|(cost, path)| weighted_path_out_row(&indices, start, goal, cost, path))
                 .collect())
         })?;
         for rows in rows_per_pair {

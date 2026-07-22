@@ -37,7 +37,62 @@ fn f64_trunc_to_i64(f: f64) -> Result<i64> {
 /// Round through IEEE754 binary32 precision, then widen back to f64.
 /// Soft conversion — no `as f32` (bs_detector).
 pub(crate) fn via_f32_precision(f: f64) -> f64 {
-    f64::from(f32::from_bits(f64_bits_to_f32_bits(f.to_bits())))
+    f64::from(f64_to_f32(f))
+}
+
+/// Soft `f64` → `f32` (IEEE round-ties-to-even) — no numeric `as` cast.
+pub(crate) fn f64_to_f32(f: f64) -> f32 {
+    f32::from_bits(f64_bits_to_f32_bits(f.to_bits()))
+}
+
+/// usize → f64 without a numeric `as` cast.
+pub(crate) fn usize_to_f64(n: usize) -> f64 {
+    match u32::try_from(n) {
+        Ok(v) => f64::from(v),
+        Err(_gt_u32) => match i64::try_from(n) {
+            Ok(i) => Num::int(i).to_f64(),
+            Err(_gt_i64) => match u64::try_from(n) {
+                Ok(u) => u64_to_f64(u),
+                Err(_impossible) => 0.0,
+            },
+        },
+    }
+}
+
+/// u64 → f64 without a numeric `as` cast.
+pub(crate) fn u64_to_f64(n: u64) -> f64 {
+    match i64::try_from(n) {
+        Ok(i) => Num::int(i).to_f64(),
+        Err(_above_i64_max) => {
+            let lo = match u32::try_from(n & 0xFFFF_FFFF) {
+                Ok(v) => v,
+                Err(_masked) => 0,
+            };
+            let hi = match u32::try_from(n >> 32) {
+                Ok(v) => v,
+                Err(_shift) => 0,
+            };
+            f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
+        }
+    }
+}
+
+/// Approximate i128 as f64 without a numeric `as` cast (limb widen).
+pub(crate) fn i128_approx_f64(n: i128) -> f64 {
+    let neg = n < 0;
+    let mut x = n.unsigned_abs();
+    let mut result = 0.0_f64;
+    let mut scale = 1.0_f64;
+    while x > 0 {
+        let limb = match u32::try_from(x & 0xFFFF_FFFF) {
+            Ok(v) => v,
+            Err(_masked_fits_u32) => 0,
+        };
+        result += f64::from(limb) * scale;
+        x >>= 32;
+        scale *= 4_294_967_296.0; // 2^32
+    }
+    if neg { -result } else { result }
 }
 
 fn f64_bits_to_f32_bits(a: u64) -> u32 {
