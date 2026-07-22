@@ -22,7 +22,10 @@ pub(crate) struct RawTokenStream {
 
 impl Tokenizer for RawTokenizer {
     fn token_stream<'a>(&self, text: &'a str) -> BoxTokenStream<'a> {
-        let token = Token::new(0, text.len(), 0, text.to_string(), 1).expect("len offsets");
+        let Some(token) = Token::new(0, text.len(), 0, text.to_string(), 1) else {
+            return crate::project::text::tokenizer::empty_tokenizer::EmptyTokenizer
+                .token_stream(text);
+        };
         RawTokenStream {
             token,
             has_token: true,
