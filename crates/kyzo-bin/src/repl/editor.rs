@@ -14,15 +14,16 @@
  * distinct concern from the read-eval loop (`super::repl_main`) and from
  * command dispatch (`super::commands`).
  *
- * - **`Completer::update` no longer panics.** The original had
- *   `unreachable!()`: rustyline only calls `update` to splice a candidate
- *   `complete` returned, and `complete` is never overridden here (its
- *   default impl always returns no candidates), so `update` is unreachable
- *   *today*. But that invariant lives in a different method than the one
- *   enforcing it — a future change adding real completions here would have
- *   to remember to touch this one too, silently, or reintroduce a panic
- *   reachable from a keypress. A no-op fallback (leave the line buffer
- *   untouched) costs nothing now and can't regress into a crash later.
+ * - **`Completer::update` no longer panics.** The original asserted that
+ *   this path could never run: rustyline only calls `update` to splice a
+ *   candidate `complete` returned, and `complete` is never overridden here
+ *   (its default impl always returns no candidates), so `update` is
+ *   unreachable *today*. But that invariant lives in a different method
+ *   than the one enforcing it — a future change adding real completions
+ *   here would have to remember to touch this one too, silently, or
+ *   reintroduce a panic reachable from a keypress. A no-op fallback
+ *   (leave the line buffer untouched) costs nothing now and can't regress
+ *   into a crash later.
  */
 
 //! The REPL's line-editing behavior: a query continues onto more lines
