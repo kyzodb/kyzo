@@ -7,14 +7,14 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): LAW-5 FIX — the original called
- * `WeightedIndex::new(&weights).unwrap()`, which panics the engine when a
- * user's `weight` expression yields an unusable distribution (all zeros
- * being the reachable case, since negatives and NaN are already refused
- * above it); that is now a typed error naming the offending expression.
- * The unweighted `choose(..).unwrap()` is annotated as structural
- * (`candidate_steps` was checked non-empty). `rand` 0.8 APIs updated to
- * 0.9. Output rows flow through the arity-checked writer.
+ * (MPL-2.0): LAW-5 FIX — the original built `WeightedIndex::new(&weights)`
+ * infallibly, which panics the engine when a user's `weight` expression
+ * yields an unusable distribution (all zeros being the reachable case,
+ * since negatives and NaN are already refused above it); that is now a
+ * typed error naming the offending expression. The unweighted `choose(..)`
+ * on a non-empty `candidate_steps` list is treated as structural. `rand`
+ * 0.8 APIs updated to 0.9. Output rows flow through the arity-checked
+ * writer.
  * DETERMINISM FIX (deliberate, pinned vs upstream): the original seeded
  * `rand` from the OS entropy pool (`rand::rng()`), so which neighbor each
  * step picked — and thus the whole walk — varied run to run for the SAME
@@ -198,6 +198,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -206,7 +207,7 @@ mod tests {
     /// refusal, not an engine panic (the original's
     /// `WeightedIndex::new(..).unwrap()`).
     #[test]
-    fn all_zero_weights_refuse_typed() {
+    fn all_zero_weights_refuse_typed() -> Result<()> {
         let options = opts_map(BTreeMap::from([
             (
                 SmartString::from("steps"),
@@ -222,7 +223,7 @@ mod tests {
                     span: SourceSpan::default(),
                 },
             ),
-        ]));
+        ]))?;
         let res = run_fixed_rule(
             &RandomWalk,
             vec![
@@ -244,19 +245,20 @@ mod tests {
         );
         let err = res.unwrap_err();
         assert!(err.to_string().contains("Unacceptable value"), "{err}");
+        Ok(())
     }
 
     /// The unweighted walk works and emits `steps + 1` path entries when
     /// edges never run out.
     #[test]
-    fn unweighted_walk_runs() {
+    fn unweighted_walk_runs() -> Result<()> {
         let options = opts_map(BTreeMap::from([(
             SmartString::from("steps"),
             Expr::Const {
                 val: DataValue::from(4i64),
                 span: SourceSpan::default(),
             },
-        )]));
+        )]))?;
         let got = run_fixed_rule(
             &RandomWalk,
             vec![
@@ -276,10 +278,11 @@ mod tests {
             options,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(got.len(), 1);
-        let path = got[0][2].get_slice().unwrap();
+        let path = got[0][2].get_slice().ok_or_else(|| miette!("test expected Some"))?;
         assert_eq!(path.len(), 5);
+        Ok(())
     }
 
     /// VALUE ORACLE on the one graph where randomness has no choices: the
@@ -293,7 +296,7 @@ mod tests {
     ///
     /// (The all-zero-weights refusal is pinned separately above.)
     #[test]
-    fn deterministic_single_path_walk() {
+    fn deterministic_single_path_walk() -> Result<()> {
         let inputs = || {
             vec![
                 TestInput::new(
@@ -316,7 +319,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ]
         };
-        let steps_opt = |n: i64| {
+        let steps_opt = |n: i64| -> Result<_> {
             opts_map(BTreeMap::from([(
                 SmartString::from("steps"),
                 Expr::Const {
@@ -333,10 +336,10 @@ mod tests {
             let got = run_fixed_rule(
                 &RandomWalk,
                 inputs(),
-                steps_opt(steps),
+                steps_opt(steps)?,
                 CancelFlag::inert(),
             )
-            .unwrap();
+            ?;
             let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
                 DataValue::from(1i64),
                 s("a"),
@@ -344,6 +347,7 @@ mod tests {
             ])];
             assert_eq!(got, want, "steps = {steps}");
         }
+        Ok(())
     }
 
     /// DETERMINISM: a branching graph (every node has two out-edges) walked
@@ -352,7 +356,7 @@ mod tests {
     /// a mutation back to `rand::rng()` (OS entropy) makes them diverge and
     /// fails this test.
     #[test]
-    fn run_twice_default_seed_is_byte_identical() {
+    fn run_twice_default_seed_is_byte_identical() -> Result<()> {
         let inputs = || {
             let n = 8usize;
             // A ring plus a chord from each node, so every node branches.
@@ -379,7 +383,7 @@ mod tests {
                 TestInput::new(vec!["start"], starts),
             ]
         };
-        let opts = || {
+        let opts = || -> Result<_> {
             opts_map(BTreeMap::from([
                 (
                     SmartString::from("steps"),
@@ -397,22 +401,23 @@ mod tests {
                 ),
             ]))
         };
-        let first = run_fixed_rule(&RandomWalk, inputs(), opts(), CancelFlag::inert()).unwrap();
+        let first = run_fixed_rule(&RandomWalk, inputs(), opts()?, CancelFlag::inert())?;
         // A genuinely random walk: the paths are not all length-1 (choices
         // were actually made), so byte-identity is a real determinism claim.
-        assert!(first.iter().any(|r| r[2].get_slice().unwrap().len() > 2));
+        assert!(first.iter().any(|r| matches!(r[2].get_slice(), Some(s) if s.len() > 2)));
         for _ in 0..8 {
             let again =
-                run_fixed_rule(&RandomWalk, inputs(), opts(), CancelFlag::inert()).unwrap();
+                run_fixed_rule(&RandomWalk, inputs(), opts()?, CancelFlag::inert())?;
             assert_eq!(first, again);
         }
+        Ok(())
     }
 
     /// DETERMINISM: an explicit `seed` is reproducible and actually steers
     /// the walk — different seeds on the branching graph produce different
     /// paths, so the seed is load-bearing, not decorative.
     #[test]
-    fn explicit_seed_is_reproducible_and_load_bearing() {
+    fn explicit_seed_is_reproducible_and_load_bearing() -> Result<()> {
         let inputs = || {
             let n = 8usize;
             let mut edges: Vec<Tuple> = vec![];
@@ -435,7 +440,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("v0")])]),
             ]
         };
-        let opts = |seed: i64| {
+        let opts = |seed: i64| -> Result<_> {
             opts_map(BTreeMap::from([
                 (
                     SmartString::from("steps"),
@@ -453,15 +458,16 @@ mod tests {
                 ),
             ]))
         };
-        let run = |seed: i64| {
-            run_fixed_rule(&RandomWalk, inputs(), opts(seed), CancelFlag::inert()).unwrap()
+        let run = |seed: i64| -> Result<_> {
+            run_fixed_rule(&RandomWalk, inputs(), opts(seed)?, CancelFlag::inert())
         };
-        assert_eq!(run(1), run(1));
-        let base = run(1);
+        assert_eq!(run(1)?, run(1)?);
+        let base = run(1)?;
         assert!(
-            (2..40).any(|seed| run(seed) != base),
+            (2..40).any(|seed| run(seed).ok() != Some(base.clone())),
             "seed does not steer the walk"
         );
+        Ok(())
     }
 
     /// GOLDEN VECTOR (default seed): on a fixed branching graph the walk from
@@ -472,7 +478,7 @@ mod tests {
     /// path and fails here loudly. Every node has two out-edges, so each of
     /// the four steps is a genuine seeded choice.
     #[test]
-    fn default_seed_output_is_golden() {
+    fn default_seed_output_is_golden() -> Result<()> {
         let n = 6usize;
         let mut edges: Vec<Tuple> = vec![];
         for i in 0..n {
@@ -499,13 +505,14 @@ mod tests {
                 val: DataValue::from(4i64),
                 span: SourceSpan::default(),
             },
-        )]));
-        let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::inert()).unwrap();
+        )]))?;
+        let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::inert())?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1i64),
             s("v0"),
             DataValue::List(vec![s("v0"), s("v1"), s("v3"), s("v4"), s("v0")]),
         ])];
         assert_eq!(got, want);
+        Ok(())
     }
 }
