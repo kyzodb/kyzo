@@ -136,7 +136,8 @@ pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 /// [`ConflictError`]: crate::store::ConflictError
 const MAX_COMMIT_ATTEMPTS: NonZeroUsize = match NonZeroUsize::new(128) {
     Some(n) => n,
-    None => panic!("128 is nonzero"),
+    // 128 ≠ 0 — NonZeroUsize::new only rejects zero; MIN is unreachable stand-in.
+    None => NonZeroUsize::MIN,
 };
 
 /// Closed Engine admission refuse taxonomy (decisions.md §42/§43).

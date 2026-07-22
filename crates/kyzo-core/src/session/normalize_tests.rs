@@ -178,7 +178,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
     }
     let prog = match parse_script(script, &no_params(), test_vld())? {
         Script::Query(p) => p,
-        Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
+        Script::Imperative(_) | Script::Sys(_) => return Err(miette!("expected a single query")),
     };
     let tx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::new());
     let view = SessionView {
@@ -369,7 +369,8 @@ mod magic_bypass_differential {
     fn tc_chain_public_matches_bypass_byte_identical_and_unadorned() -> Result<()>  {
         let n = 10usize;
         let db = open_engine(SimStorage::new(68_001))?;
-        let edge_literal: String = (0..n as i64 - 1)
+        let n_i = i64::try_from(n).map_err(|_| miette!("n does not fit i64"))?;
+        let edge_literal: String = (0..n_i - 1)
             .map(|i| format!("[{i},{}],", i + 1))
             .collect();
         db.run_script(
@@ -415,9 +416,9 @@ mod magic_bypass_differential {
         let gen_rel = |label: u64, count: u64| -> Vec<(i64, i64)> {
             let mut rng = StdRng::seed_from_u64(seed ^ (label << 32));
             let mut rows: BTreeSet<(i64, i64)> = BTreeSet::new();
-            while (rows.len() as u64) < count {
-                let y = rng.random_range(0..vars as i64);
-                let x = rng.random_range(0..vars as i64);
+            while match u64::try_from(rows.len()) { Ok(n) => n, Err(_) => u64::MAX } < count {
+                let y = rng.random_range(0..i64::try_from(vars).map_err(|_| miette!("vars does not fit i64"))?);
+                let x = rng.random_range(0..i64::try_from(vars).map_err(|_| miette!("vars does not fit i64"))?);
                 if y != x {
                     rows.insert((y, x));
                 }

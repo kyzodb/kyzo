@@ -694,14 +694,15 @@ mod tests {
             let live = seats.certificate_inputs(CatalogGeneration::from_relation(
                 RelationGeneration::witness(0),
             ))?;
-            let subject = DataValue::List(vec![DataValue::from(1i64), DataValue::from(i as i64)]);
+            let i_i = match i64::try_from(i) { Ok(v) => v, Err(_) => 0 };
+            let subject = DataValue::List(vec![DataValue::from(1i64), DataValue::from(i_i)]);
             let (successor, cert) = admit_semantic_deletion(
                 seats.store_id(),
                 &live,
                 kind,
                 prior,
                 subject,
-                ValidityTs::from_raw(200 + i as i64),
+                ValidityTs::from_raw(200 + match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }),
             )
             .map_err(|e| miette!("admit semantic deletion: {e}"))?;
             let (_permit, link) = seal_semantic_deletion(&seats, kind, prior, &successor, cert)

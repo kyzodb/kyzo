@@ -3170,9 +3170,15 @@ mod bulk_write_tests {
         // or land a FormatVersion bump explaining why it cannot.
         let mut hasher_input = Vec::new();
         for (k, v) in &scan {
-            hasher_input.extend_from_slice(&(k.len() as u64).to_le_bytes());
+            hasher_input.extend_from_slice(&match u64::try_from(k.len()) {
+                    Ok(n) => n,
+                    Err(_) => u64::MAX,
+                }.to_le_bytes());
             hasher_input.extend_from_slice(k);
-            hasher_input.extend_from_slice(&(v.len() as u64).to_le_bytes());
+            hasher_input.extend_from_slice(&match u64::try_from(v.len()) {
+                    Ok(n) => n,
+                    Err(_) => u64::MAX,
+                }.to_le_bytes());
             hasher_input.extend_from_slice(v);
         }
         use sha2::Digest;

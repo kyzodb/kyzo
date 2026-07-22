@@ -1583,7 +1583,9 @@ impl<S: Storage> Engine<S> {
         for handle in list_relations(&tx.store)? {
             rows.push(Tuple::from_vec(vec![
                 DataValue::from(handle.name.as_str()),
-                DataValue::from(handle.arity() as i64),
+                DataValue::from(
+                    i64::try_from(handle.arity()).map_err(|_| miette!("relation arity does not fit i64"))?,
+                ),
                 DataValue::from(format!("{:?}", handle.access_level)),
             ]));
         }

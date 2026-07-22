@@ -99,7 +99,8 @@ pub(crate) const WITNESS_CAP: usize = 8;
 /// conflict (the same policy as [`Db`]'s script path).
 const MAX_COMMIT_ATTEMPTS: NonZeroUsize = match NonZeroUsize::new(32) {
     Some(n) => n,
-    None => panic!("32 is nonzero"),
+    // 32 ≠ 0 — NonZeroUsize::new only rejects zero; MIN is unreachable stand-in.
+    None => NonZeroUsize::MIN,
 };
 
 /// A transaction was denied: an integrity constraint's body is satisfiable

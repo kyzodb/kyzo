@@ -206,7 +206,7 @@ mod index_status_authority {
     use super::*;
 
     #[test]
-    fn index_status_counter_is_live_catalog_generation() {
+    fn index_status_counter_is_live_catalog_generation() -> miette::Result<()> {
         let live = CatalogGeneration::from_relation(RelationGeneration::witness(12));
         let status = IndexStatus::witness(live, Some(IndexGeneration::witness(9)));
         assert_eq!(status.counter(), 12);
@@ -217,9 +217,10 @@ mod index_status_authority {
                 assert_eq!(sealed.counter(), 9);
             }
             other @ (IndexStaleness::NeverBuilt { .. } | IndexStaleness::Fresh { .. }) => {
-                panic!("expected Stale, got {other:?}")
+                return Err(miette::miette!("expected Stale, got {other:?}"));
             }
         }
+        Ok(())
     }
 
     #[test]

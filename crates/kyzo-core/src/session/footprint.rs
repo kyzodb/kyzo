@@ -395,10 +395,15 @@ impl LiveFootprintTable {
 
     /// Count of live Fenced footprints (fence-pressure operator feed).
     pub fn fence_pressure(&self) -> u64 {
-        self.live
-            .values()
-            .filter(|s| matches!(s, AskShape::Fenced(_)))
-            .count() as u64
+        match u64::try_from(
+            self.live
+                .values()
+                .filter(|s| matches!(s, AskShape::Fenced(_)))
+                .count(),
+        ) {
+            Ok(n) => n,
+            Err(_) => u64::MAX,
+        }
     }
 
     /// Whether any current-epoch Fenced footprint is live (blocks ordinary advance).
