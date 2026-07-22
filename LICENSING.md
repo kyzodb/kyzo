@@ -15,6 +15,9 @@ paths, and every file carrying an MPL header, are MPL-2.0:
 - `crates/kyzo-lsp/`
 - `crates/kyzo-crashfs/`
 - `crates/kyzo-arrow-interop/`
+- `crates/kyzo-model/`
+- `crates/kyzo-oracle/`
+- `crates/kyzo-trials/`
 - `fuzz/`
 - `crates/xtask/`
 - `vendor/` — the owned storage fork; upstream licenses preserved as noted there.
@@ -28,6 +31,11 @@ The agent-development and code-intelligence layer — original work, not derived
 from CozoDB — is BSL-1.1. These paths are BSL-1.1:
 
 - `.claude/` — the KyzoDB agent tooling: skills, rules, hooks, agents, settings.
+- `CLAUDE.md` — the agent-facing project instructions; same original-work,
+  agent-development category as `.claude/`, just living at repo root instead
+  of inside it.
+- `docs/` — project documentation and design material; original prose, not
+  CozoDB lineage.
 
 The KyzoDB MCP server and the codegraph code lens are also BSL-1.1, but they live in their own
 repositories (codegraph is the source of truth, redeployed from there) and are gitignored here, not
