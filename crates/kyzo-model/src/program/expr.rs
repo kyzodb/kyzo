@@ -880,6 +880,8 @@ impl Default for ValueRange {
 /// round-trip law compile-checked until that door opens.
 #[cfg(test)]
 mod canonical_codec_tests {
+    use miette::{IntoDiagnostic, Result};
+
     use super::*;
     use crate::program::op;
 
@@ -887,10 +889,10 @@ mod canonical_codec_tests {
     const BINDING_GOLDEN: &str = r#"{"Binding":{"var":{"name":"x"},"tuple_pos":"Unresolved"}}"#;
 
     #[test]
-    fn expr_canonical_round_trip_golden() {
-        let binding: Expr = serde_json::from_str(BINDING_GOLDEN).expect("binding golden decodes");
+    fn expr_canonical_round_trip_golden() -> Result<()> {
+        let binding: Expr = serde_json::from_str(BINDING_GOLDEN).into_diagnostic()?;
         assert_eq!(
-            serde_json::to_string(&binding).expect("binding encodes"),
+            serde_json::to_string(&binding).into_diagnostic()?,
             BINDING_GOLDEN,
             "Binding golden vector moved"
         );
@@ -933,9 +935,10 @@ mod canonical_codec_tests {
             ]),
             span,
         };
-        let bytes = serde_json::to_vec(&tree).expect("encode Expr tree");
-        let back: Expr = serde_json::from_slice(&bytes).expect("decode Expr tree");
+        let bytes = serde_json::to_vec(&tree).into_diagnostic()?;
+        let back: Expr = serde_json::from_slice(&bytes).into_diagnostic()?;
         assert_eq!(back, tree, "Expr tree round-trip changed identity");
+        Ok(())
     }
 
     #[test]
