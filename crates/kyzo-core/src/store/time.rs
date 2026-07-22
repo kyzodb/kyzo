@@ -378,13 +378,15 @@ mod tests {
         ValiditySlot::from_stored(vts(t), true)
     }
 
+    const REL: RelationId = RelationId::new(7).expect("below cap");
+
     fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
         [
             DataValue::from(fact),
             DataValue::Validity(slot(valid_ts)),
             DataValue::Validity(slot(sys_ts)),
         ]
-        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .encode_as_key(REL)
         .as_bytes()
         .to_vec()
     }
@@ -465,11 +467,11 @@ mod tests {
         out
     }
 
-    fn facts_of(tuples: &[Tuple]) -> Vec<i64> {
+    fn facts_of(tuples: &[Tuple]) -> Result<Vec<i64>> {
         tuples
             .iter()
             .map(|t| match &t[0] {
-                DataValue::Num(n) => n.as_int().expect("int-domain column"),
+                DataValue::Num(n) => n.as_int().ok_or_else(|| miette!("int-domain column")),
                 DataValue::Null
                 | DataValue::Bool(_)
                 | DataValue::Str(_)
@@ -482,7 +484,7 @@ mod tests {
                 | DataValue::Set(_)
                 | DataValue::Validity(_)
                 | DataValue::Interval(_)
-                | DataValue::Geometry(_) => panic!("non-integer fact column"),
+                | DataValue::Geometry(_) => Err(miette!("non-integer fact column")),
             })
             .collect()
     }
@@ -547,7 +549,7 @@ mod tests {
                 .collect();
             for sys_at in [-1i64, 0, 5, 10, 15, 25, 40] {
                 for valid_at in [-1i64, 0, 10, 20, 30, 40] {
-                    let got = facts_of(&skip_walk(&store, sys_at, valid_at)?);
+                    let got = facts_of(&skip_walk(&store, sys_at, valid_at)?)?;
                     let want = oracle(&rows, sys_at, valid_at);
                     assert_eq!(
                         got, want,
@@ -568,10 +570,10 @@ mod tests {
         ]
         .into();
         // Before the correction was recorded: the assert governs.
-        assert_eq!(facts_of(&skip_walk(&store, 15, 15)?), vec![1]);
+        assert_eq!(facts_of(&skip_walk(&store, 15, 15)?)?, vec![1]);
         // After: the retract governs — the fact is absent.
         assert_eq!(
-            facts_of(&skip_walk(&store, 25, 15)?),
+            facts_of(&skip_walk(&store, 25, 15)?)?,
             Vec::<i64>::new()
         );
         // An erase instead of a retract falls through to... nothing older:
@@ -583,7 +585,7 @@ mod tests {
         ]
         .into();
         // Erased at 10, so the older instant 0 shows through.
-        assert_eq!(facts_of(&skip_walk(&store, 25, 15)?), vec![1]);
+        assert_eq!(facts_of(&skip_walk(&store, 25, 15)?)?, vec![1]);
         // A RETRACT at 10 would instead settle the fact absent.
         let store: BTreeMap<Vec<u8>, ClaimPolarity> = [
             (bikey(1, 10, 5), ClaimPolarity::Assert),
@@ -592,7 +594,7 @@ mod tests {
         ]
         .into();
         assert_eq!(
-            facts_of(&skip_walk(&store, 25, 15)?),
+            facts_of(&skip_walk(&store, 25, 15)?)?,
             Vec::<i64>::new()
         );
     
