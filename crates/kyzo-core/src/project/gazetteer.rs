@@ -381,6 +381,7 @@ mod tests {
     use kyzo_model::SourceSpan;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
+    use miette::{IntoDiagnostic, Result, miette};
 
     // -- fixture construction -------------------------------------------------
 
@@ -411,11 +412,11 @@ mod tests {
         db: &impl Storage,
         rows: &[(i64, &[&str])],
         config: GazetteerConfig,
-    ) -> (RelationHandle, Gazetteer) {
+    ) -> Result<(RelationHandle, Gazetteer)> {
         let meta = gazetteer_dict_metadata(ColType::Int);
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let dict =
-            create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts).unwrap();
+            create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts)?;
         for (entity, surfaces) in rows {
             let surface_list =
                 DataValue::List(surfaces.iter().map(|s| DataValue::from(*s)).collect());
@@ -425,27 +426,25 @@ mod tests {
                 &row,
                 kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
+            )?;
         }
-        tx.commit().unwrap();
-        let rtx = db.read_tx().unwrap();
-        let g = compile_dictionary(&rtx, &dict, config).unwrap();
-        (dict, g)
+        tx.commit().map_err(|e| miette!("{e}"))?;
+        let rtx = db.read_tx()?;
+        let g = compile_dictionary(&rtx, &dict, config)?;
+        Ok((dict, g))
     }
 
     /// A compact, comparable view of a tag: `(entity_id, start, len, surface)`.
-    fn view(tags: &[Tag]) -> Vec<(i64, usize, usize, String)> {
-        tags.iter()
-            .map(|t| {
-                (
-                    t.entity.get_int().unwrap(),
-                    t.start,
-                    t.len,
-                    t.surface.to_string(),
-                )
-            })
-            .collect()
+    fn view(tags: &[Tag]) -> Result<Vec<(i64, usize, usize, String)>> {
+        let mut out = Vec::with_capacity(tags.len());
+        for t in tags {
+            let entity = t
+                .entity
+                .get_int()
+                .ok_or_else(|| miette!("expected int entity"))?;
+            out.push((entity, t.start, t.len, t.surface.to_string()));
+        }
+        Ok(out)
     }
 
     // -- the naive reference oracle -------------------------------------------
@@ -522,9 +521,9 @@ mod tests {
     // -- laws -----------------------------------------------------------------
 
     #[test]
-    fn matches_naive_reference_across_documents() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn matches_naive_reference_across_documents() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (1, &["New York"]),
             (2, &["York"]),
@@ -532,7 +531,7 @@ mod tests {
             (4, &["cat"]),
             (5, &["category"]),
         ];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
         let p = pairs(rows);
         for text in [
             "I love New York City in the fall",
@@ -544,48 +543,50 @@ mod tests {
             "catcatcat",
         ] {
             assert_eq!(
-                view(&g.tag(text)),
+                view(&g.tag(text))?,
                 naive_tag(&p, text, false),
                 "mismatch on {text:?}"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn leftmost_longest_overlap_policy() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn leftmost_longest_overlap_policy() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // "New York" (len 8) contains "York" (len 4); "New York City" (13)
         // contains both.
         let rows: &[(i64, &[&str])] =
             &[(1, &["New York"]), (2, &["York"]), (3, &["New York City"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
 
         // Longest wins from the leftmost start: the whole "New York City".
-        let tags = view(&g.tag("New York City"));
+        let tags = view(&g.tag("New York City"))?;
         assert_eq!(tags, vec![(3, 0, 13, "New York City".to_string())]);
 
         // Without the trailing "City", "New York" (8) beats contained "York".
-        let tags = view(&g.tag("New York today"));
+        let tags = view(&g.tag("New York today"))?;
         assert_eq!(tags, vec![(1, 0, 8, "New York".to_string())]);
 
         // Bare "York" still tags on its own.
-        let tags = view(&g.tag("York alone"));
+        let tags = view(&g.tag("York alone"))?;
         assert_eq!(tags, vec![(2, 0, 4, "York".to_string())]);
+        Ok(())
     }
 
     #[test]
-    fn shared_surface_form_emits_every_entity() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn shared_surface_form_emits_every_entity() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // Three distinct entities share the surface "Washington".
         let rows: &[(i64, &[&str])] = &[
             (10, &["Washington"]),
             (20, &["Washington"]),
             (30, &["Washington"]),
         ];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
-        let tags = view(&g.tag("Washington"));
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
+        let tags = view(&g.tag("Washington"))?;
         assert_eq!(
             tags,
             vec![
@@ -595,22 +596,23 @@ mod tests {
             ],
             "an ambiguous surface yields all its entities at the one span"
         );
+        Ok(())
     }
 
     #[test]
-    fn adjacent_and_repeated_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn adjacent_and_repeated_matches() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["ab"]), (2, &["cd"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
         // Adjacent, no separator: two back-to-back matches.
-        let tags = view(&g.tag("abcd"));
+        let tags = view(&g.tag("abcd"))?;
         assert_eq!(
             tags,
             vec![(1, 0, 2, "ab".to_string()), (2, 2, 2, "cd".to_string()),]
         );
         // Repeated same form at several offsets.
-        let tags = view(&g.tag("ab ab ab"));
+        let tags = view(&g.tag("ab ab ab"))?;
         assert_eq!(
             tags,
             vec![
@@ -619,108 +621,114 @@ mod tests {
                 (1, 6, 2, "ab".to_string()),
             ]
         );
+        Ok(())
     }
 
     #[test]
-    fn case_insensitive_folds_ascii_and_keeps_spans() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn case_insensitive_folds_ascii_and_keeps_spans() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["Rust"]), (2, &["cozo"])];
         let cfg = GazetteerConfig {
             case_insensitive: true,
         };
-        let (_dict, g) = compile(&db, rows, cfg);
+        let (_dict, g) = compile(&db, rows, cfg)?;
         let p = pairs(rows);
         let text = "RUST and rust and Cozo and COZO";
         // Agrees with the case-insensitive oracle.
-        assert_eq!(view(&g.tag(text)), naive_tag(&p, text, true));
+        assert_eq!(view(&g.tag(text))?, naive_tag(&p, text, true));
         // And the surface returned is the DOCUMENT's casing, not the form's.
-        let tags = view(&g.tag("RUST"));
+        let tags = view(&g.tag("RUST"))?;
         assert_eq!(tags, vec![(1, 0, 4, "RUST".to_string())]);
+        Ok(())
     }
 
     #[test]
-    fn case_variant_forms_collapse_to_one_pattern() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn case_variant_forms_collapse_to_one_pattern() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // "Cat" and "cat" as forms of two different entities: under folding
         // they are one pattern carrying both entities.
         let rows: &[(i64, &[&str])] = &[(1, &["Cat"]), (2, &["cat"])];
         let cfg = GazetteerConfig {
             case_insensitive: true,
         };
-        let (_dict, g) = compile(&db, rows, cfg);
+        let (_dict, g) = compile(&db, rows, cfg)?;
         assert_eq!(g.pattern_count(), 1, "case-variant forms fold to one");
-        let tags = view(&g.tag("a CAT here"));
+        let tags = view(&g.tag("a CAT here"))?;
         assert_eq!(
             tags,
             vec![(1, 2, 3, "CAT".to_string()), (2, 2, 3, "CAT".to_string()),],
             "both entities emit at the one folded match"
         );
+        Ok(())
     }
 
     #[test]
-    fn exact_mode_is_case_sensitive() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn exact_mode_is_case_sensitive() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["Rust"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
         assert!(g.tag("i love rust").is_empty(), "lowercase does not match");
         assert_eq!(
-            view(&g.tag("i love Rust")),
+            view(&g.tag("i love Rust"))?,
             vec![(1, 7, 4, "Rust".to_string())]
         );
+        Ok(())
     }
 
     // -- unicode --------------------------------------------------------------
 
     #[test]
-    fn unicode_multibyte_spans_are_byte_offsets_on_boundaries() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn unicode_multibyte_spans_are_byte_offsets_on_boundaries() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // "café" is 5 bytes (é = 2 bytes); "naïve" is 6 bytes (ï = 2).
         let rows: &[(i64, &[&str])] = &[(1, &["café"]), (2, &["naïve"]), (3, &["東京"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
         let p = pairs(rows);
 
         let text = "a café and a naïve 東京 tour";
-        assert_eq!(view(&g.tag(text)), naive_tag(&p, text, false));
+        assert_eq!(view(&g.tag(text))?, naive_tag(&p, text, false));
 
         // Spot the byte offsets explicitly: "café" starts at byte 2, spans 5.
         let tags = g.tag(text);
         let cafe = tags
             .iter()
             .find(|t| t.entity == DataValue::from(1i64))
-            .unwrap();
+            .ok_or_else(|| miette!("expected cafe tag"))?;
         assert_eq!((cafe.start, cafe.len), (2, 5));
         assert_eq!(&text[cafe.start..cafe.start + cafe.len], "café");
         // "東京" is two 3-byte chars = 6 bytes.
         let tokyo = tags
             .iter()
             .find(|t| t.entity == DataValue::from(3i64))
-            .unwrap();
+            .ok_or_else(|| miette!("expected tokyo tag"))?;
         assert_eq!(tokyo.len, 6);
         assert_eq!(&text[tokyo.start..tokyo.start + tokyo.len], "東京");
+        Ok(())
     }
 
     #[test]
-    fn no_match_inside_a_multibyte_char() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn no_match_inside_a_multibyte_char() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // 'é' is bytes [0xC3, 0xA9]. A form can never be the byte 0xA9 alone
         // (that is not valid UTF-8, so it is not a representable surface). The
         // form "é" matches the whole char, on boundaries.
         let rows: &[(i64, &[&str])] = &[(1, &["é"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
         // "café" contains an é at bytes [3,5); the tag lands exactly there.
-        let tags = view(&g.tag("café"));
+        let tags = view(&g.tag("café"))?;
         assert_eq!(tags, vec![(1, 3, 2, "é".to_string())]);
+        Ok(())
     }
 
     #[test]
-    fn zalgo_and_rtl_agree_with_oracle() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn zalgo_and_rtl_agree_with_oracle() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // Zalgo (combining marks), RTL (Arabic/Hebrew), and an emoji ZWJ
         // sequence — all valid UTF-8, all handled as opaque bytes.
         let rows: &[(i64, &[&str])] = &[
@@ -729,7 +737,7 @@ mod tests {
             (3, &["שלום"]),              // "peace" in Hebrew (RTL)
             (4, &["👩\u{200d}💻"]),      // woman technologist (ZWJ emoji)
         ];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
         let p = pairs(rows);
         for text in [
             "say مرحبا to a\u{0301}\u{0300} and שלום",
@@ -737,40 +745,43 @@ mod tests {
             "a\u{0301}\u{0300}a\u{0301}\u{0300}",
         ] {
             assert_eq!(
-                view(&g.tag(text)),
+                view(&g.tag(text))?,
                 naive_tag(&p, text, false),
                 "mismatch on {text:?}"
             );
         }
+        Ok(())
     }
 
     // -- edge cases -----------------------------------------------------------
 
     #[test]
-    fn empty_dictionary_tags_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let (_dict, g) = compile(&db, &[], GazetteerConfig::exact());
+    fn empty_dictionary_tags_nothing() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let (_dict, g) = compile(&db, &[], GazetteerConfig::exact())?;
         assert_eq!(g.pattern_count(), 0);
         assert!(g.tag("any text at all").is_empty());
         assert!(g.tag("").is_empty());
+        Ok(())
     }
 
     #[test]
-    fn empty_document_tags_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn empty_document_tags_nothing() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["anything"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact())?;
         assert!(g.tag("").is_empty());
+        Ok(())
     }
 
     // -- determinism ----------------------------------------------------------
 
     #[test]
-    fn determinism_run_twice_byte_identical() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn determinism_run_twice_byte_identical() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (3, &["gamma", "g"]),
             (1, &["alpha", "a"]),
@@ -778,26 +789,27 @@ mod tests {
         ];
         let text = "alpha beta gamma a b g alpha";
         // One stored relation; two independent compiles of it must agree.
-        let (dict, g1) = compile(&db, rows, GazetteerConfig::exact());
-        let rtx = db.read_tx().unwrap();
-        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::exact()).unwrap();
+        let (dict, g1) = compile(&db, rows, GazetteerConfig::exact())?;
+        let rtx = db.read_tx()?;
+        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())?;
         let t1 = g1.tag(text);
         let t2 = g2.tag(text);
         assert_eq!(t1, t2, "same dictionary + text ⇒ identical tags");
         // And a second tag() call on the same automaton is identical.
         assert_eq!(g1.tag(text), t1);
+        Ok(())
     }
 
     // -- corruption is typed, never a panic -----------------------------------
 
     #[test]
-    fn empty_surface_form_is_typed_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn empty_surface_form_is_typed_error() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let meta = gazetteer_dict_metadata(ColType::Int);
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let dict =
-            create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts).unwrap();
+            create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts)?;
         let row = vec![
             DataValue::from(1i64),
             DataValue::List(vec![DataValue::from("ok"), DataValue::from("")]),
@@ -807,58 +819,58 @@ mod tests {
             &row,
             kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
-        )
-        .unwrap();
-        tx.commit().unwrap();
+        )?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
-            .expect_err("empty surface must error");
+            .err().ok_or_else(|| miette!("empty surface must error"))?;
         assert!(
             err.downcast_ref::<GazetteerEmptySurface>().is_some(),
             "typed empty-surface error, got: {err:?}"
         );
+        Ok(())
     }
 
     #[test]
-    fn corrupt_surfaces_column_is_typed_error_not_panic() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn corrupt_surfaces_column_is_typed_error_not_panic() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["fine"])];
-        let (dict, _g) = compile(&db, rows, GazetteerConfig::exact());
+        let (dict, _g) = compile(&db, rows, GazetteerConfig::exact())?;
 
         // Overwrite the row's value with a non-list surfaces column (an Int
         // where a List<String> is required). The stored bytes decode as a
         // valid tuple, but the wrong shape for the dictionary.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let bad = vec![DataValue::from(1i64), DataValue::from(999i64)];
         dict.put_fact(
             &mut tx,
             &bad,
             kyzo_model::value::ValidityTs::from_raw(1),
             SourceSpan(0, 0),
-        )
-        .unwrap();
-        tx.commit().unwrap();
+        )?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
-            .expect_err("non-list surfaces must error, not panic");
+            .err().ok_or_else(|| miette!("non-list surfaces must error, not panic"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption error, got: {err:?}"
         );
+        Ok(())
     }
 
     #[test]
-    fn non_string_surface_element_is_typed_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn non_string_surface_element_is_typed_error() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["fine"])];
-        let (dict, _g) = compile(&db, rows, GazetteerConfig::exact());
+        let (dict, _g) = compile(&db, rows, GazetteerConfig::exact())?;
 
         // A surfaces list whose element is an Int, not a String.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let bad = vec![
             DataValue::from(1i64),
             DataValue::List(vec![DataValue::from(42i64)]),
@@ -868,34 +880,33 @@ mod tests {
             &bad,
             kyzo_model::value::ValidityTs::from_raw(1),
             SourceSpan(0, 0),
-        )
-        .unwrap();
-        tx.commit().unwrap();
+        )?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
-            .expect_err("non-string surface element must error, not panic");
+            .err().ok_or_else(|| miette!("non-string surface element must error, not panic"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption error, got: {err:?}"
         );
+        Ok(())
     }
 
     // --- hostile-review ---
 
     use std::collections::BTreeSet;
 
-    fn hostile_view(tags: &[Tag]) -> Vec<(i64, usize, usize, String)> {
-        tags.iter()
-            .map(|t| {
-                (
-                    t.entity.get_int().unwrap(),
-                    t.start,
-                    t.len,
-                    t.surface.to_string(),
-                )
-            })
-            .collect()
+    fn hostile_view(tags: &[Tag]) -> Result<Vec<(i64, usize, usize, String)>> {
+        let mut out = Vec::with_capacity(tags.len());
+        for t in tags {
+            let entity = t
+                .entity
+                .get_int()
+                .ok_or_else(|| miette!("expected int entity"))?;
+            out.push((entity, t.start, t.len, t.surface.to_string()));
+        }
+        Ok(out)
     }
 
     fn hostile_pairs<'a>(rows: &'a [(i64, &'a [&'a str])]) -> Vec<(i64, &'a str)> {
@@ -940,12 +951,14 @@ mod tests {
         let mut out: Vec<(i64, usize, usize, String)> = Vec::new();
         let mut cursor = 0usize;
         while let Some(&min_start) = cands.iter().map(|(s, _)| s).filter(|&&s| s >= cursor).min() {
-            let max_end = cands
+            let Some(max_end) = cands
                 .iter()
                 .filter(|(s, _)| *s == min_start)
                 .map(|(_, e)| *e)
                 .max()
-                .unwrap();
+            else {
+                break;
+            };
             let mut ents: BTreeSet<i64> = BTreeSet::new();
             for (e, surf) in pairs {
                 let sb = surf.as_bytes();
@@ -967,8 +980,8 @@ mod tests {
         out
     }
 
-    fn assert_agree(g: &Gazetteer, pairs: &[(i64, &str)], text: &str, ci: bool) {
-        let tags = g.tag(text);
+    fn assert_agree(g: &Gazetteer, pairs: &[(i64, &str)], text: &str, ci: bool) -> Result<()> {
+        let tags = g.tag(text)?;
         for t in &tags {
             assert!(
                 text.is_char_boundary(t.start),
@@ -985,17 +998,18 @@ mod tests {
             );
         }
         assert_eq!(
-            hostile_view(&tags),
+            hostile_view(&tags)?,
             ref_tag(pairs, text, ci),
             "mismatch on {text:?}"
         );
         assert_eq!(g.tag(text), tags, "non-deterministic tag on {text:?}");
+        Ok(())
     }
 
     #[test]
-    fn turkish_dotted_dotless_i_no_false_multibyte_match() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn turkish_dotted_dotless_i_no_false_multibyte_match() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (1, &["i"]),
             (2, &["I"]),
@@ -1006,7 +1020,7 @@ mod tests {
         let cfg = GazetteerConfig {
             case_insensitive: true,
         };
-        let (_d, g) = compile(&db, rows, cfg);
+        let (_d, g) = compile(&db, rows, cfg)?;
         let p = hostile_pairs(rows);
         for text in [
             "\u{0130}stanbul",
@@ -1015,14 +1029,15 @@ mod tests {
             "i\u{0130}i\u{0131}i",
             "\u{0130}\u{0130}\u{0130}",
         ] {
-            assert_agree(&g, &p, text, true);
+            assert_agree(&g, &p, text, true)?;
         }
+        Ok(())
     }
 
     #[test]
-    fn ligature_and_combining_marks_adjacent_to_ascii() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn ligature_and_combining_marks_adjacent_to_ascii() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (1, &["cafe"]),
             (2, &["ff"]),
@@ -1030,7 +1045,7 @@ mod tests {
             (4, &["a\u{0301}"]),
             (5, &["a"]),
         ];
-        let (_d, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_d, g) = compile(&db, rows, GazetteerConfig::exact())?;
         let p = hostile_pairs(rows);
         for text in [
             "cafe\u{0301}",
@@ -1039,14 +1054,15 @@ mod tests {
             "\u{FB00}\u{FB00}ff",
             "cafe cafe\u{0301}",
         ] {
-            assert_agree(&g, &p, text, false);
+            assert_agree(&g, &p, text, false)?;
         }
+        Ok(())
     }
 
     #[test]
-    fn three_way_nesting_and_prefix_suffix_overlaps() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn three_way_nesting_and_prefix_suffix_overlaps() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (1, &["a"]),
             (2, &["ab"]),
@@ -1055,7 +1071,7 @@ mod tests {
             (5, &["ba"]),
             (6, &["abab"]),
         ];
-        let (_d, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_d, g) = compile(&db, rows, GazetteerConfig::exact())?;
         let p = hostile_pairs(rows);
         for text in [
             "abc",
@@ -1070,21 +1086,22 @@ mod tests {
             "aabbaa",
             "abcabcabc",
         ] {
-            assert_agree(&g, &p, text, false);
+            assert_agree(&g, &p, text, false)?;
         }
+        Ok(())
     }
 
     #[test]
-    fn whole_document_surface_and_single_char_carpet() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn whole_document_surface_and_single_char_carpet() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (1, &["a"]),
             (2, &["b"]),
             (3, &["the whole thing"]),
             (4, &["東京"]),
         ];
-        let (_d, g) = compile(&db, rows, GazetteerConfig::exact());
+        let (_d, g) = compile(&db, rows, GazetteerConfig::exact())?;
         let p = hostile_pairs(rows);
         for text in [
             "the whole thing",
@@ -1093,14 +1110,15 @@ mod tests {
             "東京東京",
             "b",
         ] {
-            assert_agree(&g, &p, text, false);
+            assert_agree(&g, &p, text, false)?;
         }
+        Ok(())
     }
 
     #[test]
-    fn seeded_fuzz_against_independent_reference() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn seeded_fuzz_against_independent_reference() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (1, &["ab"]),
             (2, &["abc"]),
@@ -1115,11 +1133,11 @@ mod tests {
             let cfg = GazetteerConfig {
                 case_insensitive: true,
             };
-            compile(&db, rows, cfg)
+            compile(&db, rows, cfg)?
         };
-        let dir2 = tempfile::tempdir().unwrap();
-        let db2 = new_fjall_storage(dir2.path()).unwrap();
-        let (_de, g_exact) = compile(&db2, rows, GazetteerConfig::exact());
+        let dir2 = tempfile::tempdir().into_diagnostic()?;
+        let db2 = new_fjall_storage(dir2.path())?;
+        let (_de, g_exact) = compile(&db2, rows, GazetteerConfig::exact())?;
         let p = hostile_pairs(rows);
 
         let alphabet = [
@@ -1150,45 +1168,47 @@ mod tests {
                 r /= alphabet_len;
                 s.push_str(alphabet[idx]);
             }
-            assert_agree(&g_exact, &p, &s, false);
-            assert_agree(&g_lower, &p, &s, true);
+            assert_agree(&g_exact, &p, &s, false)?;
+            assert_agree(&g_lower, &p, &s, true)?;
         }
+        Ok(())
     }
 
     #[test]
-    fn case_insensitive_multibyte_surface_matches_original_form() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn case_insensitive_multibyte_surface_matches_original_form() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &["\u{0130}NDEX"])];
         let cfg = GazetteerConfig {
             case_insensitive: true,
         };
-        let (_d, g) = compile(&db, rows, cfg);
+        let (_d, g) = compile(&db, rows, cfg)?;
         let p = hostile_pairs(rows);
         for text in ["the \u{0130}NDEX here", "\u{0130}ndex lower tail"] {
-            assert_agree(&g, &p, text, true);
+            assert_agree(&g, &p, text, true)?;
         }
-        let tags = hostile_view(&g.tag("go \u{0130}NDEX go"));
+        let tags = hostile_view(&g.tag("go \u{0130}NDEX go"))?;
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].0, 1);
         assert_eq!(
             &"go \u{0130}NDEX go"[tags[0].1..tags[0].1 + tags[0].2],
             "\u{0130}NDEX"
         );
+        Ok(())
     }
 
     #[test]
-    fn two_compiles_agree_on_adversarial_docs() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn two_compiles_agree_on_adversarial_docs() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[
             (3, &["東京", "b"]),
             (1, &["ab", "a"]),
             (2, &["abc", "東", "ab"]),
         ];
-        let (dict, g1) = compile(&db, rows, GazetteerConfig::exact());
-        let rtx = db.read_tx().unwrap();
-        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::exact()).unwrap();
+        let (dict, g1) = compile(&db, rows, GazetteerConfig::exact())?;
+        let rtx = db.read_tx()?;
+        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())?;
         for text in ["ab東京abc東ab", "東京", "abcabab"] {
             assert_eq!(
                 g1.tag(text),
@@ -1196,6 +1216,7 @@ mod tests {
                 "two compiles disagree on {text:?}"
             );
         }
+        Ok(())
     }
 
     /// Mutation differential: ASCII case-fold vs full `to_lowercase` on
@@ -1204,7 +1225,7 @@ mod tests {
     /// `str::to_lowercase` changes the byte length of `İNDEX` and breaks
     /// span truthfulness — this pin kills that mutant.
     #[test]
-    fn index_mutant_to_lowercase_diverges_on_turkish_i() {
+    fn index_mutant_to_lowercase_diverges_on_turkish_i() -> Result<()> {
         let surface = "\u{0130}NDEX"; // İNDEX
         let ascii_fold_len = surface.len(); // length-preserving fold
         let unicode_lower = surface.to_lowercase();
@@ -1213,13 +1234,13 @@ mod tests {
             unicode_lower.len(),
             "to_lowercase must change İNDEX length — the mutant this test kills"
         );
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows: &[(i64, &[&str])] = &[(1, &[surface])];
         let cfg = GazetteerConfig {
             case_insensitive: true,
         };
-        let (_d, g) = compile(&db, rows, cfg);
+        let (_d, g) = compile(&db, rows, cfg)?;
         let tags = g.tag(surface);
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].len, ascii_fold_len);
@@ -1227,5 +1248,6 @@ mod tests {
             &surface[tags[0].start..tags[0].start + tags[0].len],
             surface
         );
+        Ok(())
     }
 }
