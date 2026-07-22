@@ -149,6 +149,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -166,7 +167,7 @@ mod tests {
     ///   pop b: found (a,b,[a,b]); d already visited
     /// ⇒ exactly four rows, with d's route through c.
     #[test]
-    fn exact_traversal_and_routes() {
+    fn exact_traversal_and_routes() -> Result<()> {
         let got = run_fixed_rule(
             &Dfs,
             vec![
@@ -205,10 +206,10 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])),
+            ]))?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), s("a"), DataValue::List(vec![s("a")])]),
             Tuple::from_vec(vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])]),
@@ -220,5 +221,6 @@ mod tests {
             ]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
