@@ -60,6 +60,21 @@ members = [
 ]
 citation = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/store/transcript.rs::from",
+  "crates/kyzo-model/src/value/tag.rs::byte",
+]
+citation = "SEAT-59 closed discriminants: SealedArtifactKind's From<u64> and Tag::byte are independently authored discriminant tables (transcript artifact tags vs value-plane memcmp tags). Explicit match arms replace `as` (transmute-desugar refused under forbid(unsafe_code)); collapsing them would fuse unrelated taxonomies. Independence is the enum seats, not the match scaffold."
+
+[[copy_detector]]
+members = [
+  "crates/kyzo-core/src/store/replica.rs::from",
+  "crates/kyzo-core/src/store/transcript.rs::from",
+  "crates/kyzo-model/src/value/tag.rs::byte",
+]
+citation = "SEAT-59: closed discriminant tables for CrossingKind, SealedArtifactKind, and Tag. Each enum owns its wire tags; match arms are required under forbid(unsafe_code) (enum-to-int as desugars to transmute). Independence is the per-enum tag set, not the match shape. Collapsing would erase sealed wire seats or merge unrelated tag namespaces."
+
 # ---------------------------------------------------------------------------
 # WAIVER-PURITY (#376): per-pair independence rulings after grab-bag split.
 # Boilerplate (*_option, parse_quoted_*, tokenizer advance, stdlib scaffolds,
