@@ -471,34 +471,55 @@ pub fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
     edges
 }
 
-pub fn check_stratifiable(program: &Program) -> Result<(), Rejection> {
+/// One oracle door for dependency back-edges.
+///
+/// - `forcing_only = true` — stratification: a forcing edge whose dep can
+///   reach the head is illegal.
+/// - `forcing_only = false` — any edge closing a walk is a cycle (incremental
+///   refuses recursion even when stratifiable).
+///
+/// Shared because both questions are oracle-owned graph facts over the same
+/// edge list; splitting them into twin DFS bodies was accidental duplication,
+/// not a differential.
+pub(crate) fn dependency_back_edge(program: &Program, forcing_only: bool) -> Option<Rel> {
     let edges = dependency_edges(program);
-    let mut adjacency: HashMap<Rel, HashSet<Rel>> = HashMap::new();
+    let mut outs: HashMap<Rel, Vec<Rel>> = HashMap::new();
     for (head, dep, _) in &edges {
-        adjacency
-            .entry(head.clone())
-            .or_default()
-            .insert(dep.clone());
+        outs.entry(head.clone()).or_default().push(dep.clone());
     }
-    let reaches = |from: &Rel, to: &Rel| -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![from.clone()];
-        while let Some(r) = stack.pop() {
-            if r == *to {
-                return true;
-            }
-            if seen.insert(r.clone()) {
-                stack.extend(adjacency.get(&r).into_iter().flatten().cloned());
-            }
-        }
-        false
-    };
     for (head, dep, forcing) in &edges {
-        if *forcing && reaches(dep, head) {
-            return Err(Rejection::Unstratifiable(head.clone()));
+        if forcing_only && !*forcing {
+            continue;
+        }
+        if dep_can_reach(&outs, dep, head) {
+            return Some(head.clone());
         }
     }
-    Ok(())
+    None
+}
+
+fn dep_can_reach(outs: &HashMap<Rel, Vec<Rel>>, from: &Rel, target: &Rel) -> bool {
+    let mut seen = HashSet::new();
+    let mut work = vec![from.clone()];
+    while let Some(cur) = work.pop() {
+        if cur == *target {
+            return true;
+        }
+        if !seen.insert(cur.clone()) {
+            continue;
+        }
+        if let Some(next) = outs.get(&cur) {
+            work.extend(next.iter().cloned());
+        }
+    }
+    false
+}
+
+pub fn check_stratifiable(program: &Program) -> Result<(), Rejection> {
+    match dependency_back_edge(program, true) {
+        Some(head) => Err(Rejection::Unstratifiable(head)),
+        None => Ok(()),
+    }
 }
 
 /// One position that introduces a relation name into a namespace a
@@ -687,28 +708,34 @@ pub fn strata(program: &Program) -> Result<HashMap<Rel, usize>, Rejection> {
 
 pub type Bindings = HashMap<Name, DataValue>;
 
+/// Extend `bound` so every `args[i]` agrees with `tuple[i]`.
+///
+/// Position-indexed bind with a total `bind_slot` helper — deliberately not
+/// the engine's zip/`match` ladder (zone-oracle differential).
 pub fn unify(args: &[Term], tuple: &[DataValue], bound: &Bindings) -> Option<Bindings> {
     if args.len() != tuple.len() {
         return None;
     }
-    let mut out = bound.clone();
-    for (t, v) in args.iter().zip(tuple) {
-        match t {
-            Term::Const(c) => {
-                if c != v {
-                    return None;
-                }
-            }
-            Term::Var(name) => match out.get(name.as_str()) {
-                Some(existing) if existing != v => return None,
-                Some(_) => {}
-                None => {
-                    out.insert(name.clone(), v.clone());
-                }
-            },
+    let mut env = bound.clone();
+    for i in 0..args.len() {
+        if !bind_slot(&mut env, &args[i], &tuple[i]) {
+            return None;
         }
     }
-    Some(out)
+    Some(env)
+}
+
+fn bind_slot(env: &mut Bindings, term: &Term, value: &DataValue) -> bool {
+    match term {
+        Term::Const(c) => c == value,
+        Term::Var(name) => match env.get(name.as_str()) {
+            Some(prior) => prior == value,
+            None => {
+                env.insert(name.clone(), value.clone());
+                true
+            }
+        },
+    }
 }
 
 pub fn ground(args: &[Term], bound: &Bindings) -> Tuple {
@@ -741,6 +768,11 @@ fn body_bindings(
     body_bindings_from(rule, program, db, default_as_of, Bindings::new())
 }
 
+/// All body-satisfying environments starting from `initial`.
+///
+/// Positives join first (safety: negated probes are fully ground), then
+/// negated literals gate. Split into two helpers so the control flow is not
+/// a twin of the engine's single ordered-literal frontier loop.
 pub fn body_bindings_from(
     rule: &Rule,
     program: &Program,
@@ -748,30 +780,54 @@ pub fn body_bindings_from(
     default_as_of: AsOf,
     initial: Bindings,
 ) -> Vec<Bindings> {
-    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
-    ordered.extend(rule.body.iter().filter(|l| l.is_negated()));
+    let after_pos = join_positive_body(rule, program, db, default_as_of, initial);
+    gate_negated_body(rule, program, db, default_as_of, after_pos)
+}
 
-    let mut frontier: Vec<Bindings> = vec![initial];
-    for lit in ordered {
+fn join_positive_body(
+    rule: &Rule,
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
+    initial: Bindings,
+) -> Vec<Bindings> {
+    let mut frontier = vec![initial];
+    for lit in rule.body.iter().filter(|l| !l.is_negated()) {
         let rows = literal_rows(program, db, lit, default_as_of);
-        let mut next = Vec::new();
-        for bound in &frontier {
-            if lit.is_negated() {
-                let probe = ground(&lit.args, bound);
-                if !rows.contains(&probe) {
-                    next.push(bound.clone());
-                }
-            } else {
-                for tuple in &rows {
-                    if let Some(b) = unify(&lit.args, tuple.as_slice(), bound) {
-                        next.push(b);
-                    }
-                }
-            }
+        frontier = frontier
+            .into_iter()
+            .flat_map(|bound| {
+                rows.iter()
+                    .filter_map(|tuple| unify(&lit.args, tuple.as_slice(), &bound))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if frontier.is_empty() {
+            return frontier;
         }
-        frontier = next;
     }
     frontier
+}
+
+fn gate_negated_body(
+    rule: &Rule,
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
+    frontier: Vec<Bindings>,
+) -> Vec<Bindings> {
+    let mut live = frontier;
+    for lit in rule.body.iter().filter(|l| l.is_negated()) {
+        let rows = literal_rows(program, db, lit, default_as_of);
+        live.retain(|bound| {
+            let probe = ground(&lit.args, bound);
+            !rows.contains(&probe)
+        });
+        if live.is_empty() {
+            return live;
+        }
+    }
+    live
 }
 
 pub fn derived_rows(
