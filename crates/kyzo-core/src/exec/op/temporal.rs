@@ -908,128 +908,136 @@ mod tests {
         db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         sys: ValidityTs,
-    ) -> Vec<(i64, i64, i64, Option<i64>)> {
+    ) -> Result<Vec<(i64, i64, i64, Option<i64>)>, &'static str> {
         let ra = SpansRA {
             bindings: vec![sym("k"), sym("val"), sym("iv")],
             storage: handle.clone(),
             sys,
             span: sp(),
         };
-        let rtx = db.read_tx().expect("read tx");
+        let rtx = db.read_tx().map_err(|_| "read tx")?;
         let mut out = vec![];
-        for batch in ra.iter_batched(&rtx).expect("iter") {
-            for row in batch.expect("batch").into_rows() {
+        for batch in ra.iter_batched(&rtx).map_err(|_| "iter")? {
+            for row in batch.map_err(|_| "batch")?.into_rows() {
                 let DataValue::Num(ref n_k) = row[0] else {
-                    panic!("key not an int")
+                    return Err("key not an int");
                 };
-                let Some(k) = n_k.as_int() else {
-                    assert!(false, "key not an int");
-                    0
-                };
+                let k = n_k.as_int().ok_or("key not an int")?;
                 let DataValue::Num(ref n_val) = row[1] else {
-                    panic!("val not an int")
+                    return Err("val not an int");
                 };
-                let Some(val) = n_val.as_int() else {
-                    assert!(false, "val not an int");
-                    0
-                };
+                let val = n_val.as_int().ok_or("val not an int")?;
                 let DataValue::Interval(iv) = &row[2] else {
-                    panic!("third column not an interval: {row:?}")
+                    return Err("third column not an interval");
                 };
                 out.push((
                     k,
                     val,
-                    iv.start().expect("@spans runs always have a finite start"),
+                    iv.start().ok_or("@spans runs always have a finite start")?,
                     iv.end(), // None iff the run is genuinely open (PosUnbounded)
                 ));
             }
         }
         out.sort();
-        out
+        Ok(out)
     }
 
     #[test]
-    fn single_assert_is_one_open_interval() {
+    fn single_assert_is_one_open_interval() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_single", 1);
         assert_at(&db, &h, 1, 10, 100);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
+    
+        Ok(())
     }
 
     #[test]
-    fn retract_clips_the_interval_exclusive() {
+    fn retract_clips_the_interval_exclusive() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_retract", 1);
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
+    
+        Ok(())
     }
 
     #[test]
-    fn payload_change_splits_into_two_intervals() {
+    fn payload_change_splits_into_two_intervals() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_split", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 200);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
+    
+        Ok(())
     }
 
     #[test]
-    fn double_assert_same_payload_is_idempotent_one_interval() {
+    fn double_assert_same_payload_is_idempotent_one_interval() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_idempotent", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 100);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
+    
+        Ok(())
     }
 
     #[test]
-    fn assert_after_retract_opens_a_new_interval() {
+    fn assert_after_retract_opens_a_new_interval() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_reopen", 1);
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
         assert_at(&db, &h, 1, 30, 100);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 100, 30, None)]);
+    
+        Ok(())
     }
 
     #[test]
-    fn dangling_retract_holds_nowhere() {
+    fn dangling_retract_holds_nowhere() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_dangling_retract", 1);
         retract_at(&db, &h, 1, 10);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert!(rows.is_empty());
+    
+        Ok(())
     }
 
     /// Erase transparency: a system-time correction that un-records the
     /// instant-10 assertion falls through to the older instant-0 one.
     #[test]
-    fn erase_is_transparent_falls_through_to_older_instant() {
+    fn erase_is_transparent_falls_through_to_older_instant() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_erase", 1);
         assert_at(&db, &h, 1, 0, 100);
         assert_at(&db, &h, 1, 10, 200);
         erase_at(&db, &h, 1, 10);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         // Instant 10 is erased, so the payload is 100 throughout (the
         // instant-0 assert governs everywhere it would have fallen
         // through to) — one interval, not two.
         assert_eq!(rows, vec![(1, 100, 0, None)]);
+    
+        Ok(())
     }
 
     #[test]
-    fn no_zero_width_intervals_at_any_fixed_sys() {
+    fn no_zero_width_intervals_at_any_fixed_sys() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_no_zero_width", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 10, 200); // same instant, later sys: corrects it
-        for (start, end, _, _) in spans_rows(&db, &h, MAX_VALIDITY_TS)
+        for (start, end, _, _) in spans_rows(&db, &h, MAX_VALIDITY_TS)?
             .into_iter()
             .map(|(k, val, s, e)| (s, e, k, val))
         {
@@ -1045,22 +1053,26 @@ mod tests {
         let db2 = new_fjall_storage(tempfile_dir()).expect("storage");
         let h2 = make_relation(&db2, "spans_no_zero_width2", 1);
         assert_at(&db2, &h2, 1, 10, 100);
-        let rows = spans_rows(&db2, &h2, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db2, &h2, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
+    
+        Ok(())
     }
 
     #[test]
-    fn multiple_facts_derive_independently() {
+    fn multiple_facts_derive_independently() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_multi", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 2, 5, 900);
         retract_at(&db, &h, 2, 15);
-        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(
             rows.into_iter().sorted().collect_vec(),
             vec![(1, 100, 10, None), (2, 900, 5, Some(14))]
         );
+    
+        Ok(())
     }
 
     fn delta_rows(
@@ -1068,7 +1080,7 @@ mod tests {
         handle: &RelationHandle,
         from: AsOf,
         to: AsOf,
-    ) -> Vec<(i64, i64, i64)> {
+    ) -> Result<Vec<(i64, i64, i64)>, &'static str> {
         delta_rows_with_posting(db, handle, from, to, DeltaScan::Naive)
     }
 
@@ -1078,7 +1090,7 @@ mod tests {
         from: AsOf,
         to: AsOf,
         scan: DeltaScan,
-    ) -> Vec<(i64, i64, i64)> {
+    ) -> Result<Vec<(i64, i64, i64)>, &'static str> {
         let ra = DeltaRA {
             bindings: vec![sym("k"), sym("val"), sym("sgn")],
             storage: handle.clone(),
@@ -1087,69 +1099,66 @@ mod tests {
             span: sp(),
             scan,
         };
-        let rtx = db.read_tx().expect("read tx");
+        let rtx = db.read_tx().map_err(|_| "read tx")?;
         let mut out = vec![];
-        for batch in ra.iter_batched(&rtx).expect("iter") {
-            for row in batch.expect("batch").into_rows() {
+        for batch in ra.iter_batched(&rtx).map_err(|_| "iter")? {
+            for row in batch.map_err(|_| "batch")?.into_rows() {
                 let DataValue::Num(ref n_k) = row[0] else {
-                    panic!("key not an int")
+                    return Err("key not an int");
                 };
-                let Some(k) = n_k.as_int() else {
-                    assert!(false, "key not an int");
-                    0
-                };
+                let k = n_k.as_int().ok_or("key not an int")?;
                 let DataValue::Num(ref n_val) = row[1] else {
-                    panic!("val not an int")
+                    return Err("val not an int");
                 };
-                let Some(val) = n_val.as_int() else {
-                    assert!(false, "val not an int");
-                    0
-                };
+                let val = n_val.as_int().ok_or("val not an int")?;
                 let DataValue::Num(ref n_sgn) = row[2] else {
-                    panic!("sign not an int")
+                    return Err("sign not an int");
                 };
-                let Some(sgn) = n_sgn.as_int() else {
-                    assert!(false, "sign not an int");
-                    0
-                };
+                let sgn = n_sgn.as_int().ok_or("sign not an int")?;
                 out.push((k, val, sgn));
             }
         }
-        out
+        Ok(out)
     }
 
     #[test]
-    fn diff_valid_axis_sees_a_new_assertion_as_plus() {
+    fn diff_valid_axis_sees_a_new_assertion_as_plus() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "delta_new", 1);
         assert_at(&db, &h, 1, 10, 100);
-        let rows = delta_rows(&db, &h, AsOf::current(vts(5)), AsOf::current(vts(20)));
+        let rows = delta_rows(&db, &h, AsOf::current(vts(5)), AsOf::current(vts(20)))?;
         assert_eq!(rows, vec![(1, 100, SIGN_PLUS)]);
+    
+        Ok(())
     }
 
     #[test]
-    fn diff_payload_change_is_a_minus_plus_pair_never_modified() {
+    fn diff_payload_change_is_a_minus_plus_pair_never_modified() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "delta_change", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 200);
-        let rows = delta_rows(&db, &h, AsOf::current(vts(15)), AsOf::current(vts(25)));
+        let rows = delta_rows(&db, &h, AsOf::current(vts(15)), AsOf::current(vts(25)))?;
         assert_eq!(rows.len(), 2);
         assert!(rows.contains(&(1, 100, SIGN_MINUS)));
         assert!(rows.contains(&(1, 200, SIGN_PLUS)));
+    
+        Ok(())
     }
 
     #[test]
-    fn diff_identical_snapshots_is_empty() {
+    fn diff_identical_snapshots_is_empty() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "delta_empty", 1);
         assert_at(&db, &h, 1, 10, 100);
-        let rows = delta_rows(&db, &h, AsOf::current(vts(20)), AsOf::current(vts(20)));
+        let rows = delta_rows(&db, &h, AsOf::current(vts(20)), AsOf::current(vts(20)))?;
         assert!(rows.is_empty());
+    
+        Ok(())
     }
 
     #[test]
-    fn diff_sys_axis_sees_a_correction() {
+    fn diff_sys_axis_sees_a_correction() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "delta_sys", 1);
         assert_at(&db, &h, 1, 10, 100); // sys stamp 1 (first commit)
@@ -1157,8 +1166,10 @@ mod tests {
         // Fixed valid = MAX (current belief about "now"); sys axis varies.
         let before = AsOf::at(vts(0), MAX_VALIDITY_TS);
         let after = AsOf::current(MAX_VALIDITY_TS);
-        let rows = delta_rows(&db, &h, before, after);
+        let rows = delta_rows(&db, &h, before, after)?;
         assert_eq!(rows, vec![(1, 200, SIGN_PLUS)]);
+    
+        Ok(())
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
@@ -1279,8 +1290,8 @@ mod tests {
         idx: &RelationHandle,
         from: AsOf,
         to: AsOf,
-    ) {
-        let naive = delta_rows(db, base, from, to);
+    ) -> Result<(), &'static str> {
+        let naive = delta_rows(db, base, from, to)?;
         let fast = delta_rows_with_posting(
             db,
             base,
@@ -1289,15 +1300,16 @@ mod tests {
             DeltaScan::Accelerated {
                 posting: idx.clone(),
             },
-        );
+        )?;
         assert_eq!(
             naive, fast,
             "fast path disagreed with the naive path at from={from:?} to={to:?}"
         );
+        Ok(())
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_new_assertion() {
+    fn posting_fast_path_matches_naive_on_a_new_assertion() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let (base, idx) = make_indexed_relation(&db, "posting_new");
         write_indexed_event(&db, &base, 1, 10, Some(100));
@@ -1307,11 +1319,13 @@ mod tests {
             &idx,
             AsOf::current(vts(5)),
             AsOf::current(vts(20)),
-        );
+        )?;
+    
+        Ok(())
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_payload_change() {
+    fn posting_fast_path_matches_naive_on_a_payload_change() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let (base, idx) = make_indexed_relation(&db, "posting_change");
         write_indexed_event(&db, &base, 1, 10, Some(100));
@@ -1322,11 +1336,13 @@ mod tests {
             &idx,
             AsOf::current(vts(15)),
             AsOf::current(vts(25)),
-        );
+        )?;
+    
+        Ok(())
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_identical_snapshots() {
+    fn posting_fast_path_matches_naive_on_identical_snapshots() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let (base, idx) = make_indexed_relation(&db, "posting_identical");
         write_indexed_event(&db, &base, 1, 10, Some(100));
@@ -1336,11 +1352,13 @@ mod tests {
             &idx,
             AsOf::current(vts(20)),
             AsOf::current(vts(20)),
-        );
+        )?;
+    
+        Ok(())
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_retraction() {
+    fn posting_fast_path_matches_naive_on_a_retraction() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let (base, idx) = make_indexed_relation(&db, "posting_retract");
         write_indexed_event(&db, &base, 1, 10, Some(100));
@@ -1351,7 +1369,7 @@ mod tests {
             &idx,
             AsOf::current(vts(15)),
             AsOf::current(vts(25)),
-        );
+        )?;
         // A window entirely BEFORE any event: empty candidate set either way.
         assert_paths_agree(
             &db,
@@ -1359,11 +1377,13 @@ mod tests {
             &idx,
             AsOf::current(vts(1)),
             AsOf::current(vts(5)),
-        );
+        )?;
+    
+        Ok(())
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_backward_diff() {
+    fn posting_fast_path_matches_naive_on_a_backward_diff() -> Result<(), &'static str> {
         // `to` earlier than `from`: `lo`/`hi` still resolve correctly
         // since the fast path takes them by numeric min/max, not by
         // positional role.
@@ -1376,7 +1396,9 @@ mod tests {
             &idx,
             AsOf::current(vts(20)),
             AsOf::current(vts(5)),
-        );
+        )?;
+    
+        Ok(())
     }
 
     /// A seeded generative campaign (xorshift64*, the same dependency-free
@@ -1385,7 +1407,7 @@ mod tests {
     /// assert/retract events, many random coordinate pairs — the two
     /// production paths must agree on every one.
     #[test]
-    fn posting_fast_path_matches_naive_generatively() {
+    fn posting_fast_path_matches_naive_generatively() -> Result<(), &'static str> {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let (base, idx) = make_indexed_relation(&db, "posting_generative");
 
@@ -1422,7 +1444,9 @@ mod tests {
                 &idx,
                 AsOf::current(vts(from)),
                 AsOf::current(vts(to)),
-            );
+            )?;
         }
+    
+        Ok(())
     }
 }
