@@ -138,6 +138,8 @@ impl std::error::Error for InvalidRegex {
     }
 }
 
+impl miette::Diagnostic for InvalidRegex {}
+
 impl RegexSource {
     /// The writer door: validate `(flags, pattern)` under KyzoRegexV1 —
     /// the flags participate, because they change the accepted grammar.

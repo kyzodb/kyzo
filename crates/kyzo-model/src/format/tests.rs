@@ -26,12 +26,13 @@ use crate::SourceSpan;
 use crate::program::expr::{BindingPos, Expr, LazyOp};
 use crate::program::op;
 use crate::program::symbol::Symbol;
+use miette::{IntoDiagnostic, Result, miette};
 use crate::value::{
     Bound, DataValue, Interval, Num, RegexFlags, RegexSource, UuidWrapper, ValiditySlot,
     ValidityTs, Vector, append_canonical,
 };
 
-fn corpus() -> Vec<DataValue> {
+fn corpus() -> Result<Vec<DataValue>> {
     let mut c = vec![
         DataValue::Null,
         DataValue::Bool(false),
@@ -69,10 +70,10 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
-        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "^a.*b$".into()).unwrap()),
-        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "x+".into()).unwrap()),
-        DataValue::Vector(Vector::try_new(vec![0.0, -0.0, 1.0]).unwrap()),
-        DataValue::Vector(Vector::try_new(vec![-1.5, 2.5]).unwrap()),
+        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "^a.*b$".into()).into_diagnostic()?),
+        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "x+".into()).into_diagnostic()?),
+        DataValue::Vector(Vector::try_new(vec![0.0, -0.0, 1.0]).ok_or_else(|| miette!("vector"))?),
+        DataValue::Vector(Vector::try_new(vec![-1.5, 2.5]).ok_or_else(|| miette!("vector"))?),
         DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(0), true)),
         DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(1), false)),
         DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed(1))),
@@ -88,7 +89,7 @@ fn corpus() -> Vec<DataValue> {
     );
     let nested_list = DataValue::List(vec![DataValue::Num(Num::int(1))]);
     c.push(DataValue::List(vec![nested_set, nested_list]));
-    c
+    Ok(c)
 }
 
 fn encode(v: &DataValue) -> Vec<u8> {
@@ -98,26 +99,27 @@ fn encode(v: &DataValue) -> Vec<u8> {
 }
 
 #[test]
-fn law1_round_trip_corpus() {
-    for v in corpus() {
+fn law1_round_trip_corpus() -> Result<()> {
+    for v in corpus()? {
         let buf = encode(&v);
         let (decoded, rest) = match DataValue::decode_from_key(&buf) {
             Ok(pair) => pair,
             Err(e) => {
                 assert!(false, "decode failed for {v:?}: {e}");
-                return;
+                return Ok(());
             }
         };
         assert_eq!(decoded, v, "round-trip failed for {v:?}");
         assert!(rest.is_empty(), "trailing bytes for {v:?}");
     }
+    Ok(())
 }
 
 /// Exhaustive PAIRWISE check: cross-type disagreements cannot hide behind
 /// sort stability, and a failure names the exact offending pair.
 #[test]
-fn law2_order_embedding_corpus_pairwise() {
-    let values = corpus();
+fn law2_order_embedding_corpus_pairwise() -> Result<()> {
+    let values = corpus()?;
     let encoded: Vec<Vec<u8>> = values.iter().map(encode).collect();
     for i in 0..values.len() {
         for j in 0..values.len() {
@@ -130,13 +132,14 @@ fn law2_order_embedding_corpus_pairwise() {
             );
         }
     }
+    Ok(())
 }
 
 /// Deterministic corruption harness: every single-byte mutation of every
 /// corpus encoding must decode to an error or a value — never a panic.
 #[test]
-fn law3_byte_flip_harness() {
-    for v in corpus() {
+fn law3_byte_flip_harness() -> Result<()> {
+    for v in corpus()? {
         let buf = encode(&v);
         for i in 0..buf.len() {
             for flip in [0x01u8, 0x80, 0xFF] {
@@ -149,13 +152,15 @@ fn law3_byte_flip_harness() {
             }
         }
     }
+    Ok(())
 }
 
 #[test]
-fn law_vector_signed_zero_canonicalizes() {
-    let a = DataValue::Vector(Vector::try_new(vec![-0.0]).unwrap());
-    let b = DataValue::Vector(Vector::try_new(vec![0.0]).unwrap());
+fn law_vector_signed_zero_canonicalizes() -> Result<()> {
+    let a = DataValue::Vector(Vector::try_new(vec![-0.0]).ok_or_else(|| miette!("vector"))?);
+    let b = DataValue::Vector(Vector::try_new(vec![0.0]).ok_or_else(|| miette!("vector"))?);
     assert_eq!(encode(&a), encode(&b), "signed zero must canonicalize");
+    Ok(())
 }
 
 #[test]
@@ -171,10 +176,10 @@ const EXPR_BINDING_GOLDEN: &str = r#"{"Binding":{"var":{"name":"x"},"tuple_pos":
 /// Expr under one complete canonical serde codec, both directions:
 /// encode → decode identity, and the Binding golden bytes stay put.
 #[test]
-fn expr_canonical_round_trip_golden() {
-    let binding: Expr = serde_json::from_str(EXPR_BINDING_GOLDEN).expect("binding golden decodes");
+fn expr_canonical_round_trip_golden() -> Result<()> {
+    let binding: Expr = serde_json::from_str(EXPR_BINDING_GOLDEN).into_diagnostic()?;
     assert_eq!(
-        serde_json::to_string(&binding).expect("binding encodes"),
+        serde_json::to_string(&binding).into_diagnostic()?,
         EXPR_BINDING_GOLDEN,
         "Binding golden vector moved"
     );
@@ -217,7 +222,8 @@ fn expr_canonical_round_trip_golden() {
         ]),
         span,
     };
-    let bytes = serde_json::to_vec(&tree).expect("encode Expr tree");
-    let back: Expr = serde_json::from_slice(&bytes).expect("decode Expr tree");
+    let bytes = serde_json::to_vec(&tree).into_diagnostic()?;
+    let back: Expr = serde_json::from_slice(&bytes).into_diagnostic()?;
     assert_eq!(back, tree, "Expr tree round-trip changed identity");
+    Ok(())
 }
