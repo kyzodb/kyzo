@@ -774,18 +774,18 @@ pub(crate) fn validate_and_lower_crossing(
     status: crate::store::replica::CrossingStatus,
     shared_capabilities: crate::store::replica::CrossingCapabilitySet,
 ) -> Result<lowering::OriginSealedLowering, AdmitRefuse> {
-    use crate::store::replica::validate_crossing_before_lower;
+    use crate::store::replica::{validate_crossing_before_lower, CrossingValidationSeats};
     let envelope = crossing_envelope_from_record(record, certificate, status, shared_capabilities);
-    let validated = validate_crossing_before_lower(
+    let validated = validate_crossing_before_lower(CrossingValidationSeats {
         certificate,
-        &envelope,
+        envelope: &envelope,
         local_store,
         local_commit,
         authorizing_keys,
         scopes,
         continuity,
         held_capabilities,
-    )?;
+    })?;
     Ok(lower_after_crossing(record, &validated)?)
 }
 

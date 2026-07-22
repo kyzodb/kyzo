@@ -23,9 +23,9 @@ use crate::data::statement::{OntokKind, StatementContext, StatementSource};
 use crate::project::dimension::{LoweredRow, RecordLowering, StatementDimension};
 use crate::store::replica::{
     AdmissionCertificate, CrossingCapabilitySet, CrossingContext, CrossingEnvelope,
-    CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingRefuse, CrossingStatus,
-    CrossingValidated, GraphBoundKey, GraphBoundary, NamespacedRecordIdentity, PromotionMeaning,
-    ReplicaKey, TenantId, view_under_schema_cut,
+    CrossingEnvelopeParts, CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingRefuse,
+    CrossingStatus, CrossingValidated, GraphBoundKey, GraphBoundary, NamespacedRecordIdentity,
+    PromotionMeaning, ReplicaKey, TenantId, view_under_schema_cut,
 };
 use kyzo_model::value::DataValue;
 use kyzo_model::value::canonical::encode_owned;
@@ -173,17 +173,7 @@ pub(crate) fn crossing_envelope_from_record(
         StatementContext::Unscoped => CrossingContext::Unscoped,
         StatementContext::Scoped(id) => CrossingContext::Scoped(*id.as_digest()),
     };
-    CrossingEnvelope::new(
-        crossing_kind_from_ontok(record.kind()),
-        *certificate.protocol_version(),
-        *certificate.schema_cut(),
-        certificate.authorizing_key_id(),
-        context,
-        evidence_demand,
-        evidence,
-        status,
-        shared_capabilities,
-    )
+    CrossingEnvelope::new(CrossingEnvelopeParts { kind: crossing_kind_from_ontok(record.kind()), schema_version: *certificate.protocol_version(), schema_cut: *certificate.schema_cut(), issuing_authority: certificate.authorizing_key_id(), context: context, evidence_demand: evidence_demand, evidence: evidence, status: status, shared_capabilities: shared_capabilities })
 }
 
 /// Lowering sealed under the origin schema cut (#270 T3 / seat 69).
@@ -813,7 +803,7 @@ mod tests {
             CrossingEvidenceDemand, CrossingStatus, GraphBoundary, KeyBoundaryRefuse,
             OriginContinuity, PostStateRoot, ScopeManifestDigest, ScopeManifestStatus,
             ScopeManifestTable, TenantId, mint_admission_certificate, sign_admission_parts,
-            validate_crossing_before_lower,
+            CrossingValidationSeats, validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
 
@@ -854,16 +844,7 @@ mod tests {
             CrossingEvidenceDemand::NotRequired
         );
 
-        let validated = validate_crossing_before_lower(
-            &cert,
-            &envelope,
-            record.store_id(),
-            CommitOrdinal::ZERO,
-            &keys,
-            &scopes,
-            Some(&OriginContinuity::mint()),
-            &CrossingCapabilitySet::new(),
-        )
+        let validated = validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: record.store_id(), local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() })
         .map_err(|e| miette!("crossing contract: {e}"))?;
 
         let sealed = super::lower_after_crossing(&record, &validated).map_err(|e| miette!("lower: {e}"))?;
@@ -1012,7 +993,7 @@ mod tests {
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
             CrossingRefuse, CrossingStatus, OriginContinuity, PostStateRoot, ScopeManifestDigest,
             ScopeManifestStatus, ScopeManifestTable, mint_admission_certificate,
-            sign_admission_parts, validate_crossing_before_lower,
+            sign_admission_parts, CrossingValidationSeats, validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
 
@@ -1046,16 +1027,7 @@ mod tests {
             CrossingStatus::Active,
             CrossingCapabilitySet::new(),
         );
-        let validated = validate_crossing_before_lower(
-            &cert,
-            &envelope,
-            record.store_id(),
-            CommitOrdinal::ZERO,
-            &keys,
-            &scopes,
-            Some(&OriginContinuity::mint()),
-            &CrossingCapabilitySet::new(),
-        )
+        let validated = validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: record.store_id(), local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() })
         .map_err(|e| miette!("validate A: {e}"))?;
         assert_eq!(
             validated.record_digest(),
@@ -1102,10 +1074,10 @@ mod tests {
         use crate::store::epoch::FenceEpoch;
         use crate::store::replica::{
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
-            CrossingContext, CrossingEnvelope, CrossingEvidence, CrossingEvidenceDemand,
+            CrossingContext, CrossingEnvelope, CrossingEnvelopeParts, CrossingEvidence, CrossingEvidenceDemand,
             CrossingKind, CrossingRefuse, CrossingStatus, OriginContinuity, PostStateRoot,
             ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable,
-            mint_admission_certificate, sign_admission_parts, validate_crossing_before_lower,
+            mint_admission_certificate, sign_admission_parts, CrossingValidationSeats, validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
 
@@ -1135,27 +1107,8 @@ mod tests {
 
         // Envelope claims Entity while record is Claim — validate would pass
         // envelope-vs-cert; lower_after_crossing must still refuse KindMismatch.
-        let mismatched = CrossingEnvelope::new(
-            CrossingKind::Entity,
-            *cert.protocol_version(),
-            *cert.schema_cut(),
-            cert.authorizing_key_id(),
-            CrossingContext::Unscoped,
-            CrossingEvidenceDemand::NotRequired,
-            CrossingEvidence::Absent,
-            CrossingStatus::Active,
-            CrossingCapabilitySet::new(),
-        );
-        let validated = validate_crossing_before_lower(
-            &cert,
-            &mismatched,
-            record.store_id(),
-            CommitOrdinal::ZERO,
-            &keys,
-            &scopes,
-            Some(&OriginContinuity::mint()),
-            &CrossingCapabilitySet::new(),
-        )
+        let mismatched = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Entity, schema_version: *cert.protocol_version(), schema_cut: *cert.schema_cut(), issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::NotRequired, evidence: CrossingEvidence::Absent, status: CrossingStatus::Active, shared_capabilities: CrossingCapabilitySet::new() });
+        let validated = validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &mismatched, local_store: record.store_id(), local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() })
         .map_err(|e| miette!("envelope kind is a known ONTOK tag: {e}"))?;
         assert_eq!(
             super::lower_after_crossing(&record, &validated),
