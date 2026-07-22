@@ -37,6 +37,17 @@ use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
+/// Seats for [`TempStoreRA::prefix_join_batched`].
+pub(crate) struct TempPrefixJoinBatched<'a> {
+    pub(crate) left: BatchIter<'a>,
+    pub(crate) join_indices: (Vec<usize>, Vec<usize>),
+    pub(crate) eliminate_indices: BTreeSet<usize>,
+    pub(crate) delta_rule: Option<AtomOccurrence>,
+    pub(crate) stores: &'a BTreeMap<MagicSymbol, EpochStore>,
+    pub(crate) want_premises: bool,
+    pub(crate) capture_right_as_premise: bool,
+}
+
 /// A scan of one rule's [`EpochStore`]. This variant is where the
 /// semi-naive delta discipline is *implemented*: when `delta_rule` names
 /// THIS occurrence (this atom's specific position in its body, not merely
@@ -119,17 +130,19 @@ impl TempStoreRA {
     /// trailing bindings — never of the left row — so it is computed once
     /// here; the row-at-a-time path recomputed it on every row that took
     /// the bounded branch (same result, redundant work).
-    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
     pub(crate) fn prefix_join_batched<'a>(
         &'a self,
-        left: BatchIter<'a>,
-        (left_join_indices, right_join_indices): (Vec<usize>, Vec<usize>),
-        eliminate_indices: BTreeSet<usize>,
-        delta_rule: Option<AtomOccurrence>,
-        stores: &'a BTreeMap<MagicSymbol, EpochStore>,
-        want_premises: bool,
-        capture_right_as_premise: bool,
+        seats: TempPrefixJoinBatched<'a>,
     ) -> Result<BatchIter<'a>> {
+        let TempPrefixJoinBatched {
+            left,
+            join_indices: (left_join_indices, right_join_indices),
+            eliminate_indices,
+            delta_rule,
+            stores,
+            want_premises,
+            capture_right_as_premise,
+        } = seats;
         let storage = epoch_store_of(stores, &self.storage_key)?;
 
         let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();

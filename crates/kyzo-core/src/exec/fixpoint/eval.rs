@@ -1309,18 +1309,31 @@ pub(crate) fn project_positions(row: &[DataValue], positions: &[HeadPos]) -> Tup
 /// note → limiter put. Used by both epoch-0 and semi-naive epochs; the
 /// epochs differ in *which* derivations are offered (full body vs delta
 /// occurrence), not in how a new row is admitted to `out`.
-#[allow(clippy::too_many_arguments)] // eval staging arity — pending/limiter/out are distinct seats
-fn ingest_plain_derivation(
-    out: &mut RegularTempStore,
-    pending: &mut PendingWitnesses,
-    limiter: &QueryLimiter,
+/// Staging seats for [`ingest_plain_derivation`] — out/pending/limiter stay distinct.
+struct PlainIngestSeats<'a> {
+    out: &'a mut RegularTempStore,
+    pending: &'a mut PendingWitnesses,
+    limiter: &'a QueryLimiter,
     should_check_limit: bool,
     recording: bool,
     rule_n: usize,
+    hit_limit: &'a mut bool,
+}
+
+fn ingest_plain_derivation(
+    seats: PlainIngestSeats<'_>,
     item: Cow<'_, [DataValue]>,
     premises: &Premises<'_>,
-    hit_limit: &mut bool,
 ) -> Result<ControlFlow<()>> {
+    let PlainIngestSeats {
+        out,
+        pending,
+        limiter,
+        should_check_limit,
+        recording,
+        rule_n,
+        hit_limit,
+    } = seats;
     if should_check_limit {
         if !out.exists(&item) {
             let item = Tuple::from_vec(item.into_owned());
@@ -1369,15 +1382,17 @@ fn initial_plain_eval<R: RuleBody>(
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
             ticker.tick(out.len())?;
             ingest_plain_derivation(
-                &mut out,
-                &mut pending,
-                limiter,
-                should_check_limit,
-                recording,
-                rule_n,
+                PlainIngestSeats {
+                    out: &mut out,
+                    pending: &mut pending,
+                    limiter,
+                    should_check_limit,
+                    recording,
+                    rule_n,
+                    hit_limit: &mut hit_limit,
+                },
                 item,
                 &premises,
-                &mut hit_limit,
             )
         })?;
         if hit_limit {
@@ -1425,15 +1440,17 @@ fn incremental_plain_eval<R: RuleBody>(
                 }
                 let mut hit = false;
                 let flow = ingest_plain_derivation(
-                    &mut out,
-                    &mut pending,
-                    limiter,
-                    should_check_limit,
-                    recording,
-                    rule_n,
+                    PlainIngestSeats {
+                        out: &mut out,
+                        pending: &mut pending,
+                        limiter,
+                        should_check_limit,
+                        recording,
+                        rule_n,
+                        hit_limit: &mut hit,
+                    },
                     item,
                     &premises,
-                    &mut hit,
                 )?;
                 if hit {
                     hit_limit.set(true);

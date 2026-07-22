@@ -578,15 +578,15 @@ impl InnerJoin {
                     let left =
                         self.left
                             .iter_batched(tx, delta_rule, stores, segments, want_premises)?;
-                    return r.prefix_join_batched(
+                    return r.prefix_join_batched(crate::exec::op::delta::TempPrefixJoinBatched {
                         left,
                         join_indices,
                         eliminate_indices,
                         delta_rule,
                         stores,
                         want_premises,
-                        capture,
-                    );
+                        capture_right_as_premise: capture,
+                    });
                 }
             }
             RelAlgebra::Stored(r) => {
@@ -602,12 +602,14 @@ impl InnerJoin {
                             .iter_batched(tx, delta_rule, stores, segments, want_premises)?;
                     return r.prefix_join_batched(
                         tx,
-                        left,
-                        join_indices,
-                        eliminate_indices,
-                        segments,
-                        want_premises,
-                        capture,
+                        crate::exec::op::stored::StoredPrefixJoinBatched {
+                            left,
+                            join_indices,
+                            eliminate_indices,
+                            segments,
+                            want_premises,
+                            capture_right_as_premise: capture,
+                        },
                     );
                 }
             }

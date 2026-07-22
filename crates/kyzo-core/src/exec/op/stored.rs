@@ -38,6 +38,16 @@ use std::fmt::Debug;
 use std::iter;
 use std::sync::Arc;
 
+/// Seats for [`StoredRA::prefix_join_batched`] (tx stays a separate door arg).
+pub(crate) struct StoredPrefixJoinBatched<'a> {
+    pub(crate) left: BatchIter<'a>,
+    pub(crate) join_indices: (Vec<usize>, Vec<usize>),
+    pub(crate) eliminate_indices: BTreeSet<usize>,
+    pub(crate) segments: Segments<'a>,
+    pub(crate) want_premises: bool,
+    pub(crate) capture_right_as_premise: bool,
+}
+
 /// A scan of a stored relation at the current time, through the landed
 /// scan surface of `runtime/relation.rs` (every method takes the
 /// transaction to read; see that module's routing note for temp
@@ -161,17 +171,19 @@ impl StoredRA {
     /// segment is a current-state-only acceleration structure, and
     /// [`StoredWithValidityRA::prefix_join_batched`] has its own probe with
     /// no segment argument at all.
-    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
     pub(crate) fn prefix_join_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
-        left: BatchIter<'a>,
-        (left_join_indices, right_join_indices): (Vec<usize>, Vec<usize>),
-        eliminate_indices: BTreeSet<usize>,
-        segments: Segments<'a>,
-        want_premises: bool,
-        capture_right_as_premise: bool,
+        seats: StoredPrefixJoinBatched<'a>,
     ) -> Result<BatchIter<'a>> {
+        let StoredPrefixJoinBatched {
+            left,
+            join_indices: (left_join_indices, right_join_indices),
+            eliminate_indices,
+            segments,
+            want_premises,
+            capture_right_as_premise,
+        } = seats;
         let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();
         right_invert_indices.sort_by_key(|(_, b)| **b);
         let left_to_prefix_indices = right_invert_indices

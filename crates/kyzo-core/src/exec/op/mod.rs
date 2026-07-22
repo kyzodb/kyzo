@@ -1875,12 +1875,14 @@ mod tests {
         for b in ra
             .prefix_join_batched(
                 &rtx,
-                left_of(probe_rows.clone()),
-                join_indices(),
-                Default::default(),
-                Segments::OFF,
-                false,
-                false,
+                crate::exec::op::stored::StoredPrefixJoinBatched {
+                    left: left_of(probe_rows.clone()),
+                    join_indices: join_indices(),
+                    eliminate_indices: Default::default(),
+                    segments: Segments::OFF,
+                    want_premises: false,
+                    capture_right_as_premise: false,
+                },
             )?
         {
             n_rows += b?.len();
@@ -1904,12 +1906,14 @@ mod tests {
         for b in ra
             .prefix_join_batched(
                 &rtx,
-                left_of(vec![probe_rows[0].clone()]),
-                join_indices(),
-                Default::default(),
-                segments,
-                false,
-                false,
+                crate::exec::op::stored::StoredPrefixJoinBatched {
+                    left: left_of(vec![probe_rows[0].clone()]),
+                    join_indices: join_indices(),
+                    eliminate_indices: Default::default(),
+                    segments,
+                    want_premises: false,
+                    capture_right_as_premise: false,
+                },
             )?
         {
             let _ = b?;
@@ -1919,12 +1923,14 @@ mod tests {
         for b in ra
             .prefix_join_batched(
                 &rtx,
-                left_of(probe_rows),
-                join_indices(),
-                Default::default(),
-                segments,
-                false,
-                false,
+                crate::exec::op::stored::StoredPrefixJoinBatched {
+                    left: left_of(probe_rows),
+                    join_indices: join_indices(),
+                    eliminate_indices: Default::default(),
+                    segments: segments,
+                    want_premises: false,
+                    capture_right_as_premise: false,
+                },
             )?
         {
             n_rows_seg += b?.len();
