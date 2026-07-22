@@ -213,7 +213,7 @@ fn skip_at(bytes: &[u8], depth: usize) -> Result<usize, DecodeError> {
             };
             let mut dim_arr = [0u8; 4];
             dim_arr.copy_from_slice(dim_bytes);
-            let dim = u32::from_be_bytes(dim_arr) as usize;
+            let dim = match usize::try_from(u32::from_be_bytes(dim_arr)) { Ok(n) => n, Err(_) => 0 };
             let mut at = 4;
             for _ in 0..dim {
                 let (_, used) = Num::decode_key(&body[at..]).map_err(DecodeError::Num)?;
@@ -329,7 +329,7 @@ fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
         DataValue::Null => out.push(Tag::Null.byte()),
         DataValue::Bool(b) => {
             out.push(Tag::Bool.byte());
-            out.push(*b as u8);
+            out.push(u8::from(*b));
         }
         DataValue::Num(n) => {
             out.push(Tag::Num.byte());
@@ -435,7 +435,7 @@ fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
         Datum::Null => out.push(Tag::Null.byte()),
         Datum::Bool(b) => {
             out.push(Tag::Bool.byte());
-            out.push(b as u8);
+            out.push(u8::from(b));
         }
         Datum::Num(n) => {
             out.push(Tag::Num.byte());
@@ -562,7 +562,7 @@ fn encode_json(out: &mut Vec<u8>, j: &Json) {
 
 /// Ascending order-preserving i64 key (sign bit flipped, big-endian).
 fn asc_ts_key(ts: i64) -> [u8; 8] {
-    ((ts ^ i64::MIN) as u64).to_be_bytes()
+    (ts ^ i64::MIN).cast_unsigned().to_be_bytes()
 }
 
 /// Descending order-preserving i64 key: the imported validity law (latest
@@ -576,7 +576,7 @@ fn desc_ts_key(ts: i64) -> [u8; 8] {
 }
 
 fn ts_from_asc(k: [u8; 8]) -> i64 {
-    (u64::from_be_bytes(k) as i64) ^ i64::MIN
+    u64::from_be_bytes(k).cast_signed() ^ i64::MIN
 }
 
 /// `0x00 → 0x00 0xFF` escaping with a `0x00 0x00` terminator: prefix-safe
@@ -756,7 +756,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             let count_bytes = body.get(..4).ok_or(DecodeError::Truncated)?;
             let mut count_arr = [0u8; 4];
             count_arr.copy_from_slice(count_bytes);
-            let count = u32::from_be_bytes(count_arr) as usize;
+            let count = match usize::try_from(u32::from_be_bytes(count_arr)) { Ok(n) => n, Err(_) => 0 };
             // Hostile length prefix: each float Num key is ≥1 byte, so a
             // claimed count larger than the remaining body cannot be
             // lawful. Refuse before `Vec::with_capacity` — otherwise a
@@ -992,7 +992,13 @@ mod tests {
         }
 
         fn below(&mut self, n: usize) -> usize {
-            (self.next() % n as u64) as usize
+            match u64::try_from(n) {
+                Ok(n_u) => match usize::try_from(self.next() % n_u) {
+                    Ok(v) => v,
+                    Err(_) => 0,
+                },
+                Err(_) => 0,
+            }
         }
     }
 
@@ -1533,7 +1539,7 @@ mod tests {
             0 => DataValue::Null,
             1 => DataValue::Bool(rng.next().is_multiple_of(2)),
             2 => DataValue::Num(if rng.next().is_multiple_of(2) {
-                Num::int(rng.next() as i64)
+                Num::int(rng.next().cast_signed())
             } else {
                 Num::float(f64::from_bits(rng.next()))
             }),
@@ -1551,7 +1557,7 @@ mod tests {
             }
             5 => {
                 let mut u = [0u8; 16];
-                u[0] = rng.next() as u8;
+                u[0] = match u8::try_from(rng.next() & 0xFF) { Ok(b) => b, Err(_) => 0 };
                 DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u)))
             }
             6 => {
@@ -1563,7 +1569,11 @@ mod tests {
                 DataValue::Set((0..len).map(|_| random_datum(rng, depth + 1)).collect())
             }
             8 => {
-                let flags = RegexFlags::from_bits((rng.next() % 0x40) as u8).expect("masked");
+                let flags = RegexFlags::from_bits(match u8::try_from(rng.next() % 0x40) {
+                    Ok(b) => b,
+                    Err(_) => 0,
+                })
+                .expect("masked");
                 let pattern = ["", "a", "a\\+", "^x$"][rng.below(4)].to_string();
                 DataValue::Regex(
                     RegexSource::validated(flags, pattern).expect("corpus patterns are valid"),
@@ -1577,18 +1587,21 @@ mod tests {
                 )
             }
             10 => {
-                let ts = ValidityTs::from_raw(rng.next() as i64);
+                let ts = ValidityTs::from_raw(rng.next().cast_signed());
                 let is_assert = rng.next().is_multiple_of(2);
                 DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
             }
             11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
                 Interval::EMPTY
             } else {
-                let lo = (rng.next() as i64) % 1000;
-                let span = (rng.next() % 50) as i64;
+                let lo = rng.next().cast_signed() % 1000;
+                let span = match i64::try_from(rng.next() % 50) { Ok(v) => v, Err(_) => 0 };
                 Interval::new(Bound::Closed(lo), Bound::Closed(lo.saturating_add(span)))
             }),
-            12 => DataValue::Geometry(Geometry::from_cells(rng.next() as u32, rng.next() as u32)),
+            12 => DataValue::Geometry(Geometry::from_cells(
+                match u32::try_from(rng.next() & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 },
+                match u32::try_from(rng.next() & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 },
+            )),
             _other => DataValue::Json(random_json(rng, 0)),
         }
     }
@@ -1600,7 +1613,7 @@ mod tests {
             1 => Json::Bool(rng.next().is_multiple_of(2)),
             2 => {
                 let n = if rng.next().is_multiple_of(2) {
-                    Num::int(rng.next() as i64)
+                    Num::int(rng.next().cast_signed())
                 } else {
                     // JSON numbers must be finite; map non-finite draws.
                     let f = f64::from_bits(rng.next());
@@ -1696,7 +1709,7 @@ mod tests {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in value_span {
             // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
-            h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+            h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
         }
         assert_eq!(&bytes[bytes.len() - 8..], h.to_be_bytes());
     }
@@ -1760,7 +1773,9 @@ mod tests {
         let mut rng = Rng(0xDEAD);
         for _ in 0..20_000 {
             let len = rng.below(24);
-            let bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            let bytes: Vec<u8> = (0..len)
+                .map(|_| match u8::try_from(rng.next() & 0xFF) { Ok(b) => b, Err(_) => 0 })
+                .collect();
             match decode(&bytes) {
         // must not panic
         Ok(v) => core::mem::drop(v),
