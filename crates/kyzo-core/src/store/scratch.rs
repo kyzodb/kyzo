@@ -356,27 +356,29 @@ mod tests {
     /// `(x, valid_version_ts)` pairs — the ACTUAL returned tuple values,
     /// not a count. `.take` caps emission so a mutant that emits forever
     /// fails fast rather than merely hanging.
-    fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Vec<(i64, i64)> {
+    fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Result<Vec<(i64, i64)>> {
         let (lo, hi) = rel_bounds();
         let as_of = AsOf::at(ValidityTs::from_raw(sys), ValidityTs::from_raw(valid));
         t.range_skip_scan_tuple(&lo, &hi, as_of)
             .take(1000)
             .map(|r| {
-                let tup = r.expect("engine-shaped rows decode cleanly");
-                let x = tup[0].get_int().expect("int key column");
+                let tup = r.map_err(|e| miette!("engine-shaped rows decode cleanly: {e}"))?;
+                let x = tup[0]
+                    .get_int()
+                    .ok_or_else(|| miette!("int key column"))?;
                 let version_ts = match &tup[1] {
                     DataValue::Validity(v) => v.timestamp().raw(),
                     other @ (data_value_any!()) => {
-                        panic!("expected a valid-instant slot, got {other:?}")
+                        return Err(miette!("expected a valid-instant slot, got {other:?}"));
                     }
                 };
-                (x, version_ts)
+                Ok((x, version_ts))
             })
             .collect()
     }
 
     /// Current-belief scan at valid time `ts` (`sys = i64::MAX`).
-    fn scan_at(t: &TempTx, ts: i64) -> Vec<(i64, i64)> {
+    fn scan_at(t: &TempTx, ts: i64) -> Result<Vec<(i64, i64)>> {
         scan_at_coord(t, i64::MAX, ts)
     }
 
@@ -434,14 +436,14 @@ mod tests {
         ] {
             t.put(&k, &v)?;
         }
-        assert_eq!(scan_at(&t, 5), vec![], "before any assertion");
-        assert_eq!(scan_at(&t, 9), vec![(2, 8)], "only tuple 2 asserted yet");
+        assert_eq!(scan_at(&t, 5)?, vec![], "before any assertion");
+        assert_eq!(scan_at(&t, 9)?, vec![(2, 8)], "only tuple 2 asserted yet");
         assert_eq!(
-            scan_at(&t, 15),
+            scan_at(&t, 15)?,
             vec![(1, 10), (2, 8)],
             "both live; newest version of 1 at or before 15 is ts=10"
         );
-        assert_eq!(scan_at(&t, 25), vec![(2, 8)], "tuple 1 retracted at 20");
+        assert_eq!(scan_at(&t, 25)?, vec![(2, 8)], "tuple 1 retracted at 20");
     
         Ok(())
     }
@@ -458,24 +460,24 @@ mod tests {
         // valid=10: the first candidate (ts=20) is in the future, so the
         // loop re-seeks to exactly `valid(10)` — which must land on it.
         assert_eq!(
-            scan_at(&t, 10),
+            scan_at(&t, 10)?,
             vec![(1, 10)],
             "version exactly at the query ts must be the answer"
         );
-        assert_eq!(scan_at(&t, 20), vec![(1, 20)], "newest at 20");
-        assert_eq!(scan_at(&t, 15), vec![(1, 10)], "newest at or before 15");
+        assert_eq!(scan_at(&t, 20)?, vec![(1, 20)], "newest at 20");
+        assert_eq!(scan_at(&t, 15)?, vec![(1, 10)], "newest at or before 15");
         // The SYSTEM axis is inclusive the same way: two system versions
         // of one instant, queried exactly at the older one's stamp.
         let mut t = TempTx::default();
         t.put(&bk(1, 10, 10), &bv(ClaimPolarity::Assert))?;
         t.put(&bk(1, 10, 20), &bv(ClaimPolarity::Retract))?;
         assert_eq!(
-            scan_at_coord(&t, 10, 15),
+            scan_at_coord(&t, 10, 15)?,
             vec![(1, 10)],
             "as recorded at sys=10 the assert governs"
         );
         assert_eq!(
-            scan_at_coord(&t, 20, 15),
+            scan_at_coord(&t, 20, 15)?,
             vec![],
             "the sys=20 correction retracts it"
         );
@@ -495,7 +497,7 @@ mod tests {
         let mut t = TempTx::default();
         t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert))?;
         t.put(&bk(9, i64::MIN, i64::MIN), &bv(ClaimPolarity::Retract))?;
-        assert_eq!(scan_at(&t, 10), vec![(1, 5)]);
+        assert_eq!(scan_at(&t, 10)?, vec![(1, 5)]);
     
         Ok(())
     }
@@ -624,18 +626,18 @@ mod tests {
         }
     }
 
-    fn apply<T: WriteTx>(tx: &mut T, op: &Op) -> Vec<Obs> {
-        match op {
+    fn apply<T: WriteTx>(tx: &mut T, op: &Op) -> Result<Vec<Obs>> {
+        Ok(match op {
             Op::Put(k, v) => {
-                tx.put(k, v).unwrap();
+                tx.put(k, v)?;
                 vec![]
             }
             Op::Del(k) => {
-                tx.del(k).unwrap();
+                tx.del(k)?;
                 vec![]
             }
             Op::DelRange(lo, hi) => {
-                tx.del_range(lo, hi).unwrap();
+                tx.del_range(lo, hi)?;
                 vec![]
             }
             Op::Get(k) => vec![match tx.get(k) {
@@ -652,7 +654,7 @@ mod tests {
                 Err(_) => Obs::Err,
             }],
             Op::Total => vec![collect_rows(tx.total_scan())],
-        }
+        })
     }
 
     #[test]
@@ -675,9 +677,9 @@ mod tests {
                 {
                     continue;
                 }
-                let a = apply(&mut temp_tx, &op);
-                let b = apply(&mut fjall_tx, &op);
-                let c = apply(&mut sim_tx, &op);
+                let a = apply(&mut temp_tx, &op)?;
+                let b = apply(&mut fjall_tx, &op)?;
+                let c = apply(&mut sim_tx, &op)?;
                 assert_eq!(a, b, "temp vs fjall: seed {seed} step {step} op {op:?}");
                 assert_eq!(a, c, "temp vs sim: seed {seed} step {step} op {op:?}");
             }
@@ -700,15 +702,15 @@ mod tests {
 
     /// Object-safe shim so one loop drives all three write transactions.
     trait DynW {
-        fn dput(&mut self, k: &[u8], v: &[u8]);
-        fn ddel_range(&mut self, lo: &[u8], hi: &[u8]);
+        fn dput(&mut self, k: &[u8], v: &[u8]) -> Result<()>;
+        fn ddel_range(&mut self, lo: &[u8], hi: &[u8]) -> Result<()>;
     }
     impl<T: WriteTx> DynW for T {
-        fn dput(&mut self, k: &[u8], v: &[u8]) {
-            self.put(k, v).unwrap();
+        fn dput(&mut self, k: &[u8], v: &[u8]) -> Result<()> {
+            self.put(k, v)
         }
-        fn ddel_range(&mut self, lo: &[u8], hi: &[u8]) {
-            self.del_range(lo, hi).unwrap();
+        fn ddel_range(&mut self, lo: &[u8], hi: &[u8]) -> Result<()> {
+            self.del_range(lo, hi)
         }
     }
 
@@ -732,10 +734,10 @@ mod tests {
             let mut sim_tx = sim_store.write_tx()?;
             let mut temp_tx = TempTx::default();
             for tx in [&mut temp_tx as &mut dyn DynW, &mut fjall_tx, &mut sim_tx] {
-                tx.dput(b"a", b"1");
-                tx.dput(b"a\x00", b"2");
-                tx.dput(b"b", b"3");
-                tx.ddel_range(lo, hi);
+                tx.dput(b"a", b"1")?;
+                tx.dput(b"a\x00", b"2")?;
+                tx.dput(b"b", b"3")?;
+                tx.ddel_range(lo, hi)?;
             }
             let a = collect_rows(temp_tx.total_scan());
             let b = collect_rows(fjall_tx.total_scan());
