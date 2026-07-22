@@ -392,7 +392,7 @@ impl<S: Storage> Engine<S> {
     pub fn fixed_rules(&self) -> BTreeMap<String, Arc<dyn FixedRule>> {
         self.fixed_rules
             .read()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .expect("fixed-rules mutex poisoned — refuse silent continue")
             .clone()
     }
 
@@ -403,7 +403,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .fixed_rules
             .write()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .expect("fixed-rules mutex poisoned — refuse silent continue");
         if registry.contains_key(&name) {
             bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
@@ -417,7 +417,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .fixed_rules
             .write()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .expect("fixed-rules mutex poisoned — refuse silent continue");
         if registry.contains_key(&name) {
             bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
@@ -433,7 +433,7 @@ impl<S: Storage> Engine<S> {
         }
         self.fixed_rules
             .write()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .expect("fixed-rules mutex poisoned — refuse silent continue")
             .remove(name)
             .is_some()
     }
