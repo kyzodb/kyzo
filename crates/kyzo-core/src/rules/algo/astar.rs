@@ -215,6 +215,7 @@ mod tests {
     use super::*;
     use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -231,7 +232,7 @@ mod tests {
     ///   pop c (f=2): goal ⇒ cost 2, route c→b→a reversed = [a,b,c]
     /// The direct a→c edge (cost 3) loses to the guided two-hop route.
     #[test]
-    fn heuristic_guided_route() {
+    fn heuristic_guided_route() -> Result<()> {
         let h_binding = Expr::Binding {
             var: Symbol::new("h", SourceSpan::default()),
             tuple_pos: BindingPos::Unresolved,
@@ -261,10 +262,10 @@ mod tests {
             opts_map(BTreeMap::from([(
                 SmartString::from("heuristic"),
                 h_binding,
-            )])),
+            )]))?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             s("a"),
             s("c"),
@@ -272,6 +273,7 @@ mod tests {
             DataValue::List(vec![s("a"), s("b"), s("c")]),
         ])];
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// CANCELLATION: pins unconditional top-of-pop in `astar`. Start `a` is a
@@ -279,7 +281,7 @@ mod tests {
     /// pre-raised flag still returns Ok (infinite cost); under the fix the
     /// first pop refuses.
     #[test]
-    fn astar_honors_cancel_on_sink_hub() {
+    fn astar_honors_cancel_on_sink_hub() -> Result<()> {
         fn sink_hub_inputs() -> Vec<TestInput> {
             vec![
                 // Only b→c exists; start a has zero outgoing edges.
@@ -299,7 +301,7 @@ mod tests {
                 TestInput::new(vec!["goal"], vec![Tuple::from_vec(vec![s("c")])]),
             ]
         }
-        fn sink_hub_opts() -> FixedRuleOptions {
+        fn sink_hub_opts() -> Result<FixedRuleOptions> {
             let h_binding = Expr::Binding {
                 var: Symbol::new("h", SourceSpan::default()),
                 tuple_pos: BindingPos::Unresolved,
@@ -313,10 +315,10 @@ mod tests {
         let ok = run_fixed_rule(
             &ShortestPathAStar,
             sink_hub_inputs(),
-            sink_hub_opts(),
+            sink_hub_opts()?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(ok.len(), 1);
         assert_eq!(ok[0][2], DataValue::from(f64::INFINITY));
         assert_eq!(ok[0][3], DataValue::List(vec![]));
@@ -324,8 +326,9 @@ mod tests {
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         assert!(
-            run_fixed_rule(&ShortestPathAStar, sink_hub_inputs(), sink_hub_opts(), flag).is_err(),
+            run_fixed_rule(&ShortestPathAStar, sink_hub_inputs(), sink_hub_opts()?, flag).is_err(),
             "sink hub pop must poll cancel (Ok under mid-scan-only poll)"
         );
+        Ok(())
     }
 }
