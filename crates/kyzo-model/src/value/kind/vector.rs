@@ -101,7 +101,7 @@ impl VectorDimension {
     }
 
     pub fn as_usize(self) -> usize {
-        self.0 as usize
+        (match usize::try_from(self.0) { Ok(n) => n, Err(_overflow) => usize::MAX })
     }
 }
 
