@@ -163,15 +163,6 @@ pub struct CancelFlag {
     cell: Arc<CancelCell>,
 }
 
-impl Default for CancelFlag {
-    /// Inert poll handle: never observes cancellation (no authority is
-    /// retained). Prefer [`CancelAuthority::arm`] when cancel must be
-    /// requestable.
-    fn default() -> Self {
-        Self::inert()
-    }
-}
-
 impl std::fmt::Debug for CancelFlag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CancelFlag({})", self.cell.0.get().is_some())
@@ -1619,14 +1610,14 @@ mod tests {
                 Ok(())
             }
         }
-        let res = run_fixed_rule(&Liar, vec![], empty_opts(), CancelFlag::default());
+        let res = run_fixed_rule(&Liar, vec![], empty_opts(), CancelFlag::inert());
         assert!(res.is_err());
     }
 
     #[test]
     fn simple_fixed_rule_arity_check_is_universal() {
         let rule = SimpleFixedRule::new(2, MismatchedArityBody);
-        let res = run_fixed_rule(&rule, vec![], empty_opts(), CancelFlag::default());
+        let res = run_fixed_rule(&rule, vec![], empty_opts(), CancelFlag::inert());
         assert!(res.is_err());
 
         let rule = SimpleFixedRule::new(1, IdentityNamedRowsBody);
@@ -1637,7 +1628,7 @@ mod tests {
                 vec![Tuple::from_vec(vec![s("p")]), Tuple::from_vec(vec![s("q")])],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![s("p")]), Tuple::from_vec(vec![s("q")])];
@@ -1726,7 +1717,7 @@ mod tests {
                 vec![Tuple::from_vec(vec![s("z")])],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![s("z")])];
@@ -1776,7 +1767,7 @@ mod tests {
                 ],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
 
@@ -1802,7 +1793,7 @@ mod tests {
                 vec![Tuple::from_vec(vec![DataValue::from("a")])],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("edge"), "{err}");
@@ -1835,7 +1826,7 @@ mod tests {
                 ])],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("edge weight"), "{err}");
@@ -1876,7 +1867,7 @@ mod tests {
                         TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")])]),
                     ],
                     empty_opts(),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -1892,7 +1883,7 @@ mod tests {
                         SmartString::from("k"),
                         const_expr(DataValue::from(1i64)),
                     )])),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -1915,7 +1906,7 @@ mod tests {
                         SmartString::from("heuristic"),
                         const_expr(DataValue::from(0.0)),
                     )])),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -1937,7 +1928,7 @@ mod tests {
                         SmartString::from("condition"),
                         const_expr(DataValue::from(true)),
                     )])),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -1959,7 +1950,7 @@ mod tests {
                         SmartString::from("condition"),
                         const_expr(DataValue::from(true)),
                     )])),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -1972,7 +1963,7 @@ mod tests {
                         TestInput::new(vec!["sink"], vec![Tuple::from_vec(vec![s("b")])]),
                     ],
                     empty_opts(),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -1984,7 +1975,7 @@ mod tests {
                         nullary(),
                     ],
                     empty_opts(),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -1999,7 +1990,7 @@ mod tests {
                         nullary(),
                     ],
                     empty_opts(),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -2021,7 +2012,7 @@ mod tests {
                         SmartString::from("steps"),
                         const_expr(DataValue::from(1i64)),
                     )])),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
             (
@@ -2036,7 +2027,7 @@ mod tests {
                         nullary(),
                     ],
                     empty_opts(),
-                    CancelFlag::default(),
+                    CancelFlag::inert(),
                 ),
             ),
         ];

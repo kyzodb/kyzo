@@ -373,7 +373,7 @@ mod tests {
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s(sink)])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         got.into_iter()
@@ -560,7 +560,7 @@ mod tests {
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("not found"), "{err}");
@@ -580,7 +580,7 @@ mod tests {
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("same node"), "{err}");
@@ -601,7 +601,7 @@ mod tests {
                 TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("edge weight"), "{err}");
@@ -640,7 +640,7 @@ mod tests {
 
         // Baseline: no cancellation. The first BFS walks the whole chain.
         take_maxflow_bfs_pops(); // clear any leftover from a reused thread
-        let full = prepared.run(&MaxFlow, CancelFlag::default());
+        let full = prepared.run(&MaxFlow, CancelFlag::inert());
         let full_pops = take_maxflow_bfs_pops();
         assert!(full.is_ok());
         assert!(
@@ -680,7 +680,7 @@ mod tests {
                     TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("t")])]),
                 ],
                 empty_opts(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap_err();
             assert!(

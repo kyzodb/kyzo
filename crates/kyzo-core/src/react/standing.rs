@@ -64,7 +64,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Receiver;
 
-use miette::{Diagnostic, Result, miette};
+use miette::{Diagnostic, Result, miette, ensure};
 use thiserror::Error;
 
 use crate::exec::op::temporal::SignedFact;
@@ -205,7 +205,7 @@ impl<S: Storage> StandingQuery<S> {
             let handle = get_relation(&tx, rel.name.as_str())?;
             let key_arity = handle.metadata.keys.len();
             let rows: BTreeSet<Tuple> = handle.scan_all(&tx).collect::<Result<_>>()?;
-            debug_assert!(
+            ensure!(
                 no_duplicate_key_prefix(&rows, key_arity),
                 "relation {rel:?}'s freshly-scanned rows already have a duplicate key at \
                  registration time (key_arity {key_arity}): {rows:?}"
@@ -356,7 +356,7 @@ impl<S: Storage> StandingQuery<S> {
         }
         let (deltas, new_state) =
             incremental::incremental_eval(&self.program, &self.state, &edb_patch)?;
-        debug_assert!(
+        ensure!(
             self.subscriptions.iter().all(|(rel, sub)| {
                 new_state
                     .get(rel)

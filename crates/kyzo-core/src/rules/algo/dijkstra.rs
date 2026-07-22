@@ -501,7 +501,7 @@ mod tests {
                 &ShortestPathDijkstra,
                 pseudo_random_inputs(),
                 empty_opts(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap()
         });
@@ -510,7 +510,7 @@ mod tests {
                 &ShortestPathDijkstra,
                 pseudo_random_inputs(),
                 empty_opts(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap();
             assert_eq!(seq, par);
@@ -532,7 +532,7 @@ mod tests {
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(got.len(), 1);
@@ -583,7 +583,7 @@ mod tests {
                     span: SourceSpan::default(),
                 },
             )])),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
@@ -629,7 +629,7 @@ mod tests {
                     span: SourceSpan::default(),
                 },
             )])),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
@@ -669,7 +669,7 @@ mod tests {
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(got.len(), 1);
@@ -690,7 +690,7 @@ mod tests {
         let graph =
             DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64), (1, 2, 1.0), (2, 3, 1.0)]).unwrap();
         // Unset flag: the search completes, path 0→3 costs 3.
-        let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::default()).unwrap();
+        let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::inert()).unwrap();
         assert_eq!(ok, vec![(3, 3.0, vec![0, 1, 2, 3])]);
         // Spent authority: the very first pop refuses.
         let (auth, flag) = CancelAuthority::arm();
@@ -713,7 +713,7 @@ mod tests {
             &Some(1u32),
             &forbidden,
             &(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(ok.len(), 1);

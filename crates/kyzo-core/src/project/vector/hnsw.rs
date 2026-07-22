@@ -3571,7 +3571,7 @@ fn hnsw_knn_forced(
     plan: SearchPlan,
     fallback: bool,
 ) -> Result<Vec<Tuple>> {
-    let cancel = crate::rules::contract::CancelFlag::default();
+    let cancel = crate::rules::contract::CancelFlag::inert();
     let cancel = &cancel;
     let q = IndexVec::admit(q, manifest)?;
     let mut cache = VectorCache::new(manifest);
@@ -4315,7 +4315,7 @@ mod tests {
                         bind: HnswBindPack::default(),
                     },
                     &None,
-                    &CancelFlag::default(),
+                    &CancelFlag::inert(),
                 )
                 .unwrap(),
             )
@@ -4362,7 +4362,7 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         );
         // Hand-computed squared distances from (0.9, 0.1):
         //   k=2 (1,0): 0.01 + 0.01 = 0.02   <- nearest
@@ -4380,7 +4380,7 @@ mod tests {
         // Radius is in squared units too: 0.5 keeps only (1,0).
         let mut p = knn_params(4);
         p.radius = Some(0.5);
-        let hits = knn_rows!(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::default());
+        let hits = knn_rows!(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::inert());
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(2));
 
@@ -4393,7 +4393,7 @@ mod tests {
             &idx,
             &knn_params(10),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         );
         assert_eq!(hits.len(), 4);
         assert_eq!(
@@ -4427,7 +4427,7 @@ mod tests {
             &idx,
             &knn_params(3),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         );
         assert_eq!(
             hits.iter()
@@ -4471,7 +4471,7 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.downcast_ref::<ZeroVectorRefused>().is_some());
@@ -4548,7 +4548,7 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(1));
@@ -4567,7 +4567,7 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         );
         assert!(hits.is_empty(), "empty index yields empty results");
         assert_eq!(
@@ -4612,7 +4612,7 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         );
         assert_eq!(hits[0][0], DataValue::from(1), "found at its new position");
     }
@@ -4778,7 +4778,7 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
         )
         .expect_err("corrupt rows must be errors, not panics");
         assert!(
@@ -5127,7 +5127,7 @@ mod tests {
                 None => bail!("fixture missing key"),
             };
             let hits = crate::project::contract::search_rows(Hnsw::knn(
-                &rtx, &q, &m, &base, &idx, &knn_params(1), &None, &CancelFlag::default(),
+                &rtx, &q, &m, &base, &idx, &knn_params(1), &None, &CancelFlag::inert(),
             )?)?;
             assert_eq!(hits.len(), 1);
             let got_key = hits[0].first().and_then(|v| v.get_int()).ok_or_else(|| miette!("missing key"))?;
@@ -5192,7 +5192,7 @@ mod tests {
                 &idx,
                 &knn_params(3),
                 &None,
-                &CancelFlag::default(),
+                &CancelFlag::inert(),
             );
             // Every hit is at distance 0 (identical vectors).
             for h in &hits {

@@ -70,7 +70,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use miette::{Error, Result, miette};
+use miette::{Error, Result, miette, ensure};
 
 use crate::exec::fold::aggr::NormalAggr;
 use crate::exec::op::temporal::SignedFact;
@@ -136,9 +136,16 @@ pub struct Rule {
 /// [`MaintainedState`], never inline in the program itself — a standing
 /// query's whole point is that its EDB changes out from under it, commit
 /// after commit.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct IncrementalProgram {
     pub rules: Vec<Rule>,
+}
+
+impl IncrementalProgram {
+    /// Empty program — no rules.
+    pub fn empty() -> Self {
+        Self { rules: Vec::new() }
+    }
 }
 
 /// Every relation's current fully-materialized row set — the persistent,
@@ -839,7 +846,7 @@ pub fn incremental_eval(
     // down to one sign per tuple before calling in here; this is the
     // 0.9.0-review bug's own invariant, checked at the one seam every caller
     // must cross, not re-derived at every call site.
-    debug_assert!(
+    ensure!(
         edb_patch.values().all(|facts| {
             let pluses: BTreeSet<&Tuple> = facts
                 .iter()

@@ -1808,7 +1808,7 @@ mod tests {
             "storage probe diverged from hand-computed join"
         );
 
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))
             .unwrap()
             .map(Result::unwrap)
@@ -1889,7 +1889,7 @@ mod tests {
             "storage probe diverged from hand-computed join"
         );
 
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))
             .unwrap()
             .map(Result::unwrap)
@@ -2006,7 +2006,7 @@ mod tests {
         // the timed run pays zero build cost (the production call site
         // builds once per plan-node instantiation too — see
         // `prefix_join_batched`'s doc comment).
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         let segments = Segments(Some(&engine));
         for b in ra
             .prefix_join_batched(

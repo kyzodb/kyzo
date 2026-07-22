@@ -240,7 +240,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             options,
-            CancelFlag::default(),
+            CancelFlag::inert(),
         );
         let err = res.unwrap_err();
         assert!(err.to_string().contains("Unacceptable value"), "{err}");
@@ -274,7 +274,7 @@ mod tests {
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             options,
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(got.len(), 1);
@@ -334,7 +334,7 @@ mod tests {
                 &RandomWalk,
                 inputs(),
                 steps_opt(steps),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap();
             let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
@@ -397,13 +397,13 @@ mod tests {
                 ),
             ]))
         };
-        let first = run_fixed_rule(&RandomWalk, inputs(), opts(), CancelFlag::default()).unwrap();
+        let first = run_fixed_rule(&RandomWalk, inputs(), opts(), CancelFlag::inert()).unwrap();
         // A genuinely random walk: the paths are not all length-1 (choices
         // were actually made), so byte-identity is a real determinism claim.
         assert!(first.iter().any(|r| r[2].get_slice().unwrap().len() > 2));
         for _ in 0..8 {
             let again =
-                run_fixed_rule(&RandomWalk, inputs(), opts(), CancelFlag::default()).unwrap();
+                run_fixed_rule(&RandomWalk, inputs(), opts(), CancelFlag::inert()).unwrap();
             assert_eq!(first, again);
         }
     }
@@ -454,7 +454,7 @@ mod tests {
             ]))
         };
         let run = |seed: i64| {
-            run_fixed_rule(&RandomWalk, inputs(), opts(seed), CancelFlag::default()).unwrap()
+            run_fixed_rule(&RandomWalk, inputs(), opts(seed), CancelFlag::inert()).unwrap()
         };
         assert_eq!(run(1), run(1));
         let base = run(1);
@@ -500,7 +500,7 @@ mod tests {
                 span: SourceSpan::default(),
             },
         )]));
-        let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::default()).unwrap();
+        let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::inert()).unwrap();
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1i64),
             s("v0"),

@@ -303,7 +303,7 @@ mod tests {
             &KCoreDecomposition,
             vec![TestInput::new(vec!["fr", "to"], rows)],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         got.into_iter()
@@ -454,7 +454,7 @@ mod tests {
 
         // Baseline: no cancellation. Every vertex is peeled.
         take_kcore_verts_peeled(); // clear any leftover from a reused thread
-        let full = prepared.run(&KCoreDecomposition, CancelFlag::default());
+        let full = prepared.run(&KCoreDecomposition, CancelFlag::inert());
         let full_peeled = take_kcore_verts_peeled();
         assert!(full.is_ok());
         assert!(

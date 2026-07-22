@@ -239,7 +239,7 @@ mod tests {
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows)],
             opts(&[]),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let i = |v: i64| DataValue::from(v);
@@ -278,7 +278,7 @@ mod tests {
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows())],
             opts(&[]),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
@@ -292,7 +292,7 @@ mod tests {
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows())],
             opts(&[("break_ties", DataValue::from(true))]),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
@@ -306,7 +306,7 @@ mod tests {
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows())],
             opts(&[("descending", DataValue::from(true))]),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
@@ -336,7 +336,7 @@ mod tests {
                 ("skip", DataValue::from(1i64)),
                 ("take", DataValue::from(1i64)),
             ]),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(2i64), s("b")])];

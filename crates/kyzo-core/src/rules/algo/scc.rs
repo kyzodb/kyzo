@@ -244,7 +244,7 @@ mod tests {
                 TestInput::new(vec!["id"], vec![Tuple::from_vec(vec![s("lonely")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let group_of = |name: &str| -> i64 {
@@ -271,7 +271,7 @@ mod tests {
         let n: u32 = 300_000;
         let edges = (0..n).map(|i| (i, (i + 1) % n, ()));
         let graph = DirectedCsrGraph::from_edges(edges).unwrap();
-        let sccs = TarjanSccG::new(graph).run(CancelFlag::default()).unwrap();
+        let sccs = TarjanSccG::new(graph).run(CancelFlag::inert()).unwrap();
         assert_eq!(sccs.len(), 1);
         assert_eq!(sccs[0].len(), crate::rules::convert::usize_from_u32(n));
     }

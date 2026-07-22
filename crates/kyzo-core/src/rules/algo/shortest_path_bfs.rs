@@ -209,7 +209,7 @@ mod tests {
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("bob")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(got[0][2].get_slice().unwrap().len(), 3);
@@ -222,7 +222,7 @@ mod tests {
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("george")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(got[0][2], DataValue::Null);
@@ -265,7 +265,7 @@ mod tests {
 
         // Baseline: no cancellation. The whole chain is expanded.
         take_bfs_nodes_expanded(); // clear any leftover from a reused thread
-        let full = prepared.run(&ShortestPathBFS, CancelFlag::default());
+        let full = prepared.run(&ShortestPathBFS, CancelFlag::inert());
         let full_expanded = take_bfs_nodes_expanded();
         assert!(full.is_ok());
         assert!(
@@ -307,7 +307,7 @@ mod tests {
                 TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("c")])]),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![

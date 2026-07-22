@@ -305,7 +305,7 @@ mod tests {
                 &KShortestPathYen,
                 pseudo_random_inputs(),
                 k_opt(3),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap()
         });
@@ -314,7 +314,7 @@ mod tests {
                 &KShortestPathYen,
                 pseudo_random_inputs(),
                 k_opt(3),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap();
             assert_eq!(seq, par);
@@ -338,7 +338,7 @@ mod tests {
             (2, 3, 1.0),
         ])
         .unwrap();
-        let got = k_shortest_path_yen(2, &graph, 0, 3, CancelFlag::default()).unwrap();
+        let got = k_shortest_path_yen(2, &graph, 0, 3, CancelFlag::inert()).unwrap();
         assert_eq!(got, vec![(2.0, vec![0, 1, 3]), (3.0, vec![0, 1, 2, 3])]);
     }
 
@@ -385,7 +385,7 @@ mod tests {
                     span: SourceSpan::default(),
                 },
             )])),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(got.len(), 2);
@@ -423,7 +423,7 @@ mod tests {
             (0, 3, 5.0),
         ])
         .unwrap();
-        let got = k_shortest_path_yen(3, &graph, 0, 3, CancelFlag::default()).unwrap();
+        let got = k_shortest_path_yen(3, &graph, 0, 3, CancelFlag::inert()).unwrap();
         assert_eq!(
             got,
             vec![

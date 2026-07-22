@@ -1558,7 +1558,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let hits = lsh_rows!(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),
             &f.manifest,
@@ -1578,7 +1578,7 @@ mod tests {
         // A Null query yields nothing; a non-indexable query is an error.
         assert!(
             Lsh::search_index(
-                &CancelFlag::default(),
+                &CancelFlag::inert(),
                 &rtx,
                 &DataValue::Null,
                 &f.manifest,
@@ -1594,7 +1594,7 @@ mod tests {
         );
         assert!(
             Lsh::search_index(
-                &CancelFlag::default(),
+                &CancelFlag::inert(),
                 &rtx,
                 &DataValue::from(42),
                 &f.manifest,
@@ -1621,7 +1621,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let hits = lsh_rows!(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),
             &f.manifest,

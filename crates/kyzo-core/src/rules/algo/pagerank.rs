@@ -334,7 +334,7 @@ mod tests {
     fn ranks_sinks_and_sources() {
         // 0 → 1, 2 → 1: node 1 collects rank, 0 and 2 keep the base score.
         let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (2, 1, ())]).unwrap();
-        let ranks = page_rank(&graph, 0.85, 1e-7, 50, CancelFlag::default()).unwrap();
+        let ranks = page_rank(&graph, 0.85, 1e-7, 50, CancelFlag::inert()).unwrap();
         assert_eq!(ranks.len(), 3);
         assert!(ranks[1] > ranks[0]);
         assert!((ranks[0] - ranks[2]).abs() < 1e-6);
@@ -357,7 +357,7 @@ mod tests {
         let graph = graph_of(&edges);
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         for &iters in &[1usize, 2, 5, 10] {
-            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::default()).unwrap();
+            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert()).unwrap();
             let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum);
             assert_eq!(
                 got, want,
@@ -394,7 +394,7 @@ mod tests {
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         assert_eq!(n, 302, "hub graph should span nodes 0..=301");
         for &iters in &[1usize, 2, 3] {
-            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::default()).unwrap();
+            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert()).unwrap();
             let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum);
             assert_eq!(
                 got, want,
@@ -418,7 +418,7 @@ mod tests {
         let graph = graph_of(&edges);
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 0.1;
-        let got = page_rank(&graph, 0.85, tol, 50, CancelFlag::default()).unwrap();
+        let got = page_rank(&graph, 0.85, tol, 50, CancelFlag::inert()).unwrap();
         let want_sum = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Sum);
         let want_max = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Max);
         assert_ne!(
@@ -456,7 +456,7 @@ mod tests {
                 ],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
 
@@ -484,9 +484,9 @@ mod tests {
             .build()
             .unwrap();
         let seq =
-            single.install(|| page_rank(&graph, 0.85, 0.0, 30, CancelFlag::default()).unwrap());
+            single.install(|| page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap());
         for _ in 0..20 {
-            let par = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::default()).unwrap();
+            let par = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap();
             assert_eq!(
                 seq, par,
                 "single-thread and default-pool scores must be identical"
@@ -500,8 +500,8 @@ mod tests {
     fn run_twice_identical() {
         let edges = pseudo_random_edges(500, 4000);
         let graph = graph_of(&edges);
-        let a = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::default()).unwrap();
-        let b = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::default()).unwrap();
+        let a = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap();
+        let b = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap();
         assert_eq!(a, b);
     }
 
@@ -522,7 +522,7 @@ mod tests {
         let graph = graph_of(&edges);
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 1e-9;
-        let jac = page_rank(&graph, 0.85, tol, 100_000, CancelFlag::default()).unwrap();
+        let jac = page_rank(&graph, 0.85, tol, 100_000, CancelFlag::inert()).unwrap();
         let gs = naive_gauss_seidel(n, &edges, 0.85, tol, 100_000);
         for (a, b) in jac.iter().zip(gs.iter()) {
             assert!(
@@ -533,7 +533,7 @@ mod tests {
         // And Jacobi is not trivially equal to GS mid-transient (guards
         // against the reference collapsing into the implementation): at a
         // small iteration count the two schemes disagree somewhere.
-        let jac_few = page_rank(&graph, 0.85, 0.0, 3, CancelFlag::default()).unwrap();
+        let jac_few = page_rank(&graph, 0.85, 0.0, 3, CancelFlag::inert()).unwrap();
         let gs_few = naive_gauss_seidel(n, &edges, 0.85, 0.0, 3);
         assert!(
             jac_few.iter().zip(gs_few.iter()).any(|(a, b)| a != b),

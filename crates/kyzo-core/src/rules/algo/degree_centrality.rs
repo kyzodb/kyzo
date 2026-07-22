@@ -128,7 +128,7 @@ mod tests {
                 ),
             ],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![

@@ -41,13 +41,21 @@ use kyzo_model::value::RelationId;
 pub(crate) const REBUILD_AFTER_STABLE_MISSES: u32 = 2;
 
 /// Per-relation write counters and the stable-miss rebuild gate.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Residency {
     marks: Mutex<BTreeMap<ResidentIndexKey, Arc<AtomicU64>>>,
     misses: Mutex<BTreeMap<ResidentIndexKey, (Generation, u32)>>,
 }
 
 impl Residency {
+    /// Empty residency — no marks or miss counters yet.
+    pub(crate) fn new() -> Self {
+        Self {
+            marks: Mutex::new(BTreeMap::new()),
+            misses: Mutex::new(BTreeMap::new()),
+        }
+    }
+
     fn slot(&self, relation: RelationId) -> Arc<AtomicU64> {
         let key = ResidentIndexKey::for_relation(relation);
         let mut marks = self.marks.lock().expect("generation lock poisoned");
@@ -131,7 +139,7 @@ mod tests {
     fn rebuild_gated_by_stable_miss_streak() {
         let db = SimStorage::new(5);
         let rtx = db.read_tx().unwrap();
-        let residency = Residency::default();
+        let residency = Residency::new();
         let relation = RelationId::new(2).expect("below cap");
         let live = residency.witness_after_snapshot(&rtx, relation);
 
@@ -156,7 +164,7 @@ mod tests {
     #[test]
     fn alternating_writes_never_cross_rebuild_gate() {
         let db = SimStorage::new(7);
-        let residency = Residency::default();
+        let residency = Residency::new();
         let relation = RelationId::new(3).expect("below cap");
         for _ in 0..20 {
             residency.bump_before_commit(relation);
@@ -175,7 +183,7 @@ mod tests {
     fn miss_map_loss_only_delays_rebuild() {
         let db = SimStorage::new(3);
         let rtx = db.read_tx().unwrap();
-        let residency = Residency::default();
+        let residency = Residency::new();
         let relation = RelationId::new(4).expect("below cap");
         let live = residency.witness_after_snapshot(&rtx, relation);
         assert!(!residency.should_build(relation, live));

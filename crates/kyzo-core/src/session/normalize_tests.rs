@@ -185,7 +185,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
         store: &tx.store,
         temp: &tx.temp,
     };
-    let mut normalizer = SessionNormalizer::new(view, CancelFlag::default());
+    let mut normalizer = SessionNormalizer::new(view, CancelFlag::inert());
     let (nf, _) =
         crate::exec::plan::program::into_normalized_program(prog, &mut normalizer)?;
     let (strat, _lifetimes) = nf.into_stratified_program()?;

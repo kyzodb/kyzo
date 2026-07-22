@@ -619,7 +619,7 @@ mod segment_gate_tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let handle = kv_relation(&db, "gate_rw");
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         let ra = ra_over(&handle);
 
         for i in 0..50i64 {
@@ -656,7 +656,7 @@ mod segment_gate_tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let handle = kv_relation(&db, "gate_stable");
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         for k in 0..5i64 {
             put(&db, &handle, &engine, k, k * 10);
         }
@@ -694,7 +694,7 @@ mod segment_gate_tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let handle = kv_relation(&db, "gate_reset");
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         put(&db, &handle, &engine, 1, 10);
         let ra = ra_over(&handle);
 
@@ -734,7 +734,7 @@ mod segment_gate_tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let handle = kv_relation(&db, "gate_diff");
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         let ra = ra_over(&handle);
 
         // xorshift64*: deterministic, dependency-free, seeded so the

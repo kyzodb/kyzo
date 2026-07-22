@@ -262,7 +262,7 @@ mod tests {
                 SmartString::from("heuristic"),
                 h_binding,
             )])),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
@@ -314,7 +314,7 @@ mod tests {
             &ShortestPathAStar,
             sink_hub_inputs(),
             sink_hub_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(ok.len(), 1);

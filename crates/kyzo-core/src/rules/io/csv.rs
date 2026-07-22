@@ -329,7 +329,7 @@ mod tests {
     fn reads_content_with_typing() {
         let content = "a,1,1.5\nb,2,oops";
         let got =
-            run_fixed_rule(&CsvReader, vec![], options(content), CancelFlag::default()).unwrap();
+            run_fixed_rule(&CsvReader, vec![], options(content), CancelFlag::inert()).unwrap();
         assert_eq!(got.len(), 2);
         let want: Tuple = Tuple::from_vec(vec![
             DataValue::from("a"),
@@ -378,7 +378,7 @@ mod tests {
                     },
                 ),
             ])),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("filesystem"), "{err}");
@@ -410,7 +410,7 @@ mod tests {
                     },
                 ),
             ])),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("network"), "{err}");

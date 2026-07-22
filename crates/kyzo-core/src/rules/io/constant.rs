@@ -239,7 +239,7 @@ mod tests {
                 span: SourceSpan::default(),
             },
         )]));
-        let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::default()).unwrap();
+        let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::inert()).unwrap();
         assert_eq!(got.len(), 2);
         let want: Tuple = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("x")]);
         assert_eq!(got[0], want);

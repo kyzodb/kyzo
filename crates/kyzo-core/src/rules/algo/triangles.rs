@@ -157,9 +157,9 @@ mod tests {
             .build()
             .unwrap();
         let seq =
-            single.install(|| clustering_coefficients(&graph, CancelFlag::default()).unwrap());
+            single.install(|| clustering_coefficients(&graph, CancelFlag::inert()).unwrap());
         for _ in 0..8 {
-            let par = clustering_coefficients(&graph, CancelFlag::default()).unwrap();
+            let par = clustering_coefficients(&graph, CancelFlag::inert()).unwrap();
             assert_eq!(seq, par);
         }
     }
@@ -190,7 +190,7 @@ mod tests {
                 ],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let two_thirds = DataValue::from(2.0 * 2.0 / (3.0 * 2.0));

@@ -327,7 +327,7 @@ mod tests {
             }
             DirectedCsrGraph::from_edges(edges).unwrap()
         };
-        louvain(&graph, 0., 100, CancelFlag::default()).unwrap();
+        louvain(&graph, 0., 100, CancelFlag::inert()).unwrap();
     }
 
     /// VALUE ORACLE, adjacency-order sensitivity pinned. The graph (all
@@ -368,7 +368,7 @@ mod tests {
             (2, 4, 1.0),
         ])
         .unwrap();
-        let got = louvain(&graph, 0., 10, CancelFlag::default()).unwrap();
+        let got = louvain(&graph, 0., 10, CancelFlag::inert()).unwrap();
         assert_eq!(got, vec![vec![0, 0, 1, 1, 0]]);
     }
 

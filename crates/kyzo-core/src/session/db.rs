@@ -345,7 +345,7 @@ impl<S: Storage> Engine<S> {
         Ok(Self {
             store,
             catalog,
-            segments: Arc::new(crate::project::current::SegmentEngine::default()),
+            segments: Arc::new(crate::project::current::SegmentEngine::new()),
             fixed_rules: Arc::new(RwLock::new(fixed_rules)),
             event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::default())),
             callback_count: Arc::new(AtomicU32::new(0)),

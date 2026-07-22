@@ -515,7 +515,7 @@ mod tests {
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
             opts_map(opts_pairs),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         // Group rows by clique_id, collect member names.
@@ -753,7 +753,7 @@ mod tests {
                     span: SourceSpan::default(),
                 },
             )])),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("max_cliques"), "{err}");
@@ -790,7 +790,7 @@ mod tests {
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         // One clique (id 0) containing all m nodes ⇒ m membership rows.
@@ -817,7 +817,7 @@ mod tests {
 
         // Baseline: no cancellation. Every vertex is removed.
         take_clique_counters(); // clear any leftover from a reused thread
-        let full = prepared.run(&MaximalCliques, CancelFlag::default());
+        let full = prepared.run(&MaximalCliques, CancelFlag::inert());
         let (full_removals, _) = take_clique_counters();
         assert!(full.is_ok());
         assert!(

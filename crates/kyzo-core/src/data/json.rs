@@ -27,7 +27,7 @@ pub use kyzo_model::envelope::json::{json_from_serde, serde_from_json};
 /// Private seal: any private field blocks struct-literal minting outside
 /// this module, so header/row/next cannot be forged past [`NamedRows::try_new`]
 /// (P082).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct NamedRowsSeal;
 
 /// The rows of a relation, together with its header names.

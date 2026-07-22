@@ -425,7 +425,7 @@ fn filtered_search(
         idx,
         &params,
         &fb,
-        &crate::rules::contract::CancelFlag::default(),
+        &crate::rules::contract::CancelFlag::inert(),
     )
     .unwrap()
     .materialize_all_tuples()
@@ -1222,7 +1222,7 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
             &idx,
             &params,
             &None,
-            &crate::rules::contract::CancelFlag::default(),
+            &crate::rules::contract::CancelFlag::inert(),
         )
         .unwrap(),
     )

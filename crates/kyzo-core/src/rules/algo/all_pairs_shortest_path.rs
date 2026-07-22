@@ -246,7 +246,7 @@ mod tests {
                 &BetweennessCentrality,
                 vec![TestInput::new(vec!["fr", "to", "w"], rows.clone())],
                 opt(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap()
         };
@@ -342,7 +342,7 @@ mod tests {
                 &BetweennessCentrality,
                 vec![pseudo_random_edges()],
                 undirected_opt(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap()
         });
@@ -351,7 +351,7 @@ mod tests {
                 &BetweennessCentrality,
                 vec![pseudo_random_edges()],
                 undirected_opt(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap();
             assert_eq!(seq, par);
@@ -371,7 +371,7 @@ mod tests {
                 &ClosenessCentrality,
                 vec![pseudo_random_edges()],
                 undirected_opt(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap()
         });
@@ -380,7 +380,7 @@ mod tests {
                 &ClosenessCentrality,
                 vec![pseudo_random_edges()],
                 undirected_opt(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap();
             assert_eq!(seq, par);
@@ -401,7 +401,7 @@ mod tests {
             &ClosenessCentrality,
             vec![path_graph()],
             undirected_opt(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
@@ -423,7 +423,7 @@ mod tests {
             &BetweennessCentrality,
             vec![path_graph()],
             undirected_opt(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![

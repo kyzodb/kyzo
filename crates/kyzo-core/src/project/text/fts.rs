@@ -927,7 +927,7 @@ mod tests {
             0
         };
         let hits = fts_rows!(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             q,
             &f.base,
@@ -1174,7 +1174,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let err = Fts::search_index(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             "hello",
             &f.base,
@@ -1244,7 +1244,7 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         // "the" and "a" are stopwords: the query tokenizes to nothing.
         let hits = fts_rows!(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             "the AND a",
             &base,
@@ -1260,7 +1260,7 @@ mod tests {
         );
         // "cat" survives tokenization and matches.
         let hits = fts_rows!(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             "cat",
             &base,
@@ -1355,7 +1355,7 @@ mod tests {
         };
         let p = params(0, FtsScoreKind::Tf);
         let with_filter = fts_rows!(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             "cat",
             &f.base,
@@ -1371,7 +1371,7 @@ mod tests {
             with_filter.len()
         );
         let without = fts_rows!(
-            &CancelFlag::default(),
+            &CancelFlag::inert(),
             &rtx,
             "cat",
             &f.base,

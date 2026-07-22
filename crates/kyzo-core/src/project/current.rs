@@ -35,7 +35,7 @@ use kyzo_model::value::{DataValue, RelationId, Tuple};
 /// The execution path's segment context: `OFF` (tests, benches, callers
 /// without a session) or a borrow of the session's engine. `Copy`, so it
 /// threads through operator dispatch like `tx` does.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Segments<'a>(pub(crate) Option<&'a SegmentEngine>);
 
 impl Segments<'_> {
@@ -77,13 +77,21 @@ pub(crate) enum SegmentMiss {
 /// The session's segment engine: residency discipline plus the sealed-segment
 /// cache. One per [`Db`](crate::session::db::Db), shared by all its
 /// transactions.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct SegmentEngine {
     residency: Residency,
     segments: Mutex<BTreeMap<ResidentIndexKey, Sealed<SegmentHandle>>>,
 }
 
 impl SegmentEngine {
+    /// Empty engine — no sealed segments installed.
+    pub(crate) fn new() -> Self {
+        Self {
+            residency: Residency::new(),
+            segments: Mutex::new(BTreeMap::new()),
+        }
+    }
+
     /// Live generation for `relation` — see [`Residency::witness_after_snapshot`].
     pub(crate) fn witness_after_snapshot(
         &self,
@@ -239,7 +247,8 @@ impl Segment {
 
     /// INVARIANT(segment_row_in_bounds): `i < self.len()`.
     fn row_at(&self, i: usize) -> &[DataValue] {
-        debug_assert!(i < self.len());
+        // Bound is the caller's proof — public door is `row()` → None OOB.
+        // Offset/slice indexing refuses OOB in every build (not debug-only).
         let (start, end) = offset_row_span(&self.offsets, i);
         &self.values[start..end]
     }
@@ -348,7 +357,7 @@ mod tests {
     fn classify_serves_matching_generation_and_rejects_stale() {
         let db = SimStorage::new(3);
         let rtx = db.read_tx().unwrap();
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         let relation = RelationId::new(1).expect("below cap");
         let live = engine.witness_after_snapshot(&rtx, relation);
         let handle = engine.install(
@@ -374,7 +383,7 @@ mod tests {
     fn orphan_evict_held_arc_still_serves() {
         let db = SimStorage::new(3);
         let rtx = db.read_tx().unwrap();
-        let engine = SegmentEngine::default();
+        let engine = SegmentEngine::new();
         let relation = RelationId::new(5).expect("below cap");
         let live = engine.witness_after_snapshot(&rtx, relation);
         let handle = engine.install(

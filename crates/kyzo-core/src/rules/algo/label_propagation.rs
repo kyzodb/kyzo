@@ -185,7 +185,7 @@ mod tests {
             &LabelPropagation,
             ring_inputs(),
             undirected_opt(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         for _ in 0..8 {
@@ -193,7 +193,7 @@ mod tests {
                 &LabelPropagation,
                 ring_inputs(),
                 undirected_opt(),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap();
             assert_eq!(first, again);
@@ -211,7 +211,7 @@ mod tests {
                 &LabelPropagation,
                 ring_inputs(),
                 seed_opt(seed),
-                CancelFlag::default(),
+                CancelFlag::inert(),
             )
             .unwrap()
         };
@@ -260,7 +260,7 @@ mod tests {
                 ],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         let one = DataValue::from(1i64);

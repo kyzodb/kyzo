@@ -200,7 +200,7 @@ mod tests {
                 ],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(
@@ -232,7 +232,7 @@ mod tests {
                 ],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(
@@ -262,7 +262,7 @@ mod tests {
                 ],
             )],
             empty_opts(),
-            CancelFlag::default(),
+            CancelFlag::inert(),
         )
         .unwrap();
         assert_eq!(
