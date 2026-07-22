@@ -196,7 +196,11 @@ impl ExecRows {
         col: usize,
     ) -> Result<&'o [u8], Denial> {
         let proof = self.domain.admit(o)?;
-        Ok(o.resolve_raw(self.row(row)[col] as usize, proof)?)
+        let idx = match usize::try_from(self.row(row)[col]) {
+            Ok(n) => n,
+            Err(_overflow) => usize::MAX,
+        };
+        Ok(o.resolve_raw(idx, proof)?)
     }
 
     /// The compare/identity context for raw handles in these rows.
