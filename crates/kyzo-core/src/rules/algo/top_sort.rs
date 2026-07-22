@@ -103,13 +103,14 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
 
     /// A diamond a→{b,c}→d sorts with a first and d last.
     #[test]
-    fn sorts_a_diamond() {
+    fn sorts_a_diamond() -> Result<()> {
         let got = run_fixed_rule(
             &TopSort,
             vec![TestInput::new(
@@ -124,15 +125,18 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(got.len(), 4);
-        let pos_of = |name: &str| -> i64 {
-            got.iter().find(|t| t[1] == s(name)).unwrap()[0]
+        let pos_of = |name: &str| -> Result<i64> {
+            got.iter()
+                .find(|t| t[1] == s(name))
+                .ok_or_else(|| miette!("missing node {name}"))?[0]
                 .get_int()
-                .unwrap()
+                .ok_or_else(|| miette!("pos not int"))
         };
-        assert_eq!(pos_of("a"), 0);
-        assert_eq!(pos_of("d"), 3);
+        assert_eq!(pos_of("a")?, 0);
+        assert_eq!(pos_of("d")?, 3);
+        Ok(())
     }
 
     /// VALUE ORACLE: the exact order on the diamond, pinned modulo the
@@ -150,7 +154,7 @@ mod tests {
     /// before b and give a, b, c, d instead, so this kills the
     /// reversed-CSR-sort mutant.
     #[test]
-    fn exact_order_with_documented_tie_rule() {
+    fn exact_order_with_documented_tie_rule() -> Result<()> {
         let got = run_fixed_rule(
             &TopSort,
             vec![TestInput::new(
@@ -165,7 +169,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let i = |v: i64| DataValue::from(v);
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(0), s("a")]),
@@ -174,5 +178,6 @@ mod tests {
             Tuple::from_vec(vec![i(3), s("d")]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
