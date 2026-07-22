@@ -142,8 +142,6 @@ use std::collections::BinaryHeap;
 /// builds): attribute where per-insert work goes as the index grows, to
 /// tell an algorithmic superlinearity in this file from a per-operation
 /// cost imposed by the transaction underneath it.
-#[cfg(test)]
-#[cfg(test)]
 use kyzo_model::schema::column::ColLen;
 pub(crate) mod probe {
     use std::cell::Cell;
@@ -172,7 +170,7 @@ pub(crate) mod probe {
         pub(crate) static ENTRY_POINT_DUR: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     }
 
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[cfg(test)]
     pub(crate) fn reset() {
         DIST_CALLS.with(|c| c.set(0));
         V_DIST_CALLS.with(|c| c.set(0));
@@ -186,7 +184,7 @@ pub(crate) mod probe {
     }
 
     #[derive(Debug, Clone, Copy)]
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[cfg(test)]
     pub(crate) struct Snapshot {
         pub(crate) dist_calls: u64,
         pub(crate) v_dist_calls: u64,
@@ -199,7 +197,7 @@ pub(crate) mod probe {
         pub(crate) entry_point_dur: Duration,
     }
 
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[cfg(test)]
     pub(crate) fn snapshot() -> Snapshot {
         Snapshot {
             dist_calls: DIST_CALLS.with(|c| c.get()),
@@ -235,8 +233,8 @@ use kyzo_model::schema::VecElementType;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{
-    DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, append_canonical,
-    decode_tuple_from_key, encode_owned,
+    DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, decode_tuple_from_key,
+    encode_owned,
 };
 
 // ---------------------------------------------------------------------------
@@ -360,21 +358,23 @@ pub struct HnswIndexManifest {
 }
 
 /// A fixed, pinned seed for HNSW level assignment. Deriving each vector's
-/// layer from this seed and the vector's identity — rather than from OS
-/// entropy — is what makes the index DETERMINISTIC: the same rows inserted in
-/// the same order build a byte-identical graph on every run and every
-/// platform. This is the same guarantee the fixed-rule tier established for
-/// `LabelPropagation` / `RandomWalk` when it replaced `rand::rng()` with a
-/// seeded splitmix64 stream (`fixed_rule/rng.rs`); the CozoDB original drew
-/// the level from `rand::thread_rng`, so a rebuild produced a different graph
-/// every time — a direct violation of the engine-wide determinism promise.
+/// layer from this seed and the vector's **content-addressed bytes**
+/// ([`VecContentHash`] via [`seed_from_vec_content`]) — rather than from OS
+/// entropy or row identity — is what makes the index DETERMINISTIC and
+/// DST-checkable: the same admitted vector set builds a byte-identical graph
+/// on every run and every platform. This is the same guarantee the fixed-rule
+/// tier established for `LabelPropagation` / `RandomWalk` when it replaced
+/// `rand::rng()` with a seeded splitmix64 stream (`fixed_rule/rng.rs`); the
+/// CozoDB original drew the level from `rand::thread_rng`, so a rebuild
+/// produced a different graph every time — a direct violation of the
+/// engine-wide determinism promise.
 ///
 /// Changing this constant re-levels every future insert; it is a deliberate,
 /// test-guarded value (`hnsw_level_is_deterministic_and_geometric`).
 const HNSW_LEVEL_SEED: u64 = 0x484e_5357_5f4c_564c; // "HNSW_LVL"
 
 /// One splitmix64 step — the `storage::sim` / `fixed_rule::rng` house PRNG,
-/// inlined here to fold a vector's identity into a per-vector seed. A pure
+/// inlined here to fold content-hash bytes into a per-vector seed. A pure
 /// function of its state: no platform-dependent word size or endianness, so
 /// the derived level is portable.
 #[inline]
@@ -385,6 +385,22 @@ fn splitmix64(state: &mut u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+/// Graph-build seed free from the existing content-addressing law: fold a
+/// vector's [`VecContentHash`] (SHA-256 over canonical vector bytes) into
+/// [`HNSW_LEVEL_SEED`]. Same admitted content ⇒ same seed ⇒ same layer draw;
+/// a one-bit content change ⇒ a different seed.
+#[inline]
+fn seed_from_vec_content(hash: &VecContentHash) -> u64 {
+    let mut state = HNSW_LEVEL_SEED;
+    for chunk in hash.as_bytes().chunks(8) {
+        let mut buf = [0u8; 8];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        state ^= u64::from_le_bytes(buf);
+        splitmix64(&mut state);
+    }
+    state
 }
 
 /// Wire DTO for deserialize-then-admit. Derived fields (`m_max`, `m_max0`,
@@ -503,41 +519,35 @@ impl HnswIndexManifest {
 
     /// Draw the (non-positive) layer for a vector: geometric in the standard
     /// HNSW way, `-floor(-ln(u) * level_multiplier)`, but with `u` derived
-    /// DETERMINISTICALLY from the vector's identity and the pinned
-    /// [`HNSW_LEVEL_SEED`] rather than OS entropy (see that constant). Same
-    /// vector ⇒ same level ⇒ reproducible graph.
+    /// DETERMINISTICALLY from the vector's content hash via
+    /// [`seed_from_vec_content`] rather than OS entropy or row identity.
+    /// Same admitted content ⇒ same level ⇒ reproducible, DST-checkable graph.
     ///
     /// The level is clamped to `>= -64` so a vanishingly unlikely `u` near
     /// zero cannot overflow the layer arithmetic (a 64-layer graph already
     /// implies on the order of `2^64` vectors).
-    fn random_level(&self, id: &VectorId) -> i64 {
-        // Fold the vector's memcmp-encoded identity into the seed. memcmp is
-        // the pinned on-disk key encoding, so this fold is portable and stable
-        // across platforms and releases.
-        let mut key_bytes: Vec<u8> = Vec::new();
-        for v in &id.tuple_key {
-            append_canonical(&mut key_bytes, v);
-        }
-        key_bytes.extend_from_slice(&(id.field as u64).to_le_bytes());
-        key_bytes.extend_from_slice(&id.sub_wire().to_le_bytes());
-        let mut state = HNSW_LEVEL_SEED;
-        for chunk in key_bytes.chunks(8) {
-            let mut buf = [0u8; 8];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            state ^= u64::from_le_bytes(buf);
-            splitmix64(&mut state);
-        }
-        // A uniform in (0, 1]: 53 mantissa bits, with 0 mapped to 1.0 so the
-        // log is finite (u == 0 would give -inf and a runaway level).
-        let bits = splitmix64(&mut state) >> 11;
-        let u = if bits == 0 {
-            1.0
-        } else {
-            bits as f64 / (1u64 << 53) as f64
+    fn random_level(&self, hash: &VecContentHash) -> i64 {
+        let mut state = seed_from_vec_content(hash);
+        // Uniform in (0, 1]: [1,2) from 52 mantissa bits minus 1 → [0,1);
+        // map 0 → 1 so ln is finite. No lossy `as` cast.
+        let bits = splitmix64(&mut state) >> 12;
+        let u = {
+            let unit = f64::from_bits(0x3FF0_0000_0000_0000 | bits) - 1.0;
+            if unit == 0.0 {
+                1.0
+            } else {
+                unit
+            }
         };
         let r = -u.ln() * self.level_multiplier;
-        // the level is the negation of the largest integer smaller than r
-        (-(r.floor() as i64)).max(-64)
+        // level = -floor(r), clamped via the loop bound. r ≥ 0 always.
+        let mut rem = r.floor();
+        let mut level_mag: i64 = 0;
+        while rem >= 1.0 && level_mag < 64 {
+            rem -= 1.0;
+            level_mag += 1;
+        }
+        -level_mag
     }
 }
 
@@ -821,7 +831,6 @@ impl HnswHitKey {
     }
 
     /// Named peel — no Deref/AsRef<[u8]> silent coerce.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -1293,14 +1302,12 @@ const RABITQ_EPSILON_HARD: f64 = 3.5;
 /// consumes codes for candidate generation is a later seam — exact float
 /// [`IndexVec`] remains the live distance authority.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
 pub(crate) struct RaBitQRotation {
     dim: usize,
     /// Row-major `P⁻¹` with orthonormal columns (≡ orthonormal rows of `P`).
     inv: Vec<f64>,
 }
 
-#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
 impl RaBitQRotation {
     /// Build a seeded random orthogonal `P⁻¹` via modified Gram–Schmidt with
     /// reorthogonalization on Gaussian columns. Classical GS alone loses
@@ -1432,7 +1439,6 @@ impl RabitqSplitMix64 {
 /// This code is a rebuildable accelerator for bounded inner-product
 /// estimation (seat 14 Approximate — provable bound).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
 pub(crate) struct RaBitQCode {
     dim: usize,
     /// Packed signs: bit `i` set ⇒ `+1/√D`, clear ⇒ `−1/√D` in the
@@ -1443,7 +1449,6 @@ pub(crate) struct RaBitQCode {
     ip_with_data_bits: u64,
 }
 
-#[allow(dead_code)] // accelerator seated; knn consumption is a later seam
 impl RaBitQCode {
     /// Quantize a **unit** data vector under `rotation`. Refuses non-unit
     /// (or wrong-dim) inputs — normalization is the caller's admit step;
@@ -2191,7 +2196,7 @@ fn put_vector<T: WriteTx>(
 
     let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
         // The first vector in the index.
-        let layer = manifest.random_level(at);
+        let layer = manifest.random_level(&vec_hash);
         return put_fresh_at_levels(tx, idx, base_key_len, vec_hash.clone(), at, layer, 0);
     };
 
@@ -2201,7 +2206,7 @@ fn put_vector<T: WriteTx>(
     let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     let ep_beam = Beam::of(ep_distance, &ep_id);
     found_nn.push(ep_id, ep_beam);
-    let target_layer = manifest.random_level(at);
+    let target_layer = manifest.random_level(&vec_hash);
     if target_layer < bottom_layer {
         // This vector becomes the new entry point.
         put_fresh_at_levels(
@@ -2472,11 +2477,97 @@ pub(crate) fn hnsw_put<T: WriteTx>(
     if extracted.is_empty() {
         return Ok(false);
     }
+    // Content-addressed insert order within the row: list presentation order
+    // must not seed the graph.
+    sort_content_addressed_inserts(&mut extracted);
     let mut cache = VectorCache::new(manifest);
     for (vec, at) in &extracted {
         put_vector(tx, manifest, base, idx, vec, at, &mut cache)?;
     }
     Ok(true)
+}
+
+/// Total order for graph-build inserts: content hash ascending, then
+/// [`VectorId`]. Pure function of admitted content — free of caller
+/// presentation order and of HashMap iteration.
+fn sort_content_addressed_inserts(extracted: &mut [(IndexVec, VectorId)]) {
+    extracted.sort_by(|(va, ida), (vb, idb)| {
+        va.content_hash()
+            .as_bytes()
+            .cmp(vb.content_hash().as_bytes())
+            .then_with(|| ida.cmp(idb))
+    });
+}
+
+/// Content-addressed set build: admit every vector across `rows`, sort by
+/// [`sort_content_addressed_inserts`], then [`put_vector`] each. Same vector
+/// set ⇒ byte-identical graph regardless of `rows` presentation order.
+pub(crate) fn hnsw_put_set<T: WriteTx>(
+    tx: &mut T,
+    manifest: &HnswIndexManifest,
+    base: &RelationHandle,
+    idx: &RelationHandle,
+    filter: Option<&Expr>,
+    rows: &[&[DataValue]],
+) -> Result<usize> {
+    let key_len = base.metadata.keys.len();
+    let mut extracted: Vec<(IndexVec, VectorId)> = Vec::new();
+    for tuple in rows {
+        if let Some(code) = filter
+            && !crate::exec::expr::eval_pred(code, tuple)?
+        {
+            hnsw_remove(tx, base, idx, tuple)?;
+            continue;
+        }
+        if tuple.len() < key_len {
+            bail!(IndexRowCorrupt::new(
+                &base.name,
+                tuple,
+                IndexCorruptReason::RowShorterThanKey,
+            ));
+        }
+        for field in &manifest.vec_fields {
+            let val = tuple.get(*field).ok_or_else(|| {
+                miette!(IndexRowCorrupt::new(
+                    &base.name,
+                    tuple,
+                    IndexCorruptReason::HnswManifestFieldBeyondArity { field: *field },
+                ))
+            })?;
+            match val {
+                DataValue::Vector(v) => extracted.push((
+                    IndexVec::admit(v, manifest)?,
+                    VectorId {
+                        tuple_key: Tuple::from_vec(tuple[..key_len].to_vec()),
+                        field: *field,
+                        sub: None,
+                    },
+                )),
+                DataValue::List(l) => {
+                    for (sub, item) in l.iter().enumerate() {
+                        if let DataValue::Vector(v) = item {
+                            extracted.push((
+                                IndexVec::admit(v, manifest)?,
+                                VectorId {
+                                    tuple_key: Tuple::from_vec(tuple[..key_len].to_vec()),
+                                    field: *field,
+                                    sub: Some(sub),
+                                },
+                            ));
+                        }
+                    }
+                }
+                data_value_any!() => {}
+            }
+        }
+    }
+    sort_content_addressed_inserts(&mut extracted);
+    let n = extracted.len();
+    let mut cache = VectorCache::new(manifest);
+    for (vec, at) in &extracted {
+        put_vector(tx, manifest, base, idx, vec, at, &mut cache)?;
+    }
+    Ok(n)
 }
 
 /// Un-index one base-relation row: find every vector of this row present
@@ -2640,7 +2731,6 @@ impl Hnsw {
     /// function `hnsw_knn`. Live host dispatch uses the trait method
     /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // UFCS alias of live RelationIndexSearch door
     pub(crate) fn knn(
         tx: &impl ReadTx,
         q: &Vector,
@@ -4255,8 +4345,9 @@ mod tests {
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
             "typed refusal, got: {err:?}"
         );
-        let _ = tx.abort();
-
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
         // Query refusal.
         let rtx = db.read_tx().unwrap();
         let err = Hnsw::knn(
@@ -4316,7 +4407,9 @@ mod tests {
         ];
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// Removal takes a vector out of the results; removing the last vector
@@ -4610,34 +4703,235 @@ mod tests {
     /// migration.
     const PINNED_MANIFEST_HEX: &str = "8ead626173655f72656c6174696f6ea476656373aa696e6465785f6e616d65a462795f76a77665635f64696d02a56474797065a3463332aa7665635f6669656c64739101a864697374616e6365a6436f73696e65af65665f636f6e737472756374696f6e10ac6d5f6e65696768626f75727308a56d5f6d617808a66d5f6d61783010b06c6576656c5f6d756c7469706c696572cb3fdec709dc3a03feac696e6465785f66696c746572c0b1657874656e645f63616e64696461746573c2b76b6565705f7072756e65645f636f6e6e656374696f6e73c2";
 
-    /// The level assignment is (a) deterministic — the same vector identity
+    /// Fixture (x, y) from a key via splitmix — bit reinterpret of `i64`, no
+    /// lossy `as` cast. Distinct keys ⇒ distinct streams ⇒ distinct contents.
+    fn fixture_xy(k: i64) -> (f64, f64) {
+        let mut state = HNSW_LEVEL_SEED ^ u64::from_ne_bytes(k.to_ne_bytes());
+        let unit = |state: &mut u64| {
+            let bits = splitmix64(state) >> 12;
+            f64::from_bits(0x3FF0_0000_0000_0000 | bits) - 1.0
+        };
+        (unit(&mut state) * 2.0 - 1.0, unit(&mut state) * 2.0 - 1.0)
+    }
+
+    fn dump_index_graph_bytes(
+        idx: &RelationHandle,
+        db: &impl Storage,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let rtx = db.read_tx()?;
+        let lower = idx.id.raw_encode();
+        let upper = (idx.id.raw() + 1).to_be_bytes();
+        rtx.range_scan(&lower, &upper)
+            .map(|kv| kv.map(|(k, v)| (k[8..].to_vec(), v[8..].to_vec())))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    /// Build via [`hnsw_put_set`] (content-addressed insert order).
+    fn build_put_set(
+        db: &impl Storage,
+        distance: HnswDistance,
+        rows: &[Tuple],
+    ) -> Result<(RelationHandle, RelationHandle, HnswIndexManifest)> {
+        let m = HnswIndexManifest::admit(
+            SmartString::from("vecs"),
+            SmartString::from("by_v"),
+            2,
+            VecElementType::F32,
+            vec![1],
+            distance,
+            16,
+            8,
+            None,
+            false,
+            false,
+        )?;
+        let mut tx = db.write_tx()?;
+        let base = create_relation(
+            &mut tx,
+            input_handle("vecs", base_metadata()),
+            KeyspaceKind::Facts,
+        )?;
+        let idx = create_relation(
+            &mut tx,
+            input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
+            KeyspaceKind::AlgorithmState,
+        )?;
+        for r in rows {
+            base.put_fact(
+                &mut tx,
+                r.as_slice(),
+                kyzo_model::value::ValidityTs::from_raw(0),
+                SourceSpan(0, 0),
+            )?;
+        }
+        let refs: Vec<&[DataValue]> = rows.iter().map(|r| r.as_slice()).collect();
+        hnsw_put_set(&mut tx, &m, &base, &idx, None, &refs)?;
+        tx.commit()?;
+        Ok((base, idx, m))
+    }
+
+    fn count_layer0_nodes(
+        idx: &RelationHandle,
+        base: &RelationHandle,
+        db: &impl Storage,
+    ) -> Result<usize> {
+        let rtx = db.read_tx()?;
+        let kl = base.metadata.keys.len();
+        let mut n = 0usize;
+        for row in crate::project::contract::index_rows(&idx.name, idx.scan_all(&rtx)) {
+            let row = row?;
+            if let HnswRow::Node { layer, .. } = HnswRow::decode(row.as_slice(), kl, &idx.name)?
+                && layer == 0
+            {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
+    /// The level assignment is (a) deterministic — the same vector *content*
     /// always yields the same level — and (b) geometric: non-positive and
     /// bottom-heavy with the expected `P(level == 0)`.
     #[test]
-    fn hnsw_level_is_deterministic_and_geometric() {
-        let m = manifest(HnswDistance::L2);
-        let id_of = |k: i64| VectorId {
-            tuple_key: Tuple::from_vec(vec![DataValue::from(k)]),
-            field: 1,
-            sub: None,
+    fn hnsw_level_is_deterministic_and_geometric() -> Result<()> {
+        let m = HnswIndexManifest::admit(
+            SmartString::from("vecs"),
+            SmartString::from("by_v"),
+            2,
+            VecElementType::F32,
+            vec![1],
+            HnswDistance::L2,
+            16,
+            8,
+            None,
+            false,
+            false,
+        )?;
+        let hash_of = |k: i64| -> Result<VecContentHash> {
+            let (x, y) = fixture_xy(k);
+            let v = Vector::try_new(vec![x, y]).ok_or_else(|| miette!("fixture vector"))?;
+            Ok(IndexVec::admit(&v, &m)?.content_hash())
         };
-        // Deterministic: same identity, same level, every call.
         for k in 0..50 {
-            let a = m.random_level(&id_of(k));
-            let b = m.random_level(&id_of(k));
-            assert_eq!(a, b, "level must be a pure function of identity");
+            let h = hash_of(k)?;
+            let a = m.random_level(&h);
+            let b = m.random_level(&h);
+            assert_eq!(a, b, "level must be a pure function of content hash");
             assert!(a <= 0, "levels are <= 0, got {a}");
             assert!(a >= -64, "levels are clamped at -64, got {a}");
         }
-        // Geometric distribution over 4000 distinct identities: with
-        // multiplier 1/ln(8), P(level == 0) = 1 - 1/8 = 0.875.
-        let zero_count = (0..4000)
-            .filter(|k| m.random_level(&id_of(*k)) == 0)
-            .count();
+        let mut zero_count = 0usize;
+        for k in 0..4000 {
+            if m.random_level(&hash_of(k)?) == 0 {
+                zero_count += 1;
+            }
+        }
         assert!(
             (3300..3700).contains(&zero_count),
             "level 0 should dominate (~87.5%): {zero_count}/4000"
         );
+        Ok(())
+    }
+
+    /// Claude adversaries for C6 (binding):
+    /// 1. Same set in 3 presentation orders → byte-identical graph
+    /// 2. Single bit-flip in one vector → bytes diverge
+    /// 3. Same content put twice → deterministic dedup (node count unchanged)
+    #[test]
+    fn content_addressed_vector_build_is_byte_equal_and_diverges() -> Result<()> {
+        let m = HnswIndexManifest::admit(
+            SmartString::from("vecs"),
+            SmartString::from("by_v"),
+            2,
+            VecElementType::F32,
+            vec![1],
+            HnswDistance::L2,
+            16,
+            8,
+            None,
+            false,
+            false,
+        )?;
+        let hash = |x: f64, y: f64| -> Result<VecContentHash> {
+            let v = Vector::try_new(vec![x, y]).ok_or_else(|| miette!("hash vector"))?;
+            Ok(IndexVec::admit(&v, &m)?.content_hash())
+        };
+        let h_same_a = hash(1.0, 0.0)?;
+        let h_same_b = hash(1.0, 0.0)?;
+        let h_diff = hash(0.0, 1.0)?;
+        assert_eq!(
+            seed_from_vec_content(&h_same_a),
+            seed_from_vec_content(&h_same_b),
+            "identical content must mint the identical graph-build seed"
+        );
+        assert_ne!(
+            seed_from_vec_content(&h_same_a),
+            seed_from_vec_content(&h_diff),
+            "RED: distinct content must diverge the graph-build seed"
+        );
+        assert_eq!(m.random_level(&h_same_a), m.random_level(&h_same_b));
+
+        let mut same_rows: Vec<Tuple> = Vec::with_capacity(24);
+        for k in 0..24 {
+            let (x, y) = fixture_xy(k);
+            same_rows.push(row(k, x, y));
+        }
+
+        let dump_set = |rows: &[Tuple]| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+            let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
+            let db = new_fjall_storage(dir.path())?;
+            let (_base, idx, _m) = build_put_set(&db, HnswDistance::L2, rows)?;
+            dump_index_graph_bytes(&idx, &db)
+        };
+
+        let mut order_rev = same_rows.clone();
+        order_rev.reverse();
+        let mut order_rot = same_rows.clone();
+        order_rot.rotate_left(7);
+        let g_fwd = dump_set(&same_rows)?;
+        let g_rev = dump_set(&order_rev)?;
+        let g_rot = dump_set(&order_rot)?;
+        assert!(!g_fwd.is_empty(), "graph must be non-empty");
+        assert_eq!(
+            g_fwd, g_rev,
+            "same set, reversed presentation → byte-identical graph"
+        );
+        assert_eq!(
+            g_fwd, g_rot,
+            "same set, rotated presentation → byte-identical graph"
+        );
+
+        let mut flipped_rows = same_rows.clone();
+        let (x0, y0) = fixture_xy(0);
+        let x_flip = f64::from_bits(x0.to_bits() ^ 1);
+        flipped_rows[0] = row(0, x_flip, y0);
+        let g_flip = dump_set(&flipped_rows)?;
+        assert_ne!(
+            g_fwd, g_flip,
+            "RED: one-bit content flip must diverge stored graph bytes"
+        );
+
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
+        let db = new_fjall_storage(dir.path())?;
+        let (base, idx, m2) = build_put_set(&db, HnswDistance::L2, &same_rows)?;
+        let nodes_once = count_layer0_nodes(&idx, &base, &db)?;
+        let graph_once = dump_index_graph_bytes(&idx, &db)?;
+        let mut tx = db.write_tx()?;
+        let refs: Vec<&[DataValue]> = same_rows.iter().map(|r| r.as_slice()).collect();
+        hnsw_put_set(&mut tx, &m2, &base, &idx, None, &refs)?;
+        tx.commit()?;
+        let nodes_twice = count_layer0_nodes(&idx, &base, &db)?;
+        let graph_twice = dump_index_graph_bytes(&idx, &db)?;
+        assert_eq!(
+            nodes_once, nodes_twice,
+            "re-putting the same content must not mint a second node per vector"
+        );
+        assert_eq!(
+            graph_once, graph_twice,
+            "dedup re-put must leave graph bytes unchanged"
+        );
+        assert_eq!(nodes_once, same_rows.len(), "one layer-0 node per vector");
+        Ok(())
     }
 
     /// Determinism at the graph level: the same rows inserted in the same
