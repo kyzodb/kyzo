@@ -128,6 +128,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -142,7 +143,7 @@ mod tests {
     ///   take c (2) ⇒ (b,c,2); c offers d at 3;
     ///   take d (3) ⇒ (c,d,3).
     #[test]
-    fn unique_mst_exact_rows() {
+    fn unique_mst_exact_rows() -> Result<()> {
         let got = run_fixed_rule(
             &MinimumSpanningTreePrim,
             vec![
@@ -160,13 +161,14 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
             Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
             Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// TIE BEHAVIOR: equal weights on the chain a-b: 1, b-c: 1 from a.
@@ -177,7 +179,7 @@ mod tests {
     /// first; exact ties beyond that follow hash-seeded queue order and
     /// are deliberately not pinned.)
     #[test]
-    fn equal_weight_chain_exact_rows() {
+    fn equal_weight_chain_exact_rows() -> Result<()> {
         let got = run_fixed_rule(
             &MinimumSpanningTreePrim,
             vec![
@@ -193,11 +195,12 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
             Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
