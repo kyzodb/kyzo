@@ -55,7 +55,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle};
-use crate::store::failure::{KeyspaceId, QuarantineRange};
+use crate::store::failure::KeyspaceId;
 use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
 use crate::store::{ReadTx, Storage};
 use fjall::Slice;
@@ -85,15 +85,6 @@ const _: () = assert!(
     std::mem::align_of::<KeyspaceScopedChecksumDigest>() == std::mem::align_of::<[u8; 32]>()
 );
 
-impl KeyspaceScopedChecksumDigest {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-    /// Borrow the checksum bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Table/keyspace-scoped checksum identity (§49).
 ///
 /// Binds keyspace identity + logical block so misplaced-but-intact data is
@@ -108,9 +99,7 @@ pub struct KeyspaceScopedChecksum {
     digest: KeyspaceScopedChecksumDigest,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl KeyspaceScopedChecksum {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Compute a scoped checksum over payload bytes.
     pub fn compute(keyspace: KeyspaceId, block: u64, payload: &[u8]) -> Self {
         let mut h = Sha256::new();
@@ -125,7 +114,6 @@ impl KeyspaceScopedChecksum {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Keyspace identity.
     pub fn keyspace(self) -> KeyspaceId {
         self.keyspace
@@ -145,19 +133,6 @@ impl KeyspaceScopedChecksum {
     pub fn verify(self, payload: &[u8]) -> bool {
         Self::compute(self.keyspace, self.block, payload).digest == self.digest
     }
-}
-
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Mint a quarantine range from a failed scoped-identity check (§50).
-///
-/// Ordinary tenant queries never see the range; the operator surface and
-/// [`crate::store::failure::StoreRefuse::Quarantined`] do.
-pub fn mint_quarantine_range(
-    keyspace: KeyspaceId,
-    start: Vec<u8>,
-    end: Vec<u8>,
-) -> QuarantineRange {
-    QuarantineRange::mint(keyspace, start, end)
 }
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption
@@ -352,7 +327,6 @@ impl RelationName {
         Self(name.clone())
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow as `&str`.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -374,13 +348,13 @@ impl From<String> for RelationName {
 
 impl std::fmt::Display for RelationName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0.as_str())
+        f.write_str(self.as_str())
     }
 }
 
 impl AsRef<str> for RelationName {
     fn as_ref(&self) -> &str {
-        self.0.as_str()
+        self.as_str()
     }
 }
 
@@ -414,14 +388,6 @@ pub struct IndexRowDigest([u8; 32]);
 
 const _: () = assert!(std::mem::size_of::<IndexRowDigest>() == std::mem::size_of::<[u8; 32]>());
 const _: () = assert!(std::mem::align_of::<IndexRowDigest>() == std::mem::align_of::<[u8; 32]>());
-
-impl IndexRowDigest {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-    /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
 
 /// Stable digest tag for an [`IndexKind`] discriminant (PartialEq-only kinds).
 fn index_kind_digest_tag(kind: &IndexKind) -> &'static [u8] {

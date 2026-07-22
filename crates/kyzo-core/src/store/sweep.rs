@@ -316,7 +316,6 @@ impl IntentOrdinal {
     /// First intent ordinal.
     pub const ZERO: IntentOrdinal = IntentOrdinal(0);
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven ordinal (decode / test sites that hold the proof).
     pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -346,7 +345,6 @@ impl CommitOrdinal {
     /// Genesis / pre-first-commit floor (no sealed history yet).
     pub const ZERO: CommitOrdinal = CommitOrdinal(0);
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven ordinal (WAL / seal decode).
     pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -1359,32 +1357,32 @@ pub enum SweepSealFailure {
 // wall-clock. This surface publishes sealed `f` and refuses the durability/SLA
 // *claim* when exceeded — never Store open of a recoverable Store.
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed intercept (ns) of `f(bytes_since_last_flush)`.
 ///
 /// Campaign ceiling from `kyzo.recovery_sla.corpus.v2` /
 /// `kyzo.recovery_sla.seal.v2` real `wal::replay` (margin 2/1) — story #221 T3.
 /// Bound, not bit-stable equality to every re-derive.
+#[cfg(any(test, feature = "bench-internals"))]
 pub const RECOVERY_SLA_INTERCEPT_NS: u64 = 811_352;
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed slope numerator (ns per byte) of `f` — corpus.v2 / seal.v2 real-replay.
+#[cfg(any(test, feature = "bench-internals"))]
 pub const RECOVERY_SLA_SLOPE_NUM: u64 = 2;
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed slope denominator of `f` — corpus.v2 / seal.v2 real-replay.
+#[cfg(any(test, feature = "bench-internals"))]
 pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed bound `f(bytes_since_last_flush)` in nanoseconds.
+#[cfg(any(test, feature = "bench-internals"))]
 #[inline]
 pub fn recovery_time_bound_ns(bytes_since_last_flush: u64) -> u64 {
     RECOVERY_SLA_INTERCEPT_NS
         + bytes_since_last_flush.saturating_mul(RECOVERY_SLA_SLOPE_NUM) / RECOVERY_SLA_SLOPE_DEN
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Successful bench-lane emit of the §86 recovery SLA claim.
+#[cfg(any(test, feature = "bench-internals"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecoverySlaEmit {
     /// Observed / published recovery-time p999 (ns).
@@ -1395,14 +1393,13 @@ pub struct RecoverySlaEmit {
     pub bound_ns: u64,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Refuse the published durability / SLA *claim* — not Store open (§28).
+#[cfg(any(test, feature = "bench-internals"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum RecoverySlaClaimRefuse {
     /// Observed p999 exceeds sealed `f(bytes_since_last_flush)`.
     #[error(
-        "recovery SLA claim refused: recovery_time_p999={recovery_time_p999_ns}ns \
-         exceeds f(bytes_since_last_flush={bytes_since_last_flush})={bound_ns}ns"
+        "recovery SLA claim refused: recovery_time_p999={recovery_time_p999_ns}ns          exceeds f(bytes_since_last_flush={bytes_since_last_flush})={bound_ns}ns"
     )]
     #[diagnostic(code(store::sweep::recovery_sla_claim_above_bound))]
     AboveBound {
@@ -1415,12 +1412,12 @@ pub enum RecoverySlaClaimRefuse {
     },
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Bench-lane emit for the §86 recovery SLA claim.
 ///
 /// When `recovery_time_p999_ns` exceeds sealed `f(bytes_since_last_flush)`,
 /// refuses the **claim** (badge / Spec “meets recovery SLA”). Does not gate
 /// Store open — recoverability is independent of the marketing bound (§28).
+#[cfg(any(test, feature = "bench-internals"))]
 pub fn emit_recovery_sla_claim(
     recovery_time_p999_ns: u64,
     bytes_since_last_flush: u64,

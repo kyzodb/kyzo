@@ -35,7 +35,6 @@ pub enum MintDomain {
 }
 
 impl MintDomain {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Stable tag byte for the pure nonce transcript.
     fn tag(self) -> u8 {
         match self {
@@ -54,7 +53,6 @@ impl DomainCounter {
     /// Counter zero for a fresh incarnation domain.
     pub const ZERO: DomainCounter = DomainCounter(0);
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven counter (WAL / seal decode).
     pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -82,7 +80,6 @@ pub enum DomainCounterRefuse {
     SpaceExhausted,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Durable counter-block lease for AEAD. Reserve-before-encrypt by construction.
 ///
 /// Only constructor consumes a durably-reserved counter block — volatile
@@ -100,9 +97,7 @@ pub struct NonceLease {
     incarnation_id: IncarnationId,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl NonceLease {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint a lease over an already-durable reserved counter block.
     ///
     /// `ceiling` must be strictly above `floor`. The encrypt door takes the
@@ -131,7 +126,6 @@ impl NonceLease {
         self.domain
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Inclusive floor of the reserved block.
     pub fn floor(&self) -> DomainCounter {
         self.floor
@@ -166,7 +160,6 @@ impl NonceLease {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse from lease mint / nonce-at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum NonceLeaseRefuse {
@@ -178,7 +171,6 @@ pub enum NonceLeaseRefuse {
     CounterOutsideLease,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Pure nonce derivation: `Nonce = H(MintDomain, DomainCounter, CryptoDomain, IncarnationId)`.
 ///
 /// Signature unfrozen until campaigns green — this is the provisional pure fn.

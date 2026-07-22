@@ -89,7 +89,6 @@ pub enum BitemporalDecodeError {
     StampSysRetract,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Named refusals for transaction-time at the durable commit door
 /// (decisions.md §30/§31).
 #[derive(Debug, Error, Diagnostic, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +106,6 @@ pub enum TxnTimeRefuse {
     ForeignTxnTime,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Transaction time bound to a dense [`CommitOrdinal`] at the durable event.
 ///
 /// Physical observation is optional for humans — order authority is the
@@ -119,9 +117,7 @@ pub struct TxnTime {
     commit_ordinal: CommitOrdinal,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl TxnTime {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint transaction time from a SweepDoor [`Committed`] proof.
     ///
     /// This is the sole public mint — client-supplied and Engine-before-append
@@ -133,7 +129,6 @@ impl TxnTime {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Store identity this txn time is namespaced by.
     pub fn store_id(self) -> StoreId {
         self.store_id

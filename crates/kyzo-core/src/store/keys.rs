@@ -23,16 +23,12 @@
 ///
 /// Every variant is refused by admission when placed in an indexed / memcmp
 /// key. Extending this enum requires a Spec edit — open-ended growth is banned.
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Secret {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Data-encryption key material.
     Dek,
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Key-encryption key material.
     Kek,
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Password / passphrase material.
     Password,
     /// Bearer token material.
@@ -44,7 +40,6 @@ pub enum Secret {
 }
 
 impl Secret {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Published memcmp-tax note: secrets in indexed keys are permanent leak.
     pub const MEMCMP_TAX_NOTE: &'static str = "INVARIANT(Secret): order law forces plaintext \
          indexed keys; Secret material in any memcmp key is a permanent tax and leak — \
@@ -63,7 +58,6 @@ impl Secret {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse when Secret material is proposed for an indexed key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum SecretKeyRefuse {
@@ -72,7 +66,6 @@ pub enum SecretKeyRefuse {
     SecretInIndexedKey(Secret),
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Classify whether a proposed key-plane marking is Secret-class.
 ///
 /// Admission calls this; a `Some(Secret)` → [`SecretKeyRefuse::SecretInIndexedKey`].

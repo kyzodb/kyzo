@@ -303,7 +303,6 @@ pub enum WalRefuse {
     TranscriptEncode,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Replay the retained WAL suffix from durable segments alone.
 ///
 /// Reconstructs Engine-visible state; memtables/SSTs wipe and rebuild as cache.
@@ -348,7 +347,6 @@ pub fn replay(store_id: StoreId, segments: &[WalSegment]) -> Result<WalReplaySta
     })
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 fn apply_payload(
     floors: &mut WalFloors,
     commit_bodies: &mut Vec<(CommitOrdinal, Vec<u8>)>,
@@ -421,7 +419,6 @@ fn mint_domain_wire_tag(domain: MintDomain) -> u8 {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Bind a [`NonceLease`]'s exclusive ceiling into a floor payload for append.
 pub fn nonce_floor_payload(lease: &NonceLease) -> WalPayload {
     WalPayload::NonceFloor {
