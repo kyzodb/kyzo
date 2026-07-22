@@ -132,17 +132,20 @@ mod tests {
 
     use super::*;
     use crate::project::text::tokenizer::Token;
+    use miette::{Result, miette};
 
     #[test]
-    fn test_tokenized_stream() {
+    fn test_tokenized_stream() -> Result<()> {
         let tok_text = PreTokenizedString::admit(
             String::from("A a"),
             vec![
-                Token::new(0, 1, 0, String::from("A"), 1).expect("lawful"),
-                Token::new(2, 3, 1, String::from("a"), 1).expect("lawful"),
+                Token::new(0, 1, 0, String::from("A"), 1)
+                    .ok_or_else(|| miette!("lawful token A"))?,
+                Token::new(2, 3, 1, String::from("a"), 1)
+                    .ok_or_else(|| miette!("lawful token a"))?,
             ],
         )
-        .expect("lawful");
+        .ok_or_else(|| miette!("lawful pretokenized string"))?;
 
         let mut token_stream = PreTokenizedStream::from(tok_text.clone());
 
@@ -151,27 +154,36 @@ mod tests {
             assert_eq!(token_stream.token(), expected_token);
         }
         assert!(!token_stream.advance());
+        Ok(())
     }
 
     #[test]
-    fn admit_refuses_incoherent_token_text() {
+    fn admit_refuses_incoherent_token_text() -> Result<()> {
         assert!(
             PreTokenizedString::admit(
                 String::from("hello"),
-                vec![Token::new(0, 5, 0, String::from("world"), 1).expect("lawful"),],
+                vec![
+                    Token::new(0, 5, 0, String::from("world"), 1)
+                        .ok_or_else(|| miette!("lawful token world"))?,
+                ],
             )
             .is_none()
         );
+        Ok(())
     }
 
     #[test]
-    fn admit_refuses_offsets_past_text() {
+    fn admit_refuses_offsets_past_text() -> Result<()> {
         assert!(
             PreTokenizedString::admit(
                 String::from("hi"),
-                vec![Token::new(0, 10, 0, String::from("hi"), 1).expect("lawful"),],
+                vec![
+                    Token::new(0, 10, 0, String::from("hi"), 1)
+                        .ok_or_else(|| miette!("lawful token hi"))?,
+                ],
             )
             .is_none()
         );
+        Ok(())
     }
 }
