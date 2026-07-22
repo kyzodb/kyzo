@@ -25,6 +25,8 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 
+use miette::{Result, miette};
+
 use crate::data::json::NamedRows;
 use crate::exec::provenance::semiring::{
     BadCertificate, Derivation, DerivationGraph, DerivationId, ProofNode, verify_proof,
@@ -70,9 +72,9 @@ impl CertificateFault {
 /// - checker accepts the corrupted tree → `expect_err` panic;
 /// - checker rejects with the wrong [`BadCertificate`] → assert panic;
 /// - `into_named_rows` does not emit status `"mismatch"` → caller asserts.
-pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> NamedRows {
-    let (graph, honest, answer) = seal_golden_path_certificate();
-    verify_proof(&honest, &graph).expect("sealed golden certificate must verify");
+pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedRows> {
+    let (graph, honest, answer) = seal_golden_path_certificate()?;
+    verify_proof(&honest, &graph).map_err(|e| miette!("sealed golden certificate must verify: {e}"))?;
 
     let sabotaged = inject_fault(&honest, fault);
     assert_ne!(
@@ -95,9 +97,9 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> NamedRows {
         fault.expected_reject()
     );
 
-    let program = fixture_mismatch_program();
+    let program = fixture_mismatch_program()?;
     let rows: BTreeSet<Tuple> = BTreeSet::from([answer]);
-    VerifyOutcome::Mismatch {
+    Ok(VerifyOutcome::Mismatch {
         program,
         evaluated: rows.clone(),
         provenance: rows,
@@ -105,23 +107,24 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> NamedRows {
             "verify_proof rejected injected certificate ({fault:?}): {bad}"
         )),
     }
-    .into_named_rows()
+    .into_named_rows())
 }
 
 /// Control: the sealed golden alone must verify. A corpus that only ever
 /// saw mismatch rows without this control can soft-green on a broken seal.
-pub fn golden_certificate_verifies() {
-    let (graph, honest, _) = seal_golden_path_certificate();
-    verify_proof(&honest, &graph).expect("sealed golden must verify under verify_proof");
+pub fn golden_certificate_verifies() -> Result<()> {
+    let (graph, honest, _) = seal_golden_path_certificate()?;
+    verify_proof(&honest, &graph).map_err(|e| miette!("sealed golden must verify under verify_proof: {e}"))?;
+    Ok(())
 }
 
 /// Miniature sealed graph: `path[1,3] ← path[1,2] ← edge[1,2]` plus
 /// `edge[2,3]`, unit weights, tropical costs `{1, 2}`.
-fn seal_golden_path_certificate() -> (
+fn seal_golden_path_certificate() -> Result<(
     DerivationGraph<&'static str>,
     ProofNode<&'static str>,
     Tuple,
-) {
+)> {
     let mut graph = DerivationGraph::default();
     graph.add_fact("edge:1-2");
     graph.add_fact("edge:2-3");
@@ -129,18 +132,18 @@ fn seal_golden_path_certificate() -> (
         .add_derivation(Derivation {
             head: "path:1-2",
             label: DerivationId::from_rule_index(0),
-            weight: NonZeroU64::new(1).expect("1 is nonzero"),
+            weight: NonZeroU64::new(1).ok_or_else(|| miette!("1 is nonzero"))?,
             premises: vec!["edge:1-2"],
         })
-        .expect("base derivation admits");
+        .map_err(|e| miette!("base derivation admits: {e}"))?;
     let d_rec = graph
         .add_derivation(Derivation {
             head: "path:1-3",
             label: DerivationId::from_rule_index(1),
-            weight: NonZeroU64::new(1).expect("1 is nonzero"),
+            weight: NonZeroU64::new(1).ok_or_else(|| miette!("1 is nonzero"))?,
             premises: vec!["path:1-2", "edge:2-3"],
         })
-        .expect("recursive derivation admits");
+        .map_err(|e| miette!("recursive derivation admits: {e}"))?;
 
     let honest = ProofNode::Step {
         node: "path:1-3",
@@ -159,7 +162,7 @@ fn seal_golden_path_certificate() -> (
         ],
     };
     let answer = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from(3i64)]);
-    (graph, honest, answer)
+    Ok((graph, honest, answer))
 }
 
 fn inject_fault(
@@ -227,34 +230,36 @@ fn inject_fault(
     }
 }
 
-fn fixture_mismatch_program() -> MismatchProgram {
+fn fixture_mismatch_program() -> Result<MismatchProgram> {
     let script = parse_script(
         "path[x, y] := *edge[x, y]\n?[x, y] := path[x, y]",
         &Default::default(),
         ValidityTs::from_raw(0),
     )
-    .expect("fixture program parses");
-    match script {
+    .map_err(|e| miette!("fixture program parses: {e}"))?;
+    Ok(match script {
         Script::Query(prog) => MismatchProgram(prog),
         Script::Sys(_) | Script::Imperative(_) => {
             panic!("fixture must be a query script")
         }
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use miette::Result;
+
     use super::*;
 
     #[test]
-    fn golden_control_verifies_and_every_fault_is_typed_mismatch() {
-        golden_certificate_verifies();
+    fn golden_control_verifies_and_every_fault_is_typed_mismatch() -> Result<()> {
+        golden_certificate_verifies()?;
         for fault in [
             CertificateFault::CorruptClaimedCost,
             CertificateFault::OutOfRangeDerivation,
             CertificateFault::CorruptPremiseNode,
         ] {
-            let rows = mismatch_named_rows_under_fault(fault);
+            let rows = mismatch_named_rows_under_fault(fault)?;
             assert_eq!(rows.headers(), &["status", "summary", "detail"]);
             assert_eq!(
                 rows.rows()[0][0],
@@ -306,5 +311,6 @@ mod tests {
                 "mismatch summary must name both answer sets, got {summary}"
             );
         }
+        Ok(())
     }
 }

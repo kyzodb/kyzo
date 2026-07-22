@@ -446,19 +446,19 @@ fn verify_catches_a_deliberately_sabotaged_oracle_fact() {
 /// `BadCertificate`; NamedRows status is `"mismatch"` — never reduced
 /// `"match"`. No Engine forge API.
 #[test]
-fn verify_mismatch_under_certificate_mutation_injector() {
+fn verify_mismatch_under_certificate_mutation_injector() -> miette::Result<()> {
     use kyzo::oracle_harness::{
         CertificateFault, golden_certificate_verifies, mismatch_named_rows_under_fault,
     };
 
-    golden_certificate_verifies();
+    golden_certificate_verifies()?;
 
     for fault in [
         CertificateFault::CorruptClaimedCost,
         CertificateFault::OutOfRangeDerivation,
         CertificateFault::CorruptPremiseNode,
     ] {
-        let rows = mismatch_named_rows_under_fault(fault);
+        let rows = mismatch_named_rows_under_fault(fault)?;
         assert_eq!(rows.headers(), &["status", "summary", "detail"]);
         assert_eq!(
             status_of(&rows),
@@ -487,6 +487,7 @@ fn verify_mismatch_under_certificate_mutation_injector() {
             summary_of(&rows)
         );
     }
+    Ok(())
 }
 
 /// Filter atoms bind no premises — still Match, but cardinality must
