@@ -146,6 +146,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -162,7 +163,7 @@ mod tests {
     /// (upstream-parity: only nodes reached over an edge are "found"), so
     /// exactly three rows, and d's route goes through b, not c.
     #[test]
-    fn exact_traversal_and_routes() {
+    fn exact_traversal_and_routes() -> Result<()> {
         let got = run_fixed_rule(
             &Bfs,
             vec![
@@ -201,10 +202,10 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])),
+            ]))?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])]),
             Tuple::from_vec(vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])]),
@@ -215,5 +216,6 @@ mod tests {
             ]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
