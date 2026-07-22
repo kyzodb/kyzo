@@ -124,7 +124,7 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
     for &b in bytes {
         h ^= u64::from(b);
         // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
-        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+        h = (std::num::Wrapping(h) * std::num::Wrapping(0x0000_0100_0000_01B3)).0;
     }
     h
 }

@@ -85,7 +85,7 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
     if round_bit == 1 && (sticky == 1 || m32 & 1 == 1) {
         // INVARIANT(F64ToF32RoundTieEven): mantissa+1 on round-up; wrap to 0
         // with m32==0x0080_0000 is handled next (bump exp / clamp inf).
-        m32 = m32.wrapping_add(1);
+        m32 = (std::num::Wrapping(m32) + std::num::Wrapping(1)).0;
         if m32 == 0x0080_0000 {
             m32 = 0;
             exp32 += 1;

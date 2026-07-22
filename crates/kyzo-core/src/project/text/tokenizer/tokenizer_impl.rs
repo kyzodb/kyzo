@@ -342,7 +342,7 @@ pub(crate) fn advance_char_indices_token<'a>(
 ) -> bool {
     token.text.clear();
     // INVARIANT(token_position): tokenizer position is a modular counter; wrap is intentional.
-    token.position = token.position.wrapping_add(1);
+    token.position = (std::num::Wrapping(token.position) + std::num::Wrapping(1)).0;
     while let Some((offset_from, c)) = chars.next() {
         if is_token_char(c) {
             let offset_to = match chars

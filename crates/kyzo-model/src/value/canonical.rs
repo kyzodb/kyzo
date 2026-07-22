@@ -993,7 +993,7 @@ mod tests {
             x ^= x << 17;
             self.0 = x;
             // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
-            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            (std::num::Wrapping(x) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
         }
 
         fn below(&mut self, n: usize) -> usize {
@@ -1748,7 +1748,7 @@ mod tests {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in value_span {
             // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
-            h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+            h = (std::num::Wrapping(h ^ u64::from(b)) * std::num::Wrapping(0x100_0000_01b3)).0;
         }
         assert_eq!(&bytes[bytes.len() - 8..], h.to_be_bytes());
         Ok(())

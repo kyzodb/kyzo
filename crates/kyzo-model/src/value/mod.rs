@@ -894,7 +894,7 @@ mod facade_tests {
             x ^= x << 17;
             self.0 = x;
             // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
-            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            (std::num::Wrapping(x) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
         }
 
         fn below(&mut self, n: usize) -> usize {

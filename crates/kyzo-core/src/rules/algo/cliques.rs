@@ -644,12 +644,10 @@ mod tests {
         // Pseudo-random graphs.
         for seed in 0..40u64 {
             // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-            let mut state = 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(seed + 1);
+            let mut state = (std::num::Wrapping(0x9E37_79B9_7F4A_7C15u64) * std::num::Wrapping(seed + 1)).0;
             let mut next = || {
                 // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-                state = state
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
+                state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
                 state
             };
             let n = 12u64;

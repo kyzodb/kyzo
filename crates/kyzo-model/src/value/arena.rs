@@ -1803,7 +1803,7 @@ mod tests {
             x ^= x << 17;
             self.0 = x;
             // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
-            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            (std::num::Wrapping(x) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
         }
 
         fn below(&mut self, n: usize) -> usize {
@@ -2205,7 +2205,7 @@ mod tests {
     fn laws_random_differential_multi_epoch() -> Result<()> {
         for seed in 1u64..=9 {
             // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut rng = Rng((std::num::Wrapping(seed) * std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0);
             let alphabet: &[u8] = match seed % 3 {
                 0 => &[0x00, 0x01],
                 1 => b"abcdefghij",
@@ -2572,8 +2572,8 @@ mod tests {
         let pairs: Vec<(i64, i64)> = (0..ops)
             .map(|i| {
                 // INVARIANT(test_pair_mix): bench pair ids are modular hashes of the index.
-                let a = (match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }.wrapping_mul(2654435761)).rem_euclid(distinct);
-                let b = (match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }.wrapping_mul(40503) + 7).rem_euclid(distinct);
+                let a = ((std::num::Wrapping(match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }) * std::num::Wrapping(2654435761)).0).rem_euclid(distinct);
+                let b = ((std::num::Wrapping(match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }) * std::num::Wrapping(40503)).0 + 7).rem_euclid(distinct);
                 (a, b)
             })
             .collect();

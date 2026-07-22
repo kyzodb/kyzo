@@ -263,9 +263,7 @@ mod tests {
         let mut state = 0xd1ce_d1ce_d1ce_d1ceu64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
             state
         };
         let mut edges: Vec<Tuple> = vec![];

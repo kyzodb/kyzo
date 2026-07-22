@@ -460,7 +460,7 @@ impl Magnitude {
     fn finite(e: i32, frac72: u128) -> Self {
         // INVARIANT(NumExpBias): e ∈ [-1073, 1024] by the finite-magnitude door;
         // wrap adds EXP_OFFSET into the proven u16 biased-exponent range.
-        let biased = e.wrapping_add(EXP_OFFSET);
+        let biased = (std::num::Wrapping(e) + std::num::Wrapping(EXP_OFFSET)).0;
         debug_assert!((7..=2104).contains(&biased));
         Magnitude::Finite {
             exp_key: match u16::try_from(biased) {
@@ -883,7 +883,7 @@ mod tests {
             x ^= x << 17;
             self.0 = x;
             // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
-            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            (std::num::Wrapping(x) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
         }
     }
 

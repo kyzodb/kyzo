@@ -140,8 +140,8 @@ fn hilbert_rot(n: Option<u32>, x: &mut u32, y: &mut u32, rx: u32, ry: u32) {
                 Some(side) => {
                     // INVARIANT(HilbertRotReflect): side is a power of two ≥ 2;
                     // wrap implements (side-1)-x reflection on the u32 grid.
-                    *x = side.wrapping_sub(1).wrapping_sub(*x);
-                    *y = side.wrapping_sub(1).wrapping_sub(*y);
+                    *x = (std::num::Wrapping(side) - std::num::Wrapping(1) - std::num::Wrapping(*x)).0;
+                    *y = (std::num::Wrapping(side) - std::num::Wrapping(1) - std::num::Wrapping(*y)).0;
                 }
             }
         }
@@ -186,8 +186,8 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
         hilbert_rot(Some(s), &mut lat, &mut lon, rx, ry);
         // INVARIANT(HilbertDecodeStep): s is a power of two on the 32-bit
         // Hilbert walk; wrap places the bit into lat/lon without overflow checks.
-        lat = lat.wrapping_add(s.wrapping_mul(rx));
-        lon = lon.wrapping_add(s.wrapping_mul(ry));
+        lat = (std::num::Wrapping(lat) + std::num::Wrapping(s) * std::num::Wrapping(rx)).0;
+        lon = (std::num::Wrapping(lon) + std::num::Wrapping(s) * std::num::Wrapping(ry)).0;
         d >>= 2;
         if s == 1 << 31 {
             break;
@@ -258,18 +258,20 @@ mod tests {
             s ^= s << 17;
             // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
             // test corpus; wrap is the intended u32 scatter, not a size proof.
-            let lat = match u32::try_from(s & 0xFFFF_FFFF) {
-                Ok(v) => v,
-                Err(_) => 0,
-            }
-            .wrapping_mul(0x9E37_79B9);
-            let lon = match u32::try_from(s >> 32) {
-                Ok(v) => v,
-                Err(_) => 0,
-            }
             // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
             // test corpus; wrap is the intended u32 scatter, not a size proof.
-            .wrapping_mul(0x85EB_CA6B);
+            let lat = (std::num::Wrapping(match u32::try_from(s & 0xFFFF_FFFF) {
+                Ok(v) => v,
+                Err(_) => 0,
+            }) * std::num::Wrapping(0x9E37_79B9))
+            .0;
+            // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
+            // test corpus; wrap is the intended u32 scatter, not a size proof.
+            let lon = (std::num::Wrapping(match u32::try_from(s >> 32) {
+                Ok(v) => v,
+                Err(_) => 0,
+            }) * std::num::Wrapping(0x85EB_CA6B))
+            .0;
             corpus.push(Geometry::from_cells(lat, lon));
         }
         let values: Vec<DataValue> = corpus.iter().copied().map(DataValue::Geometry).collect();

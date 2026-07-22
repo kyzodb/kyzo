@@ -340,7 +340,7 @@ mod tests {
         let mut hll = HyperLogLog::<M>::new();
         for i in 0..n {
             // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-            hll.add(&val(salt.wrapping_mul(1_000_003).wrapping_add(i)));
+            hll.add(&val((std::num::Wrapping(salt) * std::num::Wrapping(1_000_003) + std::num::Wrapping(i)).0));
         }
         hll
     }
@@ -496,9 +496,7 @@ mod tests {
         let mut state = 0x9E37_79B9_7F4A_7C15u64;
         let mut next = move || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
             state >> 33
         };
         for trial in 0..6u64 {

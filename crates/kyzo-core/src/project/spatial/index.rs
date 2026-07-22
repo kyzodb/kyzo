@@ -1077,11 +1077,11 @@ mod tests {
     impl Rng {
         fn next_u64(&mut self) -> u64 {
             // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
+            self.0 = (std::num::Wrapping(self.0) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
+            let mut z = std::num::Wrapping(self.0);
+            z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
+            (z ^ (z >> 31)).0
         }
         /// A uniform f64 in `[0, 1)`.
         fn unit(&mut self) -> f64 {

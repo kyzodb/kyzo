@@ -69,7 +69,8 @@ use kyzo_model::value::DataValue;
 
 pub(crate) use crate::exec::stdlib::convert::{u64_to_f64, usize_to_f64};
 
-// xxHash64 primes, from the published specification.
+use std::num::Wrapping as W;
+
 const PRIME64_1: u64 = 0x9E37_79B1_85EB_CA87;
 const PRIME64_2: u64 = 0xC2B2_AE3D_27D4_EB4F;
 const PRIME64_3: u64 = 0x1656_67B1_9E37_79F9;
@@ -79,16 +80,15 @@ const PRIME64_5: u64 = 0x27D4_EB2F_1656_67C5;
 #[inline]
 fn round(acc: u64, input: u64) -> u64 {
     // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-    acc.wrapping_add(input.wrapping_mul(PRIME64_2))
-        .rotate_left(31)
-        .wrapping_mul(PRIME64_1)
+    let t = (W(acc) + W(input) * W(PRIME64_2)).0;
+    (W(t.rotate_left(31)) * W(PRIME64_1)).0
 }
 
 #[inline]
 fn merge_round(mut acc: u64, val: u64) -> u64 {
     acc ^= round(0, val);
     // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-    acc.wrapping_mul(PRIME64_1).wrapping_add(PRIME64_4)
+    (W(acc) * W(PRIME64_1) + W(PRIME64_4)).0
 }
 
 #[inline]
@@ -113,13 +113,12 @@ pub(crate) fn xxh64(data: &[u8], seed: u64) -> u64 {
     let len = data.len();
     let mut idx = 0usize;
     let mut h: u64;
-
     if len >= 32 {
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-        let mut v1 = seed.wrapping_add(PRIME64_1).wrapping_add(PRIME64_2);
-        let mut v2 = seed.wrapping_add(PRIME64_2);
+        let mut v1 = (W(seed) + W(PRIME64_1) + W(PRIME64_2)).0;
+        let mut v2 = (W(seed) + W(PRIME64_2)).0;
         let mut v3 = seed;
-        let mut v4 = seed.wrapping_sub(PRIME64_1);
+        let mut v4 = (W(seed) - W(PRIME64_1)).0;
         while idx + 32 <= len {
             v1 = round(v1, read_u64_le(&data[idx..]));
             v2 = round(v2, read_u64_le(&data[idx + 8..]));
@@ -128,57 +127,37 @@ pub(crate) fn xxh64(data: &[u8], seed: u64) -> u64 {
             idx += 32;
         }
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-        h = v1
-            .rotate_left(1)
-            .wrapping_add(v2.rotate_left(7))
-            .wrapping_add(v3.rotate_left(12))
-            .wrapping_add(v4.rotate_left(18));
-        h = merge_round(h, v1);
-        h = merge_round(h, v2);
-        h = merge_round(h, v3);
-        h = merge_round(h, v4);
+        h = (W(v1.rotate_left(1)) + W(v2.rotate_left(7)) + W(v3.rotate_left(12)) + W(v4.rotate_left(18))).0;
+        h = merge_round(h, v1); h = merge_round(h, v2); h = merge_round(h, v3); h = merge_round(h, v4);
     } else {
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-        h = seed.wrapping_add(PRIME64_5);
+        h = (W(seed) + W(PRIME64_5)).0;
     }
-
     // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-    h = h.wrapping_add(match u64::try_from(len) {
-        Ok(n) => n,
-        Err(_slice_len_fits_u64) => u64::MAX,
-    });
-
+    h = (W(h) + W(match u64::try_from(len) { Ok(n) => n, Err(_) => u64::MAX })).0;
     while idx + 8 <= len {
         h ^= round(0, read_u64_le(&data[idx..]));
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-        h = h
-            .rotate_left(27)
-            .wrapping_mul(PRIME64_1)
-            .wrapping_add(PRIME64_4);
+        h = (W(h.rotate_left(27)) * W(PRIME64_1) + W(PRIME64_4)).0;
         idx += 8;
     }
     if idx + 4 <= len {
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-        h ^= u64::from(read_u32_le(&data[idx..])).wrapping_mul(PRIME64_1);
-        h = h
-            .rotate_left(23)
-            .wrapping_mul(PRIME64_2)
-            .wrapping_add(PRIME64_3);
+        h ^= (W(u64::from(read_u32_le(&data[idx..]))) * W(PRIME64_1)).0;
+        h = (W(h.rotate_left(23)) * W(PRIME64_2) + W(PRIME64_3)).0;
         idx += 4;
     }
     while idx < len {
         // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-        h ^= u64::from(data[idx]).wrapping_mul(PRIME64_5);
-        h = h.rotate_left(11).wrapping_mul(PRIME64_1);
+        h ^= (W(u64::from(data[idx])) * W(PRIME64_5)).0;
+        h = (W(h.rotate_left(11)) * W(PRIME64_1)).0;
         idx += 1;
     }
-
-    // Final avalanche.
     h ^= h >> 33;
     // INVARIANT(xxh64): wrapping u64 ops are the published xxHash64 mix; wrap is the hash.
-    h = h.wrapping_mul(PRIME64_2);
+    h = (W(h) * W(PRIME64_2)).0;
     h ^= h >> 29;
-    h = h.wrapping_mul(PRIME64_3);
+    h = (W(h) * W(PRIME64_3)).0;
     h ^= h >> 32;
     h
 }

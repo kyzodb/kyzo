@@ -1933,17 +1933,13 @@ fn search_layer<T: ReadTx>(
 /// prefer candidates closer to `q` than to any already-selected neighbour;
 /// optionally extend by the candidates' own neighbours and keep pruned
 /// connections up to `m`.
-#[allow(clippy::too_many_arguments)]
-fn select_neighbours_heuristic(
-    tx: &impl ReadTx,
+fn select_neighbours_heuristic<T: ReadTx>(
+    walk: &mut HnswWalkCtx<'_, '_, T>,
     q: &IndexVec,
     found: &PriorityQueue<VectorId, Beam>,
     m: usize,
     layer: i64,
     manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    cache: &mut VectorCache<'_>,
 ) -> Result<PriorityQueue<VectorId, Reverse<Beam>>> {
     let mut candidates: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
     let mut ret: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
@@ -1953,9 +1949,9 @@ fn select_neighbours_heuristic(
     }
     if manifest.extend_candidates {
         for (id, _) in found.iter() {
-            for (neighbour, _) in neighbours(tx, base, idx, id, layer, false)? {
-                cache.ensure(tx, base, &neighbour)?;
-                let dist = cache.v_dist(q, &neighbour)?;
+            for (neighbour, _) in neighbours(walk.tx, walk.base, walk.idx, id, layer, false)? {
+                walk.cache.ensure(walk.tx, walk.base, &neighbour)?;
+                let dist = walk.cache.v_dist(q, &neighbour)?;
                 candidates.push(neighbour.clone(), Reverse(Beam::of(dist, &neighbour)));
             }
         }
@@ -1967,9 +1963,9 @@ fn select_neighbours_heuristic(
         let cand_dist_to_q = cand_prio.dist();
         let mut should_add = true;
         for (existing, _) in ret.iter() {
-            cache.ensure(tx, base, &cand)?;
-            cache.ensure(tx, base, existing)?;
-            let dist_to_existing = cache.k_dist(existing, &cand)?;
+            walk.cache.ensure(walk.tx, walk.base, &cand)?;
+            walk.cache.ensure(walk.tx, walk.base, existing)?;
+            let dist_to_existing = walk.cache.k_dist(existing, &cand)?;
             if dist_to_existing < cand_dist_to_q {
                 should_add = false;
                 break;
@@ -2158,17 +2154,28 @@ fn neighbours_tagged(
 /// test module is the reusable tool for whoever runs the next, larger
 /// campaign (this file's DoD explicitly defers that campaign to a quiet
 /// box, per the story). Returns the new live degree.
-#[allow(clippy::too_many_arguments)]
+/// Graph seats for [`shrink_neighbour`] (mutable write tx).
+struct HnswShrinkSpec<'a, 'c, T: WriteTx> {
+    tx: &'a mut T,
+    manifest: &'a HnswIndexManifest,
+    base: &'a RelationHandle,
+    idx: &'a RelationHandle,
+    cache: &'a mut VectorCache<'c>,
+}
+
 fn shrink_neighbour<T: WriteTx>(
-    tx: &mut T,
+    spec: &mut HnswShrinkSpec<'_, '_, T>,
     target: &VectorId,
     m: usize,
     layer: i64,
-    manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    cache: &mut VectorCache<'_>,
 ) -> Result<usize> {
+    let HnswShrinkSpec {
+        tx,
+        manifest,
+        base,
+        idx,
+        cache,
+    } = spec;
     let base_key_len = base.metadata.keys.len();
     cache.ensure(tx, base, target)?;
     let vec = cache.get(target)?.clone();
@@ -2178,8 +2185,19 @@ fn shrink_neighbour<T: WriteTx>(
         was_tombstoned.insert(neighbour.clone(), ignore_link);
         candidates.push(neighbour.clone(), Beam::of(dist, &neighbour));
     }
-    let new_candidates =
-        select_neighbours_heuristic(tx, &vec, &candidates, m, layer, manifest, base, idx, cache)?;
+    let new_candidates = select_neighbours_heuristic(
+        &mut HnswWalkCtx {
+            tx,
+            base,
+            idx,
+            cache,
+        },
+        &vec,
+        &candidates,
+        m,
+        layer,
+        manifest,
+    )?;
     let mut old_candidate_set = FxHashSet::default();
     for (old, _) in &candidates {
         old_candidate_set.insert(old.clone());
@@ -2815,16 +2833,7 @@ impl RelationIndexSearch for Hnsw {
         tx: &Tx,
         request: Self::Request<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        crate::project::contract::admit_relation_search_hits(hnsw_knn_body(
-            tx,
-            request.q,
-            request.manifest,
-            request.base,
-            request.idx,
-            request.params,
-            request.filter_expr,
-            request.cancel,
-        )?)
+        crate::project::contract::admit_relation_search_hits(hnsw_knn_body(tx, request)?)
     }
 }
 
@@ -2865,44 +2874,25 @@ impl Hnsw {
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
     /// function `hnsw_knn`. Live host dispatch uses the trait method
     /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
-    #[allow(clippy::too_many_arguments)]
     #[cfg(test)]
     pub(crate) fn knn(
         tx: &impl ReadTx,
-        q: &Vector,
-        manifest: &HnswIndexManifest,
-        base: &RelationHandle,
-        idx: &RelationHandle,
-        params: &HnswKnnParams,
-        filter_expr: &Option<Expr>,
-        cancel: &crate::rules::contract::CancelFlag,
+        request: HnswSearchRequest<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        Self::search_relation(
-            tx,
-            HnswSearchRequest {
-                q,
-                manifest,
-                base,
-                idx,
-                params,
-                filter_expr,
-                cancel,
-            },
-        )
+        Self::search_relation(tx, request)
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn hnsw_knn_body(
-    tx: &impl ReadTx,
-    q: &Vector,
-    manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &HnswKnnParams,
-    filter_expr: &Option<Expr>,
-    cancel: &crate::rules::contract::CancelFlag,
-) -> Result<Vec<Tuple>> {
+fn hnsw_knn_body(tx: &impl ReadTx, request: HnswSearchRequest<'_>) -> Result<Vec<Tuple>> {
+    let HnswSearchRequest {
+        q,
+        manifest,
+        base,
+        idx,
+        params,
+        filter_expr,
+        cancel,
+    } = request;
     let q = IndexVec::admit(q, manifest)?;
 
     // Filter-aware traversal (story #3): a filtered search takes the
@@ -2912,7 +2902,18 @@ fn hnsw_knn_body(
     // tail (the `(distance, encoded-key)` tie-break) the operator tier owns;
     // this branch is deliberately kept OUT of that site.
     if let Some(filter) = filter_expr {
-        return hnsw_knn_filtered(cancel, tx, &q, manifest, base, idx, params, filter);
+        return hnsw_knn_filtered(
+            &HnswFilteredKnn {
+                cancel,
+                q: &q,
+                manifest,
+                base,
+                idx,
+                params,
+                filter,
+            },
+            tx,
+        );
     }
 
     let mut cache = VectorCache::new(manifest);
@@ -3252,26 +3253,42 @@ fn build_cand_tuple(
     Ok(cand_tuple)
 }
 
+/// Filtered k-NN entry seats (post–query-admit).
+struct HnswFilteredKnn<'a> {
+    cancel: &'a crate::rules::contract::CancelFlag,
+    q: &'a IndexVec,
+    manifest: &'a HnswIndexManifest,
+    base: &'a RelationHandle,
+    idx: &'a RelationHandle,
+    params: &'a HnswKnnParams,
+    filter: &'a Expr,
+}
+
+/// Shared seats for filtered strategy helpers (walk + knn params + filter).
+struct HnswFilterCtx<'a, 'c, T: ReadTx> {
+    tx: &'a T,
+    base: &'a RelationHandle,
+    idx: &'a RelationHandle,
+    params: &'a HnswKnnParams,
+    filter: &'a Expr,
+    cache: &'a mut VectorCache<'c>,
+}
+
 /// Does this candidate belong in the result set: within `radius` (if any) AND
 /// filter-passing. Builds the candidate row through the shared builder so the
 /// predicate is identical everywhere.
-#[allow(clippy::too_many_arguments)]
-fn admit_candidate(
-    tx: &impl ReadTx,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &HnswKnnParams,
+fn admit_candidate<T: ReadTx>(
+    ctx: &mut HnswFilterCtx<'_, '_, T>,
     cand: &VectorId,
     distance: f64,
-    filter: &Expr,
 ) -> Result<Option<Tuple>> {
-    if let Some(r) = params.radius
+    if let Some(r) = ctx.params.radius
         && distance > r
     {
         return Ok(None);
     }
-    let cand_tuple = build_cand_tuple(tx, base, idx, params, cand, distance)?;
-    if crate::exec::expr::eval_pred(filter, &cand_tuple)? {
+    let cand_tuple = build_cand_tuple(ctx.tx, ctx.base, ctx.idx, ctx.params, cand, distance)?;
+    if crate::exec::expr::eval_pred(ctx.filter, &cand_tuple)? {
         Ok(Some(cand_tuple))
     } else {
         Ok(None)
@@ -3314,21 +3331,15 @@ fn layer0_nodes<'a>(
 /// The estimate only picks WHICH strategy runs first; the k-guarantee is upheld
 /// by the exact scan fallback regardless, so a coarse or biased
 /// estimate can never produce a wrong result count.
-#[allow(clippy::too_many_arguments)]
-fn select_strategy(
-    tx: &impl ReadTx,
+fn select_strategy<T: ReadTx>(
+    ctx: &mut HnswFilterCtx<'_, '_, T>,
     q: &IndexVec,
     manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &HnswKnnParams,
-    filter: &Expr,
-    cache: &mut VectorCache<'_>,
 ) -> Result<SearchPlan> {
     let mut n: usize = 0;
     let mut state = HNSW_SAMPLE_SEED;
     let mut reservoir: Vec<VectorId> = Vec::with_capacity(HNSW_SAMPLE_SIZE);
-    for id in layer0_nodes(tx, base, idx) {
+    for id in layer0_nodes(ctx.tx, ctx.base, ctx.idx) {
         let id = id?;
         if reservoir.len() < HNSW_SAMPLE_SIZE {
             reservoir.push(id);
@@ -3347,9 +3358,9 @@ fn select_strategy(
     }
     let mut pass = 0usize;
     for id in &reservoir {
-        cache.ensure(tx, base, id)?;
-        let d = cache.v_dist(q, id)?;
-        if admit_candidate(tx, base, idx, params, id, d, filter)?.is_some() {
+        ctx.cache.ensure(ctx.tx, ctx.base, id)?;
+        let d = ctx.cache.v_dist(q, id)?;
+        if admit_candidate(ctx, id, d)?.is_some() {
             pass += 1;
         }
     }
@@ -3360,17 +3371,17 @@ fn select_strategy(
         None => 0,
     };
     let d_bar = manifest.m_max0.max(1);
-    let t_scan = match HNSW_K_SCAN.checked_mul(params.k) {
+    let t_scan = match HNSW_K_SCAN.checked_mul(ctx.params.k) {
         Some(v) => v,
         None => usize::MAX,
     }
-    .max(params.ef);
+    .max(ctx.params.ef);
     // Estimated graph work to seat `ef` passing candidates ≈ (ef/s)·D̄; if that
     // meets or exceeds `N`, the scan (cost ~N) wins outright.
     let graph_work = if s <= 0.0 {
         usize::MAX
     } else {
-        match kyzo_model::value::Num::float((usize_to_f64(params.ef) / s) * usize_to_f64(d_bar)).to_int_coerced() {
+        match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s) * usize_to_f64(d_bar)).to_int_coerced() {
             Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
             None => 0,
         }
@@ -3378,17 +3389,17 @@ fn select_strategy(
     if s <= 0.0 || m_hat <= t_scan || graph_work >= n {
         Ok(SearchPlan::Scan)
     } else {
-        let ef_max = match HNSW_EF_MAX_FACTOR.checked_mul(params.ef) {
+        let ef_max = match HNSW_EF_MAX_FACTOR.checked_mul(ctx.params.ef) {
             Some(v) => v,
             None => usize::MAX,
         }
         .min(n)
-        .max(params.ef);
-        let ef2 = match kyzo_model::value::Num::float((usize_to_f64(params.ef) / s).ceil()).to_int_coerced() {
+        .max(ctx.params.ef);
+        let ef2 = match kyzo_model::value::Num::float((usize_to_f64(ctx.params.ef) / s).ceil()).to_int_coerced() {
             Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
             None => 0,
         }
-        .clamp(params.ef, ef_max);
+        .clamp(ctx.params.ef, ef_max);
         Ok(SearchPlan::Graph { ef2 })
     }
 }
@@ -3396,29 +3407,23 @@ fn select_strategy(
 /// Strategy A — exact filtered nearest-k by linear scan of the index population.
 /// Recall-safe and insertion-order-invariant (key-order enumeration, total-order
 /// accumulator).
-#[allow(clippy::too_many_arguments)] // mirrors hnsw_knn's own surface
-fn scan_filtered(
+fn scan_filtered<T: ReadTx>(
     cancel: &crate::rules::contract::CancelFlag,
-    tx: &impl ReadTx,
+    ctx: &mut HnswFilterCtx<'_, '_, T>,
     q: &IndexVec,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &HnswKnnParams,
-    filter: &Expr,
-    cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
     let mut heap: BinaryHeap<Ranked> = BinaryHeap::new();
-    for id in layer0_nodes(tx, base, idx) {
+    for id in layer0_nodes(ctx.tx, ctx.base, ctx.idx) {
         // One poll per scanned node: the exact scan is the O(N) path.
         cancel.check()?;
         let id = id?;
-        cache.ensure(tx, base, &id)?;
-        let d = cache.v_dist(q, &id)?;
-        if let Some(tuple) = admit_candidate(tx, base, idx, params, &id, d, filter)? {
-            let key = id_order_key(idx, &id)?;
+        ctx.cache.ensure(ctx.tx, ctx.base, &id)?;
+        let d = ctx.cache.v_dist(q, &id)?;
+        if let Some(tuple) = admit_candidate(ctx, &id, d)? {
+            let key = id_order_key(ctx.idx, &id)?;
             push_topk(
                 &mut heap,
-                params.k,
+                ctx.params.k,
                 Ranked {
                     dist: RankScore::of(d),
                     key,
@@ -3427,7 +3432,7 @@ fn scan_filtered(
             );
         }
     }
-    Ok(drain_sorted(heap, params.k))
+    Ok(drain_sorted(heap, ctx.params.k))
 }
 
 /// Design V, layer 0 — route through the FULL graph (connectivity preserved),
@@ -3436,17 +3441,11 @@ fn scan_filtered(
 /// they fail the filter). `visit_cap` bounds worst-case work under a
 /// mis-estimated selectivity; hitting it leaves the result heap short, which the
 /// caller's fallback repairs.
-#[allow(clippy::too_many_arguments)]
-fn graph_search_layer0(
-    tx: &impl ReadTx,
+fn graph_search_layer0<T: ReadTx>(
+    ctx: &mut HnswFilterCtx<'_, '_, T>,
     q: &IndexVec,
     ef2: usize,
-    base: &RelationHandle,
-    idx: &RelationHandle,
     seeds: &[VectorId],
-    params: &HnswKnnParams,
-    filter: &Expr,
-    cache: &mut VectorCache<'_>,
     visit_cap: usize,
 ) -> Result<BinaryHeap<Ranked>> {
     let mut visited: FxHashSet<VectorId> = FxHashSet::default();
@@ -3455,11 +3454,11 @@ fn graph_search_layer0(
 
     for id in seeds {
         if visited.insert(id.clone()) {
-            cache.ensure(tx, base, id)?;
-            let d = cache.v_dist(q, id)?;
+            ctx.cache.ensure(ctx.tx, ctx.base, id)?;
+            let d = ctx.cache.v_dist(q, id)?;
             candidates.push(id.clone(), Reverse(Beam::of(d, id)));
-            if let Some(tuple) = admit_candidate(tx, base, idx, params, id, d, filter)? {
-                let key = id_order_key(idx, id)?;
+            if let Some(tuple) = admit_candidate(ctx, id, d)? {
+                let key = id_order_key(ctx.idx, id)?;
                 push_topk(
                     &mut results,
                     ef2,
@@ -3487,12 +3486,12 @@ fn graph_search_layer0(
         {
             break;
         }
-        for (neighbour, _) in neighbours(tx, base, idx, &cand_id, 0, false)? {
+        for (neighbour, _) in neighbours(ctx.tx, ctx.base, ctx.idx, &cand_id, 0, false)? {
             if !visited.insert(neighbour.clone()) {
                 continue;
             }
-            cache.ensure(tx, base, &neighbour)?;
-            let nd = cache.v_dist(q, &neighbour)?;
+            ctx.cache.ensure(ctx.tx, ctx.base, &neighbour)?;
+            let nd = ctx.cache.v_dist(q, &neighbour)?;
             // Routing: expand every neighbour that could still improve the beam
             // (or unconditionally while the beam is under-full) — full-graph
             // routing, so connectivity is the unfiltered graph's.
@@ -3501,8 +3500,8 @@ fn graph_search_layer0(
                 candidates.push(neighbour.clone(), Reverse(Beam::of(nd, &neighbour)));
             }
             // Visibility: seat only if it passes the filter (+radius).
-            if let Some(tuple) = admit_candidate(tx, base, idx, params, &neighbour, nd, filter)? {
-                let key = id_order_key(idx, &neighbour)?;
+            if let Some(tuple) = admit_candidate(ctx, &neighbour, nd)? {
+                let key = id_order_key(ctx.idx, &neighbour)?;
                 push_topk(
                     &mut results,
                     ef2,
@@ -3520,28 +3519,27 @@ fn graph_search_layer0(
 
 /// Strategy V/C — filtered graph traversal: unfiltered ef=1 descent through the
 /// upper layers for a routing entry point, then Design-V layer-0 search.
-#[allow(clippy::too_many_arguments)]
-fn graph_filtered(
-    tx: &impl ReadTx,
+fn graph_filtered<T: ReadTx>(
+    ctx: &mut HnswFilterCtx<'_, '_, T>,
     q: &IndexVec,
     manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
     ep_id: VectorId,
     bottom_layer: i64,
     ef2: usize,
-    params: &HnswKnnParams,
-    filter: &Expr,
-    cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
     let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
-    cache.ensure(tx, base, &ep_id)?;
-    let ep_d = cache.v_dist(q, &ep_id)?;
+    ctx.cache.ensure(ctx.tx, ctx.base, &ep_id)?;
+    let ep_d = ctx.cache.v_dist(q, &ep_id)?;
     let ep_beam = Beam::of(ep_d, &ep_id);
     found_nn.push(ep_id, ep_beam);
     for layer in bottom_layer..0 {
         search_layer(
-            &mut HnswWalkCtx { tx, base, idx, cache },
+            &mut HnswWalkCtx {
+                tx: ctx.tx,
+                base: ctx.base,
+                idx: ctx.idx,
+                cache: ctx.cache,
+            },
             q,
             1,
             layer,
@@ -3556,10 +3554,8 @@ fn graph_filtered(
         Some(v) => v,
         None => usize::MAX,
     };
-    let results = graph_search_layer0(
-        tx, q, ef2, base, idx, &seeds, params, filter, cache, visit_cap,
-    )?;
-    Ok(drain_sorted(results, params.k))
+    let results = graph_search_layer0(ctx, q, ef2, &seeds, visit_cap)?;
+    Ok(drain_sorted(results, ctx.params.k))
 }
 
 /// The filter-aware search entry point: estimate selectivity, run the chosen
@@ -3567,17 +3563,16 @@ fn graph_filtered(
 /// walk under-delivered, so the count guarantee (`min(k, M)`) holds at every
 /// selectivity. Returns nearest-first, `(distance, key)`-total-
 /// ordered rows.
-#[allow(clippy::too_many_arguments)] // mirrors hnsw_knn's own surface
-fn hnsw_knn_filtered(
-    cancel: &crate::rules::contract::CancelFlag,
-    tx: &impl ReadTx,
-    q: &IndexVec,
-    manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &HnswKnnParams,
-    filter: &Expr,
-) -> Result<Vec<Tuple>> {
+fn hnsw_knn_filtered(req: &HnswFilteredKnn<'_>, tx: &impl ReadTx) -> Result<Vec<Tuple>> {
+    let HnswFilteredKnn {
+        cancel,
+        q,
+        manifest,
+        base,
+        idx,
+        params,
+        filter,
+    } = req;
     if params.k == 0 {
         return Ok(vec![]);
     }
@@ -3585,27 +3580,23 @@ fn hnsw_knn_filtered(
     let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
         return Ok(vec![]);
     };
-    let plan = select_strategy(tx, q, manifest, base, idx, params, filter, &mut cache)?;
+    let mut ctx = HnswFilterCtx {
+        tx,
+        base,
+        idx,
+        params,
+        filter,
+        cache: &mut cache,
+    };
+    let plan = select_strategy(&mut ctx, q, manifest)?;
     match plan {
-        SearchPlan::Scan => scan_filtered(cancel, tx, q, base, idx, params, filter, &mut cache),
+        SearchPlan::Scan => scan_filtered(cancel, &mut ctx, q),
         SearchPlan::Graph { ef2 } => {
-            let hits = graph_filtered(
-                tx,
-                q,
-                manifest,
-                base,
-                idx,
-                ep_id,
-                bottom_layer,
-                ef2,
-                params,
-                filter,
-                &mut cache,
-            )?;
+            let hits = graph_filtered(&mut ctx, q, manifest, ep_id, bottom_layer, ef2)?;
             if hits.len() < params.k {
                 // Hard fallback: the exact scan finds every match the graph walk
                 // could not reach, upholding min(k, M).
-                scan_filtered(cancel, tx, q, base, idx, params, filter, &mut cache)
+                scan_filtered(cancel, &mut ctx, q)
             } else {
                 Ok(hits)
             }
@@ -3613,45 +3604,66 @@ fn hnsw_knn_filtered(
     }
 }
 
+/// Test-only seats for plan selection / forced-plan runs.
+#[cfg(test)]
+struct HnswPlanQuery<'a> {
+    q: &'a Vector,
+    manifest: &'a HnswIndexManifest,
+    base: &'a RelationHandle,
+    idx: &'a RelationHandle,
+    params: &'a HnswKnnParams,
+    filter: &'a Expr,
+}
+
 /// Test-only: expose the selector's decision so the strategy-selection tests can
 /// assert the chosen band and its insertion-order invariance.
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 fn hnsw_knn_selected_plan(
     tx: &impl ReadTx,
-    q: &Vector,
-    manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &HnswKnnParams,
-    filter: &Expr,
+    query: HnswPlanQuery<'_>,
 ) -> Result<Option<SearchPlan>> {
+    let HnswPlanQuery {
+        q,
+        manifest,
+        base,
+        idx,
+        params,
+        filter,
+    } = query;
     let q = IndexVec::admit(q, manifest)?;
     let mut cache = VectorCache::new(manifest);
     if entry_point(tx, base, idx)?.is_none() {
         return Ok(None);
     }
-    Ok(Some(select_strategy(
-        tx, &q, manifest, base, idx, params, filter, &mut cache,
-    )?))
+    let mut ctx = HnswFilterCtx {
+        tx,
+        base,
+        idx,
+        params,
+        filter,
+        cache: &mut cache,
+    };
+    Ok(Some(select_strategy(&mut ctx, &q, manifest)?))
 }
 
 /// Test-only: run a SPECIFIED plan, with the scan fallback optionally disabled,
 /// so tests can prove the fallback is load-bearing (a graph walk with a starved
 /// beam under-delivers; the fallback repairs it to exact `min(k, M)`).
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 fn hnsw_knn_forced(
     tx: &impl ReadTx,
-    q: &Vector,
-    manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &HnswKnnParams,
-    filter: &Expr,
+    query: HnswPlanQuery<'_>,
     plan: SearchPlan,
     fallback: bool,
 ) -> Result<Vec<Tuple>> {
+    let HnswPlanQuery {
+        q,
+        manifest,
+        base,
+        idx,
+        params,
+        filter,
+    } = query;
     let cancel = crate::rules::contract::CancelFlag::inert();
     let cancel = &cancel;
     let q = IndexVec::admit(q, manifest)?;
@@ -3659,24 +3671,20 @@ fn hnsw_knn_forced(
     let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
         return Ok(vec![]);
     };
+    let mut ctx = HnswFilterCtx {
+        tx,
+        base,
+        idx,
+        params,
+        filter,
+        cache: &mut cache,
+    };
     match plan {
-        SearchPlan::Scan => scan_filtered(cancel, tx, &q, base, idx, params, filter, &mut cache),
+        SearchPlan::Scan => scan_filtered(cancel, &mut ctx, &q),
         SearchPlan::Graph { ef2 } => {
-            let hits = graph_filtered(
-                tx,
-                &q,
-                manifest,
-                base,
-                idx,
-                ep_id,
-                bottom_layer,
-                ef2,
-                params,
-                filter,
-                &mut cache,
-            )?;
+            let hits = graph_filtered(&mut ctx, &q, manifest, ep_id, bottom_layer, ef2)?;
             if fallback && hits.len() < params.k {
-                scan_filtered(cancel, tx, &q, base, idx, params, filter, &mut cache)
+                scan_filtered(cancel, &mut ctx, &q)
             } else {
                 Ok(hits)
             }

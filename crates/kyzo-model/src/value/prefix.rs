@@ -140,7 +140,7 @@ mod tests {
             s ^= s >> 7;
             s ^= s << 17;
             // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
-            s.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            (std::num::Wrapping(s) * std::num::Wrapping(0x2545_F491_4F6C_DD1D)).0
         };
         for _ in 0..20_000 {
             let la = match usize::try_from(next() % 12) {
