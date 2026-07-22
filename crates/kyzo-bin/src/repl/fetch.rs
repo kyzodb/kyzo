@@ -294,21 +294,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_scheme_host_port_and_path() {
-        let t = Target::parse("https://example.com:8443/a/b?c=d").unwrap();
+    fn parses_scheme_host_port_and_path() -> Result<()> {
+        let t = Target::parse("https://example.com:8443/a/b?c=d")?;
         assert!(t.https);
         assert_eq!(t.host, "example.com");
         assert_eq!(t.port, 8443);
         assert_eq!(t.path_and_query, "/a/b?c=d");
+        Ok(())
     }
 
     #[test]
-    fn defaults_port_by_scheme_and_path_to_root() {
-        let http = Target::parse("http://example.com").unwrap();
+    fn defaults_port_by_scheme_and_path_to_root() -> Result<()> {
+        let http = Target::parse("http://example.com")?;
         assert_eq!(http.port, 80);
         assert_eq!(http.path_and_query, "/");
-        let https = Target::parse("https://example.com").unwrap();
+        let https = Target::parse("https://example.com")?;
         assert_eq!(https.port, 443);
+        Ok(())
     }
 
     #[test]
@@ -317,32 +319,35 @@ mod tests {
     }
 
     #[test]
-    fn resolves_relative_and_absolute_redirects() {
-        let t = Target::parse("https://example.com/old").unwrap();
+    fn resolves_relative_and_absolute_redirects() -> Result<()> {
+        let t = Target::parse("https://example.com/old")?;
         assert_eq!(t.resolve_redirect("/new"), "https://example.com:443/new");
         assert_eq!(
             t.resolve_redirect("http://other.example/x"),
             "http://other.example/x"
         );
+        Ok(())
     }
 
     #[test]
-    fn reads_content_length_body() {
+    fn reads_content_length_body() -> Result<()> {
         let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
         let mut reader = BufReader::new(&raw[..]);
-        let (status, headers) = read_status_and_headers(&mut reader).unwrap();
+        let (status, headers) = read_status_and_headers(&mut reader)?;
         assert_eq!(status, 200);
-        let body = read_body(&mut reader, &headers).unwrap();
+        let body = read_body(&mut reader, &headers)?;
         assert_eq!(body, b"hello");
+        Ok(())
     }
 
     #[test]
-    fn reads_chunked_body() {
+    fn reads_chunked_body() -> Result<()> {
         let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
         let mut reader = BufReader::new(&raw[..]);
-        let (status, headers) = read_status_and_headers(&mut reader).unwrap();
+        let (status, headers) = read_status_and_headers(&mut reader)?;
         assert_eq!(status, 200);
-        let body = read_body(&mut reader, &headers).unwrap();
+        let body = read_body(&mut reader, &headers)?;
         assert_eq!(body, b"hello world");
+        Ok(())
     }
 }
