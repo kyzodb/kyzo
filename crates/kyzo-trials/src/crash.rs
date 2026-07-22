@@ -21,11 +21,21 @@ use super::{IntentOrdinal, OverlapBatch, SweepDoor, SweepSession};
 use crate::store::authority::{Entropy, OpenOrdinal};
 use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
 use crate::store::idempotency::{IdempotencyMemo, OperationKey, RequestDigest};
-use crate::store::merkle::{GENESIS_ROOT, StateRoot};
+use crate::store::merkle::{StateRoot, GENESIS_ROOT};
 use crate::store::open::{
-    EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId, genesis,
+    genesis, EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, StoreId,
 };
 use crate::store::scratch::TempTx;
+
+/// Loud admit — kit/campaign step that must hold. Diverges on Err (never silent).
+fn admit<T, E: std::fmt::Display>(r: Result<T, E>, what: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => loop {
+            assert!(false, "{what}: {e}");
+        },
+    }
+}
 
 fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
     let key = OperationKey::single_store(b"kyzo.sweep.crash", op, store_id, b"s0");
@@ -50,15 +60,19 @@ fn open_live_door(
     let store_id = sealed.store_id();
     let fence_epoch = sealed.fence_epoch();
     let (_view, auth) = sealed.take_write_authority();
-    let incarnation = auth
-        .incarnation_mint_cap(OpenOrdinal::ZERO)
-        .mint(Entropy::admit(entropy))
-        .expect("incarnation mint");
+    let incarnation = admit(
+        auth.incarnation_mint_cap(OpenOrdinal::ZERO)
+            .mint(Entropy::admit(entropy)),
+        "INVARIANT(incarnation_mint): genesis mint admits",
+    );
     let session = SweepSession::new(store_id, fence_epoch, incarnation);
     let cap = StableCommitCap::NativeFsyncProof {
         snapshot_fork: SnapshotFork::No,
     };
-    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap).expect("live SweepDoor");
+    let door = admit(
+        SweepDoor::open(store_id, fence_epoch, session, auth, cap),
+        "INVARIANT(live_sweep_door): NativeFsyncProof open admits",
+    );
     (door, incarnation, session)
 }
 
@@ -87,20 +101,24 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
     let (key_c, dig_c) = op_key(store_id, b"overlap-C");
 
     // A arrives before the barrier — queued, then pulled into the overlap cohort.
-    let intent_a = door
-        .admit(incarnation, &session, key_a, dig_a)
-        .expect("admit A before fsync window");
-    door.begin_fsync_window(incarnation, &session)
-        .expect("begin in-flight fsync window");
+    let intent_a = admit(
+        door.admit(incarnation, &session, key_a, dig_a),
+        "admit A before fsync window",
+    );
+    admit(
+        door.begin_fsync_window(incarnation, &session),
+        "begin in-flight fsync window",
+    );
     assert!(
         door.fsync_window_open(),
         "fsync window must be open for overlap admission"
     );
 
     // B arrives while the fsync is in flight → overlaps that barrier.
-    let intent_b = door
-        .admit(incarnation, &session, key_b, dig_b)
-        .expect("admit B overlapping in-flight fsync");
+    let intent_b = admit(
+        door.admit(incarnation, &session, key_b, dig_b),
+        "admit B overlapping in-flight fsync",
+    );
     let cohort: Vec<IntentOrdinal> = door.overlap_cohort_ordinals().collect();
     assert_eq!(
         cohort,
@@ -108,15 +126,16 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
         "overlap cohort must be exactly A then B while the fsync window is open"
     );
 
-    let (batch_ab, committed_ab) = door
-        .seal_durable_overlap_batch(
+    let (batch_ab, committed_ab) = admit(
+        door.seal_durable_overlap_batch(
             vec![
                 (TempTx::default(), content_root(1)),
                 (TempTx::default(), content_root(2)),
             ],
             &session,
-        )
-        .expect("seal overlap batch A+B");
+        ),
+        "seal overlap batch A+B",
+    );
 
     assert!(
         !door.fsync_window_open(),
@@ -138,9 +157,10 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
     );
 
     // C arrives after the window closed — non-overlapping with that in-flight fsync.
-    let intent_c = door
-        .admit(incarnation, &session, key_c, dig_c)
-        .expect("admit C after fsync window closed");
+    let intent_c = admit(
+        door.admit(incarnation, &session, key_c, dig_c),
+        "admit C after fsync window closed",
+    );
     assert!(
         !batch_ab.contains_overlap_member(intent_c.intent_ordinal()),
         "non-overlapping arrival C must NOT be a member of the prior overlap batch"
@@ -156,11 +176,14 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
     );
 
     // Later barrier: C alone. No timer — explicit begin/seal only.
-    door.begin_fsync_window(incarnation, &session)
-        .expect("begin later fsync window for C");
-    let (batch_c, committed_c) = door
-        .seal_durable_overlap_batch(vec![(TempTx::default(), content_root(3))], &session)
-        .expect("seal overlap batch C");
+    admit(
+        door.begin_fsync_window(incarnation, &session),
+        "begin later fsync window for C",
+    );
+    let (batch_c, committed_c) = admit(
+        door.seal_durable_overlap_batch(vec![(TempTx::default(), content_root(3))], &session),
+        "seal overlap batch C",
+    );
 
     assert_eq!(committed_c.len(), 1);
     assert!(
@@ -190,7 +213,8 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
 
     // Named so a trivial always-true assert cannot satisfy the board Check alone:
     // both this file and sweep.rs must carry the overlap law token.
-    let _: &OverlapBatch = &batch_ab;
+    let batch_ab_typed: &OverlapBatch = &batch_ab;
+    assert_eq!(batch_ab_typed.members(), batch_ab.members());
 }
 
 // ---------------------------------------------------------------------------
@@ -206,9 +230,11 @@ mod fuse_crash_matrix {
     use kyzo_crashfs::harness::{mount, require_live_mount, wait_for_mount};
     use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
-    use crate::store::fjall::{StorageOptions, new_fjall_storage, new_fjall_storage_with};
+    use crate::store::fjall::{new_fjall_storage, new_fjall_storage_with, StorageOptions};
     use crate::store::sim::SimStorage;
     use crate::store::{ReadTx, Slice, Storage, WriteTx};
+
+    use super::admit;
 
     /// The main data keyspace's journal file at a fresh store's very first
     /// segment. The commit-boundary matrix hard-pins this: after the
@@ -239,11 +265,11 @@ mod fuse_crash_matrix {
     /// hand-written copies of the same workload.
     fn drive_durable_rounds<S: Storage>(storage: &S, rounds: u32, n: u32) {
         for round in 0..rounds {
-            let mut tx = storage.write_tx().unwrap();
+            let mut tx = admit(storage.write_tx(), "write_tx durable round");
             for (k, v) in round_kv(round, n) {
-                tx.put(&k, &v).unwrap();
+                admit(tx.put(&k, &v), "put durable round");
             }
-            tx.commit_durable().unwrap();
+            admit(tx.commit_durable(), "commit_durable round");
         }
     }
 
@@ -252,8 +278,12 @@ mod fuse_crash_matrix {
     /// oracle (their `total_scan` byte order need not agree for this
     /// campaign's purposes, only their content).
     fn total_scan_set<S: Storage>(storage: &S) -> BTreeSet<(Slice, Slice)> {
-        let tx = storage.read_tx().unwrap();
-        tx.total_scan().map(|r| r.unwrap()).collect()
+        let tx = admit(storage.read_tx(), "read_tx total_scan_set");
+        let mut out = BTreeSet::new();
+        for r in tx.total_scan() {
+            out.insert(admit(r, "total_scan row"));
+        }
+        out
     }
 
     /// The oracle: `SimStorage` driven through the identical round script,
@@ -272,12 +302,17 @@ mod fuse_crash_matrix {
     /// the hard-pin for this class: the small-row matrix must never rotate
     /// past a single segment, or `JOURNAL_PATH`'s Nth-fsync premise is void.
     fn journal_segment_basenames(store_root: &std::path::Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(store_root)
-            .unwrap_or_else(|e| panic!("read store root {}: {e}", store_root.display()))
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jnl"))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
+        let dir = admit(
+            std::fs::read_dir(store_root).map_err(|e| format!("{e}")),
+            &format!("read store root {}", store_root.display()),
+        );
+        let mut names: Vec<String> = Vec::new();
+        for entry in dir {
+            let entry = admit(entry.map_err(|e| format!("{e}")), "read_dir entry");
+            if entry.path().extension().and_then(|x| x.to_str()) == Some("jnl") {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
         names.sort();
         names
     }
@@ -312,22 +347,29 @@ mod fuse_crash_matrix {
         // AND Write on the journal coincides with each round's own
         // commit_durable by OBSERVING it once, honestly — never by guessing
         // fjall's internals.
-        let backing_a = tempfile::tempdir().unwrap();
-        let mnt_a = tempfile::tempdir().unwrap();
+        let backing_a = admit(tempfile::tempdir(), "tempdir backing_a");
+        let mnt_a = admit(tempfile::tempdir(), "tempdir mnt_a");
         let fs_a = PassthroughFs::new(backing_a.path(), FaultPlan::new(1));
         let counters = fs_a.shared_counters();
-        let session_a = mount(fs_a, mnt_a.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+        let session_a = admit(mount(fs_a, mnt_a.path()), "mount recorder");
         wait_for_mount(mnt_a.path());
+        let rounds_cap = admit(
+            usize::try_from(ROUNDS).map_err(|e| format!("{e}")),
+            "INVARIANT(rounds_fit_usize): ROUNDS fits usize",
+        );
         let (boundary_fsync_count, boundary_write_count): (Vec<u64>, Vec<u64>) = {
-            let db = new_fjall_storage(mnt_a.path()).unwrap();
-            let mut fsyncs = Vec::with_capacity(ROUNDS as usize);
-            let mut writes = Vec::with_capacity(ROUNDS as usize);
+            let db = admit(
+                new_fjall_storage(mnt_a.path()),
+                "new_fjall_storage recorder",
+            );
+            let mut fsyncs = Vec::with_capacity(rounds_cap);
+            let mut writes = Vec::with_capacity(rounds_cap);
             for round in 0..ROUNDS {
-                let mut tx = db.write_tx().unwrap();
+                let mut tx = admit(db.write_tx(), "recorder write_tx");
                 for (k, v) in round_kv(round, KEYS_PER_ROUND) {
-                    tx.put(&k, &v).unwrap();
+                    admit(tx.put(&k, &v), "recorder put");
                 }
-                tx.commit_durable().unwrap();
+                admit(tx.commit_durable(), "recorder commit_durable");
                 fsyncs.push(counters.fsync_count(JOURNAL_PATH));
                 writes.push(counters.write_count(JOURNAL_PATH));
             }
@@ -372,10 +414,13 @@ mod fuse_crash_matrix {
             .zip(boundary_write_count.iter())
             .enumerate()
         {
-            let round_idx = idx as u32; // the round whose OWN barrier is torn
+            let round_idx = admit(
+                u32::try_from(idx).map_err(|e| format!("{e}")),
+                "INVARIANT(round_idx): enumerate idx fits u32",
+            );
             for fault in COMMIT_BOUNDARY_FAULTS {
-                let backing_b = tempfile::tempdir().unwrap();
-                let mnt_b = tempfile::tempdir().unwrap();
+                let backing_b = admit(tempfile::tempdir(), "tempdir backing_b");
+                let mnt_b = admit(tempfile::tempdir(), "tempdir mnt_b");
                 // ClearCache is an fsync-boundary power cut; TornSeq/TornOp
                 // decide at write time and materialize on the next fsync —
                 // arming them on Fsync would be a silent no-op in passthrough.
@@ -386,17 +431,16 @@ mod fuse_crash_matrix {
                 let plan =
                     FaultPlan::new(1).with_trigger(Trigger::new(JOURNAL_PATH, op, at_count, fault));
                 let fs_b = PassthroughFs::new(backing_b.path(), plan);
-                let session_b =
-                    mount(fs_b, mnt_b.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+                let session_b = admit(mount(fs_b, mnt_b.path()), "mount fault campaign");
                 wait_for_mount(mnt_b.path());
                 {
-                    let db = new_fjall_storage(mnt_b.path()).unwrap();
+                    let db = admit(new_fjall_storage(mnt_b.path()), "new_fjall_storage faulted");
                     for round in 0..=round_idx {
-                        let mut tx = db.write_tx().unwrap();
+                        let mut tx = admit(db.write_tx(), "faulted write_tx");
                         for (k, v) in round_kv(round, KEYS_PER_ROUND) {
-                            tx.put(&k, &v).unwrap();
+                            admit(tx.put(&k, &v), "faulted put");
                         }
-                        tx.commit_durable().unwrap();
+                        admit(tx.commit_durable(), "faulted commit_durable");
                     }
                 }
                 drop(session_b); // the simulated crash: unmount, nothing more written
@@ -408,9 +452,10 @@ mod fuse_crash_matrix {
                 let expected_prefix = oracle_after_powercut(round_idx, KEYS_PER_ROUND);
                 match fault {
                     Fault::ClearCache => {
-                        let reopened = reopen.unwrap_or_else(|e| {
-                            panic!("ClearCache round {round_idx}: store must open clean, not: {e}")
-                        });
+                        let reopened = admit(
+                            reopen,
+                            &format!("ClearCache round {round_idx}: store must open clean"),
+                        );
                         // "Opens clean" is necessary, never sufficient (the issue's
                         // own pinned lsm-tree finding: data blocks are checksummed
                         // lazily, on first read) — total_scan forces the traversal
@@ -487,15 +532,17 @@ mod fuse_crash_matrix {
     /// write below the rotate threshold.
     fn multi_jnl_kv(round: u32, i: u32) -> (Vec<u8>, Vec<u8>) {
         let key = format!("mj{round:04}-k{i:04}").into_bytes();
-        let mut state = (round as u64)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            .wrapping_add(i as u64)
-            .wrapping_add(0xA5A5_A5A5_5A5A_5A5A);
+        // INVARIANT(multi_jnl_mix): modular mix for incompressible payload; wrap is the PRNG.
+        let mut state = (std::num::Wrapping(u64::from(round))
+            * std::num::Wrapping(0x9E37_79B9_7F4A_7C15)
+            + std::num::Wrapping(u64::from(i))
+            + std::num::Wrapping(0xA5A5_A5A5_5A5A_5A5A))
+        .0;
         let mut val = Vec::with_capacity(MULTI_JNL_VALUE_LEN);
         while val.len() < MULTI_JNL_VALUE_LEN {
-            state = state
-                .wrapping_mul(0xBF58_476D_1CE4_E5B9)
-                .wrapping_add(0x94D0_49BB_1331_11EB);
+            state = (std::num::Wrapping(state) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9)
+                + std::num::Wrapping(0x94D0_49BB_1331_11EB))
+            .0;
             val.extend_from_slice(&state.to_le_bytes());
         }
         val.truncate(MULTI_JNL_VALUE_LEN);
@@ -521,31 +568,39 @@ mod fuse_crash_matrix {
         // rounds until ≥2 distinct `.jnl` basenames have recorded fsyncs —
         // sealed segments may vanish after flush under the floor, so accumulate
         // every basename's fsync frontier while it lives.
-        let backing_a = tempfile::tempdir().unwrap();
-        let mnt_a = tempfile::tempdir().unwrap();
+        let backing_a = admit(tempfile::tempdir(), "tempdir multi backing_a");
+        let mnt_a = admit(tempfile::tempdir(), "tempdir multi mnt_a");
         let fs_a = PassthroughFs::new(backing_a.path(), FaultPlan::new(1));
         let counters = fs_a.shared_counters();
-        let session_a = mount(fs_a, mnt_a.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+        let session_a = admit(mount(fs_a, mnt_a.path()), "mount multi recorder");
         wait_for_mount(mnt_a.path());
 
         let mut rounds_driven = 0u32;
         let mut segment_fsync_frontier: std::collections::BTreeMap<String, u64> =
             std::collections::BTreeMap::new();
         {
-            let db = new_fjall_storage_with(mnt_a.path(), multi_jnl_storage_opts())
-                .expect("journaling floor must open");
+            let db = admit(
+                new_fjall_storage_with(mnt_a.path(), multi_jnl_storage_opts()),
+                "journaling floor must open",
+            );
             for round in 0..MULTI_JNL_MAX_ROUNDS {
-                let mut tx = db.write_tx().unwrap();
+                let mut tx = admit(db.write_tx(), "multi recorder write_tx");
                 for i in 0..MULTI_JNL_KEYS_PER_ROUND {
                     let (k, v) = multi_jnl_kv(round, i);
-                    tx.put(&k, &v).unwrap();
+                    admit(tx.put(&k, &v), "multi recorder put");
                 }
-                tx.commit_durable().unwrap();
+                admit(tx.commit_durable(), "multi recorder commit_durable");
                 rounds_driven = round + 1;
 
                 // Let the flush worker run the journal-rotate check (it only
                 // evaluates `pos > 64_000_000` on Flush messages).
-                let _ = db.sync();
+                match db.sync() {
+                    Ok(()) => {}
+                    Err(sync_refused) => {
+                        // Best-effort flush tick — rotate check may still have run.
+                        drop(sync_refused);
+                    }
+                }
                 if round > 0 && round % 4 == 0 {
                     std::thread::sleep(std::time::Duration::from_millis(200));
                 }
@@ -561,13 +616,19 @@ mod fuse_crash_matrix {
                 }
             }
         }
+        let payload_mib = admit(
+            usize::try_from(rounds_driven).map_err(|e| format!("{e}")),
+            "INVARIANT(rounds_driven_usize)",
+        ) * admit(
+            usize::try_from(MULTI_JNL_KEYS_PER_ROUND).map_err(|e| format!("{e}")),
+            "INVARIANT(keys_per_round_usize)",
+        ) * MULTI_JNL_VALUE_LEN
+            / (1024 * 1024);
         assert!(
             segment_fsync_frontier.len() >= 2,
             "at journaling floor, writing past one segment must yield ≥2 journal \
-             basenames with fsync activity; after {rounds_driven} rounds (~{} MiB \
+             basenames with fsync activity; after {rounds_driven} rounds (~{payload_mib} MiB \
              payload) saw {:?}",
-            (rounds_driven as usize * MULTI_JNL_KEYS_PER_ROUND as usize * MULTI_JNL_VALUE_LEN)
-                / (1024 * 1024),
             segment_fsync_frontier.keys().collect::<Vec<_>>()
         );
         drop(session_a);
@@ -583,8 +644,8 @@ mod fuse_crash_matrix {
                 fsync_at >= 1,
                 "segment {segment} frontier must be a real fsync occurrence"
             );
-            let backing_b = tempfile::tempdir().unwrap();
-            let mnt_b = tempfile::tempdir().unwrap();
+            let backing_b = admit(tempfile::tempdir(), "tempdir multi backing_b");
+            let mnt_b = admit(tempfile::tempdir(), "tempdir multi mnt_b");
             let plan = FaultPlan::new(1).with_trigger(Trigger::new(
                 segment.clone(),
                 OpKind::Fsync,
@@ -592,11 +653,13 @@ mod fuse_crash_matrix {
                 Fault::ClearCache,
             ));
             let fs_b = PassthroughFs::new(backing_b.path(), plan);
-            let session_b = mount(fs_b, mnt_b.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+            let session_b = admit(mount(fs_b, mnt_b.path()), "mount multi fault");
             wait_for_mount(mnt_b.path());
             {
-                let db = new_fjall_storage_with(mnt_b.path(), multi_jnl_storage_opts())
-                    .expect("journaling floor must open");
+                let db = admit(
+                    new_fjall_storage_with(mnt_b.path(), multi_jnl_storage_opts()),
+                    "journaling floor must open (fault pass)",
+                );
                 for round in 0..rounds_driven {
                     let Ok(mut tx) = db.write_tx() else { break };
                     let mut put_ok = true;
@@ -728,10 +791,13 @@ mod fuse_crash_matrix {
             run_bounded(
                 "compaction_segment_torn_write_campaign_never_returns_wrong_bytes",
                 move || {
-                    let fault =
-                        [Fault::TornSeq, Fault::TornOp, Fault::ClearCache][(seed % 3) as usize];
-                    let backing = tempfile::tempdir().unwrap();
-                    let mnt = tempfile::tempdir().unwrap();
+                    let fault_idx = admit(
+                        usize::try_from(seed % 3).map_err(|e| format!("{e}")),
+                        "INVARIANT(fault_idx): seed%3 fits usize",
+                    );
+                    let fault = [Fault::TornSeq, Fault::TornOp, Fault::ClearCache][fault_idx];
+                    let backing = admit(tempfile::tempdir(), "tempdir flood backing");
+                    let mnt = admit(tempfile::tempdir(), "tempdir flood mnt");
                     // Catalog #13: occurrence was hard-coded `1` (first fsync
                     // only). Seed-derive so the campaign also arms the 2nd/3rd
                     // fsync on each matching segment path — a real crash can
@@ -746,7 +812,7 @@ mod fuse_crash_matrix {
                         fault,
                     ));
                     let fs = PassthroughFs::new(backing.path(), plan);
-                    let session = mount(fs, mnt.path()).unwrap_or_else(|refuse| panic!("{refuse}"));
+                    let session = admit(mount(fs, mnt.path()), "mount flood campaign");
                     wait_for_mount(mnt.path());
                     {
                         // A store that itself hits an error mid-open/mid-write
@@ -766,7 +832,13 @@ mod fuse_crash_matrix {
                                     break;
                                 }
                             }
-                            let _ = db.sync();
+                            match db.sync() {
+                                Ok(()) => {}
+                                Err(sync_refused) => {
+                                    // Best-effort final sync under armed fault.
+                                    drop(sync_refused);
+                                }
+                            }
                             // Give the background flush thread a moment to
                             // actually reach disk — confirmed empirically (the
                             // probe that shaped these constants) to settle
@@ -827,54 +899,65 @@ mod fuse_crash_matrix {
         use crate::store::{ReadTx, Slice, Storage, WriteTx};
 
         if let Ok(dir) = std::env::var("KYZO_CRASH_CHILD_DIR") {
-            let db = new_fjall_storage(&dir).unwrap();
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"committed", b"survives").unwrap();
-            tx.commit().unwrap();
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"synced", b"survives-power-cut-too").unwrap();
-            tx.commit().unwrap();
-            db.sync().unwrap();
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"durable", b"per-tx-fsync").unwrap();
-            tx.commit_durable().unwrap();
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"uncommitted", b"must-vanish").unwrap();
+            let db = admit(new_fjall_storage(&dir), "child open store");
+            let mut tx = admit(db.write_tx(), "child write_tx committed");
+            admit(tx.put(b"committed", b"survives"), "child put committed");
+            admit(tx.commit(), "child commit committed");
+            let mut tx = admit(db.write_tx(), "child write_tx synced");
+            admit(
+                tx.put(b"synced", b"survives-power-cut-too"),
+                "child put synced",
+            );
+            admit(tx.commit(), "child commit synced");
+            admit(db.sync(), "child sync");
+            let mut tx = admit(db.write_tx(), "child write_tx durable");
+            admit(tx.put(b"durable", b"per-tx-fsync"), "child put durable");
+            admit(tx.commit_durable(), "child commit_durable");
+            let mut tx = admit(db.write_tx(), "child write_tx uncommitted");
+            admit(
+                tx.put(b"uncommitted", b"must-vanish"),
+                "child put uncommitted",
+            );
             std::process::abort();
         }
 
-        let dir = tempfile::tempdir().unwrap();
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .args([
-                "store::sweep::crash::fuse_crash_matrix::crash_consistency_process_abort",
-                "--exact",
-                "--nocapture",
-            ])
-            .env("KYZO_CRASH_CHILD_DIR", dir.path().join("db"))
-            .status()
-            .unwrap();
+        let dir = admit(tempfile::tempdir(), "parent tempdir");
+        let exe = admit(std::env::current_exe(), "current_exe");
+        let status = admit(
+            std::process::Command::new(exe)
+                .args([
+                    "store::sweep::crash::fuse_crash_matrix::crash_consistency_process_abort",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("KYZO_CRASH_CHILD_DIR", dir.path().join("db"))
+                .status(),
+            "spawn crash child",
+        );
         assert!(
             !status.success(),
             "child must die by abort, not exit cleanly"
         );
 
-        let db = new_fjall_storage(dir.path().join("db")).unwrap();
-        let tx = db.read_tx().unwrap();
+        let db = admit(
+            new_fjall_storage(dir.path().join("db")),
+            "reopen after process abort",
+        );
+        let tx = admit(db.read_tx(), "read_tx after abort");
         assert_eq!(
-            tx.get(b"committed").unwrap(),
+            admit(tx.get(b"committed"), "get committed"),
             Some(Slice::from(b"survives")),
             "committed (unsynced) data must survive a process crash"
         );
         assert_eq!(
-            tx.get(b"synced").unwrap(),
+            admit(tx.get(b"synced"), "get synced"),
             Some(Slice::from(b"survives-power-cut-too"))
         );
         assert_eq!(
-            tx.get(b"durable").unwrap(),
+            admit(tx.get(b"durable"), "get durable"),
             Some(Slice::from(b"per-tx-fsync"))
         );
-        assert_eq!(tx.get(b"uncommitted").unwrap(), None);
+        assert_eq!(admit(tx.get(b"uncommitted"), "get uncommitted"), None);
     }
 }
 
@@ -889,23 +972,25 @@ mod crypto_shred_deep_reachability {
     use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
     use crate::store::backup::{LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse};
     use crate::store::crypto::{
-        CryptoRefuse, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, derive_dek, shred,
-        unwrap_shred_salt, wrap_shred_salt,
+        derive_dek, shred, unwrap_shred_salt, wrap_shred_salt, CryptoRefuse, Kek, KekUnwrapCap,
+        SegmentCounter, ShredLedger, ShredSalt,
     };
     use crate::store::epoch::{CryptoDomain, FenceEpoch};
     use crate::store::open::StoreId;
     use crate::store::seal::{
-        CheckpointSeal, CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest,
-        SealRefuse,
+        CheckpointSeal, CheckpointSealParts, NonceLeaseFloors, SealDigest, SealRefuse,
+        GENESIS_PRIOR_SEAL,
     };
     use crate::store::sweep::CommitOrdinal;
     use crate::store::transcript::{
-        CanonicalTranscriptBuilder, FieldId, SEALED_ARTIFACT_KINDS, TranscriptRefuse,
         encode_all_normative_production_transcripts, encode_normative_production_transcript,
         refuse_residual_secret_bytes, refuse_residual_secrets_in_all_sealed_kinds,
+        CanonicalTranscriptBuilder, FieldId, TranscriptRefuse, SEALED_ARTIFACT_KINDS,
     };
     use crate::store::wal::WalHash;
     use crate::store::{FormatVersion, SealedArtifactKind};
+
+    use super::admit;
 
     fn shredded_secret_needles<'a>(
         kek: &'a [u8; 32],
@@ -918,9 +1003,11 @@ mod crypto_shred_deep_reachability {
     fn clean_seal_parts(store: StoreId, incarnation_entropy: [u8; 32]) -> CheckpointSealParts {
         let fence = FenceEpoch::genesis(store);
         let domain = CryptoDomain::new(store, fence);
-        let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-            .mint(Entropy::admit(incarnation_entropy))
-            .expect("incarnation boundary");
+        let incarnation = admit(
+            IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
+                .mint(Entropy::admit(incarnation_entropy)),
+            "incarnation boundary",
+        );
         CheckpointSealParts {
             store_id: store,
             crypto_domain: domain,
@@ -947,17 +1034,21 @@ mod crypto_shred_deep_reachability {
         incarnation_entropy: [u8; 32],
         payload: Vec<u8>,
     ) -> LeaveIsFreePack {
-        let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-            .mint(Entropy::admit(incarnation_entropy))
-            .expect("incarnation");
-        LeaveIsFreePack::build(LeaveIsFreeParts {
-            kind: LeaveIsFreeKind::SealAndSuffix,
-            format_version: FormatVersion::CURRENT,
-            wrapped_shred_salts: vec![wrapped],
-            incarnation_history: vec![incarnation],
-            payload,
-        })
-        .expect("leave-is-free pack")
+        let incarnation = admit(
+            IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
+                .mint(Entropy::admit(incarnation_entropy)),
+            "incarnation",
+        );
+        admit(
+            LeaveIsFreePack::build(LeaveIsFreeParts {
+                kind: LeaveIsFreeKind::SealAndSuffix,
+                format_version: FormatVersion::CURRENT,
+                wrapped_shred_salts: vec![wrapped],
+                incarnation_history: vec![incarnation],
+                payload,
+            }),
+            "leave-is-free pack",
+        )
     }
 
     /// H8 deep reachability: after production shred, every sealed artifact
@@ -976,7 +1067,7 @@ mod crypto_shred_deep_reachability {
         let cap = KekUnwrapCap::from_kek(Kek::admit(kek_bytes));
         let salt = ShredSalt::admit(salt_bytes);
         let seg = SegmentCounter::of_u64(9);
-        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain).expect("production wrap");
+        let wrapped = admit(wrap_shred_salt(&cap, &salt, seg, domain), "production wrap");
         // Retained wrap copy for leave-is-free pack (post-shred pack may still
         // carry ciphertext bytes; plaintext needles must not survive in pack
         // payload / entropy / ciphertext as raw residual).
@@ -1006,20 +1097,28 @@ mod crypto_shred_deep_reachability {
             13,
             "campaign must enumerate every SealedArtifactKind incl. KeyCommit + WrappedShredSalt"
         );
-        let sealed_transcripts = encode_all_normative_production_transcripts()
-            .expect("normative production transcripts encode");
-        refuse_residual_secrets_in_all_sealed_kinds(&sealed_transcripts, &needles)
-            .expect("clean goldens must pass all-kinds residual scrub");
+        let sealed_transcripts = admit(
+            encode_all_normative_production_transcripts(),
+            "normative production transcripts encode",
+        );
+        admit(
+            refuse_residual_secrets_in_all_sealed_kinds(&sealed_transcripts, &needles),
+            "clean goldens must pass all-kinds residual scrub",
+        );
         // Explicit WAL-header lane (same production encode door).
-        let wal_header = encode_normative_production_transcript(SealedArtifactKind::WalHeader)
-            .expect("wal header");
+        let wal_header = admit(
+            encode_normative_production_transcript(SealedArtifactKind::WalHeader),
+            "wal header",
+        );
         assert_eq!(
             refuse_residual_secret_bytes(wal_header.as_bytes(), &needles),
             Ok(())
         );
         // KeyCommit / CMT-1 golden must stay intact and clean of shredded needles.
-        let key_commit = encode_normative_production_transcript(SealedArtifactKind::KeyCommit)
-            .expect("key commit");
+        let key_commit = admit(
+            encode_normative_production_transcript(SealedArtifactKind::KeyCommit),
+            "key commit",
+        );
         assert_eq!(
             refuse_residual_secret_bytes(key_commit.as_bytes(), &needles),
             Ok(()),
@@ -1027,14 +1126,19 @@ mod crypto_shred_deep_reachability {
         );
 
         // Production CheckpointSeal mint + encode + scrub — clean seal passes.
-        let clean = CheckpointSeal::mint(clean_seal_parts(store, [0x26; 32])).expect("mint");
-        clean
-            .refuse_residual_secrets(&needles)
-            .expect("clean CheckpointSeal must pass residual scrub");
-        let clean_transcript = clean.encode_transcript().expect("encode");
-        clean_transcript
-            .refuse_residual_secrets(&needles)
-            .expect("clean seal transcript must pass");
+        let clean = admit(
+            CheckpointSeal::mint(clean_seal_parts(store, [0x26; 32])),
+            "mint",
+        );
+        admit(
+            clean.refuse_residual_secrets(&needles),
+            "clean CheckpointSeal must pass residual scrub",
+        );
+        let clean_transcript = admit(clean.encode_transcript(), "encode");
+        admit(
+            clean_transcript.refuse_residual_secrets(&needles),
+            "clean seal transcript must pass",
+        );
 
         // Production leave-is-free pack scrub — clean pack (no needles in
         // payload / incarnation entropy; wrap ciphertext is AEAD) passes.
@@ -1044,22 +1148,27 @@ mod crypto_shred_deep_reachability {
             [0x2A; 32],
             b"leave-is-free-clean-payload".to_vec(),
         );
-        clean_pack
-            .refuse_residual_secrets(&needles)
-            .expect("clean leave-is-free pack must pass residual scrub");
+        admit(
+            clean_pack.refuse_residual_secrets(&needles),
+            "clean leave-is-free pack must pass residual scrub",
+        );
 
         // Hostile: plant plaintext ShredSalt into a sealed transcript field → refuse.
-        let mut dirty_builder =
-            CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).expect("builder");
-        dirty_builder
-            .append_u64(
+        let mut dirty_builder = admit(
+            CanonicalTranscriptBuilder::new(FormatVersion::CURRENT),
+            "builder",
+        );
+        admit(
+            dirty_builder.append_u64(
                 FieldId::ARTIFACT_KIND,
                 SealedArtifactKind::CheckpointSeal.tag(),
-            )
-            .expect("kind");
-        dirty_builder
-            .append_digest32(FieldId::PRIMARY_DIGEST, &salt_bytes)
-            .expect("plant salt as digest");
+            ),
+            "kind",
+        );
+        admit(
+            dirty_builder.append_digest32(FieldId::PRIMARY_DIGEST, &salt_bytes),
+            "plant salt as digest",
+        );
         let dirty_transcript = dirty_builder.seal();
         assert_eq!(
             dirty_transcript.refuse_residual_secrets(&needles),
@@ -1081,10 +1190,9 @@ mod crypto_shred_deep_reachability {
         ) {
             let mut parts = clean_seal_parts(store, incarnation_entropy);
             plant(&mut parts);
+            let dirty = admit(CheckpointSeal::mint(parts), "mint dirty");
             assert_eq!(
-                CheckpointSeal::mint(parts)
-                    .expect("mint dirty")
-                    .refuse_residual_secrets(needles),
+                dirty.refuse_residual_secrets(needles),
                 Err(SealRefuse::ResidualSecretMaterial),
                 "production CheckpointSeal scrub must refuse residual secret in {field}"
             );
