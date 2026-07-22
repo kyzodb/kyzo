@@ -20,7 +20,14 @@ use crate::value::{DataValue, MAX_VALIDITY_TS, ValidityTs};
 /// Floored microseconds since Unix epoch (toward −∞). Shared by validity
 /// coercion and timestamp parse so both agree on the containing microsecond.
 pub fn timestamp_to_micros(ts: jiff::Timestamp) -> i64 {
-    (ts.as_nanosecond().div_euclid(1000)) as i64
+    let micros_i128 = ts.as_nanosecond().div_euclid(1000);
+    match i64::try_from(micros_i128) {
+        Ok(us) => us,
+        // jiff::Timestamp's civil range is inside i64 microseconds; this arm
+        // is the total door for an out-of-range i128 quotient without `as`.
+        Err(_overflow) if micros_i128 < 0 => i64::MIN,
+        Err(_overflow) => i64::MAX,
+    }
 }
 
 /// Parses an RFC 3339 / ISO 8601 timestamp string to a validity timestamp in
