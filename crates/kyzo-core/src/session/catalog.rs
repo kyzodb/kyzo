@@ -109,7 +109,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use miette::{Diagnostic, Result, bail, ensure};
+use miette::{Diagnostic, Result, bail, ensure, miette};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 

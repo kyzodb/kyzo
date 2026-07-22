@@ -391,7 +391,7 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
             row,
             IndexCorruptReason::SparseWeightNotFloat,
         ))
-    });
+    })?;
     let weight = f64_to_f32(weight);
     if !weight.is_finite() || weight < 0.0 {
         bail!(IndexRowCorrupt::new(
