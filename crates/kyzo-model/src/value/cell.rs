@@ -275,8 +275,6 @@ impl Value {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
     use super::super::arena::BulkObserver;
     use super::super::canonical::{Datum, decode, encode};
     use super::super::number::Num;
@@ -287,37 +285,36 @@ mod tests {
     }
 
     #[test]
-    fn residency_law_is_a_pure_function_of_canonical_length() -> Result<()> {
+    fn residency_law_is_a_pure_function_of_canonical_length() {
         let mut arena = Arena::new();
         // Canonical payload for a clean string of n chars is n + 2
         // (terminator), so 12 chars = 14 payload bytes = last inline size.
-        let inline_edge = Value::mint(&strd("abcdefghijkl"), &mut arena).into_diagnostic()?;
+        let inline_edge = Value::mint(&strd("abcdefghijkl"), &mut arena).expect("mint");
         assert!(inline_edge.is_inline());
-        let outline_edge = Value::mint(&strd("abcdefghijklm"), &mut arena).into_diagnostic()?;
+        let outline_edge = Value::mint(&strd("abcdefghijklm"), &mut arena).expect("mint");
         assert!(!outline_edge.is_inline());
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
-        let again = Value::mint(&strd("abcdefghijklm"), &mut arena).into_diagnostic()?;
+        let again = Value::mint(&strd("abcdefghijklm"), &mut arena).expect("mint");
         // Nest brand under one live frame; project durable Admission for
         // same_word (coexisting-arena API).
         let ok = arena
             .frame()
             .with_nested_ctx(|nest| outline_edge.value().same_word(&again.value(), &nest.ctx()));
         assert!(ok);
-        Ok(())
     }
 
     /// The per-kind residency table, pinned: residency is
     /// format-significant, so which kinds can never / always / sometimes
     /// inline is a law, not an accident.
     #[test]
-    fn residency_table_by_kind_is_pinned() -> Result<()> {
+    fn residency_table_by_kind_is_pinned() {
         use super::super::kind::interval::{Bound, Interval};
         use super::super::kind::json::Json;
         use super::super::kind::validity::{Validity, ValidityTs};
         let mut arena = Arena::new();
         let inline = |cb: &CanonicalBytes, arena: &mut Arena| -> bool {
-            Value::mint(cb, arena).into_diagnostic()?.is_inline()
+            Value::mint(cb, arena).expect("mint").is_inline()
         };
         // Always inline: Null, Bool, every Num (payload <= 13), Validity
         // (payload 9), empty/half-bounded intervals (payload <= 11).
@@ -331,7 +328,7 @@ mod tests {
         assert!(inline(
             &encode(Datum::Validity(
                 Validity::new(ValidityTs::from_raw(i64::MAX), false)
-                    .into_diagnostic()?,
+                    .expect("retract admits every tick"),
             )),
             &mut arena
         ));
@@ -361,11 +358,10 @@ mod tests {
         assert!(inline(&encode(Datum::List(&[])), &mut arena));
         assert!(inline(&encode(Datum::Set(&[])), &mut arena));
         assert!(inline(&encode(Datum::Json(&Json::Null)), &mut arena));
-        Ok(())
     }
 
     #[test]
-    fn inline_round_trip_reconstructs_canonical_bytes() -> Result<()> {
+    fn inline_round_trip_reconstructs_canonical_bytes() {
         let mut arena = Arena::new();
         for d in [
             Datum::Null,
@@ -376,28 +372,27 @@ mod tests {
             Datum::Str("a\u{0}b"),
         ] {
             let cb = encode(d);
-            let m = Value::mint(&cb, &mut arena).into_diagnostic()?;
+            let m = Value::mint(&cb, &mut arena).expect("mint");
             let v = m.value();
             assert!(v.is_inline(), "small value went out of line");
             assert!(m.stamp().is_none());
-            assert_eq!(v.inline_canonical().ok_or_else(|| miette!("inline"))?, cb.as_bytes());
+            assert_eq!(v.inline_canonical().expect("inline"), cb.as_bytes());
             assert_eq!(v.tag().byte(), cb.as_bytes()[0]);
         }
-        Ok(())
     }
 
     #[test]
-    fn outline_resolves_through_an_observer_to_the_same_canonical_bytes() -> Result<()> {
+    fn outline_resolves_through_an_observer_to_the_same_canonical_bytes() {
         let mut arena = Arena::new();
         let big: Vec<Datum> = (0..40).map(|_| Datum::Num(Num::int(7))).collect();
         let cb = encode(Datum::List(&big));
-        let m = Value::mint(&cb, &mut arena).into_diagnostic()?;
+        let m = Value::mint(&cb, &mut arena).expect("mint");
         let v = m.value();
         assert!(!v.is_inline());
-        let sc = m.stamp().ok_or_else(|| miette!("outline mints a stamp"))?;
+        let sc = m.stamp().expect("outline mints a stamp");
         assert_eq!(v.code().map(Code::raw), Some(sc.code().raw()));
         let f = arena.frame();
-        let resolved = f.resolve(sc).into_diagnostic()?;
+        let resolved = f.resolve(sc).expect("lawful");
         assert_eq!(
             resolved,
             cb.as_bytes(),
@@ -406,11 +401,10 @@ mod tests {
         assert!(decode(resolved).is_ok());
         // The ONE prefix doctrine: word prefix == canonical prefix.
         assert_eq!(v.prefix4(), cb.prefix4());
-        Ok(())
     }
 
     #[test]
-    fn storage_cmp_decides_exactly_what_the_word_knows() -> Result<()> {
+    fn storage_cmp_decides_exactly_what_the_word_knows() {
         let mut arena = Arena::new();
         let corpus: Vec<CanonicalBytes> = vec![
             encode(Datum::Null),
@@ -426,7 +420,7 @@ mod tests {
         ];
         let words: Vec<(Value, CanonicalBytes)> = corpus
             .into_iter()
-            .map(|cb| (Value::mint(&cb, &mut arena).into_diagnostic()?.value(), cb))
+            .map(|cb| (Value::mint(&cb, &mut arena).expect("mint").value(), cb))
             .collect();
         for (va, ca) in &words {
             for (vb, cb) in &words {
@@ -446,7 +440,6 @@ mod tests {
                 }
             }
         }
-        Ok(())
     }
 
     /// Cross-arena mint cannot obtain a shared [`Admission`], so the old
@@ -454,7 +447,7 @@ mod tests {
     /// `true` — cannot be written. Physical identity remains only under a
     /// proven token; storage cmp still refuses the unresolved prefix tie.
     #[test]
-    fn same_word_requires_shared_admission() -> Result<()> {
+    fn same_word_requires_shared_admission() {
         use super::super::admission::Denial;
         let mut arena_a = Arena::new();
         let mut arena_b = Arena::new();
@@ -462,8 +455,8 @@ mod tests {
         let big_y = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxy"));
         // Same prefix, different values, DIFFERENT arenas: both get code
         // 0, producing identical words — the trap the unproven API told.
-        let va = Value::mint(&big_x, &mut arena_a).into_diagnostic()?.value();
-        let vb = Value::mint(&big_y, &mut arena_b).into_diagnostic()?.value();
+        let va = Value::mint(&big_x, &mut arena_a).expect("mint").value();
+        let vb = Value::mint(&big_y, &mut arena_b).expect("mint").value();
         assert_eq!(va.try_cmp_storage(&vb), None, "storage cmp refuses it");
         let fa = arena_a.frame();
         let fb = arena_b.frame();
@@ -480,9 +473,8 @@ mod tests {
             "cross-arena prove_shared must refuse — no token, no same_word"
         );
         // Under one arena, identical minting yields same_word.
-        let again = Value::mint(&big_x, &mut arena_a).into_diagnostic()?.value();
+        let again = Value::mint(&big_x, &mut arena_a).expect("mint").value();
         let ctx = Admission::from_observer(&arena_a.frame());
         assert!(va.same_word(&again, &ctx));
-        Ok(())
     }
 }

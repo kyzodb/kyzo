@@ -1788,8 +1788,6 @@ impl Default for Arena {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
     use super::*;
 
     /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
@@ -1836,8 +1834,8 @@ mod tests {
     /// Test-plane intern — capacity/span [`Denial`] is unreachable at
     /// test sizes; production callers propagate [`Result`].
     #[track_caller]
-    fn must_intern(arena: &mut Arena, b: &[u8]) -> Result<StampedCode> {
-        Ok(Arena::intern(arena, b).into_diagnostic()?)
+    fn must_intern(arena: &mut Arena, b: &[u8]) -> StampedCode {
+        Arena::intern(arena, b).expect("test intern within capacity")
     }
 
     // ------------------------------------------------------------------
@@ -1894,7 +1892,7 @@ mod tests {
         }
 
         /// Seal, returning old-code -> new-code.
-        fn seal(&mut self) -> Result<Vec<u32>> {
+        fn seal(&mut self) -> Vec<u32> {
             let old: Vec<Vec<u8>> = self
                 .sealed
                 .iter()
@@ -1903,20 +1901,19 @@ mod tests {
                 .collect();
             let mut new_sealed = old.clone();
             new_sealed.sort();
-            let mut remap: Vec<u32> = Vec::with_capacity(old.len());
-            for v in &old {
-                let idx = new_sealed
-                    .binary_search_by(|x| x.as_slice().cmp(v))
-                    .map_err(|_| miette!("survives seal"))?;
-                remap.push(match u32::try_from(idx) {
-                    Ok(n) => n,
-                    Err(_) => 0,
-                });
-            }
+            let remap: Vec<u32> = old
+                .iter()
+                .map(|v| {
+                    let idx = new_sealed
+                        .binary_search_by(|x| x.as_slice().cmp(v))
+                        .expect("survives seal");
+                    match u32::try_from(idx) { Ok(n) => n, Err(_) => 0 }
+                })
+                .collect();
             self.sealed = new_sealed;
             self.tail.clear();
             self.epoch += 1;
-            Ok(remap)
+            remap
         }
     }
 
@@ -1924,7 +1921,7 @@ mod tests {
     // The laws, checked as full sweeps against the oracle.
     // ------------------------------------------------------------------
 
-    fn check_laws(arena: &Arena, naive: &Naive) -> Result<()> {
+    fn check_laws(arena: &Arena, naive: &Naive) {
         let f = arena.frame();
         assert_eq!(f.len(), naive.len(), "cardinality diverged");
         assert_eq!(
@@ -1937,7 +1934,7 @@ mod tests {
         // (dense over 0..len; sealed = sorted ranks, tail = arrivals).
         for c in 0..f.len() {
             assert_eq!(
-                f.resolve(stamp(c, f.epoch(), f.arena)).into_diagnostic()?,
+                f.resolve(stamp(c, f.epoch(), f.arena)).expect("lawful"),
                 naive.resolve(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }),
                 "code {c} resolves differently"
             );
@@ -1945,7 +1942,7 @@ mod tests {
         // Sealed codes are strictly byte-ordered.
         let mut prev: Option<&[u8]> = None;
         for c in 0..f.sealed_len() {
-            let v = f.resolve(stamp(c, f.epoch(), f.arena)).into_diagnostic()?;
+            let v = f.resolve(stamp(c, f.epoch(), f.arena)).expect("lawful");
             if let Some(p) = prev {
                 assert!(p < v, "sealed order broken at {c}");
             }
@@ -1955,7 +1952,7 @@ mod tests {
         let union = naive.union_sorted();
         for (k, v) in union.iter().enumerate() {
             assert_eq!(
-                f.select(k).into_diagnostic()?,
+                f.select(k).expect("in-range"),
                 v.as_slice(),
                 "select({k}) wrong"
             );
@@ -1967,18 +1964,17 @@ mod tests {
                 let a = stamp(i, f.epoch(), f.arena);
                 let b = stamp(j, f.epoch(), f.arena);
                 assert_eq!(
-                    f.cmp_codes(a, b).into_diagnostic()?,
+                    f.cmp_codes(a, b).expect("lawful"),
                     naive.resolve(match u32::try_from(i) { Ok(v) => v, Err(_) => 0 }).cmp(naive.resolve(match u32::try_from(j) { Ok(v) => v, Err(_) => 0 })),
                     "cmp_codes({i},{j}) diverged from byte order"
                 );
             }
         }
-        Ok(())
     }
 
     /// Verify a pinned snapshot against a frozen copy of the oracle taken
     /// at the same moment — the "answers identically forever" law.
-    fn check_snapshot(snap: &Snapshot, frozen: &Naive) -> Result<()> {
+    fn check_snapshot(snap: &Snapshot, frozen: &Naive) {
         assert_eq!(snap.len(), frozen.len(), "snapshot cardinality drifted");
         assert_eq!(
             snap.sealed_len(),
@@ -1989,7 +1985,7 @@ mod tests {
         for c in 0..snap.len() {
             assert_eq!(
                 snap.resolve(stamp(c, snap.epoch(), snap.arena))
-                    .into_diagnostic()?,
+                    .expect("lawful"),
                 frozen.resolve(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }),
                 "snapshot code {c} drifted"
             );
@@ -1997,7 +1993,7 @@ mod tests {
         let union = frozen.union_sorted();
         for (k, v) in union.iter().enumerate() {
             assert_eq!(
-                snap.select(k).into_diagnostic()?,
+                snap.select(k).expect("in-range"),
                 v.as_slice(),
                 "snapshot select({k}) drifted"
             );
@@ -2011,14 +2007,13 @@ mod tests {
                             stamp(i, snap.epoch(), snap.arena),
                             stamp(j, snap.epoch(), snap.arena)
                         )
-                        .into_diagnostic()?,
+                        .expect("lawful"),
                         frozen.resolve(match u32::try_from(i) { Ok(v) => v, Err(_) => 0 }).cmp(frozen.resolve(match u32::try_from(j) { Ok(v) => v, Err(_) => 0 })),
                         "snapshot cmp drifted"
                     );
                 }
             }
         }
-        Ok(())
     }
 
     /// Drive an op sequence against the oracle with per-op law checks;
@@ -2031,27 +2026,27 @@ mod tests {
         Snapshot,
     }
 
-    fn drive(ops: &[Op], sweep_every: usize) -> Result<()> {
+    fn drive(ops: &[Op], sweep_every: usize) {
         let mut arena = Arena::new();
         let mut naive = Naive::new();
         let mut pinned: Vec<(Snapshot, Naive)> = Vec::new();
         for (i, op) in ops.iter().enumerate() {
             match op {
                 Op::Intern(b) => {
-                    let sc = must_intern(&mut arena, b)?;
+                    let sc = must_intern(&mut arena, b);
                     assert_eq!(sc.code().raw(), naive.intern(b), "op {i}: code diverged");
                     assert_eq!(sc.epoch(), arena.epoch(), "op {i}: stamp epoch wrong");
                     {
                         let f = arena.frame();
                         assert_eq!(
-                            f.resolve(sc).into_diagnostic()?,
+                            f.resolve(sc).expect("lawful"),
                             b.as_slice(),
                             "op {i}: round-trip"
                         );
                     }
                     // Dedup: immediate re-intern is a hit, no growth.
                     let n = arena.len();
-                    assert_eq!(must_intern(&mut arena, b)?, sc, "op {i}: dedup");
+                    assert_eq!(must_intern(&mut arena, b), sc, "op {i}: dedup");
                     assert_eq!(arena.len(), n, "op {i}: dedup grew arena");
                 }
                 Op::Seal => {
@@ -2060,20 +2055,17 @@ mod tests {
                     let source_epoch = arena.epoch();
                     let live: Vec<Vec<u8>> = {
                         let f = arena.frame();
-                        let mut live = Vec::with_capacity(f.len());
-                        for c in 0..f.len() {
-                            live.push(
+                        (0..f.len())
+                            .map(|c| {
                                 f.resolve(stamp(c, source_epoch, f.arena))
-                                    .into_diagnostic()?
-                                    .to_vec(),
-                            );
-                        }
-                        live
-                    }
+                                    .expect("lawful")
+                                    .to_vec()
+                            })
+                            .collect()
                     };
                     let from_sealed = arena.sealed_len();
-                    let remap = arena.seal().into_diagnostic()?;
-                    let expect = naive.seal()?;
+                    let remap = arena.seal().expect("lawful seal");
+                    let expect = naive.seal();
                     assert_eq!(remap.source_epoch(), source_epoch);
                     assert_eq!(remap.target_epoch(), arena.epoch());
                     // The remap law: every old code, sealed or tail,
@@ -2083,7 +2075,7 @@ mod tests {
                     for (old, bytes) in live.iter().enumerate() {
                         let new = remap
                             .apply(stamp(old, source_epoch, arena.id))
-                            .into_diagnostic()?;
+                            .expect("lawful");
                         assert_eq!(
                             new.code().raw(),
                             expect[old],
@@ -2091,7 +2083,7 @@ mod tests {
                         );
                         assert_eq!(new.epoch(), arena.epoch(), "op {i}: restamp wrong");
                         assert_eq!(
-                            f.resolve(new).into_diagnostic()?,
+                            f.resolve(new).expect("lawful"),
                             bytes.as_slice(),
                             "op {i}: code {old} lost its value crossing the seal"
                         );
@@ -2101,7 +2093,7 @@ mod tests {
                     for old in 0..from_sealed {
                         let new = remap
                             .apply(stamp(old, source_epoch, arena.id))
-                            .into_diagnostic()?
+                            .expect("lawful")
                             .code()
                             .raw();
                         if let Some(p) = prev {
@@ -2124,7 +2116,6 @@ mod tests {
         for (snap, frozen) in &pinned {
             check_snapshot(snap, frozen);
         }
-        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -2240,41 +2231,39 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn stale_stamp_is_refused_not_misread() -> Result<()> {
+    fn stale_stamp_is_refused_not_misread() {
         let mut arena = Arena::new();
-        let sc_b = must_intern(&mut arena, b"b")?;
-        let remap = arena.seal().into_diagnostic()?;
+        let sc_b = must_intern(&mut arena, b"b");
+        let remap = arena.seal().expect("lawful seal");
         // Post-seal: intern something smaller so the old code's rank is
         // genuinely wrong if smuggled.
-        must_intern(&mut arena, b"a")?;
+        must_intern(&mut arena, b"a");
         let f = arena.frame();
         assert!(
             !f.admits(sc_b),
             "stale stamp crossed a seal without the remap door"
         );
-        let crossed = remap.apply(sc_b).into_diagnostic()?;
+        let crossed = remap.apply(sc_b).expect("lawful");
         assert!(f.admits(crossed), "remapped stamp admits");
-        assert_eq!(f.resolve(crossed).into_diagnostic()?, b"b");
-        Ok(())
+        assert_eq!(f.resolve(crossed).expect("lawful"), b"b");
     }
 
     #[test]
-    fn remap_refuses_wrong_epoch_input() -> Result<()> {
+    fn remap_refuses_wrong_epoch_input() {
         let mut arena = Arena::new();
-        must_intern(&mut arena, b"x")?;
-        let r1 = arena.seal().into_diagnostic()?;
-        let sc_new = must_intern(&mut arena, b"y")?; // epoch 1
+        must_intern(&mut arena, b"x");
+        let r1 = arena.seal().expect("lawful seal");
+        let sc_new = must_intern(&mut arena, b"y"); // epoch 1
         assert!(
             matches!(r1.apply(sc_new), Err(Denial::EpochMismatch { .. })),
             "r1 reads epoch-0 codes only — typed refusal"
         );
-        Ok(())
     }
 
     #[test]
     fn admits_is_exact_including_bounds() {
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"x")?;
+        let sc = must_intern(&mut arena, b"x");
         let f = arena.frame();
         assert!(f.admits(sc));
         // A forged in-epoch stamp beyond the frame's length is NOT
@@ -2290,8 +2279,8 @@ mod tests {
     fn cross_arena_stamp_refuses_in_frame_spend() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        let sa = must_intern(&mut a, b"alpha")?;
-        must_intern(&mut b, b"beta")?;
+        let sa = must_intern(&mut a, b"alpha");
+        must_intern(&mut b, b"beta");
         assert!(
             matches!(b.frame().resolve(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp must refuse typed"
@@ -2304,46 +2293,44 @@ mod tests {
     /// Consumable authority is spent by move into a bulk pass; the pass
     /// then amortizes many raw reads with zero remints.
     #[test]
-    fn bulk_spend_authority_open_pass_is_consume_on_spend() -> Result<()> {
+    fn bulk_spend_authority_open_pass_is_consume_on_spend() {
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"x")?;
+        let sc = must_intern(&mut arena, b"x");
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         let pass = auth.open_pass(&f);
         assert_eq!(
-            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).into_diagnostic()?,
+            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).expect("lawful"),
             b"x"
         );
         assert_eq!(
-            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).into_diagnostic()?,
+            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).expect("lawful"),
             b"x"
         );
         // `auth` was moved into `open_pass` — a second use would be E0382.
         // Absence of Clone/Copy is locked in `super::proofs`.
-        Ok(())
     }
 
     /// One-shot `resolve_raw` likewise consumes the authority by value.
     #[test]
-    fn bulk_spend_authority_resolve_raw_is_consume_on_spend() -> Result<()> {
+    fn bulk_spend_authority_resolve_raw_is_consume_on_spend() {
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"y")?;
+        let sc = must_intern(&mut arena, b"y");
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         assert_eq!(
             f.resolve_raw((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 }), auth)
-                .into_diagnostic()?,
+                .expect("lawful"),
             b"y"
         );
         // `auth` spent — reuse would be E0382 (see `super::proofs`).
-        Ok(())
     }
 
     #[test]
     fn nested_ctx_brands_handle_identity_under_one_frame() {
         let mut arena = Arena::new();
-        let a = must_intern(&mut arena, b"a")?;
-        let b = must_intern(&mut arena, b"b")?;
+        let a = must_intern(&mut arena, b"a");
+        let b = must_intern(&mut arena, b"b");
         let f = arena.frame();
         f.with_nested_ctx(|ctx| {
             assert!(ctx.same_handle(a.code(), a.code()));
@@ -2360,7 +2347,7 @@ mod tests {
         });
         // Snapshot nest is the same shape.
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"x")?;
+        let sc = must_intern(&mut arena, b"x");
         let snap = arena.snapshot();
         snap.with_nested_ctx(|ctx| {
             assert!(ctx.same_handle(sc.code(), sc.code()));
@@ -2368,36 +2355,34 @@ mod tests {
     }
 
     #[test]
-    fn stale_stamp_refuses_in_frame_spend() -> Result<()> {
+    fn stale_stamp_refuses_in_frame_spend() {
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"x")?;
-        arena.seal().into_diagnostic()?;
+        let sc = must_intern(&mut arena, b"x");
+        arena.seal().expect("lawful seal");
         assert!(
             matches!(arena.frame().resolve(sc), Err(Denial::EpochMismatch { .. })),
             "stale stamp must refuse typed — cross through the remap door"
         );
-        Ok(())
     }
 
     #[test]
-    fn snapshot_refuses_wrong_epoch_stamp() -> Result<()> {
+    fn snapshot_refuses_wrong_epoch_stamp() {
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"x")?;
-        let _remap = arena.seal().into_diagnostic()?;
+        let sc = must_intern(&mut arena, b"x");
+        let _remap = arena.seal().expect("lawful seal");
         let snap = arena.snapshot();
         assert!(
             matches!(snap.resolve(sc), Err(Denial::EpochMismatch { .. })),
             "stamped epoch 0 into epoch-1 snapshot must refuse typed"
         );
-        Ok(())
     }
 
     #[test]
     fn snapshot_refuses_codes_past_its_cut() {
         let mut arena = Arena::new();
-        must_intern(&mut arena, b"x")?;
+        must_intern(&mut arena, b"x");
         let snap = arena.snapshot();
-        let later = must_intern(&mut arena, b"y")?; // same epoch, after the cut
+        let later = must_intern(&mut arena, b"y"); // same epoch, after the cut
         assert!(
             matches!(snap.resolve(later), Err(Denial::VisibilityOverflow { .. })),
             "same-epoch code past the snapshot cut must refuse typed"
@@ -2413,8 +2398,8 @@ mod tests {
     fn cross_arena_stamps_are_refused_by_frames() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        let sa = must_intern(&mut a, b"alpha")?;
-        let sb = must_intern(&mut b, b"beta")?;
+        let sa = must_intern(&mut a, b"alpha");
+        let sb = must_intern(&mut b, b"beta");
         assert_eq!(a.epoch(), b.epoch(), "both at epoch 0: the dangerous case");
         let fb = b.frame();
         assert!(
@@ -2432,8 +2417,8 @@ mod tests {
     fn cross_arena_stamp_refuses_in_snapshots() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        let sa = must_intern(&mut a, b"alpha")?;
-        must_intern(&mut b, b"beta")?;
+        let sa = must_intern(&mut a, b"alpha");
+        must_intern(&mut b, b"beta");
         assert!(
             matches!(b.snapshot().resolve(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp in snapshot must refuse typed"
@@ -2441,17 +2426,16 @@ mod tests {
     }
 
     #[test]
-    fn cross_arena_stamp_refuses_in_remaps() -> Result<()> {
+    fn cross_arena_stamp_refuses_in_remaps() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        must_intern(&mut a, b"alpha")?;
-        let sb = must_intern(&mut b, b"beta")?;
-        let remap = a.seal().into_diagnostic()?;
+        must_intern(&mut a, b"alpha");
+        let sb = must_intern(&mut b, b"beta");
+        let remap = a.seal().expect("lawful seal");
         assert!(
             matches!(remap.apply(sb), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp in remap must refuse typed"
         );
-        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -2460,26 +2444,25 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn same_epoch_observers_agree_on_shared_codes() -> Result<()> {
+    fn same_epoch_observers_agree_on_shared_codes() {
         let mut arena = Arena::new();
-        must_intern(&mut arena, b"m")?;
-        arena.seal().into_diagnostic()?;
-        let a = must_intern(&mut arena, b"zz")?;
+        must_intern(&mut arena, b"m");
+        arena.seal().expect("lawful seal");
+        let a = must_intern(&mut arena, b"zz");
         let early = arena.snapshot();
-        let b = must_intern(&mut arena, b"aa")?;
+        let b = must_intern(&mut arena, b"aa");
         let late = arena.snapshot();
         // Codes visible to both answer identically in both.
         assert_eq!(
-            early.resolve(a).into_diagnostic()?,
-            late.resolve(a).into_diagnostic()?
+            early.resolve(a).expect("lawful"),
+            late.resolve(a).expect("lawful")
         );
-        assert_eq!(early.resolve(a).into_diagnostic()?, b"zz");
+        assert_eq!(early.resolve(a).expect("lawful"), b"zz");
         // The later observer sees more; the earlier refuses what it
         // cannot see (tested above); nothing shared ever disagrees.
-        assert_eq!(late.resolve(b).into_diagnostic()?, b"aa");
+        assert_eq!(late.resolve(b).expect("lawful"), b"aa");
         let f = arena.frame();
-        assert_eq!(f.resolve(a).into_diagnostic()?, b"zz");
-        Ok(())
+        assert_eq!(f.resolve(a).expect("lawful"), b"zz");
     }
 
     // ------------------------------------------------------------------
@@ -2489,17 +2472,17 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn tail_codes_are_arrival_stable_within_an_epoch() -> Result<()> {
+    fn tail_codes_are_arrival_stable_within_an_epoch() {
         let mut arena = Arena::new();
-        must_intern(&mut arena, b"m")?;
-        arena.seal().into_diagnostic()?;
-        let c_z = must_intern(&mut arena, b"z")?;
-        let c_a = must_intern(&mut arena, b"a")?; // smaller than everything sealed
-        let c_q = must_intern(&mut arena, b"q")?;
+        must_intern(&mut arena, b"m");
+        arena.seal().expect("lawful seal");
+        let c_z = must_intern(&mut arena, b"z");
+        let c_a = must_intern(&mut arena, b"a"); // smaller than everything sealed
+        let c_q = must_intern(&mut arena, b"q");
         // Interning smaller values did not move earlier stamps.
-        assert_eq!(must_intern(&mut arena, b"z")?, c_z);
-        assert_eq!(must_intern(&mut arena, b"a")?, c_a);
-        assert_eq!(must_intern(&mut arena, b"q")?, c_q);
+        assert_eq!(must_intern(&mut arena, b"z"), c_z);
+        assert_eq!(must_intern(&mut arena, b"a"), c_a);
+        assert_eq!(must_intern(&mut arena, b"q"), c_q);
         // Tail codes are consecutive arrivals above the sealed range.
         assert_eq!(c_z.code().raw(), 1);
         assert_eq!(c_a.code().raw(), 2);
@@ -2510,38 +2493,35 @@ mod tests {
         assert_eq!(f.rank(b"m"), Ok(Ok(1)));
         assert_eq!(f.rank(b"q"), Ok(Ok(2)));
         assert_eq!(f.rank(b"z"), Ok(Ok(3)));
-        Ok(())
     }
 
     #[test]
-    fn seal_remap_carries_sealed_and_tail_codes() -> Result<()> {
+    fn seal_remap_carries_sealed_and_tail_codes() {
         let mut arena = Arena::new();
         let mut held: Vec<(StampedCode, Vec<u8>)> = Vec::new();
         for v in [b"delta".as_slice(), b"alpha", b"omega"] {
-            held.push((must_intern(&mut arena, v)?, v.to_vec()));
+            held.push((must_intern(&mut arena, v), v.to_vec()));
         }
-        let r1 = arena.seal().into_diagnostic()?;
+        let r1 = arena.seal().expect("lawful seal");
         for (sc, _) in held.iter_mut() {
-            *sc = r1.apply(*sc).into_diagnostic()?;
+            *sc = r1.apply(*sc).expect("lawful");
         }
         for v in [b"aaaa".as_slice(), b"zzzz"] {
-            held.push((must_intern(&mut arena, v)?, v.to_vec()));
+            held.push((must_intern(&mut arena, v), v.to_vec()));
         }
-        let r2 = arena.seal().into_diagnostic()?;
+        let r2 = arena.seal().expect("lawful seal");
         let f = arena.frame();
         for (sc, v) in &held {
-            let crossed = r2.apply(*sc).into_diagnostic()?;
-            assert_eq!(f.resolve(crossed).into_diagnostic()?, v.as_slice());
+            let crossed = r2.apply(*sc).expect("lawful");
+            assert_eq!(f.resolve(crossed).expect("lawful"), v.as_slice());
         }
         // Post-seal: dense byte order over all five.
-        let mut all: Vec<&[u8]> = Vec::with_capacity(f.len());
-        for c in 0..f.len() {
-            all.push(f.resolve(stamp(c, f.epoch(), f.arena)).into_diagnostic()?);
-        }
+        let all: Vec<&[u8]> = (0..f.len())
+            .map(|c| f.resolve(stamp(c, f.epoch(), f.arena)).expect("lawful"))
+            .collect();
         let mut sorted = all.clone();
         sorted.sort();
         assert_eq!(all, sorted, "sealed codes are byte-ordered after seal");
-        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -2591,8 +2571,8 @@ mod tests {
             v
         };
         for &(a, b) in &pairs {
-            let ca = must_intern(&mut arena, &enc(a))?.code().raw();
-            let cb = must_intern(&mut arena, &enc(b))?.code().raw();
+            let ca = must_intern(&mut arena, &enc(a)).code().raw();
+            let cb = must_intern(&mut arena, &enc(b)).code().raw();
             codes.entry((ca, cb)).or_insert(false);
         }
         let code_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -2604,17 +2584,17 @@ mod tests {
     }
 
     #[test]
-    fn observer_cmp_derefs_only_on_prefix_tie() -> Result<()> {
+    fn observer_cmp_derefs_only_on_prefix_tie() {
         let mut arena = Arena::new();
         // Delta (unsealed) codes: comparison must go prefix-first.
-        let a = must_intern(&mut arena, b"AAAA-tail-1")?; // distinct prefix
-        let b = must_intern(&mut arena, b"BBBB-tail-2")?; // distinct prefix
-        let c = must_intern(&mut arena, b"SAME-tail-x")?; // shared prefix with d
-        let d = must_intern(&mut arena, b"SAME-tail-y")?;
+        let a = must_intern(&mut arena, b"AAAA-tail-1"); // distinct prefix
+        let b = must_intern(&mut arena, b"BBBB-tail-2"); // distinct prefix
+        let c = must_intern(&mut arena, b"SAME-tail-x"); // shared prefix with d
+        let d = must_intern(&mut arena, b"SAME-tail-y");
         let f = arena.frame();
 
         let base = arena.compare_derefs();
-        assert_eq!(f.cmp_codes(a, b).into_diagnostic()?, std::cmp::Ordering::Less);
+        assert_eq!(f.cmp_codes(a, b).expect("lawful"), std::cmp::Ordering::Less);
         assert_eq!(
             arena.compare_derefs() - base,
             0,
@@ -2622,12 +2602,11 @@ mod tests {
         );
 
         let base = arena.compare_derefs();
-        assert_eq!(f.cmp_codes(c, d).into_diagnostic()?, std::cmp::Ordering::Less);
+        assert_eq!(f.cmp_codes(c, d).expect("lawful"), std::cmp::Ordering::Less);
         assert!(
             arena.compare_derefs() > base,
             "shared-prefix tie must deref to break the tie"
         );
-        Ok(())
     }
 
     /// The sealed fast lane: sorting an all-sealed CodeColumn is RAW
@@ -2636,34 +2615,34 @@ mod tests {
     /// no matter how many prefixes tie. This is the execution currency: no
     /// durable-encoding work in the ordered-iteration hot path.
     #[test]
-    fn sealed_code_column_sort_never_derefs() -> Result<()> {
+    fn sealed_code_column_sort_never_derefs() {
         use super::super::column::CodeColumn;
         let mut arena = Arena::new();
         // Many shared-prefix values (would all be prefix-ties under a
         // byte compare) plus distinct ones.
         let mut interned = Vec::new();
         for i in 0..500u32 {
-            interned.push(must_intern(&mut arena, format!("SAME-{i:08}").as_bytes())?);
+            interned.push(must_intern(&mut arena, format!("SAME-{i:08}").as_bytes()));
         }
         for i in 0..500u32 {
-            interned.push(must_intern(&mut arena, &i.to_be_bytes())?);
+            interned.push(must_intern(&mut arena, &i.to_be_bytes()));
         }
-        let remap = arena.seal().into_diagnostic()?;
-        let mut codes = Vec::with_capacity(interned.len());
-        for c in interned {
-            codes.push(remap.apply(c).into_diagnostic()?);
-        }
+        let remap = arena.seal().expect("lawful seal");
+        let codes: Vec<_> = interned
+            .into_iter()
+            .map(|c| remap.apply(c).expect("lawful"))
+            .collect();
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         for c in &codes {
-            col.push(*c).into_diagnostic()?;
+            col.push(*c).expect("lawful push");
         }
         let base = arena.compare_derefs();
         let perm = col
             .admit(&f)
-            .into_diagnostic()?
+            .expect("lawful admit")
             .sort_permutation()
-            .into_diagnostic()?;
+            .expect("lawful sort");
         assert_eq!(perm.len(), 1000);
         assert_eq!(
             arena.compare_derefs() - base,
@@ -2671,33 +2650,29 @@ mod tests {
             "the sealed fast lane must sort by raw code order with zero derefs"
         );
         // And the order it produced is the true value (byte) order.
-        let mut ranks: Vec<usize> = Vec::with_capacity(perm.len());
-        for &i in &perm {
-            let bytes = f
-                .resolve(codes[(match usize::try_from(i) {
-                    Ok(n) => n,
-                    Err(_) => 0,
-                })])
-                .into_diagnostic()?;
-            let r = f.rank(bytes).into_diagnostic()?;
-            ranks.push(r.map_err(|_| miette!("found"))?);
-        }
+        let ranks: Vec<usize> = perm
+            .iter()
+            .map(|&i| {
+                f.rank(f.resolve(codes[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })]).expect("lawful"))
+                    .expect("interned")
+                    .expect("found")
+            })
+            .collect();
         assert!(
             ranks.windows(2).all(|w| w[0] <= w[1]),
             "sealed sort not value-ordered"
         );
-        Ok(())
     }
 
     #[test]
-    fn distinct_prefix_compares_never_deref() -> Result<()> {
+    fn distinct_prefix_compares_never_deref() {
         let mut arena = Arena::new();
         for i in 0..2000u32 {
             let mut v = i.to_be_bytes().to_vec();
             v.extend_from_slice(b"-payload-tail");
-            must_intern(&mut arena, &v)?;
+            must_intern(&mut arena, &v);
         }
-        arena.seal().into_diagnostic()?;
+        arena.seal().expect("lawful seal");
         assert_eq!(
             arena.compare_derefs(),
             0,
@@ -2709,19 +2684,18 @@ mod tests {
         let before = arena.compare_derefs();
         let mut v = 7u32.to_be_bytes().to_vec();
         v.extend_from_slice(b"-payload-tail");
-        must_intern(&mut arena, &v)?;
+        must_intern(&mut arena, &v);
         assert!(
             arena.compare_derefs() > before,
             "equality tie never counted"
         );
         let before = arena.compare_derefs();
-        must_intern(&mut arena, b"same-prefix-AAAA")?;
-        must_intern(&mut arena, b"same-prefix-BBBB")?;
+        must_intern(&mut arena, b"same-prefix-AAAA");
+        must_intern(&mut arena, b"same-prefix-BBBB");
         assert!(
             arena.compare_derefs() > before,
             "shared-prefix tie never counted"
         );
-        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -2730,33 +2704,30 @@ mod tests {
     // after the writer has moved 90k+ values past them.
     // ------------------------------------------------------------------
 
-    fn stress(values: Vec<Vec<u8>>, seal_every: usize) -> Result<()> {
+    fn stress(values: Vec<Vec<u8>>, seal_every: usize) {
         let mut arena = Arena::new();
         let mut live: Vec<(StampedCode, usize)> = Vec::new();
         let mut pinned: Option<(Snapshot, Vec<Vec<u8>>)> = None;
         for (i, v) in values.iter().enumerate() {
-            let sc = must_intern(&mut arena, v)?;
+            let sc = must_intern(&mut arena, v);
             live.push((sc, i));
             if (i + 1) % seal_every == 0 {
-                let remap = arena.seal().into_diagnostic()?;
+                let remap = arena.seal().expect("lawful seal");
                 for (sc, _) in live.iter_mut() {
-                    *sc = remap.apply(*sc).into_diagnostic()?;
+                    *sc = remap.apply(*sc).expect("lawful");
                 }
             }
             if i + 1 == seal_every / 2 {
                 // Pin one early snapshot with its expected contents.
                 let expect: Vec<Vec<u8>> = {
                     let f = arena.frame();
-                    let mut expect = Vec::with_capacity(f.len());
-                    for c in 0..f.len() {
-                        expect.push(
+                    (0..f.len())
+                        .map(|c| {
                             f.resolve(stamp(c, f.epoch(), f.arena))
-                                .into_diagnostic()?
-                                .to_vec(),
-                        );
-                    }
-                    expect
-                }
+                                .expect("lawful")
+                                .to_vec()
+                        })
+                        .collect()
                 };
                 pinned = Some((arena.snapshot(), expect));
             }
@@ -2765,17 +2736,17 @@ mod tests {
             let f = arena.frame();
             for (sc, i) in &live {
                 assert_eq!(
-                    f.resolve(*sc).into_diagnostic()?,
+                    f.resolve(*sc).expect("lawful"),
                     values[*i].as_slice(),
                     "stamp lost across epochs"
                 );
             }
         }
-        let final_remap = arena.seal().into_diagnostic()?;
+        let final_remap = arena.seal().expect("lawful seal");
         let f = arena.frame();
         for (sc, i) in live.iter_mut() {
-            *sc = final_remap.apply(*sc).into_diagnostic()?;
-            assert_eq!(f.resolve(*sc).into_diagnostic()?, values[*i].as_slice());
+            *sc = final_remap.apply(*sc).expect("lawful");
+            assert_eq!(f.resolve(*sc).expect("lawful"), values[*i].as_slice());
         }
         let mut expected = values;
         expected.sort();
@@ -2783,7 +2754,7 @@ mod tests {
         assert_eq!(f.len(), expected.len());
         for (k, v) in expected.iter().enumerate() {
             assert_eq!(
-                f.resolve(stamp(k, f.epoch(), f.arena)).into_diagnostic()?,
+                f.resolve(stamp(k, f.epoch(), f.arena)).expect("lawful"),
                 v.as_slice(),
                 "rank {k} wrong at scale"
             );
@@ -2795,12 +2766,11 @@ mod tests {
             for (c, v) in expect.iter().enumerate() {
                 assert_eq!(
                     snap.resolve(stamp(c, snap.epoch(), snap.arena))
-                        .into_diagnostic()?,
+                        .expect("lawful"),
                     v.as_slice()
                 );
             }
         }
-        Ok(())
     }
 
     #[test]
@@ -2841,46 +2811,42 @@ mod tests {
     fn snapshot_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Snapshot>();
-    }        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<Snapshot>();
     }
 
     #[test]
-    fn empty_seal_advances_epoch_and_is_identity() -> Result<()> {
+    fn empty_seal_advances_epoch_and_is_identity() {
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"x")?;
-        let r1 = arena.seal().into_diagnostic()?;
+        let sc = must_intern(&mut arena, b"x");
+        let r1 = arena.seal().expect("lawful seal");
         assert_eq!(r1.tail_len(), 1);
-        let crossed = r1.apply(sc).into_diagnostic()?;
-        let r2 = arena.seal().into_diagnostic()?;
+        let crossed = r1.apply(sc).expect("lawful");
+        let r2 = arena.seal().expect("lawful seal");
         assert_eq!(arena.epoch(), Epoch(2));
         assert_eq!(r2.tail_len(), 0);
-        let twice = r2.apply(crossed).into_diagnostic()?;
+        let twice = r2.apply(crossed).expect("lawful");
         assert_eq!(
             twice.code().raw(),
             crossed.code().raw(),
             "empty seal moved a code"
         );
         let f = arena.frame();
-        assert_eq!(f.resolve(twice).into_diagnostic()?, b"x");
-        Ok(())
+        assert_eq!(f.resolve(twice).expect("lawful"), b"x");
     }
 
     #[test]
-    fn empty_string_is_a_value_across_epochs() -> Result<()> {
+    fn empty_string_is_a_value_across_epochs() {
         let mut arena = Arena::new();
-        let sc = must_intern(&mut arena, b"")?;
+        let sc = must_intern(&mut arena, b"");
         assert_eq!(sc.code().raw(), 0);
-        let remap = arena.seal().into_diagnostic()?;
-        let crossed = remap.apply(sc).into_diagnostic()?;
+        let remap = arena.seal().expect("lawful seal");
+        let crossed = remap.apply(sc).expect("lawful");
         assert_eq!(crossed.code().raw(), 0);
         let f = arena.frame();
-        assert_eq!(f.resolve(crossed).into_diagnostic()?, b"");
-        Ok(())
+        assert_eq!(f.resolve(crossed).expect("lawful"), b"");
     }
 
     #[test]
-    fn values_around_chunk_boundaries_round_trip() -> Result<()> {
+    fn values_around_chunk_boundaries_round_trip() {
         let mut arena = Arena::new();
         let lens = [
             0usize,
@@ -2896,70 +2862,67 @@ mod tests {
         let mut held = Vec::new();
         for len in lens {
             let v: Vec<u8> = (0..len).map(|i| match u8::try_from(i % 251) { Ok(b) => b, Err(_) => 0 }).collect();
-            held.push((must_intern(&mut arena, &v)?, v));
+            held.push((must_intern(&mut arena, &v), v));
         }
         // Fill across many shared chunks too.
         for i in 0..40_000u32 {
-            must_intern(&mut arena, format!("filler-{i}").as_bytes())?;
+            must_intern(&mut arena, format!("filler-{i}").as_bytes());
         }
         {
             let f = arena.frame();
             for (sc, v) in &held {
-                assert_eq!(f.resolve(*sc).into_diagnostic()?, v.as_slice());
+                assert_eq!(f.resolve(*sc).expect("lawful"), v.as_slice());
             }
         }
-        let remap = arena.seal().into_diagnostic()?;
+        let remap = arena.seal().expect("lawful seal");
         let f = arena.frame();
         for (sc, v) in &held {
             assert_eq!(
-                f.resolve(remap.apply(*sc).into_diagnostic()?)
-                    .into_diagnostic()?,
+                f.resolve(remap.apply(*sc).expect("lawful"))
+                    .expect("lawful"),
                 v.as_slice()
             );
         }
-        Ok(())
     }
 
     #[test]
-    fn snapshot_survives_writer_progress_and_chunk_freezes() -> Result<()> {
+    fn snapshot_survives_writer_progress_and_chunk_freezes() {
         let mut arena = Arena::new();
         for i in 0..5_000u32 {
-            must_intern(&mut arena, format!("v-{i:05}").as_bytes())?;
+            must_intern(&mut arena, format!("v-{i:05}").as_bytes());
         }
-        arena.seal().into_diagnostic()?;
-        must_intern(&mut arena, b"tail-one")?;
+        arena.seal().expect("lawful seal");
+        must_intern(&mut arena, b"tail-one");
         let snap = arena.snapshot();
-        let mut world: Vec<Vec<u8>> = Vec::with_capacity(snap.len());
-        for c in 0..snap.len() {
-            world.push(
+        let world: Vec<Vec<u8>> = (0..snap.len())
+            .map(|c| {
                 snap.resolve(stamp(c, snap.epoch(), snap.arena))
-                    .into_diagnostic()?
-                    .to_vec(),
-            );
-        }
+                    .expect("lawful")
+                    .to_vec()
+            })
+            .collect();
         // Writer moves far past the snapshot: new values, seals, chunk
         // rollovers, cascades.
         for round in 0..3 {
             for i in 0..5_000u32 {
-                must_intern(&mut arena, format!("post-{round}-{i}").as_bytes())?;
+                must_intern(&mut arena, format!("post-{round}-{i}").as_bytes());
             }
-            arena.seal().into_diagnostic()?;
+            arena.seal().expect("lawful seal");
         }
         for (c, v) in world.iter().enumerate() {
             assert_eq!(
                 snap.resolve(stamp(c, snap.epoch(), snap.arena))
-                    .into_diagnostic()?,
+                    .expect("lawful"),
                 v.as_slice(),
                 "snapshot drifted"
             );
         }
-        Ok(())
     }
 
     #[test]
     fn forged_in_epoch_stamp_beyond_len_refuses_typed() {
         let mut arena = Arena::new();
-        must_intern(&mut arena, b"x")?;
+        must_intern(&mut arena, b"x");
         let f = arena.frame();
         // A forged in-epoch stamp beyond len is a visibility refusal —
         // same vocabulary as cut overflow, never a process abort.

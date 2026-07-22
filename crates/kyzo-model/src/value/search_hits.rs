@@ -179,18 +179,15 @@ impl From<Denial> for MaterializeError {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
     use super::*;
     use crate::value::DataValue;
 
     #[test]
-    fn admit_decoded_empty_is_empty_hits() -> Result<()> {
-        let hits = SearchHits::admit_decoded(std::iter::empty()).into_diagnostic()?;
+    fn admit_decoded_empty_is_empty_hits() {
+        let hits = SearchHits::admit_decoded(std::iter::empty()).unwrap();
         assert!(hits.is_empty());
         assert_eq!(hits.len(), 0);
-        assert!(hits.materialize_all().into_diagnostic()?.is_empty());
-        Ok(())
+        assert!(hits.materialize_all().unwrap().is_empty());
     }
 
     #[test]
@@ -210,12 +207,11 @@ mod tests {
     }
 
     #[test]
-    fn admit_decoded_round_trips_materialize() -> Result<()> {
+    fn admit_decoded_round_trips_materialize() {
         let row = Tuple::from_vec(vec![DataValue::from(7), DataValue::from("x")]);
-        let hits = SearchHits::admit_decoded([row.clone()]).into_diagnostic()?;
+        let hits = SearchHits::admit_decoded([row.clone()]).unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits.materialize_all_tuples().into_diagnostic()?, vec![row]);
-        Ok(())
+        assert_eq!(hits.materialize_all_tuples().unwrap(), vec![row]);
     }
 
     #[test]

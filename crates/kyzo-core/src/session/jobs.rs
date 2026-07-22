@@ -21,7 +21,7 @@
 //! lands. Dispatch stays here so `session/db.rs` remains the composition root.
 
 use kyzo_model::value::{DataValue, Tuple};
-use miette::{Diagnostic, Result, bail, miette};
+use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
 use crate::data::json::NamedRows;
@@ -242,7 +242,6 @@ pub fn relations_from_ephemeral_for_operator(
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
@@ -251,7 +250,7 @@ mod tests {
     use crate::store::{Storage, WriteTx};
 
     #[test]
-    fn ephemeral_relations_project_in_flight_and_storage() -> Result<()>  {
+    fn ephemeral_relations_project_in_flight_and_storage() {
         let mut ephemeral = EphemeralEngineState::default();
         ephemeral.replace(
             3,
@@ -265,28 +264,27 @@ mod tests {
         );
         let rels = relations_from_ephemeral(ephemeral);
         assert_eq!(
-            rels.in_flight_tx_relation()?.rows()[0][0]
+            rels.in_flight_tx_relation().unwrap().rows()[0][0]
                 .get_int()
-                ?,
+                .unwrap(),
             3
         );
-        let stats = rels.storage_stats_relation()?;
-        assert_eq!(stats.rows()[0][0].get_int().ok_or_else(|| miette!("get_int"))?, 100);
-        assert_eq!(stats.rows()[0][4].get_int().ok_or_else(|| miette!("get_int"))?, 2);
+        let stats = rels.storage_stats_relation().unwrap();
+        assert_eq!(stats.rows()[0][0].get_int().unwrap(), 100);
+        assert_eq!(stats.rows()[0][4].get_int().unwrap(), 2);
 
         let op = relations_from_ephemeral_for_operator(
             EphemeralEngineState::default(),
             OperatorCap::mint(),
         );
         assert!(op.has_operator_cap());
-        Ok(())
     }
 
     /// Adversarial: quarantine / failure topology unreachable without Cap —
     /// not merely "when you pass Tenant you refuse". Cap-absent refuses;
     /// with Cap (test mint via pub(crate)), operator sees data.
     #[test]
-    fn quarantine_unreachable_without_operator_cap() -> Result<()>  {
+    fn quarantine_unreachable_without_operator_cap() {
         let mut surface = OperatorHealthSurface::default();
         surface.record_quarantine(mint_quarantine(
             KeyspaceId::from_raw(9),
@@ -314,82 +312,77 @@ mod tests {
 
         let op = OperatorEphemeralRelations::for_operator(surface, IndexStatus::default(), cap);
         assert!(op.has_operator_cap());
-        let rows = op.quarantine_relation()?;
+        let rows = op.quarantine_relation().unwrap();
         assert_eq!(rows.rows().len(), 1);
         // Memcomparable bytes preserved — not Debug strings.
         assert!(matches!(&rows.rows()[0][1], DataValue::Bytes(b) if b.as_slice() == b"q0"));
         assert!(matches!(&rows.rows()[0][2], DataValue::Bytes(b) if b.as_slice() == b"q1"));
         assert!(op.failure_topology(&lattice).is_ok());
-        Ok(())
     }
 
     #[test]
-    fn list_running_without_registry_refuses_never_hardcoded_zero() -> Result<()>  {
+    fn list_running_without_registry_refuses_never_hardcoded_zero() {
         let err = list_running().expect_err("must refuse without live registry");
         assert!(
             err.downcast_ref::<JobsRefuse>()
                 .is_some_and(|r| matches!(r, JobsRefuse::InFlightRegistryAbsent)),
             "expected InFlightRegistryAbsent, got {err}"
         );
-        Ok(())
     }
 
     #[test]
-    fn kill_running_refuses_with_own_typed_variant() -> Result<()>  {
+    fn kill_running_refuses_with_own_typed_variant() {
         let err = kill_running().expect_err("kill not landed");
         assert!(
             err.downcast_ref::<JobsRefuse>()
                 .is_some_and(|r| matches!(r, JobsRefuse::KillNotLanded)),
             "expected KillNotLanded, got {err}"
         );
-        Ok(())
     }
 
     #[test]
-    fn list_running_live_registry_nonzero_when_real_tx_open() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
-        let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
-            .map_err(|e| miette!("compose: {e}"))?;
+    fn list_running_live_registry_nonzero_when_real_tx_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
+            .expect("compose");
 
         // Open a real write transaction (live Store tx) and register it on the
         // in-flight registry — the registry is the ::running authority.
-        let tx = db.store.write_tx().map_err(|e| miette!("open write tx: {e}"))?;
+        let tx = db.store.write_tx().expect("open write tx");
         db.in_flight_tx_begin();
 
         let rows = db
             .list_running_jobs()
-            .map_err(|e| miette!("list_running from live registry: {e}"))?;
+            .expect("list_running from live registry");
         assert_eq!(rows.headers(), &["in_flight_tx".to_string()]);
         assert_eq!(rows.rows().len(), 1);
         assert!(
-            rows.rows()[0][0].get_int().ok_or_else(|| miette!("get_int"))? > 0,
+            rows.rows()[0][0].get_int().unwrap() > 0,
             "live registry must be nonzero while a real tx is open"
         );
 
         db.in_flight_tx_end();
-        let after = db.list_running_jobs().map_err(|e| miette!("list after end: {e}"))?;
-        assert_eq!(after.rows()[0][0].get_int().ok_or_else(|| miette!("get_int"))?, 0);
+        let after = db.list_running_jobs().expect("list after end");
+        assert_eq!(after.rows()[0][0].get_int().unwrap(), 0);
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
-        Ok(())
     }
 
     #[test]
-    fn compaction_debt_renders_from_debt_ledger_not_ephemeral() -> Result<()>  {
+    fn compaction_debt_renders_from_debt_ledger_not_ephemeral() {
         let mut surface = OperatorHealthSurface::default();
         let cap = OperatorCap::mint();
         let mut debt = crate::store::failure::DebtLedger::with_ceiling(50);
-        debt.admit(11).map_err(|e| miette!("admit: {e}"))?;
+        debt.admit(11).expect("admit");
         surface.set_debt(&cap, debt);
 
         let rels = OperatorEphemeralRelations::for_tenant(surface, IndexStatus::default());
         assert_eq!(
-            rels.compaction_debt_relation()?.rows()[0][0]
+            rels.compaction_debt_relation().unwrap().rows()[0][0]
                 .get_int()
-                ?,
+                .unwrap(),
             11
         );
-        Ok(())
     }
 }

@@ -288,8 +288,7 @@ pub fn json_to_datavalue(v: &JsonValue) -> DataValue {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
+    use miette::{IntoDiagnostic, Result};
     use super::*;
     use crate::value::Num;
 
@@ -343,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn infinity_string_decode_stays_str_not_num() -> Result<()> {
+    fn infinity_string_decode_stays_str_not_num() {
         // Former Cozo remap tokens must not invent Num on the way back.
         for s in ["INFINITY", "NEGATIVE_INFINITY", "NaN", "nan", "Inf"] {
             let back = json_to_datavalue(&JsonValue::String(s.to_string()));
@@ -352,6 +351,5 @@ mod tests {
                 "{s:?} must decode as Str, got {back:?}"
             );
         }
-        Ok(())
     }
 }

@@ -7,7 +7,6 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use miette::{Result, miette};
 use std::collections::BTreeMap;
 
 use kyzo_model::value::{DataValue, ValidityTs};
@@ -34,23 +33,19 @@ fn test_vld() -> ValidityTs {
 /// Test-local composition: Store + fresh Catalog. Not the deleted fused
 /// public `Db::new(storage)` constructor — production callers use
 /// [`Engine::compose`].
-fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
-    Ok(Engine::compose(store, Catalog::new())?)
+fn open_engine<S: Storage>(store: S) -> Engine<S> {
+    Engine::compose(store, Catalog::new()).expect("compose engine")
 }
 
 /// Result rows as sorted `i64` vectors, for order-independent assertions.
-fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
+fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
     let mut out: Vec<Vec<i64>> = nr
         .rows()
         .iter()
-        .map(|r| {
-            r.iter()
-                .map(|v| v.get_int().ok_or_else(|| miette!("int")))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+        .collect();
     out.sort();
-    Ok(out)
+    out
 }
 
 /// The guard idiom is a language guarantee: `&&`, `||`, and `~`
@@ -58,29 +53,29 @@ fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
 /// from ever evaluating — through the whole engine, not just the
 /// expression unit.
 #[test]
-fn guard_idiom_short_circuits_through_scripts() -> Result<()>  {
-    let dir = tempfile::tempdir()?;
-    let db = open_engine(new_fjall_storage(dir.path())?)?;
+fn guard_idiom_short_circuits_through_scripts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_engine(new_fjall_storage(dir.path()).unwrap());
     db.run_script(
         "?[k, v] <- [[0, 10], [2, 20]] :create t {k => v}",
         no_params(),
     )
-    .map_err(|e| miette!("create: {e}"))?;
+    .expect("create");
     // `%` errors on a zero divisor (`/` does NOT — it yields inf —
     // so a division guard cannot discriminate lazy from strict; the
     // hostile review caught the original test passing vacuously).
     let rows = db
         .run_script("?[k] := *t[k, v], k != 0 && v % k == 0", no_params())
-        .map_err(|e| miette!("guarded modulo must not error on the zero row: {e}"))?;
-    assert_eq!(int_rows(&rows)?, vec![vec![2]]);
+        .expect("guarded modulo must not error on the zero row");
+    assert_eq!(int_rows(&rows), vec![vec![2]]);
     // Same law when the connective is nested inside another expression.
     let rows = db
         .run_script(
             "?[k] := *t[k, v], w = if(k != 0 && v % k == 0, 1, 0), w == 1",
             no_params(),
         )
-        .map_err(|e| miette!("nested guard must not error: {e}"))?;
-    assert_eq!(int_rows(&rows)?, vec![vec![2]]);
+        .expect("nested guard must not error");
+    assert_eq!(int_rows(&rows), vec![vec![2]]);
     // The mirror proves the pin has teeth: unguarded, the zero row
     // DOES error.
     db.run_script("?[k] := *t[k, v], v % k == 0", no_params())
@@ -88,9 +83,8 @@ fn guard_idiom_short_circuits_through_scripts() -> Result<()>  {
     // Coalesce guards the same way.
     let rows = db
         .run_script("?[x] := x = null ~ 7", no_params())
-        .map_err(|e| miette!("coalesce: {e}"))?;
-    assert_eq!(int_rows(&rows)?, vec![vec![7]]);
-    Ok(())
+        .expect("coalesce");
+    assert_eq!(int_rows(&rows), vec![vec![7]]);
 }
 
 /// The reviewers' pushdown hazard, pinned: `to_conjunction` splits a
@@ -98,16 +92,16 @@ fn guard_idiom_short_circuits_through_scripts() -> Result<()>  {
 /// never let the guarded expression evaluate on rows its guard would
 /// have excluded — in any atom order, stored or derived.
 #[test]
-fn guard_survives_conjunction_pushdown_across_joins() -> Result<()>  {
-    let dir = tempfile::tempdir()?;
-    let db = open_engine(new_fjall_storage(dir.path())?)?;
+fn guard_survives_conjunction_pushdown_across_joins() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_engine(new_fjall_storage(dir.path()).unwrap());
     db.run_script("?[k] <- [[1], [2]] :create a {k}", no_params())
-        .map_err(|e| miette!("create a: {e}"))?;
+        .expect("create a");
     db.run_script(
         "?[k, v] <- [[0, 5], [1, 20], [2, 30]] :create b {k => v}",
         no_params(),
     )
-    .map_err(|e| miette!("create b: {e}"))?;
+    .expect("create b");
     for (name, script) in [
         (
             "stored join",
@@ -130,12 +124,11 @@ fn guard_survives_conjunction_pushdown_across_joins() -> Result<()>  {
             }
         };
         assert_eq!(
-            int_rows(&rows)?,
+            int_rows(&rows),
             vec![vec![1, 20], vec![2, 30]],
             "{name}: wrong rows"
         );
     }
-    Ok(())
 }
 
 /// Exercises the normalizer paths the recursive-join test does not: a
@@ -143,28 +136,27 @@ fn guard_survives_conjunction_pushdown_across_joins() -> Result<()>  {
 /// form and the binding-safety well-ordering, and a named-field relation
 /// read (`*edge{a: x}`), which drives catalog-schema field resolution.
 #[test]
-fn negation_and_named_field_through_public_api() -> Result<()>  {
-    let db = open_engine(SimStorage::new(13))?;
+fn negation_and_named_field_through_public_api() {
+    let db = open_engine(SimStorage::new(13));
     db.run_script(
         "?[a, b] <- [[1, 2], [2, 1], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
         no_params(),
     )
-    .map_err(|e| miette!("create: {e}"))?;
+    .expect("create");
 
     // Sources of edges whose reverse is absent: 1↔2 is symmetric (both
     // excluded); 2→3, 3→4, 4→2 have no reverse, so their sources qualify.
     let neg = db
         .run_script("?[a] := *edge[a, b], not *edge[b, a]", no_params())
-        .map_err(|e| miette!("negation query: {e}"))?;
-    assert_eq!(int_rows(&neg)?, vec![vec![2], vec![3], vec![4]]);
+        .expect("negation query");
+    assert_eq!(int_rows(&neg), vec![vec![2], vec![3], vec![4]]);
 
     // Named-field read binds the `a` column by name; the result is every
     // distinct source vertex.
     let named = db
         .run_script("?[x] := *edge{a: x}", no_params())
-        .map_err(|e| miette!("named-field query: {e}"))?;
-    assert_eq!(int_rows(&named)?, vec![vec![1], vec![2], vec![3], vec![4]]);
-    Ok(())
+        .expect("named-field query");
+    assert_eq!(int_rows(&named), vec![vec![1], vec![2], vec![3], vec![4]]);
 }
 
 // ── obligation 11: the magic-sets end-to-end differential ────────────────
@@ -176,20 +168,20 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
     match db { // fixed rules bind later at session normalize; parse is params-only
         value => core::mem::drop(value),
     }
-    let prog = match parse_script(script, &no_params(), test_vld())? {
+    let prog = match parse_script(script, &no_params(), test_vld()).unwrap() {
         Script::Query(p) => p,
         Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
     };
-    let tx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::default());
+    let tx = SessionTx::new_read(db.store.read_tx().unwrap(), ScriptOptions::default());
     let view = SessionView {
         store: &tx.store,
         temp: &tx.temp,
     };
     let mut normalizer = SessionNormalizer::new(view, CancelFlag::default());
     let (nf, _) =
-        crate::exec::plan::program::into_normalized_program(prog, &mut normalizer)?;
-    let (strat, _lifetimes) = nf.into_stratified_program()?;
-    let magic = strat.magic_sets_rewrite(&view)?;
+        crate::exec::plan::program::into_normalized_program(prog, &mut normalizer).unwrap();
+    let (strat, _lifetimes) = nf.into_stratified_program().unwrap();
+    let magic = strat.magic_sets_rewrite(&view).unwrap();
     magic
         .into_strata()
         .into_iter()
@@ -207,15 +199,15 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
 /// `5→6` component makes the demand selective: a rewriter that lost or
 /// leaked demand returns the wrong rows, not merely a slower plan.
 #[test]
-fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()>  {
+fn magic_sets_demand_matches_naive_oracle_end_to_end() {
     // Hand-checked fixpoint on edges 1→2→3→4 plus disconnected 5→6
     // (oracle differential lives in kyzo-trials; crate wall forbids kyzo_oracle here).
-    let db = open_engine(SimStorage::new(17))?;
+    let db = open_engine(SimStorage::new(17));
     db.run_script(
         "?[a, b] <- [[1, 2], [2, 3], [3, 4], [5, 6]] :create edge {a, b}",
         no_params(),
     )
-    .map_err(|e| miette!("create edges: {e}"))?;
+    .expect("create edges");
     let recursive_rule = "
         path[a, b] := *edge[a, b]
         path[a, b] := *edge[a, c], path[c, b]
@@ -230,7 +222,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()>  {
         syms1.iter().any(|s| s.contains('|')),
         "the bound-first-arg query must trigger the magic-sets rewrite; symbols were {syms1:?}"
     );
-    let got1 = int_rows(&db.run_script(&q1, no_params()).map_err(|e| miette!("bound-first query: {e}"))?)?;
+    let got1 = int_rows(&db.run_script(&q1, no_params()).expect("bound-first query"));
     assert_eq!(got1, vec![vec![2], vec![3], vec![4]]); // excludes the 5→6 component
 
     // Demand pattern 2: second argument bound (who reaches 4).
@@ -240,14 +232,13 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()>  {
         syms2.iter().any(|s| s.contains('|')),
         "the bound-second-arg query must trigger the magic-sets rewrite; symbols were {syms2:?}"
     );
-    let got2 = int_rows(&db.run_script(&q2, no_params()).map_err(|e| miette!("bound-second query: {e}"))?)?;
+    let got2 = int_rows(&db.run_script(&q2, no_params()).expect("bound-second query"));
     assert_eq!(
         got2,
         vec![vec![1], vec![2], vec![3]],
         "backward-demand who reaches 4"
     );
     assert_eq!(got2, vec![vec![1], vec![2], vec![3]]);
-    Ok(())
 }
 
 /// Issue #68 reopened, diagnostic: does the PUBLIC path's magic-sets
@@ -260,16 +251,16 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()>  {
 /// rewrite fired and pt's rules stopped being the same Muggle rules
 /// `bench_api::points_to` hand-builds.
 #[test]
-fn pointsto_magic_symbols_are_unadorned() -> Result<()>  {
-    let db = open_engine(SimStorage::new(6800))?;
+fn pointsto_magic_symbols_are_unadorned() {
+    let db = open_engine(SimStorage::new(6800));
     db.run_script("?[a, b] <- [] :create addr_of {a, b}", no_params())
-        .map_err(|e| miette!("create addr_of: {e}"))?;
+        .expect("create addr_of");
     db.run_script("?[a, b] <- [] :create assign {a, b}", no_params())
-        .map_err(|e| miette!("create assign: {e}"))?;
+        .expect("create assign");
     db.run_script("?[a, b] <- [] :create load {a, b}", no_params())
-        .map_err(|e| miette!("create load: {e}"))?;
+        .expect("create load");
     db.run_script("?[a, b] <- [] :create store {a, b}", no_params())
-        .map_err(|e| miette!("create store: {e}"))?;
+        .expect("create store");
     let script = "
         pt[y, x] := *addr_of[y, x]
         pt[y, x] := *assign[y, z], pt[z, x]
@@ -289,7 +280,6 @@ fn pointsto_magic_symbols_are_unadorned() -> Result<()>  {
         vec!["?".to_string(), "pt|Mff".to_string()],
         "expected the fully-unbound entry to collapse pt to its one ff variant; got {syms:?}"
     );
-    Ok(())
 }
 
 /// Diagnostic companion to `pointsto_magic_symbols_are_unadorned`: is
@@ -299,13 +289,13 @@ fn pointsto_magic_symbols_are_unadorned() -> Result<()>  {
 /// top query? (`path[a,b] := edge[a,c], path[c,b]` — the standard
 /// transitive-closure shape used throughout this test module.)
 #[test]
-fn transitive_closure_magic_symbols_under_unbound_query() -> Result<()>  {
-    let db = open_engine(SimStorage::new(6801))?;
+fn transitive_closure_magic_symbols_under_unbound_query() {
+    let db = open_engine(SimStorage::new(6801));
     db.run_script(
         "?[a, b] <- [[1,2],[2,3],[3,4]] :create edge {a, b}",
         no_params(),
     )
-    .map_err(|e| miette!("create edge: {e}"))?;
+    .expect("create edge");
     let script = "
         path[a, b] := *edge[a, b]
         path[a, b] := *edge[a, c], path[c, b]
@@ -318,7 +308,6 @@ fn transitive_closure_magic_symbols_under_unbound_query() -> Result<()>  {
         vec!["?".to_string(), "path|Mff".to_string()],
         "expected the fully-unbound entry to collapse path to its one ff variant; got {syms:?}"
     );
-    Ok(())
 }
 
 // ── obligation 12: the standing magic-vs-bypass differential (#68) ───────
@@ -340,7 +329,6 @@ fn transitive_closure_magic_symbols_under_unbound_query() -> Result<()>  {
 // The deleted `bench_api` façade used to host the bypass; that sealed
 // door stays cut. The language option is the honest production twin.
 mod magic_bypass_differential {
-    use miette::{Result, miette};
     use super::*;
 
     /// Every non-`?` symbol name, sorted — order-independent, so this
@@ -360,15 +348,15 @@ mod magic_bypass_differential {
                 &format!("{script}\n:disable_magic_rewrite true"),
                 no_params(),
             )
-            .map_err(|e| miette!("bypass query: {e}"))?,
-        )?
+            .expect("bypass query"),
+        )
     }
 
     /// Transitive closure over a tiny deterministic chain (`0→1→…→n-1`).
     #[test]
-    fn tc_chain_public_matches_bypass_byte_identical_and_unadorned() -> Result<()>  {
+    fn tc_chain_public_matches_bypass_byte_identical_and_unadorned() {
         let n = 10usize;
-        let db = open_engine(SimStorage::new(68_001))?;
+        let db = open_engine(SimStorage::new(68_001));
         let edge_literal: String = (0..n as i64 - 1)
             .map(|i| format!("[{i},{}],", i + 1))
             .collect();
@@ -376,13 +364,13 @@ mod magic_bypass_differential {
             &format!("?[a, b] <- [{edge_literal}] :create edge {{a, b}}"),
             no_params(),
         )
-        .map_err(|e| miette!("create edge: {e}"))?;
+        .expect("create edge");
         let script = "
             path[a, b] := *edge[a, b]
             path[a, b] := *edge[a, c], path[c, b]
             ?[a, b] := path[a, b]
         ";
-        let public_rows = int_rows(&db.run_script(script, no_params()).map_err(|e| miette!("query: {e}"))?)?;
+        let public_rows = int_rows(&db.run_script(script, no_params()).expect("query"));
         let bypass_rows = run_bypass(&db, script);
 
         assert_eq!(
@@ -395,7 +383,6 @@ mod magic_bypass_differential {
             "a fully-unbound entry must leave path as its one ff variant, matching the \
              bypass path's cost (no Input/Sup machinery)"
         );
-        Ok(())
     }
 
     /// Andersen points-to's self-join shape (`pt` occurs twice in
@@ -404,7 +391,7 @@ mod magic_bypass_differential {
     /// dedup the retired bench façade used, so both paths still compute
     /// over a fixed deterministic input.
     #[test]
-    fn pointsto_self_join_public_matches_bypass_byte_identical_and_unadorned() -> Result<()>  {
+    fn pointsto_self_join_public_matches_bypass_byte_identical_and_unadorned() {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
         use std::collections::BTreeSet;
@@ -425,14 +412,14 @@ mod magic_bypass_differential {
             rows.into_iter().collect()
         };
 
-        let db = open_engine(SimStorage::new(68_002))?;
+        let db = open_engine(SimStorage::new(68_002));
         let load_rel = |name: &str, rows: &[(i64, i64)]| {
             let literal: String = rows.iter().map(|(y, x)| format!("[{y},{x}],")).collect();
             db.run_script(
                 &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
                 no_params(),
             )
-            .map_err(|e| miette!("create: {e}"))?;
+            .expect("create");
         };
         load_rel("addr_of", &gen_rel(1, addrs));
         load_rel("assign", &gen_rel(2, assigns));
@@ -445,7 +432,7 @@ mod magic_bypass_differential {
             pt[z, w] := *store[y, x], pt[y, z], pt[x, w]
             ?[y, x] := pt[y, x]
         ";
-        let public_rows = int_rows(&db.run_script(script, no_params()).map_err(|e| miette!("query: {e}"))?)?;
+        let public_rows = int_rows(&db.run_script(script, no_params()).expect("query"));
         let bypass_rows = run_bypass(&db, script);
 
         assert_eq!(
@@ -458,7 +445,6 @@ mod magic_bypass_differential {
             "a fully-unbound entry must leave pt as its one ff variant, matching the bypass \
              path's cost (no Input/Sup machinery) — issue #68's regression shape"
         );
-        Ok(())
     }
 
     /// Mutual recursion where only ONE of the two predicates (`p`) is
@@ -468,10 +454,10 @@ mod magic_bypass_differential {
     /// needed bound variant (with its Input/Sup chain) — the mutual
     /// reference back from `r` to `p` must redirect onto `p|Mff`.
     #[test]
-    fn mutual_recursion_bf_and_ff_stays_correctly_reachable() -> Result<()>  {
+    fn mutual_recursion_bf_and_ff_stays_correctly_reachable() {
         let expected: Vec<Vec<i64>> = vec![vec![1, 2], vec![2, 4]];
 
-        let db = open_engine(SimStorage::new(68_101))?;
+        let db = open_engine(SimStorage::new(68_101));
         for (name, rows) in [
             ("seedp", vec![(1i64, 2i64)]),
             ("linkp", vec![(2, 3)]),
@@ -483,7 +469,7 @@ mod magic_bypass_differential {
                 &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
                 no_params(),
             )
-            .map_err(|e| miette!("create: {e}"))?;
+            .expect("create");
         }
         let script = "
             p[a, b] := *seedp[a, b]
@@ -492,7 +478,7 @@ mod magic_bypass_differential {
             r[a, b] := *linkr[a, c], p[c, b]
             ?[a, b] := p[a, b]
         ";
-        let got = int_rows(&db.run_script(script, no_params()).map_err(|e| miette!("query: {e}"))?)?;
+        let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(got, expected, "mutual recursion answer");
 
         let syms = sorted_syms(&db, script);
@@ -507,7 +493,6 @@ mod magic_bypass_differential {
             syms.iter().any(|s| s == "r|Mbf" || s == "r|Mfb"),
             "r is never demanded unbound and must keep its genuinely-needed bound variant; got {syms:?}"
         );
-        Ok(())
     }
 
     /// A predicate negated from a later stratum, alongside a SEPARATE
@@ -515,10 +500,10 @@ mod magic_bypass_differential {
     /// negation always targets a Muggle (cross-stratum-exempt) name and
     /// must be completely inert to the redirect/sweep machinery.
     #[test]
-    fn negation_with_ff_sibling_stays_correct() -> Result<()>  {
+    fn negation_with_ff_sibling_stays_correct() {
         let expected: Vec<Vec<i64>> = vec![vec![2, 3]];
 
-        let db = open_engine(SimStorage::new(68_102))?;
+        let db = open_engine(SimStorage::new(68_102));
         for (name, rows) in [
             ("addr_of", vec![(1i64, 2i64), (2, 3)]),
             ("assign", vec![(2, 3), (3, 4)]),
@@ -529,7 +514,7 @@ mod magic_bypass_differential {
                 &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
                 no_params(),
             )
-            .map_err(|e| miette!("create: {e}"))?;
+            .expect("create");
         }
         let script = "
             pt[y, x] := *addr_of[y, x]
@@ -537,7 +522,7 @@ mod magic_bypass_differential {
             excluded[y, x] := pt[y, x], not *blocked[y, x]
             ?[y, x] := excluded[y, x]
         ";
-        let got = int_rows(&db.run_script(script, no_params()).map_err(|e| miette!("query: {e}"))?)?;
+        let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(got, expected, "negation alongside ff-sibling answer");
         assert_eq!(
             sorted_syms(&db, script),
@@ -549,7 +534,6 @@ mod magic_bypass_differential {
             "pt (and the also-fully-unbound excluded) must collapse to their one ff variant \
              apiece, with negation elsewhere in the program"
         );
-        Ok(())
     }
 
     /// Repeated-variable adornment (`r[v, y, y]`'s pinned quirk in
@@ -559,25 +543,24 @@ mod magic_bypass_differential {
     /// confirms the collapse/sweep pair doesn't interact badly with
     /// repeated-argument adornment.
     #[test]
-    fn repeated_var_partial_adornment_matches_oracle() -> Result<()>  {
+    fn repeated_var_partial_adornment_matches_oracle() {
         let expected: Vec<Vec<i64>> = vec![vec![2]];
 
-        let db = open_engine(SimStorage::new(68_103))?;
+        let db = open_engine(SimStorage::new(68_103));
         db.run_script(
             "?[a, b, c] <- [[1,2,2],[1,3,4]] :create baseq {a, b, c}",
             no_params(),
         )
-        .map_err(|e| miette!("create baseq: {e}"))?;
+        .expect("create baseq");
         db.run_script("?[a] <- [[1]] :create seedv {a}", no_params())
-            .map_err(|e| miette!("create seedv: {e}"))?;
+            .expect("create seedv");
         let script = "
             q[a, b, c] := *baseq[a, b, c]
             dup[y] := *seedv[v], q[v, y, y]
             ?[y] := dup[y]
         ";
-        let got = int_rows(&db.run_script(script, no_params()).map_err(|e| miette!("query: {e}"))?)?;
+        let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(got, expected, "repeated-variable adornment answer");
-        Ok(())
     }
 
     /// The reviewer's orphan shape, reconstructed to the closest
@@ -601,10 +584,10 @@ mod magic_bypass_differential {
     /// away `pt|Mbf`/`pt|Mbb` uncollected in the base case, which both
     /// of those tests catch directly.
     #[test]
-    fn helper_via_relation_bound_var_inside_self_join_survives_correctly() -> Result<()>  {
+    fn helper_via_relation_bound_var_inside_self_join_survives_correctly() {
         let expected: Vec<Vec<i64>> = vec![vec![1, 2]];
 
-        let db = open_engine(SimStorage::new(68_104))?;
+        let db = open_engine(SimStorage::new(68_104));
         for (name, rows) in [
             ("addr_of", vec![(1i64, 2i64)]),
             ("assign", vec![(2, 3)]),
@@ -618,7 +601,7 @@ mod magic_bypass_differential {
                 &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
                 no_params(),
             )
-            .map_err(|e| miette!("create: {e}"))?;
+            .expect("create");
         }
         let script = "
             pt[y, x] := *addr_of[y, x]
@@ -629,7 +612,7 @@ mod magic_bypass_differential {
             helper[a, b] := *linkh[a, c], helper[c, b]
             ?[y, x] := pt[y, x]
         ";
-        let got = int_rows(&db.run_script(script, no_params()).map_err(|e| miette!("query: {e}"))?)?;
+        let got = int_rows(&db.run_script(script, no_params()).expect("query"));
         assert_eq!(got, expected, "helper-inside-self-join answer");
 
         let syms = sorted_syms(&db, script);
@@ -645,6 +628,5 @@ mod magic_bypass_differential {
             "helper must keep its genuinely-needed bound variant, reachable through pt's \
              surviving ff copy of the load rule; got {syms:?}"
         );
-        Ok(())
     }
 }

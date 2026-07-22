@@ -497,21 +497,22 @@ impl NullableColType {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
     use super::*;
     use crate::value::{RegexFlags, RegexSource, ValidityTs};
+    use miette::{IntoDiagnostic, Result};
 
     #[test]
     fn json_coerce_preserves_regex_flags_via_to_json() -> Result<()> {
         let col = NullableColType::required(ColType::Json);
         let cur = ValidityTs::from_raw(0);
         let ci = DataValue::Regex(
-            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).into_diagnostic()?,
+            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into())?,
         );
-        let cs = DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).into_diagnostic()?);
-        let j_ci = col.coerce(ci, cur).into_diagnostic()?;
-        let j_cs = col.coerce(cs, cur).into_diagnostic()?;
+        let cs = DataValue::Regex(
+            RegexSource::validated(RegexFlags::NONE, "foo".into())?,
+        );
+        let j_ci = col.coerce(ci, cur)?;
+        let j_cs = col.coerce(cs, cur)?;
         assert_ne!(j_ci, j_cs, "Json coerce must not drop regex flags");
         Ok(())
     }
@@ -527,7 +528,7 @@ mod tests {
         assert_eq!(
             NullableColType::optional(ColType::Int)
                 .coerce(DataValue::Null, cur)
-                .into_diagnostic()?,
+                ?,
             DataValue::Null
         );
         Ok(())
@@ -538,11 +539,11 @@ mod tests {
         let cur = ValidityTs::from_raw(0);
         let b = NullableColType::required(ColType::Bytes)
             .coerce(DataValue::from("AQID"), cur)
-            .into_diagnostic()?;
+            ?;
         assert_eq!(b, DataValue::Bytes(vec![1, 2, 3]));
         let u = NullableColType::required(ColType::Uuid)
             .coerce(DataValue::from("550e8400-e29b-41d4-a716-446655440000"), cur)
-            .into_diagnostic()?;
+            ?;
         assert!(matches!(u, DataValue::Uuid(_)));
         Ok(())
     }

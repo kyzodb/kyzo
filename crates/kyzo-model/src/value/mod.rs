@@ -879,8 +879,6 @@ pub fn decode_tuple(bytes: &[u8], arity: usize) -> Result<Vec<DataValue>, Decode
 
 #[cfg(test)]
 mod facade_tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
     use super::canonical::CanonicalBytes;
     use super::*;
 
@@ -910,9 +908,9 @@ mod facade_tests {
         }
     }
 
-    fn random_value(rng: &mut Rng, depth: usize) -> Result<DataValue> {
+    fn random_value(rng: &mut Rng, depth: usize) -> DataValue {
         let roll = rng.below(if depth == 0 { 14 } else { 7 });
-        Ok(match roll {
+        match roll {
             0 => DataValue::Null,
             1 => DataValue::Bool(rng.next().is_multiple_of(2)),
             2 => DataValue::Num(if rng.next().is_multiple_of(2) {
@@ -922,20 +920,16 @@ mod facade_tests {
             }),
             3 => DataValue::Str(["", "a", "ab", "a\u{0}b"][rng.below(4)].to_string()),
             4 => DataValue::Bytes(vec![0x00, 0xFF][..rng.below(3).min(2)].to_vec()),
-            5 => {
-                let mut items = Vec::new();
-                for _ in 0..rng.below(3) {
-                    items.push(random_value(rng, depth + 1)?);
-                }
-                DataValue::List(items)
-            }
-            6 => {
-                let mut items = Vec::new();
-                for _ in 0..rng.below(3) {
-                    items.push(random_value(rng, depth + 1)?);
-                }
-                DataValue::Set(items.into_iter().collect())
-            }
+            5 => DataValue::List(
+                (0..rng.below(3))
+                    .map(|_| random_value(rng, depth + 1))
+                    .collect(),
+            ),
+            6 => DataValue::Set(
+                (0..rng.below(3))
+                    .map(|_| random_value(rng, depth + 1))
+                    .collect(),
+            ),
             7 => DataValue::uuid(uuid::Uuid::from_bytes({
                 let mut b = [0u8; 16];
                 b[0] = match u8::try_from(rng.next() & 0xFF) {
@@ -946,7 +940,7 @@ mod facade_tests {
             })),
             8 => DataValue::Regex(
                 RegexSource::validated(RegexFlags::NONE, ["a", "b+", ""][rng.below(3)].into())
-                    .into_diagnostic()?,
+                    .expect("valid"),
             ),
             9 => DataValue::Vector(
                 Vector::try_new(
@@ -954,7 +948,7 @@ mod facade_tests {
                         .map(|_| f64::from_bits(rng.next()))
                         .collect(),
                 )
-                .ok_or_else(|| miette!("try_new"))?,
+                .unwrap(),
             ),
             10 => {
                 let ts = ValidityTs::from_raw(rng.next().cast_signed());
@@ -984,18 +978,15 @@ mod facade_tests {
             } else {
                 Json::Str("k".into())
             }),
-        })
+        }
     }
 
     /// THE Ord law: the structural mirror equals canonical byte order,
     /// every generated pair, both directions.
     #[test]
-    fn law_storage_ord_equals_canonical_byte_order() -> Result<()> {
+    fn law_storage_ord_equals_canonical_byte_order() {
         let mut rng = Rng(0xFACADE);
-        let mut corpus: Vec<DataValue> = Vec::with_capacity(250);
-        for _ in 0..250 {
-            corpus.push(random_value(&mut rng, 0)?);
-        }
+        let corpus: Vec<DataValue> = (0..250).map(|_| random_value(&mut rng, 0)).collect();
         let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
         for i in 0..corpus.len() {
             for j in 0..corpus.len() {
@@ -1008,21 +999,20 @@ mod facade_tests {
                 );
             }
         }
-        Ok(())
     }
 
     /// Identity laws surface through Eq: -0.0 vectors, NaN components,
     /// set writing order.
     #[test]
-    fn identity_laws_flow_through_the_facade() -> Result<()> {
+    fn identity_laws_flow_through_the_facade() {
         assert_eq!(
-            DataValue::Vector(Vector::try_new(vec![0.0]).ok_or_else(|| miette!("try_new"))?),
-            DataValue::Vector(Vector::try_new(vec![-0.0]).ok_or_else(|| miette!("try_new"))?)
+            DataValue::Vector(Vector::try_new(vec![0.0]).unwrap()),
+            DataValue::Vector(Vector::try_new(vec![-0.0]).unwrap())
         );
         assert_eq!(
-            DataValue::Vector(Vector::try_new(vec![f64::NAN]).ok_or_else(|| miette!("try_new"))?),
+            DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
             DataValue::Vector(
-                Vector::try_new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]).ok_or_else(|| miette!("try_new"))?
+                Vector::try_new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]).unwrap()
             )
         );
         let a: DataValue = DataValue::Set(
@@ -1044,31 +1034,28 @@ mod facade_tests {
         // Num identity is representation-faithful through From.
         assert_ne!(DataValue::from(1i64), DataValue::from(1.0f64));
         assert!(DataValue::from(1i64) < DataValue::from(1.0f64));
-        Ok(())
     }
 
     /// Round-trip through the codec: DataValue is the decode result.
     #[test]
-    fn facade_round_trips_through_the_codec() -> Result<()> {
+    fn facade_round_trips_through_the_codec() {
         let mut rng = Rng(0x5EED);
         for _ in 0..300 {
-            let v = random_value(&mut rng, 0)?;
+            let v = random_value(&mut rng, 0);
             let enc = encode_owned(&v);
-            let back = decode(enc.as_bytes()).into_diagnostic()?;
+            let back = decode(enc.as_bytes()).expect("lawful");
             assert_eq!(back, v, "round-trip changed {v:?}");
         }
-        Ok(())
     }
 
     /// ScanBound's Ord mirrors its written form's byte order — the two
     /// sentinels really do bracket every canonical encoding.
     #[test]
-    fn law_scan_bound_order_equals_written_byte_order() -> Result<()> {
+    fn law_scan_bound_order_equals_written_byte_order() {
         let mut rng = Rng(0xB0BB1E5);
-        let mut bounds: Vec<ScanBound> = Vec::with_capacity(80);
-        for _ in 0..80 {
-            bounds.push(ScanBound::Value(random_value(&mut rng, 0)?));
-        }
+        let mut bounds: Vec<ScanBound> = (0..80)
+            .map(|_| ScanBound::Value(random_value(&mut rng, 0)))
+            .collect();
         bounds.push(ScanBound::Least);
         bounds.push(ScanBound::Greatest);
         let keys: Vec<Vec<u8>> = bounds
@@ -1090,19 +1077,17 @@ mod facade_tests {
                 );
             }
         }
-        Ok(())
     }
 
     /// decode_tuple: exact arity, nothing trailing, total.
     #[test]
-    fn decode_tuple_is_exact_and_total() -> Result<()> {
+    fn decode_tuple_is_exact_and_total() {
         let vals = [DataValue::from(7i64), DataValue::from("x"), DataValue::Null];
         let key = TupleKey::from_values(&vals);
-        let back = decode_tuple(key.as_bytes(), 3).into_diagnostic()?;
+        let back = decode_tuple(key.as_bytes(), 3).expect("lawful");
         assert_eq!(back.as_slice(), &vals);
         assert!(decode_tuple(key.as_bytes(), 2).is_err());
         assert!(decode_tuple(key.as_bytes(), 4).is_err());
         assert!(decode_tuple(&[0xEE], 1).is_err());
-        Ok(())
     }
 }

@@ -549,16 +549,14 @@ pub fn scan_key_upper_projected(
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
     use super::super::admission::Denial;
     use super::super::canonical::{Datum, encode};
     use super::super::code::StampedCode;
     use super::super::number::Num;
     use super::*;
 
-    fn stamp_of(arena: &mut Arena, d: Datum<'_>) -> Result<StampedCode> {
-        Ok(arena.intern(encode(d).as_bytes()).into_diagnostic()?)
+    fn stamp_of(arena: &mut Arena, d: Datum<'_>) -> StampedCode {
+        arena.intern(encode(d).as_bytes()).expect("intern")
     }
 
     // ------------------------------------------------------------------
@@ -567,36 +565,36 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn written_form_is_durable_across_seals_while_codes_move() -> Result<()> {
+    fn written_form_is_durable_across_seals_while_codes_move() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         for i in 0..30i64 {
-            let a = stamp_of(&mut arena, Datum::Num(Num::int(i * 7 % 13)))?;
+            let a = stamp_of(&mut arena, Datum::Num(Num::int(i * 7 % 13)));
             let b = stamp_of(
                 &mut arena,
                 Datum::Str(if i % 2 == 0 { "even" } else { "odd" }),
-            )?;
-            rows.push_row(&[a, b]).into_diagnostic()?;
+            );
+            rows.push_row(&[a, b]).expect("lawful push");
         }
         let keys_before: Vec<TupleKey> = {
             let f = arena.frame();
-            let adm = rows.admit(&f).into_diagnostic()?;
+            let adm = rows.admit(&f).expect("lawful admit");
             (0..adm.len())
-                .map(|i| adm.encode_row(i).into_diagnostic()?)
+                .map(|i| adm.encode_row(i).expect("lawful"))
                 .collect()
         };
         let raw_before: Vec<Vec<u32>> = {
             let f = arena.frame();
-            let adm = rows.admit(&f).into_diagnostic()?;
+            let adm = rows.admit(&f).expect("lawful admit");
             (0..adm.len()).map(|i| adm.row(i).to_vec()).collect()
         };
         // Seal + gather: the execution currency moves...
-        let remap = arena.seal().into_diagnostic()?;
-        let rows = rows.gather(&remap).into_diagnostic()?;
+        let remap = arena.seal().expect("lawful seal");
+        let rows = rows.gather(&remap).expect("lawful gather");
         // ...and moves visibly (something re-ranked: 13 distinct nums +
         // 2 strings all started as tail codes).
         let f = arena.frame();
-        let adm = rows.admit(&f).into_diagnostic()?;
+        let adm = rows.admit(&f).expect("lawful admit");
         let raw_after: Vec<Vec<u32>> = (0..adm.len()).map(|i| adm.row(i).to_vec()).collect();
         assert_ne!(
             raw_before, raw_after,
@@ -605,70 +603,68 @@ mod tests {
         // ...while the written form is byte-identical, row for row.
         for (i, k) in keys_before.iter().enumerate() {
             assert_eq!(
-                &adm.encode_row(i).into_diagnostic()?,
+                &adm.encode_row(i).expect("lawful"),
                 k,
                 "the durable form moved with the seal"
             );
         }
-        Ok(())
     }
 
     /// The written form's byte order embeds elementwise tuple order.
     #[test]
-    fn encoded_key_order_is_tuple_semantic_order() -> Result<()> {
+    fn encoded_key_order_is_tuple_semantic_order() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         let tuples: [(i64, &str); 5] = [(3, "b"), (1, "zzz"), (3, "a"), (-5, "x"), (1, "a")];
         for (n, s) in tuples {
-            let a = stamp_of(&mut arena, Datum::Num(Num::int(n)))?;
-            let b = stamp_of(&mut arena, Datum::Str(s))?;
-            rows.push_row(&[a, b]).into_diagnostic()?;
+            let a = stamp_of(&mut arena, Datum::Num(Num::int(n)));
+            let b = stamp_of(&mut arena, Datum::Str(s));
+            rows.push_row(&[a, b]).expect("lawful push");
         }
         let f = arena.frame();
-        let adm = rows.admit(&f).into_diagnostic()?;
+        let adm = rows.admit(&f).expect("lawful admit");
         for i in 0..adm.len() {
             for j in 0..adm.len() {
                 assert_eq!(
                     adm.encode_row(i)
-                        .into_diagnostic()?
-                        .cmp(&adm.encode_row(j).into_diagnostic()?),
-                    adm.cmp_rows(i, j).into_diagnostic()?,
+                        .expect("lawful")
+                        .cmp(&adm.encode_row(j).expect("lawful")),
+                    adm.cmp_rows(i, j).expect("lawful"),
                     "key byte order diverged from tuple order at ({i},{j})"
                 );
             }
         }
-        Ok(())
     }
 
     /// bytes → execution → bytes round-trips exactly; malformed keys
     /// refuse without partial pushes.
     #[test]
-    fn push_encoded_round_trips_and_refuses_totally() -> Result<()> {
+    fn push_encoded_round_trips_and_refuses_totally() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
-        let a = stamp_of(&mut arena, Datum::Num(Num::int(42)))?;
-        let b = stamp_of(&mut arena, Datum::Str("hello"))?;
-        rows.push_row(&[a, b]).into_diagnostic()?;
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
+        let a = stamp_of(&mut arena, Datum::Num(Num::int(42)));
+        let b = stamp_of(&mut arena, Datum::Str("hello"));
+        rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
             rows.admit(&f)
-                .into_diagnostic()?
+                .expect("lawful admit")
                 .encode_row(0)
-                .into_diagnostic()?
+                .expect("lawful")
         };
         // Re-enter through the bytes door.
-        let mut rows2 = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
-        rows2.push_encoded(&key, &mut arena).into_diagnostic()?;
+        let mut rows2 = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
+        rows2.push_encoded(&key, &mut arena).expect("lawful key");
         {
             let f = arena.frame();
-            let adm2 = rows2.admit(&f).into_diagnostic()?;
+            let adm2 = rows2.admit(&f).expect("lawful admit");
             assert_eq!(
-                adm2.encode_row(0).into_diagnostic()?,
+                adm2.encode_row(0).expect("lawful"),
                 key,
                 "bytes door changed the tuple"
             );
             // Same epoch + arena dedup ⟹ same codes: tuple identity holds.
-            let adm = rows.admit(&f).into_diagnostic()?;
+            let adm = rows.admit(&f).expect("lawful admit");
             assert_eq!(adm.row(0), adm2.row(0));
         }
         // Truncated key: typed refusal, nothing pushed.
@@ -681,7 +677,6 @@ mod tests {
         fat.push(0x05);
         assert!(rows2.push_encoded(&TupleKey(fat), &mut arena).is_err());
         assert_eq!(rows2.len(), before);
-        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -691,13 +686,13 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn fixpoint_choreography_law() -> Result<()> {
+    fn fixpoint_choreography_law() {
         let mut arena = Arena::new();
         let epoch0 = arena.epoch();
         // Seed relation: reach(x) for x in {0}; rule: reach(x+3) up to 12.
         let mut total = Rows::new_in(Arity::ONE, &arena.frame());
-        let seed = stamp_of(&mut arena, Datum::Num(Num::int(0)))?;
-        total.push_row(&[seed]).into_diagnostic()?;
+        let seed = stamp_of(&mut arena, Datum::Num(Num::int(0)));
+        total.push_row(&[seed]).expect("lawful push");
         let mut frontier: Vec<Vec<u8>> = vec![encode(Datum::Num(Num::int(0))).as_bytes().to_vec()];
         let mut rounds = 0;
         while !frontier.is_empty() {
@@ -706,20 +701,20 @@ mod tests {
             // intern them (frame necessarily closed: intern is &mut).
             let mut fresh: Vec<StampedCode> = Vec::new();
             for bytes in frontier.drain(..) {
-                let (datum, _) = decode_one(&bytes).into_diagnostic()?;
+                let (datum, _) = decode_one(&bytes).expect("lawful");
                 let n = match datum {
-                    super::super::DataValue::Num(n) => n.as_int().ok_or_else(|| miette!("int domain"))?,
+                    super::super::DataValue::Num(n) => n.as_int().expect("int domain"),
                     other @ (data_value_any!()) => panic!("wrong kind: {other:?}"),
                 };
                 if n + 3 <= 12 {
-                    fresh.push(stamp_of(&mut arena, Datum::Num(Num::int(n + 3)))?);
+                    fresh.push(stamp_of(&mut arena, Datum::Num(Num::int(n + 3))));
                 }
             }
             // READ PHASE: dedup the derived tuples against the total by
             // raw-code identity under one admitted domain, then extend.
             let novel: Vec<StampedCode> = {
                 let f = arena.frame();
-                let adm = total.admit(&f).into_diagnostic()?;
+                let adm = total.admit(&f).expect("lawful admit");
                 let existing: std::collections::BTreeSet<u32> = adm.raw().iter().copied().collect();
                 fresh
                     .into_iter()
@@ -727,10 +722,10 @@ mod tests {
                     .collect()
             };
             for sc in &novel {
-                total.push_row(&[*sc]).into_diagnostic()?;
+                total.push_row(&[*sc]).expect("lawful push");
                 let f = arena.frame();
-                let adm = total.admit(&f).into_diagnostic()?;
-                frontier.push(adm.resolve_cell(adm.len() - 1, 0).into_diagnostic()?.to_vec());
+                let adm = total.admit(&f).expect("lawful admit");
+                frontier.push(adm.resolve_cell(adm.len() - 1, 0).expect("lawful").to_vec());
             }
             assert_eq!(arena.epoch(), epoch0, "no seal mid-fixpoint");
             assert!(rounds < 32, "fixpoint diverged");
@@ -739,66 +734,64 @@ mod tests {
         assert_eq!(total.len(), 5);
         let keys_at_fixpoint: Vec<TupleKey> = {
             let f = arena.frame();
-            let adm = total.admit(&f).into_diagnostic()?;
+            let adm = total.admit(&f).expect("lawful admit");
             (0..adm.len())
-                .map(|i| adm.encode_row(i).into_diagnostic()?)
+                .map(|i| adm.encode_row(i).expect("lawful"))
                 .collect()
         };
         // COMMIT BOUNDARY: seal once, gather the held container, and the
         // durable form is untouched.
-        let remap = arena.seal().into_diagnostic()?;
-        let total = total.gather(&remap).into_diagnostic()?;
+        let remap = arena.seal().expect("lawful seal");
+        let total = total.gather(&remap).expect("lawful gather");
         let f = arena.frame();
-        let adm = total.admit(&f).into_diagnostic()?;
+        let adm = total.admit(&f).expect("lawful admit");
         for (i, k) in keys_at_fixpoint.iter().enumerate() {
-            assert_eq!(&adm.encode_row(i).into_diagnostic()?, k);
+            assert_eq!(&adm.encode_row(i).expect("lawful"), k);
         }
-        Ok(())
     }
 
     /// The storage door: stored bytes become a key only by proving the
     /// split; garbage and wrong-arity bytes refuse typed.
     #[test]
-    fn from_stored_is_a_validating_door() -> Result<()> {
+    fn from_stored_is_a_validating_door() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
-        let a = stamp_of(&mut arena, Datum::Num(Num::int(1)))?;
-        let b = stamp_of(&mut arena, Datum::Str("s"))?;
-        rows.push_row(&[a, b]).into_diagnostic()?;
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
+        let a = stamp_of(&mut arena, Datum::Num(Num::int(1)));
+        let b = stamp_of(&mut arena, Datum::Str("s"));
+        rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
             rows.admit(&f)
-                .into_diagnostic()?
+                .expect("lawful admit")
                 .encode_row(0)
-                .into_diagnostic()?
+                .expect("lawful")
         };
         // Lawful bytes round-trip through the storage door.
-        let reclaimed = TupleKey::from_stored(key.as_bytes().to_vec(), 2).into_diagnostic()?;
+        let reclaimed = TupleKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
         assert_eq!(reclaimed, key);
         // Wrong arity, garbage, truncation: typed refusals.
         assert!(TupleKey::from_stored(key.as_bytes().to_vec(), 3).is_err());
         assert!(TupleKey::from_stored(vec![0xEE, 0x00], 1).is_err());
         assert!(TupleKey::from_stored(key.as_bytes()[..key.len() - 1].to_vec(), 2).is_err());
-        Ok(())
     }
 
     /// Storage ingestion refuses stale/foreign containers with typed
     /// errors, never panics.
     #[test]
-    fn push_encoded_refuses_stale_and_foreign_domains_typed() -> Result<()> {
+    fn push_encoded_refuses_stale_and_foreign_domains_typed() {
         let mut arena = Arena::new();
         let mut rows = Rows::new_in(Arity::ONE, &arena.frame());
-        let a = stamp_of(&mut arena, Datum::Num(Num::int(9)))?;
-        rows.push_row(&[a]).into_diagnostic()?;
+        let a = stamp_of(&mut arena, Datum::Num(Num::int(9)));
+        rows.push_row(&[a]).expect("lawful push");
         let key = {
             let f = arena.frame();
             rows.admit(&f)
-                .into_diagnostic()?
+                .expect("lawful admit")
                 .encode_row(0)
-                .into_diagnostic()?
+                .expect("lawful")
         };
         // Stale: the container predates the seal.
-        arena.seal().into_diagnostic()?;
+        arena.seal().expect("lawful seal");
         assert!(matches!(
             rows.push_encoded(&key, &mut arena),
             Err(PushError::StaleDomain { .. })
@@ -813,13 +806,12 @@ mod tests {
         match other.epoch() {
             epoch => core::mem::drop(epoch),
         }
-        Ok(())
     }
 
     /// The exhaustion door: ids at/beyond the cap refuse at decode, so
     /// the allocator's ceiling cannot be bypassed by stored counter bytes.
     #[test]
-    fn relation_id_cap_is_enforced_at_decode() -> Result<()> {
+    fn relation_id_cap_is_enforced_at_decode() {
         assert_eq!(
             RelationId::raw_decode(&7u64.to_be_bytes()),
             Ok(RelationId(7))
@@ -830,7 +822,7 @@ mod tests {
         // Every assignable prefix stays below the 0xFF bound byte.
         assert!(
             RelationId::new(RelationId::CAP - 1)
-                .into_diagnostic()?
+                .expect("last assignable")
                 .raw_encode()[0]
                 < 0xFF
         );
@@ -840,19 +832,18 @@ mod tests {
         // Allocator step cannot skip the ceiling either.
         assert!(
             RelationId::new(RelationId::CAP - 1)
-                .into_diagnostic()?
+                .expect("last assignable")
                 .next()
                 .is_none()
         );
-        Ok(())
     }
 
     /// The scan-key sentinel law: lower <= every key of matching rows
     /// <= upper, for value bounds and both sentinels.
     #[test]
-    fn scan_keys_bracket_matching_rows() -> Result<()> {
+    fn scan_keys_bracket_matching_rows() {
         use super::super::ScanBound;
-        let rel = RelationId::new(7).into_diagnostic()?;
+        let rel = RelationId::new(7).expect("below cap");
         let rows: Vec<Vec<DataValue>> = vec![
             vec![DataValue::from(0i64), DataValue::from("a")],
             vec![DataValue::from(0i64), DataValue::from("zz")],
@@ -874,7 +865,7 @@ mod tests {
             assert!(lo.as_slice() <= k.as_slice() && k.as_slice() <= hi.as_slice());
         }
         // Next relation's keys fall outside.
-        let foreign = rows[0].encode_as_key(RelationId::new(8).into_diagnostic()?);
+        let foreign = rows[0].encode_as_key(RelationId::new(8).expect("below cap"));
         assert!(foreign.as_bytes() > hi.as_slice());
         // Projected == materialized.
         let row = vec![DataValue::from("x"), DataValue::from(0i64)];
@@ -882,35 +873,33 @@ mod tests {
             scan_key_lower_projected(rel, &row, &[1], &[]),
             scan_key_lower(rel, &row[1..2], &[])
         );
-        Ok(())
     }
 
     /// The fixed slot widths the storage layout constants promise are
     /// exactly what the codec produces.
     #[test]
-    fn validity_slot_width_is_pinned() -> Result<()> {
+    fn validity_slot_width_is_pinned() {
         use super::super::kind::validity::{Validity, ValiditySlot, ValidityTs};
         let enc = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
             ValiditySlot::Value(
-                Validity::new(ValidityTs::from_raw(123), true).into_diagnostic()?,
+                Validity::new(ValidityTs::from_raw(123), true).expect("non-reserved"),
             ),
         ));
         assert_eq!(enc.len(), StorageKey::VALIDITY_TAIL_LEN);
         let enc2 = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
             ValiditySlot::Value(
                 Validity::new(ValidityTs::from_raw(i64::MIN), false)
-                    .into_diagnostic()?,
+                    .expect("retract admits every tick"),
             ),
         ));
         assert_eq!(enc2.len(), StorageKey::VALIDITY_TAIL_LEN);
-        Ok(())
     }
 
     #[test]
-    fn arity_is_enforced_at_the_write_door() -> Result<()> {
+    fn arity_is_enforced_at_the_write_door() {
         let mut arena = Arena::new();
-        let sc = stamp_of(&mut arena, Datum::Null)?;
-        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &arena.frame());
+        let sc = stamp_of(&mut arena, Datum::Null);
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         assert!(
             matches!(
                 rows.push_row(&[sc]),
@@ -921,6 +910,5 @@ mod tests {
             ),
             "wrong-width push must refuse typed — never abort"
         );
-        Ok(())
     }
 }

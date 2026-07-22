@@ -233,8 +233,6 @@ impl CompiledRegexV1 {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
-
     use super::*;
 
     #[test]
@@ -249,26 +247,24 @@ mod tests {
     }
 
     #[test]
-    fn writer_door_refuses_nonsense_at_construction() -> Result<()> {
+    fn writer_door_refuses_nonsense_at_construction() {
         assert!(RegexSource::validated(RegexFlags::NONE, "a+".into()).is_ok());
         assert!(RegexSource::validated(RegexFlags::NONE, "(?i)foo".into()).is_ok());
         assert!(RegexSource::validated(RegexFlags::NONE, "(".into()).is_err());
         assert!(RegexSource::validated(RegexFlags::NONE, "a{2,1}".into()).is_err());
-        Ok(())
     }
 
     #[test]
-    fn execution_witness_carries_flag_semantics_and_refuses_bad_sources() -> Result<()> {
-        let ci = RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).into_diagnostic()?;
-        assert!(ci.compile().into_diagnostic()?.is_match("FOO"));
-        let cs = RegexSource::validated(RegexFlags::NONE, "foo".into()).into_diagnostic()?;
-        assert!(!cs.compile().into_diagnostic()?.is_match("FOO"));
+    fn execution_witness_carries_flag_semantics_and_refuses_bad_sources() {
+        let ci = RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).unwrap();
+        assert!(ci.compile().unwrap().is_match("FOO"));
+        let cs = RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap();
+        assert!(!cs.compile().unwrap().is_match("FOO"));
         // A stored-identity source that does not parse (hostile bytes, or
         // a pattern from an older accepted grammar) refuses at the
         // execution door instead of matching garbage.
         let hostile = RegexSource::from_stored(RegexFlags::NONE, "(".into());
         assert!(hostile.compile().is_err());
-        Ok(())
     }
 
     #[test]
@@ -282,17 +278,16 @@ mod tests {
     }
 
     #[test]
-    fn flag_and_inline_pattern_are_distinct_identities() -> Result<()> {
+    fn flag_and_inline_pattern_are_distinct_identities() {
         use super::super::super::canonical::{Datum, encode};
-        let flagged = RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).into_diagnostic()?;
-        let inlined = RegexSource::validated(RegexFlags::NONE, "(?i)foo".into()).into_diagnostic()?;
+        let flagged = RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).unwrap();
+        let inlined = RegexSource::validated(RegexFlags::NONE, "(?i)foo".into()).unwrap();
         assert_ne!(
             encode(Datum::Regex(&flagged)),
             encode(Datum::Regex(&inlined))
         );
         // Storage order: flags byte first, then pattern bytes.
-        let plain = RegexSource::validated(RegexFlags::NONE, "zzz".into()).into_diagnostic()?;
+        let plain = RegexSource::validated(RegexFlags::NONE, "zzz".into()).unwrap();
         assert!(encode(Datum::Regex(&plain)) < encode(Datum::Regex(&flagged)));
-        Ok(())
     }
 }

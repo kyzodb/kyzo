@@ -574,6 +574,34 @@ fn expected_is_scan(target: f64) -> bool {
 /// THE GATE. The filter-aware path meets or beats the pinned draft baseline at
 /// every band, and is EXACT (recall 1.0 / count 1.0) in the scan bands — the
 /// bands where the old post-filter returned as little as zero of k.
+
+/// One selectivity band of the filter-aware recall sweep (gate + measurement rig).
+fn filter_aware_band_metrics(
+    rtx: &impl ReadTx,
+    q: &Vector,
+    m: &HnswIndexManifest,
+    base: &RelationHandle,
+    idx: &RelationHandle,
+    rows: &[Tuple],
+    target: f64,
+) -> (f64, f64, usize, Option<SearchPlan>) {
+    let f = filter_at_selectivity(
+        target,
+        match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
+            Some(i) => i,
+            None => 0,
+        } % 2
+            == 0,
+    );
+    let truth = brute_force_filtered_knn(q, P2_K, &f, rows, m);
+    let plan = selected_plan(rtx, q, m, base, idx, P2_K, P2_EF, &f);
+    let hits = filtered_search(rtx, q, m, base, idx, P2_K, P2_EF, &f);
+    let ekeys = keys_of(&hits);
+    let r = recall_at_k(&ekeys, &truth, P2_K);
+    let cr = count_recall(&ekeys, &truth, P2_K);
+    (r, cr, hits.len(), plan)
+}
+
 #[test]
 fn filter_aware_recall_meets_or_beats_baseline() {
     let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED);
@@ -584,14 +612,8 @@ fn filter_aware_recall_meets_or_beats_baseline() {
     let q = seeded_query(P2_DIM, P2_QUERY_SEED);
 
     for (target, base_recall, base_count) in PINNED_BASELINE {
-        // Alternate the accepted-set shape across the sweep: half the
-        // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
-        let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
-        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
-        let ekeys = keys_of(&hits);
-        let r = recall_at_k(&ekeys, &truth, P2_K);
-        let cr = count_recall(&ekeys, &truth, P2_K);
+        let (r, cr, n_hits, _plan) =
+            filter_aware_band_metrics(&rtx, &q, &m, &base, &idx, &rows, target);
 
         assert!(
             r >= base_recall - 1e-9,
@@ -608,7 +630,7 @@ fn filter_aware_recall_meets_or_beats_baseline() {
             );
         }
         // Results must be nearest-first and never exceed k.
-        assert!(hits.len() <= P2_K, "band {target}: over-k result set");
+        assert!(n_hits <= P2_K, "band {target}: over-k result set");
     }
 }
 
@@ -1023,15 +1045,6 @@ fn min_k_matches_tiny_match_sets() {
     }
 }
 
-/// A corpus of two well-separated clusters: keys `0..half` are a "near"
-/// cluster around the origin, keys `half..n` are the SAME random spread
-/// translated `+40` in every dimension — a "far" cluster with no vector-space
-/// overlap with the near one. Returns `(n, half, rows)`.
-///
-/// Thin wrapper over [`near_far_cluster_corpus_n`] at the Phase-2 standard `N`.
-fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
-    near_far_cluster_corpus_n(dim, P2_N)
-}
 
 /// Parameterized near/far cluster corpus (shared by Phase-2 and T13).
 fn near_far_cluster_corpus_n(dim: usize, n: i64) -> (i64, i64, Vec<Tuple>) {
@@ -1070,7 +1083,7 @@ fn near_far_cluster_corpus_n(dim: usize, n: i64) -> (i64, i64, Vec<Tuple>) {
 #[test]
 fn min_k_matches_disconnected_from_entry_region() {
     let dim = 16;
-    let (n, half, rows) = near_far_cluster_corpus(dim);
+    let (n, half, rows) = near_far_cluster_corpus_n(dim, P2_N);
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
@@ -1121,7 +1134,7 @@ fn min_k_matches_disconnected_from_entry_region() {
 #[test]
 fn graph_walk_alone_crosses_to_disconnected_matches_without_fallback() {
     let dim = 16;
-    let (_n, half, rows) = near_far_cluster_corpus(dim);
+    let (_n, half, rows) = near_far_cluster_corpus_n(dim, P2_N);
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
@@ -1549,9 +1562,6 @@ fn t13_band_accept(target: f64, n: i64) -> i64 {
     }
 }
 
-fn t13_near_far(dim: usize, n: i64) -> (i64, i64, Vec<Tuple>) {
-    near_far_cluster_corpus_n(dim, n)
-}
 
 /// Commit-per-remove: batching many `hnsw_remove` calls in one write TX hits
 /// "neighbour has no node row" when two deleted vectors share an edge.
@@ -1574,7 +1584,7 @@ fn t13_remove_committed(
 #[test]
 fn t13_acorn_entry_neighbourhood_excluded_still_finds_matches() {
     let dim = T13_DIM;
-    let (_n, half, rows) = t13_near_far(dim, T13_N);
+    let (_n, half, rows) = near_far_cluster_corpus_n(dim, T13_N);
     let dir = t13_ok(tempfile::tempdir(), "tempdir");
     let db = t13_ok(new_fjall_storage(dir.path()), "open store");
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
@@ -1690,7 +1700,7 @@ fn t13_delete_then_search_never_returns_deleted_id_after_reopen() {
 #[test]
 fn t13_connectivity_under_interleaved_insert_delete_reopen() {
     let dim = T13_DIM;
-    let (n, half, mut live_rows) = t13_near_far(dim, T13_N);
+    let (n, half, mut live_rows) = near_far_cluster_corpus_n(dim, T13_N);
     let dir = t13_ok(tempfile::tempdir(), "tempdir");
     let path = dir.path().to_path_buf();
     let mut deleted: FxHashSet<i64> = FxHashSet::default();
@@ -1807,16 +1817,17 @@ fn filter_aware_recall_table() {
 
     eprintln!("  sel  match  plan     recall@k  count  | baseline r/c");
     for (target, br, bc) in PINNED_BASELINE {
-        // Alternate the accepted-set shape across the sweep: half the
-        // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
+        let f = filter_at_selectivity(
+            target,
+            match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() {
+                Some(i) => i,
+                None => 0,
+            } % 2
+                == 0,
+        );
         let matches = f.true_match_count(&rows);
-        let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
-        let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
-        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
-        let ekeys = keys_of(&hits);
-        let r = recall_at_k(&ekeys, &truth, P2_K);
-        let cr = count_recall(&ekeys, &truth, P2_K);
+        let (r, cr, _n_hits, plan) =
+            filter_aware_band_metrics(&rtx, &q, &m, &base, &idx, &rows, target);
         eprintln!("{target:>5.2} {matches:>6}  {plan:?}   {r:>7.3} {cr:>6.3}  |  {br:.3}/{bc:.3}");
     }
 }

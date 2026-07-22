@@ -72,8 +72,8 @@ fn corpus() -> Result<Vec<DataValue>> {
         ))),
         DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "^a.*b$".into()).into_diagnostic()?),
         DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "x+".into()).into_diagnostic()?),
-        DataValue::Vector(Vector::try_new(vec![0.0, -0.0, 1.0]).ok_or_else(|| miette!("try_new"))?),
-        DataValue::Vector(Vector::try_new(vec![-1.5, 2.5]).ok_or_else(|| miette!("try_new"))?),
+        DataValue::Vector(Vector::try_new(vec![0.0, -0.0, 1.0]).ok_or_else(|| miette!("vector"))?),
+        DataValue::Vector(Vector::try_new(vec![-1.5, 2.5]).ok_or_else(|| miette!("vector"))?),
         DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(0), true)),
         DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(1), false)),
         DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed(1))),
@@ -138,7 +138,7 @@ fn law2_order_embedding_corpus_pairwise() -> Result<()> {
 /// Deterministic corruption harness: every single-byte mutation of every
 /// corpus encoding must decode to an error or a value — never a panic.
 #[test]
-fn law3_byte_flip_harness() {
+fn law3_byte_flip_harness() -> Result<()> {
     for v in corpus()? {
         let buf = encode(&v);
         for i in 0..buf.len() {
@@ -152,12 +152,13 @@ fn law3_byte_flip_harness() {
             }
         }
     }
+    Ok(())
 }
 
 #[test]
 fn law_vector_signed_zero_canonicalizes() -> Result<()> {
-    let a = DataValue::Vector(Vector::try_new(vec![-0.0]).ok_or_else(|| miette!("try_new"))?);
-    let b = DataValue::Vector(Vector::try_new(vec![0.0]).ok_or_else(|| miette!("try_new"))?);
+    let a = DataValue::Vector(Vector::try_new(vec![-0.0]).ok_or_else(|| miette!("vector"))?);
+    let b = DataValue::Vector(Vector::try_new(vec![0.0]).ok_or_else(|| miette!("vector"))?);
     assert_eq!(encode(&a), encode(&b), "signed zero must canonicalize");
     Ok(())
 }
