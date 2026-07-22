@@ -319,12 +319,12 @@ impl RawVersion {
 /// `RelationHandle::keyspace_lower`/`keyspace_upper` (`runtime/relation.rs`,
 /// private methods in a file this story does not touch — see the module
 /// doc) rather than exposing them; the computation itself
-/// (`Tuple::default()` encoded under the relation's id, and the next
+/// (`Tuple::new()` encoded under the relation's id, and the next
 /// relation id's raw prefix as the exclusive upper bound) is a few lines
 /// of the same public encoding API every caller of this module already
 /// uses.
 pub(crate) fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Vec<u8>) {
-    let lower = Tuple::default()
+    let lower = Tuple::new()
         .encode_as_key(storage.id)
         .as_bytes()
         .to_vec();

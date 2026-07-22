@@ -216,7 +216,6 @@ impl Num {
                     Magnitude::Finite { exp_key, frac72 } => {
                         // exp_key was proven at Magnitude construction
                         // (E ∈ [-1073, 1024] ⇒ biased ∈ [7, 2104] ⊂ u16).
-                        debug_assert!(exp_key < EXP_INF);
                         out.extend_from_slice(&exp_key.to_be_bytes());
                         let fb = frac72.to_be_bytes(); // 16 bytes; the low 9 hold the 72-bit field
                         out.extend_from_slice(&fb[7..16]);
@@ -376,8 +375,8 @@ impl Num {
     /// Sign and normalized magnitude of a nonzero, non-NaN number.
     fn sign_magnitude(self) -> (bool, Magnitude) {
         match self.0 {
+            Repr::Int(0) => (false, Magnitude::finite(0, 0)),
             Repr::Int(v) => {
-                debug_assert!(v != 0);
                 let neg = v < 0;
                 let m = v.unsigned_abs();
                 let bl = 64 - m.leading_zeros();
@@ -388,8 +387,8 @@ impl Num {
                 let frac72 = u128::from(m) << (72 - bl);
                 (neg, Magnitude::finite(e, frac72))
             }
+            Repr::Float(v) if v == 0.0 || v.is_nan() => (false, Magnitude::finite(0, 0)),
             Repr::Float(v) => {
-                debug_assert!(v != 0.0 && !v.is_nan());
                 let neg = v < 0.0;
                 if v.is_infinite() {
                     return (neg, Magnitude::Inf);
@@ -461,14 +460,12 @@ impl Magnitude {
         // INVARIANT(NumExpBias): e ∈ [-1073, 1024] by the finite-magnitude door;
         // wrap adds EXP_OFFSET into the proven u16 biased-exponent range.
         let biased = (std::num::Wrapping(e) + std::num::Wrapping(EXP_OFFSET)).0;
-        debug_assert!((7..=2104).contains(&biased));
-        Magnitude::Finite {
-            exp_key: match u16::try_from(biased) {
-                Ok(v) => v,
-                Err(_) => 0,
-            },
-            frac72,
-        }
+        let exp_key = match u16::try_from(biased) {
+            Ok(v) if (7..=2104).contains(&biased) && v < EXP_INF => v,
+            Ok(_out_of_key_range) => 0,
+            Err(_gt_u16) => 0,
+        };
+        Magnitude::Finite { exp_key, frac72 }
     }
 }
 

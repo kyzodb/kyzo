@@ -480,7 +480,7 @@ mod tests {
 
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
         (
-            Tuple::default().encode_as_key(REL).as_bytes().to_vec(),
+            Tuple::new().encode_as_key(REL).as_bytes().to_vec(),
             (REL.raw() + 1).to_be_bytes().to_vec(),
         )
     }

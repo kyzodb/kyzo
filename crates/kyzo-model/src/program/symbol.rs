@@ -73,7 +73,7 @@ pub enum SymbolKind {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Symbol {
     pub name: SmartString<LazyCompact>,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 

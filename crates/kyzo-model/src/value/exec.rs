@@ -148,11 +148,12 @@ impl ExecRows {
             let Some(matches) = index.get(&key) else {
                 continue;
             };
-            debug_assert!(
-                matches
-                    .iter()
-                    .all(|&rr| ctx.same_handle(Code(key), Code(other.row(rr)[other_col])))
-            );
+            if !matches
+                .iter()
+                .all(|&rr| ctx.same_handle(Code(key), Code(other.row(rr)[other_col])))
+            {
+                return Err(Denial::BookkeepingBroken);
+            }
             for &rr in matches {
                 for &(side, col) in out {
                     let code = match side {

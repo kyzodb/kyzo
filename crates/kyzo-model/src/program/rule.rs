@@ -46,12 +46,16 @@ use crate::value::{AsOf, DataValue, ValidityTs};
 /// `*` classifies as generated and `~` as generated-ignored, and neither is
 /// a valid user identifier in the grammar, so generated names can never
 /// collide with user names.
-#[derive(Default)]
 pub struct TempSymbGen {
     last_id: u32,
 }
 
 impl TempSymbGen {
+    /// Fresh generator; next id is 1.
+    pub fn new() -> Self {
+        Self { last_id: 0 }
+    }
+
     /// A fresh generated binding (`*n`).
     pub fn next(&mut self, span: SourceSpan) -> Symbol {
         self.last_id += 1;
@@ -126,10 +130,20 @@ pub struct Comment {
 /// comment sharing the position's own last source line after it
 /// (`trailing`, in source order). Attached once by
 /// [`InputProgram::attach_comment_trivia`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trivia {
     pub leading: Vec<Comment>,
     pub trailing: Vec<Comment>,
+}
+
+impl Trivia {
+    /// No attached comments.
+    pub fn empty() -> Self {
+        Self {
+            leading: Vec::new(),
+            trailing: Vec::new(),
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -213,9 +227,9 @@ pub struct InputInlineRule {
     pub head: Vec<Symbol>,
     pub aggr: Vec<HeadAggrSlot>,
     pub body: Vec<InputAtom>,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-    #[serde(skip)]
+    #[serde(skip, default = "Trivia::empty")]
     pub trivia: Trivia,
 }
 
@@ -270,7 +284,7 @@ pub struct UnknownFixedRuleOption {
 /// Proven fixed-rule options bag: every key resolved through
 /// [`resolve_fixed_rule_option`]. Identity keys are [`Symbol`]; an unknown
 /// name cannot enter this type.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FixedRuleOptions {
     entries: BTreeMap<Symbol, Expr>,
 }
@@ -310,7 +324,7 @@ impl FixedRuleOptions {
     }
 
     pub fn get(&self, name: &str) -> Option<&Expr> {
-        self.entries.get(&Symbol::new(name, SourceSpan::default()))
+        self.entries.get(&Symbol::new(name, SourceSpan::empty()))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Expr)> {
@@ -357,9 +371,9 @@ pub struct FixedRuleApply {
     pub head: Vec<Symbol>,
     /// Declaration arity — the one authority; [`Self::arity`] returns it.
     pub arity: usize,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-    #[serde(skip)]
+    #[serde(skip, default = "Trivia::empty")]
     pub trivia: Trivia,
 }
 
@@ -388,21 +402,21 @@ pub enum FixedRuleArg {
     InMem {
         name: Symbol,
         bindings: Vec<Symbol>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Stored {
         name: Symbol,
         bindings: Vec<Symbol>,
         as_of: Option<AsOf>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     NamedStored {
         name: Symbol,
         bindings: BTreeMap<Symbol, Symbol>,
         as_of: Option<AsOf>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
 }
@@ -460,17 +474,17 @@ pub enum InputAtom {
     },
     Negation {
         inner: Box<InputAtom>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Conjunction {
         inner: Vec<InputAtom>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Disjunction {
         inner: Vec<InputAtom>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// `x = y` or `x in y`
@@ -650,7 +664,7 @@ pub struct UnknownSearchModalityOption {
 /// Extensible by appending `SEARCH_OPT_*` in `program/op.rs`. Spatial /
 /// sparse names are [OPEN] cross-story dep #249 T1 / #353 — land when
 /// engine `SearchConfig` gains those variants; until then unknown names refuse.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchModalityOptions {
     entries: BTreeMap<Symbol, Expr>,
 }
@@ -690,7 +704,7 @@ impl SearchModalityOptions {
     }
 
     pub fn get(&self, name: &str) -> Option<&Expr> {
-        self.entries.get(&Symbol::new(name, SourceSpan::default()))
+        self.entries.get(&Symbol::new(name, SourceSpan::empty()))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Expr)> {
@@ -758,7 +772,7 @@ pub struct SearchInput {
     pub query: Expr,
     pub filter: SearchFilter,
     pub modality: SearchModalityOptions,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
@@ -801,7 +815,7 @@ impl SearchInput {
 pub struct InputRuleApplyAtom {
     pub name: Symbol,
     pub args: Vec<Expr>,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
@@ -849,7 +863,7 @@ pub struct InputNamedFieldRelationApplyAtom {
     pub name: Symbol,
     pub args: BTreeMap<Symbol, Expr>,
     pub validity: Option<ValidityClause>,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
@@ -859,7 +873,7 @@ pub struct InputRelationApplyAtom {
     pub name: Symbol,
     pub args: Vec<Expr>,
     pub validity: Option<ValidityClause>,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
@@ -870,7 +884,7 @@ pub struct Unification {
     pub expr: Expr,
     /// If false, `=`; if true, `in`.
     pub one_many_unif: bool,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
@@ -976,11 +990,11 @@ impl InputProgram {
             }
         }
         let (entry_name, entry) = prog
-            .remove_entry(&Symbol::prog_entry(SourceSpan::default()))
+            .remove_entry(&Symbol::prog_entry(SourceSpan::empty()))
             .ok_or_else(|| {
                 let span = match prog.keys().next() {
                     Some(s) => s.span,
-                    None => SourceSpan::default(),
+                    None => SourceSpan::empty(),
                 };
                 NoEntry(Some(span))
             })?;

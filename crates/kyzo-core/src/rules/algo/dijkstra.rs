@@ -580,7 +580,7 @@ mod tests {
                 SmartString::from("keep_ties"),
                 Expr::Const {
                     val: DataValue::from(true),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             )]))?,
             CancelFlag::inert(),
@@ -627,7 +627,7 @@ mod tests {
                 SmartString::from("keep_ties"),
                 Expr::Const {
                     val: DataValue::from(true),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             )]))?,
             CancelFlag::inert(),

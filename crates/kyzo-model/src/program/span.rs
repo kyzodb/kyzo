@@ -23,8 +23,15 @@
 ///
 /// Spans survive every pipeline stage — a compiled plan can still point at
 /// the exact characters responsible for a runtime error.
-#[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceSpan(pub usize, pub usize);
+
+impl SourceSpan {
+    /// The empty span at offset 0 — used when no source location is known.
+    pub const fn empty() -> Self {
+        SourceSpan(0, 0)
+    }
+}
 
 impl std::fmt::Debug for SourceSpan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

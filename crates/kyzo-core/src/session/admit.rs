@@ -35,7 +35,7 @@
 use std::collections::BTreeSet;
 
 use itertools::Itertools;
-use miette::{Diagnostic, Result, WrapErr, bail};
+use miette::{ensure, Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -306,15 +306,16 @@ impl LiveAdmissionSeats {
         let write_token = *sealed.write_authority().token_id();
 
         // Distinct OS entropy — never derived from write_token / token_id.
+        // Remint until the verifying id is not the raw seed bytes.
         let mut signing_seed = [0u8; 32];
-        rand::rng().fill_bytes(&mut signing_seed);
-        let origin_key = AuthorizingKey::mint_with_verifying_id(signing_seed);
-        let authorizing_key_id = origin_key.id();
-        debug_assert_ne!(
-            *authorizing_key_id.as_bytes(),
-            signing_seed,
-            "authorizing_key_id must not equal signing seed"
-        );
+        let (origin_key, authorizing_key_id) = loop {
+            rand::rng().fill_bytes(&mut signing_seed);
+            let origin_key = AuthorizingKey::mint_with_verifying_id(signing_seed);
+            let authorizing_key_id = origin_key.id();
+            if *authorizing_key_id.as_bytes() != signing_seed {
+                break (origin_key, authorizing_key_id);
+            }
+        };
 
         let scope_manifest_digest = genesis_scope_manifest_digest(
             store_id,
@@ -2114,7 +2115,7 @@ impl<T: WriteTx> SessionTx<T> {
                 .metadata
                 .keys
                 .iter()
-                .map(|k| Symbol::new(k.name.clone(), SourceSpan::default()))
+                .map(|k| Symbol::new(k.name.clone(), SourceSpan::empty()))
                 .collect_vec();
             let mut kv_bindings = k_bindings.clone();
             kv_bindings.extend(
@@ -2122,7 +2123,7 @@ impl<T: WriteTx> SessionTx<T> {
                     .metadata
                     .non_keys
                     .iter()
-                    .map(|k| Symbol::new(k.name.clone(), SourceSpan::default())),
+                    .map(|k| Symbol::new(k.name.clone(), SourceSpan::empty())),
             );
 
             if !relation_store.rm_triggers.is_empty() {
@@ -2380,14 +2381,14 @@ impl<T: WriteTx> SessionTx<T> {
             .metadata
             .keys
             .iter()
-            .map(|k| Symbol::new(k.name.clone(), SourceSpan::default()))
+            .map(|k| Symbol::new(k.name.clone(), SourceSpan::empty()))
             .collect_vec();
         kv_bindings.extend(
             relation_store
                 .metadata
                 .non_keys
                 .iter()
-                .map(|k| Symbol::new(k.name.clone(), SourceSpan::default())),
+                .map(|k| Symbol::new(k.name.clone(), SourceSpan::empty())),
         );
 
         if !relation_store.put_triggers.is_empty() {
@@ -2572,7 +2573,7 @@ impl<T: WriteTx> SessionTx<T> {
         valid: ValidityTs,
         stamp: ValidityTs,
     ) -> Result<()> {
-        let span = SourceSpan::default();
+        let span = SourceSpan::empty();
         let key = idx_handle.encode_bitemporal_key_for_store(idx_tup, valid, stamp, span)?;
         let val = idx_handle.encode_bitemporal_val_for_store(idx_tup, polarity, span)?;
         // The index relation is a mutated relation in its own right: its
@@ -2777,28 +2778,28 @@ pub(crate) fn make_const_rule(
     bindings: Vec<Symbol>,
     data: &[Tuple],
 ) -> Result<()> {
-    let rule_symbol = Symbol::new(rule_name, SourceSpan::default());
+    let rule_symbol = Symbol::new(rule_name, SourceSpan::empty());
     let mut options = FixedRuleOptions::empty();
     options.insert(
-        Symbol::new("data", SourceSpan::default()),
+        Symbol::new("data", SourceSpan::empty()),
         Expr::Const {
             val: DataValue::List(data.iter().map(|t| DataValue::List(t.to_vec())).collect()),
-            span: SourceSpan::default(),
+            span: SourceSpan::empty(),
         },
     )?;
-    let options = Constant.init_options(options, SourceSpan::default())?;
+    let options = Constant.init_options(options, SourceSpan::empty())?;
     let bindings_arity = bindings.len();
     program.insert_rule(
         rule_symbol,
         InputInlineRulesOrFixed::Fixed {
             fixed: FixedRuleApply {
-                fixed_handle: FixedRuleHandle::new("Constant", SourceSpan::default()),
+                fixed_handle: FixedRuleHandle::new("Constant", SourceSpan::empty()),
                 rule_args: vec![],
                 options,
                 head: bindings,
                 arity: bindings_arity,
-                span: SourceSpan::default(),
-                trivia: Trivia::default(),
+                span: SourceSpan::empty(),
+                trivia: Trivia::empty(),
             },
         },
     );
@@ -2807,7 +2808,7 @@ pub(crate) fn make_const_rule(
 
 #[cfg(test)]
 mod live_certificate_verifiability {
-    use miette::{Result, miette};
+    use miette::{ensure, Result, miette};
     use super::*;
     use crate::data::statement::{
         ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
@@ -3082,7 +3083,7 @@ mod live_certificate_verifiability {
 
 #[cfg(test)]
 mod access_level_mutation_refuse {
-    use miette::{Result, miette};
+    use miette::{ensure, Result, miette};
     use std::collections::BTreeMap;
 
     use crate::session::access::InsufficientAccessLevel;
@@ -3196,7 +3197,7 @@ mod access_level_mutation_refuse {
 
 #[cfg(test)]
 mod bulk_write_tests {
-    use miette::{Result, miette};
+    use miette::{ensure, Result, miette};
     use std::collections::BTreeMap;
 
     use fjall::Slice;
@@ -3483,7 +3484,7 @@ mod bulk_write_tests {
 
 #[cfg(test)]
 mod trigger_cache_battery {
-    use miette::{Result, miette};
+    use miette::{ensure, Result, miette};
     use std::collections::BTreeMap;
 
     use crate::data::json::NamedRows;

@@ -192,14 +192,14 @@ mod tests {
                     SmartString::from("condition"),
                     Expr::Const {
                         val: DataValue::from(true),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
                 (
                     SmartString::from("limit"),
                     Expr::Const {
                         val: DataValue::from(10i64),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
             ]))?,

@@ -30,7 +30,7 @@ use kyzo_oracle::SignedFact as OracleSignedFact;
 use kyzo_oracle::eval as laws;
 
 fn sym(name: &str) -> Symbol {
-    Symbol::new(name, SourceSpan::default())
+    Symbol::new(name, SourceSpan::empty())
 }
 fn v(i: i64) -> DataValue {
     DataValue::Num(Num::int(i))
@@ -301,7 +301,7 @@ fn rel_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
         name: sym(name),
         args: args.into_iter().map(sym).collect(),
         validity: None,
-        span: SourceSpan::default(),
+        span: SourceSpan::empty(),
     };
     if negated {
         MagicAtom::NegatedRelation(atom)
@@ -313,7 +313,7 @@ fn rule_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
     let atom = MagicRuleApplyAtom {
         name: muggle(name),
         args: args.into_iter().map(sym).collect(),
-        span: SourceSpan::default(),
+        span: SourceSpan::empty(),
     };
     if negated {
         MagicAtom::NegatedRule(atom)
@@ -326,10 +326,10 @@ fn const_unif(binding: &str, val: DataValue) -> MagicAtom {
         binding: sym(binding),
         expr: kyzo_model::program::expr::Expr::Const {
             val,
-            span: SourceSpan::default(),
+            span: SourceSpan::empty(),
         },
         one_many_unif: false,
-        span: SourceSpan::default(),
+        span: SourceSpan::empty(),
     })
 }
 fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
@@ -450,10 +450,10 @@ fn translate_refuses_fixed_rules() {
     let fixed_impl: std::sync::Arc<dyn FixedRule> =
         std::sync::Arc::new(SimpleFixedRule::new(0, EmptyNamedRowsBody));
     let fixed = MagicFixedRuleApply {
-        fixed_handle: FixedRuleHandle::new("?", SourceSpan::default()),
+        fixed_handle: FixedRuleHandle::new("?", SourceSpan::empty()),
         rule_args: vec![],
         options: kyzo_model::program::rule::FixedRuleOptions::empty(),
-        span: SourceSpan::default(),
+        span: SourceSpan::empty(),
         arity: 1,
         fixed_impl,
     };
@@ -474,7 +474,7 @@ fn translate_refuses_predicates_and_index_searches() {
                 rel_atom("p", vec!["X"], false),
                 MagicAtom::Predicate(kyzo_model::program::expr::Expr::Const {
                     val: DataValue::Bool(true),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 }),
             ],
         )],
@@ -498,10 +498,10 @@ fn translate_refuses_non_constant_unification() {
                     expr: kyzo_model::program::expr::Expr::Apply {
                         op: kyzo_model::program::op::OP_ADD,
                         args: Box::new([]),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                     one_many_unif: false,
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 }),
             ],
         )],

@@ -232,21 +232,21 @@ mod tests {
                 SmartString::from("content"),
                 Expr::Const {
                     val: DataValue::from(content),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
             (
                 SmartString::from("fields"),
                 Expr::Const {
                     val: DataValue::List(vec![DataValue::from("id"), DataValue::from("name")]),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
             (
                 SmartString::from("null_if_absent"),
                 Expr::Const {
                     val: DataValue::from(true),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
         ]))
@@ -292,14 +292,14 @@ mod tests {
                     SmartString::from("url"),
                     Expr::Const {
                         val: DataValue::from("file:///tmp/rows.jsonl"),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
                 (
                     SmartString::from("fields"),
                     Expr::Const {
                         val: DataValue::List(vec![DataValue::from("id"), DataValue::from("name")]),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
             ]))?,
@@ -321,14 +321,14 @@ mod tests {
                     SmartString::from("url"),
                     Expr::Const {
                         val: DataValue::from("https://example.com/rows.jsonl"),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
                 (
                     SmartString::from("fields"),
                     Expr::Const {
                         val: DataValue::List(vec![DataValue::from("id"), DataValue::from("name")]),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
             ]))?,

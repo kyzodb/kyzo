@@ -250,7 +250,7 @@ mod tests {
             smartstring::SmartString::from("k"),
             Expr::Const {
                 val: DataValue::from(k),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))
     }
@@ -384,7 +384,7 @@ mod tests {
                 smartstring::SmartString::from("k"),
                 Expr::Const {
                     val: DataValue::from(2i64),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             )]))?,
             CancelFlag::inert(),
@@ -464,7 +464,7 @@ mod tests {
                 smartstring::SmartString::from("k"),
                 Expr::Const {
                     val: DataValue::from(2i64),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             )]))?,
             cancel,

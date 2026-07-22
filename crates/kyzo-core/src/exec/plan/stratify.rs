@@ -652,7 +652,7 @@ mod tests {
                 aggr,
                 body,
                 span: SourceSpan(0, 0),
-                trivia: Trivia::default(),
+                trivia: Trivia::empty(),
             };
             match self
                 .prog
@@ -688,7 +688,7 @@ mod tests {
                 head: vec![],
                 arity: 1,
                 span: SourceSpan(0, 0),
-                trivia: Trivia::default(),
+                trivia: Trivia::empty(),
             };
             let prev = self
                 .prog

@@ -213,14 +213,14 @@ mod tests {
                 SmartString::from("steps"),
                 Expr::Const {
                     val: DataValue::from(3i64),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
             (
                 SmartString::from("weight"),
                 Expr::Const {
                     val: DataValue::from(0.0f64),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
         ]))?;
@@ -256,7 +256,7 @@ mod tests {
             SmartString::from("steps"),
             Expr::Const {
                 val: DataValue::from(4i64),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))?;
         let got = run_fixed_rule(
@@ -324,7 +324,7 @@ mod tests {
                 SmartString::from("steps"),
                 Expr::Const {
                     val: DataValue::from(n),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             )]))
         };
@@ -389,14 +389,14 @@ mod tests {
                     SmartString::from("steps"),
                     Expr::Const {
                         val: DataValue::from(20i64),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
                 (
                     SmartString::from("iterations"),
                     Expr::Const {
                         val: DataValue::from(5i64),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
             ]))
@@ -446,14 +446,14 @@ mod tests {
                     SmartString::from("steps"),
                     Expr::Const {
                         val: DataValue::from(20i64),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
                 (
                     SmartString::from("seed"),
                     Expr::Const {
                         val: DataValue::from(seed),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
             ]))
@@ -506,7 +506,7 @@ mod tests {
             SmartString::from("steps"),
             Expr::Const {
                 val: DataValue::from(4i64),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))?;
         let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::inert())?;

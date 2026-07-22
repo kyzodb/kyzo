@@ -114,9 +114,10 @@ impl<'de> serde::Deserialize<'de> for crate::value::RelationId {
     }
 }
 
-/// serde → plane: total. serde_json numbers are finite by construction
-/// (standard parsing admits no NaN/inf), and serde maps carry unique
-/// keys, so the plane's refusals cannot fire on this path.
+/// serde → plane: total on lawful serde_json values. serde_json numbers are
+/// finite by construction (standard parsing admits no NaN/inf), and serde
+/// maps carry unique keys, so the plane's refusals cannot fire on this path.
+/// Unreachable refuse arms map to [`Json::Null`] rather than aborting.
 pub fn json_from_serde(v: &JsonValue) -> Json {
     match v {
         JsonValue::Null => Json::Null,
@@ -125,13 +126,13 @@ pub fn json_from_serde(v: &JsonValue) -> Json {
             let num = match n.as_i64() {
                 Some(i) => Num::int(i),
                 None => Num::float(match n.as_f64() {
-                Some(f) => f,
-                None => 0.0,
-            }),
+                    Some(f) => f,
+                    None => 0.0,
+                }),
             };
             match JsonNum::new(num) {
                 Ok(n) => Json::Num(n),
-                Err(_non_finite) => std::process::abort(),
+                Err(_non_finite) => Json::Null,
             }
         }
         JsonValue::String(s) => Json::Str(s.clone()),
@@ -143,7 +144,7 @@ pub fn json_from_serde(v: &JsonValue) -> Json {
                 .collect();
             match JsonObj::new(entries) {
                 Ok(obj) => Json::Obj(obj),
-                Err(_dup) => std::process::abort(),
+                Err(_dup) => Json::Null,
             }
         }
     }

@@ -195,7 +195,7 @@ mod tests {
 
     fn binding(name: &'static str) -> Expr {
         Expr::Binding {
-            var: Symbol::new(name, SourceSpan::default()),
+            var: Symbol::new(name, SourceSpan::empty()),
             tuple_pos: BindingPos::Unresolved,
         }
     }
@@ -203,7 +203,7 @@ mod tests {
     fn c(val: DataValue) -> Expr {
         Expr::Const {
             val,
-            span: SourceSpan::default(),
+            span: SourceSpan::empty(),
         }
     }
 
@@ -215,7 +215,7 @@ mod tests {
                 Expr::Apply {
                     op: OP_LIST,
                     args: Box::new([binding("id")]),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
             (SmartString::from("sort_by"), binding("k")),

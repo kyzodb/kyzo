@@ -1001,10 +1001,10 @@ impl HnswRow {
     ) -> Result<()> {
         let key = idx.encode_key_for_store(
             self.key_tuple(base_key_len)?.as_slice(),
-            SourceSpan::default(),
+            SourceSpan::empty(),
         )?;
         let val =
-            idx.encode_val_only_for_store(self.val_tuple()?.as_slice(), SourceSpan::default())?;
+            idx.encode_val_only_for_store(self.val_tuple()?.as_slice(), SourceSpan::empty())?;
         tx.put(&key, &val)
     }
 
@@ -1995,7 +1995,7 @@ fn put_fresh_at_levels(
     // artifact of construction order; recording the real key is
     // deliberate.)
     let entry_key =
-        idx.encode_key_for_store(node_key(bottom_layer, at)?.as_slice(), SourceSpan::default())?;
+        idx.encode_key_for_store(node_key(bottom_layer, at)?.as_slice(), SourceSpan::empty())?;
     HnswRow::Canary {
         bottom_layer,
         entry_key: HnswEntryKey::from_storage_key(entry_key),
@@ -2222,7 +2222,7 @@ fn shrink_neighbour<T: WriteTx>(
             if was_tomb {
                 let old_key = spec
                     .idx
-                    .encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
+                    .encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::empty())?;
                 spec.tx.del(&old_key)?;
             } else {
                 HnswRow::Edge {
@@ -2368,7 +2368,7 @@ fn remove_vec<T: WriteTx>(
         let layer = -neg_layer;
         let self_key_tuple = node_key(layer, at)?;
         let self_key =
-            idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::default())?;
+            idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::empty())?;
         if tx.exists(&self_key)? {
             tx.del(&self_key)?;
         } else {
@@ -2383,12 +2383,12 @@ fn remove_vec<T: WriteTx>(
             // healing is a recorded ceiling item.
             let out_key = idx.encode_key_for_store(
                 edge_key(layer, at, &neighbour)?.as_slice(),
-                SourceSpan::default(),
+                SourceSpan::empty(),
             )?;
             tx.del(&out_key)?;
             let in_key = idx.encode_key_for_store(
                 edge_key(layer, &neighbour, at)?.as_slice(),
-                SourceSpan::default(),
+                SourceSpan::empty(),
             )?;
             tx.del(&in_key)?;
 
@@ -2423,12 +2423,12 @@ fn remove_vec<T: WriteTx>(
         // The entry point may have been removed: re-elect from what
         // remains, or retire the canary with the last vector.
         let canary =
-            idx.encode_key_for_store(canary_key(base_key_len).as_slice(), SourceSpan::default())?;
+            idx.encode_key_for_store(canary_key(base_key_len).as_slice(), SourceSpan::empty())?;
         match entry_point(tx, base, idx)? {
             Some((bottom_layer, ep_id)) => {
                 let entry_key = idx.encode_key_for_store(
                     node_key(bottom_layer, &ep_id)?.as_slice(),
-                    SourceSpan::default(),
+                    SourceSpan::empty(),
                 )?;
                 let val = idx.encode_val_only_for_store(
                     HnswRow::Canary {
@@ -2437,7 +2437,7 @@ fn remove_vec<T: WriteTx>(
                     }
                     .val_tuple()?
                     .as_slice(),
-                    SourceSpan::default(),
+                    SourceSpan::empty(),
                 )?;
                 tx.put(&canary, &val)?;
             }
@@ -2567,7 +2567,7 @@ fn vamana_set_out_neighbours<T: WriteTx>(
     for (to, _) in selected { new_set.insert(to.clone()); }
     for (old, _, ignore_link) in neighbours_tagged(tx, base, idx, of, layer)? {
         if !new_set.contains(&old) || ignore_link {
-            let key = idx.encode_key_for_store(edge_key(layer, of, &old)?.as_slice(), SourceSpan::default())?;
+            let key = idx.encode_key_for_store(edge_key(layer, of, &old)?.as_slice(), SourceSpan::empty())?;
             tx.del(&key)?;
         }
     }
@@ -3130,7 +3130,7 @@ impl PartialOrd for Ranked {
 fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<HnswHitKey> {
     Ok(HnswHitKey::from_storage_key(idx.encode_key_for_store(
         node_key(0, id)?.as_slice(),
-        SourceSpan::default(),
+        SourceSpan::empty(),
     )?))
 }
 

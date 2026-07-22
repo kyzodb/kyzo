@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn heuristic_guided_route() -> Result<()> {
         let h_binding = Expr::Binding {
-            var: Symbol::new("h", SourceSpan::default()),
+            var: Symbol::new("h", SourceSpan::empty()),
             tuple_pos: BindingPos::Unresolved,
         };
         let got = run_fixed_rule(
@@ -303,7 +303,7 @@ mod tests {
         }
         fn sink_hub_opts() -> Result<FixedRuleOptions> {
             let h_binding = Expr::Binding {
-                var: Symbol::new("h", SourceSpan::default()),
+                var: Symbol::new("h", SourceSpan::empty()),
                 tuple_pos: BindingPos::Unresolved,
             };
             opts_map(BTreeMap::from([(

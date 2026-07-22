@@ -237,7 +237,7 @@ mod tests {
                     DataValue::List(vec![DataValue::from(1i64), DataValue::from("x")]),
                     DataValue::List(vec![DataValue::from(2i64), DataValue::from("y")]),
                 ]),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))?;
         let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::inert())?;
@@ -256,11 +256,11 @@ mod tests {
             SmartString::from("data"),
             Expr::Const {
                 val: DataValue::from("not a list"),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))?;
         let err = Constant
-            .arity(&options, &[], SourceSpan::default())
+            .arity(&options, &[], SourceSpan::empty())
             .unwrap_err();
         assert!(err.to_string().contains("Wrong value"), "{err}");
 
@@ -272,11 +272,11 @@ mod tests {
                     DataValue::List(vec![DataValue::from(1i64)]),
                     DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
                 ]),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))?;
         let err = Constant
-            .init_options(options, SourceSpan::default())
+            .init_options(options, SourceSpan::empty())
             .unwrap_err();
         assert!(err.to_string().contains("same arity"), "{err}");
         Ok(())

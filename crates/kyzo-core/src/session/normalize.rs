@@ -37,7 +37,7 @@ impl<'a, T> SessionNormalizer<'a, T> {
         Self {
             view,
             cancel,
-            symb_gen: TempSymbGen::default(),
+            symb_gen: TempSymbGen::new(),
         }
     }
 }

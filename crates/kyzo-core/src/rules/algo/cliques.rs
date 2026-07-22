@@ -508,7 +508,7 @@ mod tests {
                 SmartString::from("max_cliques"),
                 Expr::Const {
                     val: DataValue::from(mc),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             );
         }
@@ -757,7 +757,7 @@ mod tests {
                 SmartString::from("max_cliques"),
                 Expr::Const {
                     val: DataValue::from(3i64),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             )]))?,
             CancelFlag::inert(),

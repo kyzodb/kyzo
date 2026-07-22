@@ -500,7 +500,7 @@ fn base_column_frame(base: &RelationHandle) -> BTreeMap<Symbol, usize> {
         .iter()
         .chain(base.metadata.non_keys.iter())
         .enumerate()
-        .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::default()), i))
+        .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::empty()), i))
         .collect()
 }
 
@@ -536,7 +536,7 @@ fn load_catalog_handles(
 )> {
     let mut by_id = BTreeMap::new();
     let mut by_name = BTreeMap::new();
-    let lower = Tuple::default().encode_as_key(RelationId::SYSTEM);
+    let lower = Tuple::new().encode_as_key(RelationId::SYSTEM);
     let upper = (RelationId::SYSTEM.raw() + 1).to_be_bytes();
     for pair in tx.range_scan(&lower, &upper) {
         let (k, v) = pair?;
@@ -1062,7 +1062,7 @@ mod pins {
             // Locate the plain index relation id from the catalog.
             let tx = storage.read_tx()?;
             let mut idx_id = None;
-            let lower = Tuple::default().encode_as_key(RelationId::SYSTEM);
+            let lower = Tuple::new().encode_as_key(RelationId::SYSTEM);
             let upper = (RelationId::SYSTEM.raw() + 1).to_be_bytes();
             for pair in tx.range_scan(&lower, &upper) {
                 let (k, v) = pair?;
@@ -1090,7 +1090,7 @@ mod pins {
             let handle = {
                 // Minimal handle shape for encode doors — fetch real metadata.
                 let tx = storage.read_tx()?;
-                let lower = Tuple::default().encode_as_key(RelationId::SYSTEM);
+                let lower = Tuple::new().encode_as_key(RelationId::SYSTEM);
                 let upper = (RelationId::SYSTEM.raw() + 1).to_be_bytes();
                 let mut found = None;
                 for pair in tx.range_scan(&lower, &upper) {
@@ -1109,13 +1109,13 @@ mod pins {
                     &phantom_key_cols,
                     stamp,
                     stamp,
-                    kyzo_model::SourceSpan::default(),
+                    kyzo_model::SourceSpan::empty(),
                 )?;
             let val = handle
                 .encode_bitemporal_val_for_store(
                     &phantom_key_cols,
                     crate::store::time::ClaimPolarity::Assert,
-                    kyzo_model::SourceSpan::default(),
+                    kyzo_model::SourceSpan::empty(),
                 )?;
             drop(idx_id);
             (key.as_ref().to_vec(), val)

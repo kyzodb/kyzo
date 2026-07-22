@@ -436,12 +436,12 @@ mod tests {
     fn cnst(v: impl Into<DataValue>) -> Expr {
         Expr::Const {
             val: v.into(),
-            span: Default::default(),
+            span: SourceSpan::empty(),
         }
     }
     fn binding(pos: usize) -> Expr {
         Expr::Binding {
-            var: kyzo_model::program::symbol::Symbol::new(format!("c{pos}"), Default::default()),
+            var: kyzo_model::program::symbol::Symbol::new(format!("c{pos}"), SourceSpan::empty()),
             tuple_pos: BindingPos::Resolved(pos),
         }
     }
@@ -449,7 +449,7 @@ mod tests {
         Expr::Apply {
             op,
             args: args.into(),
-            span: Default::default(),
+            span: SourceSpan::empty(),
         }
     }
 
@@ -518,7 +518,7 @@ mod tests {
                     vec![apply(OP_ADD, vec![binding(1), cnst(1)]), cnst(0)],
                 ),
             ]),
-            span: Default::default(),
+            span: SourceSpan::empty(),
         };
         // Row 0: c0=0 → guard false, c1 (a string!) never touched.
         // Row 1: c0=1 → second arm runs on an int, fine.
@@ -558,7 +558,7 @@ mod tests {
                 ),
                 (cnst(true), binding(0)),
             ],
-            span: Default::default(),
+            span: SourceSpan::empty(),
         };
         let rows: Vec<Vec<DataValue>> = (0..12).map(|i| vec![DataValue::from(i)]).collect();
         differential(&cond, &rows);
@@ -583,10 +583,10 @@ mod tests {
                         Ok(v) => v,
                         Err(_gt_i64) => 0,
                     }),
-                    span: Default::default(),
+                    span: SourceSpan::empty(),
                 },
                 1 | 2 => Expr::Binding {
-                    var: kyzo_model::program::symbol::Symbol::new("c", Default::default()),
+                    var: kyzo_model::program::symbol::Symbol::new("c", SourceSpan::empty()),
                     tuple_pos: BindingPos::Resolved(match usize::try_from(next(rng) % 2) {
                         Ok(v) => v,
                         Err(_gt_usize) => 0,
@@ -599,7 +599,7 @@ mod tests {
                         OP_GT
                     },
                     args: Box::new([gen_expr(rng, depth - 1), gen_expr(rng, depth - 1)]),
-                    span: Default::default(),
+                    span: SourceSpan::empty(),
                 },
                 4 => Expr::Lazy {
                     op: {
@@ -613,7 +613,7 @@ mod tests {
                         }
                     },
                     args: Box::new([gen_expr(rng, depth - 1), gen_expr(rng, depth - 1)]),
-                    span: Default::default(),
+                    span: SourceSpan::empty(),
                 },
                 5 => Expr::Cond {
                     clauses: vec![
@@ -621,12 +621,12 @@ mod tests {
                         (
                             Expr::Const {
                                 val: DataValue::from(true),
-                                span: Default::default(),
+                                span: SourceSpan::empty(),
                             },
                             gen_expr(rng, depth - 1),
                         ),
                     ],
-                    span: Default::default(),
+                    span: SourceSpan::empty(),
                 },
                 // Named exhaustiveness arm: `choice` is `next % 3` or `% 6`.
                 // A residue ≥6 is outside the generator contract — emit a
@@ -635,7 +635,7 @@ mod tests {
                     let _named_overflow = modulus_overflow;
                     Expr::Const {
                         val: DataValue::Null,
-                        span: Default::default(),
+                        span: SourceSpan::empty(),
                     }
                 },
             }

@@ -308,8 +308,8 @@ pub(crate) fn sparse_put<T: WriteTx>(
         key.push(DataValue::from(i64::from(dim)));
         key.extend(tail.as_slice().iter().cloned());
         let val = [DataValue::from(f64::from(weight))];
-        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
-        let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
+        let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::empty())?;
         tx.put(&key_bytes, &val_bytes)?;
     }
     Ok(())
@@ -346,7 +346,7 @@ pub(crate) fn sparse_del<T: WriteTx>(
         let mut key = Tuple::with_capacity(1 + base_key_len);
         key.push(DataValue::from(i64::from(dim)));
         key.extend(tail.as_slice().iter().cloned());
-        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
         tx.del(&key_bytes)?;
     }
     Ok(())
@@ -923,7 +923,7 @@ mod tests {
             for (k, _) in &kvs {
                 let bad = f.idx.encode_val_only_for_store(
                     &[DataValue::from("not a float")],
-                    SourceSpan::default(),
+                    SourceSpan::empty(),
                 )?;
                 tx.put(k, &bad)?;
             }
@@ -943,7 +943,7 @@ mod tests {
             for (k, _) in &kvs {
                 let neg = f
                     .idx
-                    .encode_val_only_for_store(&[DataValue::from(-1.0f64)], SourceSpan::default())?;
+                    .encode_val_only_for_store(&[DataValue::from(-1.0f64)], SourceSpan::empty())?;
                 tx.put(k, &neg)?;
             }
             tx.commit().map_err(|e| miette!("{e}"))?;

@@ -973,7 +973,7 @@ mod tests {
     use kyzo_model::value::Num;
 
     fn sym(name: &str) -> Symbol {
-        Symbol::new(name, SourceSpan::default())
+        Symbol::new(name, SourceSpan::empty())
     }
     fn v(i: i64) -> DataValue {
         DataValue::Num(Num::int(i))

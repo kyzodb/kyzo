@@ -1368,7 +1368,7 @@ pub(crate) mod tests_support {
     pub(crate) fn opts_map(map: BTreeMap<SmartString<LazyCompact>, Expr>) -> Result<FixedRuleOptions> {
         FixedRuleOptions::from_entries(
             map.into_iter()
-                .map(|(k, v)| (Symbol::new(k, SourceSpan::default()), v)),
+                .map(|(k, v)| (Symbol::new(k, SourceSpan::empty()), v)),
         )
         .into_diagnostic()
     }
@@ -1383,7 +1383,7 @@ pub(crate) mod tests_support {
         FixedRuleOptions::from_entries(
             pairs
                 .iter()
-                .map(|(k, v)| (Symbol::new(*k, SourceSpan::default()), v.clone())),
+                .map(|(k, v)| (Symbol::new(*k, SourceSpan::empty()), v.clone())),
         )
         .into_diagnostic()
     }
@@ -1449,7 +1449,7 @@ pub(crate) mod tests_support {
         inputs: Vec<TestInput>,
         mut options: FixedRuleOptions,
     ) -> Result<PreparedFixedRule> {
-        let span = SourceSpan::default();
+        let span = SourceSpan::empty();
         options = rule.init_options(options, span)?;
         let mut stores = BTreeMap::new();
         let mut rule_args = vec![];
@@ -1499,7 +1499,7 @@ pub(crate) mod tests_support {
                 stores: &self.stores,
                 stored: &HarnessStoredClosed,
             };
-            let mut out = FixedRuleOutput::new(self.arity, SourceSpan::default());
+            let mut out = FixedRuleOutput::new(self.arity, SourceSpan::empty());
             rule.run(payload, &mut out, cancel)?;
             let store = out.into_store().wrap();
             let mut collected = EpochStore::new_normal(self.arity);
@@ -1601,7 +1601,7 @@ mod tests {
 
     #[test]
     fn output_writer_rejects_wrong_arity() -> Result<()> {
-        let mut out = FixedRuleOutput::new(2, SourceSpan::default());
+        let mut out = FixedRuleOutput::new(2, SourceSpan::empty());
         out.put(Tuple::from_vec(vec![s("a"), s("b")]))?;
         let err = out.put(Tuple::from_vec(vec![s("a")])).unwrap_err();
         assert!(err.to_string().contains("arity 2"), "{err}");
@@ -1658,7 +1658,7 @@ mod tests {
     #[test]
     fn harness_stored_inputs_refuse() {
         use tests_support::HarnessStoredClosed;
-        let span = SourceSpan::default();
+        let span = SourceSpan::empty();
         let arg = MagicFixedRuleRuleArg::Stored {
             name: Symbol::new("some_relation", span),
             bindings: vec![],
@@ -1691,7 +1691,7 @@ mod tests {
                 SmartString::from("condition"),
                 Expr::Const {
                     val: DataValue::from(true),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             )]))?,
             cancel,
@@ -1716,7 +1716,7 @@ mod tests {
         }
         let pr = DEFAULT_FIXED_RULES.get("PageRank").ok_or_else(|| miette!("PageRank missing"))?.clone();
         assert_eq!(
-            pr.arity(&empty_opts(), &[], SourceSpan::default())?,
+            pr.arity(&empty_opts(), &[], SourceSpan::empty())?,
             2
         );
         Ok(())
@@ -1881,7 +1881,7 @@ mod tests {
         fn const_expr(v: DataValue) -> Expr {
             Expr::Const {
                 val: v,
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             }
         }
         let nullary = || TestInput::new(vec![], vec![Tuple::from_vec(vec![])]);

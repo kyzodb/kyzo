@@ -350,7 +350,7 @@ mod tests {
     /// The half-open byte range covering the whole of `REL`'s keyspace.
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
         (
-            Tuple::default().encode_as_key(REL).to_vec(),
+            Tuple::new().encode_as_key(REL).to_vec(),
             (REL.raw() + 1).to_be_bytes().to_vec(),
         )
     }

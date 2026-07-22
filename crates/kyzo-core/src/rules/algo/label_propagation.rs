@@ -158,7 +158,7 @@ mod tests {
             SmartString::from("undirected"),
             Expr::Const {
                 val: DataValue::from(true),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))
     }
@@ -166,10 +166,10 @@ mod tests {
     fn seed_opt(seed: i64) -> Result<FixedRuleOptions> {
         let mut o = undirected_opt()?;
         o.insert(
-            Symbol::new("seed", SourceSpan::default()),
+            Symbol::new("seed", SourceSpan::empty()),
             Expr::Const {
                 val: DataValue::from(seed),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )?;
         Ok(o)

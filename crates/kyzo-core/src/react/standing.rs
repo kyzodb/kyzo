@@ -109,7 +109,7 @@ pub(crate) enum StandingRegisterRefusal {
 /// `SmartString`), and it keeps `Symbol` construction in exactly one
 /// place instead of `Symbol::new("?", …)` recurring at every call site.
 fn entry_symbol() -> Symbol {
-    Symbol::new("?", SourceSpan::default())
+    Symbol::new("?", SourceSpan::empty())
 }
 
 /// One EDB dependency's live subscription: the callback id (for
@@ -472,7 +472,7 @@ mod tests {
     use kyzo_model::value::{DataValue, Num};
 
     fn sym(name: &str) -> Symbol {
-        Symbol::new(name, SourceSpan::default())
+        Symbol::new(name, SourceSpan::empty())
     }
     fn v(i: i64) -> DataValue {
         DataValue::Num(Num::int(i))
@@ -500,7 +500,7 @@ mod tests {
             name: sym(name),
             args: args.into_iter().map(sym).collect(),
             validity: None,
-            span: SourceSpan::default(),
+            span: SourceSpan::empty(),
         };
         if negated {
             MagicAtom::NegatedRelation(atom)

@@ -217,7 +217,8 @@ impl NamedRows {
         let batch = kyzo_model::envelope::arrow::ColumnBatch::from_rows(
             self.rows.clone(),
             self.headers.len(),
-        );
+        )
+        .map_err(|e| miette::miette!("{e}"))?;
         let names: Vec<&str> = self.headers.iter().map(String::as_str).collect();
         kyzo_model::envelope::arrow::encode_stream(&batch, &names)
     }

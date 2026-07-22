@@ -302,8 +302,8 @@ pub(crate) fn fts_put<T: WriteTx>(
             DataValue::List(position),
             DataValue::from(count),
         ];
-        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
-        let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
+        let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::empty())?;
         tx.put(&key_bytes, &val_bytes)?;
     }
     Ok(())
@@ -345,7 +345,7 @@ pub(crate) fn fts_del<T: WriteTx>(
         let mut key = Tuple::with_capacity(1 + base_key_len);
         key.push(DataValue::Str(term.to_string()));
         key.extend(tail.as_slice().iter().cloned());
-        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
         tx.del(&key_bytes)?;
     }
     Ok(())

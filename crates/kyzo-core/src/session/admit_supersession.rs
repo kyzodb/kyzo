@@ -463,7 +463,7 @@ mod tests {
             prior,
             &corrected,
             ValidityTs::of_micros(200),
-            SourceSpan::default(),
+            SourceSpan::empty(),
         )
         .map_err(|e| miette!("append correction: {e}"))?;
         tx.commit().map_err(|e| miette!("commit correction: {e}"))?;
@@ -526,7 +526,7 @@ mod tests {
             prior,
             &corrected,
             ValidityTs::of_micros(100),
-            SourceSpan::default(),
+            SourceSpan::empty(),
         )
         .map_err(|e| miette!("append same-valid correction: {e}"))?;
         tx.commit().map_err(|e| miette!("commit correction: {e}"))?;
@@ -578,7 +578,7 @@ mod tests {
             prior_record.record_id(),
             &[DataValue::from(1i64), DataValue::from(150i64)],
             ValidityTs::of_micros(200),
-            SourceSpan::default(),
+            SourceSpan::empty(),
         )
         .map_err(|e| miette!("append: {e}"))?;
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
@@ -827,7 +827,7 @@ mod tests {
             prior_record.record_id(),
             &[DataValue::from(1i64), DataValue::from(175i64)],
             ValidityTs::of_micros(300),
-            SourceSpan::default(),
+            SourceSpan::empty(),
         )
         .map_err(|e| miette!("append @300: {e}"))?;
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
@@ -839,7 +839,7 @@ mod tests {
                 &rtx,
                 &[DataValue::from(1i64)],
                 AsOf::at(ValidityTs::of_micros(i64::MAX), ValidityTs::of_micros(150)),
-                SourceSpan::default(),
+                SourceSpan::empty(),
             )
             .map_err(|e| miette!("as-of 150: {e}"))?;
         assert_eq!(
@@ -855,7 +855,7 @@ mod tests {
                 &rtx,
                 &[DataValue::from(1i64)],
                 AsOf::at(ValidityTs::of_micros(i64::MAX), ValidityTs::of_micros(350)),
-                SourceSpan::default(),
+                SourceSpan::empty(),
             )
             .map_err(|e| miette!("as-of 350: {e}"))?;
         assert_eq!(

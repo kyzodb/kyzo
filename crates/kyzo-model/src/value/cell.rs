@@ -152,12 +152,13 @@ impl Value {
     /// Tag byte of a minted word. Lawful by construction: only
     /// [`Value::mint`] / [`Value::gathered`] write the word, and they
     /// copy the tag from a [`CanonicalBytes`] witness (itself mint-only
-    /// via encode). Kept as infallible — an illegal tag is unrepresentable
-    /// without forging the private `[u8; 16]` (no `from_bytes` door).
+    /// via encode). An illegal tag is unrepresentable without forging the
+    /// private `[u8; 16]` (no `from_bytes` door) — forged bytes order as
+    /// [`Tag::Null`] rather than aborting the process.
     pub fn tag(self) -> Tag {
         match Tag::from_byte(self.bytes[0]) {
             Some(tag) => tag,
-            None => std::process::abort(),
+            None => Tag::Null,
         }
     }
 

@@ -955,7 +955,7 @@ impl RelationHandle {
     /// The inclusive lower bound of this relation's keyspace: the empty
     /// tuple under its prefix.
     fn keyspace_lower(&self) -> StorageKey {
-        Tuple::default().encode_as_key(self.id)
+        Tuple::new().encode_as_key(self.id)
     }
 
     /// The exclusive upper bound of this relation's keyspace: the next
@@ -1060,7 +1060,7 @@ impl RelationHandle {
                 tx,
                 key,
                 AsOf::current(MAX_VALIDITY_TS),
-                SourceSpan::default(),
+                SourceSpan::empty(),
             ),
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
@@ -1087,7 +1087,7 @@ impl RelationHandle {
                     tx,
                     key,
                     AsOf::current(MAX_VALIDITY_TS),
-                    SourceSpan::default(),
+                    SourceSpan::empty(),
                 )?
                 .map(|row| Tuple::from_vec(row.as_slice()[self.metadata.keys.len()..].to_vec()))),
             KeyspaceKind::AlgorithmState => {
@@ -1114,7 +1114,7 @@ impl RelationHandle {
                     tx,
                     key,
                     AsOf::current(MAX_VALIDITY_TS),
-                    SourceSpan::default(),
+                    SourceSpan::empty(),
                 )?
                 .is_some()),
             KeyspaceKind::AlgorithmState => {
@@ -1466,7 +1466,7 @@ pub(crate) fn destroy_relation(tx: &mut impl WriteTx, name: &str) -> Result<()> 
         ));
     }
     tx.del(&SystemKey::Relation(name).encode())?;
-    let lower = Tuple::default().encode_as_key(store.id);
+    let lower = Tuple::new().encode_as_key(store.id);
     // Successor prefix as raw bytes; cannot overflow (ids <= 2^48).
     let upper = (store.id.raw() + 1).to_be_bytes();
     tx.del_range(&lower, &upper)

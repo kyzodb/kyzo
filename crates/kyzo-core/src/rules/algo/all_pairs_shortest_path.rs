@@ -224,7 +224,7 @@ mod tests {
             smartstring::SmartString::from("undirected"),
             Expr::Const {
                 val: DataValue::from(true),
-                span: SourceSpan::default(),
+                span: SourceSpan::empty(),
             },
         )]))
     }

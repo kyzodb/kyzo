@@ -62,8 +62,8 @@ pub enum SelectionContract {
 /// result set is empty / non-empty.
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub enum QueryAssertion {
-    AssertNone(#[serde(skip)] SourceSpan),
-    AssertSome(#[serde(skip)] SourceSpan),
+    AssertNone(#[serde(skip, default = "SourceSpan::empty")] SourceSpan),
+    AssertSome(#[serde(skip, default = "SourceSpan::empty")] SourceSpan),
 }
 
 /// Whether a mutating query reports the mutated rows back (`:returning`).
@@ -124,7 +124,7 @@ pub struct InputRelationHandle {
     pub metadata: StoredRelationMetadata,
     pub key_bindings: Vec<Symbol>,
     pub dep_bindings: Vec<Symbol>,
-    #[serde(skip)]
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
@@ -158,7 +158,7 @@ impl InputRelationHandle {
 /// Fields are public: the parser assembles these incrementally and the
 /// runtime reads them piecemeal; they carry no cross-field invariant that a
 /// constructor could prove.
-#[derive(Clone, PartialEq, Default, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct QueryOutOptions {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -300,6 +300,19 @@ impl Display for QueryOutOptions {
 }
 
 impl QueryOutOptions {
+    /// No limit/offset/timeout/sorters/store/assertion.
+    pub fn empty() -> Self {
+        Self {
+            limit: None,
+            offset: None,
+            timeout: None,
+            sleep: None,
+            sorters: Vec::new(),
+            store_relation: None,
+            assertion: None,
+        }
+    }
+
     /// How many rows evaluation must produce before it may stop early:
     /// `limit + offset` when both are given.
     pub fn num_to_take(&self) -> Option<usize> {

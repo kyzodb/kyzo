@@ -838,7 +838,7 @@ mod tests {
             aggr: head.iter().map(|_| HeadAggrSlot::Plain).collect(),
             body: vec![],
             span: SourceSpan(0, 0),
-            trivia: Trivia::default(),
+            trivia: Trivia::empty(),
         }
     }
 

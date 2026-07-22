@@ -1812,15 +1812,15 @@ mod tests {
             op: OP_GT,
             args: Box::new([
                 Expr::Binding {
-                    var: Symbol::new("c0", Default::default()),
+                    var: Symbol::new("c0", SourceSpan::empty()),
                     tuple_pos: BindingPos::Resolved(0),
                 },
                 Expr::Const {
                     val: DataValue::from(0),
-                    span: Default::default(),
+                    span: SourceSpan::empty(),
                 },
             ]),
-            span: Default::default(),
+            span: SourceSpan::empty(),
         };
         let stream: Vec<Result<Tuple>> = vec![
             Ok(Tuple::from_vec(vec![DataValue::from(5)])),

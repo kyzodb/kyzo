@@ -700,7 +700,7 @@ pub(crate) fn lsh_del<T: WriteTx>(
             // half-consumed by its own error path (the original deleted
             // first and then hit `unreachable!`).
             let decoded = decode_inv_chunks(found, inv_idx, key_part)?;
-            let inv_key = inv_idx.encode_key_for_store(key_part, SourceSpan::default())?;
+            let inv_key = inv_idx.encode_key_for_store(key_part, SourceSpan::empty())?;
             tx.del(&inv_key)?;
             decoded
         }
@@ -711,7 +711,7 @@ pub(crate) fn lsh_del<T: WriteTx>(
     key.extend_from_slice(key_part);
     for chunk in chunks {
         key[0] = DataValue::Bytes(chunk.clone());
-        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::empty())?;
         tx.del(&key_bytes)?;
     }
     Ok(())
@@ -787,7 +787,7 @@ pub(crate) fn lsh_put<T: WriteTx>(tx: &mut T, spec: LshPutSpec<'_>) -> Result<()
     key.extend_from_slice(inv_key_part);
     for chunk in chunks.iter() {
         key[0] = DataValue::Bytes(chunk.clone());
-        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::empty())?;
         // Postings carry no value; an empty value decodes as a key-only
         // tuple (pinned kernel behavior).
         tx.put(&key_bytes, &[])?;
@@ -796,8 +796,8 @@ pub(crate) fn lsh_put<T: WriteTx>(tx: &mut T, spec: LshPutSpec<'_>) -> Result<()
     let inv_val_part = vec![DataValue::List(
         chunks.into_iter().map(DataValue::Bytes).collect(),
     )];
-    let inv_key = inv_idx.encode_key_for_store(inv_key_part, SourceSpan::default())?;
-    let inv_val = inv_idx.encode_val_only_for_store(&inv_val_part, SourceSpan::default())?;
+    let inv_key = inv_idx.encode_key_for_store(inv_key_part, SourceSpan::empty())?;
+    let inv_val = inv_idx.encode_val_only_for_store(&inv_val_part, SourceSpan::empty())?;
     tx.put(&inv_key, &inv_val)?;
     Ok(())
 }

@@ -184,7 +184,7 @@ fn expr_canonical_round_trip_golden() -> Result<()> {
         "Binding golden vector moved"
     );
 
-    let span = SourceSpan::default();
+    let span = SourceSpan::empty();
     let tree = Expr::Lazy {
         op: LazyOp::And,
         args: Box::new([

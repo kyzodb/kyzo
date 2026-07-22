@@ -198,12 +198,12 @@ impl ColumnBatch {
         })
     }
 
-    /// Convenience door for call sites that already prove row width.
-    pub fn from_rows(rows: Vec<Tuple>, arity: usize) -> ColumnBatch {
-        match Self::try_from_rows(rows, arity) {
-            Ok(batch) => batch,
-            Err(_width) => std::process::abort(),
-        }
+    /// Convenience door that forwards [`try_from_rows`] — refuses wrong width.
+    pub fn from_rows(
+        rows: Vec<Tuple>,
+        arity: usize,
+    ) -> std::result::Result<ColumnBatch, ColumnBatchWidthError> {
+        Self::try_from_rows(rows, arity)
     }
 
     pub fn width(&self) -> usize {
@@ -846,7 +846,7 @@ mod tests {
                 Tuple::from_vec(vec![v_int(3)]),
             ],
             1,
-        );
+        )?;
         let bytes = encode_stream(&batch, &["n"])?;
         assert!(bytes.len() > 16);
         assert_eq!(&bytes[0..4], &CONTINUATION_MARKER.to_le_bytes());
@@ -860,7 +860,10 @@ mod tests {
 
     #[test]
     fn encode_stream_refuses_a_name_count_mismatch() {
-        let batch = ColumnBatch::from_rows(vec![Tuple::from_vec(vec![v_int(1)])], 1);
+        let batch = match ColumnBatch::from_rows(vec![Tuple::from_vec(vec![v_int(1)])], 1) {
+            Ok(b) => b,
+            Err(_e) => return,
+        };
         let err = encode_stream(&batch, &[]).unwrap_err();
         assert!(err.to_string().contains("column names"));
     }

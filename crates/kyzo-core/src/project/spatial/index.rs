@@ -460,8 +460,8 @@ pub(crate) fn spatial_put<T: WriteTx>(
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
     let val = vec![DataValue::from(point.lat()), DataValue::from(point.lon())];
-    let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
-    let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
+    let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
+    let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::empty())?;
     tx.put(&key_bytes, &val_bytes)
 }
 
@@ -485,7 +485,7 @@ pub(crate) fn spatial_del<T: WriteTx>(
     }
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
-    let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
+    let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
     tx.del(&key_bytes)
 }
 

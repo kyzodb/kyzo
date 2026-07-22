@@ -100,7 +100,7 @@ impl<T: WriteTx> SessionTx<T> {
             .iter()
             .chain(base.metadata.non_keys.iter())
             .enumerate()
-            .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::default()), i))
+            .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::empty()), i))
             .collect()
     }
 
@@ -287,11 +287,11 @@ impl<T: WriteTx> SessionTx<T> {
         for (name, metadata) in index_metas {
             self.create_relation(
                 kyzo_model::program::InputRelationHandle {
-                    name: Symbol::new(name, SourceSpan::default()),
+                    name: Symbol::new(name, SourceSpan::empty()),
                     metadata,
                     key_bindings: vec![],
                     dep_bindings: vec![],
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
                 kind,
             )?;
@@ -314,7 +314,7 @@ impl<T: WriteTx> SessionTx<T> {
             let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
             let keys_len = base.metadata.keys.len();
             let upper = (base.id.raw() + 1).to_be_bytes();
-            let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
+            let mut lower: Vec<u8> = Tuple::new().encode_as_key(base.id).as_ref().to_vec();
             loop {
                 let batch: Vec<(Slice, Slice)> = self
                     .store
@@ -382,7 +382,7 @@ impl<T: WriteTx> SessionTx<T> {
         let upper = (base.id.raw() + 1).to_be_bytes();
         let keys_len = base.metadata.keys.len();
         let as_of = kyzo_model::value::AsOf::current(kyzo_model::value::MAX_VALIDITY_TS);
-        let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
+        let mut lower: Vec<u8> = Tuple::new().encode_as_key(base.id).as_ref().to_vec();
         loop {
             // Current rows only: an index reflects current state, and the
             // as-of resolution skips a fact's whole version group in one
@@ -543,7 +543,7 @@ impl<T: WriteTx> SessionTx<T> {
         let mut vec_fields = Vec::with_capacity(cfg.vec_fields.len());
         for f in &cfg.vec_fields {
             let pos = frame
-                .get(&Symbol::new(f.clone(), SourceSpan::default()))
+                .get(&Symbol::new(f.clone(), SourceSpan::empty()))
                 .ok_or_else(|| {
                     IndexLifecycleError(format!(
                         "'{}' is not a column of relation '{}'",
@@ -846,14 +846,14 @@ mod temporal_index_tests {
     /// without a dependent-column payload to track.
     fn base_input(name: &str) -> InputRelationHandle {
         InputRelationHandle {
-            name: Symbol::new(name, SourceSpan::default()),
+            name: Symbol::new(name, SourceSpan::empty()),
             metadata: StoredRelationMetadata {
                 keys: vec![col("k")],
                 non_keys: vec![],
             },
-            key_bindings: vec![Symbol::new("k", SourceSpan::default())],
+            key_bindings: vec![Symbol::new("k", SourceSpan::empty())],
             dep_bindings: vec![],
-            span: SourceSpan::default(),
+            span: SourceSpan::empty(),
         }
     }
 
@@ -898,7 +898,7 @@ mod temporal_index_tests {
             polarity,
             reasserts_existing,
         } = spec;
-        let span = SourceSpan::default();
+        let span = SourceSpan::empty();
         let row = vec![DataValue::from(k)];
         let key = base.encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
         let val = base.encode_bitemporal_val_for_store(&row, polarity, span)?;
@@ -931,7 +931,7 @@ mod temporal_index_tests {
     type DecodedPosting = (i64, i64, i64, i64, ClaimPolarity);
 
     fn scan_postings(tx: &impl ReadTx, idx_handle: &RelationHandle) -> Result<Vec<DecodedPosting>> {
-        let lower: Vec<u8> = Tuple::default()
+        let lower: Vec<u8> = Tuple::new()
             .encode_as_key(idx_handle.id)
             .as_ref()
             .to_vec();
@@ -973,7 +973,7 @@ mod temporal_index_tests {
     /// directly for the bijection tests below. Every base relation in
     /// this module has exactly one Int key column.
     fn scan_base_rows(tx: &impl ReadTx, base: &RelationHandle) -> Result<Vec<DecodedPosting>> {
-        let lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
+        let lower: Vec<u8> = Tuple::new().encode_as_key(base.id).as_ref().to_vec();
         let upper = (base.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
@@ -1126,7 +1126,7 @@ mod temporal_index_tests {
             .create_relation(base_input("b"), KeyspaceKind::Facts)?;
         let base_b = stx_b.get_relation("b")?;
         for &(k, valid, sys, polarity, _) in &events {
-            let span = SourceSpan::default();
+            let span = SourceSpan::empty();
             let row = vec![DataValue::from(k)];
             let key = base_b
                 .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
@@ -1147,7 +1147,7 @@ mod temporal_index_tests {
 
         let tx_a = db_a.store.read_tx()?;
         let tx_b = db_b.store.read_tx()?;
-        let lower: Vec<u8> = Tuple::default().encode_as_key(idx_a.id).as_ref().to_vec();
+        let lower: Vec<u8> = Tuple::new().encode_as_key(idx_a.id).as_ref().to_vec();
         let upper = (idx_a.id.raw() + 1).to_be_bytes().to_vec();
         let raw_a: Vec<(Slice, Slice)> = tx_a
             .range_scan(&lower, &upper)

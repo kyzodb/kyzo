@@ -103,7 +103,7 @@ pub enum Expr {
         /// The value
         val: DataValue,
         /// Source span
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// Function application
@@ -113,7 +113,7 @@ pub enum Expr {
         /// Arguments to the application
         args: Box<[Expr]>,
         /// Source span
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// Unbound function application
@@ -123,7 +123,7 @@ pub enum Expr {
         /// Arguments to the application
         args: Box<[Expr]>,
         /// Source span
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// Conditional expressions
@@ -132,7 +132,7 @@ pub enum Expr {
         /// evaluate to a boolean
         clauses: Vec<(Expr, Expr)>,
         /// Source span
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     /// A short-circuiting connective: arguments evaluate left to right,
@@ -146,7 +146,7 @@ pub enum Expr {
         /// Arguments, evaluated left to right.
         args: Box<[Expr]>,
         /// Source span
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
 }
@@ -236,30 +236,30 @@ enum ExprDe {
     },
     Const {
         val: DataValue,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Apply {
         op: OpDecl,
         args: Box<[Expr]>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     UnboundApply {
         op: SmartString<LazyCompact>,
         args: Box<[Expr]>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Cond {
         clauses: Vec<(Expr, Expr)>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
     Lazy {
         op: LazyOp,
         args: Box<[Expr]>,
-        #[serde(skip)]
+        #[serde(skip, default = "SourceSpan::empty")]
         span: SourceSpan,
     },
 }
@@ -647,7 +647,7 @@ impl Expr {
     pub fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
         Ok(match self {
             Expr::Binding { .. } | Expr::Const { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
-                ValueRange::default()
+                ValueRange::unbounded()
             }
             Expr::Apply { op, args, .. } => match op.name {
                 n if n == opdecl::OP_GE.name || n == opdecl::OP_GT.name => {
@@ -671,7 +671,7 @@ impl Expr {
                         };
                         return Ok(ValueRange::upper_bound(tar_val));
                     }
-                    ValueRange::default()
+                    ValueRange::unbounded()
                 }
                 n if n == opdecl::OP_LE.name || n == opdecl::OP_LT.name => {
                     if let Some(symb) = args[0].get_binding()
@@ -696,7 +696,7 @@ impl Expr {
 
                         return Ok(ValueRange::lower_bound(tar_val));
                     }
-                    ValueRange::default()
+                    ValueRange::unbounded()
                 }
                 n if n == opdecl::OP_STARTS_WITH.name => {
                     if let Some(symb) = args[0].get_binding()
@@ -718,9 +718,9 @@ impl Expr {
                         let upper = ScanBound::Value(DataValue::Str(upper));
                         return Ok(ValueRange::new(lower, upper));
                     }
-                    ValueRange::default()
+                    ValueRange::unbounded()
                 }
-                _other => ValueRange::default(),
+                _other => ValueRange::unbounded(),
             },
             Expr::UnboundApply { op, span, .. } => {
                 bail!(NoImplementationError(*span, op.to_string()));
@@ -813,7 +813,7 @@ pub fn compute_bounds(
     let mut lowers = vec![];
     let mut uppers = vec![];
     for current in symbols {
-        let mut cur_bound = ValueRange::default();
+        let mut cur_bound = ValueRange::unbounded();
         for filter in filters {
             let nxt = filter.extract_bound(current)?;
             cur_bound = cur_bound.merge(nxt);
@@ -832,6 +832,14 @@ pub struct ValueRange {
 }
 
 impl ValueRange {
+    /// Unbounded on both ends.
+    pub fn unbounded() -> Self {
+        Self {
+            lower: ScanBound::Least,
+            upper: ScanBound::Greatest,
+        }
+    }
+
     fn merge(self, other: Self) -> Self {
         let lower = max(self.lower, other.lower);
         let upper = min(self.upper, other.upper);
@@ -866,15 +874,6 @@ impl ValueRange {
     }
 }
 
-impl Default for ValueRange {
-    fn default() -> Self {
-        Self {
-            lower: ScanBound::Least,
-            upper: ScanBound::Greatest,
-        }
-    }
-}
-
 /// Executable twin of the format-seat Expr golden (story #352 T1).
 /// `format` is not yet wired at the crate root; this module keeps the
 /// round-trip law compile-checked until that door opens.
@@ -897,7 +896,7 @@ mod canonical_codec_tests {
             "Binding golden vector moved"
         );
 
-        let span = SourceSpan::default();
+        let span = SourceSpan::empty();
         let tree = Expr::Lazy {
             op: LazyOp::And,
             args: Box::new([

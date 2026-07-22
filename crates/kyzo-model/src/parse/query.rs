@@ -151,7 +151,7 @@ pub(crate) fn parse_query(
     cur_vld: ValidityTs,
 ) -> Result<InputProgram> {
     let mut progs: BTreeMap<Symbol, InputInlineRulesOrFixed> = Default::default();
-    let mut out_opts: QueryOutOptions = Default::default();
+    let mut out_opts: QueryOutOptions = QueryOutOptions::empty();
     let mut disable_magic_rewrite = false;
 
     let mut stored_relation: Option<StoredRelationBuild> = None;
@@ -297,7 +297,7 @@ pub(crate) fn parse_query(
                             head,
                             arity,
                             span,
-                            trivia: Trivia::default(),
+                            trivia: Trivia::empty(),
                         },
                     },
                 );
@@ -703,7 +703,7 @@ fn parse_rule(
             aggr,
             body: body_clauses,
             span,
-            trivia: Trivia::default(),
+            trivia: Trivia::empty(),
         },
     ))
 }
@@ -1143,7 +1143,7 @@ fn parse_fixed_rule(
             head,
             arity,
             span: args_list_span,
-            trivia: Trivia::default(),
+            trivia: Trivia::empty(),
         },
     ))
 }
@@ -1163,12 +1163,12 @@ fn insert_empty_const_rule(
     progs: &mut BTreeMap<Symbol, InputInlineRulesOrFixed>,
     bindings: &[Symbol],
 ) -> Result<()> {
-    let entry_symbol = Symbol::prog_entry(Default::default());
+    let entry_symbol = Symbol::prog_entry(SourceSpan::empty());
     let options = FixedRuleOptions::from_entries([(
-        Symbol::new("data", Default::default()),
+        Symbol::new("data", SourceSpan::empty()),
         Expr::Const {
             val: DataValue::List(vec![]),
-            span: Default::default(),
+            span: SourceSpan::empty(),
         },
     )])?;
     progs.insert(
@@ -1176,14 +1176,14 @@ fn insert_empty_const_rule(
         InputInlineRulesOrFixed::Fixed {
             fixed: FixedRuleApply {
                 fixed_handle: FixedRuleHandle {
-                    name: Symbol::new("Constant", Default::default()),
+                    name: Symbol::new("Constant", SourceSpan::empty()),
                 },
                 rule_args: vec![],
                 options,
                 head: bindings.to_vec(),
                 arity: bindings.len(),
-                span: Default::default(),
-                trivia: Trivia::default(),
+                span: SourceSpan::empty(),
+                trivia: Trivia::empty(),
             },
         },
     );
@@ -1212,7 +1212,7 @@ fn extract_entry_param_head(data_part: Pair<'_>) -> Option<Vec<Symbol>> {
             return None;
         }
         let name = param.as_str().strip_prefix('$')?;
-        head.push(Symbol::new(name, Default::default()));
+        head.push(Symbol::new(name, SourceSpan::empty()));
     }
     Some(head)
 }

@@ -300,7 +300,7 @@ mod tests {
                 SmartString::from("content"),
                 Expr::Const {
                     val: DataValue::from(content),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
             (
@@ -311,14 +311,14 @@ mod tests {
                         DataValue::from("Int"),
                         DataValue::from("Float?"),
                     ]),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
             (
                 SmartString::from("has_headers"),
                 Expr::Const {
                     val: DataValue::from(false),
-                    span: SourceSpan::default(),
+                    span: SourceSpan::empty(),
                 },
             ),
         ]))
@@ -366,7 +366,7 @@ mod tests {
                     SmartString::from("url"),
                     Expr::Const {
                         val: DataValue::from("file:///tmp/data.csv"),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
                 (
@@ -377,7 +377,7 @@ mod tests {
                             DataValue::from("Int"),
                             DataValue::from("Float?"),
                         ]),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
             ]))?,
@@ -399,7 +399,7 @@ mod tests {
                     SmartString::from("url"),
                     Expr::Const {
                         val: DataValue::from("https://example.com/data.csv"),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
                 (
@@ -410,7 +410,7 @@ mod tests {
                             DataValue::from("Int"),
                             DataValue::from("Float?"),
                         ]),
-                        span: SourceSpan::default(),
+                        span: SourceSpan::empty(),
                     },
                 ),
             ]))?,

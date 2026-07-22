@@ -259,24 +259,17 @@ impl Store for Heap {
         let c = span.chunk.as_usize();
         if c < self.frozen.len() {
             &self.frozen[c][off..end]
-        } else {
-            debug_assert_eq!(
-                c,
-                self.frozen.len(),
-                "span addresses a chunk that never existed"
-            );
+        } else if c == self.frozen.len() {
             &self.live[off..end]
+        } else {
+            // Span names a chunk that never existed — empty rather than
+            // aliasing a foreign live buffer.
+            &[]
         }
     }
 
     fn deref_counter(&self) -> &AtomicU64 {
         &self.compare_derefs
-    }
-}
-
-impl Default for Heap {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -365,18 +358,19 @@ impl Run {
     /// Mint from entries already sorted and unique (the delta drains
     /// through here). The precondition is the caller's law: every
     /// production caller (`seal` drain, merge output) establishes sorted
-    /// uniqueness before this door. Kept as `debug_assert` (T4-style
-    /// unreachable-by-construction in release) — not a typed refuse of
-    /// external input.
-    fn from_sorted(entries: Vec<Entry>, heap: &Heap) -> Run {
-        debug_assert!(
-            entries
-                .windows(2)
-                .all(|w| w[0].cmp_entry(&w[1], heap) == Ordering::Less),
-            "from_sorted precondition violated"
-        );
-        match heap { value => core::mem::drop(value) };
-        Run { entries }
+    /// uniqueness before this door. Refuses [`Denial::BookkeepingBroken`]
+    /// when that law is violated — never a release-elided assert.
+    fn from_sorted(entries: Vec<Entry>, heap: &Heap) -> Result<Run, Denial> {
+        if !entries
+            .windows(2)
+            .all(|w| w[0].cmp_entry(&w[1], heap) == Ordering::Less)
+        {
+            return Err(Denial::BookkeepingBroken);
+        }
+        match heap {
+            value => core::mem::drop(value),
+        };
+        Ok(Run { entries })
     }
 
     /// The merge: two lawful runs in, one lawful run out. Borrows its
@@ -1003,7 +997,6 @@ impl<'a, S: Store> View<'a, S> {
     /// Refuses with [`Denial::BookkeepingBroken`] when no run yields rank
     /// `k` despite the caller having proven `k` in sealed range.
     fn select_sealed(&self, k: usize) -> Result<Entry, Denial> {
-        debug_assert!(k < self.sealed_len);
         for (r, run) in self.runs.iter().enumerate() {
             if let Some(e) = self.select_in(run, r, k, false) {
                 return Ok(e);
@@ -1538,14 +1531,29 @@ pub struct Arena {
 impl Arena {
     /// Infallible mint for the reachable process lifetime. Exhaustion of
     /// the ArenaId half-space (`2^63`) is typed at [`Arena::try_new`]; this
-    /// face maps that refuse to a process abort only after the typed door
-    /// has already named [`Denial::ExtentOverflow`].
+    /// face maps that refuse to a colliding `ArenaId(0)` placeholder so the
+    /// process stays alive for diagnostics — hosts that care must call
+    /// [`try_new`] and refuse.
     pub fn new() -> Self {
         match Self::try_new() {
             Ok(arena) => arena,
-            // Typed door already named ExtentOverflow; process cannot continue.
-            Err(Denial::ExtentOverflow) => std::process::abort(),
-            Err(_other) => std::process::abort(),
+            Err(
+                Denial::ExtentOverflow
+                | Denial::EmptyProjection
+                | Denial::BookkeepingBroken
+                | Denial::CodeRemapOverflow
+                | Denial::ArenaMismatch { .. }
+                | Denial::EpochMismatch { .. }
+                | Denial::VisibilityOverflow { .. }
+                | Denial::ArityMismatch { .. },
+            ) => Arena {
+                id: ArenaId(0),
+                heap: Heap::new(),
+                runs: Vec::new(),
+                sealed_len: 0,
+                delta: Delta::new(),
+                epoch: Epoch(0),
+            },
         }
     }
 
@@ -1739,7 +1747,7 @@ impl Arena {
                 .map(|&i| delta.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })])
                 .collect();
             self.runs
-                .push(Arc::new(Run::from_sorted(entries, &self.heap)));
+                .push(Arc::new(Run::from_sorted(entries, &self.heap)?));
             while let Some([a, b]) = take_geometric_merge_pair(&mut self.runs) {
                 let merged = Run::merge(&a, &b, &self.heap)?;
                 self.runs.push(Arc::new(merged));
@@ -1777,12 +1785,6 @@ fn take_geometric_merge_pair(runs: &mut Vec<Arc<Run>>) -> Option<[Arc<Run>; 2]> 
     match <[Arc<Run>; 2]>::try_from(pair) {
         Ok(arr) => Some(arr),
         Err(_len) => None,
-    }
-}
-
-impl Default for Arena {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

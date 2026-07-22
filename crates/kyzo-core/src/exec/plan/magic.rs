@@ -579,7 +579,7 @@ fn adorn_fixed_rule_apply(
                             // Unbound columns get positional filler names;
                             // digit-leading names cannot collide with user
                             // bindings (not valid identifiers in the grammar).
-                            None => Symbol::new(format!("{i}"), SourceSpan::default()),
+                            None => Symbol::new(format!("{i}"), SourceSpan::empty()),
                             Some(k) => k.clone(),
                         }
                     })
@@ -1802,7 +1802,7 @@ mod tests {
             head: vec![],
             arity: 1,
             span: SourceSpan(0, 0),
-            trivia: Trivia::default(),
+            trivia: Trivia::empty(),
         };
 
         let adorned =
@@ -1847,7 +1847,7 @@ mod tests {
             head: vec![],
             arity: 1,
             span: SourceSpan(0, 0),
-            trivia: Trivia::default(),
+            trivia: Trivia::empty(),
         };
 
         // Every facts relation time-travels in the one universal format:
