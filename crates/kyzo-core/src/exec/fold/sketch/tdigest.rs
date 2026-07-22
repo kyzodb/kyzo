@@ -353,16 +353,18 @@ fn sort_floats(mut xs: Vec<f64>) -> Vec<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use miette::{Result, miette};
 
-    fn digest_of<I: IntoIterator<Item = f64>>(it: I, compression: f64) -> TDigest {
+    fn digest_of<I: IntoIterator<Item = f64>>(it: I, compression: f64) -> Result<TDigest> {
         let vals: Vec<DataValue> = it.into_iter().map(DataValue::from).collect();
-        TDigest::from_values(&vals, compression).unwrap()
+        TDigest::from_values(&vals, compression)
     }
 
     /// The exact rank of `x` in `sorted` (fraction of points <= x).
     fn exact_rank(sorted: &[f64], x: f64) -> f64 {
         let count = sorted.iter().filter(|&&v| v <= x).count();
-        crate::exec::fold::sketch::usize_to_f64(count) / crate::exec::fold::sketch::usize_to_f64(sorted.len())
+        crate::exec::fold::sketch::usize_to_f64(count)
+            / crate::exec::fold::sketch::usize_to_f64(sorted.len())
     }
 
     /// ACCURACY vs EXACT, in two ways. In RANK SPACE — the metric t-digest
@@ -375,13 +377,17 @@ mod tests {
     /// correctness, not merely on the byte fingerprint. Data is a pinned
     /// deterministic ramp, so this is reproducible.
     #[test]
-    fn quantile_rank_error_within_bound() {
+    fn quantile_rank_error_within_bound() -> Result<()> {
         let n = 100_000;
-        let data: Vec<f64> = (0..n).map(|i| crate::exec::fold::sketch::usize_to_f64(i)).collect();
-        let digest = digest_of(data.iter().copied(), 100.0);
+        let data: Vec<f64> = (0..n)
+            .map(|i| crate::exec::fold::sketch::usize_to_f64(i))
+            .collect();
+        let digest = digest_of(data.iter().copied(), 100.0)?;
 
         for &q in &[0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999] {
-            let est = digest.quantile(q).expect("non-empty digest");
+            let est = digest
+                .quantile(q)
+                .ok_or_else(|| miette!("non-empty digest"))?;
             let got_rank = exact_rank(&data, est);
             let err = (got_rank - q).abs();
             // Generous relative to the ~1/δ = 1% mid guarantee; tails tighter.
@@ -396,69 +402,81 @@ mod tests {
                 "q={q}: value {est} off true {true_value} by more than 0.005*n"
             );
         }
+        Ok(())
     }
 
     /// Extreme quantiles are exact anchors: q=0 is the min, q=1 the max.
     #[test]
-    fn extremes_are_exact() {
-        let digest = digest_of((0..1000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.5), 100.0);
+    fn extremes_are_exact() -> Result<()> {
+        let digest = digest_of(
+            (0..1000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.5),
+            100.0,
+        )?;
         assert_eq!(digest.quantile(0.0), Some(0.0));
         assert_eq!(digest.quantile(1.0), Some(999.0 * 0.5));
+        Ok(())
     }
 
     /// Empty digest: quantile and wire use typed absence — never NaN.
     #[test]
-    fn empty_has_no_nan_absence() {
-        let empty = TDigest::from_values(&[], 100.0).unwrap();
+    fn empty_has_no_nan_absence() -> Result<()> {
+        let empty = TDigest::from_values(&[], 100.0)?;
         assert!(empty.is_empty());
         assert_eq!(empty.min, None);
         assert_eq!(empty.max, None);
         assert_eq!(empty.quantile(0.5), None);
         let bytes = empty.to_bytes();
-        let min_bits = f64::from_le_bytes(bytes[1 + 16..1 + 24].try_into().unwrap()).to_bits();
-        let max_bits = f64::from_le_bytes(bytes[1 + 24..1 + 32].try_into().unwrap()).to_bits();
+        let min_bits = f64::from_le_bytes(read8(&bytes[1 + 16..1 + 24])).to_bits();
+        let max_bits = f64::from_le_bytes(read8(&bytes[1 + 24..1 + 32])).to_bits();
         assert_ne!(min_bits, f64::NAN.to_bits());
         assert_ne!(max_bits, f64::NAN.to_bits());
-        let round = TDigest::from_bytes(&bytes).unwrap();
+        let round = TDigest::from_bytes(&bytes)?;
         assert_eq!(round.min, None);
         assert_eq!(round.max, None);
         assert_eq!(round.quantile(0.0), None);
+        Ok(())
     }
 
     /// The centroid count stays bounded by the compression, not the input
     /// size — the whole point of a sketch.
     #[test]
-    fn size_is_bounded_by_compression() {
-        let digest = digest_of((0..1_000_000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
+    fn size_is_bounded_by_compression() -> Result<()> {
+        let digest = digest_of(
+            (0..1_000_000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)),
+            100.0,
+        )?;
         assert!(
             digest.centroids.len() <= 300,
             "centroid count {} not bounded by compression",
             digest.centroids.len()
         );
+        Ok(())
     }
 
     /// DETERMINISM / ORDER INDEPENDENCE: the same multiset in ascending,
     /// descending, and a shuffled order builds byte-identical digests,
     /// because the build sorts first. This is the canonical-fold guarantee.
     #[test]
-    fn byte_identical_across_input_orders() {
-        let base: Vec<f64> = (0..5000).map(|i| (crate::exec::fold::sketch::usize_to_f64(i) * 2.7).sin() * 1000.0).collect();
+    fn byte_identical_across_input_orders() -> Result<()> {
+        let base: Vec<f64> = (0..5000)
+            .map(|i| (crate::exec::fold::sketch::usize_to_f64(i) * 2.7).sin() * 1000.0)
+            .collect();
         let asc = {
             let mut v = base.clone();
             v.sort_by(|a, b| a.total_cmp(b));
-            digest_of(v, 100.0)
+            digest_of(v, 100.0)?
         };
         let desc = {
             let mut v = base.clone();
             v.sort_by(|a, b| b.total_cmp(a));
-            digest_of(v, 100.0)
+            digest_of(v, 100.0)?
         };
         // A deterministic shuffle (index-scramble) of the same multiset.
         let shuffled = {
             let mut v = base.clone();
             v.rotate_left(1234);
             v.reverse();
-            digest_of(v, 100.0)
+            digest_of(v, 100.0)?
         };
         assert_eq!(asc.to_bytes(), desc.to_bytes(), "order changed the digest");
         assert_eq!(
@@ -466,22 +484,30 @@ mod tests {
             shuffled.to_bytes(),
             "order changed the digest"
         );
+        Ok(())
     }
 
     /// MERGE is deterministic and commutative: recomputing gives identical
     /// bytes, and swapping operands gives identical bytes. This is what makes
     /// a fixed shard-reduction reproducible.
     #[test]
-    fn merge_is_deterministic_and_commutative() {
-        let a = digest_of((0..3000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
-        let b = digest_of((2000..6000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 1.3), 100.0);
+    fn merge_is_deterministic_and_commutative() -> Result<()> {
+        let a = digest_of(
+            (0..3000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)),
+            100.0,
+        )?;
+        let b = digest_of(
+            (2000..6000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 1.3),
+            100.0,
+        )?;
 
-        let ab1 = a.merge(&b).unwrap();
-        let ab2 = a.merge(&b).unwrap();
+        let ab1 = a.merge(&b)?;
+        let ab2 = a.merge(&b)?;
         assert_eq!(ab1.to_bytes(), ab2.to_bytes(), "merge not deterministic");
 
-        let ba = b.merge(&a).unwrap();
+        let ba = b.merge(&a)?;
         assert_eq!(ab1.to_bytes(), ba.to_bytes(), "merge not commutative");
+        Ok(())
     }
 
     /// HONESTY: merge is deliberately not claimed associative. Both
@@ -492,41 +518,49 @@ mod tests {
     /// in the engine relies on it, and the quantile aggregation uses the
     /// order-independent [`TDigest::from_values`] build instead.
     #[test]
-    fn merge_associativity_is_not_relied_upon() {
-        let a = digest_of((0..2000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
-        let b = digest_of((1000..4000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.7), 100.0);
-        let c = digest_of((500..2500).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 2.1), 100.0);
+    fn merge_associativity_is_not_relied_upon() -> Result<()> {
+        let a = digest_of(
+            (0..2000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)),
+            100.0,
+        )?;
+        let b = digest_of(
+            (1000..4000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.7),
+            100.0,
+        )?;
+        let c = digest_of(
+            (500..2500).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 2.1),
+            100.0,
+        )?;
 
-        let left = a.merge(&b).unwrap().merge(&c).unwrap();
-        let right = a.merge(&b.merge(&c).unwrap()).unwrap();
+        let left = a.merge(&b)?.merge(&c)?;
+        let right = a.merge(&b.merge(&c)?)?;
 
         // Each grouping is self-consistent (deterministic).
-        assert_eq!(
-            left.to_bytes(),
-            a.merge(&b).unwrap().merge(&c).unwrap().to_bytes()
-        );
-        assert_eq!(
-            right.to_bytes(),
-            a.merge(&b.merge(&c).unwrap()).unwrap().to_bytes()
-        );
+        assert_eq!(left.to_bytes(), a.merge(&b)?.merge(&c)?.to_bytes());
+        assert_eq!(right.to_bytes(), a.merge(&b.merge(&c)?)?.to_bytes());
         // We do NOT assert left == right: associativity is not guaranteed,
         // and the aggregation never depends on it. Both must still give
         // usable quantiles close to the true median of the combined data.
         for d in [&left, &right] {
             assert!(d.quantile(0.5).is_some_and(f64::is_finite));
         }
+        Ok(())
     }
 
     /// Round-trip through the stored form, and reject corruption.
     #[test]
-    fn serialization_round_trips_and_rejects_corruption() {
-        let d = digest_of((0..2000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.25), 100.0);
-        assert_eq!(TDigest::from_bytes(&d.to_bytes()).unwrap(), d);
+    fn serialization_round_trips_and_rejects_corruption() -> Result<()> {
+        let d = digest_of(
+            (0..2000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.25),
+            100.0,
+        )?;
+        assert_eq!(TDigest::from_bytes(&d.to_bytes())?, d);
         assert!(TDigest::from_bytes(&[]).is_err());
         assert!(TDigest::from_bytes(&[0x02]).is_err());
         let mut short = d.to_bytes();
         short.truncate(20);
         assert!(TDigest::from_bytes(&short).is_err());
+        Ok(())
     }
 
     /// Non-numeric input is rejected, not silently coerced.
@@ -539,9 +573,13 @@ mod tests {
     /// PINNED-LITERAL fingerprint for a fixed input: any drift of the build
     /// algorithm, the scale function, or the serialization fails loudly.
     #[test]
-    fn pinned_digest_fingerprint() {
-        let digest = digest_of((0..1000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
+    fn pinned_digest_fingerprint() -> Result<()> {
+        let digest = digest_of(
+            (0..1000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)),
+            100.0,
+        )?;
         let fingerprint = super::super::xxh64(&digest.to_bytes(), 0);
         assert_eq!(fingerprint, 0xA474_C02B_97F8_32C4);
+        Ok(())
     }
 }
