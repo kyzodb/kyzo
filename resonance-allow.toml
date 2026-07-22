@@ -60,14 +60,6 @@ members = [
 ]
 citation = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
 
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/store/replica.rs::from",
-  "crates/kyzo-core/src/store/transcript.rs::from",
-  "crates/kyzo-model/src/value/tag.rs::byte",
-]
-citation = "SEAT-59: closed discriminant tables for CrossingKind, SealedArtifactKind, and Tag. Each enum owns its wire tags; match arms are required under forbid(unsafe_code) (enum-to-int as desugars to transmute). Independence is the per-enum tag set, not the match shape. Collapsing would erase sealed wire seats or merge unrelated tag namespaces."
-
 # ---------------------------------------------------------------------------
 # WAIVER-PURITY (#376): per-pair independence rulings after grab-bag split.
 # Boilerplate (*_option, parse_quoted_*, tokenizer advance, stdlib scaffolds,
@@ -173,3 +165,19 @@ members = [
 ]
 citation = "RA operators: Join::next vs Delta::next — distinct operators (binary join vs delta-probe) sharing batch-advance control flow by the RA iterator contract. Independence is the match/probe law each implements; not accidental copy-paste of one join."
 
+
+# ---------------------------------------------------------------------------
+# check: bs_detector — seat 59 wire discriminant extract (not truncating cast)
+# ---------------------------------------------------------------------------
+
+[[bs_detector]]
+pattern = "as_cast"
+file = "crates/kyzo-core/src/store/replica.rs"
+line = 1140
+why_not_sabotage = "SEAT-59: CrossingKind is #[repr(u8)]; `self as u8` extracts the sealed discriminant — the sole wire mint. Not a truncating numeric cast of a value width."
+
+[[bs_detector]]
+pattern = "as_cast"
+file = "crates/kyzo-core/src/store/transcript.rs"
+line = 83
+why_not_sabotage = "SEAT-59: SealedArtifactKind is #[repr(u64)]; `self as u64` extracts the sealed discriminant — the sole wire mint. Not a truncating numeric cast of a value width."

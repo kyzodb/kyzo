@@ -1137,28 +1137,13 @@ impl CrossingKind {
 
     /// Wire tag for this kind — `#[repr(u8)]` discriminant is sole authority (seat 59).
     pub fn as_wire(self) -> u8 {
-        u8::from(self)
+        self as u8
     }
 }
 
 impl From<CrossingKind> for u8 {
     fn from(kind: CrossingKind) -> u8 {
-        // Explicit arms: `as u8` desugars to transmute and is refused under
-        // `forbid(unsafe_code)`. Discriminants are the sealed seat-59 tags.
-        match kind {
-            CrossingKind::Entity => 0,
-            CrossingKind::Event => 1,
-            CrossingKind::State => 2,
-            CrossingKind::Role => 3,
-            CrossingKind::Relation => 4,
-            CrossingKind::Claim => 5,
-            CrossingKind::Evidence => 6,
-            CrossingKind::Context => 7,
-            CrossingKind::Concept => 8,
-            CrossingKind::Rule => 9,
-            CrossingKind::Derivation => 10,
-            CrossingKind::Invalidation => 11,
-        }
+        kind.as_wire()
     }
 }
 

@@ -80,29 +80,13 @@ impl SealedArtifactKind {
     /// Stable discriminant written into golden / sealed transcripts.
     /// `#[repr(u64)]` discriminant is sole authority (seat 59); second serialize Unconstructible.
     pub fn tag(self) -> u64 {
-        u64::from(self)
+        self as u64
     }
 }
 
 impl From<SealedArtifactKind> for u64 {
     fn from(kind: SealedArtifactKind) -> u64 {
-        // Explicit arms: `as u64` desugars to transmute and is refused under
-        // `forbid(unsafe_code)`. Discriminants are the sealed seat-59 tags.
-        match kind {
-            SealedArtifactKind::CheckpointSeal => 1,
-            SealedArtifactKind::AdmissionCertificate => 2,
-            SealedArtifactKind::ForkGrant => 3,
-            SealedArtifactKind::RecoveryGrant => 4,
-            SealedArtifactKind::MergeProofHeader => 5,
-            SealedArtifactKind::AuditKeyLeaf => 6,
-            SealedArtifactKind::WalHeader => 7,
-            SealedArtifactKind::KeyCommit => 8,
-            SealedArtifactKind::StateRootHead => 9,
-            SealedArtifactKind::LeaveIsFreePack => 10,
-            SealedArtifactKind::ChainedStateRoot => 11,
-            SealedArtifactKind::AncestorReadGrant => 12,
-            SealedArtifactKind::WrappedShredSalt => 13,
-        }
+        kind.tag()
     }
 }
 
