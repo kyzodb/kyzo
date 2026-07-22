@@ -12,8 +12,7 @@
 
 use kyzo::WriteTx;
 
-#[allow(dead_code)]
-fn spent_after_abort<T: WriteTx>(mut tx: T) {
+fn _spent_after_abort<T: WriteTx>(mut tx: T) {
     let _ = tx.abort();
     let _ = tx.put(b"k", b"v");
 }

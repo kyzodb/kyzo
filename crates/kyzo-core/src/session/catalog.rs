@@ -32,10 +32,10 @@
  *   ([`RelationIdSpaceExhausted`]); `choose_index` survives empty argument
  *   lists, zero-key relations, and stale mappers; encode paths check arity
  *   before slicing.
- * - The original's key-prefix splice helper is deleted: it was dead code
- *   (`#[allow(dead_code)]` upstream) and splicing a different relation id
- *   into an [`StorageKey`]'s bytes would launder unproven provenance into
- *   the typed key. If a real consumer appears it returns as an encoder.
+ * - The original's key-prefix splice helper is deleted: it was unused
+ *   upstream and splicing a different relation id into an [`StorageKey`]'s
+ *   bytes would launder unproven provenance into the typed key. If a real
+ *   consumer appears it returns as an encoder.
  * - Fix on port / #301 T6: the original's column-by-column
  *   `ensure_compatible` chained the *input*'s key columns with the
  *   *stored* relation's own non-key columns, so an input's dependent
@@ -124,7 +124,9 @@ use crate::store::{ReadTx, Storage, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::{InputProgram, InputRelationHandle};
-use kyzo_model::schema::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
+use kyzo_model::schema::StoredRelationMetadata;
+#[cfg(test)]
+use kyzo_model::schema::{CompatibleInputSchema, RelationWriteShape};
 use kyzo_model::value::{
     AsOf, DataValue, MAX_VALIDITY_TS, RelationId, ScanBound, StorageKey, StoredValiditySlot, Tuple,
     TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
@@ -619,12 +621,10 @@ mod catalog {
             fn __proof() {}
         }
         impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-        // Marker exists only to give the second blanket impl below a
-        // distinct type parameter; the ambiguity trick never constructs
-        // it, so a plain dead_code lint fires by design.
-        #[allow(dead_code)]
-        struct Marker;
-        impl<T: CatalogRecord> AmbiguousIfImpl<Marker> for T {}
+        // Underscored marker: type-parameter only for the ambiguity trick;
+        // never constructed as a value.
+        struct _Marker;
+        impl<T: CatalogRecord> AmbiguousIfImpl<_Marker> for T {}
         let _ = <kyzo_model::value::DataValue as AmbiguousIfImpl<_>>::__proof;
     };
 
@@ -676,27 +676,6 @@ impl RelationHandle {
         self.metadata.non_keys.len() + self.metadata.keys.len()
     }
 
-    /// Column name → position in the full tuple (keys then non-keys), for
-    /// binding resolution.
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn raw_binding_map(&self) -> BTreeMap<Symbol, usize> {
-        let mut ret = BTreeMap::new();
-        for (i, col) in self.metadata.keys.iter().enumerate() {
-            ret.insert(Symbol::new(col.name.clone(), Default::default()), i);
-        }
-        for (i, col) in self.metadata.non_keys.iter().enumerate() {
-            ret.insert(
-                Symbol::new(col.name.clone(), Default::default()),
-                i + self.metadata.keys.len(),
-            );
-        }
-        ret
-    }
-
-    #[allow(dead_code)] // mid-wiring surface
-    pub(crate) fn has_index(&self, index_name: &str) -> bool {
-        self.indices.iter().any(|idx| idx.name == index_name)
-    }
 
     pub(crate) fn has_no_index(&self) -> bool {
         self.indices.is_empty()
@@ -935,34 +914,6 @@ impl RelationHandle {
         Ok(ret)
     }
 
-    /// Encode the non-key columns of `tuple` as this relation's stored
-    /// value: the columns' canonical encodings concatenated. No header —
-    /// the relation id is the key prefix, not repeated here, and the value
-    /// decoder ([`extend_tuple_from_v`]) reads canonical bytes directly.
-    #[allow(dead_code)] // RelationHandle store door mid-wiring
-    pub(crate) fn encode_val_for_store(
-        &self,
-        tuple: &[DataValue],
-        span: SourceSpan,
-    ) -> Result<Vec<u8>> {
-        let start = self.metadata.keys.len();
-        // A short tuple is a caller arity error, reported as one — never a
-        // slice-index panic.
-        ensure!(
-            tuple.len() >= start,
-            StoredRelArityMismatch {
-                name: self.name.to_string(),
-                expect_arity: self.arity(),
-                actual_arity: tuple.len(),
-                span
-            }
-        );
-        let mut ret = Vec::with_capacity(16 * (tuple.len() - start));
-        for v in &tuple[start..] {
-            kyzo_model::value::append_canonical(&mut ret, v);
-        }
-        Ok(ret)
-    }
 
     /// Encode an arbitrary tuple as a stored value (used where the caller
     /// has already split keys from dependents). Canonical bytes, no header.
@@ -982,7 +933,7 @@ impl RelationHandle {
     /// whole schema for `shape`. Constructs a branded
     /// [`CompatibleInputSchema`] or refuses the whole schema — never
     /// approves columns one at a time.
-    #[allow(dead_code)] // RelationHandle store door mid-wiring
+    #[cfg(test)]
     pub(crate) fn prove_compatible_input(
         &self,
         inp: &InputRelationHandle,
@@ -1392,7 +1343,7 @@ pub(crate) struct RelationHasConstraints(
 );
 
 /// Whether a relation of this name exists in the persistent catalog.
-#[allow(dead_code)] // mid-wiring / test-only surface
+#[cfg(test)]
 pub(crate) fn relation_exists(tx: &impl ReadTx, name: &str) -> Result<bool> {
     tx.exists(&SystemKey::Relation(name).encode())
 }

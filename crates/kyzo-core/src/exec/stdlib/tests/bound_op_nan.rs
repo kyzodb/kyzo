@@ -8,7 +8,8 @@
  */
 
 //! StdlibRefuse::NanAnswer at BoundOp::apply — sole NaN success refuse.
-use crate::exec::stdlib::{StdlibRefuse, resolve_op};
+use crate::exec::stdlib::errors::StdlibRefuse;
+use crate::exec::stdlib::resolve_op;
 use kyzo_model::value::DataValue;
 
 #[test]

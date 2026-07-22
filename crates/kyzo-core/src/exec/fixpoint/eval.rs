@@ -350,7 +350,6 @@ impl Budget {
     /// ticker — that granularity is a production-only concern for bounding
     /// rayon's mid-epoch parallel materialization) and needs its ceiling to
     /// check against directly.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn epoch_ceiling(&self) -> NonZeroU32 {
         self.epoch_ceiling
     }

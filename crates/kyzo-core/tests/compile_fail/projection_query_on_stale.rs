@@ -22,13 +22,11 @@ impl ProjectionKind for DemoKind {
     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
 }
 
-#[allow(dead_code)]
-fn query_on_stale(stale: Stale<DemoKind>) {
+fn _query_on_stale(stale: Stale<DemoKind>) {
     let _ = stale.query(&());
 }
 
-#[allow(dead_code)]
-fn classify_path_yields_stale() -> Stale<DemoKind> {
+fn _classify_path_yields_stale() -> Stale<DemoKind> {
     let sealed = ProjectionBuilder::new(DemoKind).seal(Generation::new(1));
     Generation::new(2)
         .classify(sealed)

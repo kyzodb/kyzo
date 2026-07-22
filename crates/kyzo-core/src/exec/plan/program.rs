@@ -191,7 +191,6 @@ pub(crate) enum NormalFormRulesOrFixed {
 }
 
 impl NormalFormRulesOrFixed {
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn rules(&self) -> Option<&[NormalFormInlineRule]> {
         match self {
             NormalFormRulesOrFixed::Rules { rules: r } => Some(r),
@@ -252,20 +251,17 @@ impl NormalFormProgram {
     }
 
     /// What the entry is defined as.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn entry(&self) -> &NormalFormRulesOrFixed {
         &self.entry
     }
 
     /// The non-entry rules.
-    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn rules(&self) -> &BTreeMap<Symbol, NormalFormRulesOrFixed> {
         &self.rules
     }
 
     /// Whether `::set_options` disabled the magic-sets rewrite for this
     /// query. Travels to [`StratifiedNormalFormProgram`] at stratification.
-    #[allow(dead_code)] // program option accessor mid-wiring
     pub(crate) fn disable_magic_rewrite(&self) -> bool {
         self.disable_magic_rewrite
     }
@@ -351,7 +347,6 @@ impl StratifiedNormalFormProgram {
     }
 
     /// The strata in execution order.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub fn strata(&self) -> &[NormalFormStratum] {
         &self.strata
     }

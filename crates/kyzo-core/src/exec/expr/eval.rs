@@ -160,7 +160,6 @@ pub(crate) fn eval_pred(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Resul
 }
 
 /// Fold then evaluate closed expressions (including nondeterministic ops once).
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn eval_to_const(mut expr: Expr) -> Result<DataValue> {
     expr.partial_eval()?;
     if let Expr::Const { val, .. } = expr {

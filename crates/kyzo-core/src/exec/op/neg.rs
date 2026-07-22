@@ -92,7 +92,6 @@ impl NegJoin {
     }
 
     /// The join strategy this node will use (explain output).
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub fn join_type(&self) -> Result<&'static str> {
         let join_indices = self
             .joiner

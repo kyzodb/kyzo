@@ -22,7 +22,7 @@
 //! asymptotically suboptimal on cyclic queries (AGM triangle). First
 //! milestone — live Store `seek` + Leapfrog Triejoin over 3 relations —
 //! lives at [`crate::store::skip_walk::leapfrog_intersect_3`] (metered
-//! under `store::`). This module re-exports that primitive; it does **not**
+//! under `store::`). This module points at that primitive; it does **not**
 //! yet replace the binary-join planner. AGM-triangle optimality is not a
 //! CI theorem until the Free-Join planner lands (`[research-open]`).
 // ─────────────────────────────────────────────────────────────────────────
@@ -31,10 +31,6 @@
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
 
-/// Free-Join first-cut primitive (LFTJ over 3 ordered relations via live
-/// `SkipCursor::seek`). Seat 99 milestone — not planner replacement.
-#[allow(unused_imports)] // re-export for exec consumers / seat wiring
-pub(crate) use crate::store::skip_walk::leapfrog_intersect_3;
 use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::exec::fixpoint::eval::AtomOccurrence;
 use crate::exec::op::batch_ops::{BATCH_ROWS, Batch, BatchIter};
@@ -50,35 +46,6 @@ use kyzo_model::value::Tuple;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) fn flatten_err<T, E1: Into<miette::Error>, E2: Into<miette::Error>>(
-    v: std::result::Result<std::result::Result<T, E2>, E1>,
-) -> Result<T> {
-    match v {
-        Err(e) => Err(e.into()),
-        Ok(Err(e)) => Err(e.into()),
-        Ok(Ok(v)) => Ok(v),
-    }
-}
-
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) fn filter_iter(
-    filters: Vec<Expr>,
-    it: impl Iterator<Item = Result<Tuple>>,
-) -> impl Iterator<Item = Result<Tuple>> {
-    it.filter_map_ok(move |t| -> Option<Result<Tuple>> {
-        for p in filters.iter() {
-            match crate::exec::expr::eval_pred(p, &t) {
-                Ok(false) => return None,
-                Err(e) => return Some(Err(e)),
-                Ok(true) => {}
-            }
-        }
-        Some(Ok(t))
-    })
-    .map(flatten_err)
-}
 
 pub(crate) fn get_eliminate_indices(
     bindings: &[Symbol],
@@ -376,7 +343,6 @@ impl Debug for Joiner {
 impl Joiner {
     /// The join columns as a left-name → right-name map (explain output;
     /// its consumer lands with db.rs — deviation D5).
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn as_map(&self) -> BTreeMap<&str, &str> {
         self.left_keys
             .iter()
@@ -483,7 +449,6 @@ impl InnerJoin {
     }
 
     /// The join strategy this node will use (explain output).
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub fn join_type(&self) -> Result<&'static str> {
         Ok(match &self.right {
             RelAlgebra::Fixed(f) => f.join_type(),

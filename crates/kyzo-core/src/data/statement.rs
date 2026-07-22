@@ -109,7 +109,6 @@ impl StatementValue {
 pub struct ValidityTime(Interval);
 
 impl ValidityTime {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap a proven interval.
     pub fn new(interval: Interval) -> Self {
         Self(interval)
@@ -123,7 +122,6 @@ impl ValidityTime {
         ))
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Closed start, open end (still holds).
     pub fn from_onward(from_micros: i64) -> Self {
         Self(Interval::new(Bound::Closed(from_micros), Bound::Unbounded))
@@ -140,7 +138,6 @@ impl ValidityTime {
 pub struct ContextId([u8; 32]);
 
 impl ContextId {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven context digest.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -159,7 +156,6 @@ impl ContextId {
 pub enum StatementContext {
     /// Holds without a restricting durable scope.
     Unscoped,
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Scoped to a durable context identity.
     Scoped(ContextId),
 }
@@ -169,7 +165,6 @@ pub enum StatementContext {
 pub struct SourceArtifactId([u8; 32]);
 
 impl SourceArtifactId {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven source-artifact digest.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -191,7 +186,6 @@ impl SourceArtifactId {
 pub enum StatementSource {
     /// None-surface: no source artifact — field is unbound by type.
     Unbound,
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Interpreted knowledge: artifact identity from evidence coordinates.
     Artifact(SourceArtifactId),
 }
@@ -202,13 +196,11 @@ impl StatementSource {
         Self::Unbound
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Bind to a source artifact (interpreted surfaces only).
     pub fn new(artifact: SourceArtifactId) -> Self {
         Self::Artifact(artifact)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the source artifact id when bound.
     pub fn artifact_id(&self) -> Option<&SourceArtifactId> {
         match self {
@@ -281,7 +273,6 @@ impl StatementBody {
         &self.source
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Consume into the six typed fields.
     pub fn into_fields(
         self,

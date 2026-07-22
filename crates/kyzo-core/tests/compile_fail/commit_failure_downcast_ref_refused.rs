@@ -13,8 +13,7 @@
 
 use kyzo::{CommitFailure, ConflictError};
 
-#[allow(dead_code)]
-fn branch_by_downcast(err: CommitFailure) {
+fn _branch_by_downcast(err: CommitFailure) {
     let _ = err.downcast_ref::<ConflictError>();
 }
 

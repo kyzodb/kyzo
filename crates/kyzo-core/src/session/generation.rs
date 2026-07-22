@@ -40,7 +40,6 @@ impl CatalogGeneration {
         CatalogGeneration(relation.0)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Lift a per-index witness into the catalog clock.
     pub(crate) fn from_index(index: IndexGeneration) -> Self {
         CatalogGeneration(index.0)
@@ -76,7 +75,6 @@ impl RelationGeneration {
         RelationGeneration(raw)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// The relation freshness counter (render-only for exporters).
     pub(crate) fn counter(self) -> u64 {
         self.0
@@ -102,19 +100,16 @@ impl RelationGeneration {
 pub(crate) struct IndexGeneration(u64);
 
 impl IndexGeneration {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Witness a loaded per-index counter as index freshness.
     pub(crate) fn witness(raw: u64) -> Self {
         IndexGeneration(raw)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// The index freshness counter (render-only for exporters).
     pub(crate) fn counter(self) -> u64 {
         self.0
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Lift into the catalog clock, then mint a projection stamp.
     pub(crate) fn projection_stamp(self) -> Generation {
         CatalogGeneration::from_index(self).projection_stamp()
@@ -144,7 +139,6 @@ impl Default for IndexStatus {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl IndexStatus {
     /// Witness live Catalog generation and optional sealed index generation.
     pub(crate) fn witness(live: CatalogGeneration, sealed: Option<IndexGeneration>) -> Self {
@@ -156,13 +150,11 @@ impl IndexStatus {
         self.live.counter()
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Live Catalog generation clock.
     pub(crate) fn live(self) -> CatalogGeneration {
         self.live
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Sealed index rebuild stamp, if any.
     pub(crate) fn sealed(self) -> Option<IndexGeneration> {
         self.sealed
@@ -189,7 +181,6 @@ impl IndexStatus {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Staleness of an index relative to Catalog generation (§20).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum IndexStaleness {
@@ -205,7 +196,6 @@ pub(crate) enum IndexStaleness {
 }
 
 impl IndexStaleness {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// True when the operator should treat the index as not matching live Catalog.
     pub(crate) fn is_stale(self) -> bool {
         !matches!(self, IndexStaleness::Fresh { .. })

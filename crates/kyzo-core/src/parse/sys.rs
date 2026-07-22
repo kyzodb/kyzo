@@ -68,9 +68,7 @@ pub(crate) enum SysOp {
     ListRelations,
     ListRunning,
     ListFixedRules,
-    #[allow(dead_code)] // mid-wiring / test-only surface
     KillRunning(ProcessId),
-    #[allow(dead_code)] // mid-wiring / test-only surface
     Explain(Box<InputProgram>),
     Verify(Box<InputProgram>),
     RemoveRelation(Vec<Symbol>),

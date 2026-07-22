@@ -20,7 +20,6 @@ pub struct BoundOp {
     body: fn(&[DataValue]) -> Result<DataValue>,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl BoundOp {
     /// Sole apply door — typed NaN Refuse (`StdlibRefuse::NanAnswer`).
     pub fn apply(&self, args: &[DataValue]) -> Result<DataValue> {
@@ -50,15 +49,6 @@ impl BoundOp {
         self.decl().name
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-    pub fn display_name(&self) -> String {
-        self.decl().display_name()
-    }
-
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-    pub fn min_arity(&self) -> usize {
-        self.decl().min_arity
-    }
 
     pub fn is_vararg(&self) -> bool {
         self.decl().is_vararg()

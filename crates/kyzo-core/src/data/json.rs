@@ -13,7 +13,6 @@ use miette::{
     Diagnostic, GraphicalReportHandler, GraphicalTheme, JSONReportHandler, Report, ThemeCharacters,
     ThemeStyles,
 };
-#[allow(unused_imports)] // reexport surface; callers bind later or via tests
 pub use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::sync::LazyLock;
@@ -21,10 +20,9 @@ use thiserror::Error;
 
 use kyzo_model::value::{DataValue, NonFiniteJsonNumber, Tuple};
 
-#[allow(unused_imports)] // reexport surface; callers bind later or via tests
-pub use kyzo_model::envelope::json::{
-    JsonData, json_from_serde, json_to_datavalue, serde_from_json,
-};
+pub use kyzo_model::envelope::json::{JsonData, json_to_datavalue};
+#[cfg(test)]
+pub use kyzo_model::envelope::json::{json_from_serde, serde_from_json};
 
 /// Private seal: any private field blocks struct-literal minting outside
 /// this module, so header/row/next cannot be forged past [`NamedRows::try_new`]

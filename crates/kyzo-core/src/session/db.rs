@@ -846,8 +846,12 @@ impl<S: Storage> Engine<S> {
             SysOp::RemoveIndex(rel, idx) => self.sys_remove_index(&rel, &idx),
 
             // Jobs / verify (already delegated).
-            SysOp::ListRunning => crate::session::jobs::list_running(),
-            SysOp::KillRunning(_) => crate::session::jobs::kill_running(),
+            SysOp::ListRunning => {
+                crate::session::jobs::run_job_op(crate::session::jobs::JobSysOp::ListRunning)
+            }
+            SysOp::KillRunning(pid) => crate::session::jobs::run_job_op(
+                crate::session::jobs::JobSysOp::KillRunning { pid: pid.get() },
+            ),
             // Query-answer `::verify` — provenance door (session/verify.rs).
             SysOp::Verify(prog) => {
                 let outcome = self.verify_input_program(*prog, cur_vld, options)?;

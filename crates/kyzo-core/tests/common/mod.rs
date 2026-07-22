@@ -16,7 +16,6 @@
 //! `fjall` storage (not an in-memory stand-in), torn down only at process
 //! exit — mirroring `examples/language_tour.rs`'s own fixture.
 
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 

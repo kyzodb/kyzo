@@ -15,7 +15,6 @@
 //! remains in [`crate::value::canonical`]. Expr's one normative serde
 //! codec (seat 59) is pinned by a golden round-trip vector in [`tests`].
 
-#![cfg_attr(not(test), allow(dead_code))]
 
 #[cfg(test)]
 mod tests;

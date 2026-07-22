@@ -13,6 +13,66 @@
 
 //! Index searches as relations: the engines' operators
 //! (HNSW, FTS, LSH, spatial) joined into plans.
+//!
+//! ## Filtered-ANN-under-churn (story #376 T13 — research program)
+//!
+//! KyzoDB's exceed-the-ceiling claim is **provable filtered ANN under churn** —
+//! not static filtered recall. The field's best pieces exist in isolation
+//! (ACORN predicate-agnostic HNSW traversal; Window-Filters range-recall
+//! theory; Ghost-Vectors / tombstone healing; DST connectivity campaigns);
+//! nobody publishes the end-to-end theorem on one ordered substrate under
+//! concurrent insert / delete / compaction. This module is the
+//! **evaluator-fed door** of that program.
+//!
+//! ### Design (ruled shape)
+//!
+//! 1. **Evaluator-fed ACORN-style traversal.** KyzoScript resolves the
+//!    predicate into an [`Expr`] on the search atom; [`SearchRA`] compiles
+//!    that filter against the full output frame (`parent ++ own_bindings`)
+//!    and feeds it into the engine's filter-aware HNSW path
+//!    (`Hnsw::knn` → `hnsw_knn_filtered`). That path is ACORN-shaped:
+//!    predicate-agnostic graph walk (Design V — expand through
+//!    filter-failing nodes for connectivity; admit only matches into the
+//!    result), with selective filters routed to exact scan and a load-bearing
+//!    scan fallback so `min(k, M)` is a result-set guarantee, not a recall
+//!    hope. Soft "post-filter a distance-only candidate pool" is deleted.
+//! 2. **Window-Filters range-recall bounds.** Contiguous numeric-label
+//!    windows (key ranges as the first Window-Filters cut) carry an
+//!    executable lower bound on recall@k vs an independent oracle — metered
+//!    in `hnsw_filter_harness`, not invented green here.
+//! 3. **Deletes through the compaction / remove path.** Live deletes call
+//!    [`hnsw_remove`] (mutation tier) so the index population shrinks; graph
+//!    healing over tombstones remains the recorded ceiling item on the
+//!    HNSW bones. Soft "leave deleted vectors in the graph forever and
+//!    hope the filter skips them" is Unconstructible as the delete law.
+//! 4. **DST connectivity under concurrent insert/delete/compaction.** The
+//!    full proof is a DST campaign that interleaves filtered search with
+//!    mutation + compaction and refuses connectivity / recall regressions.
+//!    That campaign is **not** claimed green by this milestone.
+//!
+//! ### Claude adversaries (binding)
+//!
+//! 1. Filter excludes every neighbour of the entry point → still finds matches
+//!    (ACORN disconnection). 2. Delete-then-search never returns a deleted id
+//!    through the durable remove/LSM path. 3. Connectivity under interleaved
+//!    insert/delete/compaction. Metered in `hnsw_filter_harness` (T13 suite).
+//!
+//! ### First milestone (executable now)
+//!
+//! Harness adversary suite: ACORN disconnection, durable delete-then-search,
+//! interleaved churn connectivity. SearchRA's role is the already-live
+//! evaluator→engine filter handoff (no second filter serialization).
+//!
+//! ### `[research-open]` remainder + named blocker
+//!
+//! Full Window-Filters β-tree partition over the ordered substrate,
+//! compaction-healing as a filter-harness meter, and a **concurrent** DST
+//! connectivity campaign remain **`[research-open]`**. **Named blocker:** no
+//! DST lane in `kyzo-trials` yet interleaves filtered HNSW search with
+//! concurrent insert / delete / compaction while asserting connectivity +
+//! Window-Filters theoretical range-recall bounds as a CI theorem —
+//! evaluator-fed path + delete-churn first cut only until that door opens.
+//! Do not invent green end-to-end churn proofs.
 // ─────────────────────────────────────────────────────────────────────────
 // SearchRA: index searches as joins
 // ─────────────────────────────────────────────────────────────────────────

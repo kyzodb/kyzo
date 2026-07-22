@@ -21,8 +21,7 @@ impl ProjectionKind for DemoKind {
     fn search(&self, _query: &Self::Query) -> Self::Candidates {}
 }
 
-#[allow(dead_code)]
-fn query_on_builder(builder: ProjectionBuilder<DemoKind>) {
+fn _query_on_builder(builder: ProjectionBuilder<DemoKind>) {
     let _ = builder.query(&());
 }
 

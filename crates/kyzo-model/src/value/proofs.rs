@@ -62,12 +62,10 @@ macro_rules! assert_not_impl {
                 fn __proof() {}
             }
             impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-            // Marker exists only to give the second blanket impl below a
-            // distinct type parameter; the ambiguity trick never
-            // constructs it, so a plain dead_code lint fires by design.
-            #[allow(dead_code)]
-            struct Marker;
-            impl<T: ?Sized $(+ $tr)+> AmbiguousIfImpl<Marker> for T {}
+            // Underscored marker: type-parameter only for the ambiguity
+            // trick; never constructed as a value.
+            struct _Marker;
+            impl<T: ?Sized $(+ $tr)+> AmbiguousIfImpl<_Marker> for T {}
             // Unresolvable (ambiguous) the moment `$t` implements the
             // traits; resolvable — this line compiles — only while it does
             // not.

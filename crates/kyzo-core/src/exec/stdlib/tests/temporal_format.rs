@@ -14,10 +14,6 @@ use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs};
 
-#[allow(dead_code)] // mid-wiring / test-only surface
-fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() < 1e-5
-}
 
 #[test]
 fn test_pre_epoch_timestamps() {

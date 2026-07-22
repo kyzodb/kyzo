@@ -646,7 +646,6 @@ impl OutputStrideLeft {
 impl FixedRuleOutput {
     /// Brand a fresh output store with the rule's declared arity and
     /// the application's span for error labeling.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new(arity: usize, span: SourceSpan) -> Self {
         Self {
             store: RegularTempStore::default(),
@@ -849,7 +848,6 @@ impl SimpleRuleBody for EmptyNamedRowsBody {
 }
 
 /// Named body: forward the first input relation unchanged.
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub struct IdentityNamedRowsBody;
 
 impl SimpleRuleBody for IdentityNamedRowsBody {
@@ -869,7 +867,6 @@ impl SimpleRuleBody for IdentityNamedRowsBody {
 
 /// Named body: deliberately emit a one-column row under a mismatched
 /// arity declaration — used to pin the universal writer check.
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub struct MismatchedArityBody;
 
 impl SimpleRuleBody for MismatchedArityBody {
@@ -1179,20 +1176,6 @@ impl GraphAlgorithmInvariantError {
     }
 }
 
-/// Refuse with [`GraphAlgorithmInvariantError`] at a named proof site.
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) fn refuse_graph_invariant<T>(invariant: &'static str) -> Result<T> {
-    Err(GraphAlgorithmInvariantError::refuse(invariant))
-}
-
-/// First column of a tuple the input boundary already proved non-empty.
-#[allow(dead_code)] // mid-wiring / test-only surface
-pub(crate) fn tuple_first_column(tuple: &Tuple) -> Result<&DataValue> {
-    tuple
-        .as_slice()
-        .first()
-        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("tuple_first_column"))
-}
 
 /// First column of an owned tuple (consumes the head value).
 pub(crate) fn tuple_into_first_column(tuple: Tuple) -> Result<DataValue> {
@@ -1386,7 +1369,6 @@ pub(crate) mod tests_support {
     }
 
     /// Build options from string keys (known fixed-rule option names only).
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn opts(pairs: &[(&str, Expr)]) -> FixedRuleOptions {
         FixedRuleOptions::from_entries(
             pairs

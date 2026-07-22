@@ -12,8 +12,7 @@
 
 use kyzo::WriteTx;
 
-#[allow(dead_code)]
-fn spent_after_commit<T: WriteTx>(mut tx: T) {
+fn _spent_after_commit<T: WriteTx>(mut tx: T) {
     let _ = tx.commit();
     let _ = tx.put(b"k", b"v");
 }

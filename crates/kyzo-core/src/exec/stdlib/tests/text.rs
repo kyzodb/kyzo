@@ -11,10 +11,6 @@
 use crate::exec::stdlib::text::*;
 use kyzo_model::value::DataValue;
 
-#[allow(dead_code)] // mid-wiring / test-only surface
-fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() < 1e-5
-}
 
 #[test]
 fn test_str_includes() {

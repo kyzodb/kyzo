@@ -179,7 +179,6 @@ impl<'a> LevelRowRef<'a> {
     }
 
     /// Named peel alias.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn as_slice(self) -> &'a [u8] {
         self.0
     }
@@ -187,7 +186,6 @@ impl<'a> LevelRowRef<'a> {
 
 impl LevelArenaBytes {
     /// Empty arena — the only open mint beside branded append doors.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new() -> Self {
         Self(Vec::new())
     }
@@ -198,7 +196,6 @@ impl LevelArenaBytes {
     }
 
     /// Named peel alias.
-    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn as_slice(&self) -> &[u8] {
         &self.0
     }
@@ -305,7 +302,6 @@ impl<L> LevelStack<L> {
         self.above.last().unwrap_or(&self.bottom)
     }
 
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub fn len(&self) -> usize {
         self.above.len() + 1
     }
@@ -382,7 +378,6 @@ impl NormalLevel {
         self.offsets.is_empty()
     }
     /// Row bytes at index `i`, or `None` when out of bounds.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn row(&self, i: usize) -> Option<LevelRowRef<'_>> {
         (i < self.len()).then(|| self.row_at(i))
     }
@@ -1380,7 +1375,6 @@ pub struct RegularTempStore {
 /// meet store's group key): still `DataValue`-shaped, since the meet path
 /// is unconverted this chunk (`MeetAggrStore`/`MeetLevel` stay as-is; see
 /// this module's doc).
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn empty_tuple_ref() -> &'static Tuple {
     static EMPTY: std::sync::OnceLock<Tuple> = std::sync::OnceLock::new();
     EMPTY.get_or_init(Tuple::new)
@@ -1850,7 +1844,6 @@ impl<'a> TupleInIter<'a> {
     /// Construct a view over an already-interleaved (key-part, value-part,
     /// skip) triple — the non-suffix meet path, where `key`/`val` are
     /// `DataValue` projections of a fully rebuilt logical row.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn new(key: &'a [DataValue], val: &'a [DataValue], skip: LimiterSkip) -> Self {
         TupleInIter::Values { key, val, skip }
     }

@@ -828,7 +828,6 @@ impl<S: Storage> Engine<S> {
         registry.operator_health = surface;
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Set the index-status authority (§20).
     pub(crate) fn set_index_status(&self, status: IndexStatus) {
         let mut registry = self

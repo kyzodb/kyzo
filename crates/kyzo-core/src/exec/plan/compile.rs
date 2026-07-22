@@ -251,7 +251,6 @@ impl CompiledRuleSet {
     /// Output arity. Total by construction: an inline set proves itself
     /// non-empty and signature-uniform at [`CompiledInlineRules::new`]
     /// (the original indexed `rules[0]` here).
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn arity(&self) -> usize {
         match self {
             CompiledRuleSet::Rules(rules) => rules.aggr.len(),
@@ -1142,7 +1141,6 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
 /// program proven fixed-rule-free (today: the tests; the parse tier
 /// refuses unknown fixed rules much earlier) use this as `F`.
 #[derive(Debug)]
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub enum NoFixedRules {}
 
 impl FixedRuleEval for NoFixedRules {
