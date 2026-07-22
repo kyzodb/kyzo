@@ -187,7 +187,9 @@ impl LshPermutationBytes {
     /// a public `Vec` field.
     #[cfg(test)]
     pub(crate) fn corrupt_truncate_last_byte_for_test(&mut self) {
-        let _ = self.0.pop();
+        match self.0.pop() {
+            value => core::mem::drop(value),
+        }
     }
 }
 
@@ -379,7 +381,7 @@ impl HashPermutations {
     }
 
     /// Borrow the seed words.
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[cfg(test)]
     pub(crate) fn as_slice(&self) -> &[u32] {
         &self.0
     }
@@ -645,7 +647,9 @@ fn decode_inv_chunks(
             .map(|chunk| match chunk {
                 DataValue::Bytes(b) => Ok(b),
                 other @ (data_value_any!()) => {
-                    let _ = other;
+                    match other {
+                        value => core::mem::drop(value),
+                    }
                     Err(miette!(IndexRowCorrupt::new(
                         &inv_idx.name,
                         key,
@@ -655,7 +659,9 @@ fn decode_inv_chunks(
             })
             .collect(),
         other => {
-            let _ = other;
+            match other {
+                value => core::mem::drop(value),
+            }
             bail!(IndexRowCorrupt::new(
                 &inv_idx.name,
                 key,
@@ -759,7 +765,9 @@ pub(crate) fn lsh_put<T: WriteTx>(
             HashValues::new(n_grams.iter().map(|t| ngram_bytes(t)), perms)
         }
         data_value_any!() => {
-            let _ = to_index;
+            match to_index {
+                value => core::mem::drop(value),
+            }
             bail!(LshValueRefused::PutUnsupported)
         }
     };
@@ -850,13 +858,13 @@ impl RelationIndexSearch for Lsh {
 /// This returns a candidate SET, not a similarity ranking (see the module
 /// docs). A `Null` query yields no candidates. `perms`/`tokenizer` follow
 /// the same caller contracts as [`lsh_put`].
+#[cfg(test)]
 impl Lsh {
     /// Relation-backed LSH candidate search — UFCS door into
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
     /// function `lsh_search`. Live host dispatch uses the trait method
     /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // UFCS alias of live RelationIndexSearch door
     pub(crate) fn search_index(
         cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,
@@ -907,7 +915,9 @@ fn lsh_search_body(
             HashValues::new(n_grams.iter().map(|t| ngram_bytes(t)), perms)
         }
         data_value_any!() => {
-            let _ = q;
+            match q {
+                value => core::mem::drop(value),
+            }
             bail!(LshValueRefused::SearchUnsupported)
         }
     };
@@ -1370,7 +1380,11 @@ mod tests {
                 let upper = (rel.id.raw() + 1).to_be_bytes();
                 for kv in rtx.range_scan(lower.as_bytes(), &upper) {
                     let (k, v) = kv.unwrap();
-                    out.push((k[8..].to_vec(), v.get(8..).unwrap_or(&[]).to_vec()));
+                    let val_tail = match v.get(8..) {
+                        Some(t) => t,
+                        None => &[],
+                    };
+                    out.push((k[8..].to_vec(), val_tail.to_vec()));
                 }
             }
             out
@@ -1619,7 +1633,9 @@ mod tests {
             &f.inv,
         )
         .unwrap();
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// A corrupt inverse-index row is a typed error with key context,
@@ -1675,7 +1691,9 @@ mod tests {
         garbage.push(0xc1);
         tx.put(&inv_key, &garbage).unwrap();
         assert!(lsh_del(&mut tx, &row, None, &f.idx, &f.inv).is_err());
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// The manifest's wire form round-trips and its bytes are pinned: it

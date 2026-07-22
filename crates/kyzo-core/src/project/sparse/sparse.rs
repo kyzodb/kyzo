@@ -236,7 +236,6 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
 /// relation's key columns). Non-key: `weight` (a `Float`). The dimension is the
 /// leading key column so a query dimension's posting list is a single prefix
 /// scan.
-#[allow(dead_code)] // [OPEN] session IndexKind::Sparse host mutation door
 pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("dim"),
@@ -283,7 +282,6 @@ fn posting_src_tail(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
 ///
 /// Host mutation door: session `IndexKind::Sparse` is [OPEN] — this algorithm
 /// is complete; the catalog/ops arm is the unbuilt seat.
-#[allow(dead_code)] // [OPEN] session IndexKind::Sparse host mutation door
 pub(crate) fn sparse_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
@@ -323,7 +321,6 @@ pub(crate) fn sparse_put<T: WriteTx>(
 ///
 /// Host mutation door: session `IndexKind::Sparse` is [OPEN] — this algorithm
 /// is complete; the catalog/ops arm is the unbuilt seat.
-#[allow(dead_code)] // [OPEN] session IndexKind::Sparse host mutation door
 pub(crate) fn sparse_del<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
@@ -362,7 +359,6 @@ pub(crate) fn sparse_del<T: WriteTx>(
 /// hybrid-fusion / future df-idf reweighting seam (a BM25-family variant would
 /// need `N`), so the RA tier can obtain it once without a hidden per-search
 /// cache in these pure functions.
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) fn sparse_total_docs(tx: &impl ReadTx, base: &RelationHandle) -> Result<usize> {
     let (start, end) = base.whole_relation_bounds();
     tx.range_count(&start, &end)
@@ -406,9 +402,7 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
 /// (P038).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SparseBindScore {
-    #[allow(dead_code)] // mid-wiring / test-only surface
     Omit,
-    #[allow(dead_code)] // mid-wiring surface
     Append,
 }
 
@@ -473,7 +467,6 @@ impl Sparse {
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
     /// function `sparse_search`. Session `IndexKind::Sparse` is [OPEN]; the
     /// trait door and this UFCS alias are complete.
-    #[allow(dead_code)] // UFCS alias; [OPEN] session IndexKind::Sparse
     pub(crate) fn search_index(
         tx: &impl ReadTx,
         query: &[(u32, f32)],
@@ -1025,7 +1018,9 @@ mod tests {
         );
         // A clean vector still admits.
         assert!(put(&mut tx, &[(0, 1.0), (2, 0.5)]).is_ok());
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// A filter runs AFTER scoring and `k` counts matching rows (mirrors the

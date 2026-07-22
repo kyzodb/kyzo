@@ -44,10 +44,14 @@ use jieba_rs::Jieba;
 use kyzo_model::data_value_any;
 use miette::{Diagnostic, Result, ensure};
 use serde::Deserialize;
+#[cfg(test)]
 use sha2::digest::FixedOutput;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use smartstring::{LazyCompact, SmartString};
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 
@@ -215,12 +219,10 @@ impl TokenizerConfig {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    #[allow(dead_code)] // mid-wiring surface
     pub fn args(&self) -> &[DataValue] {
         &self.args
     }
@@ -236,18 +238,19 @@ impl TokenizerConfig {
     /// and all-`Bool`-arg configs hash identically across the forks — the
     /// `Bool` tags are unchanged. CozoDB never persisted this hash, so
     /// nothing written by the base depends on it.)
+    #[cfg(test)]
     pub(crate) fn config_hash(&self, filters: &[Self]) -> impl AsRef<[u8]> {
         let mut hasher = Sha256::new();
-        hasher.update(self.name.as_bytes());
+        hasher.update(self.name().as_bytes());
         let mut args_vec = vec![];
-        for arg in &self.args {
+        for arg in self.args() {
             kyzo_model::value::append_canonical(&mut args_vec, arg);
         }
         hasher.update(&args_vec);
         for filter in filters {
-            hasher.update(filter.name.as_bytes());
+            hasher.update(filter.name().as_bytes());
             args_vec.clear();
-            for arg in &filter.args {
+            for arg in filter.args() {
                 kyzo_model::value::append_canonical(&mut args_vec, arg);
             }
             hasher.update(&args_vec);
@@ -261,7 +264,7 @@ impl TokenizerConfig {
     /// `::lsh create` so an unknown name or malformed argument is refused
     /// *before* the manifest is written. `build` stays fallible regardless —
     /// see the module docs.
-    #[allow(dead_code)] // FTS filter validation door mid-wiring
+    #[cfg(test)]
     pub(crate) fn validate(&self, filters: &[Self]) -> Result<()> {
         self.build(filters).map(|_| ())
     }
@@ -278,29 +281,32 @@ impl TokenizerConfig {
         })
     }
     pub(crate) fn construct_tokenizer(&self) -> Result<Box<dyn Tokenizer>> {
-        Ok(match &self.name as &str {
+        Ok(match self.name() {
             "Raw" => Box::new(RawTokenizer),
             "Simple" => Box::new(SimpleTokenizer),
             "Whitespace" => Box::new(WhitespaceTokenizer),
             "NGram" => {
-                let min_gram = self
-                    .args
-                    .first()
-                    .unwrap_or(&DataValue::from(1))
-                    .get_int()
-                    .ok_or(TokenizerBuildRefusal::NgramMinNotInt)?;
-                let max_gram = self
-                    .args
-                    .get(1)
-                    .unwrap_or(&DataValue::from(min_gram))
-                    .get_int()
-                    .ok_or(TokenizerBuildRefusal::NgramMaxNotInt)?;
-                let prefix_only = self
-                    .args
-                    .get(2)
-                    .unwrap_or(&DataValue::Bool(false))
-                    .get_bool()
-                    .ok_or(TokenizerBuildRefusal::NgramPrefixNotBool)?;
+                let min_default = DataValue::from(1);
+                let min_gram = match self.args().first() {
+                    Some(v) => v,
+                    None => &min_default,
+                }
+                .get_int()
+                .ok_or(TokenizerBuildRefusal::NgramMinNotInt)?;
+                let max_default = DataValue::from(min_gram);
+                let max_gram = match self.args().get(1) {
+                    Some(v) => v,
+                    None => &max_default,
+                }
+                .get_int()
+                .ok_or(TokenizerBuildRefusal::NgramMaxNotInt)?;
+                let prefix_default = DataValue::Bool(false);
+                let prefix_only = match self.args().get(2) {
+                    Some(v) => v,
+                    None => &prefix_default,
+                }
+                .get_bool()
+                .ok_or(TokenizerBuildRefusal::NgramPrefixNotBool)?;
                 ensure!(min_gram >= 1, TokenizerBuildRefusal::NgramMinTooSmall);
                 ensure!(
                     max_gram >= min_gram,
@@ -313,13 +319,13 @@ impl TokenizerConfig {
                 ))
             }
             "Cangjie" => {
-                let hmm = match self.args.get(1) {
+                let hmm = match self.args().get(1) {
                     None => false,
                     Some(d) => d
                         .get_bool()
                         .ok_or(TokenizerBuildRefusal::CangjieHmmNotBool)?,
                 };
-                let option = match self.args.first() {
+                let option = match self.args().first() {
                     None => cangjie::options::TokenizerOption::Default { hmm },
                     Some(d) => {
                         let s = d
@@ -330,7 +336,7 @@ impl TokenizerConfig {
                             "all" => cangjie::options::TokenizerOption::All,
                             "search" => cangjie::options::TokenizerOption::ForSearch { hmm },
                             "unicode" => cangjie::options::TokenizerOption::Unicode,
-                            _ => {
+                            _other => {
                                 return Err(
                                     TokenizerBuildRefusal::CangjieUnknownKind(s.into()).into()
                                 );
@@ -343,19 +349,19 @@ impl TokenizerConfig {
                     option,
                 })
             }
-            _ => {
-                return Err(TokenizerBuildRefusal::UnknownTokenizer(self.name.clone()).into());
+            _other => {
+                return Err(TokenizerBuildRefusal::UnknownTokenizer(SmartString::from(self.name())).into());
             }
         })
     }
     pub(crate) fn construct_token_filter(&self) -> Result<BoxTokenFilter> {
-        Ok(match &self.name as &str {
+        Ok(match self.name() {
             "AlphaNumOnly" => AlphaNumOnlyFilter.into(),
             "AsciiFolding" => AsciiFoldingFilter.into(),
             "LowerCase" | "Lowercase" => LowerCaser.into(),
             "RemoveLong" => {
                 let limit = self
-                    .args
+                    .args()
                     .first()
                     .ok_or(TokenizerBuildRefusal::RemoveLongMissingArg)?
                     .get_int()
@@ -366,7 +372,7 @@ impl TokenizerConfig {
             "SplitCompoundWords" => {
                 let mut list_values = Vec::new();
                 match self
-                    .args
+                    .args()
                     .first()
                     .ok_or(TokenizerBuildRefusal::CompoundMissingArg)?
                 {
@@ -386,7 +392,7 @@ impl TokenizerConfig {
             }
             "Stemmer" => {
                 let language = match self
-                    .args
+                    .args()
                     .first()
                     .ok_or(TokenizerBuildRefusal::StemmerMissingLang)?
                     .get_str()
@@ -422,7 +428,7 @@ impl TokenizerConfig {
             }
             "Stopwords" => {
                 match self
-                    .args
+                    .args()
                     .first()
                     .ok_or(TokenizerBuildRefusal::StopwordsBadArg)?
                 {
@@ -443,8 +449,8 @@ impl TokenizerConfig {
                     }
                 }
             }
-            _ => {
-                return Err(TokenizerBuildRefusal::UnknownTokenFilter(self.name.clone()).into());
+            _other => {
+                return Err(TokenizerBuildRefusal::UnknownTokenFilter(SmartString::from(self.name())).into());
             }
         })
     }
@@ -473,8 +479,13 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
                     match key.as_str() {
                         "name" => name = Some(map.next_value()?),
                         "args" => args = Some(map.next_value()?),
-                        _ => {
-                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        _other => {
+                            match map.next_value()? {
+                                value => {
+                                    let typed: serde::de::IgnoredAny = value;
+                                    core::mem::drop(typed);
+                                }
+                            }
                         }
                     }
                 }
@@ -490,10 +501,10 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
     }
 }
 
+#[cfg(test)]
 /// The per-database analyzer cache: index name → analyzer, and config hash →
 /// analyzer, so N indices sharing one pipeline share one live instance.
 #[derive(Default)]
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) struct TokenizerCache {
     pub(crate) named_cache: RwLock<HashMap<SmartString<LazyCompact>, Arc<TextAnalyzer>>>,
     pub(crate) hashed_cache: RwLock<HashMap<Vec<u8>, Arc<TextAnalyzer>>>,
@@ -504,17 +515,17 @@ pub(crate) struct TokenizerCache {
 // panicked writer could have half-applied (entries are inserted whole), so
 // continuing with the underlying data is sound, and a panicking thread
 // elsewhere can no longer cascade into every later FTS query.
-#[allow(dead_code)] // mid-wiring / test-only surface
+#[cfg(test)]
 fn read_lock<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    l.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+    (match l.read() { Ok(g) => g, Err(poisoned) => poisoned.into_inner() })
 }
-#[allow(dead_code)] // mid-wiring / test-only surface
+#[cfg(test)]
 fn write_lock<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    l.write().unwrap_or_else(|poisoned| poisoned.into_inner())
+    (match l.write() { Ok(g) => g, Err(poisoned) => poisoned.into_inner() })
 }
 
+#[cfg(test)]
 impl TokenizerCache {
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn get(
         &self,
         tokenizer_name: &str,

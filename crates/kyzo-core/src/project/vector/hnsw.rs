@@ -831,6 +831,7 @@ impl HnswHitKey {
     }
 
     /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    #[cfg(test)]
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -1227,7 +1228,7 @@ fn dist_dispatch(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
         768 => dist_kernel::<768>(a, b, metric),
         1024 => dist_kernel::<1024>(a, b, metric),
         1536 => dist_kernel::<1536>(a, b, metric),
-        _ => dist_kernel_dyn(a, b, metric),
+        _other => dist_kernel_dyn(a, b, metric),
     }
 }
 
@@ -1284,6 +1285,7 @@ fn dist_kernel_dyn(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
 /// (Gao & Long, SIGMOD 2024 §3.2.2 / §5.2.4 — "nearly perfect confidence").
 /// Production stays at 1.9; Theorem 3.2 is probabilistic at this ε₀ — do not
 /// raise it to silence a 0/N property. Pinned with [`rabitq_error_bound`].
+#[cfg(test)]
 const RABITQ_EPSILON_0: f64 = 1.9;
 
 /// Hard-coverage ε for the property seal: large enough that independent Monte
@@ -1302,12 +1304,14 @@ const RABITQ_EPSILON_HARD: f64 = 3.5;
 /// consumes codes for candidate generation is a later seam — exact float
 /// [`IndexVec`] remains the live distance authority.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub(crate) struct RaBitQRotation {
     dim: usize,
     /// Row-major `P⁻¹` with orthonormal columns (≡ orthonormal rows of `P`).
     inv: Vec<f64>,
 }
 
+#[cfg(test)]
 impl RaBitQRotation {
     /// Build a seeded random orthogonal `P⁻¹` via modified Gram–Schmidt with
     /// reorthogonalization on Gaussian columns. Classical GS alone loses
@@ -1410,6 +1414,7 @@ impl RaBitQRotation {
 }
 
 /// Standard normal via Box–Muller over the house [`splitmix64`] stream.
+#[cfg(test)]
 fn rabitq_gauss(state: &mut u64) -> f64 {
     let u1 = (splitmix64(state) as f64 + 1.0) / (u64::MAX as f64 + 2.0);
     let u2 = (splitmix64(state) as f64) / (u64::MAX as f64 + 1.0);
@@ -1439,6 +1444,7 @@ impl RabitqSplitMix64 {
 /// This code is a rebuildable accelerator for bounded inner-product
 /// estimation (seat 14 Approximate — provable bound).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct RaBitQCode {
     dim: usize,
     /// Packed signs: bit `i` set ⇒ `+1/√D`, clear ⇒ `−1/√D` in the
@@ -1449,6 +1455,7 @@ pub(crate) struct RaBitQCode {
     ip_with_data_bits: u64,
 }
 
+#[cfg(test)]
 impl RaBitQCode {
     /// Quantize a **unit** data vector under `rotation`. Refuses non-unit
     /// (or wrong-dim) inputs — normalization is the caller's admit step;
@@ -1540,6 +1547,7 @@ impl RaBitQCode {
 /// `√((1 − ⟨ō,o⟩²) / ⟨ō,o⟩²) · ε₀ / √(D − 1)` — Gao & Long Eq (14)/(16).
 /// Callers pick `ε₀`; production uses [`RABITQ_EPSILON_0`], hard-coverage
 /// tests may pass a larger ε without changing the formula.
+#[cfg(test)]
 pub(crate) fn rabitq_error_bound(ip_with_data: f64, dim: usize, epsilon_0: f64) -> f64 {
     debug_assert!(dim >= 2);
     debug_assert!(ip_with_data > 0.0);
@@ -2130,7 +2138,10 @@ fn shrink_neighbour<T: WriteTx>(
         // or a resurrected tombstone both need the row written live;
         // an edge that was already live and stays selected needs no
         // rewrite.
-        let resurrected = was_tombstoned.get(&new).copied().unwrap_or(false);
+        let resurrected = match was_tombstoned.get(&new).copied() {
+            Some(v) => v,
+            None => false,
+        };
         if !old_candidate_set.contains(&new) || resurrected {
             HnswRow::Edge {
                 layer,
@@ -2146,7 +2157,7 @@ fn shrink_neighbour<T: WriteTx>(
         let old_dist = old_prio.dist();
         if !new_candidate_set.contains(&old) {
             let old_key_tuple = edge_key(layer, target, &old);
-            if was_tombstoned.get(&old).copied().unwrap_or(false) {
+match             if was_tombstoned.get(&old).copied() { Some(v) => v, None => false } {
                 let old_key =
                     idx.encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
                 tx.del(&old_key)?;
@@ -2731,6 +2742,7 @@ impl Hnsw {
     /// function `hnsw_knn`. Live host dispatch uses the trait method
     /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(crate) fn knn(
         tx: &impl ReadTx,
         q: &Vector,
@@ -3933,8 +3945,14 @@ mod tests {
                 eprintln!("  layer {layer:>3}: {count:>6} nodes");
             }
             let degrees: Vec<u64> = layer0_out_degree.values().copied().collect();
-            let min_deg = degrees.iter().min().copied().unwrap_or(0);
-            let max_deg = degrees.iter().max().copied().unwrap_or(0);
+            let min_deg = match degrees.iter().min().copied() {
+                Some(v) => v,
+                None => 0,
+            };
+            let max_deg = match degrees.iter().max().copied() {
+                Some(v) => v,
+                None => 0,
+            };
             let mean_deg = degrees.iter().sum::<u64>() as f64 / degrees.len().max(1) as f64;
             eprintln!(
                 "layer-0 live out-degree: min={min_deg} mean={mean_deg:.2} max={max_deg} \

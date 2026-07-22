@@ -115,17 +115,17 @@ impl NgramTokenizer {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Create a `NGramTokenizer` which generates tokens for all inner ngrams.
     ///
     /// This is as opposed to only prefix ngrams.
+    #[cfg(test)]
     pub(crate) fn all_ngrams(min_gram: usize, max_gram: usize) -> NgramTokenizer {
         Self::new(min_gram, max_gram, false)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Create a `NGramTokenizer` which only generates tokens for the
     /// prefix ngrams.
+    #[cfg(test)]
     pub(crate) fn prefix_only(min_gram: usize, max_gram: usize) -> NgramTokenizer {
         Self::new(min_gram, max_gram, true)
     }
@@ -165,7 +165,9 @@ impl<'a> TokenStream for NgramTokenStream<'a> {
                 return false;
             }
             self.token.position = 0;
-            let _ = self.token.set_offsets(offset_from, offset_to);
+            match self.token.set_offsets(offset_from, offset_to) {
+                token_ref => core::mem::drop(token_ref),
+            }
             self.token.text.clear();
             self.token.text.push_str(&self.text[offset_from..offset_to]);
             true

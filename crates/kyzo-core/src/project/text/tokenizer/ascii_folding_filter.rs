@@ -1532,7 +1532,7 @@ fn fold_non_ascii_char(c: char) -> Option<&'static str> {
         '\u{2053}' | // ⁓  [SWUNG DASH]
         '\u{FF5E}' // ～  [FULLWIDTH TILDE]
         => Some("~"),
-        _ => None
+        _other => None
     }
 }
 

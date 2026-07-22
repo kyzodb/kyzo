@@ -97,7 +97,7 @@ impl Residency {
                 *count = count.saturating_add(1);
                 *count >= REBUILD_AFTER_STABLE_MISSES
             }
-            _ => {
+            _other => {
                 misses.insert(key, (live, 1));
                 false
             }

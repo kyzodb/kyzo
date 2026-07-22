@@ -50,7 +50,6 @@ pub enum StatementDimension {
 }
 
 impl StatementDimension {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// The closed universe — every dimension a statement may ever project.
     pub const ALL: [StatementDimension; 6] = [
         StatementDimension::Identity,
@@ -108,13 +107,11 @@ impl LoweredRow {
         self.dimension
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Source [`RecordId`] this projection row resolves to.
     pub fn source_record_id(&self) -> RecordId {
         self.source
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Canonical row bytes for equality / rebuild proofs.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -130,27 +127,23 @@ pub struct RecordLowering {
     rows: Vec<LoweredRow>,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl RecordLowering {
-    /// Assemble from rows already ordered by dimension.
+    /// Door for the admission seat: `rows` are the type-entailed, Ord-sorted
+    /// dimension subset from [`dimensions_entailed`](crate::session::admit::lowering::dimensions_entailed).
+    /// Closedness is [`StatementDimension`]'s type; order is that seat's proof —
+    /// not a release-stripped assert.
     pub(crate) fn from_ordered_rows(rows: Vec<LoweredRow>) -> Self {
-        debug_assert!(
-            rows.windows(2).all(|w| w[0].dimension() < w[1].dimension()),
-            "lowering rows must be strictly ordered by StatementDimension"
-        );
         Self { rows }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the ordered lowered rows.
     pub fn rows(&self) -> &[LoweredRow] {
         &self.rows
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Dimensions present in this lowering (type-entailed subset).
     pub fn dimensions(&self) -> impl Iterator<Item = StatementDimension> + '_ {
-        self.rows.iter().map(LoweredRow::dimension)
+        self.rows().iter().map(LoweredRow::dimension)
     }
 
     /// Source [`RecordId`] shared by every row in this lowering.
@@ -158,19 +151,24 @@ impl RecordLowering {
     /// Empty lowering has no source — callers must not treat absence as a
     /// free-floating projection (#268 T3).
     pub fn source_record_id(&self) -> Option<RecordId> {
-        self.rows.first().map(LoweredRow::source_record_id)
+        self.rows().first().map(LoweredRow::source_record_id)
     }
 
     /// Concatenated row bytes (dimension tag + payload per row) for
     /// byte-identical equality proofs across independent lowerings.
     pub fn concatenated_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        for row in &self.rows {
-            out.push(row.dimension.tag());
-            out.extend_from_slice(row.source.as_bytes());
-            let len = row.bytes.len() as u64;
+        for row in self.rows() {
+            out.push(row.dimension().tag());
+            out.extend_from_slice(row.source_record_id().as_bytes());
+            let payload = row.as_bytes();
+            let len = match u64::try_from(payload.len()) {
+                Ok(n) => n,
+                // Only fails if usize > u64 — not a shipped pointer width.
+                Err(_) => return out,
+            };
             out.extend_from_slice(&len.to_be_bytes());
-            out.extend_from_slice(&row.bytes);
+            out.extend_from_slice(payload);
         }
         out
     }

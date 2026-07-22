@@ -141,6 +141,7 @@ mod simple_tokenizer;
 mod split_compound_words;
 mod stemmer;
 mod stop_word_filter;
+#[cfg(test)]
 mod tokenized_string;
 mod tokenizer_impl;
 mod whitespace_tokenizer;

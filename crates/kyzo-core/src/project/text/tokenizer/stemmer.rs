@@ -142,11 +142,13 @@ mod tests {
     fn stem_one(lang: Language, word: &str) -> String {
         let an = TextAnalyzer::from(SimpleTokenizer).filter(Stemmer::new(lang));
         let mut stream = an.token_stream(word);
-        let text = stream
-            .next()
-            .unwrap_or_else(|| panic!("expected a token for {word:?}"))
-            .text
-            .clone();
+        let text = match stream.next() {
+            Some(t) => t.text.clone(),
+            None => {
+                assert!(false, "expected a token for {word:?}");
+                String::new()
+            }
+        };
         assert!(stream.next().is_none(), "single-word input");
         text
     }

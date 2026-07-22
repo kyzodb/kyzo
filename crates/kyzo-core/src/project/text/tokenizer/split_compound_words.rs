@@ -175,13 +175,17 @@ impl<'a> TokenStream for SplitCompoundWordsTokenStream<'a> {
     }
 
     fn token(&self) -> &Token {
-        self.parts.last().unwrap_or_else(|| self.tail.token())
+        match self.parts.last() {
+            Some(t) => t,
+            None => self.tail.token(),
+        }
     }
 
     fn token_mut(&mut self) -> &mut Token {
-        self.parts
-            .last_mut()
-            .unwrap_or_else(|| self.tail.token_mut())
+        match self.parts.last_mut() {
+            Some(t) => t,
+            None => self.tail.token_mut(),
+        }
     }
 }
 

@@ -107,7 +107,7 @@ impl StopWordFilter {
             "vi" => stopwords::VI,
             "yo" => stopwords::YO,
             "zu" => stopwords::ZU,
-            _ => {
+            _other => {
                 return Err(UnsupportedStopwordLanguage(language.to_string()).into());
             }
         };

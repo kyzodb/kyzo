@@ -17,7 +17,6 @@ use crate::project::text::tokenizer::{Token, TokenStream};
 /// Fields are private; [`Self::admit`] is the only mint besides serde
 /// (which routes through admit).
 #[derive(Debug, Clone, serde_derive::Serialize, Eq, PartialEq)]
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) struct PreTokenizedString {
     text: String,
     tokens: Vec<Token>,
@@ -26,7 +25,6 @@ pub(crate) struct PreTokenizedString {
 impl PreTokenizedString {
     /// Mint when every token's offsets lie in `text` and each token's
     /// `text` equals the corresponding substring.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn admit(text: String, tokens: Vec<Token>) -> Option<Self> {
         let len = text.len();
         for token in &tokens {
@@ -39,12 +37,10 @@ impl PreTokenizedString {
         Some(PreTokenizedString { text, tokens })
     }
 
-    #[allow(dead_code)] // mid-wiring / test-only surface
     pub(crate) fn text(&self) -> &str {
         &self.text
     }
 
-    #[allow(dead_code)] // mid-wiring surface
     pub(crate) fn tokens(&self) -> &[Token] {
         &self.tokens
     }
@@ -82,7 +78,6 @@ impl<'de> serde::Deserialize<'de> for PreTokenizedString {
 }
 
 /// [`TokenStream`] implementation which wraps [`PreTokenizedString`]
-#[allow(dead_code)] // mid-wiring / test-only surface
 pub(crate) struct PreTokenizedStream {
     tokenized_string: PreTokenizedString,
     current_token: i64,

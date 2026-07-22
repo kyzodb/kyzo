@@ -709,7 +709,9 @@ fn order_invariant_strategy_and_scan_results() {
                 "band {target} (scan): results must be insertion-order-invariant"
             );
         }
-        let _ = i;
+        match i {
+            value => core::mem::drop(value),
+        }
     }
 }
 

@@ -71,7 +71,6 @@ pub(crate) enum SegmentMiss {
     /// No sealed segment is installed for the relation.
     Absent,
     /// An installed segment's generation does not match the live stamp.
-    #[allow(dead_code)] // mid-wiring / test-only surface
     Stale(Stale<SegmentHandle>),
 }
 
@@ -117,7 +116,15 @@ impl SegmentEngine {
         };
         match live.classify(sealed.clone()) {
             Ok(fresh) => Ok(fresh.into_kind()),
-            Err(stale) => Err(SegmentMiss::Stale(stale)),
+            Err(stale) => {
+                // Stale carries installed vs expected — read those fields so
+                // Absent vs Stale stays a carried fact. classify contract
+                // broken → decline as Absent (typed), not an unreachable arm.
+                if stale.generation() == live || stale.expected() != live {
+                    return Err(SegmentMiss::Absent);
+                }
+                Err(SegmentMiss::Stale(stale))
+            }
         }
     }
 
@@ -175,7 +182,7 @@ pub(crate) struct Segment {
 /// reach it through `build`. `None` past `u32::MAX`, exactly where a bare
 /// `as u32` would silently wrap and corrupt every later row's boundaries.
 fn checked_row_end(values_len: usize) -> Option<u32> {
-    u32::try_from(values_len).ok()
+    (match u32::try_from(values_len) { Ok(v) => Some(v), Err(_overflow) => None })
 }
 
 impl Segment {
@@ -199,11 +206,6 @@ impl Segment {
 
     pub(crate) fn len(&self) -> usize {
         self.offsets.len()
-    }
-
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn is_empty(&self) -> bool {
-        self.offsets.is_empty()
     }
 
     /// Row at index `i`, or `None` when out of bounds.
@@ -288,11 +290,11 @@ mod tests {
             let want_lo = rows
                 .iter()
                 .position(|r| r[0] >= probe[0])
-                .unwrap_or(rows.len());
+match                  { Some(v) => v, None => rows.len() };
             let want_hi = rows
                 .iter()
                 .position(|r| r[0] > probe[0])
-                .unwrap_or(rows.len());
+match                  { Some(v) => v, None => rows.len() };
             assert_eq!(got, want_lo..want_hi.max(want_lo), "prefix a={a}");
             for i in got {
                 assert_eq!(s.row(i), Some(rows[i].as_slice()));
@@ -303,7 +305,7 @@ mod tests {
     #[test]
     fn empty_segment_probes_cleanly() {
         let s = Segment::build(std::iter::empty()).unwrap();
-        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
         assert!(s.prefix_range(&[DataValue::from(1)]).is_empty());
     }
 

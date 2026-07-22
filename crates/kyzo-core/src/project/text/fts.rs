@@ -676,13 +676,11 @@ impl RelationIndexSearch for Fts {
 /// any base row is fetched.
 ///
 /// `n_total` is [`fts_total_docs`] when `score_kind` is `TfIdf`, else `0`.
+
+#[cfg(test)]
 impl Fts {
-    /// Relation-backed full-text search — UFCS door into
-    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
-    /// function `fts_search`. Live host dispatch uses the trait method
-    /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
+    /// Test-only UFCS alias of [`RelationIndexSearch::search_relation`] (P103).
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // UFCS alias of live RelationIndexSearch door
     pub(crate) fn search_index(
         cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,
@@ -710,7 +708,6 @@ impl Fts {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn fts_search_body(
     cancel: &crate::rules::contract::CancelFlag,
     tx: &impl ReadTx,
@@ -1128,7 +1125,9 @@ mod tests {
             err.downcast_ref::<FtsExtractorType>().is_some(),
             "typed extractor error, got: {err:?}"
         );
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     #[test]

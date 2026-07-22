@@ -120,7 +120,6 @@ use kyzo_model::value::DataValue;
 ///
 /// Engine complete; query host `rules::gazetteer` is [OPEN] (stub module).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)] // [OPEN] rules::gazetteer query host
 pub(crate) struct GazetteerConfig {
     /// Fold ASCII case (`A-Z ≡ a-z`) when matching. Length-preserving, so
     /// spans stay exact; **not** full-Unicode folding — see the module docs
@@ -153,7 +152,6 @@ pub(crate) struct GazetteerEmptySurface {
 #[derive(Debug, Error, Diagnostic)]
 #[error("gazetteer automaton build failed")]
 #[diagnostic(code(index::gazetteer::build_failed))]
-#[allow(dead_code)] // [OPEN] rules::gazetteer query host
 pub(crate) struct GazetteerBuildFailed;
 
 // ---------------------------------------------------------------------------
@@ -165,7 +163,6 @@ pub(crate) struct GazetteerBuildFailed;
 /// mint the relation from this; [`compile_dictionary`] expects exactly this
 /// arity (1 key + 1 non-key). Multi-column entity keys are a documented
 /// later generalization.
-#[allow(dead_code)] // [OPEN] rules::gazetteer query host
 pub(crate) fn gazetteer_dict_metadata(entity_type: ColType) -> StoredRelationMetadata {
     StoredRelationMetadata {
         keys: vec![ColumnDef {
@@ -198,7 +195,6 @@ pub(crate) struct Gazetteer {
     /// dictionary): the automaton matches nothing. Kept optional so
     /// correctness never rides on the automaton library's zero-pattern
     /// behavior.
-    #[allow(dead_code)] // [OPEN] rules::gazetteer query host
     automaton: Option<AhoCorasick>,
     /// Per pattern id (Aho-Corasick assigns ids by build order = the sorted
     /// pattern order), the entities registered under that surface form, sorted
@@ -207,13 +203,11 @@ pub(crate) struct Gazetteer {
     entities_by_pattern: Vec<Vec<DataValue>>,
     /// Whether matching folds ASCII case; retained for introspection and to
     /// document what the automaton was built to do.
-    #[allow(dead_code)] // [OPEN] rules::gazetteer query host
     case_insensitive: bool,
 }
 
 /// One tagged mention: an entity found at a byte span of the document.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // [OPEN] rules::gazetteer query host
 pub(crate) struct Tag {
     /// The dictionary entity key — ready to join the source relation.
     pub(crate) entity: DataValue,
@@ -247,7 +241,6 @@ pub(crate) struct Tag {
 /// `[entity, List<String>]` is [`IndexRowCorrupt`]; an empty surface form is
 /// [`GazetteerEmptySurface`]; an automaton that will not build is
 /// [`GazetteerBuildFailed`].
-#[allow(dead_code)] // [OPEN] rules::gazetteer query host
 pub(crate) fn compile_dictionary(
     tx: &impl ReadTx,
     dict: &RelationHandle,
@@ -331,7 +324,6 @@ impl Gazetteer {
     /// built and validated, and every span is in bounds and on a `char`
     /// boundary by construction. Result is in canonical order
     /// `(start, entity)`.
-    #[allow(dead_code)] // [OPEN] rules::gazetteer query host
     pub(crate) fn tag(&self, text: &str) -> Vec<Tag> {
         let Some(ac) = &self.automaton else {
             return Vec::new();
@@ -362,7 +354,6 @@ impl Gazetteer {
 
     /// The number of distinct surface-form patterns the automaton carries.
     /// Zero for an empty dictionary.
-    #[allow(dead_code)]
     pub(crate) fn pattern_count(&self) -> usize {
         self.entities_by_pattern.len()
     }

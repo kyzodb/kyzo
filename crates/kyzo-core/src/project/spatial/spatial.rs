@@ -607,7 +607,7 @@ fn decompose_box(qbox: &QBox) -> Vec<(u64, u64)> {
                     last.1 = hi;
                 }
             }
-            _ => merged.push((lo, hi)),
+            _other => merged.push((lo, hi)),
         }
     }
     merged
@@ -668,7 +668,7 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
     // The curve column must be exactly the 8 bytes it was stored as.
     match row[0].get_bytes() {
         Some(b) if b.len() == 8 => {}
-        _ => bail!(IndexRowCorrupt::new(
+        _other => bail!(IndexRowCorrupt::new(
             index_name,
             row,
             IndexCorruptReason::SpatialCurveNot8Bytes,
@@ -1008,7 +1008,10 @@ fn spatial_knn_body(
             break;
         }
         if best.len() == params.k {
-            let kth = best.peek().map(|c| c.dist.get()).unwrap_or(f64::INFINITY);
+            let kth = match best.peek().map(|c| c.dist.get()) {
+                Some(v) => v,
+                None => f64::INFINITY,
+            };
             if kth <= inner_radius(query, &ring) {
                 break;
             }

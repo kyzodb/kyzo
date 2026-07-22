@@ -64,7 +64,7 @@ impl DoTokenize for FtsExpr {
                 match tokens.len() {
                     0 => FtsExpr::empty_node(),
                     1 => FtsExpr::Literal(tokens.remove(0)),
-                    _ => FtsExpr::and(tokens.into_iter().map(FtsExpr::Literal).collect()),
+                    _other => FtsExpr::and(tokens.into_iter().map(FtsExpr::Literal).collect()),
                 }
             }
             FtsExpr::Near(FtsNear { literals, distance }) => {

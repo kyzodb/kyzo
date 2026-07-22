@@ -167,7 +167,7 @@ impl TextAnalyzer {
     ///     .filter(LowerCaser)
     ///     .filter(Stemmer::default());
     /// ```
-    #[allow(unused)]
+    #[cfg(test)]
     pub(crate) fn filter<F: Into<BoxTokenFilter>>(mut self, token_filter: F) -> Self {
         self.token_filters.push(token_filter.into());
         self
@@ -351,8 +351,10 @@ pub(crate) fn advance_char_indices_token<'a>(
                 .by_ref()
                 .find(|(_, ch)| !is_token_char(*ch))
                 .map(|(offset, _)| offset)
-                .unwrap_or(text.len());
-            let _ = token.set_offsets(offset_from, offset_to);
+match                  { Some(v) => v, None => text.len() };
+            match token.set_offsets(offset_from, offset_to) {
+                token_ref => core::mem::drop(token_ref),
+            }
             token.text.push_str(&text[offset_from..offset_to]);
             return true;
         }
@@ -399,7 +401,7 @@ pub(crate) trait TokenStream {
     /// and push the tokens to a sink function.
     ///
     /// Remove this.
-    #[allow(dead_code)] // mid-wiring / test-only surface
+    #[cfg(test)]
     fn process(&mut self, sink: &mut dyn FnMut(&Token)) {
         while self.advance() {
             sink(self.token());
