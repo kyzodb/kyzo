@@ -202,9 +202,10 @@ mod tests {
     use kyzo_model::program::expr::Expr;
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     #[test]
     #[ignore = "timing-evidence rig; run explicitly with --ignored --nocapture to print APSP timings"]
-    fn zz_timing_evidence() {
+    fn zz_timing_evidence() -> Result<()> {
         let n = 400u32;
         let mut state = 0x0bad_c0de_dead_beefu64;
         let mut next = || {
@@ -241,24 +242,23 @@ mod tests {
                 },
             )]))
         };
-        let run = || {
+        let run = || -> Result<_> {
             run_fixed_rule(
                 &BetweennessCentrality,
                 vec![TestInput::new(vec!["fr", "to", "w"], rows.clone())],
-                opt(),
+                opt()?,
                 CancelFlag::inert(),
             )
-            .unwrap()
         };
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
+            .into_diagnostic()?;
         let t0 = std::time::Instant::now();
-        let seq = single.install(run);
+        let seq = single.install(run)?;
         let seq_t = t0.elapsed();
         let t1 = std::time::Instant::now();
-        let par = run();
+        let par = run()?;
         let par_t = t1.elapsed();
         assert_eq!(seq, par);
         let threads = rayon::current_num_threads();
@@ -266,6 +266,7 @@ mod tests {
             "betweenness n={n}: 1-thread {seq_t:?}, default({threads} threads) {par_t:?}, speedup {:.2}x",
             seq_t.as_secs_f64() / par_t.as_secs_f64()
         );
+        Ok(())
     }
 
     fn s(v: &str) -> DataValue {
@@ -283,7 +284,7 @@ mod tests {
         )
     }
 
-    fn undirected_opt() -> FixedRuleOptions {
+    fn undirected_opt() -> Result<FixedRuleOptions> {
         opts_map(BTreeMap::from([(
             smartstring::SmartString::from("undirected"),
             Expr::Const {
@@ -332,59 +333,61 @@ mod tests {
     /// a parallel float reduction would bite; the fold is kept sequential, so
     /// it does not.
     #[test]
-    fn betweenness_parallel_matches_single_thread() {
+    fn betweenness_parallel_matches_single_thread() -> Result<()> {
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
+            .into_diagnostic()?;
+        let opts = undirected_opt()?;
         let seq = single.install(|| {
             run_fixed_rule(
                 &BetweennessCentrality,
                 vec![pseudo_random_edges()],
-                undirected_opt(),
+                opts.clone(),
                 CancelFlag::inert(),
             )
-            .unwrap()
-        });
+        })?;
         for _ in 0..8 {
             let par = run_fixed_rule(
                 &BetweennessCentrality,
                 vec![pseudo_random_edges()],
-                undirected_opt(),
+                undirected_opt()?,
                 CancelFlag::inert(),
             )
-            .unwrap();
+            ?;
             assert_eq!(seq, par);
         }
+        Ok(())
     }
 
     /// DETERMINISM: closeness (independent per-start scalars, no cross-start
     /// reduction) is byte-identical on a single- and multi-thread pool.
     #[test]
-    fn closeness_parallel_matches_single_thread() {
+    fn closeness_parallel_matches_single_thread() -> Result<()> {
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
+            .into_diagnostic()?;
+        let opts = undirected_opt()?;
         let seq = single.install(|| {
             run_fixed_rule(
                 &ClosenessCentrality,
                 vec![pseudo_random_edges()],
-                undirected_opt(),
+                opts.clone(),
                 CancelFlag::inert(),
             )
-            .unwrap()
-        });
+        })?;
         for _ in 0..8 {
             let par = run_fixed_rule(
                 &ClosenessCentrality,
                 vec![pseudo_random_edges()],
-                undirected_opt(),
+                undirected_opt()?,
                 CancelFlag::inert(),
             )
-            .unwrap();
+            ?;
             assert_eq!(seq, par);
         }
+        Ok(())
     }
 
     /// VALUE ORACLE for closeness as implemented: nc²/Σd/(n−1) over the
@@ -396,20 +399,21 @@ mod tests {
     ///   c: symmetric to a    ⇒ 1.5
     /// (All exact in f32, so the f64 rows compare exactly.)
     #[test]
-    fn closeness_on_path_graph() {
+    fn closeness_on_path_graph() -> Result<()> {
         let got = run_fixed_rule(
             &ClosenessCentrality,
             vec![path_graph()],
-            undirected_opt(),
+            undirected_opt()?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), DataValue::from(1.5)]),
             Tuple::from_vec(vec![s("b"), DataValue::from(2.25)]),
             Tuple::from_vec(vec![s("c"), DataValue::from(1.5)]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// VALUE ORACLE for betweenness as implemented (unnormalized, over
@@ -418,19 +422,20 @@ mod tests {
     /// (one tied path per pair, so the 1/ties factor is 1).
     ///   ⇒ a: 0, b: 2, c: 0.
     #[test]
-    fn betweenness_on_path_graph() {
+    fn betweenness_on_path_graph() -> Result<()> {
         let got = run_fixed_rule(
             &BetweennessCentrality,
             vec![path_graph()],
-            undirected_opt(),
+            undirected_opt()?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), DataValue::from(0.0)]),
             Tuple::from_vec(vec![s("b"), DataValue::from(2.0)]),
             Tuple::from_vec(vec![s("c"), DataValue::from(0.0)]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
