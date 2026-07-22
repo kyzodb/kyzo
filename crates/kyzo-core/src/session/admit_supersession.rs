@@ -353,6 +353,7 @@ pub(crate) fn append_corrected_fact(
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use crate::session::admit::{LiveAdmissionSeats, admit_sugar_relation_row};
     use crate::session::catalog::{Catalog, get_relation};
@@ -366,8 +367,8 @@ mod tests {
         BTreeMap::new()
     }
 
-    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine(store: SimStorage) -> Result<Engine<SimStorage>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     /// Admit an original sugar row through the live seats (same door as put).
@@ -383,19 +384,19 @@ mod tests {
         ))?;
         let (record, cert) =
             admit_sugar_relation_row(seats.store_id(), &live, relation, row, keys_len, valid)
-                .expect("admit original");
+                .map_err(|e| miette!("admit original: {e}"))?;
         seats
             .attach_verified(&record, cert.clone())
-            .expect("attach");
-        (record, cert)
+            .map_err(|e| miette!("attach: {e}"))?;
+        Ok((record, cert))
     }
 
     #[test]
-    fn correction_supersedes_by_record_id_with_dense_commit_ordinal() {
+    fn correction_supersedes_by_record_id_with_dense_commit_ordinal() -> Result<()>  {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (original, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -412,16 +413,16 @@ mod tests {
             1,
             ValidityTs::from_raw(200),
         )
-        .expect("admit correction");
+        .map_err(|e| miette!("admit correction: {e}"))?;
         let (_permit, link) =
-            seal_supersession(&seats, prior, &successor, cert).expect("seal supersession");
+            seal_supersession(&seats, prior, &successor, cert).map_err(|e| miette!("seal supersession: {e}"))?;
 
         assert_eq!(link.prior(), prior);
         assert_eq!(link.successor(), successor.record_id());
         assert_ne!(link.prior(), link.successor());
         assert_eq!(
             link.commit_ordinal(),
-            prior_commit.successor().expect("dense successor"),
+            prior_commit.successor().map_err(|e| miette!("dense successor: {e}"))?,
             "successor carries the dense CommitOrdinal after prior"
         );
         assert_eq!(seats.origin_commit(), link.commit_ordinal());
@@ -432,27 +433,28 @@ mod tests {
         );
         assert_eq!(link.kind(), SupersessionKind::Correction);
         assert!(!link.kind().is_semantic_deletion());
+        Ok(())
     }
 
     #[test]
-    fn as_of_pre_correction_replays_original_exactly() {
+    fn as_of_pre_correction_replays_original_exactly() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x2680_0004));
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
         )
-        .expect("create original @100");
+        .map_err(|e| miette!("create original @100: {e}"))?;
 
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let seats = LiveAdmissionSeats::mint_genesis();
         // Admit the create's logical prior through the correction door's
         // identity plane, then append the correction on the real store.
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
         let prior = prior_record.record_id();
 
-        let mut tx = db.store.write_tx().expect("correction tx");
-        let handle = get_relation(&tx, "quote").expect("quote");
+        let mut tx = db.store.write_tx().map_err(|e| miette!("correction tx: {e}"))?;
+        let handle = get_relation(&tx, "quote").map_err(|e| miette!("quote: {e}"))?;
         let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
         let link = append_corrected_fact(
             &seats,
@@ -463,15 +465,15 @@ mod tests {
             ValidityTs::from_raw(200),
             SourceSpan::default(),
         )
-        .expect("append correction");
-        tx.commit().expect("commit correction");
+        .map_err(|e| miette!("append correction: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit correction: {e}"))?;
 
         assert_ne!(link.prior(), link.successor());
 
         // As-of valid 150: after original @100, before correction @200.
         let at_150 = db
             .run_script("?[price] := *quote{id, price @ 150}", no_params())
-            .expect("as-of 150");
+            .map_err(|e| miette!("as-of 150: {e}"))?;
         assert_eq!(
             at_150.rows(),
             &[Tuple::from_vec(vec![DataValue::from(100i64)])],
@@ -481,12 +483,13 @@ mod tests {
         // As-of after correction sees the superseding value.
         let at_250 = db
             .run_script("?[price] := *quote{id, price @ 250}", no_params())
-            .expect("as-of 250");
+            .map_err(|e| miette!("as-of 250: {e}"))?;
         assert_eq!(
             at_250.rows(),
             &[Tuple::from_vec(vec![DataValue::from(150i64)])],
             "as-of post-correction sees the successor"
         );
+        Ok(())
     }
 
     /// GUARDIAN HUNT (#3 as-of/supersession): the CANONICAL bitemporal
@@ -498,22 +501,22 @@ mod tests {
     /// at the same valid-time. If as-of replays the stale value (or returns both
     /// rows for a single-valued key), history is being read wrong.
     #[test]
-    fn as_of_same_valid_time_correction_supersedes_stale_value() {
+    fn as_of_same_valid_time_correction_supersedes_stale_value() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x2680_0006));
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
         )
-        .expect("create original @100");
+        .map_err(|e| miette!("create original @100: {e}"))?;
 
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let seats = LiveAdmissionSeats::mint_genesis();
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
         let prior = prior_record.record_id();
 
-        let mut tx = db.store.write_tx().expect("correction tx");
-        let handle = get_relation(&tx, "quote").expect("quote");
+        let mut tx = db.store.write_tx().map_err(|e| miette!("correction tx: {e}"))?;
+        let handle = get_relation(&tx, "quote").map_err(|e| miette!("quote: {e}"))?;
         let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
         // SAME valid-time (100) as the original: the canonical correction.
         append_corrected_fact(
@@ -525,35 +528,36 @@ mod tests {
             ValidityTs::from_raw(100),
             SourceSpan::default(),
         )
-        .expect("append same-valid correction");
-        tx.commit().expect("commit correction");
+        .map_err(|e| miette!("append same-valid correction: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit correction: {e}"))?;
 
         // As-of valid 150 (latest knowledge): the correction at valid 100 must
         // win over the original at valid 100 (later system-time supersedes).
         let at_150 = db
             .run_script("?[price] := *quote{id, price @ 150}", no_params())
-            .expect("as-of 150");
+            .map_err(|e| miette!("as-of 150: {e}"))?;
         assert_eq!(
             at_150.rows(),
             &[Tuple::from_vec(vec![DataValue::from(150i64)])],
             "same-valid-time correction must supersede the stale value in as-of"
         );
+        Ok(())
     }
 
     #[test]
-    fn prior_committed_bytes_survive_correction_append() {
+    fn prior_committed_bytes_survive_correction_append() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x2680_0005));
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
 
-        let rtx = db.store.read_tx().expect("read");
+        let rtx = db.store.read_tx().map_err(|e| miette!("read: {e}"))?;
         let before: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
             .map(|kv| {
-                let (k, v) = kv.expect("kv");
+                let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
                 (k.to_vec(), v.to_vec())
             })
             .collect();
@@ -563,10 +567,10 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
 
-        let mut tx = db.store.write_tx().expect("tx");
-        let handle = get_relation(&tx, "quote").expect("handle");
+        let mut tx = db.store.write_tx().map_err(|e| miette!("tx: {e}"))?;
+        let handle = get_relation(&tx, "quote").map_err(|e| miette!("handle: {e}"))?;
         append_corrected_fact(
             &seats,
             &handle,
@@ -576,14 +580,14 @@ mod tests {
             ValidityTs::from_raw(200),
             SourceSpan::default(),
         )
-        .expect("append");
-        tx.commit().expect("commit");
+        .map_err(|e| miette!("append: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
-        let rtx = db.store.read_tx().expect("read after");
+        let rtx = db.store.read_tx().map_err(|e| miette!("read after: {e}"))?;
         let after: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
             .map(|kv| {
-                let (k, v) = kv.expect("kv");
+                let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
                 (k.to_vec(), v.to_vec())
             })
             .collect();
@@ -604,17 +608,18 @@ mod tests {
                 "prior committed value bytes must be unchanged (no overwrite)"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn no_rewrite_api_on_committed_facts() {
+    fn no_rewrite_api_on_committed_facts() -> Result<()>  {
         // Seat 34 grep-proof: correction appends; no rewrite/overwrite door.
         // Scan production surfaces only — strip this file's cfg(test) module so
         // the forbidden-needle table cannot match itself.
         let supersession_prod = include_str!("admit_supersession.rs")
             .split("#[cfg(test)]")
             .next()
-            .expect("production supersession surface");
+            .map_err(|e| miette!("production supersession surface: {e}"))?;
         let sources = [
             include_str!("admit.rs"),
             supersession_prod,
@@ -641,10 +646,11 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn semantic_deletion_kinds_map_to_crossing_status() {
+    fn semantic_deletion_kinds_map_to_crossing_status() -> Result<()>  {
         assert_eq!(
             SemanticDeletionKind::Invalidation.crossing_status(),
             CrossingStatus::Invalidated
@@ -666,14 +672,15 @@ mod tests {
             assert!(kind.as_supersession_kind().crossing_status().is_some());
         }
         assert!(SupersessionKind::Correction.crossing_status().is_none());
+        Ok(())
     }
 
     #[test]
-    fn semantic_deletion_supersedes_without_message_delete() {
+    fn semantic_deletion_supersedes_without_message_delete() -> Result<()>  {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (original, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -696,9 +703,9 @@ mod tests {
                 subject,
                 ValidityTs::from_raw(200 + i as i64),
             )
-            .expect("admit semantic deletion");
+            .map_err(|e| miette!("admit semantic deletion: {e}"))?;
             let (_permit, link) = seal_semantic_deletion(&seats, kind, prior, &successor, cert)
-                .expect("seal semantic deletion");
+                .map_err(|e| miette!("seal semantic deletion: {e}"))?;
             assert_eq!(link.prior(), prior);
             assert_eq!(link.successor(), successor.record_id());
             assert_ne!(link.prior(), link.successor());
@@ -716,22 +723,23 @@ mod tests {
         for link in &retained {
             assert!(all.contains(link));
         }
+        Ok(())
     }
 
     #[test]
-    fn prior_committed_bytes_survive_semantic_deletion_append() {
+    fn prior_committed_bytes_survive_semantic_deletion_append() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x2700_0004));
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
 
-        let rtx = db.store.read_tx().expect("read");
+        let rtx = db.store.read_tx().map_err(|e| miette!("read: {e}"))?;
         let before: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
             .map(|kv| {
-                let (k, v) = kv.expect("kv");
+                let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
                 (k.to_vec(), v.to_vec())
             })
             .collect();
@@ -741,7 +749,7 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
         ))?;
@@ -753,7 +761,7 @@ mod tests {
             DataValue::List(vec![DataValue::from(1i64)]),
             ValidityTs::from_raw(200),
         )
-        .expect("admit tombstone");
+        .map_err(|e| miette!("admit tombstone: {e}"))?;
         seal_semantic_deletion(
             &seats,
             SemanticDeletionKind::Tombstone,
@@ -761,16 +769,16 @@ mod tests {
             &deletion,
             cert,
         )
-        .expect("seal tombstone");
+        .map_err(|e| miette!("seal tombstone: {e}"))?;
 
         // Store bytes unchanged by admission alone — semantic deletion never
         // message-deletes. Append path (retract) would add a Retract row; the
         // prior Assert key must still exist either way.
-        let rtx = db.store.read_tx().expect("read after");
+        let rtx = db.store.read_tx().map_err(|e| miette!("read after: {e}"))?;
         let after: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
             .map(|kv| {
-                let (k, v) = kv.expect("kv");
+                let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
                 (k.to_vec(), v.to_vec())
             })
             .collect();
@@ -791,25 +799,26 @@ mod tests {
                 "prior committed value bytes must be unchanged (no message-delete)"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn append_correction_uses_as_of_skip_scan_not_rewrite() {
+    fn append_correction_uses_as_of_skip_scan_not_rewrite() -> Result<()>  {
         // Point-read as-of on the live store path (not script sugar alone).
         let db = open_engine(SimStorage::new(0x2680_0006));
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
 
         let seats = LiveAdmissionSeats::mint_genesis();
         let original = [DataValue::from(1i64), DataValue::from(100i64)];
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original, 1, ValidityTs::from_raw(100));
+            admit_original(&seats, "quote", &original, 1, ValidityTs::from_raw(100))?;
 
-        let mut tx = db.store.write_tx().expect("tx");
-        let handle = get_relation(&tx, "quote").expect("handle");
+        let mut tx = db.store.write_tx().map_err(|e| miette!("tx: {e}"))?;
+        let handle = get_relation(&tx, "quote").map_err(|e| miette!("handle: {e}"))?;
         append_corrected_fact(
             &seats,
             &handle,
@@ -819,11 +828,11 @@ mod tests {
             ValidityTs::from_raw(300),
             SourceSpan::default(),
         )
-        .expect("append @300");
-        tx.commit().expect("commit");
+        .map_err(|e| miette!("append @300: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
 
-        let rtx = db.store.read_tx().expect("read");
-        let handle = get_relation(&rtx, "quote").expect("handle");
+        let rtx = db.store.read_tx().map_err(|e| miette!("read: {e}"))?;
+        let handle = get_relation(&rtx, "quote").map_err(|e| miette!("handle: {e}"))?;
         let pre = handle
             .current_row(
                 &rtx,
@@ -831,7 +840,7 @@ mod tests {
                 AsOf::at(ValidityTs::from_raw(i64::MAX), ValidityTs::from_raw(150)),
                 SourceSpan::default(),
             )
-            .expect("as-of 150");
+            .map_err(|e| miette!("as-of 150: {e}"))?;
         assert_eq!(
             pre,
             Some(Tuple::from_vec(vec![
@@ -847,7 +856,7 @@ mod tests {
                 AsOf::at(ValidityTs::from_raw(i64::MAX), ValidityTs::from_raw(350)),
                 SourceSpan::default(),
             )
-            .expect("as-of 350");
+            .map_err(|e| miette!("as-of 350: {e}"))?;
         assert_eq!(
             post,
             Some(Tuple::from_vec(vec![
@@ -856,5 +865,6 @@ mod tests {
             ])),
             "store as-of after correction sees successor"
         );
+        Ok(())
     }
 }

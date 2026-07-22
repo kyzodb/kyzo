@@ -1323,6 +1323,7 @@ impl<T: ReadTx> StoredInputSource for SessionView<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
@@ -1334,8 +1335,8 @@ mod tests {
     /// Test-local composition: Store + fresh Catalog. Not the deleted fused
     /// public `Db::new(storage)` constructor — production callers use
     /// [`Engine::compose`].
-    fn open_engine<S: Storage>(store: S) -> Engine<S> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
@@ -1343,7 +1344,7 @@ mod tests {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
             .collect();
         out.sort();
         out
@@ -1354,14 +1355,14 @@ mod tests {
     /// under a 100-row ceiling refuses typed mid-run instead of
     /// materializing the whole output.
     #[test]
-    fn fixed_rule_output_respects_derived_tuple_ceiling() {
+    fn fixed_rule_output_respects_derived_tuple_ceiling() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         let mut edges = String::from("?[a, b, w] <- [");
         for i in 0..60 {
             edges.push_str(&format!("[{}, {}, 1.0],", i, i + 1));
         }
         edges.push_str("] :create edge {a, b => w}");
-        db.run_script(&edges, no_params()).expect("create edges");
+        db.run_script(&edges, no_params()).map_err(|e| miette!("create edges: {e}"))?;
 
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(100),
@@ -1379,6 +1380,7 @@ mod tests {
             msg.contains("ceiling") || msg.contains("exceeded") || msg.contains("limit"),
             "typed spend refusal, got: {msg}"
         );
+        Ok(())
     }
 
     /// Pins the ONE production line the unit-level eval tests can't reach:
@@ -1414,14 +1416,14 @@ mod tests {
     ///   spend. Both fields are asserted exactly so either failure mode is
     ///   caught.
     #[test]
-    fn fixed_rule_dispatch_forwards_true_baseline_not_zero() {
+    fn fixed_rule_dispatch_forwards_true_baseline_not_zero() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         let mut edges = String::from("?[a, b, w] <- [");
         for i in 0..10 {
             edges.push_str(&format!("[{}, {}, 1.0],", i, i + 1));
         }
         edges.push_str("] :create edge {a, b => w}");
-        db.run_script(&edges, no_params()).expect("create edges");
+        db.run_script(&edges, no_params()).map_err(|e| miette!("create edges: {e}"))?;
 
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(70),
@@ -1437,7 +1439,7 @@ mod tests {
                 "the fixed rule's mid-run guard must refuse, counting the r-stratum's baseline",
             );
         let refusal: &crate::exec::fixpoint::eval::LimitExceeded =
-            err.downcast_ref().expect("typed budget refusal");
+            err.downcast_ref().map_err(|e| miette!("typed budget refusal: {e}"))?;
         assert_eq!(
             refusal.dimension,
             crate::exec::fixpoint::eval::BudgetDimension::InFlightDerivations,
@@ -1451,6 +1453,7 @@ mod tests {
              far; a zeroed baseline would report 63 instead (and likely not refuse here at \
              all, deferring to a much later `DerivedTuples` barrier refusal at spend 120)"
         );
+        Ok(())
     }
 
     /// A `:timeout` so large it cannot become a `Duration` must be a clean
@@ -1459,7 +1462,7 @@ mod tests {
     /// reaches `build_budget` unfiltered; before the fix this called
     /// `Duration::from_secs_f64(1e300)` directly, which panics.
     #[test]
-    fn huge_timeout_is_a_clean_error_not_a_panic() {
+    fn huge_timeout_is_a_clean_error_not_a_panic() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         let err = db
             .run_script("?[a] := a in [1, 2, 3] :timeout 1e300", no_params())
@@ -1471,13 +1474,14 @@ mod tests {
             ),
             "expected a typed InvalidTimeout refusal, got: {err}"
         );
+        Ok(())
     }
 
     /// Same reproduction via the `ScriptOptions.timeout_secs` Rust-API path
     /// (bypasses the parser's own `:timeout` handling entirely), and also
     /// covers infinity — both must be refused, never panic.
     #[test]
-    fn huge_or_infinite_timeout_via_script_options_is_a_clean_error() {
+    fn huge_or_infinite_timeout_via_script_options_is_a_clean_error() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         for bad in [1e300_f64, f64::INFINITY] {
             let opts = ScriptOptions {
@@ -1495,6 +1499,7 @@ mod tests {
                 "expected a typed InvalidTimeout refusal for {bad}, got: {err}"
             );
         }
+        Ok(())
     }
 
     /// Regression for fuzz artifact
@@ -1504,7 +1509,7 @@ mod tests {
     /// silently wrapped to a wrong answer (release builds). Both profiles
     /// must now see the same clean typed error.
     #[test]
-    fn overflowing_literal_product_is_a_clean_error_not_a_panic() {
+    fn overflowing_literal_product_is_a_clean_error_not_a_panic() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         let err = db
             .run_script("?[x] := x = 2222222000*867076028303", no_params())
@@ -1529,6 +1534,7 @@ mod tests {
             "expected an integer-overflow message, got: {}",
             wrapped.1
         );
+        Ok(())
     }
 
     /// THE FIRST END-TO-END QUERY: create → insert → recursive query with a
@@ -1540,7 +1546,7 @@ mod tests {
             "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
             no_params(),
         )
-        .expect("create+insert");
+        .map_err(|e| miette!("create+insert: {e}"))?;
 
         // Transitive closure: a recursive rule with a join against the stored
         // relation, driven semi-naively.
@@ -1553,7 +1559,7 @@ mod tests {
                 ",
                 no_params(),
             )
-            .expect("recursive query");
+            .map_err(|e| miette!("recursive query: {e}"))?;
 
         // Reachability of 1→2→3→4→2 (cycle 2-3-4): from 1 everything but 1;
         // within the cycle every pair. (Identical to the compile-tier test,
@@ -1578,16 +1584,18 @@ mod tests {
     }
 
     #[test]
-    fn first_end_to_end_query_over_fjall() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn first_end_to_end_query_over_fjall() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
         create_insert_recursive_join(db);
+        Ok(())
     }
 
     #[test]
-    fn first_end_to_end_query_over_mem() {
+    fn first_end_to_end_query_over_mem() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         create_insert_recursive_join(db);
+        Ok(())
     }
 
     /// Two sessions racing read-modify-write on one counter row over the real
@@ -1596,25 +1604,28 @@ mod tests {
     /// take a typed `ConflictError` and replay. If the retry loop worked and no
     /// update was lost, the final value equals the total number of increments.
     #[test]
-    fn retry_under_contention_loses_no_update() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn retry_under_contention_loses_no_update() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
-            .expect("create counter");
+            .map_err(|e| miette!("create counter: {e}"))?;
 
         const PER_THREAD: i64 = 25;
         std::thread::scope(|scope| {
             for _ in 0..2 {
                 let db = db.clone();
-                scope.spawn(move || {
+                scope.spawn(move || -> Result<()> {
                     for _ in 0..PER_THREAD {
                         db.run_script(
                             "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
                             no_params(),
                         )
-                        .expect("increment");
+                        .map_err(|e| miette!("increment: {e}"))?;
                     }
-                });
+                    Ok(())
+                })
+                .join()
+                .map_err(|_| miette!("thread join"))??;
             }
         });
 
@@ -1623,6 +1634,7 @@ mod tests {
             2 * PER_THREAD,
             "every increment landed; the retry loop lost no update"
         );
+        Ok(())
     }
 
     /// The reviewers' refuting scenario, pinned end to end: a retraction
@@ -1634,57 +1646,58 @@ mod tests {
     /// the sim's logical clock the domains were incomparable and a plain
     /// delete-reinsert lost the row for the life of the process.)
     #[test]
-    fn retraction_governs_across_transactions_on_both_backends() {
+    fn retraction_governs_across_transactions_on_both_backends() -> Result<()>  {
         fn drive<S: Storage>(db: Engine<S>) {
             db.run_script("?[k, v] <- [[1, 'first']] :create t {k => v}", no_params())
-                .expect("create");
+                .map_err(|e| miette!("create: {e}"))?;
             db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
-                .expect("rm");
+                .map_err(|e| miette!("rm: {e}"))?;
             let gone = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
-                .expect("read");
+                .map_err(|e| miette!("read: {e}"))?;
             assert!(
                 gone.rows().is_empty(),
                 "retracted fact must be absent: {gone:?}"
             );
             db.run_script("?[k, v] <- [[1, 'second']] :put t {k => v}", no_params())
-                .expect("reinsert");
+                .map_err(|e| miette!("reinsert: {e}"))?;
             let back = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
-                .expect("read");
+                .map_err(|e| miette!("read: {e}"))?;
             assert_eq!(back.rows().len(), 1, "reinserted fact must be present");
             assert_eq!(back.rows()[0][1], DataValue::from("second"));
             // And once more: the second retraction must also govern.
             db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
-                .expect("rm again");
+                .map_err(|e| miette!("rm again: {e}"))?;
             let gone = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
-                .expect("read");
+                .map_err(|e| miette!("read: {e}"))?;
             assert!(gone.rows().is_empty(), "re-retracted fact must be absent");
         }
-        let dir = tempfile::tempdir().unwrap();
-        drive(open_engine(new_fjall_storage(dir.path()).unwrap()));
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        drive(open_engine(new_fjall_storage(dir.path())?));
         drive(open_engine(crate::store::sim::SimStorage::new(7)));
+        Ok(())
     }
 
     fn current<S: Storage>(db: &Engine<S>) -> i64 {
         let out = db
             .run_script("?[v] := *ctr[k, v]", no_params())
-            .expect("read counter");
-        out.rows()[0][0].get_int().expect("int")
+            .map_err(|e| miette!("read counter: {e}"))?;
+        out.rows()[0][0].get_int().ok_or_else(|| miette!("int"))?
     }
 
     /// A deterministic derived-tuple ceiling refuses a query that would derive
     /// more, through the public API — a typed refusal, reproducibly, with no
     /// wall-clock dependence.
     #[test]
-    fn budget_refusal_is_deterministic_and_typed() {
+    fn budget_refusal_is_deterministic_and_typed() -> Result<()>  {
         let db = open_engine(SimStorage::new(5));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
 
         // The transitive closure derives 12 path tuples; a ceiling of 3 must
         // refuse it, and the refusal must be a value, not a panic.
@@ -1719,8 +1732,9 @@ mod tests {
                 ",
                 no_params(),
             )
-            .expect("default budget completes");
+            .map_err(|e| miette!("default budget completes: {e}"))?;
         assert_eq!(ok.rows().len(), 12);
+        Ok(())
     }
 
     /// Story #68 / issue #1: a value-generating recursion with NO fixpoint
@@ -1734,7 +1748,7 @@ mod tests {
     /// `derived tuples` dimension (not `epochs`) — proving the NEW ceiling,
     /// not the pre-existing one, is what catches it.
     #[test]
-    fn runaway_value_generating_recursion_refuses_under_explicit_ceiling() {
+    fn runaway_value_generating_recursion_refuses_under_explicit_ceiling() -> Result<()>  {
         let db = open_engine(SimStorage::new(11));
         let opts = ScriptOptions {
             derived_tuple_ceiling: Some(10),
@@ -1753,13 +1767,14 @@ mod tests {
             .expect_err("a recursion with no fixpoint must refuse, never hang");
         let refusal: &crate::exec::fixpoint::eval::LimitExceeded = err
             .downcast_ref()
-            .expect("typed budget refusal, not a panic or a hang");
+            .map_err(|e| miette!("typed budget refusal, not a panic or a hang: {e}"))?;
         assert_eq!(
             refusal.dimension,
             crate::exec::fixpoint::eval::BudgetDimension::DerivedTuples,
             "must name the derived-tuple dimension specifically"
         );
         assert_eq!(refusal.ceiling, 10);
+        Ok(())
     }
 
     /// A WIDENING value-generating recursion — every epoch's join fans out
@@ -1778,7 +1793,7 @@ mod tests {
     /// or an unbounded climb; this is the one deliberately expensive test in
     /// this file, verifying the actual compiled-in default end to end.)
     #[test]
-    fn widening_value_generating_recursion_refuses_under_default_budget() {
+    fn widening_value_generating_recursion_refuses_under_default_budget() -> Result<()>  {
         let db = open_engine(SimStorage::new(12));
         let err = db
             .run_script(
@@ -1793,7 +1808,7 @@ mod tests {
             .expect_err("the DEFAULT budget alone must refuse a fixpoint-less, widening recursion");
         let refusal: &crate::exec::fixpoint::eval::LimitExceeded = err
             .downcast_ref()
-            .expect("typed budget refusal, not a panic or a hang");
+            .map_err(|e| miette!("typed budget refusal, not a panic or a hang: {e}"))?;
         assert_eq!(
             refusal.dimension,
             crate::exec::fixpoint::eval::BudgetDimension::DerivedTuples,
@@ -1802,6 +1817,7 @@ mod tests {
              a widening recursion, which can exhaust memory in far fewer than 1,000,000 epochs"
         );
         assert_eq!(refusal.ceiling, DEFAULT_DERIVED_TUPLE_CEILING);
+        Ok(())
     }
 
     /// Raising `derived_tuple_ceiling` through [`ScriptOptions`] lets a
@@ -1819,14 +1835,14 @@ mod tests {
     /// large, and the override path must not turn any ceiling into a hard
     /// cap on legitimate work.
     #[test]
-    fn raising_derived_tuple_ceiling_admits_a_larger_terminating_query() {
+    fn raising_derived_tuple_ceiling_admits_a_larger_terminating_query() -> Result<()>  {
         let db = open_engine(SimStorage::new(13));
         let mut edges = String::from("?[a, b] <- [");
         for i in 0..999 {
             edges.push_str(&format!("[{i}, {}],", i + 1));
         }
         edges.push_str("] :create edge {a, b}");
-        db.run_script(&edges, no_params()).expect("create edges");
+        db.run_script(&edges, no_params()).map_err(|e| miette!("create edges: {e}"))?;
 
         let q = "
             path[a, b] := *edge[a, b]
@@ -1848,7 +1864,7 @@ mod tests {
             .run_script_with(q, no_params(), low_opts)
             .expect_err("~999_000 true spend must exceed a 200_000 ceiling");
         let refusal: &crate::exec::fixpoint::eval::LimitExceeded =
-            err.downcast_ref().expect("typed budget refusal");
+            err.downcast_ref().map_err(|e| miette!("typed budget refusal: {e}"))?;
         assert!(
             matches!(
                 refusal.dimension,
@@ -1869,8 +1885,9 @@ mod tests {
         };
         let ok = db
             .run_script_with(q, no_params(), high_opts)
-            .expect("a raised ceiling must let the larger terminating query complete");
+            .map_err(|e| miette!("a raised ceiling must let the larger terminating query complete: {e}"))?;
         assert_eq!(ok.rows().len(), 499_500);
+        Ok(())
     }
 }
 
@@ -1880,6 +1897,7 @@ mod db_battery {
     //! determinism, and F2 refusal pin. Trigger-cache kill lives in admit;
     //! callback exactly-once arms live in observe.
 
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::data::json::NamedRows;
@@ -1894,15 +1912,15 @@ mod db_battery {
         BTreeMap::new()
     }
 
-    fn open_engine<S: Storage>(store: S) -> Engine<S> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
             .collect();
         out.sort();
         out
@@ -1911,7 +1929,7 @@ mod db_battery {
     fn raw_int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         nr.rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
             .collect()
     }
 
@@ -1919,36 +1937,36 @@ mod db_battery {
     /// multi-script inserts, aggregation, :order/:limit, :update, :insert
     /// conflict, :ensure, :rm — the stored.rs arms the author's tests never touch.
     #[test]
-    fn rs3_independent_e2e_scenario() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn rs3_independent_e2e_scenario() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
 
         db.run_script(
             "?[a, b] <- [[1, 10], [2, 20]] :create sal {a => b}",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[a, b] <- [[3, 30], [4, 20]] :put sal {a, b}", no_params())
-            .expect("second put");
+            .map_err(|e| miette!("second put: {e}"))?;
 
         // Aggregation through the public API.
         let agg = db
             .run_script("?[sum(b)] := *sal[_, b]", no_params())
-            .expect("aggregation");
+            .map_err(|e| miette!("aggregation: {e}"))?;
         assert_eq!(int_rows(&agg), vec![vec![80]]);
 
         // :order desc by value, tie broken asc by key, :limit 2.
         let top = db
             .run_script("?[a, b] := *sal[a, b] :order -b, a :limit 2", no_params())
-            .expect("order+limit");
+            .map_err(|e| miette!("order+limit: {e}"))?;
         assert_eq!(raw_int_rows(&top), vec![vec![3, 30], vec![2, 20]]);
 
         // :update rewrites the dependent column of an existing key.
         db.run_script("?[a, b] <- [[1, 11]] :update sal {a, b}", no_params())
-            .expect("update");
+            .map_err(|e| miette!("update: {e}"))?;
         let after_update = db
             .run_script("?[b] := *sal[1, b]", no_params())
-            .expect("read back");
+            .map_err(|e| miette!("read back: {e}"))?;
         assert_eq!(int_rows(&after_update), vec![vec![11]]);
 
         // :insert on an existing key is a typed refusal.
@@ -1962,16 +1980,16 @@ mod db_battery {
 
         // :ensure passes on a matching row, refuses a mismatch.
         db.run_script("?[a, b] <- [[1, 11]] :ensure sal {a, b}", no_params())
-            .expect(":ensure matching row");
+            .map_err(|e| miette!(":ensure matching row: {e}"))?;
         db.run_script("?[a, b] <- [[1, 12]] :ensure sal {a, b}", no_params())
             .expect_err(":ensure must refuse a mismatched value");
 
         // :rm removes by key; survivors are exactly the rest.
         db.run_script("?[a] <- [[1], [4]] :rm sal {a}", no_params())
-            .expect("rm");
+            .map_err(|e| miette!("rm: {e}"))?;
         let rest = db
             .run_script("?[a, b] := *sal[a, b]", no_params())
-            .expect("scan");
+            .map_err(|e| miette!("scan: {e}"))?;
         assert_eq!(int_rows(&rest), vec![vec![2, 20], vec![3, 30]]);
 
         // :returning on a put reports the mutated rows.
@@ -1980,64 +1998,69 @@ mod db_battery {
                 "?[a, b] <- [[7, 70]] :put sal {a, b} :returning",
                 no_params(),
             )
-            .expect("put returning");
+            .map_err(|e| miette!("put returning: {e}"))?;
         assert_eq!(int_rows(&ret), vec![vec![7, 70]]);
+        Ok(())
     }
 
     /// Reviewer's own contention shape (3 writers, distinct from the author's 2).
     #[test]
-    fn rs3_three_writer_contention_loses_no_update() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn rs3_three_writer_contention_loses_no_update() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
-            .expect("create counter");
+            .map_err(|e| miette!("create counter: {e}"))?;
 
         const PER_THREAD: i64 = 10;
         std::thread::scope(|scope| {
             for _ in 0..3 {
                 let db = db.clone();
-                scope.spawn(move || {
+                scope.spawn(move || -> Result<()> {
                     for _ in 0..PER_THREAD {
                         db.run_script(
                             "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
                             no_params(),
                         )
-                        .expect("increment");
+                        .map_err(|e| miette!("increment: {e}"))?;
                     }
-                });
+                    Ok(())
+                })
+                .join()
+                .map_err(|_| miette!("thread join"))??;
             }
         });
         let out = db
             .run_script("?[v] := *ctr[0, v]", no_params())
-            .expect("read");
+            .map_err(|e| miette!("read: {e}"))?;
         assert_eq!(int_rows(&out), vec![vec![30]]);
+        Ok(())
     }
 
     /// Determinism: the same scenario on two fresh databases — and across the
     /// fjall and sim backends — returns byte-identical rows in identical order;
     /// a budget refusal renders identically on repeated runs.
     #[test]
-    fn rs3_determinism_across_backends_and_repeats() {
+    fn rs3_determinism_across_backends_and_repeats() -> Result<()>  {
         fn scenario<S: Storage>(db: &Engine<S>) -> (Vec<Vec<i64>>, Vec<Vec<i64>>) {
             db.run_script(
                 "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2], [5, 6]] :create edge {a, b}",
                 no_params(),
             )
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
             let q = "
                 path[a, b] := *edge[a, b]
                 path[a, b] := *edge[a, c], path[c, b]
                 ?[a, b] := path[a, b]
             ";
-            let first = raw_int_rows(&db.run_script(q, no_params()).expect("closure"));
-            let second = raw_int_rows(&db.run_script(q, no_params()).expect("closure again"));
+            let first = raw_int_rows(&db.run_script(q, no_params()).map_err(|e| miette!("closure: {e}"))?);
+            let second = raw_int_rows(&db.run_script(q, no_params()).map_err(|e| miette!("closure again: {e}"))?);
             (first, second)
         }
 
-        let dir1 = tempfile::tempdir().unwrap();
-        let db1 = open_engine(new_fjall_storage(dir1.path()).unwrap());
-        let dir2 = tempfile::tempdir().unwrap();
-        let db2 = open_engine(new_fjall_storage(dir2.path()).unwrap());
+        let dir1 = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db1 = open_engine(new_fjall_storage(dir1.path())?);
+        let dir2 = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db2 = open_engine(new_fjall_storage(dir2.path())?);
         let db3 = open_engine(SimStorage::new(99));
 
         let (a1, a2) = scenario(&db1);
@@ -2071,6 +2094,7 @@ mod db_battery {
         let r3 = refusal(&db3);
         assert_eq!(r1, r2);
         assert_eq!(r2, r3);
+        Ok(())
     }
 
     /// F2 FIXED (was: silently dropped): a mutation targeting a `_`-prefixed
@@ -2081,7 +2105,7 @@ mod db_battery {
     /// the refusal back to the silent drop makes this test fail on the
     /// `unwrap_err`.
     #[test]
-    fn rs3_temp_relation_mutation_is_a_typed_refusal() {
+    fn rs3_temp_relation_mutation_is_a_typed_refusal() -> Result<()>  {
         let db = open_engine(SimStorage::new(23));
         let err = db
             .run_script("?[a] <- [[1]] :create _scratch {a}", no_params())
@@ -2093,24 +2117,25 @@ mod db_battery {
         // The refusal really was a refusal: nothing half-created.
         db.run_script("?[a] := *_scratch[a]", no_params())
             .expect_err("the temp relation must not exist after the refusal");
+            Ok(())
     }
 
     /// #375 T1 nasty: PRODUCTION [`SessionTx::commit_write`] twice with the
     /// same client operation identity — exactly one SweepDoor CommitOrdinal.
     #[test]
-    fn operation_key_commit_write_dedupes_same_operation_identity() {
+    fn operation_key_commit_write_dedupes_same_operation_identity() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x3750_00db));
         let opts = ScriptOptions {
             client_operation_id: Some(b"db-op-key-dedupe".to_vec()),
             sweep: Some(db.sweep.clone()),
             ..ScriptOptions::default()
         };
-        SessionTx::new_write(db.store.write_tx().expect("tx1"), opts.clone())
+        SessionTx::new_write(db.store.write_tx().map_err(|e| miette!("tx1: {e}"))?, opts.clone())
             .commit_write()
-            .expect("first commit_write");
-        SessionTx::new_write(db.store.write_tx().expect("tx2"), opts)
+            .map_err(|e| miette!("first commit_write: {e}"))?;
+        SessionTx::new_write(db.store.write_tx().map_err(|e| miette!("tx2: {e}"))?, opts)
             .commit_write()
-            .expect("retry commit_write");
+            .map_err(|e| miette!("retry commit_write: {e}"))?;
         let commits = db
             .sweep
             .with_mut(|door, _, _| door.highest_commit_ordinal().get());
@@ -2119,6 +2144,7 @@ mod db_battery {
             "two production commit_write calls with the same OperationKey \
              must mint exactly one committed effect"
         );
+        Ok(())
     }
 
     /// #374 T10 nasty: acknowledge a live KyzoScript write, inject a
@@ -2127,29 +2153,30 @@ mod db_battery {
     /// path (buffer-tier only); GREEN only when `commit_write` passes the
     /// NativeFsyncProof StableCommitCap barrier (`commit_durable`).
     #[test]
-    fn live_write_ack_survives_power_cut_via_stable_commit_cap() {
+    fn live_write_ack_survives_power_cut_via_stable_commit_cap() -> Result<()>  {
         let store = SimStorage::new(37_410);
         let db = open_engine(store);
         db.run_script("?[x] <- [[42]] :create ack_survive {x}", no_params())
-            .expect("live KyzoScript write must acknowledge");
+            .map_err(|e| miette!("live KyzoScript write must acknowledge: {e}"))?;
         // Power cut after ack: only the fsynced prefix survives.
         let after_cut = db.store.sim_powercut();
         let reopened = open_engine(after_cut);
         let rows = reopened
             .run_script("?[x] := *ack_survive[x]", no_params())
-            .expect("acked write must be query-visible after power cut");
+            .map_err(|e| miette!("acked write must be query-visible after power cut: {e}"))?;
         assert_eq!(
             int_rows(&rows),
             vec![vec![42]],
             "acknowledged live write must survive SimStorage::sim_powercut \
              (StableCommitCap NativeFsyncProof barrier)"
         );
+        Ok(())
     }
 
     /// #374 T10: barrier-on-ack — injected fsync failure must refuse the
     /// acknowledgement (never production Committed / silent volatile ack).
     #[test]
-    fn live_write_ack_refuses_when_fsync_barrier_fails() {
+    fn live_write_ack_refuses_when_fsync_barrier_fails() -> Result<()>  {
         let store = SimStorage::with_faults(
             37_411,
             crate::store::sim::FaultConfig {
@@ -2172,5 +2199,6 @@ mod db_battery {
         reopened
             .run_script("?[x] := *ack_fsync_fail[x]", no_params())
             .expect_err("refused ack must not leave a durable relation");
+            Ok(())
     }
 }

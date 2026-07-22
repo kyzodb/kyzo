@@ -2668,6 +2668,7 @@ pub(crate) fn make_const_rule(
 
 #[cfg(test)]
 mod live_certificate_verifiability {
+    use miette::{Result, miette};
     use super::*;
     use crate::data::statement::{
         ContextId, StatementContext, StatementSource, StatementSubject, StatementValue,
@@ -2695,7 +2696,7 @@ mod live_certificate_verifiability {
         let digest = RecordContentDigest::from_digest(digest_bytes);
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("live-subject")),
-            crate::data::statement::StatementPredicate::new("about").expect("predicate"),
+            crate::data::statement::StatementPredicate::new("about").map_err(|e| miette!("predicate: {e}"))?,
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
             StatementContext::Scoped(ContextId::from_digest([0xC4; 32])),
@@ -2713,7 +2714,7 @@ mod live_certificate_verifiability {
     /// #374 T4 nasty: admit via the live door with a registered authorizing key,
     /// then verify the certificate against that same key table — must succeed.
     #[test]
-    fn live_admission_certificate_verifies_against_registered_key_table() {
+    fn live_admission_certificate_verifies_against_registered_key_table() -> Result<()>  {
         let store = StoreId::from_digest([0x74; 32]);
         let authority = WriteAuthority::mint(store, [0xD4; 32]);
         let chain = RootChain::empty();
@@ -2733,25 +2734,26 @@ mod live_certificate_verifiability {
             CommitOrdinal::ZERO,
             scope,
         )
-        .expect("registered key must open the live door");
+        .map_err(|e| miette!("registered key must open the live door: {e}"))?;
 
         let (_record, cert) =
-            admit_record(claim_parts(store, live)).expect("admit through live door");
+            admit_record(claim_parts(store, live)).map_err(|e| miette!("admit through live door: {e}"))?;
 
         verify_replica(&cert, store, CommitOrdinal::ZERO, &keys, &scopes, None)
-            .expect("receiver must verify against the store key table");
+            .map_err(|e| miette!("receiver must verify against the store key table: {e}"))?;
+            Ok(())
     }
 
     /// Seats genesis path: certificate_inputs signs with the store-registered
     /// origin key; attach_verified / verify_replica against seats' table succeed.
     #[test]
-    fn seats_live_certificate_verifies_against_store_key_table() {
+    fn seats_live_certificate_verifies_against_store_key_table() -> Result<()>  {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(2),
         ))?;
         let (_record, cert) =
-            admit_record(claim_parts(seats.store_id(), live)).expect("admit via seats");
+            admit_record(claim_parts(seats.store_id(), live)).map_err(|e| miette!("admit via seats: {e}"))?;
 
         verify_replica(
             &cert,
@@ -2761,21 +2763,22 @@ mod live_certificate_verifiability {
             seats.scopes(),
             None,
         )
-        .expect("seats key table must resolve the signing id");
+        .map_err(|e| miette!("seats key table must resolve the signing id: {e}"))?;
 
         let live2 = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(3),
         ))?;
         let (record2, cert2) =
-            admit_record(claim_parts(seats.store_id(), live2)).expect("second admit");
+            admit_record(claim_parts(seats.store_id(), live2)).map_err(|e| miette!("second admit: {e}"))?;
         seats
             .attach_verified(&record2, cert2)
-            .expect("attach_verified uses store key table");
+            .map_err(|e| miette!("attach_verified uses store key table: {e}"))?;
+            Ok(())
     }
 
     /// Negative: unregistered / non-signing key — refuse, never mint ephemeral.
     #[test]
-    fn from_live_refuses_without_registered_signing_key() {
+    fn from_live_refuses_without_registered_signing_key() -> Result<()>  {
         let store = StoreId::from_digest([0x75; 32]);
         let authority = WriteAuthority::mint(store, [0xD5; 32]);
         let chain = RootChain::empty();
@@ -2798,7 +2801,7 @@ mod live_certificate_verifiability {
         // Public-only table material cannot sign — refuse, do not mint ephemeral.
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
-        let public_only = keys.lookup(&key.id()).expect("lookup").expect("public install");
+        let public_only = keys.lookup(&key.id()).map_err(|e| miette!("lookup: {e}"))?.map_err(|e| miette!("public install: {e}"))?;
         assert!(
             !public_only.can_sign(),
             "table lookup must not reconstitute signing"
@@ -2814,12 +2817,13 @@ mod live_certificate_verifiability {
         )
         .expect_err("verify-only key must not open the live door");
         assert_eq!(err, AdmitRefuse::UnregisteredAuthorizingKey);
+        Ok(())
     }
 
     /// #376 SEAT-59-GOLDENS fix-order item 3: certificate bound to a different
     /// record digest must refuse at attach_verified (digest gate before verify).
     #[test]
-    fn attach_verified_refuses_cert_minted_for_different_record() {
+    fn attach_verified_refuses_cert_minted_for_different_record() -> Result<()>  {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live_a = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(10),
@@ -2829,7 +2833,7 @@ mod live_certificate_verifiability {
             live_a,
             [0xA1; 32],
         ))
-        .expect("admit record A");
+        .map_err(|e| miette!("admit record A: {e}"))?;
         let live_b = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(11),
         ))?;
@@ -2838,7 +2842,7 @@ mod live_certificate_verifiability {
             live_b,
             [0xB2; 32],
         ))
-        .expect("admit record B");
+        .map_err(|e| miette!("admit record B: {e}"))?;
 
         let err = seats
             .attach_verified(&record_a, cert_b)
@@ -2854,11 +2858,12 @@ mod live_certificate_verifiability {
             1,
             "refused attach must commit nothing to the admission spine"
         );
+        Ok(())
     }
 
     /// #376: flipped signature byte must fail verify_replica inside attach_verified.
     #[test]
-    fn attach_verified_refuses_flipped_signature_bit() {
+    fn attach_verified_refuses_flipped_signature_bit() -> Result<()>  {
         use crate::store::replica::{AdmissionCertificateParts, mint_admission_certificate};
 
         let seats = LiveAdmissionSeats::mint_genesis();
@@ -2869,9 +2874,9 @@ mod live_certificate_verifiability {
             .root_chain()
             .links()
             .last()
-            .expect("genesis seats carry a tip link");
+            .map_err(|e| miette!("genesis seats carry a tip link: {e}"))?;
         let predecessor_history_digest = *tip.predecessor_root().as_bytes();
-        let (record, cert) = admit_record(claim_parts(seats.store_id(), live)).expect("admit");
+        let (record, cert) = admit_record(claim_parts(seats.store_id(), live)).map_err(|e| miette!("admit: {e}"))?;
 
         let mut flipped = *cert.signature().as_bytes();
         flipped[0] ^= 0x01;
@@ -2889,7 +2894,7 @@ mod live_certificate_verifiability {
             operation_key: cert.operation_key().copied(),
             signature: Signature::from_bytes(flipped),
         })
-        .expect("mint seals flipped-signature parts without re-checking authenticity");
+        .map_err(|e| miette!("mint seals flipped-signature parts without re-checking authenticity: {e}"))?;
 
         let err = seats
             .attach_verified(&record, bad)
@@ -2900,12 +2905,13 @@ mod live_certificate_verifiability {
             1,
             "refused attach must commit nothing to the admission spine"
         );
+        Ok(())
     }
 
     /// #376: replaying a certificate onto a different store's seats refuses
     /// (foreign authorizing key / store binding — not a second mint door).
     #[test]
-    fn attach_verified_refuses_cross_store_replay() {
+    fn attach_verified_refuses_cross_store_replay() -> Result<()>  {
         let origin = LiveAdmissionSeats::mint_genesis();
         let foreign = LiveAdmissionSeats::mint_genesis();
         assert_ne!(
@@ -2918,7 +2924,7 @@ mod live_certificate_verifiability {
             RelationGeneration::witness(13),
         ))?;
         let (record, cert) =
-            admit_record(claim_parts(origin.store_id(), live)).expect("admit on origin");
+            admit_record(claim_parts(origin.store_id(), live)).map_err(|e| miette!("admit on origin: {e}"))?;
 
         let err = foreign
             .attach_verified(&record, cert)
@@ -2931,11 +2937,13 @@ mod live_certificate_verifiability {
             1,
             "foreign seats must not advance on cross-store replay"
         );
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod access_level_mutation_refuse {
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::session::access::InsufficientAccessLevel;
@@ -2949,8 +2957,8 @@ mod access_level_mutation_refuse {
         BTreeMap::new()
     }
 
-    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine(store: SimStorage) -> Result<Engine<SimStorage>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     fn assert_insufficient_access(err: &miette::Error) {
@@ -2963,15 +2971,15 @@ mod access_level_mutation_refuse {
     /// Production Ord law: put/rm/update require `>= Protected`, so Hidden
     /// (below that floor) refuses every mutation door and commits nothing.
     #[test]
-    fn hidden_relation_refuses_put_rm_update_and_commits_nothing() {
+    fn hidden_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()>  {
         let db = open_engine(SimStorage::new(0xACC5_0001));
         db.run_script("?[k, v] <- [] :create h {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :put h {k => v}", no_params())
-            .expect("seed under Normal");
+            .map_err(|e| miette!("seed under Normal: {e}"))?;
 
         db.run_script("::access_level hidden h", no_params())
-            .expect("lower to Hidden");
+            .map_err(|e| miette!("lower to Hidden: {e}"))?;
 
         assert_insufficient_access(
             &db.run_script("?[k, v] <- [[2, 20]] :put h {k => v}", no_params())
@@ -2987,10 +2995,10 @@ mod access_level_mutation_refuse {
         );
 
         db.run_script("::access_level normal h", no_params())
-            .expect("restore");
+            .map_err(|e| miette!("restore: {e}"))?;
         let out = db
             .run_script("?[k, v] := *h{k, v}", no_params())
-            .expect("read back");
+            .map_err(|e| miette!("read back: {e}"))?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::from(10),
@@ -3000,20 +3008,21 @@ mod access_level_mutation_refuse {
             want.as_slice(),
             "refused Hidden mutations must commit nothing"
         );
+        Ok(())
     }
 
     /// ReadOnly is the other rung below Protected — same put/rm/update refuse
     /// + commit-nothing contract as Hidden (production `< Protected` gate).
     #[test]
-    fn read_only_relation_refuses_put_rm_update_and_commits_nothing() {
+    fn read_only_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()>  {
         let db = open_engine(SimStorage::new(0xACC5_0002));
         db.run_script("?[k, v] <- [] :create r {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :put r {k => v}", no_params())
-            .expect("seed under Normal");
+            .map_err(|e| miette!("seed under Normal: {e}"))?;
 
         db.run_script("::access_level read_only r", no_params())
-            .expect("lower to ReadOnly");
+            .map_err(|e| miette!("lower to ReadOnly: {e}"))?;
 
         assert_insufficient_access(
             &db.run_script("?[k, v] <- [[2, 20]] :put r {k => v}", no_params())
@@ -3029,10 +3038,10 @@ mod access_level_mutation_refuse {
         );
 
         db.run_script("::access_level normal r", no_params())
-            .expect("restore");
+            .map_err(|e| miette!("restore: {e}"))?;
         let out = db
             .run_script("?[k, v] := *r{k, v}", no_params())
-            .expect("read back");
+            .map_err(|e| miette!("read back: {e}"))?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::from(10),
@@ -3042,11 +3051,13 @@ mod access_level_mutation_refuse {
             want.as_slice(),
             "refused ReadOnly mutations must commit nothing"
         );
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod bulk_write_tests {
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use fjall::Slice;
@@ -3062,8 +3073,8 @@ mod bulk_write_tests {
         BTreeMap::new()
     }
 
-    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine(store: SimStorage) -> Result<Engine<SimStorage>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     /// A deterministic seeded workload exercising every branch the bulk-write
@@ -3074,13 +3085,13 @@ mod bulk_write_tests {
     /// write run), and removals (retraction through the same key encoder).
     fn run_seeded_workload(db: &Engine<SimStorage>) {
         db.run_script("?[k, v] <- [] :create w {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         let mut fresh = String::from("?[k, v] <- [");
         for i in 0..500i64 {
             fresh.push_str(&format!("[{i},{}],", i * 3));
         }
         fresh.push_str("] :put w {k => v}");
-        db.run_script(&fresh, no_params()).expect("bulk insert");
+        db.run_script(&fresh, no_params()).map_err(|e| miette!("bulk insert: {e}"))?;
 
         // Re-put 200 of those keys with a different value: exercises the
         // probe's FOUND branch (`current_row` returns `Some`) through the
@@ -3090,7 +3101,7 @@ mod bulk_write_tests {
             updates.push_str(&format!("[{i},{}],", i * 7));
         }
         updates.push_str("] :put w {k => v}");
-        db.run_script(&updates, no_params()).expect("re-put");
+        db.run_script(&updates, no_params()).map_err(|e| miette!("re-put: {e}"))?;
 
         // Retract 100 keys: exercises `remove_from_relation`'s use of the
         // same key encoder for a Retract row.
@@ -3099,7 +3110,7 @@ mod bulk_write_tests {
             removals.push_str(&format!("[{i}],"));
         }
         removals.push_str("] :rm w {k}");
-        db.run_script(&removals, no_params()).expect("bulk remove");
+        db.run_script(&removals, no_params()).map_err(|e| miette!("bulk remove: {e}"))?;
     }
 
     /// The bulk-write allocation fix (`encode_key_with_suffix` replacing
@@ -3112,12 +3123,12 @@ mod bulk_write_tests {
     /// proves it end to end, through the real mutation pipeline (extract,
     /// probe, put/remove, commit).
     #[test]
-    fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() {
+    fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() -> Result<()>  {
         let db = open_engine(SimStorage::new(0xB01C_0001));
         run_seeded_workload(&db);
 
-        let tx = db.store.read_tx().expect("read tx");
-        let scan: Vec<(Slice, Slice)> = tx.total_scan().collect::<Result<_, _>>().expect("scan");
+        let tx = db.store.read_tx().map_err(|e| miette!("read tx: {e}"))?;
+        let scan: Vec<(Slice, Slice)> = tx.total_scan().collect::<Result<_, _>>().map_err(|e| miette!("scan: {e}"))?;
         assert_eq!(
             scan.len(),
             802,
@@ -3137,13 +3148,13 @@ mod bulk_write_tests {
         // format-CORRECT bytes, not an implementation snapshot.
         let live = db
             .run_script("?[k, v] := *w{k, v}", no_params())
-            .expect("scan back")
+            .map_err(|e| miette!("scan back: {e}"))?
             .rows()
             .to_vec();
         assert_eq!(live.len(), 400, "200 re-put + 200 untouched, 100 retracted");
         let mut by_key: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         for row in &live {
-            by_key.insert(row[0].get_int().unwrap(), row[1].get_int().unwrap());
+            by_key.insert(row[0].get_int().ok_or_else(|| miette!("get_int"))?, row[1].get_int().ok_or_else(|| miette!("get_int"))?);
         }
         assert_eq!(by_key.get(&0), Some(&0)); // re-put i*7 = 0
         assert_eq!(by_key.get(&1), Some(&7)); // re-put 1*7
@@ -3176,6 +3187,7 @@ mod bulk_write_tests {
             hex, "6babc59f2f44b9f8a2b21e08295f7c35da2cd25c41fba44252584ccda6f20b3c",
             "store bytes for the seeded bulk workload changed"
         );
+        Ok(())
     }
 
     /// A per-row `@` clause's coordinate comes out of the row's own data
@@ -3193,10 +3205,10 @@ mod bulk_write_tests {
     /// committing that transaction on error, not of the loop stopping
     /// early.
     #[test]
-    fn per_row_write_validity_at_terminal_instant_refuses_whole_mutation() {
+    fn per_row_write_validity_at_terminal_instant_refuses_whole_mutation() -> Result<()>  {
         let db = open_engine(SimStorage::new(0xB01C_0002));
         db.run_script("?[k, v] <- [] :create w3 {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
 
         let err = db
             .run_script(
@@ -3211,7 +3223,7 @@ mod bulk_write_tests {
 
         let out = db
             .run_script("?[k, v] := *w3{k, v}", no_params())
-            .expect("read back");
+            .map_err(|e| miette!("read back: {e}"))?;
         assert_eq!(
             out.rows().len(),
             0,
@@ -3219,6 +3231,7 @@ mod bulk_write_tests {
              transaction that reached the reserved instant on row 2 was never \
              committed"
         );
+        Ok(())
     }
 
     /// Story #88 coverage gap: `:insert`'s duplicate-key refusal
@@ -3231,12 +3244,12 @@ mod bulk_write_tests {
     /// nothing — the first row's value stays what the successful insert
     /// wrote, not the value the refused one tried to place.
     #[test]
-    fn insert_of_an_existing_key_refuses_and_commits_nothing() {
+    fn insert_of_an_existing_key_refuses_and_commits_nothing() -> Result<()>  {
         let db = open_engine(SimStorage::new(0xB01C_0003));
         db.run_script("?[k, v] <- [] :create wi {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :insert wi {k => v}", no_params())
-            .expect("first insert of a fresh key succeeds");
+            .map_err(|e| miette!("first insert of a fresh key succeeds: {e}"))?;
 
         let err = db
             .run_script("?[k, v] <- [[1, 999]] :insert wi {k => v}", no_params())
@@ -3248,7 +3261,7 @@ mod bulk_write_tests {
 
         let out = db
             .run_script("?[k, v] := *wi{k, v}", no_params())
-            .expect("read back");
+            .map_err(|e| miette!("read back: {e}"))?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::from(10),
@@ -3258,6 +3271,7 @@ mod bulk_write_tests {
             want.as_slice(),
             "the refused insert must not overwrite the existing row"
         );
+        Ok(())
     }
 
     /// Story #88 coverage gap: `:update`'s missing-key refusal
@@ -3265,12 +3279,12 @@ mod bulk_write_tests {
     /// exist")`) was reached by no test — every existing `:update` script
     /// updates a key it just wrote. Updating an absent key must refuse.
     #[test]
-    fn update_of_a_missing_key_refuses() {
+    fn update_of_a_missing_key_refuses() -> Result<()>  {
         let db = open_engine(SimStorage::new(0xB01C_0004));
         db.run_script("?[k, v] <- [] :create wu {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :put wu {k => v}", no_params())
-            .expect("seed one key");
+            .map_err(|e| miette!("seed one key: {e}"))?;
 
         let err = db
             .run_script("?[k, v] <- [[2, 20]] :update wu {k => v}", no_params())
@@ -3279,6 +3293,7 @@ mod bulk_write_tests {
             err.to_string().contains("key to update does not exist"),
             "expected the missing-key update refusal, got: {err}"
         );
+        Ok(())
     }
 
     /// Story #88 coverage gap: `:update`'s value-CARRY-FORWARD branch
@@ -3290,23 +3305,23 @@ mod bulk_write_tests {
     /// relation is updated naming only ONE of its two non-key columns; the
     /// omitted one must retain its prior stored value, untouched.
     #[test]
-    fn update_carries_forward_an_omitted_non_key_column() {
+    fn update_carries_forward_an_omitted_non_key_column() -> Result<()>  {
         let db = open_engine(SimStorage::new(0xB01C_0005));
         db.run_script("?[k, a, b] <- [] :create wc {k => a, b}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         db.run_script(
             "?[k, a, b] <- [[1, 10, 20]] :put wc {k => a, b}",
             no_params(),
         )
-        .expect("seed one full row");
+        .map_err(|e| miette!("seed one full row: {e}"))?;
 
         // Update naming only `a` (omitting `b`): b must carry forward as 20.
         db.run_script("?[k, a] <- [[1, 99]] :update wc {k => a}", no_params())
-            .expect("partial update succeeds");
+            .map_err(|e| miette!("partial update succeeds: {e}"))?;
 
         let out = db
             .run_script("?[k, a, b] := *wc{k, a, b}", no_params())
-            .expect("read back");
+            .map_err(|e| miette!("read back: {e}"))?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::from(99),
@@ -3317,11 +3332,13 @@ mod bulk_write_tests {
             want.as_slice(),
             "a is updated to 99; b (omitted from the :update) carries forward as 20"
         );
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod trigger_cache_battery {
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::data::json::NamedRows;
@@ -3334,15 +3351,15 @@ mod trigger_cache_battery {
         BTreeMap::new()
     }
 
-    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine(store: SimStorage) -> Result<Engine<SimStorage>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
             .collect();
         out.sort();
         out
@@ -3352,28 +3369,28 @@ mod trigger_cache_battery {
     /// its own program (the trigger-parse cache must key by source). Also proves
     /// the trigger pipeline works at all — nothing else in the tree tests it.
     #[test]
-    fn rs3_two_put_triggers_fire_distinctly_in_one_session() {
+    fn rs3_two_put_triggers_fire_distinctly_in_one_session() -> Result<()>  {
         let db = open_engine(SimStorage::new(41));
         db.run_script("?[a, b] <- [[0, 0]] :create src {a => b}", no_params())
-            .expect("create src");
+            .map_err(|e| miette!("create src: {e}"))?;
         db.run_script("?[a, b] <- [[0, 0]] :create mirror {a => b}", no_params())
-            .expect("create mirror");
+            .map_err(|e| miette!("create mirror: {e}"))?;
         db.run_script("?[a, b] <- [[0, 0]] :create mirror2 {a => b}", no_params())
-            .expect("create mirror2");
+            .map_err(|e| miette!("create mirror2: {e}"))?;
         db.run_script(
             "::set_triggers src \
              on put { ?[a, b] := _new[a, b] :put mirror {a, b} } \
              on put { ?[a, b] := _new[a, b] :put mirror2 {a, b} }",
             no_params(),
         )
-        .expect("set triggers");
+        .map_err(|e| miette!("set triggers: {e}"))?;
 
         db.run_script("?[a, b] <- [[1, 10], [2, 20]] :put src {a, b}", no_params())
-            .expect("put fires triggers");
+            .map_err(|e| miette!("put fires triggers: {e}"))?;
 
         let mirror = db
             .run_script("?[a, b] := *mirror[a, b]", no_params())
-            .expect("mirror scan");
+            .map_err(|e| miette!("mirror scan: {e}"))?;
         assert_eq!(
             int_rows(&mirror),
             vec![vec![0, 0], vec![1, 10], vec![2, 20]],
@@ -3381,31 +3398,33 @@ mod trigger_cache_battery {
         );
         let mirror2 = db
             .run_script("?[a, b] := *mirror2[a, b]", no_params())
-            .expect("mirror2 scan");
+            .map_err(|e| miette!("mirror2 scan: {e}"))?;
         assert_eq!(
             int_rows(&mirror2),
             vec![vec![0, 0], vec![1, 10], vec![2, 20]],
             "second on-put trigger must run ITS program, not a cache-collided one"
         );
+        Ok(())
     }
 
     /// `:replace` atomically clears the old rows and inserts the new set,
     /// inside one transaction — the kernel `del_range` and the puts commit
     /// together.
     #[test]
-    fn replace_is_atomic_clear_and_insert() {
+    fn replace_is_atomic_clear_and_insert() -> Result<()>  {
         let db = open_engine(SimStorage::new(3));
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4]] :create edge {a, b}",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[a, b] <- [[9, 9]] :replace edge {a, b}", no_params())
-            .expect("replace");
+            .map_err(|e| miette!("replace: {e}"))?;
         let out = db
             .run_script("?[a, b] := *edge[a, b]", no_params())
-            .expect("scan");
+            .map_err(|e| miette!("scan: {e}"))?;
         // The old three rows are gone; only the replacement survives.
         assert_eq!(int_rows(&out), vec![vec![9, 9]]);
+        Ok(())
     }
 }
