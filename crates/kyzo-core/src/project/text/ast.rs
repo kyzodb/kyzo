@@ -98,58 +98,63 @@ impl DoTokenize for FtsExpr {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
+
     use super::*;
     use crate::DataValue;
     use crate::project::text::TokenizerConfig;
 
-    fn lit(s: &str) -> FtsExpr {
+    fn lit(s: &str) -> Result<FtsExpr> {
         if s.is_empty() {
-            FtsExpr::empty_node()
+            Ok(FtsExpr::empty_node())
         } else {
-            FtsExpr::Literal(FtsLiteral::new(s.into(), false, 1.0).unwrap())
+            Ok(FtsExpr::Literal(
+                FtsLiteral::new(s.into(), false, 1.0).ok_or_else(|| miette!("literal"))?,
+            ))
         }
     }
 
-    fn analyzer(tk: &str, filters: &[(&str, Vec<DataValue>)]) -> TextAnalyzer {
-        let tk = TokenizerConfig::admit(tk, vec![]).expect("test tokenizer");
-        let filters: Vec<_> = filters
-            .iter()
-            .map(|(n, args)| TokenizerConfig::admit(*n, args.clone()).expect("test filter"))
-            .collect();
-        tk.build(&filters).unwrap()
+    fn analyzer(tk: &str, filters: &[(&str, Vec<DataValue>)]) -> Result<TextAnalyzer> {
+        let tk = TokenizerConfig::admit(tk, vec![]).map_err(|e| miette!("{e}"))?;
+        let mut built = Vec::new();
+        for (n, args) in filters {
+            built.push(TokenizerConfig::admit(*n, args.clone()).map_err(|e| miette!("{e}"))?);
+        }
+        Ok(tk.build(&built).map_err(|e| miette!("{e}"))?)
     }
 
     #[test]
-    fn tokenize_rewrites_literals_through_the_analyzer() {
+    fn tokenize_rewrites_literals_through_the_analyzer() -> Result<()> {
         let an = analyzer(
             "Simple",
             &[
                 ("Lowercase", vec![]),
                 ("Stemmer", vec![DataValue::from("english")]),
             ],
-        );
-        let e = lit("Running Dogs").tokenize(&an);
+        )?;
+        let e = lit("Running Dogs")?.tokenize(&an);
         match &e {
             FtsExpr::And(v) => {
                 assert_eq!(v.len(), 2);
-                assert_eq!(v[0], lit("run"));
-                assert_eq!(v[1], lit("dog"));
+                assert_eq!(v[0], lit("run")?);
+                assert_eq!(v[1], lit("dog")?);
             }
             other @ FtsExpr::Literal(_)
             | other @ FtsExpr::Near(_)
             | other @ FtsExpr::Or(_)
             | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
-        assert_eq!(lit("Running").tokenize(&an), lit("run"));
-        let stop = analyzer("Simple", &[("Stopwords", vec![DataValue::from("en")])]);
-        let e = FtsExpr::and(vec![lit("the"), lit("crafty fox")]).tokenize(&stop);
+        assert_eq!(lit("Running")?.tokenize(&an), lit("run")?);
+        let stop = analyzer("Simple", &[("Stopwords", vec![DataValue::from("en")])])?;
+        let e = FtsExpr::and(vec![lit("the")?, lit("crafty fox")?]).tokenize(&stop);
         match &e {
             FtsExpr::And(v) => {
                 // Content pin: "the" vanishes; "crafty fox" survives as two
                 // literals — length alone would green on ["x","y"].
+                let want = [lit("crafty")?, lit("fox")?];
                 assert_eq!(
                     v.as_slice(),
-                    &[lit("crafty"), lit("fox")],
+                    &want,
                     "stopword must drop 'the' and keep crafty/fox: {v:?}"
                 );
             }
@@ -158,12 +163,14 @@ mod tests {
             | other @ FtsExpr::Or(_)
             | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
-        let p = FtsExpr::Literal(FtsLiteral::new("Runni".into(), true, 2.0).unwrap());
+        let p = FtsExpr::Literal(
+            FtsLiteral::new("Runni".into(), true, 2.0).ok_or_else(|| miette!("literal"))?,
+        );
         assert_eq!(p.clone().tokenize(&an), p);
         let e = FtsExpr::near(
             vec![
-                FtsLiteral::new("Running".into(), false, 1.0).unwrap(),
-                FtsLiteral::new("Dogs".into(), false, 1.0).unwrap(),
+                FtsLiteral::new("Running".into(), false, 1.0).ok_or_else(|| miette!("literal"))?,
+                FtsLiteral::new("Dogs".into(), false, 1.0).ok_or_else(|| miette!("literal"))?,
             ],
             3,
         )
@@ -180,5 +187,6 @@ mod tests {
             | other @ FtsExpr::Or(_)
             | other @ FtsExpr::Not(..) => panic!("expected Near, got {other:?}"),
         }
+        Ok(())
     }
 }
