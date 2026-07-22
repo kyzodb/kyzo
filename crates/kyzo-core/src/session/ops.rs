@@ -235,14 +235,16 @@ impl<T: WriteTx> SessionTx<T> {
                 if let Some(new) = new_kv {
                     crate::project::dedup::lsh::lsh_put(
                         &mut self.store,
-                        new,
-                        extractor,
-                        analyzer,
-                        base,
-                        idx,
-                        inv,
-                        manifest,
-                        perms,
+                        crate::project::dedup::lsh::LshPutSpec {
+                            tuple: new,
+                            extractor,
+                            tokenizer: analyzer,
+                            base,
+                            idx,
+                            inv_idx: inv,
+                            manifest,
+                            perms,
+                        },
                     )?;
                 }
             }

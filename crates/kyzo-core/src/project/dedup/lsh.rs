@@ -742,18 +742,29 @@ pub(crate) fn lsh_del<T: WriteTx>(
 /// handle name (`{base}:{idx}`; see the header block). `perms` is
 /// `manifest.get_hash_perms()?`, hoisted by the caller so a batch pays the
 /// decode once.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn lsh_put<T: WriteTx>(
-    tx: &mut T,
-    tuple: &[DataValue],
-    extractor: &Expr,
-    tokenizer: &TextAnalyzer,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    inv_idx: &RelationHandle,
-    manifest: &MinHashLshIndexManifest,
-    perms: &HashPermutations,
-) -> Result<()> {
+/// Seats for [`lsh_put`].
+pub(crate) struct LshPutSpec<'a> {
+    pub(crate) tuple: &'a [DataValue],
+    pub(crate) extractor: &'a Expr,
+    pub(crate) tokenizer: &'a TextAnalyzer,
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) inv_idx: &'a RelationHandle,
+    pub(crate) manifest: &'a MinHashLshIndexManifest,
+    pub(crate) perms: &'a HashPermutations,
+}
+
+pub(crate) fn lsh_put<T: WriteTx>(tx: &mut T, spec: LshPutSpec<'_>) -> Result<()> {
+    let LshPutSpec {
+        tuple,
+        extractor,
+        tokenizer,
+        base,
+        idx,
+        inv_idx,
+        manifest,
+        perms,
+    } = spec;
     let key_len = base.metadata.keys.len();
     if tuple.len() < key_len {
         bail!(IndexRowCorrupt::new(
@@ -847,18 +858,7 @@ impl RelationIndexSearch for Lsh {
         tx: &Tx,
         request: Self::Request<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        crate::project::contract::admit_relation_search_hits(lsh_search_body(
-            request.cancel,
-            tx,
-            request.q,
-            request.manifest,
-            request.base,
-            request.idx,
-            request.params,
-            request.filter_code,
-            request.perms,
-            request.tokenizer,
-        )?)
+        crate::project::contract::admit_relation_search_hits(lsh_search_body(tx, request)?)
     }
 }
 
@@ -875,49 +875,26 @@ impl Lsh {
     /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
     /// function `lsh_search`. Live host dispatch uses the trait method
     /// (`exec/plan/search.rs`); this inherent is the UFCS-friendly alias.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_index(
-        cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,
-        q: &DataValue,
-        manifest: &MinHashLshIndexManifest,
-        base: &RelationHandle,
-        idx: &RelationHandle,
-        params: &LshSearchParams,
-        filter_code: &Option<Expr>,
-        perms: &HashPermutations,
-        tokenizer: &TextAnalyzer,
+        request: LshSearchRequest<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        Self::search_relation(
-            tx,
-            LshSearchRequest {
-                cancel,
-                q,
-                manifest,
-                base,
-                idx,
-                params,
-                filter_code,
-                perms,
-                tokenizer,
-            },
-        )
+        Self::search_relation(tx, request)
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn lsh_search_body(
-    cancel: &crate::rules::contract::CancelFlag,
-    tx: &impl ReadTx,
-    q: &DataValue,
-    manifest: &MinHashLshIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &LshSearchParams,
-    filter_code: &Option<Expr>,
-    perms: &HashPermutations,
-    tokenizer: &TextAnalyzer,
-) -> Result<Vec<Tuple>> {
+fn lsh_search_body(tx: &impl ReadTx, request: LshSearchRequest<'_>) -> Result<Vec<Tuple>> {
+    let LshSearchRequest {
+        cancel,
+        q,
+        manifest,
+        base,
+        idx,
+        params,
+        filter_code,
+        perms,
+        tokenizer,
+    } = request;
     let min_hash = match q {
         DataValue::Null => return Ok(vec![]),
         DataValue::List(l) => HashValues::new(l.iter().map(element_bytes), perms),
@@ -1001,8 +978,21 @@ mod tests {
     use miette::{IntoDiagnostic, Result, miette};
 
     macro_rules! lsh_rows {
-        ($($arg:expr),* $(,)?) => {{
-            crate::project::contract::search_rows(Lsh::search_index($($arg),*)?)?
+        ($cancel:expr, $tx:expr, $q:expr, $manifest:expr, $base:expr, $idx:expr, $params:expr, $filter:expr, $perms:expr, $tokenizer:expr $(,)?) => {{
+            crate::project::contract::search_rows(Lsh::search_index(
+                $tx,
+                LshSearchRequest {
+                    cancel: $cancel,
+                    q: $q,
+                    manifest: $manifest,
+                    base: $base,
+                    idx: $idx,
+                    params: $params,
+                    filter_code: $filter,
+                    perms: $perms,
+                    tokenizer: $tokenizer,
+                },
+            )?)?
         }};
     }
 
@@ -1391,9 +1381,7 @@ mod tests {
                     kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
                 )?;
-                lsh_put(
-                    &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &m, &perms,
-                )?;
+                lsh_put(&mut tx, LshPutSpec { tuple: &row, extractor: &extractor, tokenizer: &tokenizer, base: &base, idx: &idx, inv_idx: &inv, manifest: &m, perms: &perms })?;
             }
             tx.commit().map_err(|e| miette!("{e}"))?;
             let rtx = db.read_tx()?;
@@ -1534,9 +1522,7 @@ mod tests {
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
-            lsh_put(
-                &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &manifest, &perms,
-            )?;
+            lsh_put(&mut tx, LshPutSpec { tuple: &row, extractor: &extractor, tokenizer: &tokenizer, base: &base, idx: &idx, inv_idx: &inv, manifest: &manifest, perms: &perms })?;
         }
         tx.commit().map_err(|e| miette!("{e}"))?;
         Ok(Fixture {
@@ -1589,33 +1575,11 @@ mod tests {
 
         // A Null query yields nothing; a non-indexable query is an error.
         assert!(
-            Lsh::search_index(
-                &CancelFlag::inert(),
-                &rtx,
-                &DataValue::Null,
-                &f.manifest,
-                &f.base,
-                &f.idx,
-                &LshSearchParams { k: None },
-                &None,
-                &perms,
-                &f.tokenizer,
-            )?
+            Lsh::search_index(&rtx, LshSearchRequest { cancel: &CancelFlag::inert(), q: &DataValue::Null, manifest: &f.manifest, base: &f.base, idx: &f.idx, params: &LshSearchParams { k: None }, filter_code: &None, perms: &perms, tokenizer: &f.tokenizer })?
             .is_empty()
         );
         assert!(
-            Lsh::search_index(
-                &CancelFlag::inert(),
-                &rtx,
-                &DataValue::from(42),
-                &f.manifest,
-                &f.base,
-                &f.idx,
-                &LshSearchParams { k: None },
-                &None,
-                &perms,
-                &f.tokenizer,
-            )
+            Lsh::search_index(&rtx, LshSearchRequest { cancel: &CancelFlag::inert(), q: &DataValue::from(42), manifest: &f.manifest, base: &f.base, idx: &f.idx, params: &LshSearchParams { k: None }, filter_code: &None, perms: &perms, tokenizer: &f.tokenizer })
             .is_err()
         );
         drop(rtx);
@@ -1698,17 +1662,7 @@ mod tests {
             "typed corruption, got: {err:?}"
         );
         // Re-put hits the same guard on its remove-first path.
-        let err = lsh_put(
-            &mut tx,
-            &row,
-            &f.extractor,
-            &f.tokenizer,
-            &f.base,
-            &f.idx,
-            &f.inv,
-            &f.manifest,
-            &perms,
-        )
+        let err = lsh_put(&mut tx, LshPutSpec { tuple: &row, extractor: &f.extractor, tokenizer: &f.tokenizer, base: &f.base, idx: &f.idx, inv_idx: &f.inv, manifest: &f.manifest, perms: &perms })
         .err().ok_or_else(|| miette!("expected error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 

@@ -660,17 +660,7 @@ impl RelationIndexSearch for Fts {
         tx: &Tx,
         request: Self::Request<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        crate::project::contract::admit_relation_search_hits(fts_search_body(
-            request.cancel,
-            tx,
-            request.query,
-            request.base,
-            request.idx,
-            request.params,
-            request.filter_code,
-            request.tokenizer,
-            request.n_total,
-        )?)
+        crate::project::contract::admit_relation_search_hits(fts_search_body(tx, request)?)
     }
 }
 
@@ -698,45 +688,25 @@ impl RelationIndexSearch for Fts {
 #[cfg(test)]
 impl Fts {
     /// Test-only UFCS alias of [`RelationIndexSearch::search_relation`] (P103).
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_index(
-        cancel: &crate::rules::contract::CancelFlag,
         tx: &impl ReadTx,
-        query: &str,
-        base: &RelationHandle,
-        idx: &RelationHandle,
-        params: &FtsSearchParams,
-        filter_code: &Option<Expr>,
-        tokenizer: &TextAnalyzer,
-        n_total: usize,
+        request: FtsSearchRequest<'_>,
     ) -> Result<kyzo_model::value::SearchHits> {
-        Self::search_relation(
-            tx,
-            FtsSearchRequest {
-                cancel,
-                query,
-                base,
-                idx,
-                params,
-                filter_code,
-                tokenizer,
-                n_total,
-            },
-        )
+        Self::search_relation(tx, request)
     }
 }
 
-fn fts_search_body(
-    cancel: &crate::rules::contract::CancelFlag,
-    tx: &impl ReadTx,
-    query: &str,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    params: &FtsSearchParams,
-    filter_code: &Option<Expr>,
-    tokenizer: &TextAnalyzer,
-    n_total: usize,
-) -> Result<Vec<Tuple>> {
+fn fts_search_body(tx: &impl ReadTx, request: FtsSearchRequest<'_>) -> Result<Vec<Tuple>> {
+    let FtsSearchRequest {
+        cancel,
+        query,
+        base,
+        idx,
+        params,
+        filter_code,
+        tokenizer,
+        n_total,
+    } = request;
     let ast = parse_fts_query(query)?.tokenize(tokenizer);
     if ast.is_empty() {
         return Ok(vec![]);
@@ -808,8 +778,20 @@ mod tests {
     use miette::{IntoDiagnostic, Result, miette};
 
     macro_rules! fts_rows {
-        ($($arg:expr),* $(,)?) => {{
-            crate::project::contract::search_rows(Fts::search_index($($arg),*)?)?
+        ($cancel:expr, $tx:expr, $query:expr, $base:expr, $idx:expr, $params:expr, $filter:expr, $tokenizer:expr, $n_total:expr $(,)?) => {{
+            crate::project::contract::search_rows(Fts::search_index(
+                $tx,
+                FtsSearchRequest {
+                    cancel: $cancel,
+                    query: $query,
+                    base: $base,
+                    idx: $idx,
+                    params: $params,
+                    filter_code: $filter,
+                    tokenizer: $tokenizer,
+                    n_total: $n_total,
+                },
+            )?)?
         }};
     }
 
@@ -1176,17 +1158,7 @@ mod tests {
         tx.commit().map_err(|e| miette!("{e}"))?;
 
         let rtx = db.read_tx()?;
-        let err = Fts::search_index(
-            &CancelFlag::inert(),
-            &rtx,
-            "hello",
-            &f.base,
-            &f.idx,
-            &params(1, FtsScoreKind::Tf),
-            &None,
-            &f.analyzer,
-            0,
-        )
+        let err = Fts::search_index(&rtx, FtsSearchRequest { cancel: &CancelFlag::inert(), query: "hello", base: &f.base, idx: &f.idx, params: &params(1, FtsScoreKind::Tf), filter_code: &None, tokenizer: &f.analyzer, n_total: 0 })
         .err().ok_or_else(|| miette!("corrupt postings must error, not panic"))?;
         assert!(
             err.downcast_ref::<crate::project::contract::IndexRowCorrupt>()
