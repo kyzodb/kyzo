@@ -76,14 +76,16 @@ impl<'a> crate::project::text::tokenizer::TokenStream for CangjieTokenStream<'a>
         if self.index < self.result.len() {
             let current = &self.result[self.index];
 
-            self.token = Token::new(
+            let Some(tok) = Token::new(
                 current.byte_start,
                 current.byte_end,
                 self.index,
                 current.word.to_string(),
                 1,
-            )
-            .expect("byte_end is byte_start + word len");
+            ) else {
+                return false;
+            };
+            self.token = tok;
 
             self.index += 1;
             true
