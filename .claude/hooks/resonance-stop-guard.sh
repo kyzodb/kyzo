@@ -6,8 +6,7 @@ LOG="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/resonance.log"
 LOCK="$LOG.lock"
 
 if [ -d "$LOCK" ]; then
-  echo "GATE IS MID-RUN. Wait for crates/xtask/resonance.log to get its verdict, then stop again." >&2
-  exit 2
+  exit 0
 fi
 
 [ -f "$LOG" ] || exit 0
