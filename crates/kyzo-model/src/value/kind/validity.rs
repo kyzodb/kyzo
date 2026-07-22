@@ -376,10 +376,13 @@ impl<'de> serde::Deserialize<'de> for AsOf {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
+
     use super::*;
 
-    fn v(ts: i64, is_assert: bool) -> Validity {
-        Validity::new(ValidityTs::from_raw(ts), is_assert).expect("representable Validity")
+    fn v(ts: i64, is_assert: bool) -> Result<Validity> {
+        Validity::new(ValidityTs::from_raw(ts), is_assert)
+            .ok_or_else(|| miette!("representable Validity"))
     }
 
     fn slot(ts: i64, is_assert: bool) -> ValiditySlot {
@@ -387,32 +390,33 @@ mod tests {
     }
 
     #[test]
-    fn imported_law_descending_ts_assert_first_by_shape() {
+    fn imported_law_descending_ts_assert_first_by_shape() -> Result<()> {
         // Later instants sort first (descending), assert before retract —
         // now the DERIVED order, declared by the Reverse fields.
-        assert!(v(10, true) < v(5, true));
-        assert!(v(5, true) < v(5, false));
-        assert!(v(i64::MAX, false) < v(i64::MIN, true));
-        assert_eq!(v(7, true), v(7, true));
+        assert!(v(10, true)? < v(5, true)?);
+        assert!(v(5, true)? < v(5, false)?);
+        assert!(v(i64::MAX, false)? < v(i64::MIN, true)?);
+        assert_eq!(v(7, true)?, v(7, true)?);
         // The named alias agrees with the shape.
         assert_eq!(
-            v(10, true).cmp_as_of_order(v(5, true)),
+            v(10, true)?.cmp_as_of_order(v(5, true)?),
             std::cmp::Ordering::Less
         );
         // Open-end assert lives only on ValiditySlot/SeekBound.
         assert!(matches!(slot(i64::MAX, true), ValiditySlot::Seek(_)));
         assert!(slot(i64::MAX, true).as_validity().is_none());
+        Ok(())
     }
 
     #[test]
-    fn coordinates_and_slots_speak_seek_order() {
+    fn coordinates_and_slots_speak_seek_order() -> Result<()> {
         // Smaller ValidityTs means later.
         assert!(ValidityTs::from_raw(100) < ValidityTs::from_raw(5));
         assert!(MAX_VALIDITY_TS < ValidityTs::from_raw(0));
         assert_eq!(ValidityTs::from_raw(42).raw(), 42);
         // Terminal sorts after every ordinary slot.
-        assert!(v(i64::MIN, true) < TERMINAL_VALIDITY);
-        assert!(v(i64::MAX, false) < TERMINAL_VALIDITY);
+        assert!(v(i64::MIN, true)? < TERMINAL_VALIDITY);
+        assert!(v(i64::MAX, false)? < TERMINAL_VALIDITY);
         // Stored slots are pinned to assert; ordinary slots are Validity.
         let ordinary = StoredValiditySlot::new(ValidityTs::from_raw(7)).as_validity();
         assert_eq!(ordinary.map(|s| s.ts_micros()), Some(7));
@@ -431,5 +435,6 @@ mod tests {
         let a = AsOf::current(ValidityTs::from_raw(9));
         assert_eq!(a.sys(), MAX_VALIDITY_TS);
         assert_eq!(a.valid().raw(), 9);
+        Ok(())
     }
 }
