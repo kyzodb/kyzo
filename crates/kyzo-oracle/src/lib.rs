@@ -23,7 +23,7 @@ pub mod temporal;
 
 use std::sync::Arc;
 
-use kyzo_model::value::{DataValue, NumRepr};
+use kyzo_model::value::{DataValue, Num, NumRepr};
 
 pub use eval::{
     Bindings, FixedRule, HeadAggr, HeadClass, Literal, Name, NameIntroduction, OracleBudget,
@@ -128,21 +128,31 @@ impl AggrFold for UnknownBuiltin {
     }
 }
 
-// ── Built-in meet/normal set (oracle-local; trials replaces for differentials) ──
+// ── Oracle-local fold bodies ──────────────────────────────────────────────
+// Re-derived over model vocabulary only. Control flow, naming, and error
+// construction deliberately diverge from kyzo-core `exec/fold/aggr.rs` so
+// the engine↔oracle differential is not a tautology (zone-oracle law).
+
+// ── count ────────────────────────────────────────────────────────────────
 
 struct BuiltinCount;
+
+/// Row tally: every feed increments, value is ignored (nulls count).
 struct CountAccum {
-    count: i64,
+    rows_seen: u64,
 }
+
 impl NormalAccum for CountAccum {
     fn set(&mut self, _value: &DataValue) -> Result<(), String> {
-        self.count += 1;
+        self.rows_seen = self.rows_seen.saturating_add(1);
         Ok(())
     }
     fn get(&self) -> Result<DataValue, String> {
-        Ok(DataValue::from(self.count))
+        let as_i64 = i64::try_from(self.rows_seen).unwrap_or(i64::MAX);
+        Ok(DataValue::from(as_i64))
     }
 }
+
 impl AggrFold for BuiltinCount {
     fn name(&self) -> &str {
         "count"
@@ -151,54 +161,77 @@ impl AggrFold for BuiltinCount {
         false
     }
     fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
-        Ok(Box::new(CountAccum { count: 0 }))
+        Ok(Box::new(CountAccum { rows_seen: 0 }))
     }
     fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
         None
     }
 }
 
+// ── sum ──────────────────────────────────────────────────────────────────
+
 struct BuiltinSum;
 
-/// Exact-while-possible numeric accumulator — mirrors engine `NumAccum`:
-/// stays in i128 until a float appears or int overflow forces promotion.
-/// Never truncates float→i64.
+/// Running total that prefers exact integers, promoting to float only when
+/// a float arrives or an i128 add would overflow.
 #[derive(Clone, Copy)]
-enum SumState {
-    Int(i128),
-    Float(f64),
+enum RunningTotal {
+    Exact(i128),
+    Approx(f64),
 }
 
-struct SumAccum {
-    sum: SumState,
-}
-impl NormalAccum for SumAccum {
-    fn set(&mut self, value: &DataValue) -> Result<(), String> {
-        match value {
-            DataValue::Num(n) => {
-                self.sum = match (self.sum, n.repr()) {
-                    (SumState::Int(acc), NumRepr::Int(i)) => match acc.checked_add(i as i128) {
-                        Some(acc) => SumState::Int(acc),
-                        None => SumState::Float(acc as f64 + i as f64),
-                    },
-                    (SumState::Int(acc), NumRepr::Float(f)) => SumState::Float(acc as f64 + f),
-                    (SumState::Float(acc), _) => SumState::Float(acc + n.to_f64()),
-                };
-                Ok(())
+impl RunningTotal {
+    fn zero() -> Self {
+        RunningTotal::Exact(0)
+    }
+
+    fn absorb(self, n: Num) -> Self {
+        match (self, n.repr()) {
+            (RunningTotal::Exact(acc), NumRepr::Int(i)) => {
+                let addend = i as i128;
+                match acc.checked_add(addend) {
+                    Some(sum) => RunningTotal::Exact(sum),
+                    None => RunningTotal::Approx(acc as f64 + addend as f64),
+                }
             }
-            v => Err(format!("cannot compute 'sum': encountered value {v:?}")),
+            (RunningTotal::Exact(acc), NumRepr::Float(f)) => {
+                RunningTotal::Approx(acc as f64 + f)
+            }
+            (RunningTotal::Approx(acc), NumRepr::Int(i)) => {
+                RunningTotal::Approx(acc + i as f64)
+            }
+            (RunningTotal::Approx(acc), NumRepr::Float(f)) => RunningTotal::Approx(acc + f),
         }
     }
-    fn get(&self) -> Result<DataValue, String> {
-        Ok(match self.sum {
-            SumState::Int(acc) => match i64::try_from(acc) {
+
+    fn finish(self) -> DataValue {
+        match self {
+            RunningTotal::Exact(acc) => match i64::try_from(acc) {
                 Ok(i) => DataValue::from(i),
                 Err(_) => DataValue::from(acc as f64),
             },
-            SumState::Float(f) => DataValue::from(f),
-        })
+            RunningTotal::Approx(f) => DataValue::from(f),
+        }
     }
 }
+
+struct SumAccum {
+    total: RunningTotal,
+}
+
+impl NormalAccum for SumAccum {
+    fn set(&mut self, value: &DataValue) -> Result<(), String> {
+        let DataValue::Num(n) = value else {
+            return Err(format!("sum fold: non-numeric input {value:?}"));
+        };
+        self.total = self.total.absorb(*n);
+        Ok(())
+    }
+    fn get(&self) -> Result<DataValue, String> {
+        Ok(self.total.finish())
+    }
+}
+
 impl AggrFold for BuiltinSum {
     fn name(&self) -> &str {
         "sum"
@@ -208,7 +241,7 @@ impl AggrFold for BuiltinSum {
     }
     fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
         Ok(Box::new(SumAccum {
-            sum: SumState::Int(0),
+            total: RunningTotal::zero(),
         }))
     }
     fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
@@ -216,64 +249,93 @@ impl AggrFold for BuiltinSum {
     }
 }
 
+// ── min (normal + meet) ──────────────────────────────────────────────────
+
 struct BuiltinMin;
+
+/// Least non-null observation so far; vacant until the first real value.
 struct MinAccum {
-    found: Option<DataValue>,
+    least: Option<DataValue>,
 }
+
+/// Prefer the numerically smaller of two values; refuse non-numbers.
+fn lesser_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
+    match (a, b) {
+        (DataValue::Num(x), DataValue::Num(y)) => {
+            if y < x {
+                Ok(b.clone())
+            } else {
+                Ok(a.clone())
+            }
+        }
+        _ => Err("min fold requires numeric operands".into()),
+    }
+}
+
 impl NormalAccum for MinAccum {
     fn set(&mut self, value: &DataValue) -> Result<(), String> {
-        if *value == DataValue::Null {
+        if matches!(value, DataValue::Null) {
             return Ok(());
         }
-        match &self.found {
-            None => {
-                self.found = Some(value.clone());
-                Ok(())
-            }
-            Some(found) => match (found, value) {
-                (DataValue::Num(l), DataValue::Num(r)) => {
-                    if r < l {
-                        self.found = Some(value.clone());
-                    }
-                    Ok(())
-                }
-                _ => Err("'min' applied to non-numerical values".into()),
-            },
-        }
+        // `take` forces an explicit re-seat rather than in-place Option mutation.
+        let prior = self.least.take();
+        self.least = Some(match prior {
+            None => value.clone(),
+            Some(prev) => lesser_number(&prev, value)?,
+        });
+        Ok(())
     }
     fn get(&self) -> Result<DataValue, String> {
-        Ok(self.found.clone().unwrap_or(DataValue::Null))
+        Ok(match &self.least {
+            Some(v) => v.clone(),
+            None => DataValue::Null,
+        })
     }
 }
+
+/// Meet form: Empty is identity; Null is never a candidate; otherwise numeric ≤.
 struct MeetMin;
+
+fn meet_cell_is_vacant(cell: &MeetAccum) -> bool {
+    match cell {
+        MeetAccum::Empty => true,
+        MeetAccum::Value(DataValue::Null) => true,
+        MeetAccum::Value(_) => false,
+    }
+}
+
+fn meet_offer(right: &MeetAccum) -> Option<&DataValue> {
+    match right {
+        MeetAccum::Empty => None,
+        MeetAccum::Value(DataValue::Null) => None,
+        MeetAccum::Value(v) => Some(v),
+    }
+}
+
 impl MeetOp for MeetMin {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Empty
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool, String> {
-        let MeetAccum::Value(right_v) = right else {
+        let Some(incoming) = meet_offer(right) else {
             return Ok(false);
         };
-        if *right_v == DataValue::Null {
+        if meet_cell_is_vacant(left) {
+            *left = MeetAccum::Value(incoming.clone());
+            return Ok(true);
+        }
+        let MeetAccum::Value(resident) = left else {
+            return Ok(false);
+        };
+        let winner = lesser_number(resident, incoming)?;
+        if winner == *resident {
             return Ok(false);
         }
-        match left {
-            MeetAccum::Empty | MeetAccum::Value(DataValue::Null) => {
-                *left = right.clone();
-                Ok(true)
-            }
-            MeetAccum::Value(left_v) => match (&*left_v, right_v) {
-                (DataValue::Num(l), DataValue::Num(r)) => Ok(if r < l {
-                    *left_v = right_v.clone();
-                    true
-                } else {
-                    false
-                }),
-                _ => Err("'min' applied to non-numerical values".into()),
-            },
-        }
+        *resident = winner;
+        Ok(true)
     }
 }
+
 impl AggrFold for BuiltinMin {
     fn name(&self) -> &str {
         "min"
@@ -282,71 +344,83 @@ impl AggrFold for BuiltinMin {
         true
     }
     fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
-        Ok(Box::new(MinAccum { found: None }))
+        Ok(Box::new(MinAccum { least: None }))
     }
     fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
         Some(Box::new(MeetMin))
     }
 }
 
+// ── max (normal + meet) ──────────────────────────────────────────────────
+
 struct BuiltinMax;
+
+/// Greatest non-null observation so far; vacant until the first real value.
 struct MaxAccum {
-    found: Option<DataValue>,
+    greatest: Option<DataValue>,
 }
+
+/// Prefer the numerically larger of two values; refuse non-numbers.
+fn greater_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
+    match (a, b) {
+        (DataValue::Num(x), DataValue::Num(y)) => {
+            if y > x {
+                Ok(b.clone())
+            } else {
+                Ok(a.clone())
+            }
+        }
+        _ => Err("max fold requires numeric operands".into()),
+    }
+}
+
 impl NormalAccum for MaxAccum {
     fn set(&mut self, value: &DataValue) -> Result<(), String> {
-        if *value == DataValue::Null {
+        if matches!(value, DataValue::Null) {
             return Ok(());
         }
-        match &self.found {
-            None => {
-                self.found = Some(value.clone());
-                Ok(())
-            }
-            Some(found) => match (found, value) {
-                (DataValue::Num(l), DataValue::Num(r)) => {
-                    if r > l {
-                        self.found = Some(value.clone());
-                    }
-                    Ok(())
-                }
-                _ => Err("'max' applied to non-numerical values".into()),
-            },
-        }
+        let prior = self.greatest.take();
+        self.greatest = Some(match prior {
+            None => value.clone(),
+            Some(prev) => greater_number(&prev, value)?,
+        });
+        Ok(())
     }
     fn get(&self) -> Result<DataValue, String> {
-        Ok(self.found.clone().unwrap_or(DataValue::Null))
+        Ok(match &self.greatest {
+            Some(v) => v.clone(),
+            None => DataValue::Null,
+        })
     }
 }
+
+/// Meet form: Empty is identity; Null is never a candidate; otherwise numeric ≥.
 struct MeetMax;
+
 impl MeetOp for MeetMax {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Empty
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool, String> {
-        let MeetAccum::Value(right_v) = right else {
+        let Some(incoming) = meet_offer(right) else {
             return Ok(false);
         };
-        if *right_v == DataValue::Null {
+        if meet_cell_is_vacant(left) {
+            *left = MeetAccum::Value(incoming.clone());
+            return Ok(true);
+        }
+        let MeetAccum::Value(resident) = left else {
+            return Ok(false);
+        };
+        let winner = greater_number(resident, incoming)?;
+        if winner == *resident {
             return Ok(false);
         }
-        match left {
-            MeetAccum::Empty | MeetAccum::Value(DataValue::Null) => {
-                *left = right.clone();
-                Ok(true)
-            }
-            MeetAccum::Value(left_v) => match (&*left_v, right_v) {
-                (DataValue::Num(l), DataValue::Num(r)) => Ok(if r > l {
-                    *left_v = right_v.clone();
-                    true
-                } else {
-                    false
-                }),
-                _ => Err("'max' applied to non-numerical values".into()),
-            },
-        }
+        *resident = winner;
+        Ok(true)
     }
 }
+
 impl AggrFold for BuiltinMax {
     fn name(&self) -> &str {
         "max"
@@ -355,54 +429,83 @@ impl AggrFold for BuiltinMax {
         true
     }
     fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
-        Ok(Box::new(MaxAccum { found: None }))
+        Ok(Box::new(MaxAccum { greatest: None }))
     }
     fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
         Some(Box::new(MeetMax))
     }
 }
 
+// ── and (normal + meet) ──────────────────────────────────────────────────
+
 struct BuiltinAnd;
+
+/// Conjunction over a stream of bools; starts true, false is absorbing.
 struct AndAccum {
-    accum: bool,
+    all_true_so_far: bool,
 }
+
 impl NormalAccum for AndAccum {
     fn set(&mut self, value: &DataValue) -> Result<(), String> {
-        match value {
-            DataValue::Bool(v) => {
-                self.accum &= *v;
-                Ok(())
-            }
-            v => Err(format!("cannot compute 'and' for {v:?}")),
+        let DataValue::Bool(bit) = value else {
+            return Err(format!("and fold rejects non-bool input: {value:?}"));
+        };
+        // Absorbing false: only a false observation can change the cell.
+        if !*bit {
+            self.all_true_so_far = false;
         }
+        Ok(())
     }
     fn get(&self) -> Result<DataValue, String> {
-        Ok(DataValue::from(self.accum))
+        Ok(DataValue::from(self.all_true_so_far))
     }
 }
+
+/// Two-point meet lattice with `true` as identity and `false` as bottom.
 struct MeetAnd;
+
+/// Pull a bool contribution out of a meet cell; `Empty` is no contribution.
+fn bool_contribution(cell: &MeetAccum, side: &str) -> Result<Option<bool>, String> {
+    match cell {
+        MeetAccum::Empty => Ok(None),
+        MeetAccum::Value(DataValue::Bool(b)) => Ok(Some(*b)),
+        MeetAccum::Value(other) => Err(format!(
+            "and meet: {side} side expected bool, got {other:?}"
+        )),
+    }
+}
+
 impl MeetOp for MeetAnd {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Value(DataValue::from(true))
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool, String> {
+        // Empty right is the monoid unit: no information, no change.
         if matches!(right, MeetAccum::Empty) {
             return Ok(false);
         }
+        // Vacant left adopts wholesale; typing is checked only when both
+        // sides already hold values (same observable contract as before).
         if matches!(left, MeetAccum::Empty) {
             *left = right.clone();
             return Ok(true);
         }
-        match (left, right) {
-            (MeetAccum::Value(DataValue::Bool(l)), MeetAccum::Value(DataValue::Bool(r))) => {
-                let old = *l;
-                *l &= *r;
-                Ok(old != *l)
-            }
-            (u, v) => Err(format!("cannot compute 'and' for {u:?} and {v:?}")),
+        let Some(incoming) = bool_contribution(right, "right")? else {
+            return Ok(false);
+        };
+        let Some(current) = bool_contribution(left, "left")? else {
+            return Ok(false);
+        };
+        // Lattice meet = ∧. Only true→false moves the cell.
+        if current && !incoming {
+            *left = MeetAccum::Value(DataValue::from(false));
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 }
+
 impl AggrFold for BuiltinAnd {
     fn name(&self) -> &str {
         "and"
@@ -411,32 +514,54 @@ impl AggrFold for BuiltinAnd {
         true
     }
     fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
-        Ok(Box::new(AndAccum { accum: true }))
+        Ok(Box::new(AndAccum {
+            all_true_so_far: true,
+        }))
     }
     fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
         Some(Box::new(MeetAnd))
     }
 }
 
+// ── or (normal + meet) ───────────────────────────────────────────────────
+
 struct BuiltinOr;
+
+/// Disjunction over a stream of bools; starts false, true is absorbing.
 struct OrAccum {
-    accum: bool,
+    any_true_so_far: bool,
 }
+
 impl NormalAccum for OrAccum {
     fn set(&mut self, value: &DataValue) -> Result<(), String> {
-        match value {
-            DataValue::Bool(v) => {
-                self.accum |= *v;
-                Ok(())
-            }
-            v => Err(format!("cannot compute 'or' for {v:?}")),
+        let DataValue::Bool(bit) = value else {
+            return Err(format!("or fold rejects non-bool input: {value:?}"));
+        };
+        // Absorbing true: only a true observation can change the cell.
+        if *bit {
+            self.any_true_so_far = true;
         }
+        Ok(())
     }
     fn get(&self) -> Result<DataValue, String> {
-        Ok(DataValue::from(self.accum))
+        Ok(DataValue::from(self.any_true_so_far))
     }
 }
+
+/// Two-point join lattice with `false` as identity and `true` as top.
 struct MeetOr;
+
+/// Pull a bool contribution for or-meet; errors name the op, not and-meet.
+fn or_bool_contribution(cell: &MeetAccum, side: &str) -> Result<Option<bool>, String> {
+    match cell {
+        MeetAccum::Empty => Ok(None),
+        MeetAccum::Value(DataValue::Bool(b)) => Ok(Some(*b)),
+        MeetAccum::Value(other) => Err(format!(
+            "or meet: {side} side expected bool, got {other:?}"
+        )),
+    }
+}
+
 impl MeetOp for MeetOr {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Value(DataValue::from(false))
@@ -449,16 +574,22 @@ impl MeetOp for MeetOr {
             *left = right.clone();
             return Ok(true);
         }
-        match (left, right) {
-            (MeetAccum::Value(DataValue::Bool(l)), MeetAccum::Value(DataValue::Bool(r))) => {
-                let old = *l;
-                *l |= *r;
-                Ok(old != *l)
-            }
-            (u, v) => Err(format!("cannot compute 'or' for {u:?} and {v:?}")),
+        let Some(incoming) = or_bool_contribution(right, "right")? else {
+            return Ok(false);
+        };
+        let Some(current) = or_bool_contribution(left, "left")? else {
+            return Ok(false);
+        };
+        // Lattice join = ∨. Only false→true moves the cell.
+        if !current && incoming {
+            *left = MeetAccum::Value(DataValue::from(true));
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 }
+
 impl AggrFold for BuiltinOr {
     fn name(&self) -> &str {
         "or"
@@ -467,7 +598,9 @@ impl AggrFold for BuiltinOr {
         true
     }
     fn fresh_normal(&self, _args: &[DataValue]) -> Result<Box<dyn NormalAccum>, String> {
-        Ok(Box::new(OrAccum { accum: false }))
+        Ok(Box::new(OrAccum {
+            any_true_so_far: false,
+        }))
     }
     fn fresh_meet(&self) -> Option<Box<dyn MeetOp>> {
         Some(Box::new(MeetOr))
