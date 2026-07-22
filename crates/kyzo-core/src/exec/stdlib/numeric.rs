@@ -122,18 +122,37 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     unary_f64_domain("acosh", args, |a| a >= 1.0, f64::acosh)
 }
 
-#[allow(clippy::too_many_arguments)] // fold over typed numeric ops; init/combine/finish stay explicit
-fn fold_num_args(
+struct FoldNumOps<I, F, C, V> {
     op: &'static str,
-    args: &[DataValue],
     i_init: i64,
     f_init: f64,
-    on_int: impl Fn(i64, i64) -> Result<i64>,
-    on_float: impl Fn(f64, f64) -> f64,
-    combine_final: impl Fn(i64, f64) -> DataValue,
-    vecs: impl FnOnce(&[DataValue]) -> Result<DataValue>,
+    on_int: I,
+    on_float: F,
+    combine_final: C,
+    vecs: V,
     require_msg: &'static str,
-) -> Result<DataValue> {
+}
+
+fn fold_num_args<I, F, C, V>(
+    args: &[DataValue],
+    ops: FoldNumOps<I, F, C, V>,
+) -> Result<DataValue>
+where
+    I: Fn(i64, i64) -> Result<i64>,
+    F: Fn(f64, f64) -> f64,
+    C: Fn(i64, f64) -> DataValue,
+    V: FnOnce(&[DataValue]) -> Result<DataValue>,
+{
+    let FoldNumOps {
+        op,
+        i_init,
+        f_init,
+        on_int,
+        on_float,
+        combine_final,
+        vecs,
+        require_msg,
+    } = ops;
     let mut i_accum = i_init;
     let mut f_accum = f_init;
     for arg in args {
@@ -152,21 +171,23 @@ fn fold_num_args(
 
 pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
     fold_num_args(
-        "add",
         args,
-        0,
-        0.0,
-        |a, b| a.checked_add(b).ok_or(IntegerOverflow { op: "add" }.into()),
-        |a, b| a + b,
-        |i, f| {
-            if f == 0.0 {
-                DataValue::Num(Num::int(i))
-            } else {
-                DataValue::Num(Num::float(Num::int(i).to_f64() + f))
-            }
+        FoldNumOps {
+            op: "add",
+            i_init: 0,
+            f_init: 0.0,
+            on_int: |a: i64, b: i64| a.checked_add(b).ok_or(IntegerOverflow { op: "add" }.into()),
+            on_float: |a: f64, b: f64| a + b,
+            combine_final: |i, f| {
+                if f == 0.0 {
+                    DataValue::Num(Num::int(i))
+                } else {
+                    DataValue::Num(Num::float(Num::int(i).to_f64() + f))
+                }
+            },
+            vecs: add_vecs,
+            require_msg: "addition requires numbers",
         },
-        add_vecs,
-        "addition requires numbers",
     )
 }
 
@@ -401,21 +422,23 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
     fold_num_args(
-        "mul",
         args,
-        1,
-        1.0,
-        |a, b| a.checked_mul(b).ok_or(IntegerOverflow { op: "mul" }.into()),
-        |a, b| a * b,
-        |i, f| {
-            if f == 1.0 {
-                DataValue::Num(Num::int(i))
-            } else {
-                DataValue::Num(Num::float(Num::int(i).to_f64() * f))
-            }
+        FoldNumOps {
+            op: "mul",
+            i_init: 1,
+            f_init: 1.0,
+            on_int: |a: i64, b: i64| a.checked_mul(b).ok_or(IntegerOverflow { op: "mul" }.into()),
+            on_float: |a: f64, b: f64| a * b,
+            combine_final: |i, f| {
+                if f == 1.0 {
+                    DataValue::Num(Num::int(i))
+                } else {
+                    DataValue::Num(Num::float(Num::int(i).to_f64() * f))
+                }
+            },
+            vecs: mul_vecs,
+            require_msg: "multiplication requires numbers",
         },
-        mul_vecs,
-        "multiplication requires numbers",
     )
 }
 
