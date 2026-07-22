@@ -924,6 +924,7 @@ pub fn deep_verify_storage<S: Storage>(db: &S) -> Result<DeepVerifyReport> {
 mod pins {
     //! verify_storage battery (re-homed from storage/tests.rs).
 
+    use miette::{IntoDiagnostic, Result, miette};
     use crate::session::catalog::{Catalog, IndexKind};
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
@@ -931,69 +932,65 @@ mod pins {
     use crate::store::{ReadTx, Storage};
 
     #[test]
-    fn verify_storage_catches_a_corrupt_value() {
-        let dir = tempfile::tempdir().unwrap();
+    fn verify_storage_catches_a_corrupt_value() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
         let path = dir.path().join("db");
         let data_key: Vec<u8> = {
-            let storage = new_fjall_storage(&path).unwrap();
-            let db = Engine::compose(storage.clone(), Catalog::new()).unwrap();
+            let storage = new_fjall_storage(&path)?;
+            let db = Engine::compose(storage.clone(), Catalog::new())?;
             db.run_script(
                 "?[k, v] <- [[1, 7]] :create rel {k => v}",
                 std::collections::BTreeMap::new(),
-            )
-            .unwrap();
-            let tx = storage.read_tx().unwrap();
+            )?;
+            let tx = storage.read_tx()?;
             tx.total_scan()
                 .filter_map(Result::ok)
                 .map(|(k, _)| k.to_vec())
-                .find(|k| k.len() >= 8 && k[..8].iter().any(|&b| b != 0))
-                .expect("a rel base-relation data row")
+                .find(|k| k.len() >= 8 && k[..8].iter().any(|&b| b != 0))?
         };
         {
-            let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
             let ks = raw
-                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)
-                .unwrap();
-            ks.insert(data_key, [0xFFu8]).unwrap();
-            raw.persist(fjall::PersistMode::SyncAll).unwrap();
+                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
+            ks.insert(data_key, [0xFFu8])?;
+            raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
-        let storage = new_fjall_storage(&path).unwrap();
-        let report = verify_storage(&storage).unwrap();
+        let storage = new_fjall_storage(&path)?;
+        let report = verify_storage(&storage)?;
         assert!(!report.is_clean());
         assert!(
             !report.corrupt.is_empty(),
             "corrupt polarity value must be caught: {report:?}"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn verify_storage_reports_injected_corruption() {
-        let dir = tempfile::tempdir().unwrap();
+    fn verify_storage_reports_injected_corruption() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
         let path = dir.path().join("db");
         let clean_checked;
         {
-            let storage = new_fjall_storage(&path).unwrap();
-            let db = Engine::compose(storage.clone(), Catalog::new()).unwrap();
+            let storage = new_fjall_storage(&path)?;
+            let db = Engine::compose(storage.clone(), Catalog::new())?;
             db.run_script(
                 "?[k, v] <- [[1, 7], [2, 14], [3, 21], [4, 28], [5, 35]] :create rel {k => v}",
                 std::collections::BTreeMap::new(),
-            )
-            .unwrap();
-            let report = verify_storage(&storage).unwrap();
+            )?;
+            let report = verify_storage(&storage)?;
             assert!(report.is_clean(), "healthy store: {report:?}");
             clean_checked = report.checked;
         }
         {
-            let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
             let ks = raw
-                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)
-                .unwrap();
-            ks.insert([0u8, 0, 0, 0, 0, 0, 0, 7, 0xEE, 0xEE], b"?")
-                .unwrap();
-            raw.persist(fjall::PersistMode::SyncAll).unwrap();
+                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
+            ks.insert([0u8, 0, 0, 0, 0, 0, 0, 7, 0xEE, 0xEE], b"?")?;
+            raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
-        let storage = new_fjall_storage(&path).unwrap();
-        let report = verify_storage(&storage).unwrap();
+        let storage = new_fjall_storage(&path)?;
+        let report = verify_storage(&storage)?;
         assert!(!report.is_clean());
         assert_eq!(
             report.checked,
@@ -1005,32 +1002,32 @@ mod pins {
             "names BadTag: {}",
             report.corrupt[0].error
         );
+    
+        Ok(())
     }
 
     /// §51 trap: a wrong index that still decodes and order-checks clean must
     /// fail deep-verify, because expected content is re-derived from base facts.
     #[test]
-    fn deep_verify_catches_wrong_index_that_still_decodes() {
+    fn deep_verify_catches_wrong_index_that_still_decodes() -> Result<()> {
         use crate::store::verify_walk::deep_verify_storage;
         use kyzo_model::value::{DataValue, RelationId, Tuple, TupleT};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
         let path = dir.path().join("db");
         let phantom_kv: (Vec<u8>, Vec<u8>) = {
-            let storage = new_fjall_storage(&path).unwrap();
-            let db = Engine::compose(storage.clone(), Catalog::new()).unwrap();
+            let storage = new_fjall_storage(&path)?;
+            let db = Engine::compose(storage.clone(), Catalog::new())?;
             db.run_script(
                 "?[k, v] <- [[1, 7], [2, 14]] :create t {k => v}",
                 std::collections::BTreeMap::new(),
-            )
-            .unwrap();
+            )?;
             db.run_script(
                 "::index create t:by_v {v}",
                 std::collections::BTreeMap::new(),
-            )
-            .unwrap();
+            )?;
 
-            let clean = deep_verify_storage(&storage).unwrap();
+            let clean = deep_verify_storage(&storage)?;
             assert!(clean.is_clean(), "healthy indexed store: {clean:?}");
             assert!(
                 clean.indices_checked >= 1,
@@ -1038,24 +1035,24 @@ mod pins {
             );
 
             // Locate the plain index relation id from the catalog.
-            let tx = storage.read_tx().unwrap();
+            let tx = storage.read_tx()?;
             let mut idx_id = None;
             let lower = Tuple::default().encode_as_key(RelationId::SYSTEM);
             let upper = (RelationId::SYSTEM.raw() + 1).to_be_bytes();
             for pair in tx.range_scan(&lower, &upper) {
-                let (k, v) = pair.unwrap();
+                let (k, v) = pair?;
                 let Ok(tup) = kyzo_model::value::decode_tuple_from_key(&k, 16) else {
                     continue;
                 };
                 if matches!(tup.first(), Some(DataValue::Str(_))) {
-                    let h = crate::session::catalog::RelationHandle::decode(&v).unwrap();
+                    let h = crate::session::catalog::RelationHandle::decode(&v)?;
                     if h.name.as_str() == "t:by_v" {
                         idx_id = Some(h.id);
                         break;
                     }
                 }
             }
-            let idx_id = idx_id.expect("t:by_v catalog row");
+            let idx_id = idx_id?;
 
             // Phantom index row: projects v=99 for a key that was never a base
             // fact. Valid polarity + canonical bytes → decode/order walk passes.
@@ -1067,12 +1064,12 @@ mod pins {
             let stamp = kyzo_model::value::ValidityTs::from_raw(i64::MAX / 4);
             let handle = {
                 // Minimal handle shape for encode doors — fetch real metadata.
-                let tx = storage.read_tx().unwrap();
+                let tx = storage.read_tx()?;
                 let lower = Tuple::default().encode_as_key(RelationId::SYSTEM);
                 let upper = (RelationId::SYSTEM.raw() + 1).to_be_bytes();
                 let mut found = None;
                 for pair in tx.range_scan(&lower, &upper) {
-                    let (_, v) = pair.unwrap();
+                    let (_, v) = pair?;
                     if let Ok(h) = crate::session::catalog::RelationHandle::decode(&v)
                         && h.name.as_str() == "t:by_v"
                     {
@@ -1080,7 +1077,7 @@ mod pins {
                         break;
                     }
                 }
-                found.expect("handle")
+                found?
             };
             let key = handle
                 .encode_bitemporal_key_for_store(
@@ -1088,35 +1085,32 @@ mod pins {
                     stamp,
                     stamp,
                     kyzo_model::SourceSpan::default(),
-                )
-                .unwrap();
+                )?;
             let val = handle
                 .encode_bitemporal_val_for_store(
                     &phantom_key_cols,
                     crate::store::time::ClaimPolarity::Assert,
                     kyzo_model::SourceSpan::default(),
-                )
-                .unwrap();
+                )?;
             drop(idx_id);
             (key.as_ref().to_vec(), val)
         };
 
         {
-            let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
             let ks = raw
-                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)
-                .unwrap();
-            ks.insert(&phantom_kv.0, &phantom_kv.1).unwrap();
-            raw.persist(fjall::PersistMode::SyncAll).unwrap();
+                .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
+            ks.insert(&phantom_kv.0, &phantom_kv.1)?;
+            raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
 
-        let storage = new_fjall_storage(&path).unwrap();
-        let walk = verify_storage(&storage).unwrap();
+        let storage = new_fjall_storage(&path)?;
+        let walk = verify_storage(&storage)?;
         assert!(
             walk.is_clean(),
             "decode+order walk must still pass on a wrong-but-well-formed index: {walk:?}"
         );
-        let deep = deep_verify_storage(&storage).unwrap();
+        let deep = deep_verify_storage(&storage)?;
         assert!(
             !deep.is_clean(),
             "deep-verify must catch phantom index row re-derived from base facts: {deep:?}"
@@ -1128,5 +1122,7 @@ mod pins {
             "expected a plain-index mismatch: {:?}",
             deep.index_mismatches
         );
+    
+        Ok(())
     }
 }

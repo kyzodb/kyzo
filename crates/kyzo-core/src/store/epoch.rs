@@ -298,6 +298,7 @@ pub fn advance_recovery(
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::session::footprint::{
         AskShape, ByteRange, FencedFootprint, Footprint, FootprintIndexKey, LiveFootprintTable,
@@ -308,7 +309,7 @@ mod tests {
     /// footprint — ordinary advance must refuse EpochAdvanceBlocked. Contentless
     /// bare-arg attest is Unconstructible; the forge path is TOCTOU after attest.
     #[test]
-    fn intent_clear_attest_while_live_fenced_blocks_epoch_advance() {
+    fn intent_clear_attest_while_live_fenced_blocks_epoch_advance() -> Result<()> {
         let store_id = StoreId::from_digest([0xE6; 32]);
         let fence_epoch = FenceEpoch::genesis(store_id);
         let current = CryptoDomain::new(store_id, fence_epoch);
@@ -318,23 +319,20 @@ mod tests {
         // Attest clear against an empty live table (honest at attest time).
         let mut footprints = LiveFootprintTable::new();
         let evidence = footprints
-            .prove_epoch_clear(fence_epoch)
-            .expect("empty table is clear");
+            .prove_epoch_clear(fence_epoch)?;
         let intent_clear = IntentClear::attest(evidence);
 
         // Live Fenced footprint appears after attest — advance must still refuse.
         let incarnation = authority
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xF6; 32]))
-            .expect("incarnation");
+            .mint(Entropy::from_bytes([0xF6; 32]))?;
         let fenced = FencedFootprint::seal(
             Footprint::Exact(vec![ByteRange {
                 start: b"a".to_vec(),
                 end: b"z".to_vec(),
             }]),
             0,
-        )
-        .expect("FencedFootprint seal");
+        )?;
         footprints
             .insert(
                 FootprintIndexKey {
@@ -342,8 +340,7 @@ mod tests {
                     incarnation_id: incarnation,
                 },
                 AskShape::Fenced(fenced),
-            )
-            .expect("live Fenced insert");
+            )?;
         assert!(footprints.has_live_fenced_in_epoch(fence_epoch));
 
         assert_eq!(
@@ -356,5 +353,7 @@ mod tests {
             footprints.prove_epoch_clear(fence_epoch),
             Err(EpochAdvanceRefuse::EpochAdvanceBlocked)
         );
+    
+        Ok(())
     }
 }

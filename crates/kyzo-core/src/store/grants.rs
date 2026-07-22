@@ -1476,6 +1476,7 @@ pub(crate) fn sign_fork_consent(
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;
@@ -1494,7 +1495,7 @@ mod tests {
     /// Invalid / small-order group verifying key cannot seal a RecoveryMatrix;
     /// forged aggregate bytes against a real matrix must refuse.
     #[test]
-    fn frost_recovery_refuses_invalid_group_key_and_forged_aggregate() {
+    fn frost_recovery_refuses_invalid_group_key_and_forged_aggregate() -> Result<()> {
         use crate::store::authority::RecoveryPublicKey;
 
         let store = StoreId::from_digest([0x71; 32]);
@@ -1527,18 +1528,19 @@ mod tests {
             }),
             "FORGED AGGREGATE: garbage FROST bytes must not mint RecoveryQuorumProof"
         );
+    
+        Ok(())
     }
 
     /// Weak-key forged FORK CONSENT must refuse (verify_strict).
     #[test]
-    fn verify_strict_refuses_weak_key_forged_fork_consent() {
+    fn verify_strict_refuses_weak_key_forged_fork_consent() -> Result<()> {
         let store = StoreId::from_digest([0x72; 32]);
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = PredecessorConsentTable::new();
         table
-            .insert(store, weak)
-            .expect("register weak consent key (from_bytes accepts identity)");
+            .insert(store, weak)?;
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
@@ -1552,18 +1554,19 @@ mod tests {
             "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
              at PredecessorConsentProof::verify (verify_strict)"
         );
+    
+        Ok(())
     }
 
     /// Weak-key forged ANCESTOR ENTITLEMENT must refuse (verify_strict).
     #[test]
-    fn verify_strict_refuses_weak_key_forged_ancestor_entitlement() {
+    fn verify_strict_refuses_weak_key_forged_ancestor_entitlement() -> Result<()> {
         let store = StoreId::from_digest([0x73; 32]);
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = AncestorEntitlementTable::new();
         table
-            .insert(store, weak)
-            .expect("register weak entitlement key");
+            .insert(store, weak)?;
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
@@ -1577,13 +1580,15 @@ mod tests {
             "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
              at AncestorEntitlementProof::verify (verify_strict)"
         );
+    
+        Ok(())
     }
     // -----------------------------------------------------------------------
 
     /// Nasty: victim StoreId+epoch grant with empty/forged/wrong-matrix FROST
     /// aggregate must not mint WriteAuthority.
     #[test]
-    fn recovery_grant_without_valid_quorum_refuses_write_authority() {
+    fn recovery_grant_without_valid_quorum_refuses_write_authority() -> Result<()> {
         let victim = StoreId::from_digest([0x71; 32]);
         let pred_epoch = FenceEpoch::genesis(victim);
         let grant_id = GrantId::from_bytes([0x90; 32]);
@@ -1621,8 +1626,7 @@ mod tests {
         // Attacker mints a real FROST aggregate against a *different* matrix,
         // names the victim, then materializes against the victim store matrix.
         let (attacker_matrix, attacker_sig) = frost_sign_recovery_quorum([0xB1; 32], &payload);
-        let forged_proof = RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sig)
-            .expect("attacker quorum against their own matrix");
+        let forged_proof = RecoveryQuorumProof::verify(&attacker_matrix, &payload, &attacker_sig)?;
         let grant = RecoveryGrant::new(
             grant_id,
             victim,
@@ -1630,8 +1634,7 @@ mod tests {
             successor_seed,
             commitment,
             forged_proof,
-        )
-        .expect("payload binds; proof is sealed against wrong matrix");
+        )?;
 
         // Absent store matrix → refuse (no WriteAuthority).
         let absent = materialize(&Grant::Recovery(grant.clone()), None, None, None, None);
@@ -1646,10 +1649,12 @@ mod tests {
             None,
         );
         assert_eq!(wrong, Err(MaterializeRefuse::QuorumUnverified));
+    
+        Ok(())
     }
 
     #[test]
-    fn recovery_grant_valid_quorum_materializes() {
+    fn recovery_grant_valid_quorum_materializes() -> Result<()> {
         let store_id = StoreId::from_digest([0xC0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
         let grant_id = GrantId::from_bytes([0x91; 32]);
@@ -1663,7 +1668,7 @@ mod tests {
             &commitment,
         );
         let (matrix, aggregate) = frost_sign_recovery_quorum([0xC1; 32], &payload);
-        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
+        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)?;
         // Sealed proof carries only digests — signer subset is not recoverable
         // from proof bytes (no custodian id / share index field exists).
         assert_eq!(proof.payload_digest(), &payload);
@@ -1682,20 +1687,20 @@ mod tests {
             successor_seed,
             commitment,
             proof,
-        )
-        .expect("grant");
-        let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix), None, None)
-            .expect("valid FROST quorum must mint");
+        )?;
+        let matured = materialize(&Grant::Recovery(grant), None, Some(&matrix), None, None)?;
         assert_eq!(matured.store_id(), store_id);
         assert_ne!(matured.crypto_domain().fence_epoch(), pred_epoch);
         assert_eq!(matured.write_authority().store_id(), store_id);
         assert_eq!(matured.key_material_commitment(), &commitment);
+    
+        Ok(())
     }
 
     /// Nasty: aggregate under group A must refuse verify against group B
     /// (wrong-share / wrong group key) — production verify door.
     #[test]
-    fn frost_recovery_wrong_group_aggregate_refuses() {
+    fn frost_recovery_wrong_group_aggregate_refuses() -> Result<()> {
         let payload = Digest::from_bytes([0x44u8; 32]);
         let (matrix_a, sig_a) = frost_sign_recovery_quorum([0x11; 32], &payload);
         let (matrix_b, _sig_b) = frost_sign_recovery_quorum([0x22; 32], &payload);
@@ -1712,11 +1717,13 @@ mod tests {
             }),
             "wrong-group FROST aggregate must refuse at RecoveryQuorumProof::verify"
         );
+    
+        Ok(())
     }
 
     /// Nasty: second distinct RecoveryGrant for one predecessor epoch is poison.
     #[test]
-    fn recovery_grant_second_for_same_predecessor_epoch_is_equivocation_poison() {
+    fn recovery_grant_second_for_same_predecessor_epoch_is_equivocation_poison() -> Result<()> {
         let store_id = StoreId::from_digest([0xE0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
 
@@ -1742,7 +1749,7 @@ mod tests {
                 signed_matrix.group_verifying_key(),
                 matrix.group_verifying_key()
             );
-            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
+            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)?;
             RecoveryGrant::new(
                 grant_id,
                 store_id,
@@ -1750,8 +1757,7 @@ mod tests {
                 successor_seed,
                 commitment,
                 proof,
-            )
-            .expect("grant")
+            )?
         };
 
         let g1 = mint(GrantId::from_bytes([0x01; 32]), [0xA1; 32], [0xA2; 32]);
@@ -1763,14 +1769,12 @@ mod tests {
             Some(&matrix),
             None,
             None,
-        )
-        .expect("first recovery must mint");
+        )?;
         assert_eq!(first.store_id(), store_id);
 
         let mut prior = PriorRecoveryTable::new();
         prior
-            .record(&first, pred_epoch)
-            .expect("record first shot from MaterializedGrant witness");
+            .record(&first, pred_epoch)?;
 
         // Same grant rediscovery with prior shot → still ok (idempotent).
         let again = materialize(
@@ -1779,8 +1783,7 @@ mod tests {
             Some(&matrix),
             None,
             Some(&prior),
-        )
-        .expect("same grant must converge");
+        )?;
         assert_eq!(again.grant_id(), g1.grant_id());
 
         // Distinct second grant → QuorumEquivocationPoison, never a second lineage.
@@ -1799,6 +1802,8 @@ mod tests {
                 g2.grant_id(),
             ))
         );
+    
+        Ok(())
     }
 
     /// Nasty: fabricated GrantId cannot pre-squat the predecessor-epoch one-shot
@@ -1808,7 +1813,7 @@ mod tests {
     /// bare fabricated id has no path into the ledger, so the legitimate recovery
     /// still materializes.
     #[test]
-    fn prior_recovery_fabricated_grant_id_cannot_presquat_legitimate_recovery() {
+    fn prior_recovery_fabricated_grant_id_cannot_presquat_legitimate_recovery() -> Result<()> {
         let store_id = StoreId::from_digest([0xF0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
         let probe_payload = Digest::from_bytes([0u8; 32]);
@@ -1829,7 +1834,7 @@ mod tests {
                 signed_matrix.group_verifying_key(),
                 matrix.group_verifying_key()
             );
-            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).expect("quorum");
+            let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)?;
             RecoveryGrant::new(
                 grant_id,
                 store_id,
@@ -1837,8 +1842,7 @@ mod tests {
                 successor_seed,
                 commitment,
                 proof,
-            )
-            .expect("grant")
+            )?
         };
 
         let legit = mint(GrantId::from_bytes([0x11; 32]), [0xA1; 32], [0xA2; 32]);
@@ -1859,24 +1863,24 @@ mod tests {
             Some(&matrix),
             None,
             Some(&prior),
-        )
-        .expect("legitimate quorum recovery must not be griefed by fabricated pre-squat");
+        )?;
         assert_eq!(matured.grant_id(), legit.grant_id());
         assert_eq!(matured.store_id(), store_id);
 
         prior
-            .record(&matured, pred_epoch)
-            .expect("only MaterializedGrant witness may take the one-shot");
+            .record(&matured, pred_epoch)?;
         assert_eq!(
             prior.shot_for(store_id, pred_epoch),
             Some(legit.grant_id()),
             "one-shot must bind the legitimate materialized grant, not a fabricated id"
         );
+    
+        Ok(())
     }
 
     /// Nasty: ForkGrant naming a real predecessor without valid consent must not mint.
     #[test]
-    fn fork_grant_without_valid_consent_refuses_write_authority() {
+    fn fork_grant_without_valid_consent_refuses_write_authority() -> Result<()> {
         let victim = StoreId::from_digest([0x72; 32]);
         let grant_id = GrantId::from_bytes([0xA0; 32]);
         let fork_point = ForkPointRoot::from_digest([0xAA; 32]);
@@ -1895,8 +1899,7 @@ mod tests {
         let consent = ConsentSigningKey::from_seed([0xF1; 32]);
         let mut table = PredecessorConsentTable::new();
         table
-            .insert(victim, *consent.verifying_key())
-            .expect("register victim consent key");
+            .insert(victim, *consent.verifying_key())?;
 
         // Forged signature bytes — no proof, no grant power.
         assert_eq!(
@@ -1920,12 +1923,10 @@ mod tests {
             &commitment,
         );
         table
-            .insert(other, *consent.verifying_key())
-            .expect("register other consent key");
+            .insert(other, *consent.verifying_key())?;
         let other_sig = consent.sign_consent(other, &other_payload);
         let wrong_store_proof =
-            PredecessorConsentProof::verify(&table, other, &other_payload, &other_sig)
-                .expect("consent for other store");
+            PredecessorConsentProof::verify(&table, other, &other_payload, &other_sig)?;
         assert_eq!(
             ForkGrant::new(
                 grant_id,
@@ -1952,8 +1953,7 @@ mod tests {
         );
         let forged_sig = consent.sign_consent(victim, &forged_lineage_payload);
         let forged_lineage_proof =
-            PredecessorConsentProof::verify(&table, victim, &forged_lineage_payload, &forged_sig)
-                .expect("consent verifies for forged lineage payload");
+            PredecessorConsentProof::verify(&table, victim, &forged_lineage_payload, &forged_sig)?;
         assert_eq!(
             ForkGrant::new(
                 grant_id,
@@ -1966,12 +1966,14 @@ mod tests {
             ),
             Err(MaterializeRefuse::ConsentUnverified)
         );
+    
+        Ok(())
     }
 
     /// Nasty: consent signed by an attacker key NOT bound in the sealed table
     /// for predecessor_store must refuse — closes self-issued consent forge.
     #[test]
-    fn fork_grant_attacker_own_key_not_bound_in_table_refuses() {
+    fn fork_grant_attacker_own_key_not_bound_in_table_refuses() -> Result<()> {
         let victim = StoreId::from_digest([0x75; 32]);
         let grant_id = GrantId::from_bytes([0xA3; 32]);
         let fork_point = ForkPointRoot::from_digest([0x55; 32]);
@@ -1993,8 +1995,7 @@ mod tests {
         // Sealed store authority: only the legitimate key is registered.
         let mut sealed_table = PredecessorConsentTable::new();
         sealed_table
-            .insert(victim, *legitimate.verifying_key())
-            .expect("register legitimate predecessor consent key");
+            .insert(victim, *legitimate.verifying_key())?;
 
         // Attacker signs with their own keypair — must not verify against sealed table.
         let attacker_sig = attacker.sign_consent(victim, &payload);
@@ -2016,11 +2017,9 @@ mod tests {
         // the real sealed store table — key_id mismatch must refuse.
         let mut attacker_table = PredecessorConsentTable::new();
         attacker_table
-            .insert(victim, *attacker.verifying_key())
-            .expect("attacker private table");
+            .insert(victim, *attacker.verifying_key())?;
         let forged_proof =
-            PredecessorConsentProof::verify(&attacker_table, victim, &payload, &attacker_sig)
-                .expect("verifies only against attacker's private table");
+            PredecessorConsentProof::verify(&attacker_table, victim, &payload, &attacker_sig)?;
         let grant = ForkGrant::new(
             grant_id,
             victim,
@@ -2029,8 +2028,7 @@ mod tests {
             identity,
             commitment,
             forged_proof,
-        )
-        .expect("payload binds; proof sealed against wrong table");
+        )?;
 
         assert_eq!(
             materialize(&Grant::Fork(grant.clone()), None, None, None, None),
@@ -2040,10 +2038,12 @@ mod tests {
             materialize(&Grant::Fork(grant), None, None, Some(&sealed_table), None),
             Err(MaterializeRefuse::ConsentUnverified)
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn fork_grant_valid_consent_materializes() {
+    fn fork_grant_valid_consent_materializes() -> Result<()> {
         let predecessor = StoreId::from_digest([0x74; 32]);
         let grant_id = GrantId::from_bytes([0xA2; 32]);
         let fork_point = ForkPointRoot::from_digest([0x11; 32]);
@@ -2061,11 +2061,10 @@ mod tests {
         let consent = ConsentSigningKey::from_seed([0xF2; 32]);
         let mut table = PredecessorConsentTable::new();
         table
-            .insert(predecessor, *consent.verifying_key())
-            .expect("register predecessor consent key");
+            .insert(predecessor, *consent.verifying_key())?;
         let sig = consent.sign_consent(predecessor, &payload);
         let proof =
-            PredecessorConsentProof::verify(&table, predecessor, &payload, &sig).expect("consent");
+            PredecessorConsentProof::verify(&table, predecessor, &payload, &sig)?;
         let grant = ForkGrant::new(
             grant_id,
             predecessor,
@@ -2074,13 +2073,13 @@ mod tests {
             identity,
             commitment,
             proof,
-        )
-        .expect("grant");
-        let matured = materialize(&Grant::Fork(grant), None, None, Some(&table), None)
-            .expect("valid consent must mint");
+        )?;
+        let matured = materialize(&Grant::Fork(grant), None, None, Some(&table), None)?;
         assert_ne!(matured.store_id(), predecessor);
         assert_eq!(matured.write_authority().store_id(), matured.store_id());
         assert_eq!(matured.key_material_commitment(), &commitment);
+    
+        Ok(())
     }
 
     /// Test-only predecessor consent signing key.
@@ -2136,23 +2135,20 @@ mod tests {
     }
 
     #[test]
-    fn ancestor_read_grant_registered_entitlement_succeeds() {
+    fn ancestor_read_grant_registered_entitlement_succeeds() -> Result<()> {
         let store_id = StoreId::from_digest([0x81; 32]);
         let from_epoch = FenceEpoch::genesis(store_id);
-        let to_epoch = from_epoch.successor().expect("successor epoch");
+        let to_epoch = from_epoch.successor()?;
         let payload = ancestor_read_grant_payload_digest(store_id, from_epoch, to_epoch);
 
         let entitlement = EntitlementSigningKey::from_seed([0xE1; 32]);
         let mut table = AncestorEntitlementTable::new();
         table
-            .insert(store_id, *entitlement.verifying_key())
-            .expect("register sealed entitlement key");
+            .insert(store_id, *entitlement.verifying_key())?;
 
         let sig = entitlement.sign_entitlement(store_id, &payload);
-        let proof = AncestorEntitlementProof::verify(&table, store_id, &payload, &sig)
-            .expect("registered entitlement must verify");
-        let grant = AncestorReadGrant::new(&table, store_id, from_epoch, to_epoch, proof)
-            .expect("registered entitlement must mint grant");
+        let proof = AncestorEntitlementProof::verify(&table, store_id, &payload, &sig)?;
+        let grant = AncestorReadGrant::new(&table, store_id, from_epoch, to_epoch, proof)?;
 
         assert_eq!(grant.store_id(), store_id);
         assert_eq!(grant.from_epoch(), from_epoch);
@@ -2162,17 +2158,18 @@ mod tests {
 
         let domain = CryptoDomain::new(store_id, from_epoch);
         grant
-            .authorize(domain)
-            .expect("in-range domain must authorize");
+            .authorize(domain)?;
+    
+        Ok(())
     }
 
     /// Nasty: entitlement signed by an attacker key NOT bound in the sealed
     /// registry for store_id must refuse — closes self-issued decrypt-scope forge.
     #[test]
-    fn ancestor_read_grant_attacker_own_key_not_bound_in_registry_refuses() {
+    fn ancestor_read_grant_attacker_own_key_not_bound_in_registry_refuses() -> Result<()> {
         let victim = StoreId::from_digest([0x82; 32]);
         let from_epoch = FenceEpoch::genesis(victim);
-        let to_epoch = from_epoch.successor().expect("successor epoch");
+        let to_epoch = from_epoch.successor()?;
         let payload = ancestor_read_grant_payload_digest(victim, from_epoch, to_epoch);
 
         let legitimate = EntitlementSigningKey::from_seed([0xE2; 32]);
@@ -2181,8 +2178,7 @@ mod tests {
         // Sealed store authority: only the legitimate key is registered.
         let mut sealed_table = AncestorEntitlementTable::new();
         sealed_table
-            .insert(victim, *legitimate.verifying_key())
-            .expect("register legitimate entitlement key");
+            .insert(victim, *legitimate.verifying_key())?;
 
         // Attacker signs with their own keypair — must not verify against sealed table.
         let attacker_sig = attacker.sign_entitlement(victim, &payload);
@@ -2204,11 +2200,9 @@ mod tests {
         // the real sealed store table — key_id mismatch must refuse.
         let mut attacker_table = AncestorEntitlementTable::new();
         attacker_table
-            .insert(victim, *attacker.verifying_key())
-            .expect("attacker private table");
+            .insert(victim, *attacker.verifying_key())?;
         let forged_proof =
-            AncestorEntitlementProof::verify(&attacker_table, victim, &payload, &attacker_sig)
-                .expect("verifies only against attacker's private table");
+            AncestorEntitlementProof::verify(&attacker_table, victim, &payload, &attacker_sig)?;
         assert_eq!(
             AncestorReadGrant::new(&sealed_table, victim, from_epoch, to_epoch, forged_proof),
             Err(AncestorReadRefuse::EntitlementUnverified)
@@ -2224,6 +2218,8 @@ mod tests {
             ),
             Err(AncestorReadRefuse::EntitlementUnverified)
         );
+    
+        Ok(())
     }
 
     // ---- #375 T3 — seal-once registration doors (operator/genesis) ----------
@@ -2233,7 +2229,7 @@ mod tests {
     /// [`PredecessorConsentTable::insert`] door → typed refuse (never silent
     /// overwrite of the sealed consent trust root).
     #[test]
-    fn predecessor_consent_registration_attacker_key_refuses_overwrite() {
+    fn predecessor_consent_registration_attacker_key_refuses_overwrite() -> Result<()> {
         let victim = StoreId::from_digest([0x91; 32]);
         let key_a = ConsentSigningKey::from_seed([0xA1; 32]);
         let key_b = ConsentSigningKey::from_seed([0xB2; 32]);
@@ -2245,14 +2241,12 @@ mod tests {
 
         let mut table = PredecessorConsentTable::new();
         table
-            .insert(victim, *key_a.verifying_key())
-            .expect("first registration of key A seals the StoreId");
+            .insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
         // Same key re-register → idempotent Ok (seal-once, not one-shot grief).
         table
-            .insert(victim, *key_a.verifying_key())
-            .expect("same key re-registration must be idempotent Ok");
+            .insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
         // Attacker key B for the already-sealed StoreId → TrustRootAlreadySealed.
@@ -2265,6 +2259,8 @@ mod tests {
             Some(key_a.verifying_key()),
             "sealed key A must survive the refused overwrite attempt"
         );
+    
+        Ok(())
     }
 
     /// NASTY (#375 T3): register key A for victim StoreId, then attacker key
@@ -2272,7 +2268,7 @@ mod tests {
     /// [`AncestorEntitlementTable::insert`] door → typed refuse (never silent
     /// overwrite of the sealed entitlement trust root).
     #[test]
-    fn ancestor_entitlement_registration_attacker_key_refuses_overwrite() {
+    fn ancestor_entitlement_registration_attacker_key_refuses_overwrite() -> Result<()> {
         let victim = StoreId::from_digest([0x92; 32]);
         let key_a = EntitlementSigningKey::from_seed([0xC1; 32]);
         let key_b = EntitlementSigningKey::from_seed([0xD2; 32]);
@@ -2284,13 +2280,11 @@ mod tests {
 
         let mut table = AncestorEntitlementTable::new();
         table
-            .insert(victim, *key_a.verifying_key())
-            .expect("first registration of key A seals the StoreId");
+            .insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
         table
-            .insert(victim, *key_a.verifying_key())
-            .expect("same key re-registration must be idempotent Ok");
+            .insert(victim, *key_a.verifying_key())?;
         assert_eq!(table.get(victim), Some(key_a.verifying_key()));
 
         assert_eq!(
@@ -2302,5 +2296,7 @@ mod tests {
             Some(key_a.verifying_key()),
             "sealed key A must survive the refused overwrite attempt"
         );
+    
+        Ok(())
     }
 }

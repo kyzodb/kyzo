@@ -898,6 +898,7 @@ pub fn shred(wrapped: WrappedShredSalt) -> (ShredReceipt, ShredTombstone) {
 
 #[cfg(test)]
 mod pins {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::contract::FormatVersion;
     use crate::store::epoch::FenceEpoch;
@@ -918,7 +919,7 @@ mod pins {
     /// two-key rejection through production [`open_arm`], not a short-input refuse.
     /// AAD bytes below are collision-fixture constants — not the production wrap path.
     #[test]
-    fn gcm_arm_is_not_key_committing() {
+    fn gcm_arm_is_not_key_committing() -> Result<()> {
         let k1 = Kek::from_bytes([0x11u8; 32]);
         let k2 = Kek::from_bytes([0x22u8; 32]);
         let nonce = Nonce::from_bytes([0x24u8; 12]);
@@ -948,7 +949,7 @@ mod pins {
             "fixture must still be a two-key Poly1305 collision under the base Gcm arm"
         );
         // Commit under K1 via CanonicalTranscript CMT-1; present (ct‖tag‖C_K1).
-        let c_k1 = key_commitment_kek(&k1, domain).expect("mint C_K1");
+        let c_k1 = key_commitment_kek(&k1, domain)?;
         let mut msg = aead_body;
         msg.extend_from_slice(c_k1.as_bytes());
         let o1 = open_arm_kek(AeadArm::Gcm, &k1, &nonce, &aad, &msg, domain);
@@ -962,6 +963,8 @@ mod pins {
             "production open_arm_kek must refuse the K1-committed collision under K2 with \
              KeyCommitmentMismatch (got {o2:?})"
         );
+    
+        Ok(())
     }
 
     fn test_domain() -> CryptoDomain {
@@ -980,30 +983,32 @@ mod pins {
     }
 
     #[test]
-    fn wrap_unwrap_round_trip_and_derive() {
+    fn wrap_unwrap_round_trip_and_derive() -> Result<()> {
         let kek = Kek::from_bytes([0x11; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
         let salt = ShredSalt::from_bytes([0x22; 32]);
         let seg = SegmentCounter::from_raw(7);
         let domain = test_domain();
-        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain).expect("wrap");
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain)?;
         let ledger = ShredLedger::new();
-        let opened = unwrap_shred_salt(&cap, &wrapped, &ledger).expect("unwrap");
+        let opened = unwrap_shred_salt(&cap, &wrapped, &ledger)?;
         let dek = derive_dek(&cap, domain, seg, &opened);
         assert_eq!(dek.crypto_domain(), domain);
         let (receipt, tombstone) = shred(wrapped);
         assert_eq!(receipt.segment(), seg);
         assert!(tombstone.covers(&WrappedShredSalt::from_persisted(vec![0], seg, domain)));
+    
+        Ok(())
     }
 
     #[test]
-    fn post_shred_unwrap_refuses_shredded() {
+    fn post_shred_unwrap_refuses_shredded() -> Result<()> {
         let kek = Kek::from_bytes([0x11; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
         let salt = ShredSalt::from_bytes([0x22; 32]);
         let seg = SegmentCounter::from_raw(3);
         let domain = test_domain();
-        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain).expect("wrap");
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain)?;
         // Old pack still holds a copy of the wrapped ciphertext.
         let stale_copy = wrapped.clone();
         let (_receipt, tombstone) = shred(wrapped);
@@ -1013,6 +1018,8 @@ mod pins {
             unwrap_shred_salt(&cap, &stale_copy, &ledger),
             Err(CryptoRefuse::Shredded)
         ));
+    
+        Ok(())
     }
 
     /// GUARDIAN NASTY (#376 T2 — cross-domain reinterpretation): the CMT-1 commitment
@@ -1024,7 +1031,7 @@ mod pins {
     /// cross-epoch / cross-tenant key-material confusion (seat 62 CryptoDomain
     /// separation). RED if `unwrap` ever returns the salt under a forged domain.
     #[test]
-    fn cross_domain_wrapped_salt_reinterpretation_refuses() {
+    fn cross_domain_wrapped_salt_reinterpretation_refuses() -> Result<()> {
         let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x77; 32])); // SAME KEK throughout
         let salt = ShredSalt::from_bytes([0x99; 32]);
         let seg = SegmentCounter::from_raw(4);
@@ -1035,7 +1042,7 @@ mod pins {
         let domain_a = CryptoDomain::new(store_a, FenceEpoch::genesis(store_a));
 
         // Sanity: wrap+unwrap under the TRUE domain succeeds (not a blanket lockout).
-        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain_a).expect("wrap under A");
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, domain_a)?;
         assert!(
             unwrap_shred_salt(&cap, &wrapped, &ledger).is_ok(),
             "true-domain unwrap must succeed"
@@ -1060,10 +1067,12 @@ mod pins {
             "CROSS-STORE REINTERPRETATION: a wrapped salt sealed for store A must NOT unwrap \
              under a forged store B on the same KEK"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn compress_then_encrypt_round_trips_siv_and_is_not_identity() {
+    fn compress_then_encrypt_round_trips_siv_and_is_not_identity() -> Result<()> {
         let kek = Kek::from_bytes([0x33; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
         let salt = ShredSalt::from_bytes([0x44; 32]);
@@ -1083,17 +1092,18 @@ mod pins {
             Nonce::from_bytes([9u8; 12]),
             AeadArm::Siv,
             &aad,
-        )
-        .expect("encrypt");
+        )?;
         assert_eq!(ct.arm(), AeadArm::Siv);
         assert!(!ct.body().is_empty());
-        let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
-        let round = decompress(&opened).expect("decompress");
+        let opened = decrypt(&ct, &dek, &aad)?;
+        let round = decompress(&opened)?;
         assert_eq!(round, plaintext);
+    
+        Ok(())
     }
 
     #[test]
-    fn gcm_arm_uses_chacha20poly1305() {
+    fn gcm_arm_uses_chacha20poly1305() -> Result<()> {
         let kek = Kek::from_bytes([0x55; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
         let salt = ShredSalt::from_bytes([0x66; 32]);
@@ -1106,11 +1116,12 @@ mod pins {
             Nonce::from_bytes([1u8; 12]),
             AeadArm::Gcm,
             &aad,
-        )
-        .expect("encrypt");
+        )?;
         assert_eq!(ct.arm(), AeadArm::Gcm);
-        let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
-        assert_eq!(decompress(&opened).expect("decompress"), b"gcm-arm");
+        let opened = decrypt(&ct, &dek, &aad)?;
+        assert_eq!(decompress(&opened)?, b"gcm-arm");
+    
+        Ok(())
     }
 
     /// RED-first (#376 T17): Mac / Digest / Nonce / Signature / Dek / Kek are
@@ -1118,7 +1129,7 @@ mod pins {
     /// encrypt doors take `&Dek`, wrap doors take `&Kek` / `KekUnwrapCap`, and
     /// neither role satisfies the other's door (no shared AeadKeyBytes trait).
     #[test]
-    fn wrong_kind_fixed_arrays_are_unconstructible_as_peer_kinds() {
+    fn wrong_kind_fixed_arrays_are_unconstructible_as_peer_kinds() -> Result<()> {
         let domain = test_domain();
         let aad = test_aad();
         let audit = AuditKey::from_bytes([0xABu8; 32]);
@@ -1126,7 +1137,7 @@ mod pins {
         assert_eq!(std::mem::size_of_val(&mac), 32);
         // Digest from CMT-1 KEK door is not a Mac; Mac has no From/Into Digest bridge.
         let kek = Kek::from_bytes([0x11; 32]);
-        let digest: Digest = key_commitment_kek(&kek, domain).expect("commitment");
+        let digest: Digest = key_commitment_kek(&kek, domain)?;
         assert_eq!(std::mem::size_of_val(&digest), 32);
         assert_ne!(
             std::any::type_name::<Mac>(),
@@ -1149,15 +1160,16 @@ mod pins {
             "Dek and Kek must remain distinct types"
         );
         // Wrap-derived nonce is typed Nonce, not a free [u8;12].
-        let wrap_aad = encode_wrapped_shred_salt_aad(domain, SegmentCounter::ZERO.get())
-            .expect("wrap AAD transcript");
+        let wrap_aad = encode_wrapped_shred_salt_aad(domain, SegmentCounter::ZERO.get())?;
         let n: Nonce = wrap_nonce(&wrap_aad);
         // encrypt door takes &Dek + Nonce — naked [u8;12] / &Kek are type errors.
         let salt = ShredSalt::from_bytes([0x22; 32]);
         let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x33; 32]));
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
-        let ct = compress_then_encrypt(b"typed-nonce", &dek, n, AeadArm::Siv, &aad).expect("enc");
+        let ct = compress_then_encrypt(b"typed-nonce", &dek, n, AeadArm::Siv, &aad)?;
         assert_eq!(ct.nonce(), &n);
+    
+        Ok(())
     }
 
     /// Grep gate obligation (#376 T17): named crypto/auth doors must not take or
@@ -1168,7 +1180,7 @@ mod pins {
     /// allowlist) scanning the full store surface — this pin locks the T17
     /// doors until that lands.
     #[test]
-    fn t17_no_naked_fixed_arrays_in_auth_fn_signatures() {
+    fn t17_no_naked_fixed_arrays_in_auth_fn_signatures() -> Result<()> {
         let crypto = include_str!("crypto.rs");
         let grants = include_str!("grants.rs");
         let replica = include_str!("replica.rs");
@@ -1192,7 +1204,7 @@ mod pins {
                 .find(|l| l.trim_start().starts_with(name) || l.contains(name))
             else {
                 assert!(false, "missing door {name}");
-                return;
+                return Ok(());
             };
             for needle in ["[u8; 32]", "[u8; 12]", "[u8; 64]"] {
                 assert!(
@@ -1243,8 +1255,7 @@ mod pins {
             ("fn seal_arm_kek(", "key_commitment_kek("),
         ] {
             let start = crypto_prod
-                .find(door)
-                .expect("missing door");
+                .find(door).ok_or_else(|| miette!("missing door"))?;
             let body = &crypto_prod[start..];
             let end = match body.find("
 fn ").or_else(|| body.find("
@@ -1328,6 +1339,8 @@ pub fn ")) {
                 && replica_prod.contains("fn signing_body_digest("),
             "signing_body_digest must return Digest"
         );
+    
+        Ok(())
     }
 
     /// RED-first (#376 T18 / seat 59): wrap AAD is the ONE CanonicalTranscript path;
@@ -1335,11 +1348,11 @@ pub fn ")) {
     /// from production; wrap/unwrap still round-trips; main encrypt AAD remains
     /// `&CanonicalTranscript` only.
     #[test]
-    fn t18_wrap_aad_is_sole_canonical_transcript_path() {
+    fn t18_wrap_aad_is_sole_canonical_transcript_path() -> Result<()> {
         let store = StoreId::from_digest([0x11; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
-        let production = encode_wrapped_shred_salt_aad(domain, 0).expect("encode wrap AAD");
-        let golden = parse_golden_hex(WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC).expect("golden parses");
+        let production = encode_wrapped_shred_salt_aad(domain, 0)?;
+        let golden = parse_golden_hex(WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC)?;
         assert_eq!(
             production.as_bytes(),
             golden.as_slice(),
@@ -1373,16 +1386,18 @@ pub fn ")) {
         let salt = ShredSalt::from_bytes([0x22; 32]);
         let seg = SegmentCounter::from_raw(7);
         let wrap_domain = test_domain();
-        let wrapped = wrap_shred_salt(&cap, &salt, seg, wrap_domain).expect("wrap");
+        let wrapped = wrap_shred_salt(&cap, &salt, seg, wrap_domain)?;
         let ledger = ShredLedger::new();
-        let opened = unwrap_shred_salt(&cap, &wrapped, &ledger).expect("unwrap");
+        let opened = unwrap_shred_salt(&cap, &wrapped, &ledger)?;
         let dek = derive_dek(&cap, wrap_domain, seg, &opened);
         assert_eq!(dek.crypto_domain(), wrap_domain);
 
         // Nonce is deterministic bytes-from-transcript-digest (SIV misuse-resistant).
-        let aad = shred_salt_wrap_transcript(wrap_domain, seg).expect("aad");
+        let aad = shred_salt_wrap_transcript(wrap_domain, seg)?;
         let n1 = wrap_nonce(&aad);
         let n2 = wrap_nonce(&aad);
         assert_eq!(n1, n2);
+    
+        Ok(())
     }
 }

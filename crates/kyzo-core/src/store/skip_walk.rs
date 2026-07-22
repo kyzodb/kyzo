@@ -358,6 +358,7 @@ impl<C: SkipCursor> Iterator for SkipWalk<C> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::ops::Bound;
@@ -376,7 +377,7 @@ mod tests {
     /// is a fact about today's kernel, not something this guard gets to
     /// assume away).
     #[test]
-    fn advance_past_falls_back_to_byte_successor_when_bound_does_not_advance() {
+    fn advance_past_falls_back_to_byte_successor_when_bound_does_not_advance() -> Result<()> {
         assert_eq!(
             advance_past(b"abc", b"abc".to_vec()),
             b"abc\x00".to_vec(),
@@ -393,6 +394,8 @@ mod tests {
             "genuine advance is trusted as-is"
         );
         assert_eq!(advance_past(b"", Vec::new()), vec![0], "empty key edge");
+    
+        Ok(())
     }
 
     /// The proof's own backend: nothing but a `BTreeMap`, ~30 lines,
@@ -546,7 +549,7 @@ mod tests {
     /// dictation: this driver IS #79's first theorem, so the property is
     /// stated once here and every backend inherits it).
     #[test]
-    fn skip_walk_matches_independent_oracle_over_2000_seeded_histories() {
+    fn skip_walk_matches_independent_oracle_over_2000_seeded_histories() -> Result<()> {
         let mut state: u64 = 0x5EED_9E52_5E15_C0DE;
         let mut next = move |m: usize| -> usize {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
@@ -580,7 +583,7 @@ mod tests {
             }
             for sys_at in [-40i64, -25, -5, 0, 5, 15, 25, 40] {
                 for valid_at in [-40i64, -30, -10, -3, 0, 10, 20, 30, 40] {
-                    let got = facts_of(&walk(&store, sys_at, valid_at).unwrap());
+                    let got = facts_of(&walk(&store, sys_at, valid_at)?);
                     let want = oracle(&rows, sys_at, valid_at);
                     assert_eq!(
                         got, want,
@@ -589,6 +592,8 @@ mod tests {
                 }
             }
         }
+    
+        Ok(())
     }
 
     /// Corruption refusal: hostile bytes surface a typed `Err` and the
@@ -597,7 +602,7 @@ mod tests {
     /// cleanly at bad data. Mirrors `storage/temp.rs`'s
     /// `three_way_differential_skip_scan` hostile fixtures.
     #[test]
-    fn skip_walk_refuses_corrupt_bytes_and_terminates() {
+    fn skip_walk_refuses_corrupt_bytes_and_terminates() -> Result<()> {
         let (lower, upper) = rel_bounds();
         let hostile_short: Vec<u8> = [&REL.raw().to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
         let mut hostile_sys_tag = bikey(5, 100, 1);
@@ -646,8 +651,10 @@ mod tests {
             }
             assert!(saw_err, "hostile bytes must surface as a typed Err");
             // Polling again re-yields (does not silently move past) the error.
-            assert!(w.next().unwrap().is_err());
+            assert!(w.next()?.is_err());
         }
+    
+        Ok(())
     }
 
     /// Extreme stored instants (`i64::MIN` in both slots, adjacent to the
@@ -656,7 +663,7 @@ mod tests {
     /// backstop for the strict-advance guard; this pins the honest-bytes
     /// boundary case the fuzz-shaped test above samples only by chance.
     #[test]
-    fn skip_walk_terminates_on_min_ts_retraction() {
+    fn skip_walk_terminates_on_min_ts_retraction() -> Result<()> {
         let mut store = MapSeek::default();
         store
             .map
@@ -664,15 +671,17 @@ mod tests {
         store
             .map
             .insert(bikey(9, i64::MIN, i64::MIN), bval(ClaimPolarity::Retract));
-        let got = facts_of(&walk(&store, i64::MAX, 10).unwrap());
+        let got = facts_of(&walk(&store, i64::MAX, 10)?);
         assert_eq!(got, vec![1]);
+    
+        Ok(())
     }
 
     /// Degenerate bounds (inverted, equal) are empty, never a panic — and
     /// never even reach the cursor: `SkipWalk::next`'s own loop guard
     /// returns `None` before calling `seek` when `next_bound >= upper`.
     #[test]
-    fn skip_walk_degenerate_bounds_are_empty() {
+    fn skip_walk_degenerate_bounds_are_empty() -> Result<()> {
         let mut store = MapSeek::default();
         store
             .map
@@ -687,6 +696,8 @@ mod tests {
             SkipWalk::new(store.open_skip_cursor(&lo, &lo), &lo, &lo, as_of).count(),
             0
         );
+    
+        Ok(())
     }
 
     /// The law this story exists to prove: however many version steps a
@@ -697,7 +708,7 @@ mod tests {
     /// through to exhaustion, with the open counter checked before AND
     /// after the walk runs.
     #[test]
-    fn skip_walk_opens_exactly_one_cursor_per_walk() {
+    fn skip_walk_opens_exactly_one_cursor_per_walk() -> Result<()> {
         let mut store = MapSeek::default();
         for f in 0..100i64 {
             for v in 0..10i64 {
@@ -712,8 +723,7 @@ mod tests {
 
         let as_of = AsOf::current(vts(1_000));
         let results: Vec<_> = SkipWalk::new(cursor, &lo, &hi, as_of)
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+            .collect::<Result<Vec<_>>>()?;
 
         assert_eq!(facts_of(&results).len(), 100, "every fact resolved");
         assert_eq!(
@@ -721,6 +731,8 @@ mod tests {
             1,
             "the walk drove ONE cursor across all 100 facts' version steps, never reopened"
         );
+    
+        Ok(())
     }
 
     /// Counting wrapper: pins that LFTJ advances by [`SkipCursor::seek`],
@@ -750,7 +762,7 @@ mod tests {
     /// relations via live `seek`. Intersection is `{b, c}`; each relation
     /// opens exactly one cursor; seeks fire (not nested-scan costume).
     #[test]
-    fn leapfrog_intersect_3_relations_via_live_seek() {
+    fn leapfrog_intersect_3_relations_via_live_seek() -> Result<()> {
         let r = unary_store(&[b"a", b"b", b"c", b"d"]);
         let s = unary_store(&[b"b", b"c", b"e"]);
         let t = unary_store(&[b"a", b"b", b"c", b"f"]);
@@ -772,8 +784,7 @@ mod tests {
                 inner: t.open_skip_cursor(&[], &upper),
                 seeks: &seeks_t,
             },
-        )
-        .expect("LFTJ over honest keys");
+        )?;
 
         assert_eq!(got, vec![b"b".to_vec(), b"c".to_vec()]);
         assert_eq!(r.opens.get(), 1, "R: one cursor, seek-advanced");
@@ -786,13 +797,15 @@ mod tests {
             seeks_s.get(),
             seeks_t.get()
         );
+    
+        Ok(())
     }
 
     /// Empty intersection / exhausted relation: LFTJ returns empty without
     /// inventing keys — the RED pin when a binary-join costume would still
     /// emit a cartesian ghost.
     #[test]
-    fn leapfrog_intersect_3_empty_when_one_relation_misses() {
+    fn leapfrog_intersect_3_empty_when_one_relation_misses() -> Result<()> {
         let r = unary_store(&[b"a", b"b"]);
         let s = unary_store(&[b"x", b"y"]);
         let t = unary_store(&[b"a", b"b", b"x"]);
@@ -801,8 +814,9 @@ mod tests {
             r.open_skip_cursor(&[], &upper),
             s.open_skip_cursor(&[], &upper),
             t.open_skip_cursor(&[], &upper),
-        )
-        .expect("LFTJ");
+        )?;
         assert!(got.is_empty(), "no common key across R∩S∩T");
+    
+        Ok(())
     }
 }

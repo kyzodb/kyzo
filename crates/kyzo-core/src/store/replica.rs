@@ -1868,6 +1868,7 @@ pub fn enforce_sth_gossip(
 
 #[cfg(test)]
 mod authorizing_key_ed25519_tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use ed25519_dalek::Verifier;
 
@@ -1881,7 +1882,7 @@ mod authorizing_key_ed25519_tests {
     /// RED until every hostile-peer site swaps `.verify` -> `verify_strict`
     /// (Taming the Many EdDSAs; ed25519-dalek's `verify_strict` rejects weak keys).
     #[test]
-    fn permissive_verify_accepts_weak_key_forgery() {
+    fn permissive_verify_accepts_weak_key_forgery() -> Result<()> {
         // identity point (0, 1): y = 1 little-endian, sign bit 0.
         let mut identity_key = [0u8; 32];
         identity_key[0] = 1;
@@ -1889,8 +1890,7 @@ mod authorizing_key_ed25519_tests {
         let mut forged_sig = [0u8; 64];
         forged_sig[0] = 1;
         let weak =
-            AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xAA; 32]), identity_key)
-                .expect("ed25519-dalek from_bytes accepts the small-order key (probe-confirmed)");
+            AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xAA; 32]), identity_key)?;
         assert!(
             !weak.verify_signature(
                 &Digest::from_bytes([0x99u8; 32]),
@@ -1900,6 +1900,8 @@ mod authorizing_key_ed25519_tests {
              (identity) authorizing key over an arbitrary body -- the permissive \
              .verify() must become verify_strict"
         );
+    
+        Ok(())
     }
 
     /// RFC 8032 ed25519 test vector 1 (empty message) — public verify golden.
@@ -1908,7 +1910,7 @@ mod authorizing_key_ed25519_tests {
     /// mint uses the matching 32-byte seed via dalek; receiver verifies with
     /// public material only (cannot forge).
     #[test]
-    fn rfc8032_vector1_public_key_and_empty_message() {
+    fn rfc8032_vector1_public_key_and_empty_message() -> Result<()> {
         // SECRET KEY / PUBLIC KEY / SIGNATURE from RFC 8032 §7.1 TEST 1
         let seed: [u8; 32] = [
             0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0xc8, 0x54, 0x55, 0x4a, 0xad,
@@ -1930,14 +1932,14 @@ mod authorizing_key_ed25519_tests {
 
         // Golden vector: RFC public key verifies RFC signature (empty message).
         // This is the sovereign-store verify path — public material only.
-        let vk = VerifyingKey::from_bytes(&expect_pk).expect("RFC public key");
-        let rfc_sig = Ed25519Signature::try_from(expect_sig.as_slice()).expect("RFC sig");
+        let vk = VerifyingKey::from_bytes(&expect_pk)?;
+        let rfc_sig = Ed25519Signature::try_from(expect_sig.as_slice())?;
         assert!(
             vk.verify(b"", &rfc_sig).is_ok(),
             "RFC 8032 TEST 1 signature must verify under RFC public key"
         );
         let receiver =
-            AuthorizingKey::mint_verifying([0xA1; 32], expect_pk).expect("public key installs");
+            AuthorizingKey::mint_verifying([0xA1; 32], expect_pk)?;
         assert!(!receiver.can_sign());
         assert!(
             matches!(
@@ -1954,21 +1956,22 @@ mod authorizing_key_ed25519_tests {
         assert_eq!(origin.verifying_bytes(), dalek_pk);
         assert!(origin.can_sign());
         let body = Digest::from_bytes([0x5eu8; 32]);
-        let sig = origin.sign(&body).expect("origin signs body");
+        let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
         assert!(
-            AuthorizingKey::mint_verifying([0xA1; 32], dalek_pk)
-                .expect("dalek pk")
+            AuthorizingKey::mint_verifying([0xA1; 32], dalek_pk)?
                 .verify_signature(&body, &sig),
             "receiver with public-only table material verifies origin sig"
         );
         // RFC public key must not verify a signature under the dalek-derived
         // key from this seed if they diverge — document the installed dalek
         // wire; RFC vector above remains the public-verify golden.
+    
+        Ok(())
     }
 
     #[test]
-    fn mint_with_verifying_id_is_public_id_not_seed() {
+    fn mint_with_verifying_id_is_public_id_not_seed() -> Result<()> {
         let seed = [0x42u8; 32];
         let origin = AuthorizingKey::mint_with_verifying_id(seed);
         assert_ne!(
@@ -1983,27 +1986,29 @@ mod authorizing_key_ed25519_tests {
         );
         assert!(origin.can_sign());
         let body = Digest::from_bytes([0xABu8; 32]);
-        let sig = origin.sign(&body).expect("sign");
+        let sig = origin.sign(&body)?;
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&origin.id()).expect("lookup").expect("public installed");
+        let looked = table.lookup(&origin.id())??;
         assert!(!looked.can_sign());
         assert!(looked.verify_signature(&body, &sig));
+    
+        Ok(())
     }
 
     #[test]
-    fn sign_verify_round_trip_and_table_stores_public_only() {
+    fn sign_verify_round_trip_and_table_stores_public_only() -> Result<()> {
         let seed = [0x42u8; 32];
         let id = AuthorizingKeyId::from_digest([0x11; 32]);
         let origin = AuthorizingKey::mint(id, seed);
         let body = Digest::from_bytes([0xCAu8; 32]);
-        let sig = origin.sign(&body).expect("origin can sign");
+        let sig = origin.sign(&body)?;
         assert_eq!(sig.as_bytes().len(), 64);
         assert!(origin.verify_signature(&body, &sig));
 
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&id).expect("lookup").expect("public key installed");
+        let looked = table.lookup(&id)??;
         assert!(
             !looked.can_sign(),
             "table must not reconstitute signing seed"
@@ -2017,13 +2022,15 @@ mod authorizing_key_ed25519_tests {
             matches!(looked.sign(&body), Err(ReplicaRefuse::AuthenticityFailed)),
             "receiver without seed cannot forge"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn wrong_key_and_flipped_byte_fail_verify() {
+    fn wrong_key_and_flipped_byte_fail_verify() -> Result<()> {
         let body = Digest::from_bytes([0xEEu8; 32]);
         let origin = AuthorizingKey::mint([0x01; 32], [0x7Au8; 32]);
-        let sig = origin.sign(&body).expect("sign");
+        let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
 
         // Flipped signature byte → refuse.
@@ -2041,10 +2048,11 @@ mod authorizing_key_ed25519_tests {
         let mut table = AuthorizingKeyTable::new();
         table.insert(other.authorizing_public());
         let looked = table
-            .lookup(&AuthorizingKeyId::from_digest([0x02; 32]))
-            .expect("lookup")
-            .expect("key present");
+            .lookup(&AuthorizingKeyId::from_digest([0x02; 32]))?
+            ?;
         assert!(!looked.verify_signature(&body, &sig));
+    
+        Ok(())
     }
 
     impl AuthorizingKey {
@@ -2058,6 +2066,7 @@ mod authorizing_key_ed25519_tests {
 
 #[cfg(test)]
 mod crossing_contract_tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
 
     fn mint_signed(
@@ -2099,7 +2108,7 @@ mod crossing_contract_tests {
     }
 
     #[test]
-    fn missing_declared_evidence_typed_refuse() {
+    fn missing_declared_evidence_typed_refuse() -> Result<()> {
         let key = AuthorizingKey::mint_with_verifying_id([0xC1; 32]);
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
         let mut keys = AuthorizingKeyTable::new();
@@ -2135,10 +2144,12 @@ mod crossing_contract_tests {
             Err(CrossingRefuse::DeclaredEvidenceMissing),
             "missing declared evidence must typed-refuse, not silent drop"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn scope_unknown_revoked_denied_distinct_from_retention_declined() {
+    fn scope_unknown_revoked_denied_distinct_from_retention_declined() -> Result<()> {
         let key = AuthorizingKey::mint_with_verifying_id([0xC2; 32]);
         let scope = ScopeManifestDigest::from_digest([0x5D; 32]);
         let mut keys = AuthorizingKeyTable::new();
@@ -2208,10 +2219,12 @@ mod crossing_contract_tests {
             CrossingRefuse::DeclaredEvidenceMissing,
             CrossingRefuse::Replica(ReplicaRefuse::RetentionDeclined)
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn full_contract_validates_before_lower_token() {
+    fn full_contract_validates_before_lower_token() -> Result<()> {
         let key = AuthorizingKey::mint_with_verifying_id([0xC3; 32]);
         let scope = ScopeManifestDigest::from_digest([0x5E; 32]);
         let mut keys = AuthorizingKeyTable::new();
@@ -2245,8 +2258,7 @@ mod crossing_contract_tests {
             &scopes,
             Some(&OriginContinuity::mint()),
             &held,
-        )
-        .expect("full contract must pass");
+        )?;
         assert_eq!(validated.kind(), CrossingKind::Claim);
         assert_eq!(validated.origin_schema_cut(), cert.schema_cut());
         assert!(matches!(
@@ -2297,10 +2309,12 @@ mod crossing_contract_tests {
             refuse_in_place_local_reinterpretation(),
             CrossingRefuse::LocalReinterpretationUnconstructible
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn schema_authority_mismatch_refuse() {
+    fn schema_authority_mismatch_refuse() -> Result<()> {
         let key = AuthorizingKey::mint_with_verifying_id([0xC4; 32]);
         let scope = ScopeManifestDigest::from_digest([0x5F; 32]);
         let mut keys = AuthorizingKeyTable::new();
@@ -2393,6 +2407,8 @@ mod crossing_contract_tests {
             CrossingContext::from_wire(2, None),
             Err(CrossingRefuse::ContextInvalid)
         );
+    
+        Ok(())
     }
 }
 
@@ -2639,6 +2655,7 @@ mod identity {
 /// Promotion replay equality + graph-bound key proofs (#270 T3).
 #[cfg(test)]
 mod promotion {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
 
     fn sample_meaning(schema_cut: [u8; 32], provenance: [u8; 32]) -> PromotionMeaning {
@@ -2652,17 +2669,19 @@ mod promotion {
     }
 
     #[test]
-    fn promotion_replay_equality_preserves_four_seats() {
+    fn promotion_replay_equality_preserves_four_seats() -> Result<()> {
         let before = sample_meaning([0x51; 32], [0xB1; 32]);
         // Local-to-hosted: same meaning seats, different host — equality holds.
         let after = sample_meaning([0x51; 32], [0xB1; 32]);
         assert!(before.replay_equal(&after));
         assert_eq!(before.digest(), after.digest());
         assert_eq!(prove_promotion_replay(&before, &after), Ok(()));
+    
+        Ok(())
     }
 
     #[test]
-    fn promotion_schema_divergence_refuses() {
+    fn promotion_schema_divergence_refuses() -> Result<()> {
         let before = sample_meaning([0x51; 32], [0xB1; 32]);
         let after = sample_meaning([0x99; 32], [0xB1; 32]);
         assert!(!before.replay_equal(&after));
@@ -2670,20 +2689,24 @@ mod promotion {
             prove_promotion_replay(&before, &after),
             Err(PromotionRefuse::MeaningDiverged)
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn promotion_provenance_divergence_refuses() {
+    fn promotion_provenance_divergence_refuses() -> Result<()> {
         let before = sample_meaning([0x51; 32], [0xB1; 32]);
         let after = sample_meaning([0x51; 32], [0xB2; 32]);
         assert_eq!(
             prove_promotion_replay(&before, &after),
             Err(PromotionRefuse::MeaningDiverged)
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn view_under_schema_cut_consumes_origin_cut() {
+    fn view_under_schema_cut_consumes_origin_cut() -> Result<()> {
         let origin = [0x51u8; 32];
         assert_eq!(view_under_schema_cut(&origin, &origin), Ok(()));
         assert_eq!(
@@ -2707,17 +2730,19 @@ mod promotion {
             operation_key: None,
             signature: Signature::from_bytes([0u8; 64]),
         };
-        parts.signature = sign_admission_parts(&parts, &key).expect("sign");
-        let cert = mint_admission_certificate(parts).expect("mint");
+        parts.signature = sign_admission_parts(&parts, &key)?;
+        let cert = mint_admission_certificate(parts)?;
         let projection = LocalProjection::from_certificate(cert, [0x99; 32]);
         assert_ne!(
             projection.local_schema_cut(),
             projection.origin().schema_cut()
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn graph_bound_key_never_crosses_boundary() {
+    fn graph_bound_key_never_crosses_boundary() -> Result<()> {
         let home = GraphBoundary::from_tenant(TenantId::from_digest([0x7E; 32]));
         let foreign = GraphBoundary::from_tenant(TenantId::from_digest([0x7F; 32]));
         let key = ReplicaKey::derive(
@@ -2739,11 +2764,14 @@ mod promotion {
             foreign_bound.authorize(home),
             Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
         );
+    
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod sth_gossip_obligation_tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::merkle::{
         ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, GossipConsistency, RootChain, StateRoot,
@@ -2752,7 +2780,7 @@ mod sth_gossip_obligation_tests {
 
     /// Fabric carriage is JetStream-only — subject names the Store; no peer-dial.
     #[test]
-    fn sth_gossip_obligation_seats_on_jetstream_not_peer_dial() {
+    fn sth_gossip_obligation_seats_on_jetstream_not_peer_dial() -> Result<()> {
         let store = StoreId::from_digest([0x92; 32]);
         let obligation = SthGossipObligation::on_jetstream(store);
         assert!(matches!(
@@ -2762,14 +2790,16 @@ mod sth_gossip_obligation_tests {
         let subject = obligation.subject().jetstream_subject();
         assert!(subject.starts_with("kyzo.sth."));
         assert_eq!(subject.len(), "kyzo.sth.".len() + 64);
+    
+        Ok(())
     }
 
     /// Signed STH gossip detects split-view before chains meet.
     #[test]
-    fn enforce_sth_gossip_detects_equivocating_signed_heads() {
+    fn enforce_sth_gossip_detects_equivocating_signed_heads() -> Result<()> {
         let store = StoreId::from_digest([0x69; 32]);
         let fence = FenceEpoch::genesis(store);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
         let key = AuthorizingKey::mint_with_verifying_id([0x51; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
@@ -2785,8 +2815,7 @@ mod sth_gossip_obligation_tests {
                 content_a,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         let mut chain_b = RootChain::empty();
         chain_b
             .append(ChainedStateRoot::mint(
@@ -2796,15 +2825,12 @@ mod sth_gossip_obligation_tests {
                 content_b,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
 
         let signed_a =
-            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_a).unwrap(), &key)
-                .unwrap();
+            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_a)?, &key)?;
         let signed_b =
-            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_b).unwrap(), &key)
-                .unwrap();
+            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_b)?, &key)?;
         assert_ne!(signed_a.head().root(), signed_b.head().root());
 
         let obligation = SthGossipObligation::on_jetstream(store);
@@ -2818,15 +2844,17 @@ mod sth_gossip_obligation_tests {
             enforce_sth_gossip(&obligation, &signed_a, &signed_a, None, &keys),
             Ok(GossipConsistency::Identical)
         );
+    
+        Ok(())
     }
 
     /// Honest extension under consistency proof is Detected-consistent on gossip.
     #[test]
-    fn enforce_sth_gossip_honest_extension_with_proof() {
+    fn enforce_sth_gossip_honest_extension_with_proof() -> Result<()> {
         let store = StoreId::from_digest([0x58; 32]);
         let fence = FenceEpoch::genesis(store);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
         let key = AuthorizingKey::mint_with_verifying_id([0x58; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
@@ -2840,8 +2868,7 @@ mod sth_gossip_obligation_tests {
                 StateRoot::from_digest([0x01; 32]),
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         chain
             .append(ChainedStateRoot::mint(
                 store,
@@ -2850,18 +2877,19 @@ mod sth_gossip_obligation_tests {
                 StateRoot::from_digest([0x02; 32]),
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
 
         let older =
-            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1).unwrap(), &key).unwrap();
+            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1)?, &key)?;
         let newer =
-            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2).unwrap(), &key).unwrap();
-        let proof = build_consistency_proof(&chain, o1, o2).unwrap();
+            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2)?, &key)?;
+        let proof = build_consistency_proof(&chain, o1, o2)?;
         let obligation = SthGossipObligation::on_jetstream(store);
         assert_eq!(
             enforce_sth_gossip(&obligation, &older, &newer, Some(&proof), &keys),
             Ok(GossipConsistency::ConsistentExtension)
         );
+    
+        Ok(())
     }
 }

@@ -1052,6 +1052,7 @@ mod tests {
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
 
+    use miette::{IntoDiagnostic, Result, miette};
     use std::num::NonZeroU64;
 
     use fjall::Slice;
@@ -1076,16 +1077,18 @@ mod tests {
     // const would move with it and hide the mutation.
 
     #[test]
-    fn empty_root_is_pinned() {
+    fn empty_root_is_pinned() -> Result<()> {
         // SHA-256(0x02)
         assert_eq!(
             empty_hash().to_hex(),
             "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn single_leaf_root_is_pinned() {
+    fn single_leaf_root_is_pinned() -> Result<()> {
         // leaf = SHA-256(0x00 ‖ u64_be(3) ‖ "key" ‖ "val")
         let (k, v) = (b"key".as_slice(), b"val".as_slice());
         let golden = "f26135a572169d94e1cd659dc6e6ba89caddd4d1b0acc6fa87b3b9fed4045bc0";
@@ -1094,13 +1097,14 @@ mod tests {
         let root = root_over(
             Box::new(std::iter::once(Ok((Slice::from(k), Slice::from(v))))),
             big_budget(),
-        )
-        .unwrap();
+        )?;
         assert_eq!(root.to_hex(), golden);
+    
+        Ok(())
     }
 
     #[test]
-    fn two_leaf_root_is_pinned() {
+    fn two_leaf_root_is_pinned() -> Result<()> {
         // l0 = leaf("a","1"), l1 = leaf("b","2"), root = SHA-256(0x01 ‖ l0 ‖ l1)
         let (k0, v0) = (b"a".as_slice(), b"1".as_slice());
         let (k1, v1) = (b"b".as_slice(), b"2".as_slice());
@@ -1127,16 +1131,19 @@ mod tests {
                 .map(Ok),
             ),
             big_budget(),
-        )
-        .unwrap();
+        )?;
         assert_eq!(root.to_hex(), golden);
+    
+        Ok(())
     }
 
     #[test]
-    fn key_length_prefix_removes_boundary_ambiguity() {
+    fn key_length_prefix_removes_boundary_ambiguity() -> Result<()> {
         // (key=ab, value=c) and (key=a, value=bc) share the byte stream
         // "abc" but must not collide, because the key length is prefixed.
         assert_ne!(leaf_hash(b"ab", b"c"), leaf_hash(b"a", b"bc"));
+    
+        Ok(())
     }
 
     // ── the streaming accumulator equals an independent recursive MTH ─────
@@ -1171,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_matches_recursive_mth_for_every_small_size() {
+    fn streaming_matches_recursive_mth_for_every_small_size() -> Result<()> {
         for n in 0u64..40 {
             let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0..n)
                 .map(|i| {
@@ -1188,6 +1195,8 @@ mod tests {
                 "streaming ≠ recursive MTH at n={n}"
             );
         }
+    
+        Ok(())
     }
 
     // ── cipher-invariance (§59): leaf = canonical plaintext, never AEAD ──
@@ -1198,7 +1207,7 @@ mod tests {
     /// into [`leaf_hash`] whether carriage was ciphertext or plaintext.
     /// Rooting over ciphertext body would be a different commitment (banned).
     #[test]
-    fn cipher_invariant_root_identical_encrypted_vs_plaintext() {
+    fn cipher_invariant_root_identical_encrypted_vs_plaintext() -> Result<()> {
         use crate::store::contract::FormatVersion;
         use crate::store::epoch::{CryptoDomain, FenceEpoch};
         use crate::store::open::StoreId;
@@ -1215,13 +1224,12 @@ mod tests {
         let salt = ShredSalt::from_bytes([0xA5; 32]);
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
 
-        let mut aad_b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
+        let mut aad_b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
         aad_b
             .append_u64(
                 FieldId::ARTIFACT_KIND,
                 SealedArtifactKind::AuditKeyLeaf.tag(),
-            )
-            .unwrap();
+            )?;
         let aad = aad_b.seal();
 
         let logical: Vec<(Vec<u8>, Vec<u8>)> = (0..8u32)
@@ -1244,7 +1252,7 @@ mod tests {
             nonce_bytes[..4].copy_from_slice(&(i as u32).to_be_bytes());
             let nonce = Nonce::from_bytes(nonce_bytes);
             let ct =
-                compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad).expect("encrypt");
+                compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)?;
             assert_ne!(
                 ct.body(),
                 plaintext.as_slice(),
@@ -1255,8 +1263,8 @@ mod tests {
                 leaf_hash(k, ct.body()),
                 "leaf over ciphertext ≠ leaf over plaintext — cipher-invariance requires plaintext"
             );
-            let opened = decrypt(&ct, &dek, &aad).expect("decrypt");
-            let round = decompress(&opened).expect("decompress");
+            let opened = decrypt(&ct, &dek, &aad)?;
+            let round = decompress(&opened)?;
             assert_eq!(&round, plaintext);
             opened_pairs.push((k.clone(), round));
         }
@@ -1273,21 +1281,23 @@ mod tests {
         );
 
         // Live store scan over the same plaintext content equals both.
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
         for (k, v) in &logical {
-            tx.put(k, v).unwrap();
+            tx.put(k, v)?;
         }
-        tx.commit().unwrap();
-        let tx = db.read_tx().unwrap();
-        let store_root = state_root(&tx, big_budget()).unwrap();
+        tx.commit()?;
+        let tx = db.read_tx()?;
+        let store_root = state_root(&tx, big_budget())?;
         assert_eq!(store_root, plaintext_root);
         assert_eq!(
             StateRoot::from_merkle(store_root),
             StateRoot::from_merkle(encrypted_obs_root),
             "encrypted vs plaintext identical StateRoot via state_root"
         );
+    
+        Ok(())
     }
 
     // ── valid-but-stale rollback (§56–§58): stored prior tip catches swap ──
@@ -1299,7 +1309,7 @@ mod tests {
     /// the rollback. Swap state-at-cut-1 under a tip advanced to cut-3 →
     /// [`roots_equal_at_cut`] is false.
     #[test]
-    fn valid_but_stale_rollback_detected_against_stored_prior() {
+    fn valid_but_stale_rollback_detected_against_stored_prior() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -1333,9 +1343,9 @@ mod tests {
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
-        let o3 = o2.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
+        let o3 = o2.successor()?;
 
         let mut chain = RootChain::empty();
         assert_eq!(chain.prior_root(), GENESIS_ROOT);
@@ -1348,8 +1358,8 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        chain.append(link1).unwrap();
-        let root_at_v1 = as_of_root(&chain, o1).unwrap();
+        chain.append(link1)?;
+        let root_at_v1 = as_of_root(&chain, o1)?;
 
         let link2 = ChainedStateRoot::mint(
             store_id,
@@ -1359,7 +1369,7 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        chain.append(link2).unwrap();
+        chain.append(link2)?;
 
         let link3 = ChainedStateRoot::mint(
             store_id,
@@ -1369,11 +1379,11 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        chain.append(link3).unwrap();
+        chain.append(link3)?;
 
         // T1 stores the prior tip on the SweepDoor — live tip after commit 3.
         let stored_prior = chain.prior_root();
-        let tip_as_of = as_of_root(&chain, o3).unwrap();
+        let tip_as_of = as_of_root(&chain, o3)?;
         assert!(
             roots_equal_at_cut(stored_prior, tip_as_of),
             "live tip prior equals as-of root at tip cut"
@@ -1386,7 +1396,7 @@ mod tests {
             restored_content, content_v1,
             "older state remains internally consistent"
         );
-        let stale_as_of = as_of_root(&chain, o1).unwrap();
+        let stale_as_of = as_of_root(&chain, o1)?;
         assert_eq!(stale_as_of, root_at_v1);
 
         // Detection: stored tip prior vs older cut — mismatch (§58).
@@ -1397,7 +1407,7 @@ mod tests {
 
         // Swap older content under the tip ordinal with the lawful predecessor:
         // still ≠ stored tip (content changed; chain bind notices).
-        let pred_at_o2 = as_of_root(&chain, o2).unwrap();
+        let pred_at_o2 = as_of_root(&chain, o2)?;
         let forged_at_tip = ChainedStateRoot::mint(
             store_id,
             fence,
@@ -1414,6 +1424,8 @@ mod tests {
         // Controls: same cut equals itself; tip equals tip.
         assert!(roots_equal_at_cut(stale_as_of, root_at_v1));
         assert!(roots_equal_at_cut(stored_prior, chain.prior_root()));
+    
+        Ok(())
     }
 
     /// Disk rollback: real fjall directory backed up at v1, advanced to v3,
@@ -1421,7 +1433,7 @@ mod tests {
     /// root equals the v1 root and differs from the live tip content; binding
     /// the restored content under the tip cut ≠ the stored prior tip.
     #[test]
-    fn valid_but_stale_rollback_on_disk_dir_restore() {
+    fn valid_but_stale_rollback_on_disk_dir_restore() -> Result<()> {
         use std::path::{Path, PathBuf};
 
         use crate::store::epoch::FenceEpoch;
@@ -1434,47 +1446,47 @@ mod tests {
         };
 
         fn copy_dir_recursive(src: &Path, dst: &Path) {
-            std::fs::create_dir_all(dst).expect("create backup dir");
-            for entry in std::fs::read_dir(src).expect("read live dir") {
-                let entry = entry.expect("dir entry");
-                let ty = entry.file_type().expect("file type");
+            std::fs::create_dir_all(dst)?;
+            for entry in std::fs::read_dir(src)? {
+                let entry = entry?;
+                let ty = entry.file_type()?;
                 let from = entry.path();
                 let to = dst.join(entry.file_name());
                 if ty.is_dir() {
                     copy_dir_recursive(&from, &to);
                 } else {
-                    std::fs::copy(&from, &to).expect("copy file");
+                    std::fs::copy(&from, &to)?;
                 }
             }
         }
 
         fn replace_dir_with(src: &Path, dst: &Path) {
             if dst.exists() {
-                std::fs::remove_dir_all(dst).expect("remove live before restore");
+                std::fs::remove_dir_all(dst)?;
             }
             copy_dir_recursive(src, dst);
         }
 
         let store_id = StoreId::from_digest([0x5D; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
-        let o3 = o2.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
+        let o3 = o2.successor()?;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().into_diagnostic()?;
         let live: PathBuf = root.path().join("live");
         let backup_v1: PathBuf = root.path().join("backup_v1");
-        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&live)?;
 
         // Cut 1: write v1, seal content root, back up the on-disk directory.
         let content_v1 = {
-            let db = new_fjall_storage(&live).unwrap();
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"k00", b"v0").unwrap();
-            tx.put(b"k01", b"v1").unwrap();
-            tx.commit().unwrap();
+            let db = new_fjall_storage(&live)?;
+            let mut tx = db.write_tx()?;
+            tx.put(b"k00", b"v0")?;
+            tx.put(b"k01", b"v1")?;
+            tx.commit()?;
             let content =
-                StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap());
+                StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?);
             drop(db);
             content
         };
@@ -1482,21 +1494,21 @@ mod tests {
 
         // Advance live store to v3; mint RootChain under the advanced tip.
         let (content_v3, chain) = {
-            let db = new_fjall_storage(&live).unwrap();
+            let db = new_fjall_storage(&live)?;
             {
-                let mut tx = db.write_tx().unwrap();
-                tx.put(b"k02", b"v2").unwrap();
-                tx.commit().unwrap();
+                let mut tx = db.write_tx()?;
+                tx.put(b"k02", b"v2")?;
+                tx.commit()?;
             }
             let content_v2 =
-                StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap());
+                StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?);
             {
-                let mut tx = db.write_tx().unwrap();
-                tx.put(b"k03", b"v3").unwrap();
-                tx.commit().unwrap();
+                let mut tx = db.write_tx()?;
+                tx.put(b"k03", b"v3")?;
+                tx.commit()?;
             }
             let content_v3 =
-                StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap());
+                StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?);
             assert_ne!(content_v1, content_v2);
             assert_ne!(content_v2, content_v3);
 
@@ -1509,8 +1521,7 @@ mod tests {
                     content_v1,
                     GENESIS_ROOT,
                     ChainLinkKind::Ordinary,
-                ))
-                .unwrap();
+                ))?;
             chain
                 .append(ChainedStateRoot::mint(
                     store_id,
@@ -1519,8 +1530,7 @@ mod tests {
                     content_v2,
                     chain.prior_root(),
                     ChainLinkKind::Ordinary,
-                ))
-                .unwrap();
+                ))?;
             chain
                 .append(ChainedStateRoot::mint(
                     store_id,
@@ -1529,21 +1539,20 @@ mod tests {
                     content_v3,
                     chain.prior_root(),
                     ChainLinkKind::Ordinary,
-                ))
-                .unwrap();
+                ))?;
             drop(db);
             (content_v3, chain)
         };
 
         let tip_prior = chain.prior_root();
-        let tip_as_of = as_of_root(&chain, o3).unwrap();
+        let tip_as_of = as_of_root(&chain, o3)?;
         assert!(roots_equal_at_cut(tip_prior, tip_as_of));
 
         // Attacker restores the v1 directory under the advanced tip.
         replace_dir_with(&backup_v1, &live);
         let restored_content = {
-            let db = new_fjall_storage(&live).unwrap();
-            StateRoot::from_merkle(state_root(&db.read_tx().unwrap(), big_budget()).unwrap())
+            let db = new_fjall_storage(&live)?;
+            StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?)
         };
 
         assert_eq!(
@@ -1557,7 +1566,7 @@ mod tests {
 
         // Detection door (same bind as session verify): restored content under
         // the tip cut's predecessor ≠ stored tip prior.
-        let tip_link = link_at_cut(&chain, o3).unwrap();
+        let tip_link = link_at_cut(&chain, o3)?;
         let recomputed_at_tip = ChainedStateRoot::mint(
             tip_link.store_id(),
             tip_link.fence_epoch(),
@@ -1571,6 +1580,8 @@ mod tests {
             !roots_equal_at_cut(tip_prior, recomputed_at_tip),
             "valid-but-stale on-disk rollback: stored tip prior ≠ tip rebound over restored bytes"
         );
+    
+        Ok(())
     }
 
     /// Adversarial historical_edit: mutate a past commit's content (and thus its
@@ -1580,7 +1591,7 @@ mod tests {
     /// prove coverage. Also: an honest forward link refuses to append after the
     /// edited past tip ([`MerkleChainRefuse::PredecessorMismatch`]).
     #[test]
-    fn historical_edit_breaks_every_forward_chained_root() {
+    fn historical_edit_breaks_every_forward_chained_root() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -1622,9 +1633,9 @@ mod tests {
             "historical edit must change past content root"
         );
 
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
-        let o3 = o2.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
+        let o3 = o2.successor()?;
 
         let mut honest = RootChain::empty();
         let h1 = ChainedStateRoot::mint(
@@ -1635,7 +1646,7 @@ mod tests {
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         );
-        honest.append(h1).unwrap();
+        honest.append(h1)?;
         let h2 = ChainedStateRoot::mint(
             store_id,
             fence,
@@ -1644,7 +1655,7 @@ mod tests {
             honest.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        honest.append(h2).unwrap();
+        honest.append(h2)?;
         let h3 = ChainedStateRoot::mint(
             store_id,
             fence,
@@ -1653,11 +1664,11 @@ mod tests {
             honest.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        honest.append(h3).unwrap();
+        honest.append(h3)?;
 
-        let honest_r1 = as_of_root(&honest, o1).unwrap();
-        let honest_r2 = as_of_root(&honest, o2).unwrap();
-        let honest_r3 = as_of_root(&honest, o3).unwrap();
+        let honest_r1 = as_of_root(&honest, o1)?;
+        let honest_r2 = as_of_root(&honest, o2)?;
+        let honest_r3 = as_of_root(&honest, o3)?;
 
         // historical_edit past commit → rebind every forward link (same content).
         let mut edited = RootChain::empty();
@@ -1669,9 +1680,9 @@ mod tests {
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         );
-        edited.append(e1).unwrap();
+        edited.append(e1)?;
         assert!(
-            !roots_equal_at_cut(honest_r1, as_of_root(&edited, o1).unwrap()),
+            !roots_equal_at_cut(honest_r1, as_of_root(&edited, o1)?),
             "historical_edit changes the past ChainedStateRoot"
         );
 
@@ -1683,7 +1694,7 @@ mod tests {
             edited.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        edited.append(e2).unwrap();
+        edited.append(e2)?;
         let e3 = ChainedStateRoot::mint(
             store_id,
             fence,
@@ -1692,26 +1703,28 @@ mod tests {
             edited.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        edited.append(e3).unwrap();
+        edited.append(e3)?;
 
         // Every forward root breaks — fails if chain_bind drops the predecessor.
         assert!(
-            !roots_equal_at_cut(honest_r2, as_of_root(&edited, o2).unwrap()),
+            !roots_equal_at_cut(honest_r2, as_of_root(&edited, o2)?),
             "historical_edit: forward chained root at o2 must break"
         );
         assert!(
-            !roots_equal_at_cut(honest_r3, as_of_root(&edited, o3).unwrap()),
+            !roots_equal_at_cut(honest_r3, as_of_root(&edited, o3)?),
             "historical_edit: forward chained root at o3 must break"
         );
 
         // Chain verification: honest forward link cannot cover the edited past tip.
         let mut verify = RootChain::empty();
-        verify.append(e1).unwrap();
+        verify.append(e1)?;
         assert_eq!(
             verify.append(h2),
             Err(MerkleChainRefuse::PredecessorMismatch),
             "historical_edit: honest forward link refuses edited past tip"
         );
+    
+        Ok(())
     }
 
     /// Point-in-time (§57): [`as_of_root`] is the who-believed-what-when anchor
@@ -1719,7 +1732,7 @@ mod tests {
     /// an earlier [`CommitOrdinal`]; equals that cut's [`StateRoot`]; differs
     /// from tip and from a later cut.
     #[test]
-    fn as_of_root_point_in_time_returns_past_cut_anchor() {
+    fn as_of_root_point_in_time_returns_past_cut_anchor() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -1753,9 +1766,9 @@ mod tests {
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
-        let o3 = o2.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
+        let o3 = o2.successor()?;
 
         let mut chain = RootChain::empty();
         let link1 = ChainedStateRoot::mint(
@@ -1767,7 +1780,7 @@ mod tests {
             ChainLinkKind::Ordinary,
         );
         let cut_root_o1 = link1.root();
-        chain.append(link1).unwrap();
+        chain.append(link1)?;
 
         let link2 = ChainedStateRoot::mint(
             store_id,
@@ -1778,7 +1791,7 @@ mod tests {
             ChainLinkKind::Ordinary,
         );
         let cut_root_o2 = link2.root();
-        chain.append(link2).unwrap();
+        chain.append(link2)?;
 
         let link3 = ChainedStateRoot::mint(
             store_id,
@@ -1789,24 +1802,24 @@ mod tests {
             ChainLinkKind::Ordinary,
         );
         let tip_root = link3.root();
-        chain.append(link3).unwrap();
+        chain.append(link3)?;
 
         // Past cut: as_of_root equals the StateRoot minted at that cut.
-        let as_of_o1 = as_of_root(&chain, o1).unwrap();
+        let as_of_o1 = as_of_root(&chain, o1)?;
         assert!(
             roots_equal_at_cut(as_of_o1, cut_root_o1),
             "point-in-time: as_of_root at o1 equals that cut's StateRoot"
         );
 
         // Mid cut likewise.
-        let as_of_o2 = as_of_root(&chain, o2).unwrap();
+        let as_of_o2 = as_of_root(&chain, o2)?;
         assert!(
             roots_equal_at_cut(as_of_o2, cut_root_o2),
             "point-in-time: as_of_root at o2 equals that cut's StateRoot"
         );
 
         // Past ≠ tip; past ≠ later cut — who-believed-what-when is cut-scoped.
-        let tip_as_of = as_of_root(&chain, o3).unwrap();
+        let tip_as_of = as_of_root(&chain, o3)?;
         assert!(
             roots_equal_at_cut(tip_as_of, tip_root),
             "point-in-time: as_of_root at tip equals tip StateRoot"
@@ -1823,27 +1836,31 @@ mod tests {
             !roots_equal_at_cut(as_of_o2, tip_as_of),
             "point-in-time: mid cut differs from tip"
         );
+    
+        Ok(())
     }
 
     /// Empty [`RootChain`]: [`as_of_root`] refuses — no cut exists before genesis.
     #[test]
-    fn as_of_root_refuses_empty_chain() {
+    fn as_of_root_refuses_empty_chain() -> Result<()> {
         use crate::store::sweep::CommitOrdinal;
 
         use super::{MerkleChainRefuse, RootChain, as_of_root};
 
         let chain = RootChain::empty();
-        let cut = CommitOrdinal::ZERO.successor().unwrap();
+        let cut = CommitOrdinal::ZERO.successor()?;
         assert_eq!(
             as_of_root(&chain, cut),
             Err(MerkleChainRefuse::CutBeforeGenesis)
         );
+    
+        Ok(())
     }
 
     /// [`build_consistency_proof`] refuses inverted ordinal range and a gap
     /// where the chain has no link exactly at `older`.
     #[test]
-    fn build_consistency_proof_refuses_inverted_range_and_ordinal_gap() {
+    fn build_consistency_proof_refuses_inverted_range_and_ordinal_gap() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -1855,9 +1872,9 @@ mod tests {
 
         let store_id = StoreId::from_digest([0xCF; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
-        let o3 = o2.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
+        let o3 = o2.successor()?;
 
         let mut chain = RootChain::empty();
         let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"a".to_vec(), b"1".to_vec())]));
@@ -1873,8 +1890,7 @@ mod tests {
                 c1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         // Skip o2 deliberately — gap between o1 and o3.
         chain
             .append(ChainedStateRoot::mint(
@@ -1884,8 +1900,7 @@ mod tests {
                 c3,
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
 
         assert_eq!(
             build_consistency_proof(&chain, o3, o1),
@@ -1902,12 +1917,14 @@ mod tests {
             build_consistency_proof(&RootChain::empty(), o1, o3),
             Err(MerkleChainRefuse::CutBeforeGenesis)
         );
+    
+        Ok(())
     }
 
     /// [`fork_equivalence`] is true only when fork-point root, predecessor
     /// store, fence, and commit ordinal all agree — not path/URL sameness.
     #[test]
-    fn fork_equivalence_true_only_on_identical_fork_points() {
+    fn fork_equivalence_true_only_on_identical_fork_points() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -1918,8 +1935,8 @@ mod tests {
         let store_b = StoreId::from_digest([0xF2; 32]);
         let fence_a = FenceEpoch::genesis(store_a);
         let fence_a_later = FenceEpoch::from_raw(store_a, 1);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
         let root = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
         let other_root =
             StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"OTHER".to_vec())]));
@@ -1944,6 +1961,8 @@ mod tests {
             !fork_equivalence(&a, &ForkPoint::seal(root, store_a, fence_a, o2)),
             "foreign commit ordinal must not equate"
         );
+    
+        Ok(())
     }
 
     // ── content-addressing: same content ⇒ same root, 1 bit ⇒ different ──
@@ -1981,7 +2000,7 @@ mod tests {
     }
 
     #[test]
-    fn same_content_different_history_same_root() {
+    fn same_content_different_history_same_root() -> Result<()> {
         let mut content: Vec<(Vec<u8>, Vec<u8>)> = (0..64u32)
             .map(|i| {
                 (
@@ -2017,10 +2036,12 @@ mod tests {
 
         assert_eq!(root_a, root_b, "write history changed the root (A vs B)");
         assert_eq!(root_a, root_c, "write history changed the root (A vs C)");
+    
+        Ok(())
     }
 
     #[test]
-    fn single_byte_difference_changes_the_root() {
+    fn single_byte_difference_changes_the_root() -> Result<()> {
         let base: Vec<(Vec<u8>, Vec<u8>)> = (0..32u32)
             .map(|i| {
                 (
@@ -2046,10 +2067,12 @@ mod tests {
         let mut dropped = base.clone();
         dropped.remove(5);
         assert_ne!(root, root_after_history(&dropped, &[31]), "missing pair");
+    
+        Ok(())
     }
 
     #[test]
-    fn root_is_stable_across_reopen() {
+    fn root_is_stable_across_reopen() -> Result<()> {
         let content: Vec<(Vec<u8>, Vec<u8>)> = (0..20u32)
             .map(|i| {
                 (
@@ -2058,52 +2081,54 @@ mod tests {
                 )
             })
             .collect();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
         let first = {
-            let db = new_fjall_storage(dir.path()).unwrap();
-            let mut tx = db.write_tx().unwrap();
+            let db = new_fjall_storage(dir.path())?;
+            let mut tx = db.write_tx()?;
             for (k, v) in &content {
-                tx.put(k, v).unwrap();
+                tx.put(k, v)?;
             }
-            tx.commit().unwrap();
-            let tx = db.read_tx().unwrap();
-            state_root(&tx, big_budget()).unwrap()
+            tx.commit()?;
+            let tx = db.read_tx()?;
+            state_root(&tx, big_budget())?
         };
         // Reopen the same directory; the root must be byte-identical.
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let tx = db.read_tx().unwrap();
-        assert_eq!(first, state_root(&tx, big_budget()).unwrap());
+        let db = new_fjall_storage(dir.path())?;
+        let tx = db.read_tx()?;
+        assert_eq!(first, state_root(&tx, big_budget())?);
+    
+        Ok(())
     }
 
     // ── per-relation roots and typed refusals ────────────────────────────
 
     #[test]
-    fn relation_root_covers_exactly_its_prefix() {
+    fn relation_root_covers_exactly_its_prefix() -> Result<()> {
         // Two relations sharing the keyspace, separated by the 8-byte id
         // prefix. The per-relation root must equal a root over just that
         // relation's rows, and must be blind to the other relation.
-        let rel_a = RelationId::new(7).expect("below cap");
-        let rel_b = RelationId::new(9).expect("below cap");
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+        let rel_a = RelationId::new(7).ok_or_else(|| miette!("relation id"))?;
+        let rel_b = RelationId::new(9).ok_or_else(|| miette!("relation id"))?;
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
         let mut a_pairs = Vec::new();
         for i in 0..10u32 {
             let mut k = rel_a.raw().to_be_bytes().to_vec();
             k.extend_from_slice(format!("row{i:02}").as_bytes());
             let v = format!("a{i}").into_bytes();
-            tx.put(&k, &v).unwrap();
+            tx.put(&k, &v)?;
             a_pairs.push((k, v));
         }
         for i in 0..5u32 {
             let mut k = rel_b.raw().to_be_bytes().to_vec();
             k.extend_from_slice(format!("row{i:02}").as_bytes());
-            tx.put(&k, format!("b{i}").as_bytes()).unwrap();
+            tx.put(&k, format!("b{i}").as_bytes())?;
         }
-        tx.commit().unwrap();
-        let tx = db.read_tx().unwrap();
+        tx.commit()?;
+        let tx = db.read_tx()?;
 
-        let via_relation = relation_root(&tx, rel_a, big_budget()).unwrap();
+        let via_relation = relation_root(&tx, rel_a, big_budget())?;
         let via_pairs = root_over(
             Box::new(
                 a_pairs
@@ -2111,51 +2136,56 @@ mod tests {
                     .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
             ),
             big_budget(),
-        )
-        .unwrap();
+        )?;
         assert_eq!(via_relation, via_pairs);
 
         // Editing relation B leaves relation A's root untouched.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let mut k = rel_b.raw().to_be_bytes().to_vec();
         k.extend_from_slice(b"row00");
-        tx.put(&k, b"changed").unwrap();
-        tx.commit().unwrap();
-        let tx = db.read_tx().unwrap();
+        tx.put(&k, b"changed")?;
+        tx.commit()?;
+        let tx = db.read_tx()?;
         assert_eq!(
             via_relation,
-            relation_root(&tx, rel_a, big_budget()).unwrap()
+            relation_root(&tx, rel_a, big_budget())?
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn empty_relation_roots_to_the_empty_hash() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let tx = db.read_tx().unwrap();
+    fn empty_relation_roots_to_the_empty_hash() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let tx = db.read_tx()?;
         assert_eq!(
-            relation_root(&tx, RelationId::new(3).expect("below cap"), big_budget()).unwrap(),
+            relation_root(&tx, RelationId::new(3).ok_or_else(|| miette!("relation id"))?, big_budget())?,
             empty_hash()
         );
-        assert_eq!(state_root(&tx, big_budget()).unwrap(), empty_hash());
+        assert_eq!(state_root(&tx, big_budget())?, empty_hash());
+    
+        Ok(())
     }
 
     #[test]
-    fn scan_ceiling_is_a_typed_refusal() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn scan_ceiling_is_a_typed_refusal() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
         for i in 0..10u32 {
-            tx.put(format!("k{i}").as_bytes(), b"v").unwrap();
+            tx.put(format!("k{i}").as_bytes(), b"v")?;
         }
-        tx.commit().unwrap();
-        let tx = db.read_tx().unwrap();
+        tx.commit()?;
+        let tx = db.read_tx()?;
         // Ceiling below the entry count ⇒ refuse, never a partial root.
-        let err = state_root(&tx, NonZeroU64::new(5).unwrap())
+        let err = state_root(&tx, NonZeroU64::new(5).ok_or_else(|| miette!("nonzero"))?)
             .expect_err("must refuse when the scan exceeds the ceiling");
         assert!(err.to_string().contains("ceiling"), "{err}");
         // Ceiling at the exact count succeeds.
-        assert!(state_root(&tx, NonZeroU64::new(10).unwrap()).is_ok());
+        assert!(state_root(&tx, NonZeroU64::new(10).ok_or_else(|| miette!("nonzero"))?).is_ok());
+    
+        Ok(())
     }
 
     // ── replica-equivalence: recompute-and-compare (§58) ─────────────────
@@ -2167,7 +2197,7 @@ mod tests {
     /// instance B look equivalent — trusting the received digest would pass
     /// the trap control; the protocol forces both sides to recompute.
     #[test]
-    fn replica_equivalence_two_instance_recompute_and_compare() {
+    fn replica_equivalence_two_instance_recompute_and_compare() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -2180,7 +2210,7 @@ mod tests {
 
         let store_id = StoreId::from_digest([0x58; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let ordinal = CommitOrdinal::ZERO.successor().unwrap();
+        let ordinal = CommitOrdinal::ZERO.successor()?;
 
         // Same ordered facts on both instances (single-transport replay).
         let facts: Vec<(Vec<u8>, Vec<u8>)> = vec![
@@ -2267,6 +2297,8 @@ mod tests {
             MerkleChainRefuse::PathUrlSameness,
             "path/URL sameness claim must refuse — not store equivalence"
         );
+    
+        Ok(())
     }
 
     // ── meaning × WAL byte-chain composition (§24 + §56) ─────────────────
@@ -2276,7 +2308,7 @@ mod tests {
     /// breaks composed-cut equality. If `compose_durable_cut` omitted
     /// `wal_final_hash`, a broken WAL tip would still equal the honest cut.
     #[test]
-    fn durable_commit_cut_composition_binds_meaning_and_wal_hash() {
+    fn durable_commit_cut_composition_binds_meaning_and_wal_hash() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -2286,7 +2318,7 @@ mod tests {
 
         let store_id = StoreId::from_digest([0x24; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let ordinal = CommitOrdinal::ZERO.successor().unwrap();
+        let ordinal = CommitOrdinal::ZERO.successor()?;
         let content = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
 
         let meaning = ChainedStateRoot::mint(
@@ -2305,8 +2337,7 @@ mod tests {
                 commit_ordinal: ordinal,
                 body: meaning.root().as_bytes().to_vec(),
             },
-        )
-        .expect("honest wal seal");
+        )?;
         let honest_wal = honest_record.record_hash();
         let honest = DurableCommitCut::compose(&meaning, honest_wal);
         assert_eq!(honest.wal_final_hash(), honest_wal);
@@ -2340,8 +2371,7 @@ mod tests {
                 commit_ordinal: ordinal,
                 body: vec![0xDE, 0xAD],
             },
-        )
-        .expect("broken wal seal");
+        )?;
         let wal_broken = DurableCommitCut::compose(&meaning, broken_wal_record.record_hash());
         assert_ne!(
             honest.wal_final_hash(),
@@ -2383,6 +2413,8 @@ mod tests {
             wal_broken.composed(),
             "real compose covers wal_final_hash — WAL tip break changes composed"
         );
+    
+        Ok(())
     }
 
     // ── STH gossip non-equivocation (CT; seats 2/56/58/69) ────────────────
@@ -2455,7 +2487,7 @@ mod tests {
     /// Nasty: equivocating Store shows divergent histories to two peers —
     /// same ordinal, different roots → Detected-on-gossip before chains meet.
     #[test]
-    fn sth_gossip_split_view_detected_before_chains_meet() {
+    fn sth_gossip_split_view_detected_before_chains_meet() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -2467,8 +2499,8 @@ mod tests {
 
         let store_id = StoreId::from_digest([0xE1; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
 
         // Peer A observes honest chain tip at o2.
         let mut honest = RootChain::empty();
@@ -2485,8 +2517,7 @@ mod tests {
                 c1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         honest
             .append(ChainedStateRoot::mint(
                 store_id,
@@ -2495,9 +2526,8 @@ mod tests {
                 c2,
                 honest.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
-        let head_a = StateRootHead::from_chain_tip(&honest).unwrap();
+            ))?;
+        let head_a = StateRootHead::from_chain_tip(&honest)?;
 
         // Peer B observes an equivocating fork: same StoreId/epoch/ordinal,
         // divergent content under o2 (split-view).
@@ -2514,8 +2544,7 @@ mod tests {
             evil_c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))
-        .unwrap();
+        ))?;
         evil.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2523,9 +2552,8 @@ mod tests {
             evil_c2,
             evil.prior_root(),
             ChainLinkKind::Ordinary,
-        ))
-        .unwrap();
-        let head_b = StateRootHead::from_chain_tip(&evil).unwrap();
+        ))?;
+        let head_b = StateRootHead::from_chain_tip(&evil)?;
 
         assert_eq!(head_a.store_id(), head_b.store_id());
         assert_eq!(head_a.commit_ordinal(), head_b.commit_ordinal());
@@ -2548,12 +2576,14 @@ mod tests {
             check_sth_gossip(&head_a, &head_a, None),
             Ok(GossipConsistency::Identical)
         );
+    
+        Ok(())
     }
 
     /// Distinct Store identities on an STH pair → [`MerkleChainRefuse::SthStoreMismatch`]
     /// from both gossip and consistency-proof verify (never soft-pass).
     #[test]
-    fn sth_store_mismatch_refuses_cross_store_gossip_and_proof() {
+    fn sth_store_mismatch_refuses_cross_store_gossip_and_proof() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -2567,8 +2597,8 @@ mod tests {
         let store_b = StoreId::from_digest([0xB2; 32]);
         let fence_a = FenceEpoch::genesis(store_a);
         let fence_b = FenceEpoch::genesis(store_b);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
 
         let mut chain_a = RootChain::empty();
         let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())]));
@@ -2584,8 +2614,7 @@ mod tests {
                 c1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         chain_a
             .append(ChainedStateRoot::mint(
                 store_a,
@@ -2594,8 +2623,7 @@ mod tests {
                 c2,
                 chain_a.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
 
         let mut chain_b = RootChain::empty();
         chain_b
@@ -2606,11 +2634,10 @@ mod tests {
                 c1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
 
-        let head_a = StateRootHead::from_cut(&chain_a, o1).unwrap();
-        let head_b = StateRootHead::from_cut(&chain_b, o1).unwrap();
+        let head_a = StateRootHead::from_cut(&chain_a, o1)?;
+        let head_b = StateRootHead::from_cut(&chain_b, o1)?;
         assert_ne!(head_a.store_id(), head_b.store_id());
 
         assert_eq!(
@@ -2618,27 +2645,29 @@ mod tests {
             Err(MerkleChainRefuse::SthStoreMismatch)
         );
 
-        let proof = build_consistency_proof(&chain_a, o1, o2).unwrap();
-        let newer_a = StateRootHead::from_cut(&chain_a, o2).unwrap();
+        let proof = build_consistency_proof(&chain_a, o1, o2)?;
+        let newer_a = StateRootHead::from_cut(&chain_a, o2)?;
         assert_eq!(
             verify_consistency_proof(&head_b, &newer_a, &proof),
             Err(MerkleChainRefuse::SthStoreMismatch),
             "cross-store heads must refuse even with a well-formed same-store proof"
         );
+    
+        Ok(())
     }
 
     /// Honest extension: older→newer STH verifies under a consistency proof.
     #[test]
-    fn sth_consistency_proof_honest_extension_verifies() {
+    fn sth_consistency_proof_honest_extension_verifies() -> Result<()> {
         use super::{
             GossipConsistency, StateRootHead, build_consistency_proof, check_sth_gossip,
             verify_consistency_proof,
         };
 
         let (_store, _fence, chain, o1, _o2, o3) = sth_demo_chain();
-        let older = StateRootHead::from_cut(&chain, o1).unwrap();
-        let newer = StateRootHead::from_cut(&chain, o3).unwrap();
-        let proof = build_consistency_proof(&chain, o1, o3).unwrap();
+        let older = StateRootHead::from_cut(&chain, o1)?;
+        let newer = StateRootHead::from_cut(&chain, o3)?;
+        let proof = build_consistency_proof(&chain, o1, o3)?;
         assert!(verify_consistency_proof(&older, &newer, &proof).is_ok());
         assert_eq!(
             check_sth_gossip(&older, &newer, Some(&proof)),
@@ -2649,11 +2678,13 @@ mod tests {
             check_sth_gossip(&older, &newer, None),
             Err(super::MerkleChainRefuse::ConsistencyProofRequired)
         ));
+    
+        Ok(())
     }
 
     /// Divergent histories cannot forge a consistency proof that binds both heads.
     #[test]
-    fn sth_consistency_proof_rejects_equivocating_extension() {
+    fn sth_consistency_proof_rejects_equivocating_extension() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -2665,8 +2696,8 @@ mod tests {
 
         let store_id = StoreId::from_digest([0xE2; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
 
         let mut honest = RootChain::empty();
         let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())]));
@@ -2682,8 +2713,7 @@ mod tests {
                 c1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         honest
             .append(ChainedStateRoot::mint(
                 store_id,
@@ -2692,10 +2722,9 @@ mod tests {
                 c2,
                 honest.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
 
-        let older = StateRootHead::from_cut(&honest, o1).unwrap();
+        let older = StateRootHead::from_cut(&honest, o1)?;
         // Equivocating "newer" tip: same ordinal family but forged root bytes
         // presented as a head without a binding proof from the honest chain.
         let forged_newer = {
@@ -2708,8 +2737,7 @@ mod tests {
                 c1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
             let evil_c2 = StateRoot::from_merkle(root_of_pairs(&[
                 (b"x".to_vec(), b"1".to_vec()),
                 (b"y".to_vec(), b"FORGED".to_vec()),
@@ -2721,13 +2749,12 @@ mod tests {
                 evil_c2,
                 evil.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
-            StateRootHead::from_chain_tip(&evil).unwrap()
+            ))?;
+            StateRootHead::from_chain_tip(&evil)?
         };
 
         // Honest proof cannot bind the forged newer head.
-        let honest_proof = build_consistency_proof(&honest, o1, o2).unwrap();
+        let honest_proof = build_consistency_proof(&honest, o1, o2)?;
         assert!(matches!(
             verify_consistency_proof(&older, &forged_newer, &honest_proof),
             Err(MerkleChainRefuse::ConsistencyProofFailed)
@@ -2737,5 +2764,7 @@ mod tests {
             Err(MerkleChainRefuse::SplitViewDetected),
             "forged extension must surface as split-view on gossip"
         );
+    
+        Ok(())
     }
 }

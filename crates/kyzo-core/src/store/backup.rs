@@ -944,6 +944,7 @@ pub fn import_leave_is_free(
 #[cfg(test)]
 mod pins {
     /// Backup floor law pins (re-homed from storage/tests.rs).
+    use miette::{IntoDiagnostic, Result, miette};
     use kyzo_model::TupleT;
     use kyzo_model::value::{DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs};
 
@@ -994,32 +995,33 @@ mod pins {
     }
 
     #[test]
-    fn dump_refuses_a_row_stamped_above_its_own_floor() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let rel = RelationId::new(100).expect("below cap");
+    fn dump_refuses_a_row_stamped_above_its_own_floor() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let rel = RelationId::new(100).ok_or_else(|| miette!("relation id"))?;
         let handle = facts_handle(rel, "floor_test");
         let bad_sys =
-            ValidityTs::from_raw(crate::session::current_validity().unwrap().raw() + 1_000_000_000);
+            ValidityTs::from_raw(crate::session::current_validity()?.raw() + 1_000_000_000);
         let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         tx.put(
             &SystemKey::Relation("floor_test").encode(),
-            &handle.encode().unwrap(),
-        )
-        .unwrap();
-        tx.put(&key, &val).unwrap();
-        tx.commit().unwrap();
+            &handle.encode()?,
+        )?;
+        tx.put(&key, &val)?;
+        tx.commit()?;
         let dump = dir.path().join("dump.kyzo");
         let err = dump_storage(&db, &dump).unwrap_err();
         assert!(
             err.downcast_ref::<DumpClockFloorViolation>().is_some(),
             "expected a typed DumpClockFloorViolation, got: {err}"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn leave_is_free_pack_requires_wrapped_shred_salt() {
+    fn leave_is_free_pack_requires_wrapped_shred_salt() -> Result<()> {
         use crate::store::FormatVersion;
         use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
         use crate::store::backup::{
@@ -1040,10 +1042,9 @@ mod pins {
             &ShredSalt::from_bytes([0x66; 32]),
             SegmentCounter::ZERO,
             domain,
-        )
-        .expect("wrap");
+        )?;
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
-        let incarnation = mint.mint(Entropy::from_bytes([0x77; 32])).unwrap();
+        let incarnation = mint.mint(Entropy::from_bytes([0x77; 32]))?;
 
         let missing_salt = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::SealAndSuffix,
@@ -1063,17 +1064,14 @@ mod pins {
             wrapped_shred_salts: vec![wrapped.clone()],
             incarnation_history: vec![incarnation],
             payload: vec![1, 2, 3],
-        })
-        .expect("pack with WrappedShredSalt + IncarnationId");
+        })?;
         assert!(!pack.wrapped_shred_salts().is_empty());
         let empty_ledger = ShredLedger::new();
         let mut registry = OriginRootRegistry::new();
         registry
-            .insert(pack.claimed_origin_store_id(), pack.recompute_root())
-            .expect("first origin-root registration seals");
+            .insert(pack.claimed_origin_store_id()?, pack.recompute_root()?)?;
         let verified = registry
-            .after_chain_root_verify(&pack)
-            .expect("trusted-origin ceremony");
+            .after_chain_root_verify(&pack)?;
         assert!(
             import_verify(
                 &pack,
@@ -1101,6 +1099,8 @@ mod pins {
             import_verify(&pack, verified, ObjectsCompleteness::Complete, &shredded),
             Err(PackRefuse::Shredded)
         ));
+    
+        Ok(())
     }
 }
 
@@ -1111,6 +1111,7 @@ mod pins {
 /// silent import Unconstructible (no free Verified mint from pack self-cut).
 #[cfg(test)]
 mod import_verify {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::{
         ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
         OriginRootRegistry, PackRefuse, import_leave_is_free, import_verify,
@@ -1125,7 +1126,7 @@ mod import_verify {
     use crate::store::open::StoreId;
     use crate::store::sweep::CommitOrdinal;
 
-    fn sample_pack() -> (LeaveIsFreePack, crate::store::crypto::WrappedShredSalt) {
+    fn sample_pack() -> Result<(LeaveIsFreePack, crate::store::crypto::WrappedShredSalt)> {
         let store = StoreId::from_digest([0x80; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
         let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x81; 32]));
@@ -1134,39 +1135,35 @@ mod import_verify {
             &ShredSalt::from_bytes([0x82; 32]),
             SegmentCounter::ZERO,
             domain,
-        )
-        .expect("wrap");
+        )?;
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
-        let incarnation = mint.mint(Entropy::from_bytes([0x83; 32])).unwrap();
+        let incarnation = mint.mint(Entropy::from_bytes([0x83; 32]))?;
         let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::SealAndSuffix,
             format_version: FormatVersion::CURRENT,
             wrapped_shred_salts: vec![wrapped.clone()],
             incarnation_history: vec![incarnation],
             payload: b"leave-is-free-payload".to_vec(),
-        })
-        .expect("pack");
-        (pack, wrapped)
+        })?;
+        Ok((pack, wrapped))
     }
 
-    fn registry_trusting(pack: &LeaveIsFreePack) -> OriginRootRegistry {
+    fn registry_trusting(pack: &LeaveIsFreePack) -> Result<OriginRootRegistry> {
         let mut registry = OriginRootRegistry::new();
-        registry
-            .insert(pack.claimed_origin_store_id(), pack.recompute_root())
-            .expect("first origin-root registration seals");
-        registry
+        registry.insert(pack.claimed_origin_store_id()?, pack.recompute_root()?)?;
+        Ok(registry)
     }
 
-    fn attacker_cut(content_tag: u8) -> ReplicaCutRecompute {
+    fn attacker_cut(content_tag: u8) -> Result<ReplicaCutRecompute> {
         let store = StoreId::from_digest([content_tag; 32]);
-        ReplicaCutRecompute::from_local(
+        Ok(ReplicaCutRecompute::from_local(
             store,
             FenceEpoch::genesis(store),
-            CommitOrdinal::ZERO.successor().unwrap(),
+            CommitOrdinal::ZERO.successor()?,
             StateRoot::from_digest([content_tag; 32]),
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        )
+        ))
     }
 
     /// DELIBERATE fail-closed (#359 / #375 T5): the external leave-is-free
@@ -1176,9 +1173,9 @@ mod import_verify {
     /// state (OriginRootRegistry not re-exported; public mint hard-refuses),
     /// not unfinished wiring.
     #[test]
-    fn external_leave_is_free_import_fail_closed_refuses_foreign_history() {
-        let (pack, _) = sample_pack();
-        let cut = pack.replica_cut_recompute();
+    fn external_leave_is_free_import_fail_closed_refuses_foreign_history() -> Result<()> {
+        let (pack, _) = sample_pack()?;
+        let cut = pack.replica_cut_recompute()?;
         // Public mint door: even matching cuts never yield Verified.
         assert!(matches!(
             ImportCapability::after_chain_root_verify(cut, cut),
@@ -1195,14 +1192,16 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+    
+        Ok(())
     }
 
     /// NASTY (#374 T7): minting a capability from the pack's OWN cut must refuse
     /// — self-anchor forge is Unconstructible as Verified.
     #[test]
-    fn self_anchor_forge_from_pack_own_cut_refuses() {
-        let (pack, _) = sample_pack();
-        let cut = pack.replica_cut_recompute();
+    fn self_anchor_forge_from_pack_own_cut_refuses() -> Result<()> {
+        let (pack, _) = sample_pack()?;
+        let cut = pack.replica_cut_recompute()?;
         // Old forge: compare pack cut to itself → always equal → free Verified.
         assert!(matches!(
             ImportCapability::after_chain_root_verify(cut, cut),
@@ -1219,39 +1218,44 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+    
+        Ok(())
     }
 
     /// NASTY (#374 T7): pack origin StoreId absent from sealed registry → refuse.
     #[test]
-    fn unregistered_origin_refuses_foreign_history() {
-        let (pack, _) = sample_pack();
+    fn unregistered_origin_refuses_foreign_history() -> Result<()> {
+        let (pack, _) = sample_pack()?;
         let empty = OriginRootRegistry::new();
         assert!(matches!(
             empty.after_chain_root_verify(&pack),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+    
+        Ok(())
     }
 
     /// NASTY (#374 T7): registered origin but attacker-chosen root ≠ trusted → refuse.
     #[test]
-    fn wrong_registered_root_refuses_foreign_history() {
-        let (pack, _) = sample_pack();
+    fn wrong_registered_root_refuses_foreign_history() -> Result<()> {
+        let (pack, _) = sample_pack()?;
         let mut registry = OriginRootRegistry::new();
         registry
             .insert(
-                pack.claimed_origin_store_id(),
+                pack.claimed_origin_store_id()?,
                 StateRoot::from_digest([0xAD; 32]),
-            )
-            .expect("first origin-root registration seals");
+            )?;
         assert_ne!(
-            registry.get(pack.claimed_origin_store_id()),
-            Some(pack.recompute_root()),
+            registry.get(pack.claimed_origin_store_id()?),
+            Some(pack.recompute_root()?),
             "control: attacker root must differ from pack root"
         );
         assert!(matches!(
             registry.after_chain_root_verify(&pack),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+    
+        Ok(())
     }
 
     /// NASTY (#375 T3): register trusted root A for victim StoreId, then
@@ -1259,10 +1263,10 @@ mod import_verify {
     /// [`OriginRootRegistry::insert`] door → typed refuse (never silent
     /// overwrite of the sealed origin trust root).
     #[test]
-    fn origin_root_registration_attacker_root_refuses_overwrite() {
-        let (pack, _) = sample_pack();
-        let victim = pack.claimed_origin_store_id();
-        let root_a = pack.recompute_root();
+    fn origin_root_registration_attacker_root_refuses_overwrite() -> Result<()> {
+        let (pack, _) = sample_pack()?;
+        let victim = pack.claimed_origin_store_id()?;
+        let root_a = pack.recompute_root()?;
         let root_b = StateRoot::from_digest([0xBE; 32]);
         assert_ne!(
             root_a, root_b,
@@ -1271,14 +1275,12 @@ mod import_verify {
 
         let mut registry = OriginRootRegistry::new();
         registry
-            .insert(victim, root_a)
-            .expect("first registration of root A seals the StoreId");
+            .insert(victim, root_a)?;
         assert_eq!(registry.get(victim), Some(root_a));
 
         // Same root re-register → idempotent Ok.
         registry
-            .insert(victim, root_a)
-            .expect("same root re-registration must be idempotent Ok");
+            .insert(victim, root_a)?;
         assert_eq!(registry.get(victim), Some(root_a));
 
         assert_eq!(
@@ -1290,18 +1292,19 @@ mod import_verify {
             Some(root_a),
             "sealed root A must survive the refused overwrite attempt"
         );
+    
+        Ok(())
     }
 
     /// Positive (#374 T7): pack root matches registered trusted root → admit.
     #[test]
-    fn trusted_origin_matching_root_admits() {
-        let (pack, _) = sample_pack();
-        let registry = registry_trusting(&pack);
+    fn trusted_origin_matching_root_admits() -> Result<()> {
+        let (pack, _) = sample_pack()?;
+        let registry = registry_trusting(&pack)?;
         let cap = registry
-            .after_chain_root_verify(&pack)
-            .expect("matching trusted root mints Verified");
+            .after_chain_root_verify(&pack)?;
         assert!(cap.is_verified());
-        assert_eq!(cap.bound_root(), Some(pack.recompute_root()));
+        assert_eq!(cap.bound_root(), Some(pack.recompute_root()?));
         let ledger = ShredLedger::new();
         assert!(
             import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
@@ -1311,11 +1314,13 @@ mod import_verify {
             import_leave_is_free(&pack, cap, ObjectsCompleteness::Complete, &ledger).is_ok(),
             "production import_leave_is_free door must admit after ceremony"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn unverified_capability_refuses_foreign_history() {
-        let (pack, _) = sample_pack();
+    fn unverified_capability_refuses_foreign_history() -> Result<()> {
+        let (pack, _) = sample_pack()?;
         let ledger = ShredLedger::new();
         assert!(matches!(
             import_verify(
@@ -1328,15 +1333,17 @@ mod import_verify {
         ));
         assert!(!ImportCapability::unverified().is_verified());
         assert_eq!(ImportCapability::unverified().bound_root(), None);
+    
+        Ok(())
     }
 
     /// NASTY (guardian, seat 80): bare two-cut mint is Unconstructible — attacker
     /// self-comparing an arbitrary cut never yields a verified capability.
     #[test]
-    fn verified_capability_unbound_to_pack_must_not_import_it() {
-        let (pack, _) = sample_pack();
+    fn verified_capability_unbound_to_pack_must_not_import_it() -> Result<()> {
+        let (pack, _) = sample_pack()?;
         let ledger = ShredLedger::new();
-        let attacker = attacker_cut(0x00);
+        let attacker = attacker_cut(0x00)?;
         assert!(matches!(
             ImportCapability::after_chain_root_verify(attacker, attacker),
             Err(PackRefuse::ForeignHistoryUnverified)
@@ -1351,13 +1358,15 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+    
+        Ok(())
     }
 
     #[test]
-    fn forged_root_never_reaches_import_verify_as_verified() {
-        let (pack, _) = sample_pack();
-        let expected = attacker_cut(0x01);
-        let forged = attacker_cut(0x02);
+    fn forged_root_never_reaches_import_verify_as_verified() -> Result<()> {
+        let (pack, _) = sample_pack()?;
+        let expected = attacker_cut(0x01)?;
+        let forged = attacker_cut(0x02)?;
         // Bare two-cut ceremony is Unconstructible as Verified.
         let refuse = ImportCapability::after_chain_root_verify(expected, forged);
         assert!(matches!(refuse, Err(PackRefuse::ForeignHistoryUnverified)));
@@ -1371,25 +1380,29 @@ mod import_verify {
             ),
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
+    
+        Ok(())
     }
 
     #[test]
-    fn incomplete_objects_refuse_even_when_verified() {
-        let (pack, _) = sample_pack();
-        let registry = registry_trusting(&pack);
-        let cap = registry.after_chain_root_verify(&pack).unwrap();
+    fn incomplete_objects_refuse_even_when_verified() -> Result<()> {
+        let (pack, _) = sample_pack()?;
+        let registry = registry_trusting(&pack)?;
+        let cap = registry.after_chain_root_verify(&pack)?;
         let ledger = ShredLedger::new();
         assert!(matches!(
             import_verify(&pack, cap, ObjectsCompleteness::Incomplete, &ledger),
             Err(PackRefuse::IncompleteRestore)
         ));
+    
+        Ok(())
     }
 
     #[test]
-    fn post_shred_restore_refuses_shredded() {
-        let (pack, wrapped) = sample_pack();
-        let registry = registry_trusting(&pack);
-        let cap = registry.after_chain_root_verify(&pack).unwrap();
+    fn post_shred_restore_refuses_shredded() -> Result<()> {
+        let (pack, wrapped) = sample_pack()?;
+        let registry = registry_trusting(&pack)?;
+        let cap = registry.after_chain_root_verify(&pack)?;
         let (_receipt, tombstone) = shred(wrapped);
         let mut ledger = ShredLedger::new();
         ledger.record(tombstone);
@@ -1397,10 +1410,12 @@ mod import_verify {
             import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger),
             Err(PackRefuse::Shredded)
         ));
+    
+        Ok(())
     }
 
     #[test]
-    fn store_refuse_foreign_history_unverified_tag_matches_pack() {
+    fn store_refuse_foreign_history_unverified_tag_matches_pack() -> Result<()> {
         // Seat 80 ledger tag must exist on the closed StoreRefuse sum and on
         // PackRefuse — same refuse name, no reshape into RetentionDeclined.
         let pack_tag = format!("{}", PackRefuse::ForeignHistoryUnverified);
@@ -1416,12 +1431,15 @@ mod import_verify {
             store_tag.contains("ForeignHistoryUnverified"),
             "store refuse must name ForeignHistoryUnverified: {store_tag}"
         );
+    
+        Ok(())
     }
 }
 
 /// Seat 26 / #374 T11 — partial restore distinguishable from a complete store.
 #[cfg(test)]
 mod restore_integrity {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::{
         IncompleteRestore, admit_complete_store, dump_storage, open_complete_store,
         restore_pairs_for_test, restore_storage,
@@ -1434,10 +1452,10 @@ mod restore_integrity {
     /// durable; reopen via plain complete-store open and assert typed refuse —
     /// never a silent smaller complete store.
     #[test]
-    fn interrupted_restore_reopen_refuses_incomplete() {
-        let dir = tempfile::tempdir().unwrap();
+    fn interrupted_restore_reopen_refuses_incomplete() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
         let tgt_path = dir.path().join("restore_tgt");
-        let db = new_fjall_storage(&tgt_path).unwrap();
+        let db = new_fjall_storage(&tgt_path)?;
 
         // More than one restore chunk so the poison fires after at least one
         // committed apply of dump pairs (mark already durable from phase 1).
@@ -1463,11 +1481,11 @@ mod restore_integrity {
 
         // Bare fjall open still binds the directory (bytes are there) —
         // completeness is the admit door, not substrate open.
-        let bare = new_fjall_storage(&tgt_path).unwrap();
+        let bare = new_fjall_storage(&tgt_path)?;
         {
-            let tx = bare.read_tx().unwrap();
+            let tx = bare.read_tx()?;
             assert!(
-                tx.exists(super::RESTORE_IN_PROGRESS_KEY).unwrap(),
+                tx.exists(super::RESTORE_IN_PROGRESS_KEY)?,
                 "in-progress mark must survive the interrupt"
             );
             assert!(
@@ -1492,34 +1510,36 @@ mod restore_integrity {
             reopen_err.downcast_ref::<IncompleteRestore>().is_some(),
             "open_complete_store must typed-refuse IncompleteRestore, got: {reopen_err}"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn successful_restore_clears_mark_and_admits() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = new_fjall_storage(dir.path().join("src")).unwrap();
+    fn successful_restore_clears_mark_and_admits() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let src = new_fjall_storage(dir.path().join("src"))?;
         {
-            let mut tx = src.write_tx().unwrap();
+            let mut tx = src.write_tx()?;
             let mut key = 1u64.to_be_bytes().to_vec();
             key.extend_from_slice(&0u64.to_be_bytes());
-            tx.put(&key, b"v").unwrap();
-            tx.commit().unwrap();
+            tx.put(&key, b"v")?;
+            tx.commit()?;
         }
         let dump = dir.path().join("d.kyzo");
-        dump_storage(&src, &dump).unwrap();
+        dump_storage(&src, &dump)?;
 
         let tgt_path = dir.path().join("tgt");
-        let tgt = new_fjall_storage(&tgt_path).unwrap();
-        restore_storage(&tgt, &dump).unwrap();
-        admit_complete_store(&tgt).expect("complete restore must admit");
+        let tgt = new_fjall_storage(&tgt_path)?;
+        restore_storage(&tgt, &dump)?;
+        admit_complete_store(&tgt)?;
         assert!(
-            !tgt.read_tx()
-                .unwrap()
-                .exists(super::RESTORE_IN_PROGRESS_KEY)
-                .unwrap(),
+            !tgt.read_tx()?
+                .exists(super::RESTORE_IN_PROGRESS_KEY)?,
             "in-progress mark must be cleared after successful restore"
         );
         drop(tgt);
-        open_complete_store(&tgt_path).expect("reopen after complete restore must admit");
+        open_complete_store(&tgt_path)?;
+    
+        Ok(())
     }
 }

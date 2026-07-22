@@ -429,6 +429,7 @@ pub fn nonce_floor_payload(lease: &NonceLease) -> WalPayload {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::epoch::FenceEpoch;
     use crate::store::open::StoreId;
@@ -445,41 +446,42 @@ mod tests {
 
     /// Tampered predecessor at append: seal covers the wrong tip → ChainBreak.
     #[test]
-    fn append_refuses_chain_break_on_tampered_predecessor() {
+    fn append_refuses_chain_break_on_tampered_predecessor() -> Result<()> {
         let store_id = StoreId::from_digest([0xA1; 32]);
         let fence = FenceEpoch::genesis(store_id);
         let mut segment = WalSegment::open(store_id, fence, 0);
 
-        let first = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x01)).expect("seal first");
-        segment.append(first).expect("append first");
+        let first = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x01))?;
+        segment.append(first)?;
 
         let expected = segment.terminal_hash();
         let got = WalHash::from_digest([0xDE; 32]);
-        let forged = WalRecord::seal(got, commit_payload(0x02)).expect("seal forged pred");
+        let forged = WalRecord::seal(got, commit_payload(0x02))?;
         assert_eq!(
             segment.append(forged),
             Err(WalRefuse::ChainBreak { expected, got })
         );
+    
+        Ok(())
     }
 
     /// Cross-segment splice: segment 1 head covers genesis instead of segment 0
     /// terminal — append accepts (per-segment tip), replay refuses ChainBreak.
     #[test]
-    fn replay_refuses_chain_break_across_segment_boundary() {
+    fn replay_refuses_chain_break_across_segment_boundary() -> Result<()> {
         let store_id = StoreId::from_digest([0xA2; 32]);
         let fence = FenceEpoch::genesis(store_id);
 
         let mut seg0 = WalSegment::open(store_id, fence, 0);
-        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x10)).expect("seal seg0");
-        seg0.append(r0).expect("append seg0");
+        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x10))?;
+        seg0.append(r0)?;
         let expected = seg0.terminal_hash();
 
         let mut seg1 = WalSegment::open(store_id, fence, 1);
         // Empty seg1 terminal is genesis — append permits a genesis-covering record.
         let spliced =
-            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x11)).expect("seal spliced");
-        seg1.append(spliced)
-            .expect("per-segment append accepts genesis tip");
+            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x11))?;
+        seg1.append(spliced)?;
 
         assert_eq!(
             replay(store_id, &[seg0, seg1]),
@@ -488,19 +490,21 @@ mod tests {
                 got: GENESIS_PREDECESSOR,
             })
         );
+    
+        Ok(())
     }
 
     /// Gapped segment_index under replay → SegmentGap.
     ///
     /// Index 2 skips 1 — `open` accepts any index; replay refuses before records.
     #[test]
-    fn replay_refuses_segment_gap() {
+    fn replay_refuses_segment_gap() -> Result<()> {
         let store_id = StoreId::from_digest([0xA3; 32]);
         let fence = FenceEpoch::genesis(store_id);
 
         let mut seg0 = WalSegment::open(store_id, fence, 0);
-        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x20)).expect("seal seg0");
-        seg0.append(r0).expect("append seg0");
+        let r0 = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x20))?;
+        seg0.append(r0)?;
 
         let seg2 = WalSegment::open(store_id, fence, 2);
         assert_eq!(
@@ -510,47 +514,52 @@ mod tests {
                 got: 2,
             })
         );
+    
+        Ok(())
     }
 
     /// Foreign-store segment under replay → StoreIdMismatch.
     #[test]
-    fn replay_refuses_store_id_mismatch() {
+    fn replay_refuses_store_id_mismatch() -> Result<()> {
         let store_id = StoreId::from_digest([0xA4; 32]);
         let foreign = StoreId::from_digest([0xA5; 32]);
         let fence = FenceEpoch::genesis(foreign);
 
         let mut foreign_seg = WalSegment::open(foreign, fence, 0);
         let record =
-            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x30)).expect("seal foreign");
-        foreign_seg.append(record).expect("append foreign");
+            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x30))?;
+        foreign_seg.append(record)?;
 
         assert_eq!(
             replay(store_id, &[foreign_seg]),
             Err(WalRefuse::StoreIdMismatch)
         );
+    
+        Ok(())
     }
 
     /// Bit-flipped sealed record_hash: append accepts (pred tip only), replay
     /// recomputes from payload and refuses RecordHashMismatch.
     #[test]
-    fn replay_refuses_record_hash_mismatch() {
+    fn replay_refuses_record_hash_mismatch() -> Result<()> {
         let store_id = StoreId::from_digest([0xA6; 32]);
         let fence = FenceEpoch::genesis(store_id);
         let mut segment = WalSegment::open(store_id, fence, 0);
 
         let mut record =
-            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x40)).expect("seal honest");
+            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x40))?;
         // Adversarial durable corruption — flip a digest byte after seal.
         let mut digest = *record.record_hash().as_bytes();
         digest[0] ^= 0xFF;
         record.record_hash = WalHash::from_digest(digest);
 
         segment
-            .append(record)
-            .expect("append checks predecessor only");
+            .append(record)?;
         assert_eq!(
             replay(store_id, &[segment]),
             Err(WalRefuse::RecordHashMismatch)
         );
+    
+        Ok(())
     }
 }

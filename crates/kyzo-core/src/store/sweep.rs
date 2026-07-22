@@ -1460,6 +1460,7 @@ pub fn emit_recovery_sla_claim(
 mod composition_tests {
     //! Prove RootChain × WAL byte-chain meet at [`SweepDoor::seal_durable`].
 
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
     use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
@@ -1508,7 +1509,7 @@ mod composition_tests {
 
     /// #374 T10: live ack barrier loud-refuses non-ruled arms (#359).
     #[test]
-    fn ack_native_fsync_barrier_refuses_wrong_arm() {
+    fn ack_native_fsync_barrier_refuses_wrong_arm() -> Result<()> {
         let wrong = StableCommitCap::PlatformTransactionProof {
             snapshot_fork: SnapshotFork::No,
         };
@@ -1539,8 +1540,9 @@ mod composition_tests {
         let ruled = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
-        SweepDoor::ack_native_fsync_barrier(ruled, TempTx::default())
-            .expect("ruled NativeFsyncProof{{No}} must pass the ack barrier");
+        SweepDoor::ack_native_fsync_barrier(ruled, TempTx::default())?;
+    
+        Ok(())
     }
 
     fn op_key(store_id: StoreId, op: &[u8]) -> (OperationKey, RequestDigest) {
@@ -1553,21 +1555,18 @@ mod composition_tests {
     /// a composed cut. Breaking the WAL tip bind (or the meaning tip) at the
     /// boundary breaks cut equality against the door's last durable cut.
     #[test]
-    fn seal_durable_composes_root_chain_with_wal_byte_chain() {
+    fn seal_durable_composes_root_chain_with_wal_byte_chain() -> Result<()> {
         let (mut door, incarnation, session) = open_live_door();
         let store_id = session.store_id();
 
         let (key1, dig1) = op_key(store_id, b"compose-1");
         let intent = door
-            .admit(incarnation, &session, key1, dig1)
-            .expect("admit");
+            .admit(incarnation, &session, key1, dig1)?;
         let proof = door
-            .seal_durable(intent, TempTx::default(), content_root(0xA1), &session)
-            .expect("durable seal");
+            .seal_durable(intent, TempTx::default(), content_root(0xA1), &session)?;
 
         let cut = door
-            .last_durable_cut()
-            .expect("composed cut after durable seal");
+            .last_durable_cut()?;
         assert_eq!(cut.commit_ordinal(), proof.commit_ordinal());
         assert_eq!(cut.wal_final_hash(), door.wal_final_hash());
         assert_eq!(
@@ -1578,7 +1577,7 @@ mod composition_tests {
 
         // Replay of the door's WAL segment reproduces final_hash.
         let recovered =
-            replay(store_id, std::slice::from_ref(door.wal_segment())).expect("WAL replay");
+            replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(
             recovered.final_hash,
             door.wal_final_hash(),
@@ -1589,8 +1588,7 @@ mod composition_tests {
             1,
             "one Commit record at the durable boundary"
         );
-        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)
-            .expect("WAL Commit body is OperationKey memo format");
+        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)?;
         assert_eq!(
             decoded.meaning_root,
             cut.meaning_root(),
@@ -1600,7 +1598,7 @@ mod composition_tests {
         assert_eq!(decoded.request_digest, dig1);
 
         // Recompose from observed tips — equals the door's cut.
-        let meaning = door.root_chain().links().last().copied().expect("link");
+        let meaning = door.root_chain().links().last().copied()?;
         let recomposed = DurableCommitCut::compose(&meaning, door.wal_final_hash());
         assert!(
             cuts_equal(cut, recomposed),
@@ -1615,8 +1613,7 @@ mod composition_tests {
                 commit_ordinal: proof.commit_ordinal(),
                 body: vec![0xFF; 32],
             },
-        )
-        .expect("forged wal seal")
+        )?
         .record_hash();
         let wal_broken = DurableCommitCut::compose(&meaning, forged_wal);
         assert!(
@@ -1643,36 +1640,33 @@ mod composition_tests {
         // Second durable seal advances both chains again (cross-commit chain).
         let (key2, dig2) = op_key(store_id, b"compose-2");
         let intent2 = door
-            .admit(incarnation, &session, key2, dig2)
-            .expect("admit 2");
+            .admit(incarnation, &session, key2, dig2)?;
         door
-            .seal_durable(intent2, TempTx::default(), content_root(0xC3), &session)
-            .expect("second durable seal");
-        let cut2 = door.last_durable_cut().expect("second cut");
+            .seal_durable(intent2, TempTx::default(), content_root(0xC3), &session)?;
+        let cut2 = door.last_durable_cut()?;
         assert!(!cuts_equal(cut, cut2), "second cut must differ from first");
         assert_eq!(door.root_chain().links().len(), 2);
-        let recovered2 = replay(store_id, std::slice::from_ref(door.wal_segment()))
-            .expect("replay after second seal");
+        let recovered2 = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(recovered2.final_hash, door.wal_final_hash());
         assert_eq!(recovered2.commit_bodies.len(), 2);
+    
+        Ok(())
     }
 
     /// §38/§39 — two admits with the same OperationKey through the real
     /// SweepDoor mint exactly one IntentOrdinal and one durable Commit effect.
     #[test]
-    fn operation_key_retry_admits_once_through_real_door() {
+    fn operation_key_retry_admits_once_through_real_door() -> Result<()> {
         let (mut door, incarnation, session) = open_live_door();
         let store_id = session.store_id();
         let (key, digest) = op_key(store_id, b"retry-once");
 
         let first = door
-            .admit(incarnation, &session, key, digest)
-            .expect("first admit");
+            .admit(incarnation, &session, key, digest)?;
         assert_eq!(first.intent_ordinal(), IntentOrdinal::ZERO);
 
         let replayed = door
-            .admit(incarnation, &session, key, digest)
-            .expect("retry admit same key+digest");
+            .admit(incarnation, &session, key, digest)?;
         assert_eq!(
             replayed.intent_ordinal(),
             first.intent_ordinal(),
@@ -1686,15 +1680,13 @@ mod composition_tests {
         );
 
         let proof = door
-            .seal_durable(first, TempTx::default(), content_root(0xD1), &session)
-            .expect("one durable seal");
+            .seal_durable(first, TempTx::default(), content_root(0xD1), &session)?;
         assert_eq!(proof.commit_ordinal().get(), 1);
         assert_eq!(door.highest_commit_ordinal().get(), 1);
 
         // Post-seal retry: same key+digest replays; reseal cannot advance cut.
         let after_seal = door
-            .admit(incarnation, &session, key, digest)
-            .expect("post-seal retry admit");
+            .admit(incarnation, &session, key, digest)?;
         assert_eq!(after_seal.intent_ordinal(), IntentOrdinal::ZERO);
         assert!(matches!(
             door.idempotency().lookup(&key),
@@ -1714,17 +1706,19 @@ mod composition_tests {
             "exactly one committed effect after two admits with the same operation identity"
         );
         let recovered =
-            replay(store_id, std::slice::from_ref(door.wal_segment())).expect("WAL replay");
+            replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(
             recovered.commit_bodies.len(),
             1,
             "WAL must carry exactly one Commit record"
         );
+    
+        Ok(())
     }
 
     /// §38 — same OperationKey with a changed request digest refuses reuse.
     #[test]
-    fn operation_key_reuse_changed_digest_through_real_door() {
+    fn operation_key_reuse_changed_digest_through_real_door() -> Result<()> {
         let (mut door, incarnation, session) = open_live_door();
         let store_id = session.store_id();
         let key = OperationKey::single_store(b"kyzo.sweep.test", b"reuse", store_id, b"s0");
@@ -1732,20 +1726,21 @@ mod composition_tests {
         let dig_b = IdempotencyMemo::digest_request(b"envelope-B");
         assert_ne!(dig_a, dig_b);
 
-        door.admit(incarnation, &session, key, dig_a)
-            .expect("first digest admits");
+        door.admit(incarnation, &session, key, dig_a)?;
         assert_eq!(
             door.admit(incarnation, &session, key, dig_b),
             Err(SweepRefuse::OperationKeyReuse),
             "same key + changed digest must return typed OperationKeyReuse"
         );
+    
+        Ok(())
     }
 
     /// #375 T1 — production `ack_write` path: same OperationKey twice → one
     /// CommitOrdinal / one WAL Commit; crash + WAL replay rebuilds memo and
     /// still dedupes (no second effect).
     #[test]
-    fn operation_key_ack_write_dedupes_across_wal_replay() {
+    fn operation_key_ack_write_dedupes_across_wal_replay() -> Result<()> {
         let (mut door, incarnation, session) = open_live_door();
         let store_id = session.store_id();
         let preimage = SingleStoreKeyPreimage {
@@ -1763,8 +1758,7 @@ mod composition_tests {
             digest,
             preimage.clone(),
             TempTx::default(),
-        )
-        .expect("first production ack_write");
+        )?;
         assert_eq!(door.highest_commit_ordinal().get(), 1);
 
         door.ack_write(
@@ -1774,8 +1768,7 @@ mod composition_tests {
             digest,
             preimage.clone(),
             TempTx::default(),
-        )
-        .expect("same-process retry ack_write");
+        )?;
         assert_eq!(
             door.highest_commit_ordinal().get(),
             1,
@@ -1783,10 +1776,9 @@ mod composition_tests {
         );
 
         let recovered =
-            replay(store_id, std::slice::from_ref(door.wal_segment())).expect("WAL replay");
+            replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(recovered.commit_bodies.len(), 1);
-        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)
-            .expect("commit body carries OperationKey memo");
+        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)?;
         assert_eq!(decoded.key_bytes, *key.as_bytes());
         assert_eq!(decoded.request_digest, digest);
         assert_eq!(decoded.preimage.as_ref(), Some(&preimage));
@@ -1796,17 +1788,15 @@ mod composition_tests {
         let auth = WriteAuthority::mint(store_id, [0xAC; 32]);
         let incarnation2 = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xAD; 32]))
-            .expect("incarnation");
+            .mint(Entropy::from_bytes([0xAD; 32]))?;
         let session2 = SweepSession::new(store_id, fence, incarnation2);
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
         let mut reopened =
-            SweepDoor::open(store_id, fence, session2, auth, cap).expect("reopen door");
+            SweepDoor::open(store_id, fence, session2, auth, cap)?;
         reopened
-            .restore_from_wal_replay(&recovered)
-            .expect("restore memo from WAL");
+            .restore_from_wal_replay(&recovered)?;
         assert!(matches!(
             reopened.idempotency().lookup(&key),
             OperationOutcome::Committed { .. }
@@ -1819,8 +1809,7 @@ mod composition_tests {
                 digest,
                 preimage,
                 TempTx::default(),
-            )
-            .expect("post-crash retry through restored memo");
+            )?;
         assert_eq!(
             reopened.highest_commit_ordinal().get(),
             1,
@@ -1831,6 +1820,8 @@ mod composition_tests {
             0,
             "post-crash retry must not append a second WAL Commit"
         );
+    
+        Ok(())
     }
 }
 

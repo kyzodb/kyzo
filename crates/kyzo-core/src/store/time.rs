@@ -358,6 +358,7 @@ pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()>
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
 
     use kyzo_model::value::ValidityTs;
@@ -487,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn bitemporal_tail_orders_valid_outer_system_inner() {
+    fn bitemporal_tail_orders_valid_outer_system_inner() -> Result<()> {
         let mut slots: Vec<(i64, i64)> = vec![];
         for vt in [-3, 0, 10, 20, i64::MAX] {
             for st in [-7, 0, 5, 15, i64::MAX] {
@@ -502,10 +503,12 @@ mod tests {
             by_bytes, by_semantics,
             "byte order must equal (valid, system) semantic order"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn bitemporal_skip_scan_matches_oracle() {
+    fn bitemporal_skip_scan_matches_oracle() -> Result<()> {
         let mut state: u64 = 0x5EED_B17E_44C0_FFEE;
         let mut next = move |m: usize| -> usize {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
@@ -544,7 +547,7 @@ mod tests {
                 .collect();
             for sys_at in [-1i64, 0, 5, 10, 15, 25, 40] {
                 for valid_at in [-1i64, 0, 10, 20, 30, 40] {
-                    let got = facts_of(&skip_walk(&store, sys_at, valid_at).unwrap());
+                    let got = facts_of(&skip_walk(&store, sys_at, valid_at)?);
                     let want = oracle(&rows, sys_at, valid_at);
                     assert_eq!(
                         got, want,
@@ -553,20 +556,22 @@ mod tests {
                 }
             }
         }
+    
+        Ok(())
     }
 
     #[test]
-    fn polarity_flip_at_same_instant_is_governed_by_newest_system_version() {
+    fn polarity_flip_at_same_instant_is_governed_by_newest_system_version() -> Result<()> {
         let store: BTreeMap<Vec<u8>, ClaimPolarity> = [
             (bikey(1, 10, 5), ClaimPolarity::Assert),
             (bikey(1, 10, 20), ClaimPolarity::Retract),
         ]
         .into();
         // Before the correction was recorded: the assert governs.
-        assert_eq!(facts_of(&skip_walk(&store, 15, 15).unwrap()), vec![1]);
+        assert_eq!(facts_of(&skip_walk(&store, 15, 15)?), vec![1]);
         // After: the retract governs — the fact is absent.
         assert_eq!(
-            facts_of(&skip_walk(&store, 25, 15).unwrap()),
+            facts_of(&skip_walk(&store, 25, 15)?),
             Vec::<i64>::new()
         );
         // An erase instead of a retract falls through to... nothing older:
@@ -578,7 +583,7 @@ mod tests {
         ]
         .into();
         // Erased at 10, so the older instant 0 shows through.
-        assert_eq!(facts_of(&skip_walk(&store, 25, 15).unwrap()), vec![1]);
+        assert_eq!(facts_of(&skip_walk(&store, 25, 15)?), vec![1]);
         // A RETRACT at 10 would instead settle the fact absent.
         let store: BTreeMap<Vec<u8>, ClaimPolarity> = [
             (bikey(1, 10, 5), ClaimPolarity::Assert),
@@ -587,26 +592,27 @@ mod tests {
         ]
         .into();
         assert_eq!(
-            facts_of(&skip_walk(&store, 25, 15).unwrap()),
+            facts_of(&skip_walk(&store, 25, 15)?),
             Vec::<i64>::new()
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn corrupt_bitemporal_keys_refuse_and_never_panic() {
+    fn corrupt_bitemporal_keys_refuse_and_never_panic() -> Result<()> {
         assert!(
             check_key_for_bitemporal(&[0u8; 8], ClaimPolarity::Assert, zero_as_of(), None).is_err()
         );
         let flagged = [
             DataValue::from(1i64),
             DataValue::Validity(
-                Validity::new(vts(10), false)
-                    .expect("retract admits every tick")
+                Validity::new(vts(10), false)?
                     .into(),
             ),
             DataValue::Validity(slot(5)),
         ]
-        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .encode_as_key(RelationId::new(7).ok_or_else(|| miette!("relation id"))?)
         .as_bytes()
         .to_vec();
         assert!(
@@ -618,7 +624,7 @@ mod tests {
             DataValue::Validity(TERMINAL_VALIDITY.into()),
             DataValue::Validity(TERMINAL_VALIDITY.into()),
         ]
-        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .encode_as_key(RelationId::new(7).ok_or_else(|| miette!("relation id"))?)
         .as_bytes()
         .to_vec();
         assert!(
@@ -630,7 +636,7 @@ mod tests {
             DataValue::from(2i64),
             DataValue::from(3i64),
         ]
-        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .encode_as_key(RelationId::new(7).ok_or_else(|| miette!("relation id"))?)
         .as_bytes()
         .to_vec();
         assert!(
@@ -646,21 +652,23 @@ mod tests {
                 Err(refuse) => drop(refuse),
             }
         }
+    
+        Ok(())
     }
 
     #[test]
-    fn bitemporal_value_polarity_round_trips_and_refuses_corruption() {
+    fn bitemporal_value_polarity_round_trips_and_refuses_corruption() -> Result<()> {
         for polarity in [
             ClaimPolarity::Assert,
             ClaimPolarity::Retract,
             ClaimPolarity::Erase,
         ] {
             let val = vec![polarity.encode()];
-            assert_eq!(claim_polarity_of_value(&val).unwrap(), polarity);
+            assert_eq!(claim_polarity_of_value(&val)?, polarity);
             // A bare retract/erase value carries no payload and extends
             // nothing.
             let mut tup: Tuple = Tuple::from_vec(vec![DataValue::from(1i64)]);
-            extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
+            extend_tuple_from_bitemporal_v(&mut tup, &val)?;
             assert_eq!(tup.len(), 1);
         }
         // An assert row's non-key columns ride after the polarity byte.
@@ -671,7 +679,7 @@ mod tests {
             kyzo_model::value::append_canonical(&mut val, v);
         }
         let mut tup: Tuple = Tuple::from_vec(vec![DataValue::from(1i64)]);
-        extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
+        extend_tuple_from_bitemporal_v(&mut tup, &val)?;
         assert_eq!(
             tup,
             Tuple::from_vec(vec![
@@ -690,10 +698,12 @@ mod tests {
         let mut bad = vec![ClaimPolarity::Assert.encode()];
         bad.push(0xEE); // 0xEE is not a canonical value tag
         assert_eq!(
-            claim_polarity_of_value(&bad).unwrap(),
+            claim_polarity_of_value(&bad)?,
             ClaimPolarity::Assert
         );
         assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
+    
+        Ok(())
     }
 
     // Oracle-vs-kernel temporal differential moved to

@@ -319,6 +319,7 @@ impl Drop for TempTx {
 #[cfg(test)]
 mod tests {
 
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::time::ClaimPolarity;
     use kyzo_model::value::{DataValue, ValiditySlot, ValidityTs};
@@ -380,35 +381,39 @@ mod tests {
     }
 
     #[test]
-    fn basic_kv_and_ranges() {
+    fn basic_kv_and_ranges() -> Result<()> {
         let mut t = TempTx::default();
         assert!(t.is_empty());
-        t.put(b"a", b"1").unwrap();
-        t.put(b"b", b"2").unwrap();
-        t.put(b"c", b"3").unwrap();
-        assert_eq!(t.get(b"b").unwrap(), Some(Slice::from(b"2")));
-        assert!(t.exists(b"a").unwrap());
+        t.put(b"a", b"1")?;
+        t.put(b"b", b"2")?;
+        t.put(b"c", b"3")?;
+        assert_eq!(t.get(b"b")?, Some(Slice::from(b"2")));
+        assert!(t.exists(b"a")?);
         // Degenerate ranges are empty, never a panic (law 5).
         assert_eq!(t.range_scan(b"z", b"a").count(), 0);
-        t.del_range(b"z", b"a").unwrap();
-        let keys: Vec<_> = t.range_scan(b"a", b"c").map(|kv| kv.unwrap().0).collect();
+        t.del_range(b"z", b"a")?;
+        let keys: Vec<_> = t.range_scan(b"a", b"c").map(|kv| kv?.0).collect();
         assert_eq!(keys, vec![b"a".to_vec(), b"b".to_vec()]);
-        t.del_range(b"a", b"c").unwrap();
+        t.del_range(b"a", b"c")?;
         assert_eq!(t.total_scan().count(), 1);
-        t.del(b"c").unwrap();
+        t.del(b"c")?;
         assert!(t.is_empty());
+    
+        Ok(())
     }
 
     /// `put` is last-write-wins: a second write to a key REPLACES the value.
     /// (Kills the `entry().or_insert_with` mutant that keeps the first.)
     #[test]
-    fn put_overwrites_last_write_wins() {
+    fn put_overwrites_last_write_wins() -> Result<()> {
         let mut t = TempTx::default();
-        t.put(b"k", b"first").unwrap();
-        t.put(b"k", b"second").unwrap();
-        assert_eq!(t.get(b"k").unwrap(), Some(Slice::from(b"second")));
-        let rows: Vec<_> = t.total_scan().map(|kv| kv.unwrap()).collect();
+        t.put(b"k", b"first")?;
+        t.put(b"k", b"second")?;
+        assert_eq!(t.get(b"k")?, Some(Slice::from(b"second")));
+        let rows: Vec<_> = t.total_scan().map(|kv| kv?).collect();
         assert_eq!(rows, vec![(Slice::from(b"k"), Slice::from(b"second"))]);
+    
+        Ok(())
     }
 
     /// The skip scan honors validity semantics and its returned VALUES are
@@ -420,14 +425,14 @@ mod tests {
     /// `Err`). Querying at different timestamps returns different rows, so a
     /// mutant that ignores `valid_at` dies here.
     #[test]
-    fn skip_scan_honors_validity_with_asserted_values() {
+    fn skip_scan_honors_validity_with_asserted_values() -> Result<()> {
         let mut t = TempTx::default();
         for (k, v) in [
             (bk(1, 10, 1), bv(ClaimPolarity::Assert)),
             (bk(1, 20, 1), bv(ClaimPolarity::Retract)),
             (bk(2, 8, 1), bv(ClaimPolarity::Assert)),
         ] {
-            t.put(&k, &v).unwrap();
+            t.put(&k, &v)?;
         }
         assert_eq!(scan_at(&t, 5), vec![], "before any assertion");
         assert_eq!(scan_at(&t, 9), vec![(2, 8)], "only tuple 2 asserted yet");
@@ -437,16 +442,18 @@ mod tests {
             "both live; newest version of 1 at or before 15 is ts=10"
         );
         assert_eq!(scan_at(&t, 25), vec![(2, 8)], "tuple 1 retracted at 20");
+    
+        Ok(())
     }
 
     /// The re-seek bound is INCLUSIVE: a version whose timestamp exactly
     /// equals the query time is returned, not skipped. (Kills the
     /// `Bound::Included -> Excluded` re-seek mutant, a silent wrong answer.)
     #[test]
-    fn skip_scan_returns_version_at_exact_query_ts() {
+    fn skip_scan_returns_version_at_exact_query_ts() -> Result<()> {
         let mut t = TempTx::default();
         for k in [bk(1, 20, 1), bk(1, 10, 1)] {
-            t.put(&k, &bv(ClaimPolarity::Assert)).unwrap();
+            t.put(&k, &bv(ClaimPolarity::Assert))?;
         }
         // valid=10: the first candidate (ts=20) is in the future, so the
         // loop re-seeks to exactly `valid(10)` — which must land on it.
@@ -460,8 +467,8 @@ mod tests {
         // The SYSTEM axis is inclusive the same way: two system versions
         // of one instant, queried exactly at the older one's stamp.
         let mut t = TempTx::default();
-        t.put(&bk(1, 10, 10), &bv(ClaimPolarity::Assert)).unwrap();
-        t.put(&bk(1, 10, 20), &bv(ClaimPolarity::Retract)).unwrap();
+        t.put(&bk(1, 10, 10), &bv(ClaimPolarity::Assert))?;
+        t.put(&bk(1, 10, 20), &bv(ClaimPolarity::Retract))?;
         assert_eq!(
             scan_at_coord(&t, 10, 15),
             vec![(1, 10)],
@@ -472,6 +479,8 @@ mod tests {
             vec![],
             "the sys=20 correction retracts it"
         );
+    
+        Ok(())
     }
 
     /// Extreme stored instants (`ts == i64::MIN` in both slots) sit as
@@ -482,25 +491,28 @@ mod tests {
     /// strict-advance mutant — by the `.take` cap, the same way
     /// `storage/tests.rs` pins the fjall backend.)
     #[test]
-    fn skip_scan_terminates_on_min_ts_retraction() {
+    fn skip_scan_terminates_on_min_ts_retraction() -> Result<()> {
         let mut t = TempTx::default();
-        t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert)).unwrap();
-        t.put(&bk(9, i64::MIN, i64::MIN), &bv(ClaimPolarity::Retract))
-            .unwrap();
+        t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert))?;
+        t.put(&bk(9, i64::MIN, i64::MIN), &bv(ClaimPolarity::Retract))?;
         assert_eq!(scan_at(&t, 10), vec![(1, 5)]);
+    
+        Ok(())
     }
 
     /// Degenerate skip-scan bounds (inverted, equal) denote the empty
     /// interval — never a `BTreeMap` start>end panic. (Kills the removed
     /// upper-guard mutant.)
     #[test]
-    fn skip_scan_degenerate_bounds_are_empty() {
+    fn skip_scan_degenerate_bounds_are_empty() -> Result<()> {
         let mut t = TempTx::default();
-        t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert)).unwrap();
+        t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert))?;
         let (lo, hi) = rel_bounds();
         let at = AsOf::current(ValidityTs::from_raw(10));
         assert_eq!(t.range_skip_scan_tuple(&hi, &lo, at).count(), 0, "inverted");
         assert_eq!(t.range_skip_scan_tuple(&lo, &lo, at).count(), 0, "equal");
+    
+        Ok(())
     }
 
     // ---------- three-way differential (adopted review pin) ----------
@@ -644,13 +656,13 @@ mod tests {
     }
 
     #[test]
-    fn three_way_differential_kv_ops() {
+    fn three_way_differential_kv_ops() -> Result<()> {
         for seed in 0..12u64 {
-            let dir = tempfile::tempdir().unwrap();
-            let fjall_store = new_fjall_storage(dir.path().join("d")).unwrap();
-            let mut fjall_tx = fjall_store.write_tx().unwrap();
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let fjall_store = new_fjall_storage(dir.path().join("d"))?;
+            let mut fjall_tx = fjall_store.write_tx()?;
             let sim_store = SimStorage::new(seed);
-            let mut sim_tx = sim_store.write_tx().unwrap();
+            let mut sim_tx = sim_store.write_tx()?;
             let mut temp_tx = TempTx::default();
 
             let mut rng = SimRng::new(seed ^ 0x00D1_FFEE);
@@ -682,6 +694,8 @@ mod tests {
             drop(fjall_tx.abort());
             drop(sim_tx.abort());
         }
+    
+        Ok(())
     }
 
     /// Object-safe shim so one loop drives all three write transactions.
@@ -699,9 +713,9 @@ mod tests {
     }
 
     #[test]
-    fn del_range_degenerate_and_own_writes() {
-        let dir = tempfile::tempdir().unwrap();
-        let fjall_store = new_fjall_storage(dir.path().join("d")).unwrap();
+    fn del_range_degenerate_and_own_writes() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let fjall_store = new_fjall_storage(dir.path().join("d"))?;
         let sim_store = SimStorage::new(1);
         // (lower, upper): equal, inverted, adjacent-byte, forward, empty.
         let probes: Vec<(Vec<u8>, Vec<u8>)> = vec![
@@ -714,8 +728,8 @@ mod tests {
             (vec![0xFF, 0xFF], vec![0x00]),
         ];
         for (lo, hi) in &probes {
-            let mut fjall_tx = fjall_store.write_tx().unwrap();
-            let mut sim_tx = sim_store.write_tx().unwrap();
+            let mut fjall_tx = fjall_store.write_tx()?;
+            let mut sim_tx = sim_store.write_tx()?;
             let mut temp_tx = TempTx::default();
             for tx in [&mut temp_tx as &mut dyn DynW, &mut fjall_tx, &mut sim_tx] {
                 tx.dput(b"a", b"1");
@@ -736,10 +750,12 @@ mod tests {
             drop(fjall_tx.abort());
             drop(sim_tx.abort());
         }
+    
+        Ok(())
     }
 
     #[test]
-    fn three_way_differential_skip_scan() {
+    fn three_way_differential_skip_scan() -> Result<()> {
         // Honest versioned rows planted alongside hostile inhabitants:
         // a too-short key, a full-length key whose slot tag is clobbered,
         // extreme timestamps, a value missing its polarity byte, an
@@ -817,16 +833,16 @@ mod tests {
         let sys_queries: Vec<i64> = vec![i64::MIN, 0, 1, 2, 3, 4, 5, i64::MAX];
 
         for (rows, label) in &scenarios {
-            let dir = tempfile::tempdir().unwrap();
-            let fjall_store = new_fjall_storage(dir.path().join("d")).unwrap();
-            let mut fjall_tx = fjall_store.write_tx().unwrap();
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let fjall_store = new_fjall_storage(dir.path().join("d"))?;
+            let mut fjall_tx = fjall_store.write_tx()?;
             let sim_store = SimStorage::new(2);
-            let mut sim_tx = sim_store.write_tx().unwrap();
+            let mut sim_tx = sim_store.write_tx()?;
             let mut temp_tx = TempTx::default();
             for (k, v) in rows {
-                temp_tx.put(k, v).unwrap();
-                fjall_tx.put(k, v).unwrap();
-                sim_tx.put(k, v).unwrap();
+                temp_tx.put(k, v)?;
+                fjall_tx.put(k, v)?;
+                sim_tx.put(k, v)?;
             }
             for sys in &sys_queries {
                 for ts in &queries {
@@ -844,5 +860,7 @@ mod tests {
             drop(fjall_tx.abort());
             drop(sim_tx.abort());
         }
+    
+        Ok(())
     }
 }

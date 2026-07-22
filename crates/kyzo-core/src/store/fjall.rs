@@ -1072,6 +1072,7 @@ impl Drop for FjallWriteTx {
 
 #[cfg(test)]
 mod pins {
+    use miette::{IntoDiagnostic, Result, miette};
     use kyzo_model::TupleT;
     /// Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).
     use std::collections::BTreeMap;
@@ -1131,7 +1132,7 @@ mod pins {
     }
 
     #[test]
-    fn time_travel_matches_naive_oracle() {
+    fn time_travel_matches_naive_oracle() -> Result<()> {
         let history: &[(&str, i64, bool)] = &[
             ("a", 1, true),
             ("a", 3, true),
@@ -1146,24 +1147,24 @@ mod pins {
             ("e", 3, true),
             ("e", 4, false),
         ];
-        let rel = RelationId::new(7).expect("below cap");
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+        let rel = RelationId::new(7).ok_or_else(|| miette!("relation id"))?;
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
         for (name, ts, assert) in history {
             let (k, v) = vld_row(rel, name, *ts, *assert);
-            tx.put(&k, &v).unwrap();
+            tx.put(&k, &v)?;
         }
-        tx.commit().unwrap();
+        tx.commit()?;
 
         let lower = rel.raw_encode().to_vec();
-        let upper = rel.next().expect("below cap").raw_encode().to_vec();
-        let tx = db.read_tx().unwrap();
+        let upper = rel.next().ok_or_else(|| miette!("next rel"))?.raw_encode().to_vec();
+        let tx = db.read_tx()?;
         for at in 0..=10i64 {
             let got: Vec<(String, i64)> = tx
                 .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
-                .map(|r| {
-                    let t = r.unwrap();
+                .map(|r| -> Result<_> {
+                    let t = r?;
                     let name = match &t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
                         other @ DataValue::Null
@@ -1196,28 +1197,30 @@ mod pins {
                         | other @ DataValue::Interval(_)
                         | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
                     };
-                    (name, ts)
+                    Ok((name, ts))
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
             let want = as_of_oracle(history, at);
             assert_eq!(got, want, "as-of {at}");
         }
+    
+        Ok(())
     }
 
     #[test]
-    fn inverted_ranges_under_contention_commit_clean() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn inverted_ranges_under_contention_commit_clean() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         {
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"a", b"1").unwrap();
-            tx.put(b"m", b"2").unwrap();
-            tx.commit().unwrap();
+            let mut tx = db.write_tx()?;
+            tx.put(b"a", b"1")?;
+            tx.put(b"m", b"2")?;
+            tx.commit()?;
         }
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         assert_eq!(tx.range_scan(b"z", b"a").count(), 0, "inverted scan");
         assert_eq!(tx.range_scan(b"m", b"m").count(), 0, "empty scan");
-        tx.del_range(b"z", b"a").unwrap();
+        tx.del_range(b"z", b"a")?;
         assert_eq!(
             tx.range_skip_scan_tuple(b"z", b"a", AsOf::current(ValidityTs::from_raw(0)))
                 .count(),
@@ -1225,31 +1228,32 @@ mod pins {
             "inverted skip scan"
         );
         {
-            let mut w = db.write_tx().unwrap();
-            w.put(b"c", b"concurrent").unwrap();
-            w.commit().unwrap();
+            let mut w = db.write_tx()?;
+            w.put(b"c", b"concurrent")?;
+            w.commit()?;
         }
-        tx.put(b"mine", b"x").unwrap();
-        tx.commit()
-            .expect("inverted ranges tracked nothing: commit must succeed, not panic");
-        let mut tx = db.write_tx().unwrap();
-        tx.put(b"after", b"ok").unwrap();
-        tx.commit().unwrap();
-        let r = db.read_tx().unwrap();
-        assert_eq!(r.get(b"m").unwrap(), Some(Slice::from(b"2")));
-        assert_eq!(r.get(b"mine").unwrap(), Some(Slice::from(b"x")));
-        assert_eq!(r.get(b"after").unwrap(), Some(Slice::from(b"ok")));
+        tx.put(b"mine", b"x")?;
+        tx.commit()?;
+        let mut tx = db.write_tx()?;
+        tx.put(b"after", b"ok")?;
+        tx.commit()?;
+        let r = db.read_tx()?;
+        assert_eq!(r.get(b"m")?, Some(Slice::from(b"2")));
+        assert_eq!(r.get(b"mine")?, Some(Slice::from(b"x")));
+        assert_eq!(r.get(b"after")?, Some(Slice::from(b"ok")));
+    
+        Ok(())
     }
 
     #[test]
-    fn write_write_race_aborts_second_committer() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx1 = db.write_tx().unwrap();
-        let mut tx2 = db.write_tx().unwrap();
-        tx1.put(b"ww", b"1").unwrap();
-        tx2.put(b"ww", b"2").unwrap();
-        tx1.commit().expect("the FIRST committer must never abort");
+    fn write_write_race_aborts_second_committer() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx1 = db.write_tx()?;
+        let mut tx2 = db.write_tx()?;
+        tx1.put(b"ww", b"1")?;
+        tx2.put(b"ww", b"2")?;
+        tx1.commit()?;
         let err = tx2
             .commit()
             .expect_err("a write-write race must abort the second committer");
@@ -1262,29 +1266,30 @@ mod pins {
             "conflict arm must be CommitFailure::Conflict"
         );
         assert_eq!(
-            db.read_tx().unwrap().get(b"ww").unwrap(),
+            db.read_tx()?.get(b"ww")?,
             Some(Slice::from(b"1")),
             "the aborted writer must leave no trace: first committer wins"
         );
         // Empty write set certifies nothing.
-        let ro = db.write_tx().unwrap();
-        assert_eq!(ro.get(b"ww").unwrap(), Some(Slice::from(b"1")));
-        let mut w = db.write_tx().unwrap();
-        w.put(b"ww", b"3").unwrap();
-        w.commit().unwrap();
-        ro.commit()
-            .expect("an empty-write-set commit never aborts, clobbered reads or not");
+        let ro = db.write_tx()?;
+        assert_eq!(ro.get(b"ww")?, Some(Slice::from(b"1")));
+        let mut w = db.write_tx()?;
+        w.put(b"ww", b"3")?;
+        w.commit()?;
+        ro.commit()?;
+    
+        Ok(())
     }
 
     #[test]
-    fn concurrent_increments_lose_nothing_at_the_storage_layer() {
+    fn concurrent_increments_lose_nothing_at_the_storage_layer() -> Result<()> {
         use std::sync::atomic::{AtomicI64, Ordering};
 
-        let dir = tempfile::tempdir().unwrap();
-        let db = std::sync::Arc::new(new_fjall_storage(dir.path()).unwrap());
-        let rel = RelationId::new(7).expect("below cap");
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = std::sync::Arc::new(new_fjall_storage(dir.path())?);
+        let rel = RelationId::new(7).ok_or_else(|| miette!("relation id"))?;
         let lower = rel.raw_encode().to_vec();
-        let upper = rel.next().expect("below cap").raw_encode().to_vec();
+        let upper = rel.next().ok_or_else(|| miette!("next rel"))?.raw_encode().to_vec();
 
         let val_of = |v: i64| -> Vec<u8> {
             let mut out = Vec::new();
@@ -1299,14 +1304,14 @@ mod pins {
         };
         let current = |rows: Vec<Tuple>| -> i64 {
             assert_eq!(rows.len(), 1, "exactly one live fact, got {rows:?}");
-            rows[0].last().unwrap().get_int().expect("counter int")
+            rows[0].last()?.get_int()?
         };
 
         {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             let stamp = tx.system_stamp();
-            tx.put(&key_at(stamp), &val_of(0)).unwrap();
-            tx.commit().unwrap();
+            tx.put(&key_at(stamp), &val_of(0))?;
+            tx.commit()?;
         }
 
         const PER_THREAD: i64 = 200;
@@ -1320,7 +1325,7 @@ mod pins {
                 scope.spawn(move || {
                     for _ in 0..PER_THREAD {
                         loop {
-                            let mut tx = db.write_tx().unwrap();
+                            let mut tx = db.write_tx()?;
                             let stamp = tx.system_stamp();
                             let rows: Vec<Tuple> = tx
                                 .range_skip_scan_tuple(
@@ -1328,10 +1333,10 @@ mod pins {
                                     &upper,
                                     AsOf::current(ValidityTs::from_raw(i64::MAX)),
                                 )
-                                .map(|r| r.unwrap())
+                                .map(|r| r?)
                                 .collect();
                             let old = current(rows);
-                            tx.put(&key_at(stamp), &val_of(old + 1)).unwrap();
+                            tx.put(&key_at(stamp), &val_of(old + 1))?;
                             match tx.commit() {
                                 Ok(_committed) => {
                                     commits.fetch_add(1, Ordering::SeqCst);
@@ -1346,14 +1351,14 @@ mod pins {
             }
         });
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let rows: Vec<Tuple> = rtx
             .range_skip_scan_tuple(
                 &lower,
                 &upper,
                 AsOf::current(ValidityTs::from_raw(i64::MAX)),
             )
-            .map(|r| r.unwrap())
+            .map(|r| r?)
             .collect();
         assert_eq!(
             current(rows),
@@ -1361,21 +1366,23 @@ mod pins {
             "every Ok commit observed ({} commits)",
             commits.load(Ordering::SeqCst)
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn format_version_rejects_noncanonical_and_v4_boundary() {
+    fn format_version_rejects_noncanonical_and_v4_boundary() -> Result<()> {
         // Parse law: non-canonical spelling refuses; older stamps parse so the
         // reopen guard can NAME them in the mismatch Err.
         assert!(FormatVersion::parse(b"6").is_ok());
         assert!(FormatVersion::parse(b"06").is_err());
         let older =
-            FormatVersion::parse(b"4").expect("older stamps parse so mismatch can NAME them");
+            FormatVersion::parse(b"4")?;
         assert_ne!(older, FormatVersion::CURRENT);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
         {
-            let db = new_fjall_storage(dir.path()).expect("create store stamps CURRENT");
+            let db = new_fjall_storage(dir.path())?;
             drop(db);
         }
 
@@ -1383,15 +1390,11 @@ mod pins {
         {
             use fjall::{KeyspaceCreateOptions, OptimisticTxDatabase, PersistMode};
             let raw = OptimisticTxDatabase::builder(dir.path())
-                .open()
-                .expect("raw reopen of created store");
+                .open()?;
             let meta = raw
-                .keyspace(super::META_KEYSPACE_NAME, KeyspaceCreateOptions::default)
-                .expect("open meta keyspace");
-            meta.insert(super::FORMAT_VERSION_KEY, older.as_bytes())
-                .expect("stamp older format version");
-            raw.persist(PersistMode::SyncAll)
-                .expect("persist older stamp before production reopen");
+                .keyspace(super::META_KEYSPACE_NAME, KeyspaceCreateOptions::default)?;
+            meta.insert(super::FORMAT_VERSION_KEY, older.as_bytes())?;
+            raw.persist(PersistMode::SyncAll).into_diagnostic()?;
         }
 
         let err = match new_fjall_storage(dir.path()) {
@@ -1407,25 +1410,28 @@ mod pins {
                 && msg.contains(&expected),
             "mismatch Err must name both versions (store={found}, build={expected}), got: {msg}"
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn max_journaling_size_at_floor_is_accepted() {
-        let dir = tempfile::tempdir().unwrap();
+    fn max_journaling_size_at_floor_is_accepted() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
         let db = new_fjall_storage_with(
             dir.path(),
             StorageOptions {
                 max_journaling_size_bytes: Some(MIN_JOURNALING_SIZE_BYTES),
                 ..StorageOptions::default()
             },
-        )
-        .expect("exactly 64 MiB must clear our boundary and open");
+        )?;
         drop(db);
+    
+        Ok(())
     }
 
     #[test]
-    fn max_journaling_size_below_floor_refuses_typed() {
-        let dir = tempfile::tempdir().unwrap();
+    fn max_journaling_size_below_floor_refuses_typed() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
         let err = match new_fjall_storage_with(
             dir.path(),
             StorageOptions {
@@ -1437,8 +1443,7 @@ mod pins {
             Ok(_) => panic!("one byte under the vendor floor must refuse at our boundary"),
         };
         let refuse = err
-            .downcast_ref::<FjallRefuse>()
-            .expect("open refuse must be FjallRefuse, not a stringly miette");
+            .downcast_ref::<FjallRefuse>()?;
         assert!(
             matches!(
                 refuse,
@@ -1449,5 +1454,7 @@ mod pins {
             ),
             "expected JournalingSizeBelowFloor, got {refuse:?}"
         );
+    
+        Ok(())
     }
 }

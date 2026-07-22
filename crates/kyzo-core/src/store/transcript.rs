@@ -1623,6 +1623,7 @@ fn from_hex(b: u8) -> Result<u8, TranscriptRefuse> {
 
 #[cfg(test)]
 mod pins {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
 
     /// Wire field tags from the CanonicalTranscript format spec (not production API).
@@ -1892,32 +1893,34 @@ mod pins {
     /// `.vec` files hold that same independently derived hex (durability pin) — never
     /// encoder-self-capture.
     #[test]
-    fn production_matches_independent_wire_goldens() {
+    fn production_matches_independent_wire_goldens() -> Result<()> {
         for &kind in SEALED_ARTIFACT_KINDS {
             let expected = independent_encode_normative(kind);
-            let production = encode_normative_production_transcript(kind).expect("fixture encodes");
+            let production = encode_normative_production_transcript(kind)?;
             assert_eq!(
                 production.as_bytes(),
                 expected.as_slice(),
                 "production encode_{kind:?} must match independent wire derivation"
             );
-            let golden = golden_file_for(kind).expect("every kind has a golden");
-            let from_vec = parse_golden_hex(golden).expect("golden vector parses");
+            let golden = golden_file_for(kind)?;
+            let from_vec = parse_golden_hex(golden)?;
             assert_eq!(
                 from_vec.as_slice(),
                 expected.as_slice(),
                 "{kind:?}: .vec must hold independently derived bytes"
             );
-            let parsed = CanonicalTranscript::parse(&expected).expect("golden must parse");
+            let parsed = CanonicalTranscript::parse(&expected)?;
             assert_eq!(parsed.as_bytes(), expected.as_slice());
         }
+    
+        Ok(())
     }
 
     /// Seat 59 grep gate: sealed-surface modules may SHA-256 only over
     /// `CanonicalTranscript.as_bytes()` — never `h.update(b"kyzo.…")` domain labels
     /// for sealed-artifact kinds (second serializer).
     #[test]
-    fn seat59_no_second_serializer_on_sealed_surface() {
+    fn seat59_no_second_serializer_on_sealed_surface() -> Result<()> {
         // Full module text (not cfg(test)-stripped): backup/grants place `#[cfg(test)]`
         // helpers mid-file before production digest sites — a first-split would miss them.
         let seal = include_str!("seal.rs");
@@ -2008,10 +2011,12 @@ mod pins {
                 rest = &after[marker.len()..];
             }
         }
+    
+        Ok(())
     }
 
     #[test]
-    fn production_encoders_seal_without_field_order_refuse() {
+    fn production_encoders_seal_without_field_order_refuse() -> Result<()> {
         let store = normative_golden_store();
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
         let dig = normative_golden_digest();
@@ -2087,10 +2092,12 @@ mod pins {
                 "normative production encode must seal for {kind:?}"
             );
         }
+    
+        Ok(())
     }
 
     #[test]
-    fn unknown_version_refuses() {
+    fn unknown_version_refuses() -> Result<()> {
         // Craft a transcript header with version "999" (canonical spelling, unknown).
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"KTX1");
@@ -2101,11 +2108,13 @@ mod pins {
             CanonicalTranscript::parse(&bytes),
             Err(TranscriptRefuse::UnknownVersion)
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn duplicate_map_key_refuses() {
-        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
+    fn duplicate_map_key_refuses() -> Result<()> {
+        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
         let entries = vec![
             (b"a".to_vec(), MapValue::U64(1)),
             (b"a".to_vec(), MapValue::U64(2)),
@@ -2114,15 +2123,19 @@ mod pins {
             b.append_map(FieldId::BINDINGS_MAP, &entries),
             Err(TranscriptRefuse::DuplicateMapKey)
         );
+    
+        Ok(())
     }
 
     #[test]
-    fn length_bound_checked_before_alloc() {
-        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
+    fn length_bound_checked_before_alloc() -> Result<()> {
+        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
         let huge = vec![0u8; (MAX_BYTES_FIELD as usize) + 1];
         assert_eq!(
             b.append_bytes(FieldId::DOMAIN_LABEL, &huge),
             Err(TranscriptRefuse::LengthBoundExceeded)
         );
+    
+        Ok(())
     }
 }

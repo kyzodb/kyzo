@@ -224,6 +224,7 @@ impl IdempotencyMemo {
 
 #[cfg(test)]
 mod composition_crash_replay_tests {
+    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::commit_cap::SnapshotFork;
     use crate::store::open::{
@@ -231,7 +232,7 @@ mod composition_crash_replay_tests {
     };
 
     #[test]
-    fn same_intent_converges_and_replay_is_not_duplicate_effect() {
+    fn same_intent_converges_and_replay_is_not_duplicate_effect() -> Result<()> {
         let store_id = genesis(GenesisParams {
             identity_seed: [0x38; 32],
             recovery_matrix: None,
@@ -261,19 +262,19 @@ mod composition_crash_replay_tests {
                 key_pre,
                 request_digest,
                 OperationOutcome::Committed { request_digest },
-            )
-            .expect("first terminal");
+            )?;
         let replay = memo
             .remember(
                 key_post,
                 request_digest,
                 OperationOutcome::Committed { request_digest },
-            )
-            .expect("crash replay");
+            )?;
         assert_eq!(first, replay);
         assert_eq!(
             memo.lookup(&key_pre),
             OperationOutcome::Committed { request_digest }
         );
+    
+        Ok(())
     }
 }
