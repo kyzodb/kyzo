@@ -401,48 +401,70 @@ fn knn_params_p2(k: usize, ef: usize) -> HnswKnnParams {
 /// Drive `hnsw_knn` with a filter — which now dispatches to the filter-aware
 /// path (selector → scan / filtered graph / fallback). The one call site the
 /// whole recall/determinism story flows through.
-#[allow(clippy::too_many_arguments)] // mirrors hnsw_knn's own surface
-fn filtered_search(
-    tx: &impl ReadTx,
-    q: &Vector,
-    manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
+/// Harness seats for a filtered k-NN drive.
+struct FilteredSearchSpec<'a> {
+    q: &'a Vector,
+    manifest: &'a HnswIndexManifest,
+    base: &'a RelationHandle,
+    idx: &'a RelationHandle,
     k: usize,
     ef: usize,
-    filter: &FilterSpec,
-) -> Result<Vec<Tuple>> {
-    let params = knn_params_p2(k, ef);
-    let fb = Some(filter.filter_expr());
-    Ok(Hnsw::knn(
-        tx,
+    filter: &'a FilterSpec,
+}
+
+fn filtered_search(tx: &impl ReadTx, spec: FilteredSearchSpec<'_>) -> Result<Vec<Tuple>> {
+    let FilteredSearchSpec {
         q,
         manifest,
         base,
         idx,
-        &params,
-        &fb,
-        &crate::rules::contract::CancelFlag::inert(),
+        k,
+        ef,
+        filter,
+    } = spec;
+    let params = knn_params_p2(k, ef);
+    let fb = Some(filter.filter_expr());
+    let cancel = crate::rules::contract::CancelFlag::inert();
+    Ok(Hnsw::knn(
+        tx,
+        HnswSearchRequest {
+            q,
+            manifest,
+            base,
+            idx,
+            params: &params,
+            filter_expr: &fb,
+            cancel: &cancel,
+        },
     )?
     .materialize_all_tuples()?)
 }
 
 /// The chosen strategy for `filter` — for the selector/order-invariance tests.
-#[allow(clippy::too_many_arguments)] // mirrors hnsw_knn's own surface
-fn selected_plan(
-    tx: &impl ReadTx,
-    q: &Vector,
-    manifest: &HnswIndexManifest,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    k: usize,
-    ef: usize,
-    filter: &FilterSpec,
-) -> Result<SearchPlan> {
+fn selected_plan(tx: &impl ReadTx, spec: FilteredSearchSpec<'_>) -> Result<SearchPlan> {
+    let FilteredSearchSpec {
+        q,
+        manifest,
+        base,
+        idx,
+        k,
+        ef,
+        filter,
+    } = spec;
     let params = knn_params_p2(k, ef);
     let fb = filter.filter_expr();
-    hnsw_knn_selected_plan(tx, q, manifest, base, idx, &params, &fb)?
-        .ok_or_else(|| miette!("selected plan missing"))
+    hnsw_knn_selected_plan(
+        tx,
+        HnswPlanQuery {
+            q,
+            manifest,
+            base,
+            idx,
+            params: &params,
+            filter: &fb,
+        },
+    )?
+    .ok_or_else(|| miette!("selected plan missing"))
 }
 
 /// The PINNED draft post-filter baseline (measured in Phase 1, before the
@@ -594,8 +616,8 @@ fn filter_aware_band_metrics(
             == 0,
     );
     let truth = brute_force_filtered_knn(q, P2_K, &f, rows, m)?;
-    let plan = selected_plan(rtx, q, m, base, idx, P2_K, P2_EF, &f)?;
-    let hits = filtered_search(rtx, q, m, base, idx, P2_K, P2_EF, &f)?;
+    let plan = selected_plan(rtx, FilteredSearchSpec { q: q, manifest: m, base: base, idx: idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let hits = filtered_search(rtx, FilteredSearchSpec { q: q, manifest: m, base: base, idx: idx, k: P2_K, ef: P2_EF, filter: &f })?;
     let ekeys = keys_of(&hits)?;
     let r = recall_at_k(&ekeys, &truth, P2_K);
     let cr = count_recall(&ekeys, &truth, P2_K);
@@ -652,7 +674,7 @@ fn selector_chooses_scan_when_selective_graph_otherwise() -> Result<()> {
         // Alternate the accepted-set shape across the sweep: half the
         // bands run striped (mod), half contiguous (threshold).
         let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
-        let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+        let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
         let is_scan = matches!(plan, SearchPlan::Scan);
         assert_eq!(
             is_scan,
@@ -706,8 +728,8 @@ fn filtered_search_is_byte_deterministic() -> Result<()> {
     let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows)?;
     let rtx = db.read_tx()?;
     let f = filter_at_selectivity(0.10, true);
-    let h1 = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
-    let h2 = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+    let h1 = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+    let h2 = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
     assert_eq!(h1, h2, "repeat search on one store must be identical");
     Ok(())
 }
@@ -733,8 +755,8 @@ fn order_invariant_strategy_and_scan_results() -> Result<()> {
             .iter()
             .map(|&t| {
                 let f = filter_at_selectivity(t, true);
-                let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
-                let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+                let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
+                let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
                 (plan, hits)
             })
             .collect();
@@ -783,8 +805,8 @@ fn fallback_is_load_bearing_and_exact() -> Result<()> {
     let params = knn_params_p2(P2_K, P2_EF);
     let fb = f.filter_expr();
     let starved = SearchPlan::Graph { ef2: 1 };
-    let no_fb = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, starved, false)?;
-    let with_fb = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, starved, true)?;
+    let no_fb = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, starved, false)?;
+    let with_fb = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, starved, true)?;
 
     assert!(
         no_fb.len() < P2_K,
@@ -833,13 +855,13 @@ fn production_fallback_repairs_starved_real_search() -> Result<()> {
     let f = filter_at_selectivity(0.50, true); // graph band, so the selector picks Graph
     // ef = 1 forces the inflated beam ef2 = ceil(1/ŝ) ≈ 2 — far below k = 10, so
     // the real graph walk under-delivers and the production fallback must fire.
-    let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, 1, &f)?;
+    let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: 1, filter: &f })?;
     assert!(
         matches!(plan, SearchPlan::Graph { .. }),
         "precondition: selector must pick Graph here, got {plan:?}"
     );
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-    let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, 1, &f)?;
+    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: 1, filter: &f })?;
     assert_eq!(
         hits.len(),
         P2_K,
@@ -901,7 +923,7 @@ fn engine_ordering_is_total_under_ties() -> Result<()> {
         modulus: 1,
         accept: 1,
     };
-    let hits = filtered_search(&rtx, &q, &m, &base, &idx, 5, 32, &f)?;
+    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: 5, ef: 32, filter: &f })?;
     assert_eq!(
         keys_of(&hits)?,
         vec![0, 1, 2, 3, 4],
@@ -947,7 +969,7 @@ fn min_k_matches_law_generative() -> Result<()> {
     {
         let pinned_ef = 1usize;
         let pinned_f = filter_at_selectivity(0.50, true);
-        let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, pinned_ef, &pinned_f)?;
+        let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: pinned_ef, filter: &pinned_f })?;
         assert!(
             matches!(plan, SearchPlan::Graph { .. }),
             "pinned band precondition: selector must pick Graph, got {plan:?}"
@@ -955,7 +977,7 @@ fn min_k_matches_law_generative() -> Result<()> {
         let fb = pinned_f.filter_expr();
         let params = knn_params_p2(P2_K, pinned_ef);
         let partial =
-            hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false)?;
+            hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, plan, false)?;
         assert!(
             !partial.is_empty() && partial.len() < P2_K,
             "pinned band precondition: the raw graph walk must be a NON-EMPTY \
@@ -966,7 +988,7 @@ fn min_k_matches_law_generative() -> Result<()> {
         );
 
         let truth = brute_force_filtered_knn(&q, P2_K, &pinned_f, &rows, &m)?;
-        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, pinned_ef, &pinned_f)?;
+        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: pinned_ef, filter: &pinned_f })?;
         assert_eq!(
             hits.len(),
             P2_K,
@@ -995,7 +1017,7 @@ fn min_k_matches_law_generative() -> Result<()> {
         let accept = accept_raw % modulus;
         let f = FilterSpec::ModLessThan { modulus, accept };
         let matches = f.true_match_count(&rows);
-        let hits = filtered_search(&rtx, &q, &m, &base, &idx, k, P2_EF, &f)?;
+        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f })?;
         prop_assert_eq!(
             hits.len(),
             k.min(matches),
@@ -1033,7 +1055,7 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
         let matches = f.true_match_count(&rows);
         assert_eq!(matches, match usize::try_from(threshold) { Ok(v) => v, Err(_e) => 0 }, "keys are dense 0..n");
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
         let ekeys = keys_of(&hits)?;
         assert_eq!(
             hits.len(),
@@ -1098,7 +1120,7 @@ fn min_k_matches_disconnected_from_entry_region() -> Result<()> {
         n - half
     );
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
-    let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
     let ekeys = keys_of(&hits)?;
 
     assert_eq!(
@@ -1153,7 +1175,7 @@ fn graph_walk_alone_crosses_to_disconnected_matches_without_fallback() -> Result
     let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
     let params = knn_params_p2(P2_K, P2_EF);
     let fb = f.filter_expr();
-    let hits = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false)?;
+    let hits = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, plan, false)?;
     let ekeys = keys_of(&hits)?;
 
     assert_eq!(
@@ -1190,7 +1212,7 @@ fn min_k_matches_zero_matches() -> Result<()> {
 
     let f = FilterSpec::LessThan { threshold: 0 }; // keys are 0..n, so nothing passes
     assert_eq!(f.true_match_count(&rows), 0);
-    let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
     assert!(hits.is_empty(), "zero matches must yield an empty result");
     Ok(())
 }
@@ -1218,18 +1240,9 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() -> Result<()> {
 
     let params = knn_params_p2(P2_K, P2_EF);
     let unfiltered = crate::project::contract::search_rows(
-        Hnsw::knn(
-            &rtx,
-            &q,
-            &m,
-            &base,
-            &idx,
-            &params,
-            &None,
-            &crate::rules::contract::CancelFlag::inert(),
-        )?,
+        Hnsw::knn(&rtx, HnswSearchRequest { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter_expr: &None, cancel: &crate::rules::contract::CancelFlag::inert() })?,
     )?;
-    let filtered = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+    let filtered = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
 
     assert_eq!(
         keys_of(&filtered)?,
@@ -1346,7 +1359,7 @@ fn min_k_matches_k_exceeds_entire_population() -> Result<()> {
         "sanity: the filter must be a proper subset of the corpus"
     );
     let truth = brute_force_filtered_knn(&q, k, &f, &rows, &m)?;
-    let hits = filtered_search(&rtx, &q, &m, &base, &idx, k, P2_EF, &f)?;
+    let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f })?;
     let mut ekeys = keys_of(&hits)?;
 
     assert_eq!(
@@ -1377,7 +1390,7 @@ fn min_k_matches_k_exceeds_entire_population() -> Result<()> {
         modulus: 1,
         accept: 1,
     };
-    let hits_all = filtered_search(&rtx, &q, &m, &base, &idx, k, P2_EF, &f_all)?;
+    let hits_all = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f_all })?;
     let mut all_keys = keys_of(&hits_all)?;
     assert_eq!(
         hits_all.len(),
@@ -1438,13 +1451,13 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
         accept: 1,
     };
 
-    let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+    let plan = selected_plan(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
     assert!(
         matches!(plan, SearchPlan::Graph { .. }),
         "precondition: this corpus/filter must select Graph, got {plan:?}"
     );
 
-    let baseline = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+    let baseline = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
 
     // LAWFULNESS. HNSW is an APPROXIMATE index. This corpus is adversarial:
     // `comps[i % dim] = 1.0` makes every residue class an identical vector,
@@ -1475,7 +1488,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
         let db2 = new_fjall_storage(dir2.path())?;
         let (base2, idx2, m2) = hsetup(&db2, dim, HnswDistance::L2, &rows)?;
         let rtx2 = db2.read_tx()?;
-        filtered_search(&rtx2, &q, &m2, &base2, &idx2, P2_K, P2_EF, &f)?
+        filtered_search(&rtx2, FilteredSearchSpec { q: &q, manifest: &m2, base: &base2, idx: &idx2, k: P2_K, ef: P2_EF, filter: &f })?
     };
     assert_eq!(
         keys_of(&rebuilt)?,
@@ -1490,7 +1503,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(n_threads)
             .build()?;
-        pool.install(|| filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f))
+        pool.install(|| filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f }))
     };
     for n_threads in [1usize, 2, 4, 8] {
         let got = run_under_pool(n_threads);
@@ -1509,7 +1522,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
                 let base = &base;
                 let idx = &idx;
                 let f = &f;
-                scope.spawn(move || filtered_search(rtx, q, m, base, idx, P2_K, P2_EF, f)?)
+                scope.spawn(move || filtered_search(rtx, FilteredSearchSpec { q: q, manifest: m, base: base, idx: idx, k: P2_K, ef: P2_EF, filter: f })?)
             })
             .collect();
         handles.into_iter().map(|h| h.join().map_err(|e| miette!("join: {e:?}"))?).collect()
@@ -1585,7 +1598,7 @@ fn t13_acorn_entry_neighbourhood_excluded_still_finds_matches() -> Result<()> {
     let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
     let params = knn_params_p2(P2_K, P2_EF);
     let fb = f.filter_expr();
-    let hits = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false)?;
+    let hits = hnsw_knn_forced(&rtx, HnswPlanQuery { q: &q, manifest: &m, base: &base, idx: &idx, params: &params, filter: &fb }, plan, false)?;
     let ekeys = keys_of(&hits)?;
 
     assert_eq!(
@@ -1654,7 +1667,7 @@ fn t13_delete_then_search_never_returns_deleted_id_after_reopen() -> Result<()> 
         };
         let matches = f.true_match_count(&live);
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &live, &m)?;
-        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
         let ekeys = keys_of(&hits)?;
 
         assert_eq!(
@@ -1762,7 +1775,7 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
 
         let matches = f.true_match_count(&live_rows);
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &live_rows, &m)?;
-        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f)?;
+        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: P2_K, ef: P2_EF, filter: &f })?;
         let ekeys = keys_of(&hits)?;
 
         assert_eq!(

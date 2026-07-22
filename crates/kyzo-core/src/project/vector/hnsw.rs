@@ -2154,6 +2154,7 @@ fn neighbours_tagged(
 /// test module is the reusable tool for whoever runs the next, larger
 /// campaign (this file's DoD explicitly defers that campaign to a quiet
 /// box, per the story). Returns the new live degree.
+///
 /// Graph seats for [`shrink_neighbour`] (mutable write tx).
 struct HnswShrinkSpec<'a, 'c, T: WriteTx> {
     tx: &'a mut T,
@@ -2169,34 +2170,29 @@ fn shrink_neighbour<T: WriteTx>(
     m: usize,
     layer: i64,
 ) -> Result<usize> {
-    let HnswShrinkSpec {
-        tx,
-        manifest,
-        base,
-        idx,
-        cache,
-    } = spec;
-    let base_key_len = base.metadata.keys.len();
-    cache.ensure(tx, base, target)?;
-    let vec = cache.get(target)?.clone();
+    let base_key_len = spec.base.metadata.keys.len();
+    spec.cache.ensure(spec.tx, spec.base, target)?;
+    let vec = spec.cache.get(target)?.clone();
     let mut candidates: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     let mut was_tombstoned: FxHashMap<VectorId, bool> = FxHashMap::default();
-    for (neighbour, dist, ignore_link) in neighbours_tagged(tx, base, idx, target, layer)? {
+    for (neighbour, dist, ignore_link) in
+        neighbours_tagged(spec.tx, spec.base, spec.idx, target, layer)?
+    {
         was_tombstoned.insert(neighbour.clone(), ignore_link);
         candidates.push(neighbour.clone(), Beam::of(dist, &neighbour));
     }
     let new_candidates = select_neighbours_heuristic(
         &mut HnswWalkCtx {
-            tx,
-            base,
-            idx,
-            cache,
+            tx: spec.tx,
+            base: spec.base,
+            idx: spec.idx,
+            cache: spec.cache,
         },
         &vec,
         &candidates,
         m,
         layer,
-        manifest,
+        spec.manifest,
     )?;
     let mut old_candidate_set = FxHashSet::default();
     for (old, _) in &candidates {
@@ -2226,21 +2222,22 @@ fn shrink_neighbour<T: WriteTx>(
                 dist: new_dist,
                 ignore_link: false,
             }
-            .write(tx, idx, base_key_len)?;
+            .write(spec.tx, spec.idx, base_key_len)?;
         }
     }
     for (old, old_prio) in candidates {
         let old_dist = old_prio.dist();
         if !new_candidate_set.contains(&old) {
             let old_key_tuple = edge_key(layer, target, &old)?;
-let was_tomb = match was_tombstoned.get(&old).copied() {
+            let was_tomb = match was_tombstoned.get(&old).copied() {
                 Some(v) => v,
                 None => false,
             };
             if was_tomb {
-                let old_key =
-                    idx.encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
-                tx.del(&old_key)?;
+                let old_key = spec
+                    .idx
+                    .encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
+                spec.tx.del(&old_key)?;
             } else {
                 HnswRow::Edge {
                     layer,
@@ -2249,7 +2246,7 @@ let was_tomb = match was_tombstoned.get(&old).copied() {
                     dist: old_dist,
                     ignore_link: true,
                 }
-                .write(tx, idx, base_key_len)?;
+                .write(spec.tx, spec.idx, base_key_len)?;
             }
         }
     }
@@ -3707,8 +3704,19 @@ mod tests {
     use miette::{IntoDiagnostic, Result, miette};
 
     macro_rules! knn_rows {
-        ($($arg:expr),* $(,)?) => {{
-            crate::project::contract::search_rows(Hnsw::knn($($arg),*)?)?
+        ($tx:expr, $q:expr, $m:expr, $base:expr, $idx:expr, $params:expr, $filter:expr, $cancel:expr $(,)?) => {{
+            crate::project::contract::search_rows(Hnsw::knn(
+                $tx,
+                HnswSearchRequest {
+                    q: $q,
+                    manifest: $m,
+                    base: $base,
+                    idx: $idx,
+                    params: $params,
+                    filter_expr: $filter,
+                    cancel: $cancel,
+                },
+            )?)?
         }};
     }
     use crate::rules::contract::CancelFlag;
@@ -4384,21 +4392,12 @@ mod tests {
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
             let hits = crate::project::contract::search_rows(
-                Hnsw::knn(
-                    &rtx,
-                    q_vec,
-                    &m,
-                    &base,
-                    &idx,
-                    &HnswKnnParams {
+                Hnsw::knn(&rtx, HnswSearchRequest { q: q_vec, manifest: &m, base: &base, idx: &idx, params: &HnswKnnParams {
                         k,
                         ef: 64,
                         radius: None,
                         bind: HnswBindPack::omit_all(),
-                    },
-                    &None,
-                    &CancelFlag::inert(),
-                )?,
+                    }, filter_expr: &None, cancel: &CancelFlag::inert() })?,
             )?;
             let engine_ids: FxHashSet<i64> = hits
                 .iter()
@@ -4550,16 +4549,7 @@ mod tests {
         }
         // Query refusal.
         let rtx = db.read_tx()?;
-        let err = Hnsw::knn(
-            &rtx,
-            &Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("vector refused"))?,
-            &m,
-            &base,
-            &idx,
-            &knn_params(1),
-            &None,
-            &CancelFlag::inert(),
-        )
+        let err = Hnsw::knn(&rtx, HnswSearchRequest { q: &Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("vector refused"))?, manifest: &m, base: &base, idx: &idx, params: &knn_params(1), filter_expr: &None, cancel: &CancelFlag::inert() })
         .unwrap_err();
         assert!(err.downcast_ref::<ZeroVectorRefused>().is_some());
 
@@ -4860,16 +4850,7 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let q = Vector::try_new(vec![0.5, 0.5]).ok_or_else(|| miette!("query vector refused"))?;
-        let err = Hnsw::knn(
-            &rtx,
-            &q,
-            &m,
-            &base,
-            &idx,
-            &knn_params(1),
-            &None,
-            &CancelFlag::inert(),
-        )
+        let err = Hnsw::knn(&rtx, HnswSearchRequest { q: &q, manifest: &m, base: &base, idx: &idx, params: &knn_params(1), filter_expr: &None, cancel: &CancelFlag::inert() })
         .err()
         .ok_or_else(|| miette!("corrupt rows must be errors, not panics"))?;
         assert!(
@@ -5228,9 +5209,7 @@ mod tests {
                 Some(v) => v.get_int().ok_or_else(|| miette!("key not int"))?,
                 None => bail!("fixture missing key"),
             };
-            let hits = crate::project::contract::search_rows(Hnsw::knn(
-                &rtx, &q, &m, &base, &idx, &knn_params(1), &None, &CancelFlag::inert(),
-            )?)?;
+            let hits = crate::project::contract::search_rows(Hnsw::knn(&rtx, HnswSearchRequest { q: &q, manifest: &m, base: &base, idx: &idx, params: &knn_params(1), filter_expr: &None, cancel: &CancelFlag::inert() })?)?;
             assert_eq!(hits.len(), 1);
             let got_key = hits[0].first().and_then(|v| v.get_int()).ok_or_else(|| miette!("missing key"))?;
             assert_eq!(got_key, expected_key);
