@@ -164,6 +164,7 @@ impl<E> ErrorMin<E> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
 
     #[test]
@@ -177,27 +178,27 @@ mod tests {
     }
 
     #[test]
-    fn batch_pivots_and_selects() {
+    fn batch_pivots_and_selects() -> Result<()> {
         let rows = vec![
             Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("a")]),
             Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from("b")]),
         ];
-        let b = ColumnBatch::from_rows(rows, 2).expect("uniform width");
+        let b = ColumnBatch::from_rows(rows, 2).map_err(|e| miette!("uniform width: {e}"))?;
         assert_eq!((b.width(), b.height()), (2, 2));
         assert_eq!(b.column(1).get(1), DataValue::from("b"));
-        let sel = Selection::from_sorted(vec![1]).expect("singleton ascending");
+        let sel = Selection::from_sorted(vec![1]).map_err(|e| miette!("singleton ascending: {e}"))?;
         assert_eq!(sel.iter().collect::<Vec<_>>(), vec![1usize]);
         assert!(!sel.is_empty());
-        assert_eq!(Selection::all(2).expect("fits u32").len(), 2);
+        assert_eq!(Selection::all(2).map_err(|e| miette!("fits u32: {e}"))?.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn from_rows_refuses_wrong_width() {
+    fn from_rows_refuses_wrong_width() -> Result<()> {
         let rows = vec![Tuple::from_vec(vec![DataValue::from(1i64)])];
         let err = ColumnBatch::from_rows(rows, 2).expect_err("wrong width");
         let mismatch = err
-            .downcast_ref::<ColumnBatchWidthMismatch>()
-            .expect("width mismatch");
+            .downcast_ref::<ColumnBatchWidthMismatch>().ok_or_else(|| miette!("width mismatch"))?;
         assert_eq!(
             *mismatch,
             ColumnBatchWidthMismatch {
@@ -205,5 +206,6 @@ mod tests {
                 got: 1
             }
         );
+        Ok(())
     }
 }
