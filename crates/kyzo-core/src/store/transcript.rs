@@ -80,7 +80,14 @@ impl SealedArtifactKind {
     /// Stable discriminant written into golden / sealed transcripts.
     /// `#[repr(u64)]` discriminant is sole authority (seat 59); second serialize Unconstructible.
     pub fn tag(self) -> u64 {
-        self as u64
+        u64::from(self)
+    }
+}
+
+impl From<SealedArtifactKind> for u64 {
+    fn from(kind: SealedArtifactKind) -> u64 {
+        // INVARIANT: SealedArtifactKind is #[repr(u64)] with closed discriminants 1..=13.
+        kind as ::core::primitive::u64
     }
 }
 

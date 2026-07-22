@@ -1137,7 +1137,14 @@ impl CrossingKind {
 
     /// Wire tag for this kind — `#[repr(u8)]` discriminant is sole authority (seat 59).
     pub fn as_wire(self) -> u8 {
-        self as u8
+        u8::from(self)
+    }
+}
+
+impl From<CrossingKind> for u8 {
+    fn from(kind: CrossingKind) -> u8 {
+        // INVARIANT: CrossingKind is #[repr(u8)] with closed discriminants 0..=11.
+        kind as ::core::primitive::u8
     }
 }
 
