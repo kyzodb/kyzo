@@ -97,6 +97,7 @@ mod tests {
     use super::*;
     use rand::seq::{IndexedRandom, SliceRandom};
 
+    use miette::{IntoDiagnostic, Result, miette};
     /// GOLDEN VECTOR: the exact splitmix64 words the *default* seed emits,
     /// as literals. This is what makes `DEFAULT_SEED` and the three
     /// splitmix64 constants in `step` actually test-guarded: flip any one of
@@ -156,15 +157,19 @@ mod tests {
     /// The point of implementing `RngCore`: `rand`'s consumers (shuffle,
     /// choose) are reproducible when driven by a seeded generator.
     #[test]
-    fn rand_consumers_are_reproducible() {
-        let shuffled = |seed: u64| {
+    fn rand_consumers_are_reproducible() -> Result<()> {
+        let shuffled = |seed: u64| -> Result<_> {
             let mut rng = SeededRng::new(seed);
             let mut v: Vec<u32> = (0..50).collect();
             v.shuffle(&mut rng);
-            let chosen = *(0..50).collect::<Vec<u32>>().choose(&mut rng).unwrap();
-            (v, chosen)
+            let chosen = *(0..50)
+                .collect::<Vec<u32>>()
+                .choose(&mut rng)
+                .ok_or_else(|| miette!("test expected Some"))?;
+            Ok((v, chosen))
         };
-        assert_eq!(shuffled(7), shuffled(7));
+        assert_eq!(shuffled(7)?, shuffled(7)?);
+        Ok(())
     }
 
     /// `fill_bytes` on a non-multiple-of-8 length is deterministic and fills
