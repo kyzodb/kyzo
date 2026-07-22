@@ -429,16 +429,20 @@ impl<T: TokenFilter + Clone> TokenFilterClone for T {
 
 #[cfg(test)]
 mod test {
+    use miette::{Result, miette};
+
     use super::Token;
 
     #[test]
-    fn clone() {
-        let t1 = Token::new(2, 3, 1, "abc".to_string(), 1).expect("lawful");
+    fn clone() -> Result<()> {
+        let t1 = Token::new(2, 3, 1, "abc".to_string(), 1)
+            .ok_or_else(|| miette!("lawful"))?;
         let t2 = t1.clone();
 
         assert_eq!(t1.position, t2.position);
         assert_eq!(t1.offset_from(), t2.offset_from());
         assert_eq!(t1.offset_to(), t2.offset_to());
         assert_eq!(t1.text, t2.text);
+        Ok(())
     }
 }
