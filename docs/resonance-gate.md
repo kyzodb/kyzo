@@ -128,7 +128,17 @@ shrinking it.
   seats with no meter are the backlog. Known unmetered surfaces (named
   honestly, not silently dropped): golden-vectors-pin-production as a
   mechanical check; `panic_lint` scope beyond decode surfaces; string-typed
-  names past the parse boundary; test-bypass doors.
+  names past the parse boundary; test-bypass doors; `xtask`'s own source,
+  excluded from `walk_engine_sources` because its test fixtures (e.g.
+  `bs_detector`'s `DETONATIONS` tables) contain banned-shape substrings as
+  intentional string-literal samples that a line-based matcher cannot
+  distinguish from a live occurrence.
+- `walk_engine_sources` covers every first-party workspace crate except
+  `xtask` itself (widened from an undisclosed `kyzo-core`/`kyzo-bin`/
+  `kyzo-model`-only scope after an audit found `kyzo-trials`, `kyzo-oracle`,
+  and `kyzo-crashfs` — the crash-safety proof harness, the independent
+  judge, and the fault-injection layer — completely invisible to every
+  check).
 - Staged follow-ons for this architecture: unify per-check violation
   structs into one `Violation {file, line, seat, reason}` type; lift the
   waiver/ratchet mechanics out of individual checks into declared policy on

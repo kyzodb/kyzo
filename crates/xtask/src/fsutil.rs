@@ -26,15 +26,29 @@ pub struct SourceFile {
     pub ast: syn::File,
 }
 
-/// Every `.rs` file under the engine crates that own ontology law:
-/// `kyzo-core`, `kyzo-bin`, and `kyzo-model` (value-plane / one-law codec).
-/// Never the bindings. Relative to `root` (checkout or bite-proof rsync copy).
+/// Every `.rs` file under every first-party workspace crate that is not the
+/// gate's own tooling. Widened from the original three (`kyzo-core`,
+/// `kyzo-bin`, `kyzo-model`) after an audit found this list undisclosed and
+/// three real crates — `kyzo-trials` (the DST/crash-testing harness that is
+/// supposed to *prove* crash safety), `kyzo-oracle` (the independent
+/// `::verify` judge), and `kyzo-crashfs` (the fault-injection layer) —
+/// completely invisible to every resonance check. `xtask` itself is
+/// deliberately excluded: its own test fixtures (`DETONATIONS` tables etc.)
+/// contain banned-shape substrings as intentional string-literal samples,
+/// which the line-based matchers cannot distinguish from a live occurrence —
+/// scanning it would self-trigger on its own proof data, not find a real
+/// defect. That gap is named here, not silently dropped.
 pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
     let mut out = Vec::new();
     for crate_dir in [
         "crates/kyzo-core/src",
         "crates/kyzo-bin/src",
         "crates/kyzo-model/src",
+        "crates/kyzo-trials/src",
+        "crates/kyzo-oracle/src",
+        "crates/kyzo-crashfs/src",
+        "crates/kyzo-lsp/src",
+        "crates/kyzo-arrow-interop/src",
     ] {
         let abs = root.join(crate_dir);
         if !abs.exists() {
