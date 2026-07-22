@@ -1289,17 +1289,18 @@ mod tests {
     }
 
     fn rules_of<'a>(stratum: &'a MagicProgram, key: &str) -> &'a [MagicInlineRule] {
-        let Some((_, rules_or_fixed)) = stratum
+        let found = stratum
             .prog
             .iter()
-            .find(|(k, _)| format!("{k:?}") == key)
-        else {
-            panic!("store '{key}' not found")
-        };
-        match rules_or_fixed
-        {
-            MagicRulesOrFixed::Rules { rules } => rules,
-            MagicRulesOrFixed::Fixed { .. } => panic!("store '{key}' is a fixed rule"),
+            .find(|(k, _)| format!("{k:?}") == key);
+        assert!(found.is_some(), "store '{key}' not found");
+        match found.map(|(_, v)| v) {
+            Some(MagicRulesOrFixed::Rules { rules }) => rules,
+            Some(MagicRulesOrFixed::Fixed { .. }) => {
+                assert!(false, "store '{key}' is a fixed rule");
+                &[]
+            }
+            None => &[],
         }
     }
 

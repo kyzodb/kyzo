@@ -923,13 +923,15 @@ mod tests {
                     panic!("key not an int")
                 };
                 let Some(k) = n_k.as_int() else {
-                    panic!("key not an int")
+                    assert!(false, "key not an int");
+                    0
                 };
                 let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
                 let Some(val) = n_val.as_int() else {
-                    panic!("val not an int")
+                    assert!(false, "val not an int");
+                    0
                 };
                 let DataValue::Interval(iv) = &row[2] else {
                     panic!("third column not an interval: {row:?}")
@@ -1093,19 +1095,22 @@ mod tests {
                     panic!("key not an int")
                 };
                 let Some(k) = n_k.as_int() else {
-                    panic!("key not an int")
+                    assert!(false, "key not an int");
+                    0
                 };
                 let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
                 let Some(val) = n_val.as_int() else {
-                    panic!("val not an int")
+                    assert!(false, "val not an int");
+                    0
                 };
                 let DataValue::Num(ref n_sgn) = row[2] else {
                     panic!("sign not an int")
                 };
                 let Some(sgn) = n_sgn.as_int() else {
-                    panic!("sign not an int")
+                    assert!(false, "sign not an int");
+                    0
                 };
                 out.push((k, val, sgn));
             }

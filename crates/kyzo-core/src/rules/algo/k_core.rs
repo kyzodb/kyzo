@@ -136,9 +136,12 @@ fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32
     let adj = simple_adjacency(graph);
     let mut deg: Vec<u32> = adj.iter().map(|a| a.len() as u32).collect();
     let max_deg = match deg.iter().copied().max() {
-        Some(m) => m,
+        Some(m) => match usize::try_from(m) {
+            Ok(v) => v,
+            Err(_wide) => 0,
+        },
         None => 0,
-    } as usize;
+    };
 
     // `bin[d]`: first the count of degree-`d` vertices, then (in place) the
     // start offset of the degree-`d` block within `vert`.

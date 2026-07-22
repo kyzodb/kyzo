@@ -43,7 +43,7 @@ use kyzo_model::program::rule::FixedRuleOptions;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::value::Tuple;
-use kyzo_model::value::{DataValue, TERMINAL_VALIDITY};
+use kyzo_model::value::{DataValue, Num, TERMINAL_VALIDITY};
 
 #[cfg(test)]
 use crate::rules::contract::{CancelAuthority, Cancelled};
@@ -165,7 +165,18 @@ impl FixedRule for CsvReader {
                                             .filter(|x| x.is_finite() && x.fract() == 0.0)
                                         {
                                             Some(x) => {
-                                                out_tuple.push(DataValue::from(x as i64))
+                                                match Num::float(x).to_int_coerced() {
+                                                    Some(i) => {
+                                                        out_tuple.push(DataValue::from(i))
+                                                    }
+                                                    None => {
+                                                        bail!(
+                                                            "cannot convert {} to type {}",
+                                                            s,
+                                                            typ
+                                                        )
+                                                    }
+                                                }
                                             }
                                             None if typ.is_nullable() => {
                                                 out_tuple.push(DataValue::Null)

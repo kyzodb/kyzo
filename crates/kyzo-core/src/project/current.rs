@@ -182,7 +182,10 @@ pub(crate) struct Segment {
 /// reach it through `build`. `None` past `u32::MAX`, exactly where a bare
 /// `as u32` would silently wrap and corrupt every later row's boundaries.
 fn checked_row_end(values_len: usize) -> Option<u32> {
-    (match u32::try_from(values_len) { Ok(v) => Some(v), Err(_overflow) => None })
+    match u32::try_from(values_len) {
+        Ok(v) => Some(v),
+        Err(_) => None,
+    }
 }
 
 impl Segment {
@@ -287,14 +290,14 @@ mod tests {
         for a in -1..9 {
             let probe = [DataValue::from(a)];
             let got = s.prefix_range(&probe);
-            let want_lo = rows
-                .iter()
-                .position(|r| r[0] >= probe[0])
-match                  { Some(v) => v, None => rows.len() };
-            let want_hi = rows
-                .iter()
-                .position(|r| r[0] > probe[0])
-match                  { Some(v) => v, None => rows.len() };
+            let want_lo = match rows.iter().position(|r| r[0] >= probe[0]) {
+                Some(v) => v,
+                None => rows.len(),
+            };
+            let want_hi = match rows.iter().position(|r| r[0] > probe[0]) {
+                Some(v) => v,
+                None => rows.len(),
+            };
             assert_eq!(got, want_lo..want_hi.max(want_lo), "prefix a={a}");
             for i in got {
                 assert_eq!(s.row(i), Some(rows[i].as_slice()));

@@ -620,12 +620,15 @@ mod tests {
                 .iter()
                 .map(|a| match a {
                     None => HeadAggrSlot::Plain,
-                    Some(name) => HeadAggrSlot::Aggregated {
-                        aggr: match parse_aggr(name) {
-                            Ok(Some(a)) => a,
-                            Ok(None) | Err(_) => panic!("real aggregation exists: {name}"),
+                    Some(name) => match parse_aggr(name) {
+                        Ok(Some(aggr)) => HeadAggrSlot::Aggregated {
+                            aggr,
+                            args: vec![],
                         },
-                        args: vec![],
+                        Ok(None) | Err(_) => {
+                            assert!(false, "real aggregation exists: {name}");
+                            HeadAggrSlot::Plain
+                        }
                     },
                 })
                 .collect();
