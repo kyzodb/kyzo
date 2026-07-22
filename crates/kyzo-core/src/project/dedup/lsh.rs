@@ -146,7 +146,7 @@ use kyzo_model::program::expr::BindingPos;
 
 use crate::exec::stdlib::convert::{f64_to_f32, usize_to_f64};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Lsh;
 
 impl ProjectionKind for Lsh {}

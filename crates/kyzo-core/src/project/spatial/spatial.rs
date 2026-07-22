@@ -132,7 +132,7 @@ use kyzo_model::value::{DataValue, ScanBound, Tuple};
 /// not a second build/seal/freshness protocol. Search is owned by
 /// [`RelationIndexSearch::search_relation`] (P103); range/knn are UFCS
 /// aliases into that door.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Spatial;
 
 impl ProjectionKind for Spatial {}
@@ -784,9 +784,8 @@ fn spatial_range_query_body(
 // ---------------------------------------------------------------------------
 
 /// Whether spatial k-NN appends the distance column (P038 — sum, not bool).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpatialBindDistance {
-    #[default]
     Omit,
     Append,
 }

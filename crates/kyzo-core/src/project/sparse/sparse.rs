@@ -139,7 +139,7 @@ use kyzo_model::program::expr::BindingPos;
 
 pub(crate) use crate::exec::stdlib::convert::f64_to_f32;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Sparse;
 
 impl ProjectionKind for Sparse {}

@@ -119,12 +119,21 @@ use kyzo_model::value::DataValue;
 /// How a [`Gazetteer`] folds case while matching.
 ///
 /// Engine complete; query host `rules::gazetteer` is [OPEN] (stub module).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GazetteerConfig {
     /// Fold ASCII case (`A-Z ≡ a-z`) when matching. Length-preserving, so
     /// spans stay exact; **not** full-Unicode folding — see the module docs
     /// for why the gazetteer's span law forbids the length-changing kind.
     pub(crate) case_insensitive: bool,
+}
+
+impl GazetteerConfig {
+    /// Exact match — no ASCII case folding.
+    pub(crate) fn exact() -> Self {
+        Self {
+            case_insensitive: false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -523,7 +532,7 @@ mod tests {
             (4, &["cat"]),
             (5, &["category"]),
         ];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         let p = pairs(rows);
         for text in [
             "I love New York City in the fall",
@@ -550,7 +559,7 @@ mod tests {
         // contains both.
         let rows: &[(i64, &[&str])] =
             &[(1, &["New York"]), (2, &["York"]), (3, &["New York City"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
 
         // Longest wins from the leftmost start: the whole "New York City".
         let tags = view(&g.tag("New York City"));
@@ -575,7 +584,7 @@ mod tests {
             (20, &["Washington"]),
             (30, &["Washington"]),
         ];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         let tags = view(&g.tag("Washington"));
         assert_eq!(
             tags,
@@ -593,7 +602,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let rows: &[(i64, &[&str])] = &[(1, &["ab"]), (2, &["cd"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         // Adjacent, no separator: two back-to-back matches.
         let tags = view(&g.tag("abcd"));
         assert_eq!(
@@ -655,7 +664,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let rows: &[(i64, &[&str])] = &[(1, &["Rust"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         assert!(g.tag("i love rust").is_empty(), "lowercase does not match");
         assert_eq!(
             view(&g.tag("i love Rust")),
@@ -671,7 +680,7 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         // "café" is 5 bytes (é = 2 bytes); "naïve" is 6 bytes (ï = 2).
         let rows: &[(i64, &[&str])] = &[(1, &["café"]), (2, &["naïve"]), (3, &["東京"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         let p = pairs(rows);
 
         let text = "a café and a naïve 東京 tour";
@@ -702,7 +711,7 @@ mod tests {
         // (that is not valid UTF-8, so it is not a representable surface). The
         // form "é" matches the whole char, on boundaries.
         let rows: &[(i64, &[&str])] = &[(1, &["é"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         // "café" contains an é at bytes [3,5); the tag lands exactly there.
         let tags = view(&g.tag("café"));
         assert_eq!(tags, vec![(1, 3, 2, "é".to_string())]);
@@ -720,7 +729,7 @@ mod tests {
             (3, &["שלום"]),              // "peace" in Hebrew (RTL)
             (4, &["👩\u{200d}💻"]),      // woman technologist (ZWJ emoji)
         ];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         let p = pairs(rows);
         for text in [
             "say مرحبا to a\u{0301}\u{0300} and שלום",
@@ -741,7 +750,7 @@ mod tests {
     fn empty_dictionary_tags_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let (_dict, g) = compile(&db, &[], GazetteerConfig::default());
+        let (_dict, g) = compile(&db, &[], GazetteerConfig::exact());
         assert_eq!(g.pattern_count(), 0);
         assert!(g.tag("any text at all").is_empty());
         assert!(g.tag("").is_empty());
@@ -752,7 +761,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let rows: &[(i64, &[&str])] = &[(1, &["anything"])];
-        let (_dict, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_dict, g) = compile(&db, rows, GazetteerConfig::exact());
         assert!(g.tag("").is_empty());
     }
 
@@ -769,9 +778,9 @@ mod tests {
         ];
         let text = "alpha beta gamma a b g alpha";
         // One stored relation; two independent compiles of it must agree.
-        let (dict, g1) = compile(&db, rows, GazetteerConfig::default());
+        let (dict, g1) = compile(&db, rows, GazetteerConfig::exact());
         let rtx = db.read_tx().unwrap();
-        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::default()).unwrap();
+        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::exact()).unwrap();
         let t1 = g1.tag(text);
         let t2 = g2.tag(text);
         assert_eq!(t1, t2, "same dictionary + text ⇒ identical tags");
@@ -803,7 +812,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let err = compile_dictionary(&rtx, &dict, GazetteerConfig::default())
+        let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
             .expect_err("empty surface must error");
         assert!(
             err.downcast_ref::<GazetteerEmptySurface>().is_some(),
@@ -816,7 +825,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let rows: &[(i64, &[&str])] = &[(1, &["fine"])];
-        let (dict, _g) = compile(&db, rows, GazetteerConfig::default());
+        let (dict, _g) = compile(&db, rows, GazetteerConfig::exact());
 
         // Overwrite the row's value with a non-list surfaces column (an Int
         // where a List<String> is required). The stored bytes decode as a
@@ -833,7 +842,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let err = compile_dictionary(&rtx, &dict, GazetteerConfig::default())
+        let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
             .expect_err("non-list surfaces must error, not panic");
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
@@ -846,7 +855,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let rows: &[(i64, &[&str])] = &[(1, &["fine"])];
-        let (dict, _g) = compile(&db, rows, GazetteerConfig::default());
+        let (dict, _g) = compile(&db, rows, GazetteerConfig::exact());
 
         // A surfaces list whose element is an Int, not a String.
         let mut tx = db.write_tx().unwrap();
@@ -864,7 +873,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let err = compile_dictionary(&rtx, &dict, GazetteerConfig::default())
+        let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
             .expect_err("non-string surface element must error, not panic");
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
@@ -1021,7 +1030,7 @@ mod tests {
             (4, &["a\u{0301}"]),
             (5, &["a"]),
         ];
-        let (_d, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_d, g) = compile(&db, rows, GazetteerConfig::exact());
         let p = hostile_pairs(rows);
         for text in [
             "cafe\u{0301}",
@@ -1046,7 +1055,7 @@ mod tests {
             (5, &["ba"]),
             (6, &["abab"]),
         ];
-        let (_d, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_d, g) = compile(&db, rows, GazetteerConfig::exact());
         let p = hostile_pairs(rows);
         for text in [
             "abc",
@@ -1075,7 +1084,7 @@ mod tests {
             (3, &["the whole thing"]),
             (4, &["東京"]),
         ];
-        let (_d, g) = compile(&db, rows, GazetteerConfig::default());
+        let (_d, g) = compile(&db, rows, GazetteerConfig::exact());
         let p = hostile_pairs(rows);
         for text in [
             "the whole thing",
@@ -1110,7 +1119,7 @@ mod tests {
         };
         let dir2 = tempfile::tempdir().unwrap();
         let db2 = new_fjall_storage(dir2.path()).unwrap();
-        let (_de, g_exact) = compile(&db2, rows, GazetteerConfig::default());
+        let (_de, g_exact) = compile(&db2, rows, GazetteerConfig::exact());
         let p = hostile_pairs(rows);
 
         let alphabet = [
@@ -1177,9 +1186,9 @@ mod tests {
             (1, &["ab", "a"]),
             (2, &["abc", "東", "ab"]),
         ];
-        let (dict, g1) = compile(&db, rows, GazetteerConfig::default());
+        let (dict, g1) = compile(&db, rows, GazetteerConfig::exact());
         let rtx = db.read_tx().unwrap();
-        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::default()).unwrap();
+        let g2 = compile_dictionary(&rtx, &dict, GazetteerConfig::exact()).unwrap();
         for text in ["ab東京abc東ab", "東京", "abcabab"] {
             assert_eq!(
                 g1.tag(text),
