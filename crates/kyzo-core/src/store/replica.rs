@@ -259,7 +259,7 @@ impl AuthorizingKey {
             .signing
             .as_ref()
             .ok_or(ReplicaRefuse::AuthenticityFailed)?;
-        Ok(Signature::from_bytes(
+        Ok(Signature::admit(
             signing.sign(body.as_bytes().as_slice()).to_bytes(),
         ))
     }
@@ -860,7 +860,7 @@ fn signing_body_digest(
         }
         None => h.update([0u8]),
     }
-    Digest::from_bytes(h.finalize().into())
+    Digest::admit(h.finalize().into())
 }
 
 /// Mint an AdmissionCertificate — callable only from the admission seam.
@@ -1811,7 +1811,7 @@ impl SignedStateRootHead {
     /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
     /// head fields.
     pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
-        let body = Digest::from_bytes(
+        let body = Digest::admit(
             head.compact_digest()
                 .map_err(|_| ReplicaRefuse::AuthenticityFailed)?,
         );
@@ -1847,7 +1847,7 @@ impl SignedStateRootHead {
             Some(k) => k,
             None => return Err(ReplicaRefuse::AuthenticityFailed),
         };
-        let body = Digest::from_bytes(
+        let body = Digest::admit(
             self.head
                 .compact_digest()
                 .map_err(|_| ReplicaRefuse::AuthenticityFailed)?,
@@ -1919,8 +1919,8 @@ mod authorizing_key_ed25519_tests {
         )?;
         assert!(
             !weak.verify_signature(
-                &Digest::from_bytes([0x99u8; 32]),
-                &Signature::from_bytes(forged_sig),
+                &Digest::admit([0x99u8; 32]),
+                &Signature::admit(forged_sig),
             ),
             "FORGERY ACCEPTED: verify_signature admits a signature under a small-order \
              (identity) authorizing key over an arbitrary body -- the permissive \
@@ -1968,7 +1968,7 @@ mod authorizing_key_ed25519_tests {
         assert!(!receiver.can_sign());
         assert!(
             matches!(
-                receiver.sign(&Digest::from_bytes([0u8; 32])),
+                receiver.sign(&Digest::admit([0u8; 32])),
                 Err(ReplicaRefuse::AuthenticityFailed)
             ),
             "public-only key cannot forge"
@@ -1980,7 +1980,7 @@ mod authorizing_key_ed25519_tests {
         let origin = AuthorizingKey::mint([0xA1; 32], seed);
         assert_eq!(origin.verifying_bytes(), dalek_pk);
         assert!(origin.can_sign());
-        let body = Digest::from_bytes([0x5eu8; 32]);
+        let body = Digest::admit([0x5eu8; 32]);
         let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
         assert!(
@@ -2009,7 +2009,7 @@ mod authorizing_key_ed25519_tests {
             "id is the verifying key bytes"
         );
         assert!(origin.can_sign());
-        let body = Digest::from_bytes([0xABu8; 32]);
+        let body = Digest::admit([0xABu8; 32]);
         let sig = origin.sign(&body)?;
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
@@ -2025,7 +2025,7 @@ mod authorizing_key_ed25519_tests {
         let seed = [0x42u8; 32];
         let id = AuthorizingKeyId::from_digest([0x11; 32]);
         let origin = AuthorizingKey::mint(id, seed);
-        let body = Digest::from_bytes([0xCAu8; 32]);
+        let body = Digest::admit([0xCAu8; 32]);
         let sig = origin.sign(&body)?;
         assert_eq!(sig.as_bytes().len(), 64);
         assert!(origin.verify_signature(&body, &sig));
@@ -2052,7 +2052,7 @@ mod authorizing_key_ed25519_tests {
 
     #[test]
     fn wrong_key_and_flipped_byte_fail_verify() -> Result<()> {
-        let body = Digest::from_bytes([0xEEu8; 32]);
+        let body = Digest::admit([0xEEu8; 32]);
         let origin = AuthorizingKey::mint([0x01; 32], [0x7Au8; 32]);
         let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
@@ -2060,7 +2060,7 @@ mod authorizing_key_ed25519_tests {
         // Flipped signature byte → refuse.
         let mut flipped = *sig.as_bytes();
         flipped[0] ^= 0x01;
-        let flipped_sig = Signature::from_bytes(flipped);
+        let flipped_sig = Signature::admit(flipped);
         assert!(!origin.verify_signature(&body, &flipped_sig));
         assert!(origin.verify_signature(&body, &sig));
 
@@ -2108,7 +2108,7 @@ mod crossing_contract_tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: Signature::from_bytes([0u8; 64]),
+            signature: Signature::admit([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, key).into_diagnostic()?;
         mint_admission_certificate(parts).into_diagnostic()
@@ -2461,7 +2461,7 @@ mod identity {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: Signature::from_bytes([0u8; 64]),
+            signature: Signature::admit([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, key).into_diagnostic()?;
         mint_admission_certificate(parts).into_diagnostic()
@@ -2752,7 +2752,7 @@ mod promotion {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: Signature::from_bytes([0u8; 64]),
+            signature: Signature::admit([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key)?;
         let cert = mint_admission_certificate(parts)?;

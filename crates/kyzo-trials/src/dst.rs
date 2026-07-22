@@ -253,7 +253,7 @@ fn stored_relation<S: Storage>(db: &S, name: &str, arity: usize, rows: &[Tuple])
     write_then_commit(db, |tx| {
         let handle = create_relation(tx, input, KeyspaceKind::Facts)?;
         for row in rows {
-            handle.put_fact(tx, row.as_slice(), ValidityTs::from_raw(0), sp())?;
+            handle.put_fact(tx, row.as_slice(), ValidityTs::of_micros(0), sp())?;
         }
         Ok(())
     })
@@ -766,7 +766,7 @@ fn crash_consistency_is_query_visible() {
         .unwrap();
         let put = |tx: &mut SimWriteTx, a: i64, b: i64| {
             let row = vec![v(a), v(b)];
-            h.put_fact(tx, &row, ValidityTs::from_raw(0), sp()).unwrap();
+            h.put_fact(tx, &row, ValidityTs::of_micros(0), sp()).unwrap();
         };
         put(&mut tx, 1, 2);
         put(&mut tx, 2, 3);
@@ -887,7 +887,7 @@ fn crash_recovery_under_faults_never_tears() {
             };
             for (a, b) in [(1, 2), (2, 3)] {
                 let row = vec![v(a), v(b)];
-                if let Err(e) = h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp()) {
+                if let Err(e) = h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp()) {
                     let _ = tx.abort();
                     return Err(e);
                 }
@@ -912,7 +912,7 @@ fn crash_recovery_under_faults_never_tears() {
         // not commit, which is one of the two legal recovered states.
         if let Ok(mut tx) = db.write_tx() {
             let row = vec![v(3), v(4)];
-            match h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp()) {
+            match h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp()) {
                 Ok(()) => {
                     let _ = tx.commit(); // buffer tier; ignore fault
                 }
@@ -991,7 +991,7 @@ fn snapshot_isolation_holds_at_answer_level() {
         .unwrap();
         for (slot, num) in [(0i64, 0i64), (1, C)] {
             let row = vec![v(slot), v(num)];
-            h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())
+            h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp())
                 .unwrap();
         }
         tx.commit().unwrap();
@@ -1032,7 +1032,7 @@ fn snapshot_isolation_holds_at_answer_level() {
                         // Same valid instant every round: each atomic pair
                         // update is a system-time correction of the pair,
                         // and the current read resolves to the newest one.
-                        if h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())
+                        if h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp())
                             .is_err()
                         {
                             good = false;
@@ -1117,9 +1117,9 @@ fn time_travel_under_faults_answers_or_errors() {
             ] {
                 if assertive {
                     let row = vec![v(id), DataValue::Str((*state).to_string())];
-                    h.put_fact(tx, &row, ValidityTs::from_raw(at), sp())?;
+                    h.put_fact(tx, &row, ValidityTs::of_micros(at), sp())?;
                 } else {
-                    h.retract_fact(tx, &[v(id)], ValidityTs::from_raw(at), sp())?;
+                    h.retract_fact(tx, &[v(id)], ValidityTs::of_micros(at), sp())?;
                 }
             }
             Ok(())
@@ -1137,7 +1137,7 @@ fn time_travel_under_faults_answers_or_errors() {
                 vec![rel_atom_asof(
                     "hist",
                     &[id, state],
-                    AsOf::current(ValidityTs::from_raw(at)),
+                    AsOf::current(ValidityTs::of_micros(at)),
                 )],
             )],
         )]])
@@ -1439,7 +1439,7 @@ fn open_live_door(
     let (_view, auth) = sealed.take_write_authority();
     let incarnation = auth
         .incarnation_mint_cap(OpenOrdinal::ZERO)
-        .mint(Entropy::from_bytes(entropy))
+        .mint(Entropy::admit(entropy))
         .expect("incarnation mint");
     let session = SweepSession::new(store_id, fence_epoch, incarnation);
     let cap = StableCommitCap::NativeFsyncProof {
@@ -2070,7 +2070,7 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
     let auth = WriteAuthority::mint(store_id, [0x37; 32]);
     let incarnation = auth
         .incarnation_mint_cap(OpenOrdinal::ZERO)
-        .mint(Entropy::from_bytes([0x50; 32]))
+        .mint(Entropy::admit([0x50; 32]))
         .expect("incarnation");
     let session = SweepSession::new(store_id, fence, incarnation);
     let cap = StableCommitCap::NativeFsyncProof {
@@ -2262,7 +2262,7 @@ pub mod storage_campaign_lanes {
         consent_seed: [u8; 32],
     ) {
         let (vk, _) =
-            sign_fork_consent(consent_seed, predecessor, &Digest::from_bytes([0u8; 32]));
+            sign_fork_consent(consent_seed, predecessor, &Digest::admit([0u8; 32]));
         table
             .insert(predecessor, vk)
             .expect("register predecessor consent key");
@@ -2331,7 +2331,7 @@ pub mod storage_campaign_lanes {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: Signature::from_bytes([0u8; 64]),
+            signature: Signature::admit([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, key).expect("sign admission parts");
         mint_admission_certificate(parts).expect("mint admission certificate")
@@ -2364,7 +2364,7 @@ pub mod storage_campaign_lanes {
         let (_view, auth) = sealed.take_write_authority();
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes(entropy))
+            .mint(Entropy::admit(entropy))
             .expect("incarnation mint");
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
         let door =
@@ -2411,11 +2411,11 @@ pub mod storage_campaign_lanes {
             // Two clones: equal OpenOrdinals, differing Entropy under the approved arm.
             let clone_a = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::from_bytes(seed_bytes(0x11, seed)))
+                .mint(Entropy::admit(seed_bytes(0x11, seed)))
                 .expect("clone A");
             let clone_b = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::from_bytes(seed_bytes(0x22, seed)))
+                .mint(Entropy::admit(seed_bytes(0x22, seed)))
                 .expect("clone B");
             assert_eq!(
                 clone_a.open_ordinal(),
@@ -2487,7 +2487,7 @@ pub mod storage_campaign_lanes {
         let (_view, auth) = sealed.take_write_authority();
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0x5E; 32]))
+            .mint(Entropy::admit([0x5E; 32]))
             .expect("incarnation");
         let counter = DomainCounter::ZERO;
         let first = nonce(MintDomain::Commit, counter, domain, incarnation);
@@ -2602,7 +2602,7 @@ pub mod storage_campaign_lanes {
             let (_view, auth) = sealed.take_write_authority();
             let foreign = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::from_bytes(seed_bytes(0xFF, seed)))
+                .mint(Entropy::admit(seed_bytes(0xFF, seed)))
                 .expect("foreign incarnation");
             let before = door.highest_commit_ordinal();
             let (key_foreign, dig_foreign) =
@@ -2651,7 +2651,7 @@ pub mod storage_campaign_lanes {
             let (_view, auth) = sealed.take_write_authority();
             let incarnation = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::from_bytes(seed_bytes(0xC0, seed)))
+                .mint(Entropy::admit(seed_bytes(0xC0, seed)))
                 .expect("incarnation");
 
             // Reserve-before-encrypt: DomainCounter is an input to nonce — encrypt
@@ -2755,11 +2755,11 @@ pub mod storage_campaign_lanes {
         let (_view, auth) = sealed.take_write_authority();
         let live = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xD0; 32]))
+            .mint(Entropy::admit([0xD0; 32]))
             .expect("live incarnation");
         let dead = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xDE; 32]))
+            .mint(Entropy::admit([0xDE; 32]))
             .expect("dead incarnation");
 
         let sealed2 = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
@@ -2811,11 +2811,11 @@ pub mod storage_campaign_lanes {
         // dual-use lineage is Unexposed until chain-meet (§56).
         let w1 = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xE1; 32]))
+            .mint(Entropy::admit([0xE1; 32]))
             .expect("writer 1");
         let w2 = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xE2; 32]))
+            .mint(Entropy::admit([0xE2; 32]))
             .expect("writer 2");
         assert_eq!(w1.open_ordinal(), w2.open_ordinal());
         assert_ne!(w1.entropy(), w2.entropy());
@@ -2823,7 +2823,7 @@ pub mod storage_campaign_lanes {
 
         // Chain-meet adversary: quarantine carriage + unknown-invariant → poison
         // dominates; every key admits as OrderedCorrupt (no mixed success).
-        let ks = KeyspaceId::from_raw(7);
+        let ks = KeyspaceId::of_u64(7);
         let quarantined = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
             ScopedMismatchCarriage::new(ks, b"a".to_vec(), b"c".to_vec()),
         ));
@@ -2852,7 +2852,7 @@ pub mod storage_campaign_lanes {
         // RecoveryGrant materialize advances domain; orphan write after observed
         // recovery is AuthorityRecovered on the refuse ledger.
         let (recovery, matrix) = recovery_grant_with_quorum(
-            GrantId::from_bytes([0x90; 32]),
+            GrantId::admit([0x90; 32]),
             store_id,
             pred_epoch,
             [0xEE; 32],
@@ -2882,7 +2882,7 @@ pub mod storage_campaign_lanes {
         register_predecessor_consent(&mut consent_table, predecessor, consent_seed);
 
         let fork = fork_grant_with_consent(
-            GrantId::from_bytes([0xF0; 32]),
+            GrantId::admit([0xF0; 32]),
             predecessor,
             [0xAA; 32],
             [0xBB; 32],
@@ -2929,7 +2929,7 @@ pub mod storage_campaign_lanes {
         // Mismatched prior → typed GrantAlreadyMaterialized carrying existing identity.
         // Same sealed consent key for the predecessor (one StoreId → one trust root).
         let other = fork_grant_with_consent(
-            GrantId::from_bytes([0xF1; 32]),
+            GrantId::admit([0xF1; 32]),
             predecessor,
             [0x01; 32],
             [0x02; 32],
@@ -2969,8 +2969,8 @@ pub mod storage_campaign_lanes {
         let store_id = sealed.store_id();
         let pred_epoch = sealed.fence_epoch();
 
-        let g1_id = GrantId::from_bytes([0x71; 32]);
-        let g2_id = GrantId::from_bytes([0x72; 32]);
+        let g1_id = GrantId::admit([0x71; 32]);
+        let g2_id = GrantId::admit([0x72; 32]);
         let (g1, matrix) = recovery_grant_with_quorum(
             g1_id, store_id, pred_epoch, [0xA1; 32], [0xA2; 32], [0x11; 32],
         );
@@ -3292,7 +3292,7 @@ pub mod storage_campaign_lanes {
             let (_view, auth) = sealed.take_write_authority();
             let incarnation = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::from_bytes(seed_bytes(0x26, seed)))
+                .mint(Entropy::admit(seed_bytes(0x26, seed)))
                 .expect("incarnation boundary");
 
             let intact = CheckpointSealParts {
@@ -3961,11 +3961,11 @@ pub mod storage_campaign_lanes {
         let (_view, auth) = sealed.take_write_authority();
         let holder = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xF1; 32]))
+            .mint(Entropy::admit([0xF1; 32]))
             .expect("crash-holder incarnation");
         let next_open = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xF2; 32]))
+            .mint(Entropy::admit([0xF2; 32]))
             .expect("next-open incarnation");
 
         let fenced = FencedFootprint::seal(
@@ -4082,12 +4082,12 @@ pub mod storage_campaign_lanes {
     fn shred_salt_leave_is_free_dst() {
         let store = StoreId::from_digest([0x64; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x55; 32]));
+        let cap = KekUnwrapCap::from_kek(Kek::admit([0x55; 32]));
         let seg_a = SegmentCounter::ZERO;
-        let seg_b = SegmentCounter::from_raw(1);
-        let wrap_a = wrap_shred_salt(&cap, &ShredSalt::from_bytes([0xAA; 32]), seg_a, domain)
+        let seg_b = SegmentCounter::of_u64(1);
+        let wrap_a = wrap_shred_salt(&cap, &ShredSalt::admit([0xAA; 32]), seg_a, domain)
             .expect("wrap A");
-        let wrap_b = wrap_shred_salt(&cap, &ShredSalt::from_bytes([0xBB; 32]), seg_b, domain)
+        let wrap_b = wrap_shred_salt(&cap, &ShredSalt::admit([0xBB; 32]), seg_b, domain)
             .expect("wrap B");
 
         let mut ledger = ShredLedger::new();
@@ -4107,7 +4107,7 @@ pub mod storage_campaign_lanes {
         unwrap_shred_salt(&cap, &wrap_b, &ledger).expect("neighbor still decrypts after shred");
 
         let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0x77; 32]))
+            .mint(Entropy::admit([0x77; 32]))
             .expect("incarnation history");
         let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::FullWal,
@@ -4136,7 +4136,7 @@ pub mod storage_campaign_lanes {
     /// §55 — dual fault: ObjectCorrupt typed partial vs OrderedCorrupt quarantine/poison; no mixed success.
     #[test]
     fn dual_corruption_dst() {
-        let ks = KeyspaceId::from_raw(1);
+        let ks = KeyspaceId::of_u64(1);
 
         // Ordered half adversary: unknown-invariant carriage → poison → OrderedCorrupt.
         let ordered = FailureLattice::Healthy
@@ -4569,7 +4569,7 @@ pub mod storage_campaign_lanes {
             let (_view, auth) = sealed.take_write_authority();
             let incarnation = auth
                 .incarnation_mint_cap(OpenOrdinal::ZERO)
-                .mint(Entropy::from_bytes({
+                .mint(Entropy::admit({
                     let mut e = [0x26u8; 32];
                     e[1] = (seed >> 8) as u8;
                     e

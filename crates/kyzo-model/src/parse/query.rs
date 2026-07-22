@@ -342,7 +342,9 @@ pub(crate) fn parse_query(
                         .map_err(|err| OptionNotConstantError("limit", span, [err]))?,
                 )
                 .ok_or(OptionNotNonNegIntError("limit", span))?;
-                out_opts.limit = Some(limit as usize);
+                out_opts.limit = Some(
+                    usize::try_from(limit).map_err(|_| OptionNotNonNegIntError("limit", span))?,
+                );
             }
             Rule::offset_option => {
                 let pair = pair.children().need("a child")?;
@@ -353,7 +355,9 @@ pub(crate) fn parse_query(
                         .map_err(|err| OptionNotConstantError("offset", span, [err]))?,
                 )
                 .ok_or(OptionNotNonNegIntError("offset", span))?;
-                out_opts.offset = Some(offset as usize);
+                out_opts.offset = Some(
+                    usize::try_from(offset).map_err(|_| OptionNotNonNegIntError("offset", span))?,
+                );
             }
             Rule::sort_option => {
                 for part in pair.into_inner() {
@@ -1367,7 +1371,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn parse_q(src: &str) -> Result<InputProgram> {
-        let cur = ValidityTs::from_raw(0);
+        let cur = ValidityTs::of_micros(0);
         match parse_script(src, &BTreeMap::new(), cur)? {
             Script::Query(p) => Ok(p),
             other => bail!("expected Query script, got {other:?}"),
@@ -1396,7 +1400,7 @@ mod tests {
 
     #[test]
     fn parse_query_refuses_empty_and_no_entry() -> Result<()> {
-        let cur = ValidityTs::from_raw(0);
+        let cur = ValidityTs::of_micros(0);
         ensure!(
             parse_script("", &BTreeMap::new(), cur).is_err(),
             "empty script must refuse"

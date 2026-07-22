@@ -96,7 +96,7 @@ impl NormalAggrObj for AggrHllSketch {
 /// Decode a `Bytes` value as a HyperLogLog sketch.
 fn as_hll(v: &DataValue) -> Result<HyperLogLog> {
     match v {
-        DataValue::Bytes(b) => HyperLogLog::from_bytes(b),
+        DataValue::Bytes(b) => HyperLogLog::decode(b),
         other @ (data_value_any!()) => bail!("hll_union expects sketch bytes, got {other:?}"),
     }
 }
@@ -194,7 +194,7 @@ impl NormalAggrObj for AggrCountMin {
         match value {
             // Shard merge: fold a stored sketch into this builder.
             DataValue::Bytes(b) => {
-                let other = CountMinSketch::from_bytes(b)?;
+                let other = CountMinSketch::decode(b)?;
                 self.cms.merge(&other)?;
                 Ok(())
             }
@@ -239,7 +239,7 @@ impl NormalAggrObj for AggrTDigest {
         for v in &self.buf {
             match v {
                 // Shard fold: stored digest Bytes decode + merge.
-                DataValue::Bytes(b) => digests.push(TDigest::from_bytes(b)?),
+                DataValue::Bytes(b) => digests.push(TDigest::decode(b)?),
                 other @ (data_value_any!()) => raw.push(other.clone()),
             }
         }
@@ -417,7 +417,7 @@ mod tests {
         let DataValue::Bytes(bytes) = out else {
             return Err(miette!("count_min should return bytes"));
         };
-        let cms = CountMinSketch::from_bytes(&bytes)?;
+        let cms = CountMinSketch::decode(&bytes)?;
         assert!(cms.estimate(&val(6)) >= 7);
         Ok(())
     }

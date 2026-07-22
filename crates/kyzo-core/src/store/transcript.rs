@@ -1518,7 +1518,7 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
         authorizing_key_id: dig,
         scope_manifest_digest: dig,
         operation_key: None,
-        signature: super::crypto::Signature::from_bytes([0u8; 64]),
+        signature: super::crypto::Signature::admit([0u8; 64]),
     }
 }
 

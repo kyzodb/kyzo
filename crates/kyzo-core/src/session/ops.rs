@@ -821,7 +821,7 @@ mod temporal_index_tests {
     use kyzo_model::value::{StoredValiditySlot, ValidityTs};
 
     fn vts(t: i64) -> ValidityTs {
-        ValidityTs::from_raw(t)
+        ValidityTs::of_micros(t)
     }
 
     fn open_engine(store: SimStorage) -> Result<Engine<SimStorage>> {

@@ -330,7 +330,7 @@ mod tests {
         )?);
         assert!(inline(
             &encode(Datum::Validity(
-                Validity::new(ValidityTs::from_raw(i64::MAX), false)
+                Validity::new(ValidityTs::of_micros(i64::MAX), false)
                     .ok_or_else(|| miette!("retract admits every tick"))?,
             )),
             &mut arena

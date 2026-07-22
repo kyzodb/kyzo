@@ -32,7 +32,7 @@ fn test_pre_epoch_timestamps() -> Result<()>  {
     let coerced = typing
         .coerce(
             DataValue::Str("1969-07-20T20:17:00Z".into()),
-            ValidityTs::from_raw(0),
+            ValidityTs::of_micros(0),
         )
         ?;
     match coerced {

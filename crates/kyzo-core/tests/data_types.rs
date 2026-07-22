@@ -69,7 +69,7 @@ fn every_data_type_round_trips_through_a_stored_relation() {
     assert_eq!(row[7], expected_json, "Json");
 
     let expected_validity =
-        DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(100), true));
+        DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(100), true));
     assert_eq!(row[8], expected_validity, "Validity");
 
     assert_eq!(row[9].get_int(), Some(10), "Interval start");
@@ -92,9 +92,9 @@ fn validity_polarity_is_part_of_the_value() {
     let out = db
         .run_script("?[id, val] := *v{id, val}", no_params())
         .expect("scan v");
-    let asserted = DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(100), true));
+    let asserted = DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(100), true));
     let retracted =
-        DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(100), false));
+        DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(100), false));
     for r in out.rows() {
         let id = r[0].get_int().unwrap();
         if id == 1 {

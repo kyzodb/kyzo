@@ -1838,7 +1838,7 @@ mod tests {
             rule_args: vec![FixedRuleArg::Stored {
                 name: sym("edges"),
                 bindings: vec![sym("x")],
-                as_of: Some(AsOf::current(ValidityTs::from_raw(0))),
+                as_of: Some(AsOf::current(ValidityTs::of_micros(0))),
                 span: SourceSpan(0, 0),
             }],
             options: FixedRuleOptions::empty(),

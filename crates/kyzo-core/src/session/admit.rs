@@ -625,7 +625,7 @@ fn mint_certificate_from_live(
         authorizing_key_id: key.id(),
         scope_manifest_digest: live.scope_manifest_digest,
         operation_key: None,
-        signature: Signature::from_bytes([0u8; 64]),
+        signature: Signature::admit([0u8; 64]),
     };
     parts.signature = sign_admission_parts(&parts, key)?;
     Ok(mint_admission_certificate(parts)?)
@@ -2892,7 +2892,7 @@ mod live_certificate_verifiability {
             authorizing_key_id: cert.authorizing_key_id(),
             scope_manifest_digest: cert.scope_manifest_digest(),
             operation_key: cert.operation_key().copied(),
-            signature: Signature::from_bytes(flipped),
+            signature: Signature::admit(flipped),
         })
         .map_err(|e| miette!("mint seals flipped-signature parts without re-checking authenticity: {e}"))?;
 

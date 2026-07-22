@@ -17,7 +17,7 @@ use kyzo_model::value::Tuple;
 /// A bitemporal read coordinate in plain ascending `i64` (larger means later).
 ///
 /// Exact correspondence to the Reverse-wrapped real type: wrap each field
-/// in `ValidityTs::from_raw(_)` and mint through the real type's `at` /
+/// in `ValidityTs::of_micros(_)` and mint through the real type's `at` /
 /// `current` doors. Ascending `t <= v` here is the real type's descending
 /// `ValidityTs(t) >= ValidityTs(v)`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

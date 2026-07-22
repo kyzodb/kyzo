@@ -396,7 +396,7 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (original, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -411,7 +411,7 @@ mod tests {
             "quote",
             &corrected,
             1,
-            ValidityTs::from_raw(200),
+            ValidityTs::of_micros(200),
         )
         .map_err(|e| miette!("admit correction: {e}"))?;
         let (_permit, link) =
@@ -450,7 +450,7 @@ mod tests {
         // Admit the create's logical prior through the correction door's
         // identity plane, then append the correction on the real store.
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
         let prior = prior_record.record_id();
 
         let mut tx = db.store.write_tx().map_err(|e| miette!("correction tx: {e}"))?;
@@ -462,7 +462,7 @@ mod tests {
             &mut tx,
             prior,
             &corrected,
-            ValidityTs::from_raw(200),
+            ValidityTs::of_micros(200),
             SourceSpan::default(),
         )
         .map_err(|e| miette!("append correction: {e}"))?;
@@ -512,7 +512,7 @@ mod tests {
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let seats = LiveAdmissionSeats::mint_genesis();
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
         let prior = prior_record.record_id();
 
         let mut tx = db.store.write_tx().map_err(|e| miette!("correction tx: {e}"))?;
@@ -525,7 +525,7 @@ mod tests {
             &mut tx,
             prior,
             &corrected,
-            ValidityTs::from_raw(100),
+            ValidityTs::of_micros(100),
             SourceSpan::default(),
         )
         .map_err(|e| miette!("append same-valid correction: {e}"))?;
@@ -567,7 +567,7 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
 
         let mut tx = db.store.write_tx().map_err(|e| miette!("tx: {e}"))?;
         let handle = get_relation(&tx, "quote").map_err(|e| miette!("handle: {e}"))?;
@@ -577,7 +577,7 @@ mod tests {
             &mut tx,
             prior_record.record_id(),
             &[DataValue::from(1i64), DataValue::from(150i64)],
-            ValidityTs::from_raw(200),
+            ValidityTs::of_micros(200),
             SourceSpan::default(),
         )
         .map_err(|e| miette!("append: {e}"))?;
@@ -680,7 +680,7 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (original, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -702,7 +702,7 @@ mod tests {
                 kind,
                 prior,
                 subject,
-                ValidityTs::from_raw(200 + match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }),
+                ValidityTs::of_micros(200 + match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }),
             )
             .map_err(|e| miette!("admit semantic deletion: {e}"))?;
             let (_permit, link) = seal_semantic_deletion(&seats, kind, prior, &successor, cert)
@@ -750,7 +750,7 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100))?;
+            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
         ))?;
@@ -760,7 +760,7 @@ mod tests {
             SemanticDeletionKind::Tombstone,
             prior_record.record_id(),
             DataValue::List(vec![DataValue::from(1i64)]),
-            ValidityTs::from_raw(200),
+            ValidityTs::of_micros(200),
         )
         .map_err(|e| miette!("admit tombstone: {e}"))?;
         seal_semantic_deletion(
@@ -816,7 +816,7 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original = [DataValue::from(1i64), DataValue::from(100i64)];
         let (prior_record, _) =
-            admit_original(&seats, "quote", &original, 1, ValidityTs::from_raw(100))?;
+            admit_original(&seats, "quote", &original, 1, ValidityTs::of_micros(100))?;
 
         let mut tx = db.store.write_tx().map_err(|e| miette!("tx: {e}"))?;
         let handle = get_relation(&tx, "quote").map_err(|e| miette!("handle: {e}"))?;
@@ -826,7 +826,7 @@ mod tests {
             &mut tx,
             prior_record.record_id(),
             &[DataValue::from(1i64), DataValue::from(175i64)],
-            ValidityTs::from_raw(300),
+            ValidityTs::of_micros(300),
             SourceSpan::default(),
         )
         .map_err(|e| miette!("append @300: {e}"))?;
@@ -838,7 +838,7 @@ mod tests {
             .current_row(
                 &rtx,
                 &[DataValue::from(1i64)],
-                AsOf::at(ValidityTs::from_raw(i64::MAX), ValidityTs::from_raw(150)),
+                AsOf::at(ValidityTs::of_micros(i64::MAX), ValidityTs::of_micros(150)),
                 SourceSpan::default(),
             )
             .map_err(|e| miette!("as-of 150: {e}"))?;
@@ -854,7 +854,7 @@ mod tests {
             .current_row(
                 &rtx,
                 &[DataValue::from(1i64)],
-                AsOf::at(ValidityTs::from_raw(i64::MAX), ValidityTs::from_raw(350)),
+                AsOf::at(ValidityTs::of_micros(i64::MAX), ValidityTs::of_micros(350)),
                 SourceSpan::default(),
             )
             .map_err(|e| miette!("as-of 350: {e}"))?;

@@ -193,7 +193,7 @@ fn hsetup(
         base.put_fact(
             &mut tx,
             r.as_slice(),
-            kyzo_model::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::of_micros(0),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -1759,7 +1759,7 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() {
                 base.put_fact(
                     &mut tx,
                     new_row.as_slice(),
-                    kyzo_model::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
                 ),
                 "put_fact insert",

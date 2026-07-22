@@ -65,7 +65,7 @@ pub struct RegionId([u8; 16]);
 
 impl RegionId {
     /// Wrap an already-proven region identity.
-    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+    pub fn admit(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
 

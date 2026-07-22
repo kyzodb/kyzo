@@ -545,7 +545,7 @@ impl Storage for FjallStorage {
     }
 
     fn clock_floor(&self) -> Result<ValidityTs> {
-        Ok(ValidityTs::from_raw(self.clock.floor()))
+        Ok(ValidityTs::of_micros(self.clock.floor()))
     }
 
     fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
@@ -1126,7 +1126,7 @@ mod pins {
 
     fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
         let slot =
-            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(t), true));
+            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(t), true));
         let tuple: Tuple =
             Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
         tuple.encode_as_key(rel)
@@ -1178,7 +1178,7 @@ mod pins {
         let tx = db.read_tx()?;
         for at in 0..=10i64 {
             let got: Vec<(String, i64)> = tx
-                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
+                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::of_micros(at)))
                 .map(|r| -> Result<_> {
                     let t = r?;
                     let name = match &t.as_slice()[0] {
@@ -1242,7 +1242,7 @@ mod pins {
         assert_eq!(tx.range_scan(b"m", b"m").count(), 0, "empty scan");
         tx.del_range(b"z", b"a")?;
         assert_eq!(
-            tx.range_skip_scan_tuple(b"z", b"a", AsOf::current(ValidityTs::from_raw(0)))
+            tx.range_skip_scan_tuple(b"z", b"a", AsOf::current(ValidityTs::of_micros(0)))
                 .count(),
             0,
             "inverted skip scan"
@@ -1351,7 +1351,7 @@ mod pins {
                                 .range_skip_scan_tuple(
                                     &lower,
                                     &upper,
-                                    AsOf::current(ValidityTs::from_raw(i64::MAX)),
+                                    AsOf::current(ValidityTs::of_micros(i64::MAX)),
                                 )
                                 .map(|r| r?)
                                 .collect();
@@ -1376,7 +1376,7 @@ mod pins {
             .range_skip_scan_tuple(
                 &lower,
                 &upper,
-                AsOf::current(ValidityTs::from_raw(i64::MAX)),
+                AsOf::current(ValidityTs::of_micros(i64::MAX)),
             )
             .map(|r| r?)
             .collect();

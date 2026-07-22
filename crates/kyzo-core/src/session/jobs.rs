@@ -311,7 +311,7 @@ mod tests {
     fn quarantine_unreachable_without_operator_cap() -> Result<()>  {
         let mut surface = OperatorHealthSurface::empty();
         surface.record_quarantine(mint_quarantine(
-            KeyspaceId::from_raw(9),
+            KeyspaceId::of_u64(9),
             b"q0".to_vec(),
             b"q1".to_vec(),
         ));

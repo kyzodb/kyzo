@@ -281,7 +281,7 @@ mod tests {
             (
                 Tag::Validity,
                 DataValue::Validity(
-                    Validity::new(ValidityTs::from_raw(0), true)
+                    Validity::new(ValidityTs::of_micros(0), true)
                         .ok_or_else(|| miette!("non-reserved"))?
                         .into(),
                 ),

@@ -52,7 +52,7 @@ fn open_live_door(
     let (_view, auth) = sealed.take_write_authority();
     let incarnation = auth
         .incarnation_mint_cap(OpenOrdinal::ZERO)
-        .mint(Entropy::from_bytes(entropy))
+        .mint(Entropy::admit(entropy))
         .expect("incarnation mint");
     let session = SweepSession::new(store_id, fence_epoch, incarnation);
     let cap = StableCommitCap::NativeFsyncProof {
@@ -919,7 +919,7 @@ mod crypto_shred_deep_reachability {
         let fence = FenceEpoch::genesis(store);
         let domain = CryptoDomain::new(store, fence);
         let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes(incarnation_entropy))
+            .mint(Entropy::admit(incarnation_entropy))
             .expect("incarnation boundary");
         CheckpointSealParts {
             store_id: store,
@@ -948,7 +948,7 @@ mod crypto_shred_deep_reachability {
         payload: Vec<u8>,
     ) -> LeaveIsFreePack {
         let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes(incarnation_entropy))
+            .mint(Entropy::admit(incarnation_entropy))
             .expect("incarnation");
         LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::SealAndSuffix,
@@ -973,9 +973,9 @@ mod crypto_shred_deep_reachability {
         let salt_bytes = [0xB2u8; 32];
         let store = StoreId::from_digest([0x76; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::from_bytes(kek_bytes));
-        let salt = ShredSalt::from_bytes(salt_bytes);
-        let seg = SegmentCounter::from_raw(9);
+        let cap = KekUnwrapCap::from_kek(Kek::admit(kek_bytes));
+        let salt = ShredSalt::admit(salt_bytes);
+        let seg = SegmentCounter::of_u64(9);
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain).expect("production wrap");
         // Retained wrap copy for leave-is-free pack (post-shred pack may still
         // carry ciphertext bytes; plaintext needles must not survive in pack

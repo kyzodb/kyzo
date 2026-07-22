@@ -1221,9 +1221,9 @@ mod tests {
 
         let store = StoreId::from_digest([0xC1; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
-        let kek = Kek::from_bytes([0x59; 32]);
+        let kek = Kek::admit([0x59; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::from_bytes([0xA5; 32]);
+        let salt = ShredSalt::admit([0xA5; 32]);
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
 
         let mut aad_b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
@@ -1254,7 +1254,7 @@ mod tests {
                 Ok(n) => n,
                 Err(_) => u32::MAX,
             }.to_be_bytes());
-            let nonce = Nonce::from_bytes(nonce_bytes);
+            let nonce = Nonce::admit(nonce_bytes);
             let ct = compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)?;
             assert_ne!(
                 ct.body(),
@@ -1929,7 +1929,7 @@ mod tests {
         let store_a = StoreId::from_digest([0xF1; 32]);
         let store_b = StoreId::from_digest([0xF2; 32]);
         let fence_a = FenceEpoch::genesis(store_a);
-        let fence_a_later = FenceEpoch::from_raw(store_a, 1);
+        let fence_a_later = FenceEpoch::of_u64(store_a, 1);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
         let root = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())])?);

@@ -17,7 +17,7 @@
  *   `Vec<u32>` as `&[u8]` — NATIVE-ENDIAN on disk (non-portable between
  *   architectures) and undefined behavior on the read side (unaligned
  *   `*const u32` dereference). [`HashPermutations::to_bytes`] /
- *   [`from_bytes`](HashPermutations::from_bytes) and
+ *   [`decode`](HashPermutations::decode) and
  *   [`HashValues::to_bytes`] now spell EXPLICIT LITTLE-ENDIAN
  *   `to_le_bytes`/`from_le_bytes`, safely — the engine's
  *   `#![forbid(unsafe_code)]` forces the rewrite; little-endian is the
@@ -38,7 +38,7 @@
  *   tier drives the search; the mutation tier drives put/del.
  * - Law 5: the original's `unreachable!()`s on decoded inverse-index rows
  *   are the typed [`IndexRowCorrupt`] with the row's key context;
- *   `HashPermutations::from_bytes` refuses a byte length that is not a
+ *   `HashPermutations::decode` refuses a byte length that is not a
  *   multiple of 4 (the original silently truncated); band arithmetic that
  *   does not add up is a typed manifest error, not a slice panic.
  * - [`lsh_search`] returns candidates in DETERMINISTIC order (sorted by
@@ -163,7 +163,7 @@ impl ProjectionKind for Lsh {}
 ///
 /// Prefer [`Self::from_perms`] at mint sites. `From<Vec<u8>>` is gone so an
 /// arbitrary byte vector is not type-equal to a permutation payload; the
-/// length law is re-proven by [`HashPermutations::from_bytes`] on read.
+/// length law is re-proven by [`HashPermutations::decode`] on read.
 /// Field is private — mint only via [`Self::from_perms`].
 #[derive(
     Debug, Clone, PartialEq, Eq, Default, serde_derive::Serialize, serde_derive::Deserialize,
@@ -186,7 +186,7 @@ impl LshPermutationBytes {
         &self.0
     }
 
-    /// Test-only: truncate the payload so [`HashPermutations::from_bytes`]
+    /// Test-only: truncate the payload so [`HashPermutations::decode`]
     /// refuses — exercises the corrupt-manifest path without forging via
     /// a public `Vec` field.
     #[cfg(test)]
@@ -247,7 +247,7 @@ impl MinHashLshIndexManifest {
     /// catalog payload and may be corrupt (the original truncated odd
     /// lengths silently).
     pub(crate) fn get_hash_perms(&self) -> Result<HashPermutations> {
-        HashPermutations::from_bytes(self.perms.as_bytes()).map_err(|reason| {
+        HashPermutations::decode(self.perms.as_bytes()).map_err(|reason| {
             miette!(IndexRowCorrupt::new(
                 &self.index_name,
                 &[],
@@ -362,7 +362,7 @@ pub(crate) enum LshValueRefused {
 }
 
 /// The per-index hash seeds ("permutations"): one 32-bit seed per signature
-/// position. Inner vec is private — mint via [`Self::new`] / [`Self::from_bytes`].
+/// position. Inner vec is private — mint via [`Self::new`] / [`Self::decode`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HashPermutations(Vec<u32>);
 
@@ -409,7 +409,7 @@ impl HashPermutations {
     /// The inverse of [`to_bytes`](Self::to_bytes). Safe and fallible: a
     /// length that is not a multiple of 4 is corrupt, not silently
     /// truncated (and the original's unaligned `*const u32` read was UB).
-    pub(crate) fn from_bytes(
+    pub(crate) fn decode(
         bytes: &[u8],
     ) -> std::result::Result<Self, LshPermutationDecodeRefused> {
         if !bytes.len().is_multiple_of(4) {
@@ -1022,11 +1022,11 @@ mod tests {
             ],
             "explicit little-endian, independent of the host"
         );
-        let back = HashPermutations::from_bytes(&bytes)?;
+        let back = HashPermutations::decode(&bytes)?;
         assert_eq!(back.as_slice(), perms.as_slice(), "round trip");
 
         // A length that is not a multiple of 4 is corrupt, not truncated.
-        assert!(HashPermutations::from_bytes(&bytes[..7]).is_err());
+        assert!(HashPermutations::decode(&bytes[..7]).is_err());
         // And through the manifest it is the typed corruption error.
         let mut m = manifest_with_perms(vec![1, 2, 3, 4], 4)?;
         m.perms.corrupt_truncate_last_byte_for_test();
@@ -1120,7 +1120,7 @@ mod tests {
         );
         assert_eq!(
             perms.as_slice(),
-            HashPermutations::from_bytes(&perms.to_bytes())?
+            HashPermutations::decode(&perms.to_bytes())?
                 .as_slice()
         );
         Ok(())
@@ -1380,7 +1380,7 @@ mod tests {
                 base.put_fact(
                     &mut tx,
                     &row,
-                    kyzo_model::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
                 )?;
                 lsh_put(
@@ -1518,7 +1518,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
             lsh_put(

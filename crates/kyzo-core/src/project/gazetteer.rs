@@ -424,7 +424,7 @@ mod tests {
             dict.put_fact(
                 &mut tx,
                 &row,
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
         }
@@ -817,7 +817,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &row,
-            kyzo_model::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::of_micros(0),
             SourceSpan(0, 0),
         )?;
         tx.commit().map_err(|e| miette!("{e}"))?;
@@ -847,7 +847,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &bad,
-            kyzo_model::value::ValidityTs::from_raw(1),
+            kyzo_model::value::ValidityTs::of_micros(1),
             SourceSpan(0, 0),
         )?;
         tx.commit().map_err(|e| miette!("{e}"))?;
@@ -878,7 +878,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &bad,
-            kyzo_model::value::ValidityTs::from_raw(1),
+            kyzo_model::value::ValidityTs::of_micros(1),
             SourceSpan(0, 0),
         )?;
         tx.commit().map_err(|e| miette!("{e}"))?;

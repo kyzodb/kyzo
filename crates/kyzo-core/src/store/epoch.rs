@@ -38,7 +38,7 @@ impl FenceEpoch {
     }
 
     /// Construct from an already-proven epoch (WAL / seal decode) under `store_id`.
-    pub(crate) fn from_raw(store_id: StoreId, raw: u64) -> Self {
+    pub(crate) fn of_u64(store_id: StoreId, raw: u64) -> Self {
         Self {
             store_id,
             epoch: raw,
@@ -325,7 +325,7 @@ mod tests {
         // Live Fenced footprint appears after attest — advance must still refuse.
         let incarnation = authority
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xF6; 32]))?;
+            .mint(Entropy::admit([0xF6; 32]))?;
         let fenced = FencedFootprint::seal(
             Footprint::Exact(vec![ByteRange {
                 start: b"a".to_vec(),

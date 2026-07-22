@@ -187,7 +187,7 @@ impl SystemClock {
                 .0
                 .compare_exchange_weak(last, next, Ordering::AcqRel, Ordering::Relaxed)
             {
-                Ok(_) => return Ok(ValidityTs::from_raw(next)),
+                Ok(_) => return Ok(ValidityTs::of_micros(next)),
                 Err(observed) => last = observed,
             }
         }

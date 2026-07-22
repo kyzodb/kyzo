@@ -519,7 +519,7 @@ impl NullableColType {
                             }
 
                             let Some(v) =
-                                Validity::new(ValidityTs::from_raw(microseconds), is_assert)
+                                Validity::new(ValidityTs::of_micros(microseconds), is_assert)
                             else {
                                 bail!(InvalidValidity(DataValue::Str(s.into())));
                             };
@@ -534,7 +534,7 @@ impl NullableColType {
                                 if ts == i64::MAX || ts == i64::MIN {
                                     bail!(InvalidValidity(DataValue::List(l)))
                                 }
-                                let Some(v) = Validity::new(ValidityTs::from_raw(ts), is_assert)
+                                let Some(v) = Validity::new(ValidityTs::of_micros(ts), is_assert)
                                 else {
                                     bail!(InvalidValidity(DataValue::List(l)));
                                 };
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn json_coerce_preserves_regex_flags_via_to_json() -> Result<()> {
         let col = NullableColType::required(ColType::Json);
-        let cur = ValidityTs::from_raw(0);
+        let cur = ValidityTs::of_micros(0);
         let ci = DataValue::Regex(
             RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into())?,
         );
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn required_null_refuses_optional_null_admits() -> Result<()> {
-        let cur = ValidityTs::from_raw(0);
+        let cur = ValidityTs::of_micros(0);
         assert!(
             NullableColType::required(ColType::Int)
                 .coerce(DataValue::Null, cur)
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn bytes_from_base64_string_and_uuid_from_str() -> Result<()> {
-        let cur = ValidityTs::from_raw(0);
+        let cur = ValidityTs::of_micros(0);
         let b = NullableColType::required(ColType::Bytes)
             .coerce(DataValue::from("AQID"), cur)
             ?;

@@ -1234,7 +1234,7 @@ mod tests {
             ),
             KeyspaceKind::Facts,
         )?;
-        let stamp = kyzo_model::value::ValidityTs::from_raw(0);
+        let stamp = kyzo_model::value::ValidityTs::of_micros(0);
         // left: j ∈ {7, 8, 9(no match)}; right rows (i, j): j=7 has 2000
         // rows, j=8 has 3.
         for j in [7i64, 8, 9] {
@@ -1356,7 +1356,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &row,
-                    kyzo_model::value::ValidityTs::from_raw(ts),
+                    kyzo_model::value::ValidityTs::of_micros(ts),
                     sp(),
                 )?;
         }
@@ -1369,7 +1369,7 @@ mod tests {
                 vec![sym("k"), sym("v")],
                 handle.clone(),
                 sp(),
-                Some(ValidityClause::At(AsOf::current(ValidityTs::from_raw(ts)))),
+                Some(ValidityClause::At(AsOf::current(ValidityTs::of_micros(ts)))),
             )?;
             rows_of(&ra, &rtx, &stores)?.collect()
         };
@@ -1437,7 +1437,7 @@ mod tests {
             vec![sym("k"), sym("at")],
             handle,
             sp(),
-            Some(ValidityClause::At(AsOf::current(ValidityTs::from_raw(0)))),
+            Some(ValidityClause::At(AsOf::current(ValidityTs::of_micros(0)))),
         )?;
         let neg = RelAlgebra::unit(sp())
             .neg_join(vld_scan, vec![], vec![], sp())?;
@@ -1499,7 +1499,7 @@ mod tests {
                     .put_fact(
                         &mut tx,
                         &lrow,
-                        kyzo_model::value::ValidityTs::from_raw(0),
+                        kyzo_model::value::ValidityTs::of_micros(0),
                         sp(),
                     )?;
                 if k % 2 == 0 {
@@ -1508,7 +1508,7 @@ mod tests {
                         .put_fact(
                             &mut tx,
                             &rrow,
-                            kyzo_model::value::ValidityTs::from_raw(0),
+                            kyzo_model::value::ValidityTs::of_micros(0),
                             sp(),
                         )?;
                     expected_matches += 1;
@@ -1572,7 +1572,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &lrow,
-                    kyzo_model::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::of_micros(0),
                     sp(),
                 )?;
             let rrow = vec![v(k), v(k + 1000)];
@@ -1580,7 +1580,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &rrow,
-                    kyzo_model::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::of_micros(0),
                     sp(),
                 )?;
         }
@@ -1733,10 +1733,10 @@ mod tests {
                 Err(_gt_i64) => continue,
             };
             left_handle
-                .put_fact(&mut tx, &[v(k)], ValidityTs::from_raw(0), sp())?;
+                .put_fact(&mut tx, &[v(k)], ValidityTs::of_micros(0), sp())?;
             if k % 3 == 0 {
                 right_handle
-                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::from_raw(0), sp())?;
+                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::of_micros(0), sp())?;
                 expected.push(Tuple::from_vec(vec![v(k), v(k), v(k * 10)]));
             }
         }
@@ -1805,10 +1805,10 @@ mod tests {
         let mut expected: Vec<Tuple> = Vec::new();
         for z in 0..n {
             left_handle
-                .put_fact(&mut tx, &[v(z)], ValidityTs::from_raw(0), sp())?;
+                .put_fact(&mut tx, &[v(z)], ValidityTs::of_micros(0), sp())?;
             for w in 0..(z % 7) {
                 right_handle
-                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())?;
+                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::of_micros(0), sp())?;
                 expected.push(Tuple::from_vec(vec![v(z), v(z), v(w)]));
             }
         }
@@ -1883,7 +1883,7 @@ mod tests {
             let z = i % N_NODES;
             let w = (i * 7 + 3) % N_NODES;
             right_handle
-                .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())?;
+                .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::of_micros(0), sp())?;
         }
         tx.commit().map_err(|e| miette!("commit: {e}"))?;
         let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;

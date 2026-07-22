@@ -134,7 +134,7 @@ fn validate(text: &str) -> Vec<Diagnostic> {
     let params = BTreeMap::<String, DataValue>::new();
     // Live session stamp for `@` / `@ NOW` — wall-clock micros, never the
     // from_raw(0) open-end sentinel the parse door forbids.
-    let cur_vld = ValidityTs::from_raw(
+    let cur_vld = ValidityTs::of_micros(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as i64)

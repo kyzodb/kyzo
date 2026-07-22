@@ -153,7 +153,7 @@ pub struct KeyspaceId(u64);
 
 impl KeyspaceId {
     /// Wrap an already-proven keyspace id.
-    pub const fn from_raw(raw: u64) -> Self {
+    pub const fn of_u64(raw: u64) -> Self {
         Self(raw)
     }
 
@@ -766,8 +766,8 @@ mod tests {
     /// unknown-invariant — never a scoped mismatch alone.
     #[test]
     fn scoped_mismatch_quarantines_one_range_while_another_serves() {
-        let ks = KeyspaceId::from_raw(1);
-        let other_ks = KeyspaceId::from_raw(2);
+        let ks = KeyspaceId::of_u64(1);
+        let other_ks = KeyspaceId::of_u64(2);
 
         let lattice = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
             ScopedMismatchCarriage::new(ks, b"a".to_vec(), b"c".to_vec()),
@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn mint_quarantine_feeds_carriage_not_poison() {
-        let range = mint_quarantine(KeyspaceId::from_raw(7), b"x".to_vec(), b"y".to_vec());
+        let range = mint_quarantine(KeyspaceId::of_u64(7), b"x".to_vec(), b"y".to_vec());
         let lattice = FailureLattice::Healthy.report(CarriageReport::ScopedMismatch(
             ScopedMismatchCarriage::from_range(range),
         ));
@@ -839,7 +839,7 @@ mod tests {
     fn quarantine_unreachable_without_operator_cap() {
         let mut surface = OperatorHealthSurface::empty();
         surface.record_quarantine(mint_quarantine(
-            KeyspaceId::from_raw(1),
+            KeyspaceId::of_u64(1),
             b"a".to_vec(),
             b"b".to_vec(),
         ));
@@ -855,7 +855,7 @@ mod tests {
         assert!(
             lattice
                 .topology_for(&cap)
-                .admit_key(KeyspaceId::from_raw(1), b"a")
+                .admit_key(KeyspaceId::of_u64(1), b"a")
                 .is_err()
         );
     }

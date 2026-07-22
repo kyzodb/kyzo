@@ -35,7 +35,7 @@ fn key(i: u64) -> StorageKey {
 
 fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> StorageKey {
     let slot =
-        |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(t), true));
+        |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(t), true));
     [DataValue::from(name), slot(valid_ts), slot(sys_ts)]
         .encode_as_key(RelationId::new(9).expect("below cap"))
 }
@@ -172,7 +172,7 @@ fn asof(c: &mut Criterion) {
         tx.commit().unwrap();
         let lo = &[].encode_as_key(RelationId::new(9).expect("below cap"));
         let hi = &[].encode_as_key(RelationId::new(10).expect("below cap"));
-        let at = kyzo::AsOf::current(ValidityTs::from_raw(versions / 2));
+        let at = kyzo::AsOf::current(ValidityTs::of_micros(versions / 2));
 
         let mut g = c.benchmark_group(format!("asof_{label}"));
         g.bench_function("seek_skip_scan", |b| {

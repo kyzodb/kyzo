@@ -1038,7 +1038,7 @@ mod tests {
     use super::SysScript;
 
     fn parse_lsh(src: &str, params: BTreeMap<String, DataValue>) -> miette::Result<SysScript> {
-        parse_sys(src, &params, ValidityTs::from_raw(0))
+        parse_sys(src, &params, ValidityTs::of_micros(0))
     }
 
     fn lsh_create(fp: &str, fn_: &str) -> String {

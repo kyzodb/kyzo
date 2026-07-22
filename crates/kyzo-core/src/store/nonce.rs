@@ -54,7 +54,7 @@ impl DomainCounter {
     pub const ZERO: DomainCounter = DomainCounter(0);
 
     /// Wrap an already-proven counter (WAL / seal decode).
-    pub(crate) fn from_raw(raw: u64) -> Self {
+    pub(crate) fn of_u64(raw: u64) -> Self {
         Self(raw)
     }
 

@@ -187,7 +187,7 @@ impl CountMinSketch {
 
     /// Parse the stored form, validating tag, dimensions, and length.
     /// Live door: [`super::aggr::AggrCountMin`] shard fold + query decode.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let [tag, depth, w0, w1, w2, w3, w4, w5, w6, w7, rest @ ..] = bytes else {
             bail!("Count-Min bytes too short: {} bytes", bytes.len());
         };
@@ -401,12 +401,12 @@ mod tests {
     #[test]
     fn serialization_round_trips_and_rejects_corruption() -> Result<()> {
         let (cms, _, _) = build(400, (128, 3))?;
-        assert_eq!(CountMinSketch::from_bytes(&cms.to_bytes())?, cms);
-        assert!(CountMinSketch::from_bytes(&[]).is_err());
-        assert!(CountMinSketch::from_bytes(&[0x02, 3, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        assert_eq!(CountMinSketch::decode(&cms.to_bytes())?, cms);
+        assert!(CountMinSketch::decode(&[]).is_err());
+        assert!(CountMinSketch::decode(&[0x02, 3, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
         let mut short = cms.to_bytes();
         short.pop();
-        assert!(CountMinSketch::from_bytes(&short).is_err());
+        assert!(CountMinSketch::decode(&short).is_err());
         Ok(())
     }
 

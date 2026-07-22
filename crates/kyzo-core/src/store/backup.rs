@@ -377,7 +377,7 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     let mut floor_bytes = [0u8; 8];
     r.read_exact(&mut floor_bytes)
         .map_err(|_| miette!("truncated dump: missing clock floor"))?;
-    db.raise_clock_floor(kyzo_model::value::ValidityTs::from_raw(i64::from_be_bytes(
+    db.raise_clock_floor(kyzo_model::value::ValidityTs::of_micros(i64::from_be_bytes(
         floor_bytes,
     )))?;
     // Mark durable *before* any dump pair — crash after this point leaves a
@@ -987,7 +987,7 @@ mod pins {
         let slot = |ts: ValidityTs| DataValue::Validity(ValiditySlot::from_stored(ts, true));
         let tuple: Tuple = Tuple::from_vec(vec![
             DataValue::Str(name.into()),
-            slot(ValidityTs::from_raw(valid_ts)),
+            slot(ValidityTs::of_micros(valid_ts)),
             slot(sys),
         ]);
         (
@@ -1003,7 +1003,7 @@ mod pins {
         let rel = RelationId::new(100).ok_or_else(|| miette!("relation id"))?;
         let handle = facts_handle(rel, "floor_test");
         let bad_sys =
-            ValidityTs::from_raw(crate::session::current_validity()?.raw() + 1_000_000_000);
+            ValidityTs::of_micros(crate::session::current_validity()?.raw() + 1_000_000_000);
         let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
         let mut tx = db.write_tx()?;
         tx.put(
@@ -1038,15 +1038,15 @@ mod pins {
 
         let store = StoreId::from_digest([0xCD; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x55; 32]));
+        let cap = KekUnwrapCap::from_kek(Kek::admit([0x55; 32]));
         let wrapped = wrap_shred_salt(
             &cap,
-            &ShredSalt::from_bytes([0x66; 32]),
+            &ShredSalt::admit([0x66; 32]),
             SegmentCounter::ZERO,
             domain,
         )?;
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
-        let incarnation = mint.mint(Entropy::from_bytes([0x77; 32]))?;
+        let incarnation = mint.mint(Entropy::admit([0x77; 32]))?;
 
         let missing_salt = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::SealAndSuffix,
@@ -1131,15 +1131,15 @@ mod import_verify {
     fn sample_pack() -> Result<(LeaveIsFreePack, crate::store::crypto::WrappedShredSalt)> {
         let store = StoreId::from_digest([0x80; 32]);
         let domain = CryptoDomain::new(store, FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x81; 32]));
+        let cap = KekUnwrapCap::from_kek(Kek::admit([0x81; 32]));
         let wrapped = wrap_shred_salt(
             &cap,
-            &ShredSalt::from_bytes([0x82; 32]),
+            &ShredSalt::admit([0x82; 32]),
             SegmentCounter::ZERO,
             domain,
         )?;
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
-        let incarnation = mint.mint(Entropy::from_bytes([0x83; 32]))?;
+        let incarnation = mint.mint(Entropy::admit([0x83; 32]))?;
         let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::SealAndSuffix,
             format_version: FormatVersion::CURRENT,

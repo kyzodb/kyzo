@@ -46,5 +46,5 @@ pub fn mint_store_identity(identity_seed: [u8; 32]) -> (StoreId, FenceEpoch) {
 
 /// Wrap a dense commit ordinal for WAL [`WalPayload::Commit`] bodies (bench corpus).
 pub fn commit_ordinal(raw: u64) -> CommitOrdinal {
-    CommitOrdinal::from_raw(raw)
+    CommitOrdinal::of_u64(raw)
 }

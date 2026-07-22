@@ -448,7 +448,7 @@ mod tests {
     }
 
     fn vts(t: i64) -> ValidityTs {
-        ValidityTs::from_raw(t)
+        ValidityTs::of_micros(t)
     }
 
     fn slot(t: i64) -> ValiditySlot {

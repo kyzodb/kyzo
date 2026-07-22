@@ -25,7 +25,7 @@ pub fn current_validity() -> miette::Result<kyzo_model::value::ValidityTs> {
     let micros: i64 = micros
         .try_into()
         .map_err(|_| miette::miette!("system clock beyond i64 microseconds"))?;
-    Ok(kyzo_model::value::ValidityTs::from_raw(micros))
+    Ok(kyzo_model::value::ValidityTs::of_micros(micros))
 }
 
 pub(crate) mod access;

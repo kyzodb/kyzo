@@ -476,7 +476,7 @@ impl DeepVerifyOperatorState {
             Some(n) => n.max(1),
             None => u64::MAX,
         };
-        let ord = ScheduleOrdinal::from_raw(self.next_ordinal);
+        let ord = ScheduleOrdinal::of_u64(self.next_ordinal);
         self.pending = Some(ord);
         ord
     }
@@ -560,7 +560,7 @@ pub struct CallbackId(u32);
 
 impl CallbackId {
     /// Wrap a proven id (registry / Engine mint only).
-    pub(crate) fn from_raw(raw: u32) -> Self {
+    pub(crate) fn of_u32(raw: u32) -> Self {
         Self(raw)
     }
 
@@ -576,7 +576,7 @@ pub struct ScheduleOrdinal(u64);
 
 impl ScheduleOrdinal {
     /// Wrap a proven ordinal (scheduler mint only).
-    pub(crate) fn from_raw(raw: u64) -> Self {
+    pub(crate) fn of_u64(raw: u64) -> Self {
         Self(raw)
     }
 
@@ -686,7 +686,7 @@ impl<S: Storage> Engine<S> {
             .event_callbacks
             .write()
             .expect("event-callbacks mutex poisoned — refuse silent continue");
-        let new_id = CallbackId::from_raw(self.next_callback_id());
+        let new_id = CallbackId::of_u32(self.next_callback_id());
         registry.register(new_id, decl);
         (new_id, receiver)
     }
@@ -1265,7 +1265,7 @@ mod tenant_blind_operator_surface {
         db.run_script("?[k, v] <- [[1, 7]] :create t {k => v}", no_params())?;
 
         db.operator_record_quarantine(mint_quarantine(
-            KeyspaceId::from_raw(3),
+            KeyspaceId::of_u64(3),
             b"lo".to_vec(),
             b"hi".to_vec(),
         ));

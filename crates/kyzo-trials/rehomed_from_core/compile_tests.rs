@@ -134,7 +134,7 @@ fn stored_relation(db: &FjallStorage, name: &str, arity: usize, rows: &[Tuple]) 
             .put_fact(
                 &mut tx,
                 row.as_slice(),
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 sp(),
             )
             .expect("put row");
@@ -1467,7 +1467,7 @@ fn relation_with_truncated_row(
         .put_fact(
             &mut tx,
             key_vals,
-            kyzo_model::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::of_micros(0),
             sp(),
         )
         .expect("put truncated row");

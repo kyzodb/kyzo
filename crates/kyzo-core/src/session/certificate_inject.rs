@@ -236,7 +236,7 @@ fn fixture_mismatch_program() -> Result<MismatchProgram> {
     let script = parse_script(
         "path[x, y] := *edge[x, y]\n?[x, y] := path[x, y]",
         &Default::default(),
-        ValidityTs::from_raw(0),
+        ValidityTs::of_micros(0),
     )
     .map_err(|e| miette!("fixture program parses: {e}"))?;
     Ok(match script {

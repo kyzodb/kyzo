@@ -413,7 +413,7 @@ fn vld_micros(s: &str) -> Result<i64, String> {
 fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
     let typing = NullableColType::required(ColType::Validity);
     typing
-        .coerce(DataValue::Str(s.into()), ValidityTs::from_raw(999))
+        .coerce(DataValue::Str(s.into()), ValidityTs::of_micros(999))
         .map(|v| match v {
             DataValue::Validity(vld) => (vld.timestamp().raw(), vld.is_assert()),
             other @ (data_value_any!()) => panic!("expected Validity, got {other:?}"),
@@ -459,7 +459,7 @@ fn format_timestamp_validity_input_agreed() -> Result<(), Box<dyn std::error::Er
     use kyzo_model::value::Validity;
     let f = |micros: i64| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let vld = DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(micros), true)
+            Validity::new(ValidityTs::of_micros(micros), true)
                 .ok_or_else(|| "non-reserved validity".to_string())?
                 .into(),
         );

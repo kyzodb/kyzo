@@ -941,7 +941,7 @@ fn add_ttl(stage: CommitOrdinal, ttl: StagingTtl) -> Result<CommitOrdinal, Objec
     stage
         .get()
         .checked_add(ttl.ordinals())
-        .map(CommitOrdinal::from_raw)
+        .map(CommitOrdinal::of_u64)
         .ok_or(ObjectRefuse::StagingTtlOverflow)
 }
 

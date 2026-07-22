@@ -34,7 +34,7 @@
 //! Construction doors (P001–P004 / P002):
 //! - [`ValidityTs::for_assertion`] — user write coordinate; refuses the
 //!   reserved terminal tick.
-//! - [`ValidityTs::from_raw`] — crate storage-decode / seek coordinate.
+//! - [`ValidityTs::of_micros`] — crate storage-decode / seek coordinate.
 //! - [`Validity::new`] — sole [`Validity`] mint; refuses assert+reserved.
 //! - [`ValiditySlot::from_stored`] — wire/seek payload; assert+reserved is
 //!   a [`ValiditySeekBound`], never a [`Validity`].
@@ -57,7 +57,7 @@ impl ValidityTs {
     /// Storage-decode / seek-coordinate door: any `i64` instant, including
     /// the reserved terminal. Not a user-assertion path — that is
     /// [`for_assertion`].
-    pub fn from_raw(ts_micros: i64) -> ValidityTs {
+    pub fn of_micros(ts_micros: i64) -> ValidityTs {
         ValidityTs(Reverse(ts_micros))
     }
 
@@ -79,7 +79,7 @@ impl<'de> serde::Deserialize<'de> for ValidityTs {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
-        Ok(ValidityTs::from_raw(
+        Ok(ValidityTs::of_micros(
             <i64 as serde::Deserialize>::deserialize(deserializer)?,
         ))
     }
@@ -94,7 +94,7 @@ impl ValidityTs {
         if ts_micros == i64::MAX {
             None
         } else {
-            Some(ValidityTs::from_raw(ts_micros))
+            Some(ValidityTs::of_micros(ts_micros))
         }
     }
 }
@@ -381,12 +381,12 @@ mod tests {
     use super::*;
 
     fn v(ts: i64, is_assert: bool) -> Result<Validity> {
-        Validity::new(ValidityTs::from_raw(ts), is_assert)
+        Validity::new(ValidityTs::of_micros(ts), is_assert)
             .ok_or_else(|| miette!("representable Validity"))
     }
 
     fn slot(ts: i64, is_assert: bool) -> ValiditySlot {
-        ValiditySlot::from_stored(ValidityTs::from_raw(ts), is_assert)
+        ValiditySlot::from_stored(ValidityTs::of_micros(ts), is_assert)
     }
 
     #[test]
@@ -411,14 +411,14 @@ mod tests {
     #[test]
     fn coordinates_and_slots_speak_seek_order() -> Result<()> {
         // Smaller ValidityTs means later.
-        assert!(ValidityTs::from_raw(100) < ValidityTs::from_raw(5));
-        assert!(MAX_VALIDITY_TS < ValidityTs::from_raw(0));
-        assert_eq!(ValidityTs::from_raw(42).raw(), 42);
+        assert!(ValidityTs::of_micros(100) < ValidityTs::of_micros(5));
+        assert!(MAX_VALIDITY_TS < ValidityTs::of_micros(0));
+        assert_eq!(ValidityTs::of_micros(42).raw(), 42);
         // Terminal sorts after every ordinary slot.
         assert!(v(i64::MIN, true)? < TERMINAL_VALIDITY);
         assert!(v(i64::MAX, false)? < TERMINAL_VALIDITY);
         // Stored slots are pinned to assert; ordinary slots are Validity.
-        let ordinary = StoredValiditySlot::new(ValidityTs::from_raw(7)).as_validity();
+        let ordinary = StoredValiditySlot::new(ValidityTs::of_micros(7)).as_validity();
         assert_eq!(ordinary.map(|s| s.ts_micros()), Some(7));
         assert!(ordinary.is_some_and(|s| s.is_assert()));
         // Open-end assert slot is SeekBound, never Validity.
@@ -427,12 +427,12 @@ mod tests {
         assert!(open.as_validity().is_none());
         // The user-assertion door refuses exactly the terminal tick.
         assert!(ValidityTs::for_assertion(i64::MAX).is_none());
-        assert_eq!(ValidityTs::for_assertion(0), Some(ValidityTs::from_raw(0)));
+        assert_eq!(ValidityTs::for_assertion(0), Some(ValidityTs::of_micros(0)));
         // Assert of the reserved terminal is unrepresentable as Validity.
         assert!(Validity::new(MAX_VALIDITY_TS, true).is_none());
         assert!(Validity::new(MAX_VALIDITY_TS, false).is_some());
         // AsOf::current pins system time to the latest coordinate.
-        let a = AsOf::current(ValidityTs::from_raw(9));
+        let a = AsOf::current(ValidityTs::of_micros(9));
         assert_eq!(a.sys(), MAX_VALIDITY_TS);
         assert_eq!(a.valid().raw(), 9);
         Ok(())

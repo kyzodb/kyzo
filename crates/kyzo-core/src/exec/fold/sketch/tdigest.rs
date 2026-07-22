@@ -275,7 +275,7 @@ impl TDigest {
 
     /// Parse the stored form, validating tag, length, and centroid count.
     /// Live door: [`super::aggr::AggrTDigest`] shard fold + query decode.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(!bytes.is_empty(), "empty t-digest bytes");
         ensure!(
             bytes[0] == FORMAT_TAG,
@@ -430,7 +430,7 @@ mod tests {
         let max_bits = f64::from_le_bytes(read8(&bytes[1 + 24..1 + 32])).to_bits();
         assert_ne!(min_bits, f64::NAN.to_bits());
         assert_ne!(max_bits, f64::NAN.to_bits());
-        let round = TDigest::from_bytes(&bytes)?;
+        let round = TDigest::decode(&bytes)?;
         assert_eq!(round.min, None);
         assert_eq!(round.max, None);
         assert_eq!(round.quantile(0.0), None);
@@ -554,12 +554,12 @@ mod tests {
             (0..2000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.25),
             100.0,
         )?;
-        assert_eq!(TDigest::from_bytes(&d.to_bytes())?, d);
-        assert!(TDigest::from_bytes(&[]).is_err());
-        assert!(TDigest::from_bytes(&[0x02]).is_err());
+        assert_eq!(TDigest::decode(&d.to_bytes())?, d);
+        assert!(TDigest::decode(&[]).is_err());
+        assert!(TDigest::decode(&[0x02]).is_err());
         let mut short = d.to_bytes();
         short.truncate(20);
-        assert!(TDigest::from_bytes(&short).is_err());
+        assert!(TDigest::decode(&short).is_err());
         Ok(())
     }
 

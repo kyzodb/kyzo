@@ -101,7 +101,7 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
                 dict.put_fact(
                     &mut tx,
                     &row,
-                    kyzo_model::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
                 )
                 .unwrap();

@@ -451,7 +451,7 @@ pub(crate) struct Trigger {
 /// boundary ([`Trigger::parse`] / [`set_relation_triggers`]). Sound because a
 /// stored trigger's program is `cur_vld`-independent (see [`Trigger`]).
 fn trigger_decode_vld() -> ValidityTs {
-    ValidityTs::from_raw(0)
+    ValidityTs::of_micros(0)
 }
 
 /// Catalog identity for sealed programs: compare the durable msgpack form
@@ -1827,7 +1827,7 @@ mod tests {
         let span = SourceSpan(0, 0);
         let row: Tuple = Tuple::from_vec(vec![DataValue::from(1), DataValue::from("one")]);
         let mut tx = db.write_tx()?;
-        a.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)?;
+        a.put_fact(&mut tx, row.as_slice(), ValidityTs::of_micros(0), span)?;
         tx.commit()?;
 
         let rtx = db.read_tx()?;
@@ -1929,7 +1929,7 @@ mod tests {
         let rel = create_relation(&mut tx, simple_input("fleeting"), KeyspaceKind::Facts)?;
         let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(9), DataValue::from("gone")];
-        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)?;
+        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::of_micros(0), span)?;
         destroy_relation(&mut tx, "fleeting")?;
         tx.commit()?;
 
@@ -2097,7 +2097,7 @@ mod tests {
         let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts)?;
         let span = SourceSpan(0, 0);
         let row: Tuple = Tuple::from_vec(vec![DataValue::from(5), DataValue::from("five")]);
-        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)?;
+        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::of_micros(0), span)?;
         rename_relation(
             &mut tx,
             &Symbol::new("before", SourceSpan(0, 0)),
@@ -2126,7 +2126,7 @@ mod tests {
             input_handle("beliefs", vec![col("k", ColType::Int)], vec![]),
             KeyspaceKind::Facts,
         )?;
-        let vts_of = |ts: i64| ValidityTs::from_raw(ts);
+        let vts_of = |ts: i64| ValidityTs::of_micros(ts);
         // k=1 asserted at valid t=10, retracted at valid t=20, through
         // the handle's own fact writers.
         rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan(0, 0))?;
@@ -2135,7 +2135,7 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let at = |ts: i64| -> Vec<Tuple> {
-            rel.skip_scan_all(&rtx, AsOf::current(ValidityTs::from_raw(ts)))
+            rel.skip_scan_all(&rtx, AsOf::current(ValidityTs::of_micros(ts)))
                 .map(|t| t?)
                 .collect()
         };
@@ -2342,7 +2342,7 @@ mod tests {
             .put_fact(
                 &mut tx,
                 &[DataValue::from(1), DataValue::from("retro")],
-                ValidityTs::from_raw(150),
+                ValidityTs::of_micros(150),
                 SourceSpan(0, 0),
             )?;
         tx.commit()?;

@@ -265,7 +265,7 @@ impl LiveSweepHandle {
         };
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes(entropy))
+            .mint(Entropy::admit(entropy))
             .map_err(|_| SweepRefuse::WriteSessionDead)?;
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
         let cap = StableCommitCap::NativeFsyncProof {
@@ -338,7 +338,7 @@ impl IntentOrdinal {
     pub const ZERO: IntentOrdinal = IntentOrdinal(0);
 
     /// Wrap an already-proven ordinal (decode / test sites that hold the proof).
-    pub(crate) fn from_raw(raw: u64) -> Self {
+    pub(crate) fn of_u64(raw: u64) -> Self {
         Self(raw)
     }
 
@@ -367,7 +367,7 @@ impl CommitOrdinal {
     pub const ZERO: CommitOrdinal = CommitOrdinal(0);
 
     /// Wrap an already-proven ordinal (WAL / seal decode).
-    pub(crate) fn from_raw(raw: u64) -> Self {
+    pub(crate) fn of_u64(raw: u64) -> Self {
         Self(raw)
     }
 
@@ -1503,7 +1503,7 @@ mod composition_tests {
         let (_view, auth) = sealed.take_write_authority();
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0x56; 32]))?;
+            .mint(Entropy::admit([0x56; 32]))?;
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
@@ -1799,7 +1799,7 @@ mod composition_tests {
         let auth = WriteAuthority::mint(store_id, [0xAC; 32]);
         let incarnation2 = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0xAD; 32]))?;
+            .mint(Entropy::admit([0xAD; 32]))?;
         let session2 = SweepSession::new(store_id, fence, incarnation2);
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,

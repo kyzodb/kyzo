@@ -28,7 +28,7 @@ fn no_params() -> BTreeMap<String, DataValue> {
 }
 
 fn test_vld() -> ValidityTs {
-    ValidityTs::from_raw(0)
+    ValidityTs::of_micros(0)
 }
 
 /// Test-local composition: Store + fresh Catalog. Not the deleted fused

@@ -75,7 +75,7 @@ impl GermanStr {
 
     /// Mint a bytes value. Propagates [`Denial::ExtentOverflow`] from the
     /// wide mint path.
-    pub fn from_bytes(b: &[u8], arena: &mut Arena) -> Result<MintedStr, Denial> {
+    pub fn decode(b: &[u8], arena: &mut Arena) -> Result<MintedStr, Denial> {
         Ok(MintedStr::new(Value::mint(
             &encode(Datum::Bytes(b)),
             arena,
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn bytes_kind_is_typed_and_str_accessor_refuses_it() -> Result<()> {
         let mut arena = Arena::new();
-        let b = GermanStr::from_bytes(&[0xFF, 0x00], &mut arena)
+        let b = GermanStr::mint_bytes(&[0xFF, 0x00], &mut arena)
             .into_diagnostic()?
             .value();
         assert!(b.is_bytes());

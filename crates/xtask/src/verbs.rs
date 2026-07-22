@@ -245,7 +245,7 @@ impl OpponentPin {
     /// Evidence-construction only — [`BenchAdmit::admit`] refuses any value
     /// other than [`Self::sealed`].
     #[allow(dead_code)] // honesty-chain fixture door (tests construct non-sealed pins)
-    pub fn from_raw(s: impl Into<String>) -> Self {
+    pub fn for_fixture(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 }
@@ -300,7 +300,7 @@ impl PartialEq<&str> for GraphName {
 pub struct Sha256([u8; 32]);
 
 impl Sha256 {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -1003,7 +1003,7 @@ mod bench_refuse_fixtures {
     fn fixture_refuse_opponent_pin_missing() {
         let sealed = fixture_sealed_digests();
         let mut e = lawful_evidence(&sealed);
-        e.opponent_pin = OpponentPin::from_raw("");
+        e.opponent_pin = OpponentPin::for_fixture("");
         assert_eq!(
             BenchAdmit::admit_with_sealed(&e, &sealed),
             Err(BenchRefuse::OpponentPin)
@@ -1014,7 +1014,7 @@ mod bench_refuse_fixtures {
     fn fixture_refuse_opponent_pin_strawman_not_softenable() {
         let sealed = fixture_sealed_digests();
         let mut e = lawful_evidence(&sealed);
-        e.opponent_pin = OpponentPin::from_raw("kyzo.bench.strawman.easy.v0");
+        e.opponent_pin = OpponentPin::for_fixture("kyzo.bench.strawman.easy.v0");
         assert_eq!(
             BenchAdmit::admit_with_sealed(&e, &sealed),
             Err(BenchRefuse::OpponentPin)

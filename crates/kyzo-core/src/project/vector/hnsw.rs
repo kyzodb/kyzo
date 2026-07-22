@@ -3731,7 +3731,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -3829,7 +3829,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -3902,7 +3902,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -4012,7 +4012,7 @@ mod tests {
                 base.put_fact(
                     &mut tx,
                     r.as_slice(),
-                    kyzo_model::value::ValidityTs::from_raw(0),
+                    kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
                 )
                 .unwrap();
@@ -4273,7 +4273,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -4515,7 +4515,7 @@ mod tests {
             .put_fact(
                 &mut tx,
                 zrow.as_slice(),
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -4609,7 +4609,7 @@ mod tests {
         base.put_fact(
             &mut tx,
             moved.as_slice(),
-            kyzo_model::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::of_micros(0),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -4893,7 +4893,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
         }
@@ -5099,7 +5099,7 @@ mod tests {
             &mut tx, input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)), KeyspaceKind::AlgorithmState,
         )?;
         for r in &rows {
-            base.put_fact(&mut tx, r.as_slice(), kyzo_model::value::ValidityTs::from_raw(0), SourceSpan(0, 0))?;
+            base.put_fact(&mut tx, r.as_slice(), kyzo_model::value::ValidityTs::of_micros(0), SourceSpan(0, 0))?;
             if !hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())? {
                 bail!("hnsw_put refused a finite L2 vector");
             }

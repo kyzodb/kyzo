@@ -1086,7 +1086,7 @@ mod pins {
                 DataValue::from(99i64), // mapper {v} then riding base key
             ];
             // Use a fresh stamp far above existing so order stays ascending.
-            let stamp = kyzo_model::value::ValidityTs::from_raw(i64::MAX / 4);
+            let stamp = kyzo_model::value::ValidityTs::of_micros(i64::MAX / 4);
             let handle = {
                 // Minimal handle shape for encode doors — fetch real metadata.
                 let tx = storage.read_tx()?;

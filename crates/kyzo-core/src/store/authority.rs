@@ -29,7 +29,7 @@ impl OpenOrdinal {
     pub const ZERO: OpenOrdinal = OpenOrdinal(0);
 
     /// Construct from an already-proven ordinal (WAL / seal decode sites).
-    pub(crate) fn from_raw(raw: u64) -> Self {
+    pub(crate) fn of_u64(raw: u64) -> Self {
         Self(raw)
     }
 
@@ -62,7 +62,7 @@ pub struct Entropy([u8; 32]);
 
 impl Entropy {
     /// Wrap already-drawn entropy bytes (arm sites that already hold the proof).
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -222,7 +222,7 @@ pub struct RecoveryPublicKey([u8; 32]);
 
 impl RecoveryPublicKey {
     /// Wrap already-proven FROST group verifying-key bytes (32-byte compressed).
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 

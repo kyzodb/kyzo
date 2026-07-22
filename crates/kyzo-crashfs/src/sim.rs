@@ -637,7 +637,7 @@ impl Storage for SimStorage {
 
     fn clock_floor(&self) -> Result<ValidityTs> {
         let st = self.ctx.state.lock().expect(POISONED);
-        Ok(ValidityTs::from_raw(st.next_system_stamp))
+        Ok(ValidityTs::of_micros(st.next_system_stamp))
     }
 
     fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
@@ -659,7 +659,7 @@ impl Storage for SimStorage {
         self.ctx.yield_turn();
         let mut st = self.ctx.state.lock().expect(POISONED);
         st.next_system_stamp += 1;
-        let stamp = ValidityTs::from_raw(st.next_system_stamp);
+        let stamp = ValidityTs::of_micros(st.next_system_stamp);
         Ok(SimWriteTx {
             inner: Some(SimWriteInner {
                 snapshot: snapshot_at(&st, st.commit_seq),
@@ -1308,7 +1308,7 @@ mod battery {
 
     fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
         let slot =
-            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(t), true));
+            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(t), true));
         let tuple: Tuple =
             Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
         tuple.encode_as_key(rel)
@@ -1371,7 +1371,7 @@ mod battery {
         let tx = db.read_tx().unwrap();
         for at in 0..=8i64 {
             let got: Vec<(String, i64)> = tx
-                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
+                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::of_micros(at)))
                 .map(|r| {
                     let t = r.unwrap();
                     let name = match &t.as_slice()[0] {

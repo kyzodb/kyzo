@@ -639,7 +639,7 @@ mod tests {
             "parts",
             &[DataValue::from(1), DataValue::from("widget")],
             1,
-            ValidityTs::from_raw(100),
+            ValidityTs::of_micros(100),
         )
         .map_err(|e| miette!("sugar admit: {e}"))?;
         assert_eq!(record.kind(), OntokKind::Relation);
@@ -832,7 +832,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key).map_err(|e| miette!("sign: {e}"))?;
         let cert = mint_admission_certificate(parts).map_err(|e| miette!("mint: {e}"))?;
@@ -931,7 +931,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit([0u8; 64]),
         };
         parts_a.signature = sign_admission_parts(&parts_a, &key).map_err(|e| miette!("sign A: {e}"))?;
         let cert_a = mint_admission_certificate(parts_a).map_err(|e| miette!("mint A: {e}"))?;
@@ -962,7 +962,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit([0u8; 64]),
         };
         parts_b.signature = sign_admission_parts(&parts_b, &key).map_err(|e| miette!("sign B: {e}"))?;
         let cert_b = mint_admission_certificate(parts_b).map_err(|e| miette!("mint B: {e}"))?;
@@ -1032,7 +1032,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key).map_err(|e| miette!("sign: {e}"))?;
         let cert = mint_admission_certificate(parts).map_err(|e| miette!("mint: {e}"))?;
@@ -1124,7 +1124,7 @@ mod tests {
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::from_bytes([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit([0u8; 64]),
         };
         parts.signature = sign_admission_parts(&parts, &key).map_err(|e| miette!("sign: {e}"))?;
         let cert = mint_admission_certificate(parts).map_err(|e| miette!("mint: {e}"))?;

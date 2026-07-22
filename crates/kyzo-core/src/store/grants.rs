@@ -54,7 +54,7 @@ pub struct GrantId([u8; 32]);
 
 impl GrantId {
     /// Wrap an already-proven grant id.
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -1167,7 +1167,7 @@ impl AncestorReadGrant {
 fn hash_transcript(transcript: &CanonicalTranscript) -> Digest {
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
-    Digest::from_bytes(h.finalize().into())
+    Digest::admit(h.finalize().into())
 }
 
 /// Fork-consent verifying-key id via [`encode_fork_consent_key_id`].
@@ -1354,7 +1354,7 @@ fn frost_recovery_aggregate(
     let matrix = RecoveryMatrix::new(
         u32::from(min_signers),
         u32::from(max_signers),
-        super::authority::RecoveryPublicKey::from_bytes(group_vk),
+        super::authority::RecoveryPublicKey::admit(group_vk),
     )
     .into_diagnostic()?;
 
@@ -1483,7 +1483,7 @@ pub(crate) fn sign_domain_label(
     message.extend_from_slice(domain);
     message.extend_from_slice(store_id.as_bytes());
     message.extend_from_slice(payload_digest.as_bytes());
-    let sig = Signature::from_bytes(signing.sign(message.as_slice()).to_bytes());
+    let sig = Signature::admit(signing.sign(message.as_slice()).to_bytes());
     (verifying, sig)
 }
 
@@ -1524,7 +1524,7 @@ mod tests {
 
         let store = StoreId::from_digest([0x71; 32]);
         let payload = recovery_grant_payload_digest(
-            GrantId::from_bytes([0x90; 32]),
+            GrantId::admit([0x90; 32]),
             store,
             FenceEpoch::genesis(store),
             &IdentitySeed::from_digest([0xEE; 32]),
@@ -1532,7 +1532,7 @@ mod tests {
         );
         let mut weak = [0u8; 32];
         weak[0] = 1;
-        let weak_pk = RecoveryPublicKey::from_bytes(weak);
+        let weak_pk = RecoveryPublicKey::admit(weak);
         assert!(
             matches!(
                 RecoveryMatrix::new(1, 1, weak_pk),
@@ -1570,8 +1570,8 @@ mod tests {
             PredecessorConsentProof::verify(
                 &table,
                 store,
-                &Digest::from_bytes([0x33; 32]),
-                &Signature::from_bytes(forged),
+                &Digest::admit([0x33; 32]),
+                &Signature::admit(forged),
             )
             .is_err(),
             "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
@@ -1595,8 +1595,8 @@ mod tests {
             AncestorEntitlementProof::verify(
                 &table,
                 store,
-                &Digest::from_bytes([0x33; 32]),
-                &Signature::from_bytes(forged),
+                &Digest::admit([0x33; 32]),
+                &Signature::admit(forged),
             )
             .is_err(),
             "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
@@ -1613,7 +1613,7 @@ mod tests {
     fn recovery_grant_without_valid_quorum_refuses_write_authority() -> Result<()> {
         let victim = StoreId::from_digest([0x71; 32]);
         let pred_epoch = FenceEpoch::genesis(victim);
-        let grant_id = GrantId::from_bytes([0x90; 32]);
+        let grant_id = GrantId::admit([0x90; 32]);
         let successor_seed = IdentitySeed::from_digest([0xEE; 32]);
         let commitment = KeyMaterialCommitment::from_digest([0xEF; 32]);
         let payload = recovery_grant_payload_digest(
@@ -1679,7 +1679,7 @@ mod tests {
     fn recovery_grant_valid_quorum_materializes() -> Result<()> {
         let store_id = StoreId::from_digest([0xC0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
-        let grant_id = GrantId::from_bytes([0x91; 32]);
+        let grant_id = GrantId::admit([0x91; 32]);
         let successor_seed = IdentitySeed::from_digest([0xD1; 32]);
         let commitment = KeyMaterialCommitment::from_digest([0xD2; 32]);
         let payload = recovery_grant_payload_digest(
@@ -1723,7 +1723,7 @@ mod tests {
     /// (wrong-share / wrong group key) — production verify door.
     #[test]
     fn frost_recovery_wrong_group_aggregate_refuses() -> Result<()> {
-        let payload = Digest::from_bytes([0x44u8; 32]);
+        let payload = Digest::admit([0x44u8; 32]);
         let (matrix_a, sig_a) = frost_sign_recovery_quorum([0x11; 32], &payload)?;
         let (matrix_b, _sig_b) = frost_sign_recovery_quorum([0x22; 32], &payload)?;
         assert_ne!(
@@ -1752,7 +1752,7 @@ mod tests {
         // One sealed matrix for the store; each grant gets its own FROST aggregate
         // over its payload under that same group key (re-deal with fixed seed so
         // the group verifying key matches).
-        let probe_payload = Digest::from_bytes([0u8; 32]);
+        let probe_payload = Digest::admit([0u8; 32]);
         let (matrix, _) = frost_sign_recovery_quorum([0xE1; 32], &probe_payload)?;
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
@@ -1782,8 +1782,8 @@ mod tests {
             )?
         };
 
-        let g1 = mint(GrantId::from_bytes([0x01; 32]), [0xA1; 32], [0xA2; 32]);
-        let g2 = mint(GrantId::from_bytes([0x02; 32]), [0xB1; 32], [0xB2; 32]);
+        let g1 = mint(GrantId::admit([0x01; 32]), [0xA1; 32], [0xA2; 32]);
+        let g2 = mint(GrantId::admit([0x02; 32]), [0xB1; 32], [0xB2; 32]);
 
         let first = materialize(
             &Grant::Recovery(g1.clone()),
@@ -1837,7 +1837,7 @@ mod tests {
     fn prior_recovery_fabricated_grant_id_cannot_presquat_legitimate_recovery() -> Result<()> {
         let store_id = StoreId::from_digest([0xF0; 32]);
         let pred_epoch = FenceEpoch::genesis(store_id);
-        let probe_payload = Digest::from_bytes([0u8; 32]);
+        let probe_payload = Digest::admit([0u8; 32]);
         let (matrix, _) = frost_sign_recovery_quorum([0xF1; 32], &probe_payload)?;
 
         let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
@@ -1866,10 +1866,10 @@ mod tests {
             )?
         };
 
-        let legit = mint(GrantId::from_bytes([0x11; 32]), [0xA1; 32], [0xA2; 32]);
+        let legit = mint(GrantId::admit([0x11; 32]), [0xA1; 32], [0xA2; 32]);
 
         // Attack closed at the type boundary: record takes &MaterializedGrant, not
-        // a bare GrantId (e.g. GrantId::from_bytes([0xDE; 32])). Without a real
+        // a bare GrantId (e.g. GrantId::admit([0xDE; 32])). Without a real
         // materialization witness the one-shot is empty — fabricated pre-squat
         // cannot poison the slot.
         let mut prior = PriorRecoveryTable::new();
@@ -1902,7 +1902,7 @@ mod tests {
     #[test]
     fn fork_grant_without_valid_consent_refuses_write_authority() -> Result<()> {
         let victim = StoreId::from_digest([0x72; 32]);
-        let grant_id = GrantId::from_bytes([0xA0; 32]);
+        let grant_id = GrantId::admit([0xA0; 32]);
         let fork_point = ForkPointRoot::from_digest([0xAA; 32]);
         let successor = SuccessorPrincipal::from_digest([0xBB; 32]);
         let identity = IdentitySeed::from_digest([0xCC; 32]);
@@ -1926,7 +1926,7 @@ mod tests {
                 &table,
                 victim,
                 &payload,
-                &Signature::from_bytes([0xFFu8; 64]),
+                &Signature::admit([0xFFu8; 64]),
             ),
             Err(MaterializeRefuse::ConsentUnverified)
         );
@@ -1962,7 +1962,7 @@ mod tests {
         // *different* payload (forged lineage fields), then tries to attach it
         // to the victim-named grant — construction and materialize refuse.
         let forged_lineage_payload = fork_grant_payload_digest(
-            GrantId::from_bytes([0xA1; 32]),
+            GrantId::admit([0xA1; 32]),
             victim,
             &fork_point,
             &successor,
@@ -1993,7 +1993,7 @@ mod tests {
     #[test]
     fn fork_grant_attacker_own_key_not_bound_in_table_refuses() -> Result<()> {
         let victim = StoreId::from_digest([0x75; 32]);
-        let grant_id = GrantId::from_bytes([0xA3; 32]);
+        let grant_id = GrantId::admit([0xA3; 32]);
         let fork_point = ForkPointRoot::from_digest([0x55; 32]);
         let successor = SuccessorPrincipal::from_digest([0x66; 32]);
         let identity = IdentitySeed::from_digest([0x77; 32]);
@@ -2061,7 +2061,7 @@ mod tests {
     #[test]
     fn fork_grant_valid_consent_materializes() -> Result<()> {
         let predecessor = StoreId::from_digest([0x74; 32]);
-        let grant_id = GrantId::from_bytes([0xA2; 32]);
+        let grant_id = GrantId::admit([0xA2; 32]);
         let fork_point = ForkPointRoot::from_digest([0x11; 32]);
         let successor = SuccessorPrincipal::from_digest([0x22; 32]);
         let identity = IdentitySeed::from_digest([0x33; 32]);
@@ -2118,7 +2118,7 @@ mod tests {
             message.extend_from_slice(FORK_CONSENT_DOMAIN);
             message.extend_from_slice(predecessor_store.as_bytes());
             message.extend_from_slice(payload_digest.as_bytes());
-            Signature::from_bytes(self.signing.sign(message.as_slice()).to_bytes())
+            Signature::admit(self.signing.sign(message.as_slice()).to_bytes())
         }
     }
 
@@ -2144,7 +2144,7 @@ mod tests {
             message.extend_from_slice(ANCESTOR_ENTITLEMENT_DOMAIN);
             message.extend_from_slice(store_id.as_bytes());
             message.extend_from_slice(payload_digest.as_bytes());
-            Signature::from_bytes(self.signing.sign(message.as_slice()).to_bytes())
+            Signature::admit(self.signing.sign(message.as_slice()).to_bytes())
         }
     }
 
@@ -2224,7 +2224,7 @@ mod tests {
                 &sealed_table,
                 victim,
                 &payload,
-                &Signature::from_bytes([0xFFu8; 64]),
+                &Signature::admit([0xFFu8; 64]),
             ),
             Err(AncestorReadRefuse::EntitlementUnverified)
         );

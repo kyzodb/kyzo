@@ -79,7 +79,7 @@ impl<const M: usize> HllRegisters<M> {
         Self(vec![0u8; M].into_boxed_slice())
     }
 
-    fn from_bytes(rest: &[u8]) -> Result<Self> {
+    fn decode(rest: &[u8]) -> Result<Self> {
         ensure!(
             rest.len() == M,
             "HyperLogLog register length {} does not match const M={M}",
@@ -276,7 +276,7 @@ impl<const M: usize> HyperLogLog<M> {
     /// Parse the stored form, validating the tag and that wire precision /
     /// length match this type's const `M`. Corrupt bytes are an error, never
     /// a panic.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let [tag, precision, rest @ ..] = bytes else {
             bail!("HyperLogLog bytes too short: {} bytes", bytes.len());
         };
@@ -290,7 +290,7 @@ impl<const M: usize> HyperLogLog<M> {
             Self::PRECISION
         );
         Ok(Self {
-            registers: HllRegisters::from_bytes(rest)?,
+            registers: HllRegisters::decode(rest)?,
         })
     }
 
@@ -556,22 +556,22 @@ mod tests {
         const M: usize = 1 << 10;
         let s = sketch_of::<M>(1234, 9);
         let bytes = s.to_bytes();
-        assert_eq!(HyperLogLog::<M>::from_bytes(&bytes)?, s);
+        assert_eq!(HyperLogLog::<M>::decode(&bytes)?, s);
 
-        assert!(HyperLogLog::<M>::from_bytes(&[]).is_err());
+        assert!(HyperLogLog::<M>::decode(&[]).is_err());
         assert!(
-            HyperLogLog::<M>::from_bytes(&[0x02, 10]).is_err(),
+            HyperLogLog::<M>::decode(&[0x02, 10]).is_err(),
             "bad tag"
         );
         // Wrong precision for this type (wire says 14, type is p=10).
         assert!(
-            HyperLogLog::<M>::from_bytes(&[FORMAT_TAG, 14]).is_err(),
+            HyperLogLog::<M>::decode(&[FORMAT_TAG, 14]).is_err(),
             "precision mismatch"
         );
         let mut wrong_len = bytes.clone();
         wrong_len.pop();
         assert!(
-            HyperLogLog::<M>::from_bytes(&wrong_len).is_err(),
+            HyperLogLog::<M>::decode(&wrong_len).is_err(),
             "bad length"
         );
         Ok(())

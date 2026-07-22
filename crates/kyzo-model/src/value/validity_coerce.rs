@@ -36,7 +36,7 @@ pub fn str2vld(s: &str) -> Result<ValidityTs> {
     let ts: jiff::Timestamp = s
         .parse()
         .map_err(|_| miette::miette!("bad datetime: {}", s))?;
-    Ok(ValidityTs::from_raw(timestamp_to_micros(ts)))
+    Ok(ValidityTs::of_micros(timestamp_to_micros(ts)))
 }
 
 #[derive(Debug, Error, Diagnostic)]
@@ -56,7 +56,7 @@ pub fn data_value_to_vld_spec(
             // Coerce only: any representable instant is a valid coordinate.
             // The write-assertion door (`ValidityTs::for_assertion`) refuses
             // the reserved terminal tick at the mutation boundary — not here.
-            Ok(ValidityTs::from_raw(microseconds))
+            Ok(ValidityTs::of_micros(microseconds))
         }
         DataValue::Str(s) => match &s as &str {
             "NOW" => Ok(cur_vld),
@@ -80,7 +80,7 @@ mod tests {
         // on ValidityTs::for_assertion / Validity::new — pinned here so a
         // future "tighten coerce" PR cannot silently shrink the law.
         let span = SourceSpan(0, 0);
-        let cur = ValidityTs::from_raw(1);
+        let cur = ValidityTs::of_micros(1);
         let got = data_value_to_vld_spec(DataValue::from(i64::MAX), span, cur)?;
         assert_eq!(got, MAX_VALIDITY_TS);
         assert_eq!(got.raw(), i64::MAX);
@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn now_and_end_strings_and_finite_micros() -> Result<()> {
         let span = SourceSpan(0, 0);
-        let cur = ValidityTs::from_raw(42);
+        let cur = ValidityTs::of_micros(42);
         assert_eq!(
             data_value_to_vld_spec(DataValue::from("NOW"), span, cur)?,
             cur

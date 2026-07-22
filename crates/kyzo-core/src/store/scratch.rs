@@ -110,7 +110,7 @@ impl TempTx {
         static TEMP_CLOCK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
         TempTx {
             map: Some(BTreeMap::new()),
-            stamp: ValidityTs::from_raw(
+            stamp: ValidityTs::of_micros(
                 TEMP_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
             ),
         }
@@ -330,7 +330,7 @@ mod tests {
     /// flags pinned to assert (the row's polarity lives in the value).
     fn bk(x: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
         let slot = |ts: i64| {
-            DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(ts), true))
+            DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(ts), true))
         };
         vec![DataValue::from(x), slot(valid_ts), slot(sys_ts)]
             .encode_as_key(REL)
@@ -357,7 +357,7 @@ mod tests {
     /// fails fast rather than merely hanging.
     fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Result<Vec<(i64, i64)>> {
         let (lo, hi) = rel_bounds();
-        let as_of = AsOf::at(ValidityTs::from_raw(sys), ValidityTs::from_raw(valid));
+        let as_of = AsOf::at(ValidityTs::of_micros(sys), ValidityTs::of_micros(valid));
         t.range_skip_scan_tuple(&lo, &hi, as_of)
             .take(1000)
             .map(|r| {
@@ -509,7 +509,7 @@ mod tests {
         let mut t = TempTx::new();
         t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert))?;
         let (lo, hi) = rel_bounds();
-        let at = AsOf::current(ValidityTs::from_raw(10));
+        let at = AsOf::current(ValidityTs::of_micros(10));
         assert_eq!(t.range_skip_scan_tuple(&hi, &lo, at).count(), 0, "inverted");
         assert_eq!(t.range_skip_scan_tuple(&lo, &lo, at).count(), 0, "equal");
     
@@ -868,7 +868,7 @@ mod tests {
             }
             for sys in &sys_queries {
                 for ts in &queries {
-                    let at = AsOf::at(ValidityTs::from_raw(*sys), ValidityTs::from_raw(*ts));
+                    let at = AsOf::at(ValidityTs::of_micros(*sys), ValidityTs::of_micros(*ts));
                     let a = collect_skip(temp_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let b = collect_skip(fjall_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let c = collect_skip(sim_tx.range_skip_scan_tuple(&lower, &upper, at));
@@ -876,7 +876,7 @@ mod tests {
                     assert_eq!(a, c, "skip scan temp vs sim: {label}, sys {sys}, ts {ts}");
                 }
             }
-            let at = AsOf::current(ValidityTs::from_raw(5));
+            let at = AsOf::current(ValidityTs::of_micros(5));
             assert_eq!(temp_tx.range_skip_scan_tuple(&upper, &lower, at).count(), 0);
             assert_eq!(temp_tx.range_skip_scan_tuple(&lower, &lower, at).count(), 0);
             drop(fjall_tx.abort());

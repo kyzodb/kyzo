@@ -660,7 +660,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
             sparse_put(&mut tx, &row, vector, &base, &idx)?;

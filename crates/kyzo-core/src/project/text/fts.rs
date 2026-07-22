@@ -890,7 +890,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
             fts_put(&mut tx, &row, &extractor, &analyzer, &base, &idx)?;
@@ -1233,7 +1233,7 @@ mod tests {
         base.put_fact(
             &mut tx,
             &row,
-            kyzo_model::value::ValidityTs::from_raw(0),
+            kyzo_model::value::ValidityTs::of_micros(0),
             SourceSpan(0, 0),
         )?;
         fts_put(&mut tx, &row, &ex, &a, &base, &idx)?;
@@ -1303,7 +1303,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                kyzo_model::value::ValidityTs::from_raw(0),
+                kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
             fts_put(&mut tx, &row, &ex, &a, &base, &idx)?;

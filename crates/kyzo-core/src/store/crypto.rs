@@ -39,7 +39,7 @@ pub struct Nonce([u8; 12]);
 
 impl Nonce {
     /// Wrap already-proven nonce bytes (mint / wrap-derive sites).
-    pub fn from_bytes(bytes: [u8; 12]) -> Self {
+    pub fn admit(bytes: [u8; 12]) -> Self {
         Self(bytes)
     }
 
@@ -55,7 +55,7 @@ pub struct Digest([u8; 32]);
 
 impl Digest {
     /// Wrap already-proven digest bytes (hash finalize / decode sites).
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -71,7 +71,7 @@ pub struct Mac([u8; 32]);
 
 impl Mac {
     /// Wrap already-proven MAC bytes (leaf-MAC finalize).
-    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -87,7 +87,7 @@ pub struct Signature([u8; 64]);
 
 impl Signature {
     /// Wrap already-proven signature bytes (sign / decode sites).
-    pub fn from_bytes(bytes: [u8; 64]) -> Self {
+    pub fn admit(bytes: [u8; 64]) -> Self {
         Self(bytes)
     }
 
@@ -106,7 +106,7 @@ impl SegmentCounter {
     pub const ZERO: SegmentCounter = SegmentCounter(0);
 
     /// Wrap an already-proven segment counter.
-    pub fn from_raw(raw: u64) -> Self {
+    pub fn of_u64(raw: u64) -> Self {
         Self(raw)
     }
 
@@ -156,7 +156,7 @@ pub struct Kek([u8; 32]);
 
 impl Kek {
     /// Wrap already-proven KEK bytes (HSM / genesis sites).
-    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -204,7 +204,7 @@ pub struct ShredSalt([u8; 32]);
 
 impl ShredSalt {
     /// Draw / wrap plaintext salt bytes at the derivation moment only.
-    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -265,7 +265,7 @@ pub struct AuditKey([u8; 32]);
 
 impl AuditKey {
     /// Wrap already-proven audit key bytes.
-    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -278,7 +278,7 @@ impl AuditKey {
         let dig = h.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&dig);
-        Mac::from_bytes(out)
+        Mac::admit(out)
     }
 }
 
@@ -325,7 +325,7 @@ fn key_commitment_bytes(
     let dig = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&dig);
-    Ok(Digest::from_bytes(out))
+    Ok(Digest::admit(out))
 }
 
 /// CMT-1 key-commitment for the DEK encrypt door — [`Kek`] cannot satisfy this.
@@ -370,7 +370,7 @@ fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce {
     let dig = h.finalize();
     let mut nonce = [0u8; 12];
     nonce.copy_from_slice(&dig[..12]);
-    Nonce::from_bytes(nonce)
+    Nonce::admit(nonce)
 }
 
 /// Seal bytes under AES-256-GCM-SIV (misuse-resistant).
@@ -581,7 +581,7 @@ fn open_arm_committed(
     let expected = key_commitment_bytes(key, crypto_domain)?;
     let mut presented = [0u8; KEY_COMMIT_LEN];
     presented.copy_from_slice(presented_c);
-    if !ct_eq_digest(&expected, &Digest::from_bytes(presented)) {
+    if !ct_eq_digest(&expected, &Digest::admit(presented)) {
         // never release plaintext on commitment mismatch
         drop(plaintext);
         return Err(CryptoRefuse::KeyCommitmentMismatch);
@@ -676,7 +676,7 @@ pub fn unwrap_shred_salt(
     }
     let mut salt = [0u8; 32];
     salt.copy_from_slice(&pt);
-    Ok(ShredSalt::from_bytes(salt))
+    Ok(ShredSalt::admit(salt))
 }
 
 /// `DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt)`.
@@ -922,9 +922,9 @@ mod pins {
     /// AAD bytes below are collision-fixture constants — not the production wrap path.
     #[test]
     fn gcm_arm_is_not_key_committing() -> Result<()> {
-        let k1 = Kek::from_bytes([0x11u8; 32]);
-        let k2 = Kek::from_bytes([0x22u8; 32]);
-        let nonce = Nonce::from_bytes([0x24u8; 12]);
+        let k1 = Kek::admit([0x11u8; 32]);
+        let k2 = Kek::admit([0x22u8; 32]);
+        let nonce = Nonce::admit([0x24u8; 12]);
         let domain = test_domain();
         // Collision-fixture AAD (fixed historical bytes the Poly1305 collision targets).
         let mut aad = Vec::new();
@@ -985,10 +985,10 @@ mod pins {
 
     #[test]
     fn wrap_unwrap_round_trip_and_derive() -> Result<()> {
-        let kek = Kek::from_bytes([0x11; 32]);
+        let kek = Kek::admit([0x11; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::from_bytes([0x22; 32]);
-        let seg = SegmentCounter::from_raw(7);
+        let salt = ShredSalt::admit([0x22; 32]);
+        let seg = SegmentCounter::of_u64(7);
         let domain = test_domain();
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain)?;
         let ledger = ShredLedger::new();
@@ -1004,10 +1004,10 @@ mod pins {
 
     #[test]
     fn post_shred_unwrap_refuses_shredded() -> Result<()> {
-        let kek = Kek::from_bytes([0x11; 32]);
+        let kek = Kek::admit([0x11; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::from_bytes([0x22; 32]);
-        let seg = SegmentCounter::from_raw(3);
+        let salt = ShredSalt::admit([0x22; 32]);
+        let seg = SegmentCounter::of_u64(3);
         let domain = test_domain();
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain)?;
         // Old pack still holds a copy of the wrapped ciphertext.
@@ -1033,9 +1033,9 @@ mod pins {
     /// separation). RED if `unwrap` ever returns the salt under a forged domain.
     #[test]
     fn cross_domain_wrapped_salt_reinterpretation_refuses() -> Result<()> {
-        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x77; 32])); // SAME KEK throughout
-        let salt = ShredSalt::from_bytes([0x99; 32]);
-        let seg = SegmentCounter::from_raw(4);
+        let cap = KekUnwrapCap::from_kek(Kek::admit([0x77; 32])); // SAME KEK throughout
+        let salt = ShredSalt::admit([0x99; 32]);
+        let seg = SegmentCounter::of_u64(4);
         let ledger = ShredLedger::new();
 
         let store_a = StoreId::from_digest([0xA1; 32]);
@@ -1050,7 +1050,7 @@ mod pins {
         );
 
         // Axis 1 — cross-EPOCH (same store, same KEK, forged later fence epoch).
-        let domain_a_ep5 = CryptoDomain::new(store_a, FenceEpoch::from_raw(store_a, 5));
+        let domain_a_ep5 = CryptoDomain::new(store_a, FenceEpoch::of_u64(store_a, 5));
         let forged_epoch =
             WrappedShredSalt::from_persisted(wrapped.ciphertext().to_vec(), seg, domain_a_ep5);
         assert!(
@@ -1074,9 +1074,9 @@ mod pins {
 
     #[test]
     fn compress_then_encrypt_round_trips_siv_and_is_not_identity() -> Result<()> {
-        let kek = Kek::from_bytes([0x33; 32]);
+        let kek = Kek::admit([0x33; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::from_bytes([0x44; 32]);
+        let salt = ShredSalt::admit([0x44; 32]);
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let aad = test_aad()?;
@@ -1090,7 +1090,7 @@ mod pins {
         let ct = compress_then_encrypt(
             plaintext,
             &dek,
-            Nonce::from_bytes([9u8; 12]),
+            Nonce::admit([9u8; 12]),
             AeadArm::Siv,
             &aad,
         )?;
@@ -1105,16 +1105,16 @@ mod pins {
 
     #[test]
     fn gcm_arm_uses_chacha20poly1305() -> Result<()> {
-        let kek = Kek::from_bytes([0x55; 32]);
+        let kek = Kek::admit([0x55; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::from_bytes([0x66; 32]);
+        let salt = ShredSalt::admit([0x66; 32]);
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let aad = test_aad()?;
         let ct = compress_then_encrypt(
             b"gcm-arm",
             &dek,
-            Nonce::from_bytes([1u8; 12]),
+            Nonce::admit([1u8; 12]),
             AeadArm::Gcm,
             &aad,
         )?;
@@ -1133,11 +1133,11 @@ mod pins {
     fn wrong_kind_fixed_arrays_are_unconstructible_as_peer_kinds() -> Result<()> {
         let domain = test_domain();
         let aad = test_aad()?;
-        let audit = AuditKey::from_bytes([0xABu8; 32]);
+        let audit = AuditKey::admit([0xABu8; 32]);
         let mac: Mac = audit.leaf_mac(&aad);
         assert_eq!(std::mem::size_of_val(&mac), 32);
         // Digest from CMT-1 KEK door is not a Mac; Mac has no From/Into Digest bridge.
-        let kek = Kek::from_bytes([0x11; 32]);
+        let kek = Kek::admit([0x11; 32]);
         let digest: Digest = key_commitment_kek(&kek, domain)?;
         assert_eq!(std::mem::size_of_val(&digest), 32);
         assert_ne!(
@@ -1164,8 +1164,8 @@ mod pins {
         let wrap_aad = encode_wrapped_shred_salt_aad(domain, SegmentCounter::ZERO.get())?;
         let n: Nonce = wrap_nonce(&wrap_aad);
         // encrypt door takes &Dek + Nonce — naked [u8;12] / &Kek are type errors.
-        let salt = ShredSalt::from_bytes([0x22; 32]);
-        let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x33; 32]));
+        let salt = ShredSalt::admit([0x22; 32]);
+        let cap = KekUnwrapCap::from_kek(Kek::admit([0x33; 32]));
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let ct = compress_then_encrypt(b"typed-nonce", &dek, n, AeadArm::Siv, &aad)?;
         assert_eq!(ct.nonce(), &n);
@@ -1382,10 +1382,10 @@ pub fn ")) {
             "main encrypt AAD must remain sole CanonicalTranscript path"
         );
 
-        let kek = Kek::from_bytes([0x11; 32]);
+        let kek = Kek::admit([0x11; 32]);
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::from_bytes([0x22; 32]);
-        let seg = SegmentCounter::from_raw(7);
+        let salt = ShredSalt::admit([0x22; 32]);
+        let seg = SegmentCounter::of_u64(7);
         let wrap_domain = test_domain();
         let wrapped = wrap_shred_salt(&cap, &salt, seg, wrap_domain)?;
         let ledger = ShredLedger::new();

@@ -465,13 +465,13 @@ fn derive_group(
     let mut i = 0;
     while i < breaks.len() {
         let start = breaks[i];
-        let Some(tuple) = resolve_at(group, key, ValidityTs::from_raw(start), fixed_sys) else {
+        let Some(tuple) = resolve_at(group, key, ValidityTs::of_micros(start), fixed_sys) else {
             i += 1;
             continue;
         };
         let mut j = i;
         while j + 1 < breaks.len()
-            && resolve_at(group, key, ValidityTs::from_raw(breaks[j + 1]), fixed_sys).as_ref()
+            && resolve_at(group, key, ValidityTs::of_micros(breaks[j + 1]), fixed_sys).as_ref()
                 == Some(&tuple)
         {
             j += 1;
@@ -725,7 +725,7 @@ impl DeltaRA {
 /// (exclusive) — backwards from what plain integer bounds would suggest,
 /// which is exactly why this is factored out and named rather than inlined.
 fn posting_window_bounds(posting: &RelationHandle, lo: i64, hi: i64) -> (Vec<u8>, Vec<u8>) {
-    let col_at = |ts: i64| vec![StoredValiditySlot::new(ValidityTs::from_raw(ts)).as_datavalue()];
+    let col_at = |ts: i64| vec![StoredValiditySlot::new(ValidityTs::of_micros(ts)).as_datavalue()];
     let lower = col_at(hi).encode_as_key(posting.id).as_bytes().to_vec();
     let upper = col_at(lo).encode_as_key(posting.id).as_bytes().to_vec();
     (lower, upper)
@@ -815,7 +815,7 @@ mod tests {
         DataValue::from(i)
     }
     fn vts(t: i64) -> ValidityTs {
-        ValidityTs::from_raw(t)
+        ValidityTs::of_micros(t)
     }
     fn col(name: &str) -> ColumnDef {
         ColumnDef {

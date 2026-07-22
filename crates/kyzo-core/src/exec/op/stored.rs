@@ -603,7 +603,7 @@ mod segment_gate_tests {
     ) -> Result<()> {
         let mut wtx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         handle
-            .put_fact(&mut wtx, &[v(k), v(val)], ValidityTs::from_raw(0), sp())
+            .put_fact(&mut wtx, &[v(k), v(val)], ValidityTs::of_micros(0), sp())
             .map_err(|e| miette!("put_fact: {e}"))?;
         // Writers bump BEFORE commit (`engines/segments.rs` module doc's
         // soundness pairing) — mirrors exactly what `runtime/db.rs`'s
