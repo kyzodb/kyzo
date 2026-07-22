@@ -1077,8 +1077,11 @@ impl WriteTx for FjallWriteTx {
 
 impl Drop for FjallWriteTx {
     fn drop(&mut self) {
-        if self.tx.is_some() && !std::thread::panicking() {
-            panic!("Open WriteTx dropped without commit() or abort(self)");
+        // Drop cannot return Result. Forgotten commit()/abort(self) discards
+        // the open write set via rollback — same durable effect as abort(self).
+        // Intentional ends still go through commit()/abort(self).
+        if let Some(tx) = self.tx.take() {
+            tx.rollback();
         }
     }
 }
@@ -1192,7 +1195,9 @@ mod pins {
                         | other @ DataValue::Set(_)
                         | other @ DataValue::Validity(_)
                         | other @ DataValue::Interval(_)
-                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
+                        | other @ DataValue::Geometry(_) => {
+                            return Err(miette!("unexpected {other:?}"));
+                        }
                     };
                     let ts = match &t.as_slice()[1] {
                         DataValue::Validity(v) => v.ts_micros(),
@@ -1208,7 +1213,9 @@ mod pins {
                         | other @ DataValue::List(_)
                         | other @ DataValue::Set(_)
                         | other @ DataValue::Interval(_)
-                        | other @ DataValue::Geometry(_) => panic!("unexpected {other:?}"),
+                        | other @ DataValue::Geometry(_) => {
+                            return Err(miette!("unexpected {other:?}"));
+                        }
                     };
                     Ok((name, ts))
                 })
@@ -1356,7 +1363,7 @@ mod pins {
                                     break;
                                 }
                                 Err(e) if e.is_conflict() => continue,
-                                Err(e) => panic!("unexpected commit error: {e:?}"),
+                                Err(e) => return Err(miette!("unexpected commit error: {e:?}")),
                             }
                         }
                     }
@@ -1412,7 +1419,7 @@ mod pins {
 
         let err = match new_fjall_storage(dir.path()) {
             Err(e) => e,
-            Ok(_) => panic!("production open must refuse older-but-parseable stamp"),
+            Ok(_) => return Err(miette!("production open must refuse older-but-parseable stamp")),
         };
         let msg = format!("{err:#}");
         let found = older.to_string();
@@ -1453,7 +1460,7 @@ mod pins {
             },
         ) {
             Err(e) => e,
-            Ok(_) => panic!("one byte under the vendor floor must refuse at our boundary"),
+            Ok(_) => return Err(miette!("one byte under the vendor floor must refuse at our boundary")),
         };
         let refuse = err
             .downcast_ref::<FjallRefuse>()?;

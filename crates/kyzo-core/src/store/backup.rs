@@ -188,7 +188,7 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     // The dump carries the store's on-disk format version: a dump of one
     // format can never silently restore into a store of another.
     let version = FormatVersion::CURRENT.as_bytes();
-    w.write_all(&(version.len() as u64).to_be_bytes())
+    w.write_all(&(u64::try_from(version.len()).map_err(|_| miette!("format version length does not fit u64"))?).to_be_bytes())
         .into_diagnostic()?;
     w.write_all(&version).into_diagnostic()?;
     // SNAPSHOT FIRST, FLOOR SECOND — see `floor_after_snapshot`'s doc
@@ -215,10 +215,10 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
         {
             verify_stamp_within_floor(id, &k, floor)?;
         }
-        w.write_all(&(k.len() as u64).to_be_bytes())
+        w.write_all(&(u64::try_from(k.len()).map_err(|_| miette!("dump key length does not fit u64"))?).to_be_bytes())
             .into_diagnostic()?;
         w.write_all(&k).into_diagnostic()?;
-        w.write_all(&(v.len() as u64).to_be_bytes())
+        w.write_all(&(u64::try_from(v.len()).map_err(|_| miette!("dump value length does not fit u64"))?).to_be_bytes())
             .into_diagnostic()?;
         w.write_all(&v).into_diagnostic()?;
     }
@@ -432,7 +432,7 @@ fn read_len_prefixed(r: &mut impl Read) -> Result<Option<(Vec<u8>, u64)>> {
     let len = u64::from_be_bytes(len_buf);
     let mut buf = Vec::new();
     r.take(len).read_to_end(&mut buf).into_diagnostic()?;
-    if buf.len() as u64 != len {
+    if u64::try_from(buf.len()).map_err(|_| miette!("dump field length does not fit u64"))? != len {
         bail!("truncated dump: field shorter than its length prefix");
     }
     Ok(Some((buf, len)))
@@ -1470,7 +1470,11 @@ mod restore_integrity {
                 return Err(miette!("injected interrupt mid-batch_put"));
             }
             let mut key = 1u64.to_be_bytes().to_vec();
-            key.extend_from_slice(&(i as u64).to_be_bytes());
+            key.extend_from_slice(
+                &u64::try_from(i)
+                    .map_err(|_| miette!("restore pair index does not fit u64"))?
+                    .to_be_bytes(),
+            );
             Ok((key, vec![0xAB]))
         });
 
@@ -1506,7 +1510,7 @@ mod restore_integrity {
         // match (not unwrap_err): Ok(FjallStorage) is not Debug.
         let reopen_err = match open_complete_store(&tgt_path) {
             Err(e) => e,
-            Ok(_) => panic!("open_complete_store must refuse a partial restore"),
+            Ok(_) => return Err(miette!("open_complete_store must refuse a partial restore")),
         };
         assert!(
             reopen_err.downcast_ref::<IncompleteRestore>().is_some(),
