@@ -18,8 +18,8 @@ use kyzo_model::value::{DataValue, Tuple};
 
 use crate::eval::{
     Bindings, Program, Rejection, Rel, Rule, Term, body_bindings_from, check_safety,
-    check_stratifiable, check_wellformed, dependency_edges, ground, head_classes, literal_rows,
-    naive_eval, unify,
+    check_stratifiable, check_wellformed, dependency_back_edge, dependency_edges, ground,
+    head_classes, literal_rows, naive_eval, unify,
 };
 use crate::temporal::{AsOf, SignedFact};
 use crate::{AggrFold, NormalAccum};
@@ -99,31 +99,16 @@ pub fn topological_order(program: &Program) -> Result<Vec<Rel>, Rejection> {
     Ok(order)
 }
 
+/// Incremental refuses every recursive dependency (DRed is out of scope).
+/// Uses the shared oracle cycle door with `forcing_only = false`.
 fn has_any_cycle(program: &Program) -> bool {
-    let edges = dependency_edges(program);
-    let mut adjacency: HashMap<Rel, HashSet<Rel>> = HashMap::new();
-    for (head, dep, _) in &edges {
-        adjacency
-            .entry(head.clone())
-            .or_default()
-            .insert(dep.clone());
-    }
-    let reaches = |from: &Rel, to: &Rel| -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![from.clone()];
-        while let Some(r) = stack.pop() {
-            if r == *to {
-                return true;
-            }
-            if seen.insert(r.clone()) {
-                stack.extend(adjacency.get(&r).into_iter().flatten().cloned());
-            }
-        }
-        false
-    };
-    edges.iter().any(|(head, dep, _)| reaches(dep, head))
+    dependency_back_edge(program, false).is_some()
 }
 
+/// Every grounded head a rule could have gained or lost this round.
+///
+/// Enumerates non-empty driver subsets by include/exclude recursion — not
+/// the engine's bitmask loop — then contributes each subset independently.
 fn collect_candidates(
     rule: &Rule,
     program: &Program,
@@ -136,30 +121,83 @@ fn collect_candidates(
         .body
         .iter()
         .enumerate()
-        .filter(|(_, l)| rel_deltas.get(&l.rel).is_some_and(|d| !d.is_empty()))
+        .filter(|(_, lit)| rel_deltas.get(&lit.rel).is_some_and(|d| !d.is_empty()))
         .map(|(i, _)| i)
         .collect();
     if varying.is_empty() {
         return;
     }
-    let n = varying.len();
-    for mask in 1u32..(1u32 << n) {
-        let subset: Vec<usize> = (0..n)
-            .filter(|b| mask & (1 << b) != 0)
-            .map(|b| varying[b])
-            .collect();
-        contribute_candidates_subset(
-            rule,
-            program,
-            total,
-            rel_deltas,
-            &subset,
-            default_as_of,
-            candidates,
-        );
-    }
+    let mut chosen = Vec::new();
+    enumerate_driver_subsets(
+        rule,
+        program,
+        total,
+        rel_deltas,
+        default_as_of,
+        &varying,
+        0,
+        &mut chosen,
+        candidates,
+    );
 }
 
+#[allow(clippy::too_many_arguments)]
+fn enumerate_driver_subsets(
+    rule: &Rule,
+    program: &Program,
+    total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    rel_deltas: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    default_as_of: AsOf,
+    varying: &[usize],
+    at: usize,
+    chosen: &mut Vec<usize>,
+    candidates: &mut BTreeSet<Tuple>,
+) {
+    if at == varying.len() {
+        if !chosen.is_empty() {
+            contribute_candidates_subset(
+                rule,
+                program,
+                total,
+                rel_deltas,
+                chosen,
+                default_as_of,
+                candidates,
+            );
+        }
+        return;
+    }
+    // Exclude this varying position.
+    enumerate_driver_subsets(
+        rule,
+        program,
+        total,
+        rel_deltas,
+        default_as_of,
+        varying,
+        at + 1,
+        chosen,
+        candidates,
+    );
+    // Include it.
+    chosen.push(varying[at]);
+    enumerate_driver_subsets(
+        rule,
+        program,
+        total,
+        rel_deltas,
+        default_as_of,
+        varying,
+        at + 1,
+        chosen,
+        candidates,
+    );
+    chosen.pop();
+}
+
+/// Bind delta-driven body positions first, then join/gate the rest against
+/// stable `total`. Staged helpers — not one frontier loop over a chained
+/// positive+negated iterator (engine twin shape).
 #[allow(clippy::too_many_arguments)]
 fn contribute_candidates_subset(
     rule: &Rule,
@@ -170,65 +208,99 @@ fn contribute_candidates_subset(
     default_as_of: AsOf,
     candidates: &mut BTreeSet<Tuple>,
 ) {
-    let mut frontier: Vec<Bindings> = vec![Bindings::new()];
-    for &pos in subset {
-        let lit = &rule.body[pos];
-        let deltas = &rel_deltas[&lit.rel];
-        let mut next = Vec::new();
-        for bound in &frontier {
-            for fact in deltas {
-                let tuple = match fact {
-                    SignedFact::Plus(t) | SignedFact::Minus(t) => t,
-                };
-                if let Some(b) = unify(&lit.args, tuple.as_slice(), bound) {
-                    next.push(b);
-                }
-            }
-        }
-        frontier = next;
-        if frontier.is_empty() {
-            return;
-        }
+    let Some(mut frontier) = bind_delta_drivers(rule, rel_deltas, subset) else {
+        return;
+    };
+    frontier = join_stable_positives(rule, program, total, subset, default_as_of, frontier);
+    if frontier.is_empty() {
+        return;
     }
-
-    let remaining_positive = rule
-        .body
-        .iter()
-        .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && !l.is_negated())
-        .map(|(_, l)| l);
-    let remaining_negated = rule
-        .body
-        .iter()
-        .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && l.is_negated())
-        .map(|(_, l)| l);
-    for lit in remaining_positive.chain(remaining_negated) {
-        let rows = literal_rows(program, total, lit, default_as_of);
-        let mut next = Vec::new();
-        for bound in &frontier {
-            if lit.is_negated() {
-                let probe = ground(&lit.args, bound);
-                if !rows.contains(&probe) {
-                    next.push(bound.clone());
-                }
-            } else {
-                for tuple in &rows {
-                    if let Some(b) = unify(&lit.args, tuple.as_slice(), bound) {
-                        next.push(b);
-                    }
-                }
-            }
-        }
-        frontier = next;
-        if frontier.is_empty() {
-            return;
-        }
-    }
-
+    frontier = gate_stable_negatives(rule, program, total, subset, default_as_of, frontier);
     for bound in frontier {
         candidates.insert(ground(&rule.head_args, &bound));
     }
+}
+
+fn signed_tuple(fact: &SignedFact) -> &Tuple {
+    match fact {
+        SignedFact::Plus(t) | SignedFact::Minus(t) => t,
+    }
+}
+
+fn bind_delta_drivers(
+    rule: &Rule,
+    rel_deltas: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    subset: &[usize],
+) -> Option<Vec<Bindings>> {
+    let mut frontier = vec![Bindings::new()];
+    for &pos in subset {
+        let lit = &rule.body[pos];
+        let deltas = rel_deltas.get(&lit.rel)?;
+        let mut next = Vec::new();
+        for bound in &frontier {
+            for fact in deltas {
+                if let Some(extended) = unify(&lit.args, signed_tuple(fact).as_slice(), bound) {
+                    next.push(extended);
+                }
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        frontier = next;
+    }
+    Some(frontier)
+}
+
+fn join_stable_positives(
+    rule: &Rule,
+    program: &Program,
+    total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    subset: &[usize],
+    default_as_of: AsOf,
+    frontier: Vec<Bindings>,
+) -> Vec<Bindings> {
+    let mut live = frontier;
+    for (i, lit) in rule.body.iter().enumerate() {
+        if subset.contains(&i) || lit.is_negated() {
+            continue;
+        }
+        let rows = literal_rows(program, total, lit, default_as_of);
+        live = live
+            .into_iter()
+            .flat_map(|bound| {
+                rows.iter()
+                    .filter_map(|tuple| unify(&lit.args, tuple.as_slice(), &bound))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if live.is_empty() {
+            return live;
+        }
+    }
+    live
+}
+
+fn gate_stable_negatives(
+    rule: &Rule,
+    program: &Program,
+    total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    subset: &[usize],
+    default_as_of: AsOf,
+    frontier: Vec<Bindings>,
+) -> Vec<Bindings> {
+    let mut live = frontier;
+    for (i, lit) in rule.body.iter().enumerate() {
+        if subset.contains(&i) || !lit.is_negated() {
+            continue;
+        }
+        let rows = literal_rows(program, total, lit, default_as_of);
+        live.retain(|bound| !rows.contains(&ground(&lit.args, bound)));
+        if live.is_empty() {
+            return live;
+        }
+    }
+    live
 }
 
 /// Is `target` derivable from any of `rules` against `db`?
@@ -348,6 +420,11 @@ fn eval_one_group(
     }
 }
 
+/// Incremental law for an aggregating head: find affected groups, fully
+/// re-derive each against `new_total`, emit signed row changes.
+///
+/// Layout / indexing / emit are separate steps (engine keeps them inline in
+/// one match ladder) so the differential is not a tautology.
 #[allow(clippy::too_many_arguments)]
 fn eval_aggregating_head_incremental(
     rules: &[&Rule],
@@ -359,41 +436,15 @@ fn eval_aggregating_head_incremental(
     old_rows: &BTreeSet<Tuple>,
 ) -> Result<BTreeSet<SignedFact>, Rejection> {
     let signature = &rules[0].aggr;
-    let key_positions: Vec<usize> = signature
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| !a.is_aggregated())
-        .map(|(i, _)| i)
-        .collect();
-    let val_positions: Vec<(usize, &dyn AggrFold, &[DataValue])> = signature
-        .iter()
-        .enumerate()
-        .filter_map(|(i, a)| a.as_aggregated().map(|(fold, args)| (i, fold, args)))
-        .collect();
-
-    let old_by_key: BTreeMap<Tuple, Tuple> = old_rows
-        .iter()
-        .map(|row| {
-            let key: Tuple = key_positions.iter().map(|i| row[*i].clone()).collect();
-            (key, row.clone())
-        })
-        .collect();
-
-    let mut affected = collect_affected_groups(
-        rules,
-        program,
-        old_total,
-        rel_deltas,
-        default_as_of,
-        &key_positions,
-    );
-    if key_positions.is_empty() && rel_deltas.values().any(|d| !d.is_empty()) {
-        affected.insert(Tuple::new());
-    }
+    let key_positions = plain_slots(signature);
+    let val_positions = aggregated_slots(signature);
+    let old_by_key = index_rows_by_group_key(old_rows, &key_positions);
+    let affected =
+        affected_group_keys(rules, program, old_total, rel_deltas, default_as_of, &key_positions);
 
     let mut delta = BTreeSet::new();
-    for group_key in &affected {
-        let new_row = eval_one_group(
+    for group_key in affected {
+        let rebuilt = eval_one_group(
             rules,
             program,
             new_total,
@@ -401,24 +452,86 @@ fn eval_aggregating_head_incremental(
             &key_positions,
             &val_positions,
             signature.len(),
-            group_key,
+            &group_key,
         )?;
-        let old_row = old_by_key.get(group_key).cloned();
-        match (old_row, new_row) {
-            (Some(old), Some(new)) if old != new => {
-                delta.insert(SignedFact::Minus(old));
-                delta.insert(SignedFact::Plus(new));
-            }
-            (Some(old), None) => {
-                delta.insert(SignedFact::Minus(old));
-            }
-            (None, Some(new)) => {
-                delta.insert(SignedFact::Plus(new));
-            }
-            _ => {}
-        }
+        push_group_row_delta(&mut delta, old_by_key.get(&group_key), rebuilt);
     }
     Ok(delta)
+}
+
+fn plain_slots(signature: &[crate::eval::HeadAggr]) -> Vec<usize> {
+    signature
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| !slot.is_aggregated())
+        .map(|(i, _)| i)
+        .collect()
+}
+
+fn aggregated_slots(
+    signature: &[crate::eval::HeadAggr],
+) -> Vec<(usize, &dyn AggrFold, &[DataValue])> {
+    signature
+        .iter()
+        .enumerate()
+        .filter_map(|(i, slot)| slot.as_aggregated().map(|(fold, args)| (i, fold, args)))
+        .collect()
+}
+
+fn index_rows_by_group_key(
+    rows: &BTreeSet<Tuple>,
+    key_positions: &[usize],
+) -> BTreeMap<Tuple, Tuple> {
+    let mut by_key = BTreeMap::new();
+    for row in rows {
+        let key: Tuple = key_positions.iter().map(|i| row[*i].clone()).collect();
+        by_key.insert(key, row.clone());
+    }
+    by_key
+}
+
+fn affected_group_keys(
+    rules: &[&Rule],
+    program: &Program,
+    old_total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    rel_deltas: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    default_as_of: AsOf,
+    key_positions: &[usize],
+) -> BTreeSet<Tuple> {
+    let mut keys = collect_affected_groups(
+        rules,
+        program,
+        old_total,
+        rel_deltas,
+        default_as_of,
+        key_positions,
+    );
+    // Global aggregate (no GROUP BY): any non-empty dependency delta forces
+    // a re-check of the single empty key.
+    if key_positions.is_empty() && rel_deltas.values().any(|d| !d.is_empty()) {
+        keys.insert(Tuple::new());
+    }
+    keys
+}
+
+fn push_group_row_delta(
+    delta: &mut BTreeSet<SignedFact>,
+    prior: Option<&Tuple>,
+    rebuilt: Option<Tuple>,
+) {
+    match (prior, rebuilt) {
+        (Some(old), Some(new)) if old != &new => {
+            delta.insert(SignedFact::Minus(old.clone()));
+            delta.insert(SignedFact::Plus(new));
+        }
+        (Some(old), None) => {
+            delta.insert(SignedFact::Minus(old.clone()));
+        }
+        (None, Some(new)) => {
+            delta.insert(SignedFact::Plus(new));
+        }
+        (Some(_), Some(_)) | (None, None) => {}
+    }
 }
 
 /// Reference incremental maintenance: signed EDB patch → signed relation deltas.
