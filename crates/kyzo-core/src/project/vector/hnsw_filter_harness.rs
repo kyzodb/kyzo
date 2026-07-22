@@ -79,21 +79,10 @@ fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHa
 // Deterministic vector/row generation.
 // ---------------------------------------------------------------------------
 
-/// One splitmix64 step — same house PRNG as the engine's level seed, so the
-/// generated corpus is byte-reproducible across platforms.
-fn splitmix(state: &mut u64) -> u64 {
-    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-    *state = (std::num::Wrapping(*state) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
-    let mut z = std::num::Wrapping(*state);
-    z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
-    (z ^ (z >> 31)).0
-}
-
 /// A reproducible f64 in [-1, 1) (24 bits of entropy, so every value is
 /// exactly representable at f32 precision too).
 fn next_f32(state: &mut u64) -> f64 {
-    let bits = splitmix(state) >> 40; // 24 bits
+    let bits = crate::rules::rng::splitmix64_step(state) >> 40; // 24 bits
     (u64_to_f64(u64::from(bits)) / f64::from(1u32 << 23)) - 1.0
 }
 
@@ -124,7 +113,7 @@ fn seeded_permutation(rows: &[Tuple], seed: u64) -> Vec<Tuple> {
     let mut state = seed ^ 0x5EED_0F0F_A11C_0DE5;
     for i in (1..out.len()).rev() {
         let i_u64 = match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 };
-        let j_u64 = splitmix(&mut state) % (i_u64 + 1);
+        let j_u64 = crate::rules::rng::splitmix64_step(&mut state) % (i_u64 + 1);
         let j = match usize::try_from(j_u64) { Ok(v) => v, Err(_e) => 0 };
         out.swap(i, j);
     }

@@ -402,20 +402,6 @@ pub struct HnswIndexManifest {
 /// test-guarded value (`hnsw_level_is_deterministic_and_geometric`).
 const HNSW_LEVEL_SEED: u64 = 0x484e_5357_5f4c_564c; // "HNSW_LVL"
 
-/// One splitmix64 step — the `storage::sim` / `fixed_rule::rng` house PRNG,
-/// inlined here to fold content-hash bytes into a per-vector seed. A pure
-/// function of its state: no platform-dependent word size or endianness, so
-/// the derived level is portable.
-#[inline]
-fn splitmix64(state: &mut u64) -> u64 {
-    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-    *state = (std::num::Wrapping(*state) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
-    let mut z = std::num::Wrapping(*state);
-    z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
-    (z ^ (z >> 31)).0
-}
-
 /// Graph-build seed free from the existing content-addressing law: fold a
 /// vector's [`VecContentHash`] (SHA-256 over canonical vector bytes) into
 /// [`HNSW_LEVEL_SEED`]. Same admitted content ⇒ same seed ⇒ same layer draw;
@@ -427,7 +413,7 @@ fn seed_from_vec_content(hash: &VecContentHash) -> u64 {
         let mut buf = [0u8; 8];
         buf[..chunk.len()].copy_from_slice(chunk);
         state ^= u64::from_le_bytes(buf);
-        splitmix64(&mut state);
+        crate::rules::rng::splitmix64_step(&mut state);
     }
     state
 }
@@ -573,7 +559,7 @@ impl HnswIndexManifest {
         let mut state = seed_from_vec_content(hash);
         // Uniform in (0, 1]: [1,2) from 52 mantissa bits minus 1 → [0,1);
         // map 0 → 1 so ln is finite. No lossy `as` cast.
-        let bits = splitmix64(&mut state) >> 12;
+        let bits = crate::rules::rng::splitmix64_step(&mut state) >> 12;
         let u = {
             let unit = f64::from_bits(0x3FF0_0000_0000_0000 | bits) - 1.0;
             if unit == 0.0 {
@@ -1469,8 +1455,8 @@ impl RaBitQRotation {
 /// Standard normal via Box–Muller over the house [`splitmix64`] stream.
 #[cfg(test)]
 fn rabitq_gauss(state: &mut u64) -> f64 {
-    let u1 = (u64_to_f64(splitmix64(state)) + 1.0) / (u64_to_f64(u64::MAX) + 2.0);
-    let u2 = u64_to_f64(splitmix64(state)) / (u64_to_f64(u64::MAX) + 1.0);
+    let u1 = (u64_to_f64(crate::rules::rng::splitmix64_step(state)) + 1.0) / (u64_to_f64(u64::MAX) + 2.0);
+    let u2 = u64_to_f64(crate::rules::rng::splitmix64_step(state)) / (u64_to_f64(u64::MAX) + 1.0);
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
 }
 
@@ -3342,7 +3328,7 @@ fn select_strategy<T: ReadTx>(
             reservoir.push(id);
         } else {
             let n_u64 = match u64::try_from(n) { Ok(v) => v, Err(_e) => 0 };
-            let j_u64 = splitmix64(&mut state) % (n_u64 + 1);
+            let j_u64 = crate::rules::rng::splitmix64_step(&mut state) % (n_u64 + 1);
             let j = match usize::try_from(j_u64) { Ok(v) => v, Err(_e) => 0 };
             if j < HNSW_SAMPLE_SIZE {
                 reservoir[j] = id;
@@ -3843,7 +3829,7 @@ mod tests {
     fn probe_vec(dim: usize, state: &mut u64) -> Result<DataValue> {
         let mut v = Vec::with_capacity(dim);
         for _ in 0..dim {
-            let bits = splitmix64(state);
+            let bits = crate::rules::rng::splitmix64_step(state);
             let unit = u64_to_f64(bits >> 11) / u64_to_f64(1u64 << 53); // [0, 1)
             v.push(unit * 2.0 - 1.0);
         }
@@ -4602,7 +4588,7 @@ mod tests {
     fn fixture_xy(k: i64) -> (f64, f64) {
         let mut state = HNSW_LEVEL_SEED ^ u64::from_ne_bytes(k.to_ne_bytes());
         let unit = |state: &mut u64| {
-            let bits = splitmix64(state) >> 12;
+            let bits = crate::rules::rng::splitmix64_step(state) >> 12;
             f64::from_bits(0x3FF0_0000_0000_0000 | bits) - 1.0
         };
         (unit(&mut state) * 2.0 - 1.0, unit(&mut state) * 2.0 - 1.0)
@@ -4856,8 +4842,8 @@ mod tests {
         let mut k: i64 = 0;
         while k < 16 {
             let mut state = HNSW_LEVEL_SEED ^ u64::from_ne_bytes(k.to_ne_bytes());
-            let bits_x = splitmix64(&mut state) >> 12;
-            let bits_y = splitmix64(&mut state) >> 12;
+            let bits_x = crate::rules::rng::splitmix64_step(&mut state) >> 12;
+            let bits_y = crate::rules::rng::splitmix64_step(&mut state) >> 12;
             let x = f64::from_bits(0x3FF0_0000_0000_0000 | bits_x) - 1.0;
             let y = f64::from_bits(0x3FF0_0000_0000_0000 | bits_y) - 1.0;
             rows.push(row(k, x * 2.0 - 1.0, y * 2.0 - 1.0)?);

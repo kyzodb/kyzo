@@ -15,8 +15,8 @@
 //! Those rules now take an explicit `seed` option with a fixed default and
 //! draw from [`SeededRng`]: same seed ⇒ byte-identical output.
 //!
-//! [`SeededRng`] is the storage/sim.rs `SimRng` house pattern — inline
-//! splitmix64, a pure function of its seed, no new dependency — wrapped as a
+//! [`SeededRng`] is the storage/sim.rs `SimRng` house pattern — [`splitmix64_step`]
+//! owns the mix once, a pure function of its seed, no new dependency — wrapped as a
 //! [`rand::RngCore`] so the algorithms keep using `rand`'s Fisher–Yates
 //! `shuffle`, `choose`, and `WeightedIndex` sampling unchanged; only the
 //! entropy source moves from the OS to a pinned seed. The splitmix64 output
@@ -24,6 +24,18 @@
 //! math), so the seed pins the stream on every target.
 
 use rand::RngCore;
+
+/// One splitmix64 step — sole house authority for the mix (seat 59 / copy law).
+/// Callers own the seed state; constants live here only.
+#[inline]
+pub(crate) fn splitmix64_step(state: &mut u64) -> u64 {
+    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
+    *state = (std::num::Wrapping(*state) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
+    let mut z = std::num::Wrapping(*state);
+    z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
+    (z ^ (z >> 31)).0
+}
 
 /// Inline splitmix64 wrapped as a [`rand::RngCore`]. See the module docs.
 pub(crate) struct SeededRng {
@@ -37,7 +49,7 @@ impl SeededRng {
     /// below asserts the literal first words of this seed's stream, and
     /// `default_seed_output_is_golden` in `random_walk.rs` pins a
     /// default-seed algorithm row, so any drift of this constant (or of the
-    /// splitmix64 constants in [`Self::step`]) fails loudly.
+    /// splitmix64 constants in [`splitmix64_step`]) fails loudly.
     pub(crate) const DEFAULT_SEED: u64 = 0x1234_5678_9abc_def0;
 
     /// Build a generator over `seed`'s splitmix64 stream. The rules obtain
@@ -59,12 +71,7 @@ impl SeededRng {
     /// One splitmix64 step: mirrors `storage::sim::SimRng::next_u64`.
     #[inline]
     fn step(&mut self) -> u64 {
-        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-        self.state = (std::num::Wrapping(self.state) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
-        let mut z = std::num::Wrapping(self.state);
-        z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
-        (z ^ (z >> 31)).0
+        splitmix64_step(&mut self.state)
     }
 }
 
@@ -100,11 +107,11 @@ mod tests {
     use miette::{IntoDiagnostic, Result, miette};
     /// GOLDEN VECTOR: the exact splitmix64 words the *default* seed emits,
     /// as literals. This is what makes `DEFAULT_SEED` and the three
-    /// splitmix64 constants in `step` actually test-guarded: flip any one of
-    /// them and these fixed values no longer match. (A `seed_determines_stream`
-    /// / round-trip test cannot catch such a drift — both sides move
-    /// together.) The values were computed offline from the splitmix64
-    /// definition, independent of this implementation.
+    /// splitmix64 constants in `splitmix64_step` actually test-guarded: flip
+    /// any one of them and these fixed values no longer match. (A
+    /// `seed_determines_stream` / round-trip test cannot catch such a drift —
+    /// both sides move together.) The values were computed offline from the
+    /// splitmix64 definition, independent of this implementation.
     #[test]
     fn golden_stream() {
         let mut rng = SeededRng::new(SeededRng::DEFAULT_SEED);

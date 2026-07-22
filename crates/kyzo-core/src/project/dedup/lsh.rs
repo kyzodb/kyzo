@@ -311,20 +311,6 @@ pub(crate) fn lsh_inv_index_metadata(base: &StoredRelationMetadata) -> StoredRel
 /// claim). Changing this re-projects every future default-seed index.
 pub(crate) const DEFAULT_PERM_SEED: u64 = 0x4c53_485f_5045_524d; // "LSH_PERM"
 
-/// One splitmix64 step — the `storage::sim` / `fixed_rule::rng` house PRNG,
-/// inlined here to draw permutation seeds deterministically. A pure function of
-/// its state; no platform-dependent word size or endianness, so the seed pins
-/// the drawn permutations on every target.
-#[inline]
-fn splitmix64(state: &mut u64) -> u64 {
-    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-    *state = (std::num::Wrapping(*state) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
-    let mut z = std::num::Wrapping(*state);
-    z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
-    (z ^ (z >> 31)).0
-}
-
 /// Named refusal when persisted permutation bytes fail the length law.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub(crate) enum LshPermutationDecodeRefused {
@@ -379,7 +365,7 @@ impl HashPermutations {
         for _ in 0..n_perms {
             // High 32 bits of a splitmix64 word (the finalizer diffuses the
             // whole word, so the high half is equidistributed).
-            perms.push(match u32::try_from(splitmix64(&mut state) >> 32) { Ok(v) => v, Err(_e) => 0 });
+            perms.push(match u32::try_from(crate::rules::rng::splitmix64_step(&mut state) >> 32) { Ok(v) => v, Err(_e) => 0 });
         }
         Self(perms)
     }
