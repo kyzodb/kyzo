@@ -86,25 +86,36 @@ pub trait AggrFold: Send + Sync {
 
 /// Look up a built-in fold by the user-facing aggregation name.
 pub fn builtin_fold(name: &str) -> Option<Arc<dyn AggrFold>> {
-    match name {
-        "count" => Some(Arc::new(BuiltinCount)),
-        "sum" => Some(Arc::new(BuiltinSum)),
-        "min" => Some(Arc::new(BuiltinMin)),
-        "max" => Some(Arc::new(BuiltinMax)),
-        "and" => Some(Arc::new(BuiltinAnd)),
-        "or" => Some(Arc::new(BuiltinOr)),
-        _ => None,
+    if name == "count" {
+        return Some(Arc::new(BuiltinCount));
     }
+    if name == "sum" {
+        return Some(Arc::new(BuiltinSum));
+    }
+    if name == "min" {
+        return Some(Arc::new(BuiltinMin));
+    }
+    if name == "max" {
+        return Some(Arc::new(BuiltinMax));
+    }
+    if name == "and" {
+        return Some(Arc::new(BuiltinAnd));
+    }
+    if name == "or" {
+        return Some(Arc::new(BuiltinOr));
+    }
+    None
 }
 
 /// Built-in fold, or an unknown-name fold that refuses on every use.
 /// Panic-free construction for [`eval::HeadAggr::named`].
 pub(crate) fn fold_named(name: &str) -> Arc<dyn AggrFold> {
-    builtin_fold(name).unwrap_or_else(|| {
-        Arc::new(UnknownBuiltin {
+    match builtin_fold(name) {
+        Some(fold) => fold,
+        None => Arc::new(UnknownBuiltin {
             name: name.to_string(),
-        })
-    })
+        }),
+    }
 }
 
 /// Fold that refuses every use — stands in when [`eval::HeadAggr::named`] is
@@ -144,11 +155,15 @@ struct CountAccum {
 
 impl NormalAccum for CountAccum {
     fn set(&mut self, _value: &DataValue) -> Result<(), String> {
-        self.rows_seen = self.rows_seen.saturating_add(1);
+        self.rows_seen = self
+            .rows_seen
+            .checked_add(1)
+            .ok_or_else(|| "count fold overflowed u64".to_string())?;
         Ok(())
     }
     fn get(&self) -> Result<DataValue, String> {
-        let as_i64 = i64::try_from(self.rows_seen).unwrap_or(i64::MAX);
+        let as_i64 = i64::try_from(self.rows_seen)
+            .map_err(|_| "count fold result does not fit i64".to_string())?;
         Ok(DataValue::from(as_i64))
     }
 }
@@ -188,7 +203,7 @@ impl RunningTotal {
     fn absorb(self, n: Num) -> Self {
         match (self, n.repr()) {
             (RunningTotal::Exact(acc), NumRepr::Int(i)) => {
-                let addend = i as i128;
+                let addend = i128::from(i);
                 match acc.checked_add(addend) {
                     Some(sum) => RunningTotal::Exact(sum),
                     None => RunningTotal::Approx(acc as f64 + addend as f64),
@@ -268,7 +283,9 @@ fn lesser_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
                 Ok(a.clone())
             }
         }
-        _ => Err("min fold requires numeric operands".into()),
+        (kyzo_model::data_value_any!(), kyzo_model::data_value_any!()) => {
+            Err("min fold requires numeric operands".into())
+        }
     }
 }
 
@@ -370,7 +387,9 @@ fn greater_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
                 Ok(a.clone())
             }
         }
-        _ => Err("max fold requires numeric operands".into()),
+        (kyzo_model::data_value_any!(), kyzo_model::data_value_any!()) => {
+            Err("max fold requires numeric operands".into())
+        }
     }
 }
 

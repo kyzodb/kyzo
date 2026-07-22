@@ -141,7 +141,6 @@ fn collect_candidates(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn enumerate_driver_subsets(
     rule: &Rule,
     program: &Program,
@@ -198,7 +197,6 @@ fn enumerate_driver_subsets(
 /// Bind delta-driven body positions first, then join/gate the rest against
 /// stable `total`. Staged helpers — not one frontier loop over a chained
 /// positive+negated iterator (engine twin shape).
-#[allow(clippy::too_many_arguments)]
 fn contribute_candidates_subset(
     rule: &Rule,
     program: &Program,
@@ -348,7 +346,6 @@ fn aggr_err(e: String) -> Rejection {
     Rejection::AggrError(e)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn eval_one_group(
     rules: &[&Rule],
     program: &Program,
@@ -425,7 +422,6 @@ fn eval_one_group(
 ///
 /// Layout / indexing / emit are separate steps (engine keeps them inline in
 /// one match ladder) so the differential is not a tautology.
-#[allow(clippy::too_many_arguments)]
 fn eval_aggregating_head_incremental(
     rules: &[&Rule],
     program: &Program,
@@ -566,7 +562,10 @@ pub fn incremental_eval(
     let mut new_total: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
 
     for rel in order {
-        let old_rows = old_total.get(&rel).cloned().unwrap_or_default();
+        let old_rows = match old_total.get(&rel) {
+            Some(rows) => rows.clone(),
+            None => BTreeSet::new(),
+        };
         let (delta, new_rows) = if edb.contains(&rel) {
             let filtered: BTreeSet<SignedFact> = edb_patch
                 .get(&rel)
@@ -626,7 +625,7 @@ pub fn incremental_eval(
                         (true, false) => {
                             delta.insert(SignedFact::Minus(candidate));
                         }
-                        _ => {}
+                        (true, true) | (false, false) => {}
                     }
                 }
                 delta
@@ -683,7 +682,7 @@ mod tests {
         patch: &BTreeMap<Rel, BTreeSet<SignedFact>>,
         label: &str,
     ) {
-        let old = naive_eval(program).unwrap();
+        let old = naive_eval(program).expect("baseline program evaluates");
         let mut patched_facts = program.facts.clone();
         for (rel, delta) in patch {
             let rows = patched_facts.entry(rel.clone()).or_default();
@@ -699,12 +698,18 @@ mod tests {
             }
         }
         let patched = Program::untimed(program.rules.clone(), program.fixed.clone(), patched_facts);
-        let new = naive_eval(&patched).unwrap();
-        let got = incremental_eval(program, patch).unwrap();
+        let new = naive_eval(&patched).expect("patched program evaluates");
+        let got = incremental_eval(program, patch).expect("incremental on non-recursive program");
         let all_rels: BTreeSet<_> = old.keys().chain(new.keys()).cloned().collect();
         for rel in all_rels {
-            let o = old.get(&rel).cloned().unwrap_or_default();
-            let n = new.get(&rel).cloned().unwrap_or_default();
+            let o = match old.get(&rel) {
+                Some(rows) => rows.clone(),
+                None => BTreeSet::new(),
+            };
+            let n = match new.get(&rel) {
+                Some(rows) => rows.clone(),
+                None => BTreeSet::new(),
+            };
             let mut want = BTreeSet::new();
             for t in o.difference(&n) {
                 want.insert(SignedFact::Minus(t.clone()));
@@ -712,7 +717,10 @@ mod tests {
             for t in n.difference(&o) {
                 want.insert(SignedFact::Plus(t.clone()));
             }
-            let g = got.get(&rel).cloned().unwrap_or_default();
+            let g = match got.get(&rel) {
+                Some(delta) => delta.clone(),
+                None => BTreeSet::new(),
+            };
             assert_eq!(g, want, "{label}: mismatch on {rel}");
         }
     }
@@ -781,7 +789,8 @@ mod tests {
             SignedFact::Plus(Tuple::from_vec(vec![v(1), v(30)])),
         )]);
         assert_incremental_matches_recompute(&program, &patch, "aggregation sum grows");
-        let got = incremental_eval(&program, &patch).unwrap();
+        let got = incremental_eval(&program, &patch)
+            .expect("incremental on non-recursive program");
         assert_eq!(
             got[&Rel::from("total")],
             [
@@ -818,7 +827,8 @@ mod tests {
             SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)])),
         )]);
         assert_incremental_matches_recompute(&program, &patch, "min rescans on retract");
-        let got = incremental_eval(&program, &patch).unwrap();
+        let got = incremental_eval(&program, &patch)
+            .expect("incremental on non-recursive program");
         assert_eq!(
             got[&Rel::from("total")],
             [
@@ -875,17 +885,20 @@ mod tests {
             facts,
         );
         let patch = patch_of(vec![("p", SignedFact::Plus(Tuple::from_vec(vec![v(1)])))]);
-        let got = incremental_eval(&program, &patch).unwrap();
+        let got = incremental_eval(&program, &patch)
+            .expect("incremental on non-recursive program");
         assert!(
-            got.get(&Rel::from("p"))
-                .map(|d| d.is_empty())
-                .unwrap_or(true),
+            match got.get(&Rel::from("p")) {
+                Some(d) => d.is_empty(),
+                None => true,
+            },
             "redundant Plus must filter out"
         );
         assert!(
-            got.get(&Rel::from("q"))
-                .map(|d| d.is_empty())
-                .unwrap_or(true),
+            match got.get(&Rel::from("q")) {
+                Some(d) => d.is_empty(),
+                None => true,
+            },
             "no IDB change from redundant patch"
         );
     }

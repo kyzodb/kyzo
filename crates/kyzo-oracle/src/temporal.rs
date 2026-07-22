@@ -584,7 +584,7 @@ mod tests {
         let b: BTreeSet<_> = [SignedFact::Minus(kv(1, 20)), SignedFact::Plus(kv(1, 10))]
             .into_iter()
             .collect();
-        let c = compose(&a, &b).unwrap();
+        let c = compose(&a, &b).expect("compose of valid events");
         assert!(c.is_empty());
     }
 

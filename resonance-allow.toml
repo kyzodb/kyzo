@@ -286,3 +286,159 @@ line = 689
 pattern = "expect"
 why_not_sabotage = "KEEP: EventCallbackRegistry RwLock poison is fail-closed — refuse silent continue. Helper is the sole observe-registry lock door; into_inner would hide poison."
 
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/lib.rs"
+line = 209
+pattern = "as_cast"
+why_not_sabotage = "KEEP: RunningTotal::Approx pole — i128/i64→f64 is the published sum overflow/float promotion, not a truncating width costume."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/lib.rs"
+line = 213
+pattern = "as_cast"
+why_not_sabotage = "KEEP: RunningTotal::Approx pole — i128/i64→f64 is the published sum overflow/float promotion, not a truncating width costume."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/lib.rs"
+line = 216
+pattern = "as_cast"
+why_not_sabotage = "KEEP: RunningTotal::Approx pole — i128/i64→f64 is the published sum overflow/float promotion, not a truncating width costume."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/lib.rs"
+line = 226
+pattern = "as_cast"
+why_not_sabotage = "KEEP: RunningTotal::Approx pole — i128/i64→f64 is the published sum overflow/float promotion, not a truncating width costume."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1038
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not silent clamp."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1049
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not silent clamp."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1378
+pattern = "expect"
+why_not_sabotage = "KEEP: oracle law corpus test premise — expect fails loud if a known-good program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1409
+pattern = "expect"
+why_not_sabotage = "KEEP: oracle law corpus test premise — expect fails loud if a known-good program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1438
+pattern = "expect"
+why_not_sabotage = "KEEP: oracle law corpus test premise — expect fails loud if a known-good program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1458
+pattern = "expect"
+why_not_sabotage = "KEEP: test literal NonZeroU32 — expect names the nonzero premise; inventing Option would soft-green the budget door."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1474
+pattern = "expect"
+why_not_sabotage = "KEEP: test literal NonZeroU32 — expect names the nonzero premise; inventing Option would soft-green the budget door."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1476
+pattern = "expect"
+why_not_sabotage = "KEEP: budget/oracle corpus test premise — expect fails the test loud if the oracle refuses a known-good program."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1477
+pattern = "expect"
+why_not_sabotage = "KEEP: budget/oracle corpus test premise — expect fails the test loud if the oracle refuses a known-good program."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1501
+pattern = "expect"
+why_not_sabotage = "KEEP: oracle law corpus test premise — expect fails loud if a known-good program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1540
+pattern = "expect"
+why_not_sabotage = "KEEP: oracle law corpus test premise — expect fails loud if a known-good program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/eval.rs"
+line = 1563
+pattern = "expect"
+why_not_sabotage = "KEEP: oracle law corpus test premise — expect fails loud if a known-good program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/incremental.rs"
+line = 685
+pattern = "expect"
+why_not_sabotage = "KEEP: incremental corpus test premise — expect fails loud if a known-good non-recursive program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/incremental.rs"
+line = 701
+pattern = "expect"
+why_not_sabotage = "KEEP: incremental corpus test premise — expect fails loud if a known-good non-recursive program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/incremental.rs"
+line = 702
+pattern = "expect"
+why_not_sabotage = "KEEP: incremental corpus test premise — expect fails loud if a known-good non-recursive program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/incremental.rs"
+line = 793
+pattern = "expect"
+why_not_sabotage = "KEEP: incremental corpus test premise — expect fails loud if a known-good non-recursive program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/incremental.rs"
+line = 831
+pattern = "expect"
+why_not_sabotage = "KEEP: incremental corpus test premise — expect fails loud if a known-good non-recursive program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/incremental.rs"
+line = 889
+pattern = "expect"
+why_not_sabotage = "KEEP: incremental corpus test premise — expect fails loud if a known-good non-recursive program refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/temporal.rs"
+line = 350
+pattern = "expect"
+why_not_sabotage = "KEEP: temporal fixture premise — Event/compose of hand-built valid instants; expect fails loud if the door refuses a known-valid instant."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/temporal.rs"
+line = 353
+pattern = "expect"
+why_not_sabotage = "KEEP: temporal fixture premise — Event/compose of hand-built valid instants; expect fails loud if the door refuses a known-valid instant."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/temporal.rs"
+line = 356
+pattern = "expect"
+why_not_sabotage = "KEEP: temporal fixture premise — Event/compose of hand-built valid instants; expect fails loud if the door refuses a known-valid instant."
+
+[[bs_detector]]
+file = "crates/kyzo-oracle/src/temporal.rs"
+line = 587
+pattern = "expect"
+why_not_sabotage = "KEEP: temporal fixture premise — Event/compose of hand-built valid instants; expect fails loud if the door refuses a known-valid instant."
+

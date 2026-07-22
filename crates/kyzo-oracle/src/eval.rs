@@ -205,7 +205,8 @@ impl PartialEq for HeadAggr {
                 HeadAggr::Aggregated { fold: a, args: aa },
                 HeadAggr::Aggregated { fold: b, args: ba },
             ) => a.name() == b.name() && aa == ba,
-            _ => false,
+            (HeadAggr::Plain, HeadAggr::Aggregated { .. })
+            | (HeadAggr::Aggregated { .. }, HeadAggr::Plain) => false,
         }
     }
 }
@@ -274,7 +275,7 @@ pub struct FixedRule {
     pub eval: fn(&[BTreeSet<Tuple>]) -> BTreeSet<Tuple>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Program {
     pub rules: Vec<Rule>,
     pub fixed: Vec<FixedRule>,
@@ -283,6 +284,16 @@ pub struct Program {
 }
 
 impl Program {
+    /// Empty program — no rules, fixed rules, facts, or histories.
+    pub fn empty() -> Self {
+        Self {
+            rules: Vec::new(),
+            fixed: Vec::new(),
+            facts: BTreeMap::new(),
+            histories: BTreeMap::new(),
+        }
+    }
+
     pub fn untimed(
         rules: Vec<Rule>,
         fixed: Vec<FixedRule>,
@@ -360,8 +371,8 @@ impl OracleBudget {
             if elapsed > allotted {
                 return Err(format!(
                     "query budget exceeded: deadline (ms) spent {} of ceiling {}",
-                    elapsed.as_millis() as u64,
-                    allotted.as_millis() as u64
+                    elapsed.as_millis(),
+                    allotted.as_millis()
                 ));
             }
         }
@@ -754,8 +765,17 @@ pub fn literal_rows(
     default_as_of: AsOf,
 ) -> BTreeSet<Tuple> {
     match program.histories.get(&lit.rel) {
-        Some(history) => resolve_relation(history, lit.as_of.unwrap_or(default_as_of)),
-        None => db.get(&lit.rel).cloned().unwrap_or_default(),
+        Some(history) => {
+            let as_of = match lit.as_of {
+                Some(a) => a,
+                None => default_as_of,
+            };
+            resolve_relation(history, as_of)
+        }
+        None => match db.get(&lit.rel) {
+            Some(rows) => rows.clone(),
+            None => BTreeSet::new(),
+        },
     }
 }
 
@@ -1013,15 +1033,22 @@ fn check_oracle_budget(
         .check_interrupt()
         .map_err(Rejection::BudgetExceeded)?;
 
-    let epoch_ceiling = budget.epoch_ceiling().get() as usize;
+    // INVARIANT(u32_fits_usize): NonZeroU32::get always fits usize.
+    let epoch_ceiling = usize::try_from(budget.epoch_ceiling().get())
+        .expect("INVARIANT(u32_fits_usize): u32 fits usize");
     if rounds > epoch_ceiling {
         return Err(Rejection::BudgetExceeded(format!(
-            "query budget exceeded: epochs spent {} of ceiling {}",
-            rounds as u64, epoch_ceiling as u64
+            "query budget exceeded: epochs spent {rounds} of ceiling {epoch_ceiling}"
         )));
     }
     if let Some(ceiling) = budget.derived_tuple_ceiling() {
-        let spent: u64 = db.values().map(|rows| rows.len() as u64).sum();
+        let spent: u64 = db
+            .values()
+            .map(|rows| {
+                // INVARIANT(len_fits_u64): Vec/BTreeSet::len fits u64.
+                u64::try_from(rows.len()).expect("INVARIANT(len_fits_u64): len fits u64")
+            })
+            .sum();
         if spent > ceiling {
             return Err(Rejection::BudgetExceeded(format!(
                 "query budget exceeded: derived tuples spent {spent} of ceiling {ceiling}"
@@ -1041,7 +1068,10 @@ fn naive_eval_at_impl(
     check_stratifiable(program)?;
     let classes = head_classes(program);
     let strata_of = strata(program)?;
-    let max_stratum = strata_of.values().copied().max().unwrap_or(0);
+    let max_stratum = match strata_of.values().copied().max() {
+        Some(m) => m,
+        None => 0,
+    };
 
     let mut db = program.facts.clone();
 
@@ -1057,7 +1087,10 @@ fn naive_eval_at_impl(
             let inputs: Vec<BTreeSet<Tuple>> = f
                 .inputs
                 .iter()
-                .map(|r| db.get(r).cloned().unwrap_or_default())
+                .map(|r| match db.get(r) {
+                    Some(rows) => rows.clone(),
+                    None => BTreeSet::new(),
+                })
                 .collect();
             db.insert(f.head_rel.clone(), (f.eval)(&inputs));
         }
@@ -1162,7 +1195,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     vec![x()],
                     vec![lit("d", vec![x()], false), lit("p", vec![x()], true)],
                 )],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
         (
@@ -1180,7 +1213,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                         vec![lit("d", vec![x()], false), lit("p", vec![x()], true)],
                     ),
                 ],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
         (
@@ -1194,7 +1227,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                         lit("win", vec![y()], true),
                     ],
                 )],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
         (
@@ -1208,7 +1241,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     ),
                     Rule::plain("b", vec![x()], vec![lit("a", vec![x()], false)]),
                 ],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
         (
@@ -1228,7 +1261,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                         vec![lit("p", vec![x(), y()], false)],
                     ),
                 ],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
         (
@@ -1245,7 +1278,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     ],
                     vec![lit("q", vec![x(), y(), Term::var("Z")], false)],
                 )],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
         (
@@ -1260,7 +1293,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                         lit("m", vec![x(), y()], true),
                     ],
                 )],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
         (
@@ -1276,7 +1309,7 @@ pub fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     inputs: vec!["r".into()],
                     eval: |_| BTreeSet::new(),
                 }],
-                ..Program::default()
+                ..Program::empty()
             },
         ),
     ]
@@ -1340,9 +1373,9 @@ mod tests {
         let program = Program {
             rules: transitive_closure(),
             facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
-            ..Program::default()
+            ..Program::empty()
         };
-        let db = naive_eval(&program).unwrap();
+        let db = naive_eval(&program).expect("well-formed corpus program evaluates");
         let want: BTreeSet<Tuple> = [(1, 2), (2, 3), (3, 4), (1, 3), (2, 4), (1, 4)]
             .into_iter()
             .map(|(a, b)| vec![v(a), v(b)])
@@ -1371,9 +1404,9 @@ mod tests {
         let db = naive_eval(&Program {
             rules,
             facts,
-            ..Program::default()
+            ..Program::empty()
         })
-        .unwrap();
+        .expect("stratified negation corpus evaluates");
         let want: BTreeSet<Tuple> = [(1, 1), (2, 1), (2, 2), (3, 1), (3, 2), (3, 3)]
             .into_iter()
             .map(|(a, b)| vec![v(a), v(b)])
@@ -1400,9 +1433,9 @@ mod tests {
         let program = Program {
             rules: transitive_closure(),
             facts: edge_facts(&[(1, 2), (2, 3), (3, 1)]),
-            ..Program::default()
+            ..Program::empty()
         };
-        let db = naive_eval(&program).unwrap();
+        let db = naive_eval(&program).expect("well-formed corpus program evaluates");
         assert_eq!(db[&Rel::from("path")].len(), 9);
     }
 
@@ -1410,7 +1443,7 @@ mod tests {
     fn law4_unsafe_rules_are_refused() {
         let program = Program {
             rules: vec![Rule::plain("p", vec![x()], vec![])],
-            ..Program::default()
+            ..Program::empty()
         };
         assert!(matches!(check_safety(&program), Err(Rejection::Unsafe(_))));
     }
@@ -1420,9 +1453,9 @@ mod tests {
         let program = Program {
             rules: transitive_closure(),
             facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
-            ..Program::default()
+            ..Program::empty()
         };
-        let budget = OracleBudget::new(NonZeroU32::new(1).unwrap());
+        let budget = OracleBudget::new(NonZeroU32::new(1).expect("literal 1 is nonzero"));
         let err = naive_eval_at_budgeted(&program, AsOf::current(), &budget)
             .expect_err("a ceiling of 1 must refuse a real recursive program");
         assert!(
@@ -1436,9 +1469,9 @@ mod tests {
         let program = Program {
             rules: transitive_closure(),
             facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
-            ..Program::default()
+            ..Program::empty()
         };
-        let budget = OracleBudget::new(NonZeroU32::new(1_000).unwrap());
+        let budget = OracleBudget::new(NonZeroU32::new(1_000).expect("literal 1000 is nonzero"));
         let budgeted = naive_eval_at_budgeted(&program, AsOf::current(), &budget)
             .expect("a generous budget never refuses");
         let unbudgeted = naive_eval(&program).expect("the unbudgeted oracle always runs");
@@ -1465,7 +1498,7 @@ mod tests {
             vec![],
             facts,
         );
-        let db = naive_eval(&program).unwrap();
+        let db = naive_eval(&program).expect("well-formed corpus program evaluates");
         let want: BTreeSet<Tuple> = [vec![v(1), v(30)], vec![v(2), v(5)]]
             .into_iter()
             .map(Tuple::from_vec)
@@ -1502,9 +1535,9 @@ mod tests {
                 ),
             ],
             facts,
-            ..Program::default()
+            ..Program::empty()
         };
-        let db = naive_eval(&program).unwrap();
+        let db = naive_eval(&program).expect("well-formed corpus program evaluates");
         assert!(db[&Rel::from("m")].contains(&Tuple::from_vec(vec![v(3), v(10)])));
     }
 
@@ -1527,7 +1560,7 @@ mod tests {
             vec![],
             facts,
         );
-        let db = naive_eval(&program).unwrap();
+        let db = naive_eval(&program).expect("well-formed corpus program evaluates");
         assert_eq!(
             db[&Rel::from("loop")],
             [Tuple::from_vec(vec![v(1)])].into_iter().collect()
