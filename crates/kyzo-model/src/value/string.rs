@@ -142,62 +142,68 @@ impl GermanStr {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
 
     #[test]
-    fn short_strings_are_fully_inline_words() {
+    fn short_strings_are_fully_inline_words() -> Result<()> {
         let mut arena = Arena::new();
-        let m = GermanStr::from_str("hello", &mut arena).expect("mint");
+        let m = GermanStr::from_str("hello", &mut arena).into_diagnostic()?;
         assert!(m.stamp().is_none());
         let s = m.value();
         assert!(s.value().is_inline());
-        assert_eq!(s.inline_str().expect("inline"), "hello");
-        assert!(matches!(s.inline_str().expect("inline"), Cow::Borrowed(_)));
+        assert_eq!(s.inline_str().ok_or_else(|| miette!("inline"))?, "hello");
+        assert!(matches!(s.inline_str().ok_or_else(|| miette!("inline"))?, Cow::Borrowed(_)));
+        Ok(())
     }
 
     #[test]
-    fn nul_bearing_strings_unescape_through_the_grammar() {
+    fn nul_bearing_strings_unescape_through_the_grammar() -> Result<()> {
         let mut arena = Arena::new();
         let s = GermanStr::from_str("a\u{0}b", &mut arena)
-            .expect("mint")
+            .into_diagnostic()?
             .value();
-        let got = s.inline_str().expect("inline");
+        let got = s.inline_str().ok_or_else(|| miette!("inline"))?;
         assert_eq!(got, "a\u{0}b");
         assert!(matches!(got, Cow::Owned(_)));
+        Ok(())
     }
 
     #[test]
-    fn long_strings_go_out_of_line_with_the_stamp_beside_them() {
+    fn long_strings_go_out_of_line_with_the_stamp_beside_them() -> Result<()> {
         let mut arena = Arena::new();
-        let m = GermanStr::from_str("a string well past the inline max", &mut arena).expect("mint");
+        let m = GermanStr::from_str("a string well past the inline max", &mut arena).into_diagnostic()?;
         let s = m.value();
         assert!(!s.value().is_inline());
         assert!(
             s.inline_str().is_none(),
             "out-of-line content needs an observer"
         );
-        let sc = m.stamp().expect("stamp accompanies the word");
+        let sc = m.stamp().ok_or_else(|| miette!("stamp accompanies the word"))?;
         let f = arena.frame();
-        let canonical = f.resolve(sc).expect("lawful");
+        let canonical = f.resolve(sc).into_diagnostic()?;
         assert_eq!(canonical[0], Tag::Str.byte());
+        Ok(())
     }
 
     #[test]
-    fn bytes_kind_is_typed_and_str_accessor_refuses_it() {
+    fn bytes_kind_is_typed_and_str_accessor_refuses_it() -> Result<()> {
         let mut arena = Arena::new();
         let b = GermanStr::from_bytes(&[0xFF, 0x00], &mut arena)
-            .expect("mint")
+            .into_diagnostic()?
             .value();
         assert!(b.is_bytes());
         assert!(b.inline_str().is_none());
         assert_eq!(
-            b.inline_bytes().expect("inline bytes"),
+            b.inline_bytes().ok_or_else(|| miette!("inline bytes"))?,
             Cow::<[u8]>::Owned(vec![0xFF, 0x00])
         );
         // And a non-string word cannot be claimed.
         let n = Value::mint(&encode(Datum::Null), &mut arena)
-            .expect("mint")
+            .into_diagnostic()?
             .value();
         assert!(GermanStr::from_value(n).is_none());
+        Ok(())
     }
 }
