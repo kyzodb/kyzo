@@ -125,7 +125,7 @@ fn seal_golden_path_certificate() -> Result<(
     ProofNode<&'static str>,
     Tuple,
 )> {
-    let mut graph = DerivationGraph::default();
+    let mut graph = DerivationGraph::empty();
     graph.add_fact("edge:1-2");
     graph.add_fact("edge:2-3");
     let d_base = graph

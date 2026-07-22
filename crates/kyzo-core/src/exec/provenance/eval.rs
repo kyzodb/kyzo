@@ -55,12 +55,19 @@ pub struct Witness {
 /// stratum, and therefore deterministic (asserted by the determinism
 /// tests). Passing one to [`crate::exec::fixpoint::eval::stratified_evaluate`]
 /// opts the query in; `None` evaluates through the `()` sink at zero cost.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WitnessTable {
     entries: Vec<Witness>,
 }
 
 impl WitnessTable {
+    /// Empty witness table — provenance opted out until admissions land.
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
     pub fn entries(&self) -> &[Witness] {
         &self.entries
     }
@@ -178,7 +185,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
     derivation_ceiling: std::num::NonZeroU64,
     weights: &dyn Fn(&MagicSymbol, usize) -> std::num::NonZeroU64,
 ) -> Result<DerivationGraph<ProvNode>> {
-    let mut graph: DerivationGraph<ProvNode> = DerivationGraph::default();
+    let mut graph: DerivationGraph<ProvNode> = DerivationGraph::empty();
     let ceiling = derivation_ceiling.get();
     let mut spent: u64 = 0;
 

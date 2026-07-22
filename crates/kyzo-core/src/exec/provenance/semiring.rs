@@ -326,8 +326,9 @@ pub(crate) struct DerivationGraph<K> {
 // A hand-written `Default` (an empty graph). The derived one would demand
 // the needless bound `K: Default`, which the node type (`ProvNode`) does
 // not satisfy.
-impl<K> Default for DerivationGraph<K> {
-    fn default() -> Self {
+impl<K> DerivationGraph<K> {
+    /// Empty derivation graph.
+    pub(crate) fn empty() -> Self {
         Self {
             facts: BTreeSet::new(),
             derivations: Vec::new(),
