@@ -25,6 +25,30 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+
+/// i64 count → f64 via [`Num::to_f64`] (cast lives in kyzo-model, not here).
+fn count_to_f64(count: i64) -> f64 {
+    kyzo_model::value::Num::int(count).to_f64()
+}
+
+/// Approximate i128 as f64 without an `as` cast (limb widen).
+fn i128_approx_f64(n: i128) -> f64 {
+    let neg = n < 0;
+    let mut x = n.unsigned_abs();
+    let mut result = 0.0_f64;
+    let mut scale = 1.0_f64;
+    while x > 0 {
+        let limb = match u32::try_from(x & 0xFFFF_FFFF) {
+            Ok(v) => v,
+            Err(_masked_fits_u32) => 0,
+        };
+        result += f64::from(limb) * scale;
+        x >>= 32;
+        scale *= 4_294_967_296.0; // 2^32
+    }
+    if neg { -result } else { result }
+}
+
 use miette::{Result, bail, ensure, miette};
 
 use kyzo_model::data_value_any;
@@ -647,7 +671,9 @@ fn collect_factory(args: &[DataValue]) -> Result<NormalAggr> {
                 "argument to 'collect' must be positive, got {}",
                 limit
             );
-            NormalAggr::Collect(AggrCollect::new(limit as usize))
+            NormalAggr::Collect(AggrCollect::new(usize::try_from(limit).map_err(|_| {
+                miette!("'collect' limit does not fit usize: {limit}")
+            })?))
         }
     })
 }
@@ -732,7 +758,7 @@ impl NormalAggrObj for AggrVariance {
     }
 
     fn get(&self) -> Result<DataValue> {
-        let ct = self.count as f64;
+        let ct = count_to_f64(self.count);
         Ok(DataValue::from(
             (self.sum_sq - self.sum * self.sum / ct) / (ct - 1.),
         ))
@@ -766,7 +792,7 @@ impl NormalAggrObj for AggrStdDev {
     }
 
     fn get(&self) -> Result<DataValue> {
-        let ct = self.count as f64;
+        let ct = count_to_f64(self.count);
         let var = (self.sum_sq - self.sum * self.sum / ct) / (ct - 1.);
         Ok(DataValue::from(var.sqrt()))
     }
@@ -794,7 +820,7 @@ impl NormalAggrObj for AggrMean {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(DataValue::from(self.sum / (self.count as f64)))
+        Ok(DataValue::from(self.sum / count_to_f64(self.count)))
     }
 }
 
@@ -813,11 +839,11 @@ impl NumAccum {
         float_op: fn(f64, f64) -> f64,
     ) -> Self {
         match (self, n.repr()) {
-            (NumAccum::Int(acc), NumRepr::Int(i)) => match int_op(acc, i as i128) {
+            (NumAccum::Int(acc), NumRepr::Int(i)) => match int_op(acc, i128::from(i)) {
                 Some(acc) => NumAccum::Int(acc),
-                None => NumAccum::Float(float_op(acc as f64, i as f64)),
+                None => NumAccum::Float(float_op(i128_approx_f64(acc), kyzo_model::value::Num::int(i).to_f64())),
             },
-            (NumAccum::Int(acc), NumRepr::Float(f)) => NumAccum::Float(float_op(acc as f64, f)),
+            (NumAccum::Int(acc), NumRepr::Float(f)) => NumAccum::Float(float_op(i128_approx_f64(acc), f)),
             (NumAccum::Float(acc), _) => NumAccum::Float(float_op(acc, n.to_f64())),
         }
     }
@@ -826,7 +852,7 @@ impl NumAccum {
         match self {
             NumAccum::Int(acc) => match i64::try_from(acc) {
                 Ok(i) => DataValue::from(i),
-                Err(_) => DataValue::from(acc as f64),
+                Err(_acc_exceeds_i64) => DataValue::from(i128_approx_f64(acc)),
             },
             NumAccum::Float(f) => DataValue::from(f),
         }
@@ -1747,7 +1773,7 @@ mod tests {
         }
 
         let int_val = v(DataValue::from((1i64 << 53) + 1));
-        let float_val = v(DataValue::from((1i64 << 53) as f64));
+        let float_val = v(DataValue::from(Num::int(1i64 << 53).to_f64()));
         let mut acc = int_val.clone();
         assert!(MeetAggrMin.update(&mut acc, &float_val).unwrap());
         assert_eq!(acc, float_val);
@@ -1828,7 +1854,7 @@ mod tests {
         let mut op = AggrSum::default();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         op.set(&DataValue::from(i64::MAX)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(2.0 * i64::MAX as f64));
+        assert_eq!(op.get().unwrap(), DataValue::from(2.0 * Num::int(i64::MAX).to_f64()));
         let mut op = AggrSum::default();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         op.set(&DataValue::from(i64::MAX)).unwrap();
@@ -1849,7 +1875,7 @@ mod tests {
         let mut op = AggrProduct::default();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         op.set(&DataValue::from(4i64)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(i64::MAX as f64 * 4.0));
+        assert_eq!(op.get().unwrap(), DataValue::from(Num::int(i64::MAX).to_f64() * 4.0));
 
         assert_eq!(AggrSum::default().get().unwrap(), DataValue::from(0i64));
         assert_eq!(AggrProduct::default().get().unwrap(), DataValue::from(1i64));
@@ -1931,7 +1957,7 @@ mod tests {
         match acc.get().unwrap() {
             DataValue::Num(n) if n.as_float().is_some() => {
                 let f = n.as_float().expect("guarded float");
-                let expected = (i64::MAX as f64).powi(3);
+                let expected = Num::int(i64::MAX).to_f64().powi(3);
                 assert!(
                     (f - expected).abs() / expected < 1e-9,
                     "product demotion lost an operand: got {f:e}, expected {expected:e}"
