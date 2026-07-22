@@ -35,9 +35,10 @@
 //!   hot operators substitute into `apply_op` as measured optimizations,
 //!   never as semantic forks.
 
-use miette::{Result, bail, miette};
+use miette::{Diagnostic, Result, bail, ensure, miette};
+use thiserror::Error;
 
-use crate::exec::expr::batch::{ColumnBatch, ErrorMin, Selection};
+use crate::exec::expr::batch::{BatchRowU32Overflow, ColumnBatch, ErrorMin, Selection};
 use crate::exec::stdlib::resolve_op;
 use kyzo_model::data_value_any;
 use kyzo_model::data_value_to_vld_spec;
@@ -53,15 +54,22 @@ use kyzo_model::value::{DataValue, ValidityTs};
 /// `usize`. Narrowing is total — overflow is refused at [`Selection::all`].
 #[cfg(test)]
 use kyzo_model::program::expr::LazyOp;
+
+/// Live selection names a row past the batch height.
+#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[error("selection beyond batch height")]
+#[diagnostic(code(query::selection_beyond_height))]
+struct SelectionBeyondHeight;
+
+/// Partitioned expression arms did not cover every live selection row.
+#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[error("expression arm length mismatch with selection")]
+#[diagnostic(code(query::expr_arm_len))]
+struct ExprArmLenMismatch;
+
 #[inline]
-fn row_sel(row: usize) -> u32 {
-    match u32::try_from(row) {
-        Ok(v) => v,
-        Err(_gt_u32) => {
-            debug_assert!(false, "row index exceeds u32");
-            u32::MAX
-        }
-    }
+fn row_sel(row: usize) -> Result<u32> {
+    u32::try_from(row).map_err(|_| BatchRowU32Overflow { n: row }.into())
 }
 
 fn bound_of(op: OpDecl) -> Result<&'static crate::exec::stdlib::BoundOp> {
@@ -213,14 +221,13 @@ pub(crate) fn eval_expr_batched(
     batch: &ColumnBatch,
     selection: &Selection,
 ) -> Result<Vec<DataValue>> {
-    debug_assert!(
-        selection.iter().all(|r| r < batch.height()),
-        "selection beyond batch height"
-    );
+    if !selection.iter().all(|r| r < batch.height()) {
+        bail!(SelectionBeyondHeight);
+    }
     let mut state = BatchEval {
         batch,
         next_node: 0,
-        errors: ErrorMin::default(),
+        errors: ErrorMin::empty(),
     };
     let out = eval_node(expr, selection, &mut state)?;
     match state.errors.into_error() {
@@ -245,7 +252,7 @@ pub(crate) fn eval_pred_batched(
     for (v, row) in values.iter().zip(selection.iter()) {
         match v.get_bool() {
             Some(true) => {
-                keep.push(row_sel(row));
+                keep.push(row_sel(row)?);
             }
             Some(false) => {}
             None => {
@@ -253,7 +260,7 @@ pub(crate) fn eval_pred_batched(
             }
         }
     }
-    Ok(Selection::from_sorted(keep))
+    Ok(Selection::from_sorted(keep)?)
 }
 
 fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<SelAligned> {
@@ -305,7 +312,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                     Ok(v) => out.push(v),
                     Err(err) => {
                         let span = *span;
-                        state.errors.offer(row_sel(row), apply_node, || {
+                        state.errors.offer(row_sel(row)?, apply_node, || {
                             EvalRaisedError(span, err.to_string()).into()
                         });
                         out.push(DataValue::Null);
@@ -333,30 +340,30 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                 for (i, row) in live.iter().enumerate() {
                     match op.decide(&vals.values[i]) {
                         Decision::Continue => {
-                            still_live.push(row_sel(row));
+                            still_live.push(row_sel(row)?);
                         }
                         Decision::Decided(v) => {
-                            decided.push((row_sel(row), v));
+                            decided.push((row_sel(row)?, v));
                         }
                         Decision::Refused => {
                             use kyzo_model::program::expr::PredicateTypeError;
                             let span = arg.span();
                             let val = vals.values[i].clone();
-                            state.errors.offer(row_sel(row), decide_node, || {
+                            state.errors.offer(row_sel(row)?, decide_node, || {
                                 PredicateTypeError(span, val).into()
                             });
-                            decided.push((row_sel(row), DataValue::Null));
+                            decided.push((row_sel(row)?, DataValue::Null));
                         }
                     }
                 }
-                live = Selection::from_sorted(still_live);
+                live = Selection::from_sorted(still_live)?;
             }
             // Undecided rows net the identity.
             for row in live.iter() {
-                decided.push((row_sel(row), op.identity()));
+                decided.push((row_sel(row)?, op.identity()));
             }
             decided.sort_by_key(|(r, _)| *r);
-            debug_assert_eq!(decided.len(), sel.len());
+            ensure!(decided.len() == sel.len(), ExprArmLenMismatch);
             Ok(SelAligned {
                 values: decided.into_iter().map(|(_, v)| v).collect(),
             })
@@ -378,36 +385,36 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                 for (i, row) in live.iter().enumerate() {
                     match cond_vals.values[i].get_bool() {
                         Some(true) => {
-                            taken.push(row_sel(row));
+                            taken.push(row_sel(row)?);
                         }
                         Some(false) => {
-                            passed.push(row_sel(row));
+                            passed.push(row_sel(row)?);
                         }
                         None => {
                             use kyzo_model::program::expr::PredicateTypeError;
                             let span = cond.span();
                             let v = cond_vals.values[i].clone();
-                            state.errors.offer(row_sel(row), decide_node, || {
+                            state.errors.offer(row_sel(row)?, decide_node, || {
                                 PredicateTypeError(span, v).into()
                             });
-                            decided.push((row_sel(row), DataValue::Null));
+                            decided.push((row_sel(row)?, DataValue::Null));
                         }
                     }
                 }
-                let taken = Selection::from_sorted(taken);
+                let taken = Selection::from_sorted(taken)?;
                 if !taken.is_empty() {
                     let arm = eval_node(val, &taken, state)?;
                     for (i, row) in taken.iter().enumerate() {
-                        decided.push((row_sel(row), arm.values[i].clone()));
+                        decided.push((row_sel(row)?, arm.values[i].clone()));
                     }
                 }
-                live = Selection::from_sorted(passed);
+                live = Selection::from_sorted(passed)?;
             }
             for row in live.iter() {
-                decided.push((row_sel(row), DataValue::Null));
+                decided.push((row_sel(row)?, DataValue::Null));
             }
             decided.sort_by_key(|(r, _)| *r);
-            debug_assert_eq!(decided.len(), sel.len());
+            ensure!(decided.len() == sel.len(), ExprArmLenMismatch);
             Ok(SelAligned {
                 values: decided.into_iter().map(|(_, v)| v).collect(),
             })

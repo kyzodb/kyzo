@@ -92,6 +92,12 @@ pub(crate) struct BatchRowU32Overflow {
     pub(crate) n: usize,
 }
 
+/// Selection row ids were not strictly ascending — refuse, never silent re-sort.
+#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[error("selection not ascending")]
+#[diagnostic(code(query::selection_not_ascending))]
+pub(crate) struct SelectionNotAscending;
+
 /// A sorted set of live row indices.
 #[derive(Clone)]
 pub(crate) struct Selection(Vec<u32>);
@@ -102,14 +108,13 @@ impl Selection {
         Ok(Selection((0..n).collect()))
     }
 
-    /// From ascending row ids (debug-asserted: sortedness is the caller's
-    /// construction, not a hidden re-sort).
-    pub(crate) fn from_sorted(rows: Vec<u32>) -> Selection {
-        debug_assert!(
-            rows.windows(2).all(|w| w[0] < w[1]),
-            "selection not ascending"
-        );
-        Selection(rows)
+    /// From ascending row ids. Refuses a non-strictly-ascending sequence —
+    /// sortedness is the caller's construction duty, not a silent re-sort.
+    pub(crate) fn from_sorted(rows: Vec<u32>) -> Result<Selection> {
+        if !rows.windows(2).all(|w| w[0] < w[1]) {
+            bail!(SelectionNotAscending);
+        }
+        Ok(Selection(rows))
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
@@ -136,13 +141,12 @@ pub(crate) struct ErrorMin<E> {
     best: Option<(u32, u32, E)>,
 }
 
-impl<E> Default for ErrorMin<E> {
-    fn default() -> Self {
-        ErrorMin { best: None }
-    }
-}
-
 impl<E> ErrorMin<E> {
+    /// No error offered yet.
+    pub(crate) fn empty() -> Self {
+        Self { best: None }
+    }
+
     pub(crate) fn offer(&mut self, row: u32, node: u32, make: impl FnOnce() -> E) {
         let better = match &self.best {
             None => true,
@@ -164,7 +168,7 @@ mod tests {
 
     #[test]
     fn error_min_keeps_row_major_order() {
-        let mut em: ErrorMin<&'static str> = ErrorMin::default();
+        let mut em: ErrorMin<&'static str> = ErrorMin::empty();
         em.offer(5, 0, || "later row");
         em.offer(2, 7, || "earlier row, later node");
         em.offer(2, 3, || "earlier node wins");
@@ -181,7 +185,7 @@ mod tests {
         let b = ColumnBatch::from_rows(rows, 2).expect("uniform width");
         assert_eq!((b.width(), b.height()), (2, 2));
         assert_eq!(b.column(1).get(1), DataValue::from("b"));
-        let sel = Selection::from_sorted(vec![1]);
+        let sel = Selection::from_sorted(vec![1]).expect("singleton ascending");
         assert_eq!(sel.iter().collect::<Vec<_>>(), vec![1usize]);
         assert!(!sel.is_empty());
         assert_eq!(Selection::all(2).expect("fits u32").len(), 2);
