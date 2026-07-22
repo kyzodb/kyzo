@@ -10,9 +10,9 @@
  * (MPL-2.0). This is the re-homing of the `Constant` impl that lived
  * behind a seam in `parse/query.rs` (parsing cannot exist without its
  * `init_options`/`arity` surface), now with `run` — the original's `run`
- * unwrapped its way to the data (`expr_option(..).unwrap()`,
- * `get_const().unwrap()`, `get_slice().unwrap()`), trusting that
- * `init_options` had normalized the option; those unwraps are the
+ * reached the data through infallible Option/Result peels
+ * (`expr_option(..)`, `get_const()`, `get_slice()`), trusting that
+ * `init_options` had normalized the option; those peels are the
  * sealed [`ConstantData`] path here. Drift (arity called before
  * init_options, or the option replaced after normalization) is reported
  * as the wrong-option error instead of aborting the engine. Output rows
@@ -225,10 +225,11 @@ mod tests {
     use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the
     /// rows (the harness drives all three in order, as parse/eval do).
     #[test]
-    fn constant_round_trip() {
+    fn constant_round_trip() -> Result<()> {
         let options = opts_map(BTreeMap::from([(
             SmartString::from("data"),
             Expr::Const {
@@ -238,17 +239,18 @@ mod tests {
                 ]),
                 span: SourceSpan::default(),
             },
-        )]));
-        let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::inert()).unwrap();
+        )]))?;
+        let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::inert())?;
         assert_eq!(got.len(), 2);
         let want: Tuple = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("x")]);
         assert_eq!(got[0], want);
+        Ok(())
     }
 
     /// Un-normalized (or drifted) options are a typed refusal in `run`,
     /// not an abort: the original unwrapped here.
     #[test]
-    fn drifted_options_refuse_typed() {
+    fn drifted_options_refuse_typed() -> Result<()> {
         // `arity` before `init_options`, with a non-const option: refused.
         let options = opts_map(BTreeMap::from([(
             SmartString::from("data"),
@@ -256,7 +258,7 @@ mod tests {
                 val: DataValue::from("not a list"),
                 span: SourceSpan::default(),
             },
-        )]));
+        )]))?;
         let err = Constant
             .arity(&options, &[], SourceSpan::default())
             .unwrap_err();
@@ -272,15 +274,17 @@ mod tests {
                 ]),
                 span: SourceSpan::default(),
             },
-        )]));
+        )]))?;
         let err = Constant
             .init_options(options, SourceSpan::default())
             .unwrap_err();
         assert!(err.to_string().contains("same arity"), "{err}");
+        Ok(())
     }
 
     #[test]
-    fn constant_data_empty_has_no_width() {
-        assert_eq!(ConstantData(&[]).width().unwrap(), None);
+    fn constant_data_empty_has_no_width() -> Result<()> {
+        assert_eq!(ConstantData(&[]).width()?, None);
+        Ok(())
     }
 }
