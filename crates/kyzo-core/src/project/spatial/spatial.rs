@@ -294,9 +294,15 @@ fn quantize(v: f64, lo: f64, hi: f64) -> u32 {
     if scaled <= 0.0 {
         0
     } else if scaled >= SCALE {
-        (SCALE as u64 - 1) as u32
+        u32::MAX
     } else {
-        scaled as u32
+        match kyzo_model::value::Num::float(scaled).to_int_coerced() {
+            Some(i) => match u32::try_from(i) {
+                Ok(u) => u,
+                Err(_scaled_in_u32_range) => u32::MAX,
+            },
+            None => 0,
+        }
     }
 }
 
@@ -308,7 +314,7 @@ fn quantize(v: f64, lo: f64, hi: f64) -> u32 {
 
 /// Spread the 32 bits of `x` so that bit `i` lands at bit `2i` (even positions).
 fn spread32(x: u32) -> u64 {
-    let mut x = x as u64;
+    let mut x = u64::from(x);
     x = (x | (x << 16)) & 0x0000_FFFF_0000_FFFF;
     x = (x | (x << 8)) & 0x00FF_00FF_00FF_00FF;
     x = (x | (x << 4)) & 0x0F0F_0F0F_0F0F_0F0F;
@@ -325,7 +331,10 @@ fn compact32(x: u64) -> u32 {
     x = (x | (x >> 4)) & 0x00FF_00FF_00FF_00FF;
     x = (x | (x >> 8)) & 0x0000_FFFF_0000_FFFF;
     x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
-    x as u32
+    match u32::try_from(x) {
+        Ok(v) => v,
+        Err(_compacted_fits_u32) => 0,
+    }
 }
 
 /// Interleave two quantized coordinates into a 64-bit Morton code.
@@ -552,10 +561,10 @@ impl BoundingBox {
     /// point in the box has its quantized cell inside this integer box.
     fn quantized(&self) -> QBox {
         QBox {
-            xlo: quantize(self.lat_lo, LAT_MIN, LAT_MAX) as u64,
-            xhi: quantize(self.lat_hi, LAT_MIN, LAT_MAX) as u64,
-            ylo: quantize(self.lon_lo, LON_MIN, LON_MAX) as u64,
-            yhi: quantize(self.lon_hi, LON_MIN, LON_MAX) as u64,
+            xlo: u64::from(quantize(self.lat_lo, LAT_MIN, LAT_MAX)),
+            xhi: u64::from(quantize(self.lat_hi, LAT_MIN, LAT_MAX)),
+            ylo: u64::from(quantize(self.lon_lo, LON_MIN, LON_MAX)),
+            yhi: u64::from(quantize(self.lon_hi, LON_MIN, LON_MAX)),
         }
     }
 }
@@ -582,7 +591,15 @@ fn cell_range(level: u32, x0: u64, y0: u64) -> (u64, u64) {
     if span_bits >= 64 {
         (0, u64::MAX)
     } else {
-        let base = morton_encode(x0 as u32, y0 as u32);
+        let x0_u32 = match u32::try_from(x0) {
+            Ok(v) => v,
+            Err(_cell_corner_fits_u32) => u32::MAX,
+        };
+        let y0_u32 = match u32::try_from(y0) {
+            Ok(v) => v,
+            Err(_cell_corner_fits_u32) => u32::MAX,
+        };
+        let base = morton_encode(x0_u32, y0_u32);
         (base, base + ((1u64 << span_bits) - 1))
     }
 }
@@ -1062,7 +1079,13 @@ mod tests {
         }
         /// A uniform f64 in `[0, 1)`.
         fn unit(&mut self) -> f64 {
-            (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+            let bits = self.next_u64() >> 11; // 53-bit integer in [0, 2^53)
+            let bits_i = match i64::try_from(bits) {
+                Ok(v) => v,
+                Err(_bits_fit_i64) => 0,
+            };
+            kyzo_model::value::Num::int(bits_i).to_f64()
+                / kyzo_model::value::Num::int(1i64 << 53).to_f64()
         }
         fn lat(&mut self) -> f64 {
             self.unit() * 180.0 - 90.0

@@ -62,7 +62,14 @@ impl StatementDimension {
 
     /// Stable wire tag (matches [`StatementDimension`] discriminant).
     pub fn tag(self) -> u8 {
-        self as u8
+        match self {
+            StatementDimension::Identity => 1,
+            StatementDimension::Relationship => 2,
+            StatementDimension::Similarity => 3,
+            StatementDimension::QuantityAndLocation => 4,
+            StatementDimension::Time => 5,
+            StatementDimension::Source => 6,
+        }
     }
 }
 

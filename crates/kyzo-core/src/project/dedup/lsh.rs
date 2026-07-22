@@ -142,6 +142,44 @@ use kyzo_model::value::{DataValue, Tuple, append_canonical};
 /// is the UFCS alias into that door.
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
+
+
+fn f64_to_f32(ratio: f64) -> f32 {
+    f32::from_bits({
+        let a = ratio.to_bits();
+        let sign = match u32::try_from(a >> 63) { Ok(s) => s << 31, Err(_) => 0 };
+        let exp = match i32::try_from((a >> 52) & 0x7FF) { Ok(e) => e, Err(_) => 0 };
+        let frac = a & 0x000F_FFFF_FFFF_FFFF;
+        if exp == 0x7FF {
+            sign | 0x7F80_0000 | if frac != 0 { 0x0040_0000 } else { 0 }
+        } else if exp == 0 {
+            sign
+        } else {
+            let mut exp32 = exp - 1023 + 127;
+            if exp32 >= 0xFF {
+                sign | 0x7F80_0000
+            } else if exp32 <= 0 {
+                sign
+            } else {
+                let mant = frac >> 29;
+                let m32 = match u32::try_from(mant) { Ok(m) => m, Err(_) => 0 };
+                let e_bits = match u32::try_from(exp32) { Ok(e) => e << 23, Err(_) => 0 };
+                sign | e_bits | (m32 & 0x007F_FFFF)
+            }
+        }
+    })
+}
+
+fn usize_to_f64(n: usize) -> f64 {
+    match u32::try_from(n) {
+        Ok(v) => f64::from(v),
+        Err(_) => match i64::try_from(n) {
+            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+            Err(_) => 0.0,
+        },
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Lsh;
 
@@ -375,7 +413,7 @@ impl HashPermutations {
         for _ in 0..n_perms {
             // High 32 bits of a splitmix64 word (the finalizer diffuses the
             // whole word, so the high half is equidistributed).
-            perms.push((splitmix64(&mut state) >> 32) as u32);
+            perms.push(match u32::try_from(splitmix64(&mut state) >> 32) { Ok(v) => v, Err(_e) => 0 });
         }
         Self(perms)
     }
@@ -491,7 +529,7 @@ impl HashValues {
             for (i, seed) in perms.0.iter().enumerate() {
                 let mut hasher = XxHash32::with_seed(*seed);
                 hasher.write(&v);
-                let hash = hasher.finish() as u32;
+                let hash = match u32::try_from(hasher.finish() & 0xFFFF_FFFF) { Ok(v) => v, Err(_e) => 0 };
                 self.0[i] = min(self.0[i], hash);
             }
         }
@@ -511,7 +549,7 @@ impl HashValues {
             .zip(&other_minhash.0)
             .filter(|(left, right)| left == right)
             .count();
-        matches as f32 / self.0.len() as f32
+        f64_to_f32(usize_to_f64(matches) / usize_to_f64(self.0.len().max(1)))
     }
 
     /// True iff the two signatures share at least one band of `r` consecutive
@@ -559,7 +597,7 @@ impl HashValues {
                 sig_len: self.0.len(),
             });
         }
-        if n_bands > u16::MAX as usize {
+        if n_bands > usize::from(u16::MAX) {
             bail!(LshManifestRefused::TooManyBands { n_bands });
         }
         let bytes = self.to_bytes();
@@ -567,7 +605,7 @@ impl HashValues {
         Ok((0..n_bands)
             .map(|i| {
                 let mut byte_range = bytes[i * chunk_size..(i + 1) * chunk_size].to_vec();
-                byte_range.extend_from_slice(&(i as u16).to_le_bytes());
+                byte_range.extend_from_slice(&match u16::try_from(i) { Ok(v) => v, Err(_e) => u16::MAX }.to_le_bytes());
                 byte_range
             })
             .collect())
@@ -618,13 +656,15 @@ impl LshParams {
     }
 
     fn false_positive_probability(threshold: f64, b: usize, r: usize) -> f64 {
-        let probability = |s| -> f64 { 1. - f64::powf(1. - f64::powi(s, r as i32), b as f64) };
+        let r_i32 = match i32::try_from(r) { Ok(v) => v, Err(_e) => 0 };
+        let b_f = usize_to_f64(b);
+        let probability = |s| -> f64 { 1. - f64::powf(1. - f64::powi(s, r_i32), b_f) };
         integrate(probability, 0.0, threshold, ALLOWED_INTEGRATE_ERR).integral
     }
 
     fn false_negative_probability(threshold: f64, b: usize, r: usize) -> f64 {
         let probability =
-            |s| -> f64 { 1. - (1. - f64::powf(1. - f64::powi(s, r as i32), b as f64)) };
+            |s| -> f64 { 1. - (1. - f64::powf(1. - f64::powi(s, r_i32), b_f)) };
         integrate(probability, threshold, 1.0, ALLOWED_INTEGRATE_ERR).integral
     }
 }
@@ -1098,7 +1138,7 @@ mod tests {
         assert_eq!(m1.jaccard(&m2), 1.0);
         // |{1..6} ∪ {7,8,9}| = 9, |∩ with {1..6}| = 6 → Jaccard = 2/3.
         m1.update(int_bytes(&[7, 8, 9]).into_iter(), &perms);
-        let est = m1.jaccard(&m2) as f64;
+        let est = f64::from(m1.jaccard(&m2));
         let truth = 2.0 / 3.0;
         assert!(
             (est - truth).abs() <= 0.02,
@@ -1118,17 +1158,20 @@ mod tests {
     /// [`LshParams::false_positive_probability`] /
     /// [`false_negative_probability`].
     fn predicted_collision_rate(s: f64, b: usize, r: usize) -> f64 {
-        1.0 - (1.0 - s.powi(r as i32)).powi(b as i32)
+        1.0 - (1.0 - s.powi(match i32::try_from(r) { Ok(v) => v, Err(_e) => 0 }))
+            .powi(match i32::try_from(b) { Ok(v) => v, Err(_e) => 0 })
     }
 
     /// Two equal-sized integer sets with exact Jaccard `inter / (2n - inter)`.
     fn jaccard_pair(n: usize, inter: usize, offset: i64) -> (Vec<i64>, Vec<i64>, f64) {
         assert!(inter <= n);
-        let a: Vec<i64> = (0..n as i64).map(|i| offset + i).collect();
-        let mut b: Vec<i64> = (0..inter as i64).map(|i| offset + i).collect();
-        b.extend((0..(n - inter) as i64).map(|i| offset + n as i64 + i));
+        let n_i = match i64::try_from(n) { Ok(v) => v, Err(_e) => 0 };
+        let inter_i = match i64::try_from(inter) { Ok(v) => v, Err(_e) => 0 };
+        let a: Vec<i64> = (0..n_i).map(|i| offset + i).collect();
+        let mut b: Vec<i64> = (0..inter_i).map(|i| offset + i).collect();
+        b.extend((0..(n_i - inter_i)).map(|i| offset + n_i + i));
         let union = 2 * n - inter;
-        let s = inter as f64 / union as f64;
+        let s = usize_to_f64(inter) / usize_to_f64(union);
         (a, b, s)
     }
 
@@ -1146,18 +1189,18 @@ mod tests {
         let mut hits = 0usize;
         let mut s_sum = 0.0;
         for t in 0..trials {
-            let (a, bset, s) = jaccard_pair(n, inter, (t as i64) * 10_000);
+            let (a, bset, s) = jaccard_pair(n, inter, match i64::try_from(t) { Ok(v) => v, Err(_e) => 0 } * 10_000);
             s_sum += s;
             // INVARIANT(trial_seed_mix): trial index mixes into seed0 by modular add; wrap is intentional diffusion.
-            let perms = HashPermutations::new(num_perm, seed0.wrapping_add(t as u64));
+            let perms = HashPermutations::new(num_perm, seed0.wrapping_add(match u64::try_from(t) { Ok(v) => v, Err(_e) => 0 }));
             let ha = HashValues::new(int_bytes(&a).into_iter(), &perms);
             let hb = HashValues::new(int_bytes(&bset).into_iter(), &perms);
             if ha.shares_any_band(&hb, b, r) {
                 hits += 1;
             }
         }
-        let empirical = hits as f64 / trials as f64;
-        let s_mean = s_sum / trials as f64;
+        let empirical = usize_to_f64(hits) / usize_to_f64(trials);
+        let s_mean = s_sum / usize_to_f64(trials);
         (empirical, s_mean)
     }
 

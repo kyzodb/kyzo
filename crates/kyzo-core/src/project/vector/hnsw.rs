@@ -250,6 +250,50 @@ use kyzo_model::schema::VecElementType;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{
+
+/// usize → f64 without `as` (prefer u32, else i64 via Num).
+fn usize_to_f64(n: usize) -> f64 {
+    match u32::try_from(n) {
+        Ok(v) => f64::from(v),
+        Err(_gt_u32) => match i64::try_from(n) {
+            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+            Err(_gt_i64) => match u64::try_from(n) {
+                Ok(u) => u64_to_f64(u),
+                Err(_impossible) => 0.0,
+            },
+        },
+    }
+}
+
+/// u64 → f64 without `as` (limb widen when above i64::MAX).
+fn u64_to_f64(n: u64) -> f64 {
+    match i64::try_from(n) {
+        Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+        Err(_above_i64_max) => {
+            let lo = match u32::try_from(n & 0xFFFF_FFFF) {
+                Ok(v) => v,
+                Err(_masked) => 0,
+            };
+            let hi = match u32::try_from(n >> 32) {
+                Ok(v) => v,
+                Err(_shift) => 0,
+            };
+            f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
+        }
+    }
+}
+
+/// usize → i64 with typed refusal.
+fn usize_to_i64(n: usize) -> Result<i64> {
+    i64::try_from(n).map_err(|_| miette!("usize {n} does not fit i64"))
+}
+
+/// Non-negative i64 → usize with typed refusal.
+fn i64_to_usize(n: i64) -> Result<usize> {
+    usize::try_from(n).map_err(|_| miette!("i64 {n} does not fit usize"))
+}
+
+
     DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, decode_tuple_from_key,
     encode_owned,
 };
@@ -300,7 +344,7 @@ impl MNeighbours {
 
     /// Standard HNSW level multiplier `1/ln(m)`. Finite by construction.
     pub(crate) fn level_multiplier(self) -> f64 {
-        1.0 / (self.0 as f64).ln()
+        1.0 / usize_to_f64(self.0).ln()
     }
 }
 
@@ -689,19 +733,20 @@ pub(crate) struct VectorId {
 }
 
 impl VectorId {
-    fn sub_wire(&self) -> i64 {
+    fn sub_wire(&self) -> Result<i64> {
         match self.sub {
-            None => -1,
-            Some(s) => s as i64,
+            None => Ok(-1),
+            Some(s) => usize_to_i64(s),
         }
     }
 
     /// Append this id's three wire slots (key columns, field, sub) to a
     /// key tuple under construction.
-    fn push_onto(&self, key: &mut Tuple) {
+    fn push_onto(&self, key: &mut Tuple) -> Result<()> {
         key.extend(self.tuple_key.iter().cloned());
-        key.push(DataValue::from(self.field as i64));
-        key.push(DataValue::from(self.sub_wire()));
+        key.push(DataValue::from(usize_to_i64(self.field)?));
+        key.push(DataValue::from(self.sub_wire()?));
+        Ok(())
     }
 }
 
@@ -914,21 +959,21 @@ pub(crate) enum HnswRow {
 }
 
 /// Key tuple of a node row at `layer` (fr == to == `at`).
-fn node_key(layer: i64, at: &VectorId) -> Tuple {
+fn node_key(layer: i64, at: &VectorId) -> Result<Tuple> {
     let mut k = Tuple::with_capacity(2 * at.tuple_key.len() + 5);
     k.push(DataValue::from(layer));
-    at.push_onto(&mut k);
-    at.push_onto(&mut k);
-    k
+    at.push_onto(&mut k)?;
+    at.push_onto(&mut k)?;
+    Ok(k)
 }
 
 /// Key tuple of an edge row at `layer`.
-fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Tuple {
+fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Result<Tuple> {
     let mut k = Tuple::with_capacity(2 * fr.tuple_key.len() + 5);
     k.push(DataValue::from(layer));
-    fr.push_onto(&mut k);
-    to.push_onto(&mut k);
-    k
+    fr.push_onto(&mut k)?;
+    to.push_onto(&mut k)?;
+    Ok(k)
 }
 
 /// Key tuple of the canary row for an index over a base relation with
@@ -945,8 +990,8 @@ fn canary_key(base_key_len: usize) -> Tuple {
 impl HnswRow {
     fn key_tuple(&self, base_key_len: usize) -> Tuple {
         match self {
-            HnswRow::Node { layer, at, .. } => node_key(*layer, at),
-            HnswRow::Edge { layer, fr, to, .. } => edge_key(*layer, fr, to),
+            HnswRow::Node { layer, at, .. } => node_key(*layer, at)?,
+            HnswRow::Edge { layer, fr, to, .. } => edge_key(*layer, fr, to)?,
             HnswRow::Canary { .. } => canary_key(base_key_len),
         }
     }
@@ -956,7 +1001,7 @@ impl HnswRow {
             HnswRow::Node {
                 degree, vec_hash, ..
             } => Tuple::from_vec(vec![
-                DataValue::from(*degree as i64),
+                DataValue::from(usize_to_i64(*degree)?),
                 DataValue::Bytes(vec_hash.as_bytes().to_vec()),
                 DataValue::from(false),
             ]),
@@ -1065,7 +1110,7 @@ impl HnswRow {
             }
             let sub = match int_at(start + kl + 1, &format!("{side} sub-index"))? {
                 -1 => None,
-                s if s >= 0 => Some(s as usize),
+                s if s >= 0 => Some(i64_to_usize(s)?),
                 s => bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
@@ -1074,7 +1119,7 @@ impl HnswRow {
             };
             Ok(VectorId {
                 tuple_key: Tuple::from_vec(tuple[start..start + kl].to_vec()),
-                field: field as usize,
+                field: i64_to_usize(field)?,
                 sub,
             })
         };
@@ -1108,7 +1153,7 @@ impl HnswRow {
             Ok(HnswRow::Node {
                 layer,
                 at: fr,
-                degree: degree as usize,
+                degree: i64_to_usize(degree)?,
                 vec_hash: VecContentHash::from_stored(vec_hash.clone(), index_name, tuple)?,
             })
         } else {
@@ -1354,7 +1399,7 @@ impl RaBitQRotation {
             // quantity; saturating/checked mul would change the seeded
             // orthogonal family.
             let attempt_seed = seed
-                ^ (dim as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ match u64::try_from(dim) { Ok(v) => v, Err(_d) => 0 }.wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 ^ attempt.wrapping_mul(0xD1B5_4A32_D192_ED03);
             if let Some(rot) = Self::try_orthogonal(dim, attempt_seed)
                 && rot.orthonormality_error() < 1e-10
@@ -1440,8 +1485,8 @@ impl RaBitQRotation {
 /// Standard normal via Box–Muller over the house [`splitmix64`] stream.
 #[cfg(test)]
 fn rabitq_gauss(state: &mut u64) -> f64 {
-    let u1 = (splitmix64(state) as f64 + 1.0) / (u64::MAX as f64 + 2.0);
-    let u2 = (splitmix64(state) as f64) / (u64::MAX as f64 + 1.0);
+    let u1 = (u64_to_f64(splitmix64(state)) + 1.0) / (u64_to_f64(u64::MAX) + 2.0);
+    let u2 = u64_to_f64(splitmix64(state)) / (u64_to_f64(u64::MAX) + 1.0);
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
 }
 
@@ -1507,7 +1552,7 @@ impl RaBitQCode {
                 bits[i / 64] |= 1u64 << (i % 64);
             }
         }
-        let inv_sqrt_d = 1.0 / (rotation.dim as f64).sqrt();
+        let inv_sqrt_d = 1.0 / usize_to_f64(rotation.dim).sqrt();
         let ip_with_data = abs_sum * inv_sqrt_d;
         if !(ip_with_data > 0.0 && ip_with_data.is_finite()) {
             return None;
@@ -1537,7 +1582,7 @@ impl RaBitQCode {
             return None;
         }
         let q_prime = rotation.transform(q_unit);
-        let inv_sqrt_d = 1.0 / (self.dim as f64).sqrt();
+        let inv_sqrt_d = 1.0 / usize_to_f64(self.dim).sqrt();
         let mut ip_bar_q = 0.0f64;
         for (i, &q) in q_prime.iter().enumerate() {
             let sign = if (self.bits[i / 64] >> (i % 64)) & 1 == 1 {
@@ -1576,7 +1621,7 @@ pub(crate) fn rabitq_error_bound(ip_with_data: f64, dim: usize, epsilon_0: f64) 
     debug_assert!(dim >= 2);
     debug_assert!(ip_with_data > 0.0);
     let ratio = (1.0 - ip_with_data * ip_with_data).max(0.0).sqrt() / ip_with_data;
-    ratio * epsilon_0 / ((dim - 1) as f64).sqrt()
+    ratio * epsilon_0 / usize_to_f64(dim - 1).sqrt()
 }
 
 /// Exact (authority) inner product of two equal-length float slices.
@@ -1760,7 +1805,7 @@ fn neighbours(
     probe::NEIGHBOURS_CALLS.with(|c| c.set(c.get() + 1));
     let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
-    of.push_onto(&mut prefix);
+    of.push_onto(&mut prefix)?;
     let mut ret = vec![];
     for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         #[cfg(test)]
@@ -1788,7 +1833,7 @@ fn neighbours(
     }
     #[cfg(test)]
     {
-        probe::NEIGHBOURS_ROWS.with(|c| c.set(c.get() + ret.len() as u64));
+        probe::NEIGHBOURS_ROWS.with(|c| c.set(c.get() + match u64::try_from(ret.len()) { Ok(v) => v, Err(_l) => u64::MAX }));
         probe::NEIGHBOURS_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
     }
     Ok(ret)
@@ -1979,7 +2024,7 @@ fn put_fresh_at_levels(
     // artifact of construction order; recording the real key is
     // deliberate.)
     let entry_key =
-        idx.encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?;
+        idx.encode_key_for_store(node_key(bottom_layer, at)?.as_slice(), SourceSpan::default())?;
     HnswRow::Canary {
         bottom_layer,
         entry_key: HnswEntryKey::from_storage_key(entry_key),
@@ -2006,7 +2051,7 @@ fn read_node_row(
     layer: i64,
     at: &VectorId,
 ) -> Result<Option<HnswRow>> {
-    match idx.get(tx, node_key(layer, at).as_slice())? {
+    match idx.get(tx, node_key(layer, at)?.as_slice())? {
         None => Ok(None),
         Some(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             node @ HnswRow::Node { .. } => Ok(Some(node)),
@@ -2034,7 +2079,7 @@ fn neighbours_tagged(
 ) -> Result<Vec<(VectorId, f64, bool)>> {
     let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
-    of.push_onto(&mut prefix);
+    of.push_onto(&mut prefix)?;
     let mut ret = vec![];
     for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         let row = row?;
@@ -2180,7 +2225,7 @@ fn shrink_neighbour<T: WriteTx>(
     for (old, old_prio) in candidates {
         let old_dist = old_prio.dist();
         if !new_candidate_set.contains(&old) {
-            let old_key_tuple = edge_key(layer, target, &old);
+            let old_key_tuple = edge_key(layer, target, &old)?;
 let was_tomb = match was_tombstoned.get(&old).copied() {
                 Some(v) => v,
                 None => false,
@@ -2275,7 +2320,7 @@ fn put_vector<T: WriteTx>(
         else {
             bail!(IndexRowCorrupt::new(
                 &idx.name,
-                node_key(layer, neighbour).as_slice(),
+                node_key(layer, neighbour)?.as_slice(),
                 IndexCorruptReason::HnswEdgeTargetMissingNode,
             ));
         };
@@ -2325,7 +2370,7 @@ fn remove_vec<T: WriteTx>(
     let mut encountered_singletons = false;
     for neg_layer in 0i64.. {
         let layer = -neg_layer;
-        let self_key_tuple = node_key(layer, at);
+        let self_key_tuple = node_key(layer, at)?;
         let self_key =
             idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::default())?;
         if tx.exists(&self_key)? {
@@ -2341,12 +2386,12 @@ fn remove_vec<T: WriteTx>(
             // consequence of the algorithm's probabilistic nature; graph
             // healing is a recorded ceiling item.
             let out_key = idx.encode_key_for_store(
-                edge_key(layer, at, &neighbour).as_slice(),
+                edge_key(layer, at, &neighbour)?.as_slice(),
                 SourceSpan::default(),
             )?;
             tx.del(&out_key)?;
             let in_key = idx.encode_key_for_store(
-                edge_key(layer, &neighbour, at).as_slice(),
+                edge_key(layer, &neighbour, at)?.as_slice(),
                 SourceSpan::default(),
             )?;
             tx.del(&in_key)?;
@@ -2357,7 +2402,7 @@ fn remove_vec<T: WriteTx>(
             else {
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
-                    node_key(layer, &neighbour).as_slice(),
+                    node_key(layer, &neighbour)?.as_slice(),
                     IndexCorruptReason::HnswNeighbourMissingNode,
                 ));
             };
@@ -2383,7 +2428,7 @@ fn remove_vec<T: WriteTx>(
         match entry_point(tx, base, idx)? {
             Some((bottom_layer, ep_id)) => {
                 let entry_key = idx.encode_key_for_store(
-                    node_key(bottom_layer, &ep_id).as_slice(),
+                    node_key(bottom_layer, &ep_id)?.as_slice(),
                     SourceSpan::default(),
                 )?;
                 let val = idx.encode_val_only_for_store(
@@ -2523,7 +2568,7 @@ fn vamana_set_out_neighbours<T: WriteTx>(
     for (to, _) in selected { new_set.insert(to.clone()); }
     for (old, _, ignore_link) in neighbours_tagged(tx, base, idx, of, layer)? {
         if !new_set.contains(&old) || ignore_link {
-            let key = idx.encode_key_for_store(edge_key(layer, of, &old).as_slice(), SourceSpan::default())?;
+            let key = idx.encode_key_for_store(edge_key(layer, of, &old)?.as_slice(), SourceSpan::default())?;
             tx.del(&key)?;
         }
     }
@@ -2563,71 +2608,9 @@ pub(crate) fn hnsw_put<T: WriteTx>(
     filter: Option<&Expr>,
     tuple: &[DataValue],
 ) -> Result<bool> {
-    if let Some(code) = filter
-        && !crate::exec::expr::eval_pred(code, tuple)?
-    {
-        hnsw_remove(tx, base, idx, tuple)?;
-        return Ok(false);
-    }
-    let key_len = base.metadata.keys.len();
-    if tuple.len() < key_len {
-        bail!(IndexRowCorrupt::new(
-            &base.name,
-            tuple,
-            IndexCorruptReason::RowShorterThanKey,
-        ));
-    }
-    // Extract, then ADMIT everything before writing anything: a refused
-    // vector (zero under cosine, non-finite, wrong dimension) leaves the
-    // index untouched.
-    let mut extracted: Vec<(IndexVec, VectorId)> = vec![];
-    for field in &manifest.vec_fields {
-        let val = tuple.get(*field).ok_or_else(|| {
-            miette!(IndexRowCorrupt::new(
-                &base.name,
-                tuple,
-                IndexCorruptReason::HnswManifestFieldBeyondArity { field: *field },
-            ))
-        })?;
-        match val {
-            DataValue::Vector(v) => extracted.push((
-                IndexVec::admit(v, manifest)?,
-                VectorId {
-                    tuple_key: Tuple::from_vec(tuple[..key_len].to_vec()),
-                    field: *field,
-                    sub: None,
-                },
-            )),
-            DataValue::List(l) => {
-                for (sub, item) in l.iter().enumerate() {
-                    if let DataValue::Vector(v) = item {
-                        extracted.push((
-                            IndexVec::admit(v, manifest)?,
-                            VectorId {
-                                tuple_key: Tuple::from_vec(tuple[..key_len].to_vec()),
-                                field: *field,
-                                sub: Some(sub),
-                            },
-                        ));
-                    }
-                }
-            }
-            // Non-vector values (including Null) are simply not indexed,
-            // matching the original.
-            data_value_any!() => {}
-        }
-    }
-    if extracted.is_empty() {
-        return Ok(false);
-    }
-    // Content-addressed insert order within the row: list presentation order
-    // must not seed the graph.
-    sort_content_addressed_inserts(&mut extracted);
-    let mut cache = VectorCache::new(manifest);
-    for (vec, at) in &extracted {
-        put_vector(tx, manifest, base, idx, vec, at, &mut cache)?;
-    }
-    Ok(true)
+    // ONE mutation door: thin-delegate to the set builder (copy_detector).
+    let n = hnsw_put_set(tx, manifest, base, idx, filter, &[tuple])?;
+    Ok(n > 0)
 }
 
 /// Total order for graph-build inserts: content hash ascending, then
@@ -3006,7 +2989,7 @@ fn hnsw_knn_body(
         if params.bind.field_idx.append() {
             cand_tuple.push(match cand.sub {
                 None => DataValue::Null,
-                Some(s) => DataValue::from(s as i64),
+                Some(s) => DataValue::from(match usize_to_i64(s) { Ok(i) => i, Err(_e) => 0 }),
             });
         }
         if params.bind.distance.append() {
@@ -3131,7 +3114,7 @@ impl PartialOrd for Ranked {
 /// the `VectorId`.
 fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<HnswHitKey> {
     Ok(HnswHitKey::from_storage_key(idx.encode_key_for_store(
-        node_key(0, id).as_slice(),
+        node_key(0, id)?.as_slice(),
         SourceSpan::default(),
     )?))
 }
@@ -3199,7 +3182,7 @@ fn build_cand_tuple(
     if params.bind.field_idx.append() {
         cand_tuple.push(match cand.sub {
             None => DataValue::Null,
-            Some(s) => DataValue::from(s as i64),
+            Some(s) => DataValue::from(match usize_to_i64(s) { Ok(i) => i, Err(_e) => 0 }),
         });
     }
     if params.bind.distance.append() {
@@ -3319,7 +3302,9 @@ fn select_strategy(
         if reservoir.len() < HNSW_SAMPLE_SIZE {
             reservoir.push(id);
         } else {
-            let j = (splitmix64(&mut state) % (n as u64 + 1)) as usize;
+            let n_u64 = match u64::try_from(n) { Ok(v) => v, Err(_e) => 0 };
+            let j_u64 = splitmix64(&mut state) % (n_u64 + 1);
+            let j = match usize::try_from(j_u64) { Ok(v) => v, Err(_e) => 0 };
             if j < HNSW_SAMPLE_SIZE {
                 reservoir[j] = id;
             }
@@ -3338,8 +3323,11 @@ fn select_strategy(
         }
     }
     let sampled = reservoir.len();
-    let s = pass as f64 / sampled as f64;
-    let m_hat = (s * n as f64).round() as usize;
+    let s = usize_to_f64(pass) / usize_to_f64(sampled);
+    let m_hat = match kyzo_model::value::Num::float((s * usize_to_f64(n)).round()).to_int_coerced() {
+        Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+        None => 0,
+    };
     let d_bar = manifest.m_max0.max(1);
     let t_scan = HNSW_K_SCAN.saturating_mul(params.k).max(params.ef);
     // Estimated graph work to seat `ef` passing candidates ≈ (ef/s)·D̄; if that
@@ -3347,7 +3335,10 @@ fn select_strategy(
     let graph_work = if s <= 0.0 {
         usize::MAX
     } else {
-        ((params.ef as f64 / s) * d_bar as f64) as usize
+        match kyzo_model::value::Num::float((usize_to_f64(params.ef) / s) * usize_to_f64(d_bar)).to_int_coerced() {
+            Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+            None => 0,
+        }
     };
     if s <= 0.0 || m_hat <= t_scan || graph_work >= n {
         Ok(SearchPlan::Scan)
@@ -3356,7 +3347,11 @@ fn select_strategy(
             .saturating_mul(params.ef)
             .min(n)
             .max(params.ef);
-        let ef2 = ((params.ef as f64 / s).ceil() as usize).clamp(params.ef, ef_max);
+        let ef2 = match kyzo_model::value::Num::float((usize_to_f64(params.ef) / s).ceil()).to_int_coerced() {
+            Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
+            None => 0,
+        }
+        .clamp(params.ef, ef_max);
         Ok(SearchPlan::Graph { ef2 })
     }
 }
@@ -3785,7 +3780,7 @@ mod tests {
         let mut v = Vec::with_capacity(dim);
         for _ in 0..dim {
             let bits = splitmix64(state);
-            let unit = (bits >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
+            let unit = u64_to_f64(bits >> 11) / u64_to_f64(1u64 << 53); // [0, 1)
             v.push(unit * 2.0 - 1.0);
         }
         DataValue::Vector(Vector::try_new(v).unwrap())
@@ -3848,7 +3843,7 @@ mod tests {
         let t0 = std::time::Instant::now();
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
-            let r = vec![DataValue::from(k as i64), v];
+            let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
@@ -3920,7 +3915,7 @@ mod tests {
         let t0 = std::time::Instant::now();
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
-            let r = vec![DataValue::from(k as i64), v];
+            let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
             let mut tx = db.write_tx().unwrap();
             base.put_fact(
                 &mut tx,
@@ -3959,11 +3954,11 @@ mod tests {
         let n = 8000;
         let ef_construction = 200;
         let m_max0 = 32;
-        let ceiling = (ef_construction * m_max0) as f64;
+        let ceiling = usize_to_f64(ef_construction) * usize_to_f64(m_max0);
 
         let (_elapsed, snap) = probe_build(n, 0x5EED_1234_ABCD_0000);
-        let v_dist_per_insert = snap.v_dist_calls as f64 / n as f64;
-        let k_dist_per_insert = snap.k_dist_calls as f64 / n as f64;
+        let v_dist_per_insert = u64_to_f64(snap.v_dist_calls) / usize_to_f64(n);
+        let k_dist_per_insert = u64_to_f64(snap.k_dist_calls) / usize_to_f64(n);
         eprintln!(
             "n={n} v_dist/insert={v_dist_per_insert:.1} ({:.1}% of ceiling) \
              k_dist/insert={k_dist_per_insert:.1} ({:.1}% of ceiling) ceiling={ceiling}",
@@ -4031,7 +4026,7 @@ mod tests {
             let mut state = 0xA5A5_1234_0000_0000u64;
             for k in 0..n {
                 let v = probe_vec(dim, &mut state);
-                let r = vec![DataValue::from(k as i64), v];
+                let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
                 base.put_fact(
                     &mut tx,
                     r.as_slice(),
@@ -4085,7 +4080,7 @@ mod tests {
                 Some(v) => v,
                 None => 0,
             };
-            let mean_deg = degrees.iter().sum::<u64>() as f64 / degrees.len().max(1) as f64;
+            let mean_deg = u64_to_f64(degrees.iter().sum::<u64>()) / usize_to_f64(degrees.len().max(1));
             eprintln!(
                 "layer-0 live out-degree: min={min_deg} mean={mean_deg:.2} max={max_deg} \
              (m_max0={}) over {} distinct sources",
@@ -4095,7 +4090,7 @@ mod tests {
             eprintln!(
                 "total edge rows={total_edges} ignored(tombstoned)={total_ignored_edges} \
              ({:.2}% of all edge rows)",
-                100.0 * total_ignored_edges as f64 / total_edges.max(1) as f64
+                100.0 * u64_to_f64(total_ignored_edges) / u64_to_f64(total_edges.max(1))
             );
             tx.commit().unwrap();
         }
@@ -4120,7 +4115,7 @@ mod tests {
         for &n in &sizes {
             let (t, snap) = probe_build(n, 0x5EED_1234_ABCD_0000);
             let ratio_note = if let Some((pn, pt)) = prev {
-                let n_ratio = n as f64 / pn as f64;
+                let n_ratio = usize_to_f64(n) / usize_to_f64(pn);
                 let t_ratio = t / pt;
                 format!(
                     " | vs n={pn}: n x{n_ratio:.2}, time x{t_ratio:.2}, exponent={:.3}",
@@ -4136,21 +4131,21 @@ mod tests {
                  rows_scanned={:>9} (scanned/returned={:>5.2}x) \
                  neighbours_dur={:>7.3}s entry_point_calls={:>5} entry_point_dur={:>7.3}s{ratio_note}",
                 snap.dist_calls,
-                snap.dist_calls as f64 / n as f64,
+                u64_to_f64(snap.dist_calls) / usize_to_f64(n),
                 snap.v_dist_calls,
-                snap.v_dist_calls as f64 / n as f64,
+                u64_to_f64(snap.v_dist_calls) / usize_to_f64(n),
                 snap.k_dist_calls,
-                snap.k_dist_calls as f64 / n as f64,
+                u64_to_f64(snap.k_dist_calls) / usize_to_f64(n),
                 snap.neighbours_calls,
-                snap.neighbours_calls as f64 / n as f64,
+                u64_to_f64(snap.neighbours_calls) / usize_to_f64(n),
                 snap.neighbours_rows,
                 snap.neighbours_rows_scanned,
-                snap.neighbours_rows_scanned as f64 / snap.neighbours_rows.max(1) as f64,
+                u64_to_f64(snap.neighbours_rows_scanned) / u64_to_f64(snap.neighbours_rows.max(1)),
                 snap.neighbours_dur.as_secs_f64(),
                 snap.entry_point_calls,
                 snap.entry_point_dur.as_secs_f64(),
             );
-            times.push((n, t, snap.dist_calls as f64));
+            times.push((n, t, u64_to_f64(snap.dist_calls)));
             prev = Some((n, t));
         }
         // A single, decisive number instead of the noisy pairwise ratios
@@ -4182,9 +4177,9 @@ mod tests {
     /// be read with that caveat, not taken as the whole story — read the
     /// per-step pairwise exponents alongside it for that shape.
     fn fit_power_law(points: &[(usize, f64)]) -> (f64, f64) {
-        let xs: Vec<f64> = points.iter().map(|&(n, _)| (n as f64).ln()).collect();
+        let xs: Vec<f64> = points.iter().map(|&(n, _)| usize_to_f64(n).ln()).collect();
         let ys: Vec<f64> = points.iter().map(|&(_, c)| c.ln()).collect();
-        let n = xs.len() as f64;
+        let n = usize_to_f64(xs.len());
         let mean_x = xs.iter().sum::<f64>() / n;
         let mean_y = ys.iter().sum::<f64>() / n;
         let mut s_xy = 0.0;
@@ -4226,13 +4221,13 @@ mod tests {
                  k_dist={:>9} ({:>6.1}/insert) | PER-INSERT-COMMIT build={t_many:>8.3}s \
                  v_dist={:>9} ({:>6.1}/insert) k_dist={:>9} ({:>6.1}/insert)",
                 snap_one.v_dist_calls,
-                snap_one.v_dist_calls as f64 / n as f64,
+                u64_to_f64(snap_one.v_dist_calls) / usize_to_f64(n),
                 snap_one.k_dist_calls,
-                snap_one.k_dist_calls as f64 / n as f64,
+                u64_to_f64(snap_one.k_dist_calls) / usize_to_f64(n),
                 snap_many.v_dist_calls,
-                snap_many.v_dist_calls as f64 / n as f64,
+                u64_to_f64(snap_many.v_dist_calls) / usize_to_f64(n),
                 snap_many.k_dist_calls,
-                snap_many.k_dist_calls as f64 / n as f64,
+                u64_to_f64(snap_many.k_dist_calls) / usize_to_f64(n),
             );
         }
     }
@@ -4292,7 +4287,7 @@ mod tests {
                 unreachable!()
             };
             stored.push(arr.to_f64s());
-            let r = vec![DataValue::from(k as i64), v];
+            let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
@@ -4332,7 +4327,7 @@ mod tests {
                             diff * diff
                         })
                         .sum();
-                    (d, id as i64)
+                    (d, match usize_to_i64(id) { Ok(i) => i, Err(_e) => 0 })
                 })
                 .collect();
             truth.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -4361,11 +4356,11 @@ mod tests {
                 hits.iter().map(|row| row[0].get_int().unwrap()).collect();
 
             let hit_count = truth_ids.intersection(&engine_ids).count();
-            let recall = hit_count as f64 / k as f64;
+            let recall = usize_to_f64(hit_count) / usize_to_f64(k);
             total_recall += recall;
             worst = worst.min(recall);
         }
-        let avg_recall = total_recall / n_queries as f64;
+        let avg_recall = total_recall / usize_to_f64(n_queries);
         eprintln!(
             "tombstone_fix_preserves_recall_at_10k: avg recall@10={avg_recall:.3} worst={worst:.3}"
         );
@@ -4766,7 +4761,7 @@ mod tests {
             field: 1,
             sub: None,
         };
-        let mut tuple = node_key(0, &at);
+        let mut tuple = node_key(0, &at)?;
         tuple.extend(vec![
             DataValue::from("not a degree"),
             DataValue::Bytes(vec![]),
@@ -5179,8 +5174,8 @@ mod tests {
     fn index_build_is_byte_identical_across_runs() {
         let rows: Vec<Tuple> = (0..40)
             .map(|i| {
-                let x = (i as f64 * 0.37).sin();
-                let y = (i as f64 * 0.71).cos();
+                let x = (usize_to_f64(i) * 0.37).sin();
+                let y = (usize_to_f64(i) * 0.71).cos();
                 row(i, x, y)
             })
             .collect();
@@ -5252,7 +5247,7 @@ mod tests {
         // ⟨ō,o⟩ ≈ 0.8 (paper concentration), D = 100, ε₀ = 1.9.
         let ip = 0.8f64;
         let dim = 100usize;
-        let expected = ((1.0 - ip * ip).sqrt() / ip) * RABITQ_EPSILON_0 / ((dim - 1) as f64).sqrt();
+        let expected = ((1.0 - ip * ip).sqrt() / ip) * RABITQ_EPSILON_0 / usize_to_f64(dim - 1).sqrt();
         assert_eq!(
             rabitq_error_bound(ip, dim, RABITQ_EPSILON_0).to_bits(),
             expected.to_bits(),
@@ -5340,7 +5335,7 @@ mod tests {
                 violations_hard += 1;
             }
         }
-        let rate = violations_eps0 as f64 / TRIALS as f64;
+        let rate = usize_to_f64(violations_eps0) / usize_to_f64(TRIALS);
         assert!(
             rate <= MAX_VIOLATION_RATE_AT_EPS0,
             "Theorem 3.2 at ε₀={} permits rare failures; rate {rate} \
@@ -5367,7 +5362,7 @@ mod tests {
              ½ Σ truth²={})",
             0.5 * sum_truth_sq
         );
-        let mean_bias = sum_err / TRIALS as f64;
+        let mean_bias = sum_err / usize_to_f64(TRIALS);
         assert!(
             mean_bias.abs() < 0.05,
             "Theorem 3.2 unbiasedness: |mean(est−truth)|={mean_bias} too large"
@@ -5381,9 +5376,9 @@ mod tests {
         let dim = 32usize;
         let rot = RaBitQRotation::from_seed(dim, 0x0AB1_A07B).expect("rotation");
         let o =
-            normalize_unit(&(0..dim).map(|i| (i as f64 + 1.0).sin()).collect::<Vec<_>>()).unwrap();
+            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 1.0).sin()).collect::<Vec<_>>()).unwrap();
         let q =
-            normalize_unit(&(0..dim).map(|i| (i as f64 + 2.0).cos()).collect::<Vec<_>>()).unwrap();
+            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 2.0).cos()).collect::<Vec<_>>()).unwrap();
         let code = RaBitQCode::encode(&o, &rot).expect("encode");
         let est = code.estimate_inner_product(&q, &rot).unwrap();
         let truth = exact_inner_product(&o, &q);

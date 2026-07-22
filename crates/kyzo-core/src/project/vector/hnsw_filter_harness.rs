@@ -57,6 +57,27 @@ use kyzo_model::program::expr::BindingPos;
 use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
 use kyzo_model::program::symbol::Symbol;
 
+
+fn usize_to_f64(n: usize) -> f64 {
+    match u32::try_from(n) {
+        Ok(v) => f64::from(v),
+        Err(_) => match i64::try_from(n) {
+            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+            Err(_) => 0.0,
+        },
+    }
+}
+fn u64_to_f64(n: u64) -> f64 {
+    match i64::try_from(n) {
+        Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+        Err(_) => {
+            let lo = match u32::try_from(n & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 };
+            let hi = match u32::try_from(n >> 32) { Ok(v) => v, Err(_) => 0 };
+            f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Local schema helpers (the draft's live in `mod tests`; kept private there).
 // ---------------------------------------------------------------------------
@@ -92,7 +113,7 @@ fn splitmix(state: &mut u64) -> u64 {
 /// exactly representable at f32 precision too).
 fn next_f32(state: &mut u64) -> f64 {
     let bits = splitmix(state) >> 40; // 24 bits
-    (bits as f64 / (1u32 << 23) as f64) - 1.0
+    (u64_to_f64(u64::from(bits)) / f64::from(1u32 << 23)) - 1.0
 }
 
 /// A seeded corpus: `n` rows, key `k = 0..n`, a `dim`-dimensional F32 vector.
@@ -124,7 +145,9 @@ fn seeded_permutation(rows: &[Tuple], seed: u64) -> Vec<Tuple> {
     let mut out = rows.to_vec();
     let mut state = seed ^ 0x5EED_0F0F_A11C_0DE5;
     for i in (1..out.len()).rev() {
-        let j = (splitmix(&mut state) % (i as u64 + 1)) as usize;
+        let i_u64 = match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 };
+        let j_u64 = splitmix(&mut state) % (i_u64 + 1);
+        let j = match usize::try_from(j_u64) { Ok(v) => v, Err(_e) => 0 };
         out.swap(i, j);
     }
     out
@@ -295,7 +318,7 @@ impl FilterSpec {
     /// True selectivity over a concrete corpus — VERIFIES the sweep generator
     /// lands in its band before any search runs.
     fn true_selectivity(&self, rows: &[Tuple]) -> f64 {
-        self.true_match_count(rows) as f64 / rows.len() as f64
+        usize_to_f64(self.true_match_count(rows)) / usize_to_f64(rows.len())
     }
 
     fn true_match_count(&self, rows: &[Tuple]) -> usize {
@@ -311,7 +334,10 @@ impl FilterSpec {
 /// the graph exactly where a striped one does not.
 fn filter_at_selectivity(target: f64, striped: bool) -> FilterSpec {
     let modulus = 1000i64;
-    let accept = (target * modulus as f64).round() as i64;
+    let accept = match kyzo_model::value::Num::float((target * usize_to_f64(modulus)).round()).to_int_coerced() {
+        Some(i) => i,
+        None => 0,
+    };
     if striped {
         FilterSpec::ModLessThan { modulus, accept }
     } else {
@@ -367,14 +393,14 @@ fn recall_at_k(engine_keys: &[i64], truth_keys: &[i64], k: usize) -> f64 {
     let truth: FxHashSet<i64> = truth_keys.iter().copied().collect();
     let hit = engine_keys.iter().filter(|k| truth.contains(k)).count();
     let denom = k.min(truth_keys.len()).max(1);
-    hit as f64 / denom as f64
+    usize_to_f64(hit) / usize_to_f64(denom)
 }
 
 /// Count-recall = min(k, |engine|) / min(k, |truth|): the k-guarantee's meter
 /// (did we return as many rows as we should have, regardless of ranking).
 fn count_recall(engine_keys: &[i64], truth_keys: &[i64], k: usize) -> f64 {
     let denom = k.min(truth_keys.len()).max(1);
-    engine_keys.len().min(k) as f64 / denom as f64
+    usize_to_f64(engine_keys.len().min(k)) / usize_to_f64(denom)
 }
 
 fn keys_of(hits: &[Tuple]) -> Vec<i64> {
@@ -477,7 +503,7 @@ fn sweep_generator_hits_its_bands() {
     for target in SELECTIVITY_BANDS {
         // Alternate the accepted-set shape across the sweep: half the
         // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, (target * 100.0) as i64 % 2 == 0);
+        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
         let s = f.true_selectivity(&rows);
         assert!(
             (s - target).abs() <= 0.01,
@@ -580,7 +606,7 @@ fn filter_aware_recall_meets_or_beats_baseline() {
     for (target, base_recall, base_count) in PINNED_BASELINE {
         // Alternate the accepted-set shape across the sweep: half the
         // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, (target * 100.0) as i64 % 2 == 0);
+        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
         let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
         let ekeys = keys_of(&hits);
@@ -622,7 +648,7 @@ fn selector_chooses_scan_when_selective_graph_otherwise() {
     for target in SELECTIVITY_BANDS {
         // Alternate the accepted-set shape across the sweep: half the
         // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, (target * 100.0) as i64 % 2 == 0);
+        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
         let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f).unwrap();
         let is_scan = matches!(plan, SearchPlan::Scan);
         assert_eq!(
@@ -853,7 +879,7 @@ fn engine_ordering_is_total_under_ties() {
     let rows: Vec<Tuple> = (0..n)
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
-            comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
+            comps[match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 } % dim] = 1.0; // a distinct axis unit vector
             Tuple::from_vec(vec![
                 DataValue::from(i),
                 DataValue::Vector(Vector::try_new(comps).unwrap()),
@@ -999,7 +1025,7 @@ fn min_k_matches_tiny_match_sets() {
     for threshold in [1i64, 2, 3] {
         let f = FilterSpec::LessThan { threshold };
         let matches = f.true_match_count(&rows);
-        assert_eq!(matches, threshold as usize, "keys are dense 0..n");
+        assert_eq!(matches, match usize::try_from(threshold) { Ok(v) => v, Err(_e) => 0 }, "keys are dense 0..n");
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
         let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
         let ekeys = keys_of(&hits);
@@ -1067,7 +1093,7 @@ fn min_k_matches_disconnected_from_entry_region() {
 
     let f = FilterSpec::AtLeast { threshold: half }; // matches only the far cluster
     let matches = f.true_match_count(&rows);
-    assert_eq!(matches, (n - half) as usize);
+    assert_eq!(matches, n - half);
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
     let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
     let ekeys = keys_of(&hits);
@@ -1383,7 +1409,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     let rows: Vec<Tuple> = (0..n)
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
-            comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
+            comps[match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 } % dim] = 1.0; // a distinct axis unit vector per residue class
             Tuple::from_vec(vec![
                 DataValue::from(i),
                 DataValue::Vector(Vector::try_new(comps).unwrap()),
@@ -1810,7 +1836,7 @@ fn filter_aware_recall_table() {
     for (target, br, bc) in PINNED_BASELINE {
         // Alternate the accepted-set shape across the sweep: half the
         // bands run striped (mod), half contiguous (threshold).
-        let f = filter_at_selectivity(target, (target * 100.0) as i64 % 2 == 0);
+        let f = filter_at_selectivity(target, match kyzo_model::value::Num::float(target * 100.0).to_int_coerced() { Some(i) => i, None => 0 } % 2 == 0);
         let matches = f.true_match_count(&rows);
         let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
