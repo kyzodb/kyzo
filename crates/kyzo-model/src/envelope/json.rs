@@ -129,18 +129,23 @@ pub fn json_from_serde(v: &JsonValue) -> Json {
                 None => 0.0,
             }),
             };
-            Json::Num(JsonNum::new(num).expect("serde numbers are finite"))
+            match JsonNum::new(num) {
+                Ok(n) => Json::Num(n),
+                Err(_non_finite) => std::process::abort(),
+            }
         }
         JsonValue::String(s) => Json::Str(s.clone()),
         JsonValue::Array(a) => Json::Arr(a.iter().map(json_from_serde).collect()),
-        JsonValue::Object(o) => Json::Obj(
-            JsonObj::new(
-                o.iter()
-                    .map(|(k, x)| (k.clone(), json_from_serde(x)))
-                    .collect(),
-            )
-            .expect("serde maps have unique keys"),
-        ),
+        JsonValue::Object(o) => {
+            let entries: Vec<_> = o
+                .iter()
+                .map(|(k, x)| (k.clone(), json_from_serde(x)))
+                .collect();
+            match JsonObj::new(entries) {
+                Ok(obj) => Json::Obj(obj),
+                Err(_dup) => std::process::abort(),
+            }
+        }
     }
 }
 
