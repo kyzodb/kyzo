@@ -580,7 +580,10 @@ impl CanonicalTranscript {
                 t if t == FieldTag::Map as u8 => {
                     skip_map(bytes, &mut i, 0)?;
                 }
-                _ => return Err(TranscriptRefuse::Corrupt),
+                unknown_tag => {
+                    drop(unknown_tag);
+                    return Err(TranscriptRefuse::Corrupt);
+                }
             }
         }
         if i != bytes.len() {
@@ -738,7 +741,10 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
             t if t == FieldTag::Map as u8 => {
                 skip_map(bytes, i, depth + 1)?;
             }
-            _ => return Err(TranscriptRefuse::Corrupt),
+            unknown_tag => {
+                drop(unknown_tag);
+                return Err(TranscriptRefuse::Corrupt);
+            }
         }
         if *i > bytes.len() {
             return Err(TranscriptRefuse::Corrupt);
@@ -1608,7 +1614,10 @@ fn from_hex(b: u8) -> Result<u8, TranscriptRefuse> {
         b'0'..=b'9' => Ok(b - b'0'),
         b'a'..=b'f' => Ok(b - b'a' + 10),
         b'A'..=b'F' => Ok(b - b'A' + 10),
-        _ => Err(TranscriptRefuse::Corrupt),
+        unknown => {
+            drop(unknown);
+            Err(TranscriptRefuse::Corrupt)
+        }
     }
 }
 

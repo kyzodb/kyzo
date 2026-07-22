@@ -299,11 +299,11 @@ impl AuthorizingKeyTable {
     /// Lookup trusted public verifying material for `id`, if installed.
     ///
     /// Returned key can verify; [`AuthorizingKey::can_sign`] is always false.
-    pub fn lookup(&self, id: &AuthorizingKeyId) -> Option<AuthorizingKey> {
-        self.keys
-            .get(id.as_bytes())
-            .copied()
-            .and_then(|pk| AuthorizingKey::mint_verifying(*id, pk).ok())
+    pub fn lookup(&self, id: &AuthorizingKeyId) -> Result<Option<AuthorizingKey>, ReplicaRefuse> {
+        match self.keys.get(id.as_bytes()).copied() {
+            None => Ok(None),
+            Some(pk) => Ok(Some(AuthorizingKey::mint_verifying(*id, pk)?)),
+        }
     }
 }
 
@@ -1021,9 +1021,10 @@ pub fn verify_replica(
     CanonicalTranscript::parse(certificate.transcript().as_bytes())
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
 
-    let authorizing_key = authorizing_keys
-        .lookup(&certificate.authorizing_key_id())
-        .ok_or(ReplicaRefuse::AuthenticityFailed)?;
+    let authorizing_key = match authorizing_keys.lookup(&certificate.authorizing_key_id())? {
+        Some(k) => k,
+        None => return Err(ReplicaRefuse::AuthenticityFailed),
+    };
     debug_assert!(
         !authorizing_key.can_sign(),
         "table lookup must never reconstitute a signing seed"
@@ -1821,9 +1822,10 @@ impl SignedStateRootHead {
     /// Recomputes the transcript-derived compact digest — same body as
     /// [`Self::sign`].
     pub fn verify_authenticity(&self, keys: &AuthorizingKeyTable) -> Result<(), ReplicaRefuse> {
-        let key = keys
-            .lookup(&self.authorizing_key_id)
-            .ok_or(ReplicaRefuse::AuthenticityFailed)?;
+        let key = match keys.lookup(&self.authorizing_key_id)? {
+            Some(k) => k,
+            None => return Err(ReplicaRefuse::AuthenticityFailed),
+        };
         let body = Digest::from_bytes(self.head.compact_digest());
         if key.verify_signature(&body, &self.signature) {
             Ok(())
@@ -1983,7 +1985,7 @@ mod authorizing_key_ed25519_tests {
         let sig = origin.sign(&body).expect("sign");
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&origin.id()).expect("public installed");
+        let looked = table.lookup(&origin.id()).expect("lookup").expect("public installed");
         assert!(!looked.can_sign());
         assert!(looked.verify_signature(&body, &sig));
     }
@@ -2000,7 +2002,7 @@ mod authorizing_key_ed25519_tests {
 
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&id).expect("public key installed");
+        let looked = table.lookup(&id).expect("lookup").expect("public key installed");
         assert!(
             !looked.can_sign(),
             "table must not reconstitute signing seed"
@@ -2039,7 +2041,8 @@ mod authorizing_key_ed25519_tests {
         table.insert(other.authorizing_public());
         let looked = table
             .lookup(&AuthorizingKeyId::from_digest([0x02; 32]))
-            .unwrap();
+            .expect("lookup")
+            .expect("key present");
         assert!(!looked.verify_signature(&body, &sig));
     }
 

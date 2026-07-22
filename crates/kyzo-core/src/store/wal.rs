@@ -189,10 +189,10 @@ impl WalSegment {
 
     /// Terminal hash of this segment (or genesis predecessor if empty).
     pub fn terminal_hash(&self) -> WalHash {
-        self.records
-            .last()
-            .map(|r| r.record_hash())
-            .unwrap_or(GENESIS_PREDECESSOR)
+        match self.records.last() {
+            Some(r) => r.record_hash(),
+            None => GENESIS_PREDECESSOR,
+        }
     }
 
     /// Append a sealed record. Predecessor must equal current terminal.

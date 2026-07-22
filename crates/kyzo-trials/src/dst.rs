@@ -2077,7 +2077,9 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
         snapshot_fork: SnapshotFork::No,
     };
     let mut reopened = SweepDoor::open(store_id, fence, session, auth, cap).expect("reopen");
-    reopened.restore_from_wal_replay(&recovered);
+    reopened
+        .restore_from_wal_replay(&recovered)
+        .expect("restore memo from WAL");
     let preimage_key = decoded
         .preimage
         .as_ref()

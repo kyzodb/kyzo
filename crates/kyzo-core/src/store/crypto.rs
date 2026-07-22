@@ -1122,12 +1122,12 @@ mod pins {
         let domain = test_domain();
         let aad = test_aad();
         let audit = AuditKey::from_bytes([0xABu8; 32]);
-        let mac = audit.leaf_mac(&aad);
-        let _: Mac = mac;
+        let mac: Mac = audit.leaf_mac(&aad);
+        assert_eq!(std::mem::size_of_val(&mac), 32);
         // Digest from CMT-1 KEK door is not a Mac; Mac has no From/Into Digest bridge.
         let kek = Kek::from_bytes([0x11; 32]);
-        let digest = key_commitment_kek(&kek, domain).expect("commitment");
-        let _: Digest = digest;
+        let digest: Digest = key_commitment_kek(&kek, domain).expect("commitment");
+        assert_eq!(std::mem::size_of_val(&digest), 32);
         assert_ne!(
             std::any::type_name::<Mac>(),
             std::any::type_name::<Digest>(),
@@ -1151,8 +1151,7 @@ mod pins {
         // Wrap-derived nonce is typed Nonce, not a free [u8;12].
         let wrap_aad = encode_wrapped_shred_salt_aad(domain, SegmentCounter::ZERO.get())
             .expect("wrap AAD transcript");
-        let n = wrap_nonce(&wrap_aad);
-        let _: Nonce = n;
+        let n: Nonce = wrap_nonce(&wrap_aad);
         // encrypt door takes &Dek + Nonce — naked [u8;12] / &Kek are type errors.
         let salt = ShredSalt::from_bytes([0x22; 32]);
         let cap = KekUnwrapCap::from_kek(Kek::from_bytes([0x33; 32]));
@@ -1173,7 +1172,10 @@ mod pins {
         let crypto = include_str!("crypto.rs");
         let grants = include_str!("grants.rs");
         let replica = include_str!("replica.rs");
-        let crypto_prod = crypto.split("#[cfg(test)]").next().unwrap_or(crypto);
+        let crypto_prod = match crypto.split("#[cfg(test)]").next() {
+            Some(prod) => prod,
+            None => crypto,
+        };
 
         // RustCrypto edge may take naked arrays; committing-AEAD role doors must not.
         for name in [
@@ -1185,10 +1187,13 @@ mod pins {
             "fn key_commitment_kek(",
             "fn wrap_nonce(",
         ] {
-            let line = crypto_prod
+            let Some(line) = crypto_prod
                 .lines()
                 .find(|l| l.trim_start().starts_with(name) || l.contains(name))
-                .unwrap_or_else(|| panic!("missing door {name}"));
+            else {
+                assert!(false, "missing door {name}");
+                return;
+            };
             for needle in ["[u8; 32]", "[u8; 12]", "[u8; 64]"] {
                 assert!(
                     !line.contains(needle),
@@ -1239,13 +1244,15 @@ mod pins {
         ] {
             let start = crypto_prod
                 .find(door)
-                .unwrap_or_else(|| panic!("missing door {door}"));
+                .expect("missing door");
             let body = &crypto_prod[start..];
-            let end = body
-                .find("\nfn ")
-                .or_else(|| body.find("\npub fn "))
-                .unwrap_or(body.len())
-                .min(400);
+            let end = match body.find("
+fn ").or_else(|| body.find("
+pub fn ")) {
+                Some(i) => i,
+                None => body.len(),
+            }
+            .min(400);
             let wrapper = &body[..end];
             assert!(
                 !wrapper.contains(needle),
@@ -1284,7 +1291,10 @@ mod pins {
             "leaf_mac must return Mac"
         );
 
-        let grants_prod = grants.split("#[cfg(test)]").next().unwrap_or(grants);
+        let grants_prod = match grants.split("#[cfg(test)]").next() {
+            Some(prod) => prod,
+            None => grants,
+        };
         assert!(
             grants_prod.contains("fn hash_transcript(transcript: &CanonicalTranscript) -> Digest"),
             "hash_transcript must return Digest"
@@ -1299,7 +1309,10 @@ mod pins {
             "consent/entitlement verify doors must take Digest + Signature"
         );
 
-        let replica_prod = replica.split("#[cfg(test)]").next().unwrap_or(replica);
+        let replica_prod = match replica.split("#[cfg(test)]").next() {
+            Some(prod) => prod,
+            None => replica,
+        };
         assert!(
             replica_prod.contains("pub(crate) fn sign(&self, body: &Digest) -> Result<Signature, ReplicaRefuse>"),
             "AuthorizingKey::sign must take Digest and return Signature"
@@ -1334,7 +1347,10 @@ mod pins {
         );
 
         let crypto = include_str!("crypto.rs");
-        let crypto_prod = crypto.split("#[cfg(test)]").next().unwrap_or(crypto);
+        let crypto_prod = match crypto.split("#[cfg(test)]").next() {
+            Some(prod) => prod,
+            None => crypto,
+        };
         assert!(
             !crypto_prod.contains("fn wrap_aad("),
             "hand-rolled wrap_aad must be deleted from production"

@@ -533,7 +533,10 @@ impl RootChain {
     /// Append a mint; predecessor must match the prior terminal root
     /// (or [`GENESIS_ROOT`] when empty).
     pub fn append(&mut self, link: ChainedStateRoot) -> Result<(), MerkleChainRefuse> {
-        let expected = self.links.last().map(|l| l.root()).unwrap_or(GENESIS_ROOT);
+        let expected = match self.links.last() {
+            Some(l) => l.root(),
+            None => GENESIS_ROOT,
+        };
         if link.predecessor_root() != expected {
             return Err(MerkleChainRefuse::PredecessorMismatch);
         }
@@ -550,7 +553,10 @@ impl RootChain {
     /// [`GENESIS_ROOT`] when empty. Stored on the SweepDoor so the prior is
     /// not cold on-demand only.
     pub fn prior_root(&self) -> StateRoot {
-        self.links.last().map(|l| l.root()).unwrap_or(GENESIS_ROOT)
+        match self.links.last() {
+            Some(l) => l.root(),
+            None => GENESIS_ROOT,
+        }
     }
 
     /// Contiguous segment for STH consistency proofs — first link may sit

@@ -49,8 +49,7 @@ pub struct CompactionPace {
 /// Coefficients are sealed from WA/space-amp benches (same law as
 /// [`KvSeparationThreshold`]). Until that campaign greens, pace refuses —
 /// inventing placeholder coefficients is forbidden.
-pub fn pace(debt: CompactionDebt) -> Result<CompactionPace, CompactRefuse> {
-    let _ = debt;
+pub fn pace(_debt: CompactionDebt) -> Result<CompactionPace, CompactRefuse> {
     Err(CompactRefuse::PaceCoefficientsUnmeasured)
 }
 

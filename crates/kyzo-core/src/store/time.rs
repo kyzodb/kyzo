@@ -303,7 +303,11 @@ pub fn check_key_for_bitemporal(
         }
         ClaimPolarity::Assert => {
             // A hit. Emit, then skip every older version of the fact.
-            let decoded = decode_tuple_from_key(key, size_hint.unwrap_or(DEFAULT_SIZE_HINT))?;
+            let hint = match size_hint {
+                Some(h) => h,
+                None => DEFAULT_SIZE_HINT,
+            };
+            let decoded = decode_tuple_from_key(key, hint)?;
             Ok((
                 Some(decoded),
                 splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into()),
@@ -634,7 +638,13 @@ mod tests {
         );
         for len in 0..64usize {
             let garbage = vec![0xEEu8; len];
-            let _ = check_key_for_bitemporal(&garbage, ClaimPolarity::Assert, zero_as_of(), None);
+            let outcome =
+                check_key_for_bitemporal(&garbage, ClaimPolarity::Assert, zero_as_of(), None);
+            // Garbage must terminate with a typed answer — never unwind.
+            match outcome {
+                Ok(decoded) => drop(decoded),
+                Err(refuse) => drop(refuse),
+            }
         }
     }
 

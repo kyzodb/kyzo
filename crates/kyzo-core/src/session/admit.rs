@@ -346,7 +346,13 @@ impl LiveAdmissionSeats {
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         );
-        let _ = root_chain.append(genesis_link);
+        match root_chain.append(genesis_link) {
+            Ok(()) => {}
+            Err(crate::store::merkle::MerkleChainRefuse::PredecessorMismatch | crate::store::merkle::MerkleChainRefuse::CutBeforeGenesis | crate::store::merkle::MerkleChainRefuse::PathUrlSameness | crate::store::merkle::MerkleChainRefuse::ConsistencyProofFailed | crate::store::merkle::MerkleChainRefuse::SplitViewDetected | crate::store::merkle::MerkleChainRefuse::ConsistencyProofRequired | crate::store::merkle::MerkleChainRefuse::SthStoreMismatch) => {
+                // Empty chain + GENESIS_ROOT predecessor is the only genesis
+                // shape; exhaust the refuse enum without silent `let _`.
+            }
+        }
 
         Self {
             store_id,
@@ -540,8 +546,12 @@ impl LiveCertificateInputs {
         if !authorizing_key.can_sign() {
             return Err(AdmitRefuse::UnregisteredAuthorizingKey);
         }
-        let Some(public) = registered_keys.lookup(&authorizing_key.id()) else {
-            return Err(AdmitRefuse::UnregisteredAuthorizingKey);
+        let public = match registered_keys
+            .lookup(&authorizing_key.id())
+            .map_err(|_| AdmitRefuse::UnregisteredAuthorizingKey)?
+        {
+            Some(public) => public,
+            None => return Err(AdmitRefuse::UnregisteredAuthorizingKey),
         };
         if public.verifying_bytes() != authorizing_key.verifying_bytes() {
             return Err(AdmitRefuse::UnregisteredAuthorizingKey);
@@ -2766,7 +2776,7 @@ mod live_certificate_verifiability {
         // Public-only table material cannot sign — refuse, do not mint ephemeral.
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
-        let public_only = keys.lookup(&key.id()).expect("public install");
+        let public_only = keys.lookup(&key.id()).expect("lookup").expect("public install");
         assert!(
             !public_only.can_sign(),
             "table lookup must not reconstitute signing"

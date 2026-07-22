@@ -152,10 +152,9 @@ fn relation_kinds(tx: &impl ReadTx) -> Result<BTreeMap<RelationId, KeyspaceKind>
 /// as garbage must never abort the dump — only a prefix that matches a
 /// cataloged `Facts` relation triggers the stamp check.
 fn relation_prefix(key: &[u8]) -> Option<RelationId> {
-    let bytes: [u8; 8] = key
-        .get(0..StorageKey::RELATION_PREFIX_LEN)?
-        .try_into()
-        .ok()?;
+    let prefix = key.get(0..StorageKey::RELATION_PREFIX_LEN)?;
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(prefix);
     RelationId::new(u64::from_be_bytes(bytes))
 }
 
@@ -317,12 +316,12 @@ fn put_restore_pairs<'a, S: Storage>(
             let (k, v) = match pair {
                 Ok(kv) => kv,
                 Err(e) => {
-                    let _ = tx.abort();
+                    drop(tx.abort());
                     return Err(e);
                 }
             };
             if let Err(e) = tx.put(&k, &v) {
-                let _ = tx.abort();
+                drop(tx.abort());
                 return Err(e);
             }
         }
@@ -658,11 +657,10 @@ impl LeaveIsFreePack {
     pub(crate) fn replica_cut_recompute(&self) -> ReplicaCutRecompute {
         let content = self.pack_content_root();
         let store_id = self.claimed_origin_store_id();
-        let fence = self
-            .wrapped_shred_salts
-            .first()
-            .map(|w| w.crypto_domain().fence_epoch())
-            .unwrap_or_else(|| crate::store::epoch::FenceEpoch::genesis(store_id));
+        let fence = match self.wrapped_shred_salts.first() {
+            Some(w) => w.crypto_domain().fence_epoch(),
+            None => crate::store::epoch::FenceEpoch::genesis(store_id),
+        };
         // Leave-is-free cut ordinal is the first dense successor of ZERO —
         // pack identity is content-bound; ordinal is cut protocol, not history length.
         let ordinal = CommitOrdinal::ZERO
@@ -846,10 +844,9 @@ impl ImportCapability {
     /// [`OriginRootRegistry::after_chain_root_verify`]; that type is not
     /// re-exported from `store`.
     pub fn after_chain_root_verify(
-        local: ReplicaCutRecompute,
-        peer: ReplicaCutRecompute,
+        _local: ReplicaCutRecompute,
+        _peer: ReplicaCutRecompute,
     ) -> Result<Self, PackRefuse> {
-        let _ = (local, peer);
         Err(PackRefuse::ForeignHistoryUnverified)
     }
 

@@ -375,12 +375,18 @@ pub fn new_fjall_storage(path: impl AsRef<Path>) -> Result<FjallStorage> {
 /// Elsewhere this returns `None` and the caller keeps fjall's stock
 /// default — a named platform gap, not a silently wrong number.
 pub(crate) fn quarter_system_ram_bytes() -> Option<u64> {
-    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let meminfo = match std::fs::read_to_string("/proc/meminfo") {
+        Ok(s) => s,
+        Err(_io) => return None,
+    };
     let kib = meminfo
         .lines()
         .find_map(|line| line.strip_prefix("MemTotal:"))
         .and_then(|rest| rest.trim().strip_suffix("kB"))
-        .and_then(|n| n.trim().parse::<u64>().ok())?;
+        .and_then(|n| match n.trim().parse::<u64>() {
+            Ok(v) => Some(v),
+            Err(_parse) => None,
+        })?;
     Some((kib * 1_024) / 4)
 }
 
@@ -1225,7 +1231,10 @@ mod pins {
             err.is_conflict(),
             "the write-write abort must be the typed conflict, got {err:?}"
         );
-        let _ = ConflictError;
+        assert!(
+            matches!(err, crate::store::tx::CommitFailure::Conflict(_)),
+            "conflict arm must be CommitFailure::Conflict"
+        );
         assert_eq!(
             db.read_tx().unwrap().get(b"ww").unwrap(),
             Some(Slice::from(b"1")),

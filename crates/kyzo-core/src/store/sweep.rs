@@ -136,7 +136,12 @@ fn take_len_bytes(input: &mut &[u8]) -> Option<Vec<u8>> {
     if input.len() < 4 {
         return None;
     }
-    let n = u32::from_be_bytes(input[..4].try_into().ok()?) as usize;
+    let mut len_bytes = [0u8; 4];
+    len_bytes.copy_from_slice(&input[..4]);
+    let n = match usize::try_from(u32::from_be_bytes(len_bytes)) {
+        Ok(n) => n,
+        Err(_overflow) => return None,
+    };
     *input = &input[4..];
     if input.len() < n {
         return None;
@@ -155,19 +160,28 @@ pub fn decode_commit_body(body: &[u8]) -> Option<DecodedCommitBody> {
         return None;
     }
     let mut rest = &body[COMMIT_BODY_V1.len()..];
+    if rest.len() < 32 {
+        return None;
+    }
     let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(rest[..32].try_into().ok()?);
+    key_bytes.copy_from_slice(&rest[..32]);
     rest = &rest[32..];
+    if rest.len() < 32 {
+        return None;
+    }
     let mut digest_bytes = [0u8; 32];
-    digest_bytes.copy_from_slice(rest[..32].try_into().ok()?);
+    digest_bytes.copy_from_slice(&rest[..32]);
     rest = &rest[32..];
     let outcome = *rest.first()?;
     rest = &rest[1..];
     if outcome != 1 {
         return None;
     }
+    if rest.len() < 32 {
+        return None;
+    }
     let mut meaning = [0u8; 32];
-    meaning.copy_from_slice(rest[..32].try_into().ok()?);
+    meaning.copy_from_slice(&rest[..32]);
     rest = &rest[32..];
     let has_preimage = *rest.first()?;
     rest = &rest[1..];
@@ -691,7 +705,7 @@ impl SweepDoor {
                 snapshot_fork: SnapshotFork::Yes,
             }
             | StableCommitCap::PlatformTransactionProof { .. } => {
-                let _ = tx.abort();
+                drop(tx.abort());
                 Err(SweepSealFailure::Sweep(
                     SweepRefuse::NativeFsyncAckArmRequired,
                 ))
@@ -714,25 +728,25 @@ impl SweepDoor {
         // Crash-restored digest map (bodies without preimage).
         if let Some(prior) = self.wal_restored_digests.get(key.as_bytes()) {
             if *prior != request_digest {
-                let _ = tx.abort();
+                drop(tx.abort());
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
             }
-            let _ = tx.abort();
+            drop(tx.abort());
             return Ok(());
         }
         // Live / preimage-restored IdempotencyMemo.
         match self.idempotency.consult(&key, request_digest) {
             Err(StoreRefuse::OperationKeyReuse) => {
-                let _ = tx.abort();
+                drop(tx.abort());
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
             }
             Err(_) => {
-                let _ = tx.abort();
+                drop(tx.abort());
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
             }
             Ok(Some(entry)) => {
                 if matches!(entry.outcome(), OperationOutcome::Committed { .. }) {
-                    let _ = tx.abort();
+                    drop(tx.abort());
                     return Ok(());
                 }
             }
@@ -748,7 +762,7 @@ impl SweepDoor {
             self.idempotency.lookup(&key),
             OperationOutcome::Committed { .. }
         ) {
-            let _ = tx.abort();
+            drop(tx.abort());
             return Ok(());
         }
 
@@ -765,7 +779,10 @@ impl SweepDoor {
 
     /// Rebuild [`IdempotencyMemo`] (and ordinal/WAL tips) from a WAL replay
     /// so reopen dedupes the same OperationKey across crash (§38 T1b).
-    pub fn restore_from_wal_replay(&mut self, replayed: &WalReplayState) {
+    pub fn restore_from_wal_replay(
+        &mut self,
+        replayed: &WalReplayState,
+    ) -> Result<(), StoreRefuse> {
         self.wal_tip = replayed.final_hash;
         if let Some(highest) = replayed.floors.highest_commit_ordinal {
             self.highest_commit = highest;
@@ -778,18 +795,19 @@ impl SweepDoor {
                 let key = preimage.derive_key(self.store_id);
                 debug_assert_eq!(*key.as_bytes(), decoded.key_bytes);
                 let digest = decoded.request_digest;
-                let _ = self.idempotency.remember(
+                self.idempotency.remember(
                     key,
                     digest,
                     OperationOutcome::Committed {
                         request_digest: digest,
                     },
-                );
+                )?;
             } else {
                 self.wal_restored_digests
                     .insert(decoded.key_bytes, decoded.request_digest);
             }
         }
+        Ok(())
     }
 
     /// Open the door for one Store under WriteAuthority + sealed arm + session.
@@ -1626,7 +1644,7 @@ mod composition_tests {
         let intent2 = door
             .admit(incarnation, &session, key2, dig2)
             .expect("admit 2");
-        let _ = door
+        door
             .seal_durable(intent2, TempTx::default(), content_root(0xC3), &session)
             .expect("second durable seal");
         let cut2 = door.last_durable_cut().expect("second cut");
@@ -1785,7 +1803,9 @@ mod composition_tests {
         };
         let mut reopened =
             SweepDoor::open(store_id, fence, session2, auth, cap).expect("reopen door");
-        reopened.restore_from_wal_replay(&recovered);
+        reopened
+            .restore_from_wal_replay(&recovered)
+            .expect("restore memo from WAL");
         assert!(matches!(
             reopened.idempotency().lookup(&key),
             OperationOutcome::Committed { .. }

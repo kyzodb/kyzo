@@ -82,7 +82,7 @@ use fjall::Slice;
 use miette::Result;
 
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::store::{Aborted, CommitFailure, ReadTx, WriteTx};
+use crate::store::{Aborted, CommitCorruption, CommitFailure, ReadTx, WriteTx};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 
@@ -135,7 +135,7 @@ impl TempTx {
     /// the session's lifetime *is* the transaction. Call this before Drop so
     /// the WriteTx drop-bomb does not fire for an embedded session temp.
     pub(crate) fn discard(&mut self) {
-        let _ = self.map.take();
+        drop(self.map.take());
     }
 }
 
@@ -261,17 +261,27 @@ impl WriteTx for TempTx {
     /// Open here would only ever be called by generic code that is about
     /// to drop the store anyway.
     fn commit(mut self) -> std::result::Result<(), CommitFailure> {
-        let _ = self.map.take().expect("TempTx commit after spend");
-        Ok(())
+        match self.map.take() {
+            Some(spent) => {
+                drop(spent);
+                Ok(())
+            }
+            None => Err(CommitFailure::Corruption(CommitCorruption::Detected)),
+        }
     }
 
     fn commit_durable(mut self) -> std::result::Result<(), CommitFailure> {
-        let _ = self.map.take().expect("TempTx commit_durable after spend");
-        Ok(())
+        match self.map.take() {
+            Some(spent) => {
+                drop(spent);
+                Ok(())
+            }
+            None => Err(CommitFailure::Corruption(CommitCorruption::Detected)),
+        }
     }
 
     fn abort(mut self) -> Aborted {
-        let _ = self.map.take().expect("TempTx abort after spend");
+        drop(self.map.take());
         Aborted
     }
 }
@@ -282,7 +292,7 @@ impl Drop for TempTx {
         // the transaction. Explicit commit/abort still spend Open for the
         // standalone WriteTx species tests; Drop must not bomb an embedded
         // session temp that was never separately committed.
-        let _ = self.map.take();
+        drop(self.map.take());
     }
 }
 
@@ -571,7 +581,7 @@ mod tests {
             11 => Op::Exists(gen_key(rng)),
             12..=13 => Op::Scan(gen_key(rng), gen_key(rng)),
             14 => Op::ScanCount(gen_key(rng), gen_key(rng)),
-            _ => Op::Total,
+            15 => Op::Total,
         }
     }
 
@@ -642,8 +652,8 @@ mod tests {
                     assert!(w[0].0 < w[1].0, "total_scan not strictly memcmp-ascending");
                 }
             }
-            let _ = fjall_tx.abort();
-            let _ = sim_tx.abort();
+            drop(fjall_tx.abort());
+            drop(sim_tx.abort());
         }
     }
 
@@ -696,8 +706,8 @@ mod tests {
             {
                 assert_eq!(rows.len(), 3, "degenerate del_range deleted something");
             }
-            let _ = fjall_tx.abort();
-            let _ = sim_tx.abort();
+            drop(fjall_tx.abort());
+            drop(sim_tx.abort());
         }
     }
 
@@ -804,8 +814,8 @@ mod tests {
             let at = AsOf::current(ValidityTs::from_raw(5));
             assert_eq!(temp_tx.range_skip_scan_tuple(&upper, &lower, at).count(), 0);
             assert_eq!(temp_tx.range_skip_scan_tuple(&lower, &lower, at).count(), 0);
-            let _ = fjall_tx.abort();
-            let _ = sim_tx.abort();
+            drop(fjall_tx.abort());
+            drop(sim_tx.abort());
         }
     }
 }

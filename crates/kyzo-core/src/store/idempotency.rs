@@ -159,10 +159,10 @@ impl IdempotencyMemo {
 
     /// Look up a key. Missing → [`OperationOutcome::Absent`].
     pub fn lookup(&self, key: &OperationKey) -> OperationOutcome {
-        self.entries
-            .get(key.as_bytes())
-            .map(|e| e.outcome.clone())
-            .unwrap_or(OperationOutcome::Absent)
+        match self.entries.get(key.as_bytes()) {
+            Some(e) => e.outcome.clone(),
+            None => OperationOutcome::Absent,
+        }
     }
 
     /// Consult the memo for a safe-retry door (admit / commit).

@@ -115,10 +115,7 @@ impl ObjectRef {
 
     /// Content-hash bind for bytes under this durable identity.
     pub fn content_hash(self, digest: [u8; 32]) -> ContentHash {
-        let hash = ContentHash::from_digest(digest);
-        let _bytes = hash.as_bytes();
-        debug_assert_eq!(_bytes.len(), 32);
-        hash
+        ContentHash::from_digest(digest)
     }
 
     /// Stage volatile bytes under this identity's staging token.
@@ -166,20 +163,12 @@ impl ObjectRef {
         covers_through: CommitOrdinal,
         digest: [u8; 32],
     ) -> RetentionCertificate {
-        let cert = RetentionCertificate::mint(self.store_id, covers_through, digest);
-        debug_assert_eq!(cert.store_id(), self.store_id);
-        debug_assert_eq!(cert.covers_through(), covers_through);
-        debug_assert_eq!(cert.digest(), digest);
-        cert
+        RetentionCertificate::mint(self.store_id, covers_through, digest)
     }
 
     /// Reclaim certificate for this identity's staged form.
     pub fn reclaim_certificate(self, digest: [u8; 32]) -> ReclaimCertificate {
-        let cert = ReclaimCertificate::mint(self.store_id, self.object_id, digest);
-        debug_assert_eq!(cert.store_id(), self.store_id);
-        debug_assert_eq!(cert.object_id(), self.object_id);
-        debug_assert_eq!(cert.digest(), digest);
-        cert
+        ReclaimCertificate::mint(self.store_id, self.object_id, digest)
     }
 
     /// GC this durable object under a covering retention certificate.
@@ -235,7 +224,6 @@ impl ObjectRef {
             return Err(ObjectRefuse::ObjectRefForeignStore);
         }
         let repair = PermanenceWitness::repair(original, bytes_hash, proposed, downgrade)?;
-        debug_assert_eq!(repair.object_ref(), self);
         Ok(repair)
     }
 
@@ -250,19 +238,14 @@ impl ObjectRef {
         backend_contract: BackendContract,
     ) -> ObjectDurabilityClass {
         drop(self);
-        let _sid = self.store_id;
-        debug_assert_eq!(_sid, self.store_id);
-        let class = ObjectDurabilityClass::new(
+        ObjectDurabilityClass::new(
             confirmed_copies,
             failure_domains,
             regions,
             consistency,
             integrity_verification,
             backend_contract,
-        );
-        if class.dominates(class) {
-        }
-        class
+        )
     }
 
     /// Backend contract arm identity for durability product sealing.

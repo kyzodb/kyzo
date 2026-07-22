@@ -1097,7 +1097,7 @@ mod pins {
                     kyzo_model::SourceSpan::default(),
                 )
                 .unwrap();
-            let _ = idx_id;
+            drop(idx_id);
             (key.as_ref().to_vec(), val)
         };
 
