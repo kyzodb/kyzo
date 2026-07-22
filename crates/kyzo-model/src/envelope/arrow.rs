@@ -99,33 +99,46 @@ impl ColumnVec {
             }
         }
         match fit {
-            Some(Fit::Int) => ColumnVec::I64(
-                values
-                    .iter()
-                    .map(|v| v.get_int().expect("uniform int column"))
-                    .collect(),
-            ),
-            Some(Fit::Float) => ColumnVec::F64(
-                values
-                    .iter()
-                    .map(|v| v.get_float().expect("uniform float column"))
-                    .collect(),
-            ),
-            Some(Fit::Bool) => ColumnVec::Bool(
-                values
-                    .iter()
-                    .map(|v| v.get_bool().expect("uniform bool column"))
-                    .collect(),
-            ),
-            Some(Fit::Str) => ColumnVec::Str(
-                values
-                    .into_iter()
-                    .map(|v| match v {
-                        DataValue::Str(s) => s,
-                        data_value_any!() => unreachable!("uniform str column"),
-                    })
-                    .collect(),
-            ),
+            Some(Fit::Int) => {
+                let mut out = Vec::with_capacity(values.len());
+                for v in &values {
+                    match v.get_int() {
+                        Some(i) => out.push(i),
+                        None => return ColumnVec::Mixed(values),
+                    }
+                }
+                ColumnVec::I64(out)
+            }
+            Some(Fit::Float) => {
+                let mut out = Vec::with_capacity(values.len());
+                for v in &values {
+                    match v.get_float() {
+                        Some(f) => out.push(f),
+                        None => return ColumnVec::Mixed(values),
+                    }
+                }
+                ColumnVec::F64(out)
+            }
+            Some(Fit::Bool) => {
+                let mut out = Vec::with_capacity(values.len());
+                for v in &values {
+                    match v.get_bool() {
+                        Some(b) => out.push(b),
+                        None => return ColumnVec::Mixed(values),
+                    }
+                }
+                ColumnVec::Bool(out)
+            }
+            Some(Fit::Str) => {
+                let mut out = Vec::with_capacity(values.len());
+                for v in &values {
+                    match v {
+                        DataValue::Str(s) => out.push(s.clone()),
+                        data_value_any!() => return ColumnVec::Mixed(values),
+                    }
+                }
+                ColumnVec::Str(out)
+            }
             None => ColumnVec::Mixed(values),
         }
     }
@@ -187,8 +200,10 @@ impl ColumnBatch {
 
     /// Convenience door for call sites that already prove row width.
     pub fn from_rows(rows: Vec<Tuple>, arity: usize) -> ColumnBatch {
-        Self::try_from_rows(rows, arity)
-            .expect("INVARIANT(column_batch_width): every row width equals arity")
+        match Self::try_from_rows(rows, arity) {
+            Ok(batch) => batch,
+            Err(_width) => std::process::abort(),
+        }
     }
 
     pub fn width(&self) -> usize {

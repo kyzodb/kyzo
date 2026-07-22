@@ -1541,7 +1541,11 @@ impl Arena {
     /// face maps that refuse to a process abort only after the typed door
     /// has already named [`Denial::ExtentOverflow`].
     pub fn new() -> Self {
-        Self::try_new().expect("ArenaId space exhausted")
+        match Self::try_new() {
+            Ok(arena) => arena,
+            Err(Denial::ExtentOverflow) => std::process::abort(),
+            Err(_other) => std::process::abort(),
+        }
     }
 
     /// Evidence-bearing constructor: refuses with

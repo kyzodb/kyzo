@@ -155,7 +155,10 @@ impl Value {
     /// via encode). Kept as infallible — an illegal tag is unrepresentable
     /// without forging the private `[u8; 16]` (no `from_bytes` door).
     pub fn tag(self) -> Tag {
-        Tag::from_byte(self.bytes[0]).expect("a Value carries a lawful tag by construction")
+        match Tag::from_byte(self.bytes[0]) {
+            Some(tag) => tag,
+            None => std::process::abort(),
+        }
     }
 
     pub fn is_inline(self) -> bool {

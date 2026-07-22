@@ -376,7 +376,9 @@ impl NullableColType {
                                 .chunks_exact(4)
                                 // In bounds: `chunks_exact(4)` yields 4-byte chunks.
                                 .map(|c| {
-                                    f32::from_le_bytes(c.try_into().expect("chunk of 4")) as f64
+                                    let mut arr = [0u8; 4];
+                                    arr.copy_from_slice(c);
+                                    f32::from_le_bytes(arr) as f64
                                 })
                                 .collect()
                         }
@@ -389,7 +391,11 @@ impl NullableColType {
                             bytes
                                 .chunks_exact(8)
                                 // In bounds: `chunks_exact(8)` yields 8-byte chunks.
-                                .map(|c| f64::from_le_bytes(c.try_into().expect("chunk of 8")))
+                                .map(|c| {
+                                    let mut arr = [0u8; 8];
+                                    arr.copy_from_slice(c);
+                                    f64::from_le_bytes(arr)
+                                })
                                 .collect()
                         }
                     };
@@ -425,11 +431,12 @@ impl NullableColType {
                             };
                             DataValue::Validity(v.into())
                         }
-                        "RETRACT" => DataValue::Validity(
-                            Validity::new(cur_vld, false)
-                                .expect("retract admits every tick")
-                                .into(),
-                        ),
+                        "RETRACT" => {
+                            let Some(v) = Validity::new(cur_vld, false) else {
+                                bail!(InvalidValidity(DataValue::Str("RETRACT".into())));
+                            };
+                            DataValue::Validity(v.into())
+                        }
                         s => {
                             let (is_assert, ts_str) = match s.strip_prefix('~') {
                                 None => (true, s),
@@ -451,11 +458,12 @@ impl NullableColType {
                                 bail!(InvalidValidity(DataValue::Str(s.into())))
                             }
 
-                            DataValue::Validity(
+                            let Some(v) =
                                 Validity::new(ValidityTs::from_raw(microseconds), is_assert)
-                                    .expect("reserved filtered above")
-                                    .into(),
-                            )
+                            else {
+                                bail!(InvalidValidity(DataValue::Str(s.into())));
+                            };
+                            DataValue::Validity(v.into())
                         }
                     },
                     DataValue::List(l) => {
@@ -466,11 +474,11 @@ impl NullableColType {
                                 if ts == i64::MAX || ts == i64::MIN {
                                     bail!(InvalidValidity(DataValue::List(l)))
                                 }
-                                return Ok(DataValue::Validity(
-                                    Validity::new(ValidityTs::from_raw(ts), is_assert)
-                                        .expect("reserved filtered above")
-                                        .into(),
-                                ));
+                                let Some(v) = Validity::new(ValidityTs::from_raw(ts), is_assert)
+                                else {
+                                    bail!(InvalidValidity(DataValue::List(l)));
+                                };
+                                return Ok(DataValue::Validity(v.into()));
                             }
                         }
                         bail!(InvalidValidity(DataValue::List(l)))
