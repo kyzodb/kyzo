@@ -324,7 +324,7 @@ impl Entry {
     /// Prefix-first compare against a needle; payload deref only on tie.
     #[inline]
     fn cmp_needle<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Ordering {
-        match cmp_prefixed(self.prefix, self.span.len.raw(), np, needle.len() as u32) {
+        match cmp_prefixed(self.prefix, self.span.len.raw(), np, match u32::try_from(needle.len()) { Ok(n) => n, Err(_) => u32::MAX }) {
             PrefixCmp::Decided(o) => o,
             PrefixCmp::NeedPayload => store.tie_payload(self.span).cmp(needle),
         }
@@ -387,7 +387,7 @@ impl Run {
     /// rank-invariant and the only remap anyone needs is the seal's
     /// compact [`EpochRemap`].)
     fn merge(a: &Run, b: &Run, heap: &Heap) -> Result<Run, Denial> {
-        if a.entries.len() + b.entries.len() > u32::MAX as usize {
+        if a.entries.len() + b.entries.len() > match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
             return Err(Denial::ExtentOverflow);
         }
         let mut merged = Vec::with_capacity(a.entries.len() + b.entries.len());
@@ -771,11 +771,11 @@ impl Delta {
 
     fn search<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Result<usize, usize> {
         self.sorted
-            .binary_search_by(|&i| self.arrivals[i as usize].cmp_needle(np, needle, store))
+            .binary_search_by(|&i| self.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })].cmp_needle(np, needle, store))
     }
 
     fn entry_by_rank(&self, rank: usize) -> Entry {
-        self.arrivals[self.sorted[rank] as usize]
+        self.arrivals[(match usize::try_from(self.sorted[rank]) { Ok(n) => n, Err(_) => 0 })]
     }
 }
 
@@ -843,7 +843,7 @@ impl EpochRemap {
     /// Typed [`Denial`] on overflow or a code not live in the source epoch.
     pub(super) fn apply_raw(&self, code: Code) -> Result<Code, Denial> {
         let c = code.0;
-        let visible = self.from_sealed_len as usize + self.tail.len();
+        let visible = (match usize::try_from(self.from_sealed_len) { Ok(n) => n, Err(_) => 0 }) + self.tail.len();
         if c < self.from_sealed_len {
             // Old sealed rank r moves to the r-th position not occupied
             // by an inserted value: r + k, where k counts the inserted
@@ -851,11 +851,11 @@ impl EpochRemap {
             // non-inserted positions below D[i]; it is non-decreasing
             // because D is strictly increasing, so k is one binary
             // search.)
-            let r = c as usize;
+            let r = (match usize::try_from(c) { Ok(n) => n, Err(_) => 0 });
             let (mut lo, mut hi) = (0usize, self.inserted.len());
             while lo < hi {
                 let mid = (lo + hi) / 2;
-                if self.inserted[mid] as usize - mid <= r {
+                if (match usize::try_from(self.inserted[mid]) { Ok(n) => n, Err(_) => 0 }) - mid <= r {
                     lo = mid + 1;
                 } else {
                     hi = mid;
@@ -866,10 +866,10 @@ impl EpochRemap {
                 .map(Code)
                 .ok_or(Denial::CodeRemapOverflow)
         } else {
-            let a = (c - self.from_sealed_len) as usize;
+            let a = (match usize::try_from(c - self.from_sealed_len) { Ok(n) => n, Err(_) => 0 });
             if a >= self.tail.len() {
                 return Err(Denial::VisibilityOverflow {
-                    required: c as usize + 1,
+                    required: (match usize::try_from(c) { Ok(n) => n, Err(_) => 0 }) + 1,
                     visible,
                 });
             }
@@ -956,7 +956,7 @@ impl<'a, S: Store> View<'a, S> {
     /// Refuses with [`Denial::ExtentOverflow`] when the needle exceeds the
     /// `u32` compare space — never a process abort.
     fn rank(&self, value: &[u8]) -> Result<Result<usize, usize>, Denial> {
-        if value.len() > u32::MAX as usize {
+        if value.len() > match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
             return Err(Denial::ExtentOverflow);
         }
         let np = prefix4(value);
@@ -973,7 +973,7 @@ impl<'a, S: Store> View<'a, S> {
         }
         match self
             .sorted
-            .binary_search_by(|&i| self.arrivals[i as usize].cmp_needle(np, value, self.store))
+            .binary_search_by(|&i| self.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })].cmp_needle(np, value, self.store))
         {
             Ok(pos) => {
                 rank += pos;
@@ -1041,7 +1041,7 @@ impl<'a, S: Store> View<'a, S> {
     }
 
     fn entry_by_delta_rank(&self, rank: usize) -> Entry {
-        self.arrivals[self.sorted[rank] as usize]
+        self.arrivals[(match usize::try_from(self.sorted[rank]) { Ok(n) => n, Err(_) => 0 })]
     }
 
     /// Binary search run `r` for an index whose global rank equals `k`.
@@ -1088,7 +1088,7 @@ impl<'a, S: Store> View<'a, S> {
     /// Number of delta entries strictly less than `e`.
     fn lower_bound_delta(&self, e: Entry) -> usize {
         self.sorted.partition_point(|&i| {
-            self.arrivals[i as usize].cmp_entry(&e, self.store) == Ordering::Less
+            self.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })].cmp_entry(&e, self.store) == Ordering::Less
         })
     }
 }
@@ -1183,7 +1183,7 @@ impl<'a> Frame<'a> {
     /// nest brand (a brand cannot refuse a foreign stamp at compile time).
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
         Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
-        let c = sc.code().raw() as usize;
+        let c = (match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 });
         let visible = self.len();
         if c >= visible {
             return Err(Denial::VisibilityOverflow {
@@ -1201,7 +1201,7 @@ impl<'a> Frame<'a> {
     pub fn admits(&self, sc: StampedCode) -> bool {
         sc.arena() == self.arena
             && sc.epoch() == self.epoch
-            && (sc.code().raw() as usize) < self.len()
+            && ((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })) < self.len()
     }
 
     /// Resolve a stamped code to its bytes.
@@ -1312,7 +1312,7 @@ impl Snapshot {
     /// nest brands; domain identity is mint-checked [`Admission::prove_shared`].
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
         Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
-        let c = sc.code().raw() as usize;
+        let c = (match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 });
         let visible = self.len();
         if c >= visible {
             return Err(Denial::VisibilityOverflow {
@@ -1543,6 +1543,7 @@ impl Arena {
     pub fn new() -> Self {
         match Self::try_new() {
             Ok(arena) => arena,
+            // Typed door already named ExtentOverflow; process cannot continue.
             Err(Denial::ExtentOverflow) => std::process::abort(),
             Err(_other) => std::process::abort(),
         }
@@ -1639,10 +1640,10 @@ impl Arena {
     /// heap-span encoding space, or when heap chunk/offset capacity is
     /// exhausted — never a process abort.
     pub(super) fn intern(&mut self, value: &[u8]) -> Result<StampedCode, Denial> {
-        if self.len() >= u32::MAX as usize {
+        if self.len() >= match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
             return Err(Denial::ExtentOverflow);
         }
-        if value.len() > u32::MAX as usize {
+        if value.len() > match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
             return Err(Denial::ExtentOverflow);
         }
         let np = prefix4(value);
@@ -1661,20 +1662,20 @@ impl Arena {
             }
         }
         let code = if found {
-            Code(rank as u32)
+            Code(match u32::try_from(rank) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) })
         } else {
             match self.delta.search(np, value, &self.heap) {
                 Ok(pos) => {
                     let arrival = self.delta.sorted[pos];
-                    Code((self.sealed_len + arrival as usize) as u32)
+                    Code(match u32::try_from(self.sealed_len + match usize::try_from(arrival) { Ok(n) => n, Err(_) => 0 }) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) })
                 }
                 Err(pos) => {
                     let span = self.heap.push(value)?;
                     let entry = Entry::new(span, &self.heap);
-                    let arrival = self.delta.arrivals.len() as u32;
+                    let arrival = match u32::try_from(self.delta.arrivals.len()) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) };
                     self.delta.arrivals.push(entry);
                     self.delta.sorted.insert(pos, arrival);
-                    Code((self.sealed_len + arrival as usize) as u32)
+                    Code(match u32::try_from(self.sealed_len + match usize::try_from(arrival) { Ok(n) => n, Err(_) => 0 }) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) })
                 }
             }
         };
@@ -1700,7 +1701,7 @@ impl Arena {
     /// does not cover "cannot obtain two runs."
     pub fn seal(&mut self) -> Result<EpochRemap, Denial> {
         let from = self.epoch;
-        let from_sealed_len = self.sealed_len as u32;
+        let from_sealed_len = match u32::try_from(self.sealed_len) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) };
         let delta_n = self.delta.len();
 
         // New global ranks of the delta values: old sealed rank +
@@ -1722,9 +1723,9 @@ impl Arena {
                     Err(pos) => sealed_rank += pos,
                 }
             }
-            let new_rank = (sealed_rank + j) as u32;
+            let new_rank = match u32::try_from(sealed_rank + j) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) };
             inserted.push(new_rank);
-            tail[self.delta.sorted[j] as usize] = new_rank;
+            tail[(match usize::try_from(self.delta.sorted[j]) { Ok(n) => n, Err(_) => 0 })] = new_rank;
         }
 
         // Drain the delta into a lawful run (sorted + unique by the
@@ -1735,7 +1736,7 @@ impl Arena {
             let entries: Vec<Entry> = delta
                 .sorted
                 .iter()
-                .map(|&i| delta.arrivals[i as usize])
+                .map(|&i| delta.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })])
                 .collect();
             self.runs
                 .push(Arc::new(Run::from_sorted(entries, &self.heap)));
@@ -1804,7 +1805,10 @@ mod tests {
         }
 
         fn below(&mut self, n: usize) -> usize {
-            (self.next() % n as u64) as usize
+            match u64::try_from(n) {
+                Ok(n_u) => match usize::try_from(self.next() % n_u) { Ok(v) => v, Err(_) => 0 },
+                Err(_) => 0,
+            }
         }
     }
 
@@ -1813,7 +1817,7 @@ mod tests {
         (0..len)
             .map(|_| {
                 if alphabet.is_empty() {
-                    rng.next() as u8
+                    match u8::try_from(rng.next() & 0xFF) { Ok(b) => b, Err(_) => 0 }
                 } else {
                     alphabet[rng.below(alphabet.len())]
                 }
@@ -1824,7 +1828,7 @@ mod tests {
     /// In-plane stamp mint for law sweeps (tests are part of the plane's
     /// minting authority; production stamps come from intern/apply).
     fn stamp(c: usize, epoch: Epoch, arena: ArenaId) -> StampedCode {
-        StampedCode::mint(Code(c as u32), epoch, arena, StampMintAuthority(()))
+        StampedCode::mint(Code(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }), epoch, arena, StampMintAuthority(()))
     }
 
     /// Test-plane intern — capacity/span [`Denial`] is unreachable at
@@ -1862,17 +1866,17 @@ mod tests {
 
         fn intern(&mut self, b: &[u8]) -> u32 {
             if let Ok(i) = self.sealed.binary_search_by(|v| v.as_slice().cmp(b)) {
-                return i as u32;
+                return match u32::try_from(i) { Ok(v) => v, Err(_) => 0 };
             }
             if let Some(i) = self.tail.iter().position(|v| v.as_slice() == b) {
-                return (self.sealed.len() + i) as u32;
+                return match u32::try_from(self.sealed.len() + i) { Ok(v) => v, Err(_) => 0 };
             }
             self.tail.push(b.to_vec());
-            (self.sealed.len() + self.tail.len() - 1) as u32
+            match u32::try_from(self.sealed.len() + self.tail.len() - 1) { Ok(v) => v, Err(_) => 0 }
         }
 
         fn resolve(&self, code: u32) -> &[u8] {
-            let c = code as usize;
+            let c = (match usize::try_from(code) { Ok(n) => n, Err(_) => 0 });
             if c < self.sealed.len() {
                 &self.sealed[c]
             } else {
@@ -1900,9 +1904,10 @@ mod tests {
             let remap: Vec<u32> = old
                 .iter()
                 .map(|v| {
-                    new_sealed
+                    let idx = new_sealed
                         .binary_search_by(|x| x.as_slice().cmp(v))
-                        .expect("survives seal") as u32
+                        .expect("survives seal");
+                    match u32::try_from(idx) { Ok(n) => n, Err(_) => 0 }
                 })
                 .collect();
             self.sealed = new_sealed;
@@ -1930,7 +1935,7 @@ mod tests {
         for c in 0..f.len() {
             assert_eq!(
                 f.resolve(stamp(c, f.epoch(), f.arena)).expect("lawful"),
-                naive.resolve(c as u32),
+                naive.resolve(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }),
                 "code {c} resolves differently"
             );
         }
@@ -1960,7 +1965,7 @@ mod tests {
                 let b = stamp(j, f.epoch(), f.arena);
                 assert_eq!(
                     f.cmp_codes(a, b).expect("lawful"),
-                    naive.resolve(i as u32).cmp(naive.resolve(j as u32)),
+                    naive.resolve(match u32::try_from(i) { Ok(v) => v, Err(_) => 0 }).cmp(naive.resolve(match u32::try_from(j) { Ok(v) => v, Err(_) => 0 })),
                     "cmp_codes({i},{j}) diverged from byte order"
                 );
             }
@@ -1981,7 +1986,7 @@ mod tests {
             assert_eq!(
                 snap.resolve(stamp(c, snap.epoch(), snap.arena))
                     .expect("lawful"),
-                frozen.resolve(c as u32),
+                frozen.resolve(match u32::try_from(c) { Ok(v) => v, Err(_) => 0 }),
                 "snapshot code {c} drifted"
             );
         }
@@ -2003,7 +2008,7 @@ mod tests {
                             stamp(j, snap.epoch(), snap.arena)
                         )
                         .expect("lawful"),
-                        frozen.resolve(i as u32).cmp(frozen.resolve(j as u32)),
+                        frozen.resolve(match u32::try_from(i) { Ok(v) => v, Err(_) => 0 }).cmp(frozen.resolve(match u32::try_from(j) { Ok(v) => v, Err(_) => 0 })),
                         "snapshot cmp drifted"
                     );
                 }
@@ -2295,11 +2300,11 @@ mod tests {
         let auth = BulkSpendAuthority::after_domain_admission();
         let pass = auth.open_pass(&f);
         assert_eq!(
-            pass.resolve(sc.code().raw() as usize).expect("lawful"),
+            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).expect("lawful"),
             b"x"
         );
         assert_eq!(
-            pass.resolve(sc.code().raw() as usize).expect("lawful"),
+            pass.resolve((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 })).expect("lawful"),
             b"x"
         );
         // `auth` was moved into `open_pass` — a second use would be E0382.
@@ -2314,7 +2319,7 @@ mod tests {
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         assert_eq!(
-            f.resolve_raw(sc.code().raw() as usize, auth)
+            f.resolve_raw((match usize::try_from(sc.code().raw()) { Ok(n) => n, Err(_) => 0 }), auth)
                 .expect("lawful"),
             b"y"
         );
@@ -2542,8 +2547,8 @@ mod tests {
         let pairs: Vec<(i64, i64)> = (0..ops)
             .map(|i| {
                 // INVARIANT(test_pair_mix): bench pair ids are modular hashes of the index.
-                let a = ((i as i64).wrapping_mul(2654435761)).rem_euclid(distinct);
-                let b = ((i as i64).wrapping_mul(40503) + 7).rem_euclid(distinct);
+                let a = (match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }.wrapping_mul(2654435761)).rem_euclid(distinct);
+                let b = (match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }.wrapping_mul(40503) + 7).rem_euclid(distinct);
                 (a, b)
             })
             .collect();
@@ -2648,7 +2653,7 @@ mod tests {
         let ranks: Vec<usize> = perm
             .iter()
             .map(|&i| {
-                f.rank(f.resolve(codes[i as usize]).expect("lawful"))
+                f.rank(f.resolve(codes[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })]).expect("lawful"))
                     .expect("interned")
                     .expect("found")
             })
@@ -2856,7 +2861,7 @@ mod tests {
         ];
         let mut held = Vec::new();
         for len in lens {
-            let v: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let v: Vec<u8> = (0..len).map(|i| match u8::try_from(i % 251) { Ok(b) => b, Err(_) => 0 }).collect();
             held.push((must_intern(&mut arena, &v), v));
         }
         // Fill across many shared chunks too.
