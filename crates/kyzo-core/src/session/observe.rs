@@ -325,7 +325,10 @@ impl ObservationBudget {
     }
 
     fn charge(&mut self, units: u64) {
-        self.spent = self.spent.saturating_add(units).min(self.ceiling);
+        self.spent = match self.spent.checked_add(units) {
+            Some(s) => s.min(self.ceiling),
+            None => self.ceiling,
+        };
     }
 }
 
@@ -412,7 +415,10 @@ impl DeepVerifyLastResult {
         Self {
             clean: report.is_clean(),
             indices_checked: report.indices_checked,
-            mismatch_count: report.index_mismatches.len() as u64,
+            mismatch_count: match u64::try_from(report.index_mismatches.len()) {
+                Ok(n) => n,
+                Err(_) => u64::MAX,
+            },
             digest: report.digest(),
             schedule_ordinal,
         }
@@ -466,7 +472,10 @@ impl DeepVerifyOperatorState {
     }
 
     fn schedule(&mut self) -> ScheduleOrdinal {
-        self.next_ordinal = self.next_ordinal.saturating_add(1).max(1);
+        self.next_ordinal = match self.next_ordinal.checked_add(1) {
+            Some(n) => n.max(1),
+            None => u64::MAX,
+        };
         let ord = ScheduleOrdinal::from_raw(self.next_ordinal);
         self.pending = Some(ord);
         ord
@@ -913,7 +922,10 @@ impl<S: Storage> Engine<S> {
             .event_callbacks
             .write()
             .unwrap_or_else(|p| p.into_inner());
-        let in_flight = registry.in_flight_tx.saturating_add(1);
+        let in_flight = match registry.in_flight_tx.checked_add(1) {
+            Some(n) => n,
+            None => u64::MAX,
+        };
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
     }
@@ -924,7 +936,10 @@ impl<S: Storage> Engine<S> {
             .event_callbacks
             .write()
             .unwrap_or_else(|p| p.into_inner());
-        let in_flight = registry.in_flight_tx.saturating_sub(1);
+        let in_flight = match registry.in_flight_tx.checked_sub(1) {
+            Some(n) => n,
+            None => 0,
+        };
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
     }
@@ -1211,7 +1226,9 @@ mod deep_verify_schedule {
             | DeepVerifyStaleness::Fresh { .. }
             | DeepVerifyStaleness::Stale {
                 last_result: None, ..
-            }) => panic!("expected Stale with prior result, got {other:?}"),
+            }) => {
+                return Err(miette!("expected Stale with prior result, got {other:?}"));
+            }
         }
         assert!(db.run_scheduled_deep_verify()?.is_some());
         assert!(db.run_scheduled_deep_verify()?.is_none());
@@ -1321,7 +1338,10 @@ mod one_counter_per_metric {
             debt_exporter.value()
         );
         // A recompute that invents another formula diverges — exporters must not.
-        let forged_recompute = ledger.outstanding().saturating_add(ledger.ceiling());
+        let forged_recompute = match ledger.outstanding().checked_add(ledger.ceiling()) {
+            Some(n) => n,
+            None => u64::MAX,
+        };
         assert_ne!(
             debt_exporter.value(),
             forged_recompute,
@@ -1396,14 +1416,14 @@ mod one_counter_per_metric {
             7
         );
         // Exporter and relation are the same counter — not two sources.
-        assert_eq!(
-            db.index_status_exporter().value(),
-            db.operator_ephemeral_relations()
-                .index_status_relation()?
-                .rows()[0][0]
-                .get_int().ok_or_else(|| miette!("get_int"))?
-                as u64
-        );
+        let status_i = db
+            .operator_ephemeral_relations()
+            .index_status_relation()?
+            .rows()[0][0]
+            .get_int()
+            .ok_or_else(|| miette!("get_int"))?;
+        let status_u = u64::try_from(status_i).map_err(|_| miette!("index status does not fit u64"))?;
+        assert_eq!(db.index_status_exporter().value(), status_u);
         Ok(())
     }
 }

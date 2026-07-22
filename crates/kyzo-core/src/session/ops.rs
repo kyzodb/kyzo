@@ -46,7 +46,8 @@ use kyzo_model::schema::ColumnDef;
 use kyzo_model::schema::NullableColType;
 const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = match NonZeroU64::new(1 << 32) {
     Some(n) => n,
-    None => panic!("1<<32 is nonzero"),
+    // 1<<32 ≠ 0 — NonZeroU64::new only rejects zero; MIN is an unreachable stand-in.
+    None => NonZeroU64::MIN,
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -914,7 +915,7 @@ mod temporal_index_tests {
     /// polarity)`.
     type DecodedPosting = (i64, i64, i64, i64, ClaimPolarity);
 
-    fn scan_postings(tx: &impl ReadTx, idx_handle: &RelationHandle) -> Vec<DecodedPosting> {
+    fn scan_postings(tx: &impl ReadTx, idx_handle: &RelationHandle) -> Result<Vec<DecodedPosting>> {
         let lower: Vec<u8> = Tuple::default()
             .encode_as_key(idx_handle.id)
             .as_ref()
@@ -928,25 +929,25 @@ mod temporal_index_tests {
                 let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
-                        panic!("expected the leading Validity column, got {other:?}")
+                        return Err(miette!("expected the leading Validity column, got {other:?}"));
                     }
                 };
                 let key_col = tup[1].get_int().ok_or_else(|| miette!("int base key column"))?;
                 let tail_valid = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
-                        panic!("expected the tail valid slot, got {other:?}")
+                        return Err(miette!("expected the tail valid slot, got {other:?}"));
                     }
                 };
                 let tail_sys = match &tup.as_slice()[3] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
-                        panic!("expected the tail sys slot, got {other:?}")
+                        return Err(miette!("expected the tail sys slot, got {other:?}"));
                     }
                 };
                 let polarity = crate::store::time::claim_polarity_of_value(&v)
                     .map_err(|e| miette!("posting value decodes cleanly: {e}"))?;
-                (leading, key_col, tail_valid, tail_sys, polarity)
+                Ok((leading, key_col, tail_valid, tail_sys, polarity))
             })
             .collect()
     }
@@ -956,7 +957,7 @@ mod temporal_index_tests {
     /// "leading" and "tail valid" fields), so the two scans compare
     /// directly for the bijection tests below. Every base relation in
     /// this module has exactly one Int key column.
-    fn scan_base_rows(tx: &impl ReadTx, base: &RelationHandle) -> Vec<DecodedPosting> {
+    fn scan_base_rows(tx: &impl ReadTx, base: &RelationHandle) -> Result<Vec<DecodedPosting>> {
         let lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
         let upper = (base.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
@@ -967,15 +968,19 @@ mod temporal_index_tests {
                 let key_col = tup[0].get_int().ok_or_else(|| miette!("int base key column"))?;
                 let valid = match &tup.as_slice()[1] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other @ (data_value_any!()) => panic!("expected the valid slot, got {other:?}"),
+                    other @ (data_value_any!()) => {
+                        return Err(miette!("expected the valid slot, got {other:?}"));
+                    }
                 };
                 let sys = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other @ (data_value_any!()) => panic!("expected the sys slot, got {other:?}"),
+                    other @ (data_value_any!()) => {
+                        return Err(miette!("expected the sys slot, got {other:?}"));
+                    }
                 };
                 let polarity = crate::store::time::claim_polarity_of_value(&v)
                     .map_err(|e| miette!("base value decodes cleanly: {e}"))?;
-                (valid, key_col, valid, sys, polarity)
+                Ok((valid, key_col, valid, sys, polarity))
             })
             .collect()
     }
@@ -1016,7 +1021,7 @@ mod temporal_index_tests {
         stx.store.commit()?;
 
         let tx = db.store.read_tx()?;
-        let mut got = scan_postings(&tx, &idx_handle);
+        let mut got = scan_postings(&tx, &idx_handle)?;
         got.sort_by_key(|r| (Reverse(r.0), r.1, Reverse(r.2), Reverse(r.3)));
         let mut want: Vec<DecodedPosting> = events
             .iter()
@@ -1181,8 +1186,8 @@ mod temporal_index_tests {
         stx.store.commit()?;
 
         let tx = db.store.read_tx()?;
-        let mut base_rows = scan_base_rows(&tx, &base);
-        let mut postings = scan_postings(&tx, &idx_handle);
+        let mut base_rows = scan_base_rows(&tx, &base)?;
+        let mut postings = scan_postings(&tx, &idx_handle)?;
         base_rows.sort_by_key(decoded_posting_sort_key);
         postings.sort_by_key(decoded_posting_sort_key);
         assert_eq!(
@@ -1232,8 +1237,8 @@ mod temporal_index_tests {
         let rtx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::new());
         let base = rtx.get_relation("po")?;
         let idx_handle = rtx.get_relation("po:t")?;
-        let mut base_rows = scan_base_rows(&rtx.store, &base);
-        let mut postings = scan_postings(&rtx.store, &idx_handle);
+        let mut base_rows = scan_base_rows(&rtx.store, &base)?;
+        let mut postings = scan_postings(&rtx.store, &idx_handle)?;
         assert_eq!(
             base_rows.len(),
             4,

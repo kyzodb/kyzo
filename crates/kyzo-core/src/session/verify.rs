@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::num::{NonZeroU32, NonZeroU64};
 
-use miette::{Diagnostic, Result};
+use miette::{Diagnostic, Result, miette};
 use thiserror::Error;
 
 use crate::data::json::NamedRows;
@@ -358,7 +358,10 @@ impl<S: Storage> Engine<S> {
         let budget = build_budget(options, &out_opts, cancel)?;
 
         // Provenance needs every rule store live through the final stratum.
-        let keep_until = eval_prog.strata.len().saturating_sub(1);
+        let keep_until = match eval_prog.strata.len().checked_sub(1) {
+            Some(n) => n,
+            None => 0,
+        };
         for stratum in &eval_prog.strata {
             for name in stratum.defs.keys() {
                 lifetimes.note_use(name.clone(), keep_until);
@@ -553,9 +556,9 @@ mod tests {
                 expected,
                 recomputed,
             } => {
-                panic!(
+                return Err(miette!(
                     "expected Intact, got Tampered {{ expected: {expected:?}, recomputed: {recomputed:?} }}"
-                )
+                ))
             }
         }
         Ok(())
@@ -627,7 +630,7 @@ mod tests {
                 assert!(!roots_equal_at_cut(expected, recomputed));
             }
             RootVerifyOutcome::Intact { root } => {
-                panic!("tampered store must not Intact; got root={root:?}")
+                return Err(miette!("tampered store must not Intact; got root={root:?}"))
             }
         }
         Ok(())
@@ -744,7 +747,7 @@ mod tests {
                 assert!(!roots_equal_at_cut(expected, recomputed));
             }
             RootVerifyOutcome::Intact { .. } => {
-                panic!("valid-but-stale rollback at tip must Tamper")
+                return Err(miette!("valid-but-stale rollback at tip must Tamper"))
             }
         }
 
@@ -754,7 +757,7 @@ mod tests {
                 assert_eq!(root, as_of_root(&chain, o1)?);
             }
             RootVerifyOutcome::Tampered { .. } => {
-                panic!("v1 bytes must Intact against as-of cut o1")
+                return Err(miette!("v1 bytes must Intact against as-of cut o1"))
             }
         }
         Ok(())
@@ -795,7 +798,7 @@ mod tests {
             other @ VerifyOutcome::Mismatch { .. }
             | other @ VerifyOutcome::Unsupported { .. }
             | other @ VerifyOutcome::BudgetRefused { .. } => {
-                panic!("expected Match, got {other:?}")
+                return Err(miette!("expected Match, got {other:?}"))
             }
         }
         Ok(())
@@ -927,7 +930,7 @@ mod tests {
             | VerifyOutcome::Mismatch { .. }
             | VerifyOutcome::BudgetRefused { .. }
             | VerifyOutcome::Unsupported { .. }) => {
-                panic!("expected IntervalDerivation {{ hist }}, got {other:?}")
+                return Err(miette!("expected IntervalDerivation {{ hist }}, got {other:?}"))
             }
         }
         Ok(())

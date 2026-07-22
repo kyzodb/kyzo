@@ -112,27 +112,31 @@ impl OperatorEphemeralRelations {
     /// `in_flight_tx` relation — one row: count from the live registry projection.
     pub fn in_flight_tx_relation(&self) -> Result<NamedRows> {
         let n = self.surface.ephemeral().in_flight_tx();
+        let n_i = i64::try_from(n).map_err(|_| miette!("in_flight_tx does not fit i64"))?;
         Ok(NamedRows::try_new(
             vec!["in_flight_tx".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(n as i64)])],
+            vec![Tuple::from_vec(vec![DataValue::from(n_i)])],
         )?)
     }
 
     /// `compaction_debt` relation — renders the one [`DebtLedger`] (§42/§44).
     pub fn compaction_debt_relation(&self) -> Result<NamedRows> {
         let debt = self.surface.render_debt_outstanding();
+        let debt_i = i64::try_from(debt).map_err(|_| miette!("compaction_debt does not fit i64"))?;
         Ok(NamedRows::try_new(
             vec!["compaction_debt".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(debt as i64)])],
+            vec![Tuple::from_vec(vec![DataValue::from(debt_i)])],
         )?)
     }
 
     /// `index_status` relation — renders [`IndexStatus`] Catalog generation (§20).
     pub fn index_status_relation(&self) -> Result<NamedRows> {
         let index_gen = self.index_status.counter();
+        let index_gen_i =
+            i64::try_from(index_gen).map_err(|_| miette!("index_status generation does not fit i64"))?;
         Ok(NamedRows::try_new(
             vec!["index_status_generation".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(index_gen as i64)])],
+            vec![Tuple::from_vec(vec![DataValue::from(index_gen_i)])],
         )?)
     }
 
@@ -148,11 +152,26 @@ impl OperatorEphemeralRelations {
                 "journal_count".into(),
             ],
             vec![Tuple::from_vec(vec![
-                DataValue::from(s.cache_size_bytes as i64),
-                DataValue::from(s.cache_capacity_bytes as i64),
-                DataValue::from(s.write_buffer_size_bytes as i64),
-                DataValue::from(s.active_compactions as i64),
-                DataValue::from(s.journal_count as i64),
+                DataValue::from(
+                    i64::try_from(s.cache_size_bytes)
+                        .map_err(|_| miette!("cache_size_bytes does not fit i64"))?,
+                ),
+                DataValue::from(
+                    i64::try_from(s.cache_capacity_bytes)
+                        .map_err(|_| miette!("cache_capacity_bytes does not fit i64"))?,
+                ),
+                DataValue::from(
+                    i64::try_from(s.write_buffer_size_bytes)
+                        .map_err(|_| miette!("write_buffer_size_bytes does not fit i64"))?,
+                ),
+                DataValue::from(
+                    i64::try_from(s.active_compactions)
+                        .map_err(|_| miette!("active_compactions does not fit i64"))?,
+                ),
+                DataValue::from(
+                    i64::try_from(s.journal_count)
+                        .map_err(|_| miette!("journal_count does not fit i64"))?,
+                ),
             ])],
         )?)
     }
@@ -168,8 +187,10 @@ impl OperatorEphemeralRelations {
         let ranges = self.surface.quarantine_ranges(cap);
         let mut rows = Vec::with_capacity(ranges.len());
         for range in ranges {
+            let ks = i64::try_from(range.keyspace().get())
+                .map_err(|_| TenantBlindRefuse::QuarantineTopologyForbidden)?;
             rows.push(Tuple::from_vec(vec![
-                DataValue::from(range.keyspace().get() as i64),
+                DataValue::from(ks),
                 DataValue::Bytes(range.start().to_vec()),
                 DataValue::Bytes(range.end().to_vec()),
             ]));
@@ -210,9 +231,10 @@ pub(crate) fn list_running() -> Result<NamedRows> {
 
 /// `::running` from the live in-flight-tx registry count.
 pub(crate) fn list_running_from(in_flight: u64) -> Result<NamedRows> {
+    let n = i64::try_from(in_flight).map_err(|_| miette!("in_flight_tx does not fit i64"))?;
     Ok(NamedRows::try_new(
         vec!["in_flight_tx".into()],
-        vec![Tuple::from_vec(vec![DataValue::from(in_flight as i64)])],
+        vec![Tuple::from_vec(vec![DataValue::from(n)])],
     )?)
 }
 

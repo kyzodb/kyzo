@@ -76,7 +76,7 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedR
     let (graph, honest, answer) = seal_golden_path_certificate()?;
     verify_proof(&honest, &graph).map_err(|e| miette!("sealed golden certificate must verify: {e}"))?;
 
-    let sabotaged = inject_fault(&honest, fault);
+    let sabotaged = inject_fault(&honest, fault)?;
     assert_ne!(
         sabotaged, honest,
         "injector must diverge the sealed golden under {fault:?} — identity \
@@ -85,10 +85,12 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedR
 
     let bad = match verify_proof(&sabotaged, &graph) {
         Err(e) => e,
-        Ok(cost) => panic!(
-            "verify_proof silently accepted a corrupted certificate under \
-             {fault:?} (claimed cost {cost}) — mismatch path never fired"
-        ),
+        Ok(cost) => {
+            return Err(miette!(
+                "verify_proof silently accepted a corrupted certificate under \
+                 {fault:?} (claimed cost {cost}) — mismatch path never fired"
+            ));
+        }
     };
     assert_eq!(
         bad,
@@ -168,7 +170,7 @@ fn seal_golden_path_certificate() -> Result<(
 fn inject_fault(
     proof: &ProofNode<&'static str>,
     fault: CertificateFault,
-) -> ProofNode<&'static str> {
+) -> Result<ProofNode<&'static str>> {
     match (fault, proof.clone()) {
         (
             CertificateFault::CorruptClaimedCost,
@@ -179,13 +181,13 @@ fn inject_fault(
                 premises,
                 ..
             },
-        ) => ProofNode::Step {
+        ) => Ok(ProofNode::Step {
             node,
             derivation,
             label,
             cost: 99,
             premises,
-        },
+        }),
         (
             CertificateFault::OutOfRangeDerivation,
             ProofNode::Step {
@@ -195,13 +197,13 @@ fn inject_fault(
                 premises,
                 ..
             },
-        ) => ProofNode::Step {
+        ) => Ok(ProofNode::Step {
             node,
             derivation: DerivationId::unchecked(usize::MAX),
             label,
             cost,
             premises,
-        },
+        }),
         (
             CertificateFault::CorruptPremiseNode,
             ProofNode::Step {
@@ -213,20 +215,20 @@ fn inject_fault(
             },
         ) => {
             let Some(child) = premises.last_mut() else {
-                panic!("golden recursive step must carry premises to corrupt");
+                return Err(miette!("golden recursive step must carry premises to corrupt"));
             };
             *child = ProofNode::Fact { node: "edge:9-9" };
-            ProofNode::Step {
+            Ok(ProofNode::Step {
                 node,
                 derivation,
                 label,
                 cost,
                 premises,
-            }
+            })
         }
-        (_, ProofNode::Fact { .. }) => {
-            panic!("golden certificate root must be a Step, not a Fact")
-        }
+        (_, ProofNode::Fact { .. }) => Err(miette!(
+            "golden certificate root must be a Step, not a Fact"
+        )),
     }
 }
 
@@ -240,7 +242,7 @@ fn fixture_mismatch_program() -> Result<MismatchProgram> {
     Ok(match script {
         Script::Query(prog) => MismatchProgram(prog),
         Script::Sys(_) | Script::Imperative(_) => {
-            panic!("fixture must be a query script")
+            return Err(miette!("fixture must be a query script"))
         }
     })
 }
@@ -280,7 +282,7 @@ mod tests {
                 | other @ DataValue::Set(_)
                 | other @ DataValue::Validity(_)
                 | other @ DataValue::Interval(_)
-                | other @ DataValue::Geometry(_) => panic!("detail must be Str, got {other:?}"),
+                | other @ DataValue::Geometry(_) => return Err(miette!("detail must be Str, got {other:?}")),
             };
             assert!(
                 detail.contains("verify_proof")
@@ -304,7 +306,7 @@ mod tests {
                 | other @ DataValue::Set(_)
                 | other @ DataValue::Validity(_)
                 | other @ DataValue::Interval(_)
-                | other @ DataValue::Geometry(_) => panic!("summary must be Str, got {other:?}"),
+                | other @ DataValue::Geometry(_) => return Err(miette!("summary must be Str, got {other:?}")),
             };
             assert!(
                 summary.contains("evaluated") && summary.contains("provenance"),
