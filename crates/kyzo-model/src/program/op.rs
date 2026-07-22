@@ -759,10 +759,12 @@ pub const ALL_OPS: &[OpDecl] = &[
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result};
+
     use super::*;
 
     #[test]
-    fn opcode_table_round_trips_display_name_and_serde() {
+    fn opcode_table_round_trips_display_name_and_serde() -> Result<()> {
         assert_eq!(ALL_OPS.len(), 149, "update ALL_OPS when OP_* consts change");
         for &op in ALL_OPS {
             assert_eq!(
@@ -777,11 +779,12 @@ mod tests {
                 "OP_ name resolve missed {}",
                 op.name
             );
-            let wire = serde_json::to_string(&op).expect("serialize");
-            let back: OpDecl = serde_json::from_str(&wire).expect("deserialize");
+            let wire = serde_json::to_string(&op).into_diagnostic()?;
+            let back: OpDecl = serde_json::from_str(&wire).into_diagnostic()?;
             assert_eq!(back, op, "serde round-trip drifted for {}", op.name);
         }
         assert!(resolve_decl("not_an_op").is_none());
         assert!(serde_json::from_str::<OpDecl>(r#""not_an_op""#).is_err());
+        Ok(())
     }
 }
