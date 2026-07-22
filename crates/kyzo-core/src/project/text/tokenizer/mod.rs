@@ -206,17 +206,18 @@ pub(crate) mod tests {
     mod hostile_input {
         use crate::DataValue;
         use crate::project::text::TokenizerConfig;
+        use miette::{Result, miette};
 
-        fn cfg(name: &str, args: Vec<DataValue>) -> TokenizerConfig {
-            TokenizerConfig::admit(name, args).expect("test stage name")
+        fn cfg(name: &str, args: Vec<DataValue>) -> Result<TokenizerConfig> {
+            TokenizerConfig::admit(name, args).map_err(|e| miette!("{e}"))
         }
 
-        fn tokenizer_configs() -> Vec<TokenizerConfig> {
-            vec![
-                cfg("Raw", vec![]),
-                cfg("Simple", vec![]),
-                cfg("Whitespace", vec![]),
-                cfg("NGram", vec![DataValue::from(1)]),
+        fn tokenizer_configs() -> Result<Vec<TokenizerConfig>> {
+            Ok(vec![
+                cfg("Raw", vec![])?,
+                cfg("Simple", vec![])?,
+                cfg("Whitespace", vec![])?,
+                cfg("NGram", vec![DataValue::from(1)])?,
                 cfg(
                     "NGram",
                     vec![
@@ -224,33 +225,33 @@ pub(crate) mod tests {
                         DataValue::from(4),
                         DataValue::Bool(true),
                     ],
-                ),
-                cfg("Cangjie", vec![]),
-                cfg("Cangjie", vec![DataValue::from("all")]),
+                )?,
+                cfg("Cangjie", vec![])?,
+                cfg("Cangjie", vec![DataValue::from("all")])?,
                 cfg(
                     "Cangjie",
                     vec![DataValue::from("search"), DataValue::Bool(true)],
-                ),
-                cfg("Cangjie", vec![DataValue::from("unicode")]),
-            ]
+                )?,
+                cfg("Cangjie", vec![DataValue::from("unicode")])?,
+            ])
         }
 
-        fn full_filter_stack() -> Vec<TokenizerConfig> {
-            vec![
-                cfg("RemoveLong", vec![DataValue::from(64)]),
-                cfg("AsciiFolding", vec![]),
-                cfg("Lowercase", vec![]),
+        fn full_filter_stack() -> Result<Vec<TokenizerConfig>> {
+            Ok(vec![
+                cfg("RemoveLong", vec![DataValue::from(64)])?,
+                cfg("AsciiFolding", vec![])?,
+                cfg("Lowercase", vec![])?,
                 cfg(
                     "SplitCompoundWords",
                     vec![DataValue::List(vec![
                         DataValue::from("foo"),
                         DataValue::from("bar"),
                     ])],
-                ),
-                cfg("Stemmer", vec![DataValue::from("english")]),
-                cfg("Stopwords", vec![DataValue::from("en")]),
-                cfg("AlphaNumOnly", vec![]),
-            ]
+                )?,
+                cfg("Stemmer", vec![DataValue::from("english")])?,
+                cfg("Stopwords", vec![DataValue::from("en")])?,
+                cfg("AlphaNumOnly", vec![])?,
+            ])
         }
 
         fn hostile_inputs() -> Vec<(&'static str, String)> {
@@ -317,11 +318,11 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn no_pipeline_panics_on_hostile_text() {
+        fn no_pipeline_panics_on_hostile_text() -> Result<()> {
             let inputs = hostile_inputs();
-            for tk in tokenizer_configs() {
-                let bare = tk.build(&[]).unwrap();
-                let stacked = tk.build(&full_filter_stack()).unwrap();
+            for tk in tokenizer_configs()? {
+                let bare = tk.build(&[])?;
+                let stacked = tk.build(&full_filter_stack()?)?;
                 for (name, text) in &inputs {
                     exhaust(&bare, text);
                     exhaust(&stacked, text);
@@ -331,21 +332,21 @@ pub(crate) mod tests {
                     assert!(!label.is_empty());
                 }
             }
+            Ok(())
         }
 
         /// The stemmer must also survive hostile text *unfiltered* (no
         /// RemoveLong ahead of it), including the megabyte token.
         #[test]
-        fn bare_stemmer_survives_hostile_text() {
-            let an = cfg("Simple", vec![])
-                .build(&[
-                    cfg("Lowercase", vec![]),
-                    cfg("Stemmer", vec![DataValue::from("english")]),
-                ])
-                .unwrap();
+        fn bare_stemmer_survives_hostile_text() -> Result<()> {
+            let an = cfg("Simple", vec![])?.build(&[
+                cfg("Lowercase", vec![])?,
+                cfg("Stemmer", vec![DataValue::from("english")])?,
+            ])?;
             for (_, text) in hostile_inputs() {
                 exhaust(&an, &text);
             }
+            Ok(())
         }
     }
 }
