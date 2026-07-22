@@ -61,7 +61,7 @@ pub enum PrefixCmp {
 pub fn cmp_prefixed(pa: [u8; 4], la: u32, pb: [u8; 4], lb: u32) -> PrefixCmp {
     match pa.cmp(&pb) {
         Ordering::Equal => {
-            if la as usize <= PREFIX_LEN || lb as usize <= PREFIX_LEN {
+            if (match usize::try_from(la) { Ok(n) => n, Err(_overflow) => usize::MAX }) <= PREFIX_LEN || (match usize::try_from(lb) { Ok(n) => n, Err(_overflow) => usize::MAX }) <= PREFIX_LEN {
                 PrefixCmp::Decided(la.cmp(&lb))
             } else {
                 PrefixCmp::NeedPayload
@@ -79,7 +79,18 @@ mod tests {
     /// bytewise comparison, and NeedPayload may occur only on equal
     /// prefixes with both payloads longer than the prefix.
     fn assert_sound(a: &[u8], b: &[u8]) {
-        match cmp_prefixed(prefix4(a), a.len() as u32, prefix4(b), b.len() as u32) {
+        match cmp_prefixed(
+            prefix4(a),
+            match u32::try_from(a.len()) {
+                Ok(n) => n,
+                Err(_) => u32::MAX,
+            },
+            prefix4(b),
+            match u32::try_from(b.len()) {
+                Ok(n) => n,
+                Err(_) => u32::MAX,
+            },
+        ) {
             PrefixCmp::Decided(o) => {
                 assert_eq!(
                     o,
@@ -132,11 +143,27 @@ mod tests {
             s.wrapping_mul(0x2545_F491_4F6C_DD1D)
         };
         for _ in 0..20_000 {
-            let la = (next() % 12) as usize;
-            let lb = (next() % 12) as usize;
+            let la = match usize::try_from(next() % 12) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
+            let lb = match usize::try_from(next() % 12) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
             // Tiny alphabet forces prefix collisions constantly.
-            let a: Vec<u8> = (0..la).map(|_| (next() % 2) as u8).collect();
-            let b: Vec<u8> = (0..lb).map(|_| (next() % 2) as u8).collect();
+            let a: Vec<u8> = (0..la)
+                .map(|_| match u8::try_from(next() % 2) {
+                    Ok(b) => b,
+                    Err(_) => 0,
+                })
+                .collect();
+            let b: Vec<u8> = (0..lb)
+                .map(|_| match u8::try_from(next() % 2) {
+                    Ok(b) => b,
+                    Err(_) => 0,
+                })
+                .collect();
             assert_sound(&a, &b);
         }
     }
