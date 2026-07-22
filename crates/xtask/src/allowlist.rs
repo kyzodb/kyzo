@@ -94,6 +94,24 @@ fn is_cited(s: &str) -> bool {
     s.trim().len() >= 8
 }
 
+/// Deferral / scope-park prose is Spec theater: it names a second HOW
+/// ("consolidate later") while the gate stays green. Banned in citations.
+fn is_deferral_theater(s: &str) -> bool {
+    let t = s.to_ascii_lowercase();
+    const BANNED: &[&str] = &[
+        "outside this task",
+        "outside this story",
+        "outside this task's scope",
+        "outside this story's file scope",
+        "future story",
+        "deferred only with a story",
+        "design choice outside",
+        "a design choice for a future",
+        "not this story's file scope",
+    ];
+    BANNED.iter().any(|p| t.contains(p))
+}
+
 pub fn load(root: &Path) -> Result<Allowlist> {
     let path = root.join("resonance-allow.toml");
     let text =
@@ -125,6 +143,14 @@ pub fn load(root: &Path) -> Result<Allowlist> {
                 e.members
             );
         }
+        if is_deferral_theater(&e.citation) {
+            bail!(
+                "resonance-allow.toml: copy_detector entry {:?} citation is deferral theater \
+                 (outside-task / future-story / deferred-consolidate) — consolidate the twin \
+                 or cite a sealed independence law, never park the HOW",
+                e.members
+            );
+        }
     }
     for e in &list.dead_code_ratchet {
         if !is_cited(&e.citation) {
@@ -148,4 +174,58 @@ pub fn load(root: &Path) -> Result<Allowlist> {
         }
     }
     Ok(list)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact deferral-theater prose caught live in this tree's
+    /// copy_detector allowlist (sparse put/del, neg.rs closures) — citations
+    /// that park the HOW instead of doing it or naming a sealed law. Every
+    /// one of these must be rejected, not just theoretical phrasing.
+    #[test]
+    fn deferral_theater_citations_are_rejected() {
+        let live_examples = [
+            "Consolidating would need a per-operation callback, a design choice outside this task's scope.",
+            "a visitor trait — deferred to a future story",
+            "not this story's file scope to refactor",
+        ];
+        for c in live_examples {
+            assert!(
+                is_deferral_theater(c),
+                "must reject deferral theater: {c:?}"
+            );
+        }
+    }
+
+    /// A genuine sealed-law independence citation — the honest alternative
+    /// to deferral theater — must not be rejected merely for citing scope or
+    /// architecture; only the specific park-the-HOW phrasings are banned.
+    #[test]
+    fn honest_independence_citations_pass() {
+        let honest = [
+            "Per-engine index metadata twins (LSH vs sparse): each index owns its \
+             StoredRelationMetadata shape under the shared projection architecture \
+             (.claude/rules/engines.md). Collapsing would erase per-engine schema seats.",
+            "SEAT-59: closed discriminant tables for CrossingKind, SealedArtifactKind, \
+             and Tag. Each enum owns its wire tags; independence is the per-enum tag set.",
+        ];
+        for c in honest {
+            assert!(
+                !is_deferral_theater(c),
+                "honest independence citation wrongly flagged as theater: {c:?}"
+            );
+        }
+    }
+
+    /// `is_cited` rejects empty, whitespace-only, and too-short placeholder
+    /// text — the citation-exists check that theater-rejection layers on.
+    #[test]
+    fn uncited_placeholders_are_rejected() {
+        assert!(!is_cited(""));
+        assert!(!is_cited("   "));
+        assert!(!is_cited("n/a"));
+        assert!(is_cited("SEAT-59: closed discriminant tables."));
+    }
 }

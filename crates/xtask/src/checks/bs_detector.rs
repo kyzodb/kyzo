@@ -128,10 +128,61 @@ fn m_debug_assert(l: &str) -> bool {
 }
 fn m_as_cast(l: &str) -> bool {
     let c = code_only(l);
-    [" as u8", " as u16", " as u32", " as u64", " as usize", " as i8", " as i16",
-     " as i32", " as i64", " as isize", " as f32", " as f64"]
-        .iter()
-        .any(|p| c.contains(p))
+    // Bare ` as uN` and path-qualified dodges (`as ::core::primitive::u8`).
+    const WIDTHS: &[&str] = &[
+        "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64",
+    ];
+    for w in WIDTHS {
+        if c.contains(&format!(" as {w}")) {
+            return true;
+        }
+        if c.contains(&format!("as ::core::primitive::{w}"))
+            || c.contains(&format!("as ::std::primitive::{w}"))
+            || c.contains(&format!("as core::primitive::{w}"))
+            || c.contains(&format!("as std::primitive::{w}"))
+        {
+            return true;
+        }
+    }
+    false
+}
+fn m_poison_into_inner(l: &str) -> bool {
+    let c = code_only(l);
+    c.contains(".into_inner()")
+        && (c.contains("poison")
+            || c.contains("PoisonError")
+            || c.contains("|p|")
+            || c.contains("|poisoned|")
+            || c.contains("unwrap_or_else"))
+}
+fn m_err_to_max(l: &str) -> bool {
+    let c = code_only(l);
+    let arm = c.contains("Err(") && c.contains("=>");
+    arm && (c.contains("u8::MAX")
+        || c.contains("u16::MAX")
+        || c.contains("u32::MAX")
+        || c.contains("u64::MAX")
+        || c.contains("usize::MAX")
+        || c.contains("i8::MAX")
+        || c.contains("i16::MAX")
+        || c.contains("i32::MAX")
+        || c.contains("i64::MAX")
+        || c.contains("isize::MAX"))
+}
+fn m_err_to_null_costume(l: &str) -> bool {
+    let c = code_only(l);
+    c.contains("Err(") && c.contains("=>") && c.contains("Json::Null")
+}
+fn m_err_to_zero_costume(l: &str) -> bool {
+    let c = code_only(l);
+    // The json_from_serde costume: missing float → invent 0.0.
+    // Narrow on purpose — bare `None => 0` / sketch defaults are out of scope.
+    c.contains("None =>") && c.contains("0.0")
+}
+fn m_test_err_early_return(l: &str) -> bool {
+    let c = code_only(l);
+    (c.contains("Err(_") || c.contains("Err(e)") || c.contains("Err(_e)"))
+        && c.contains("=> return")
 }
 fn m_todo(l: &str) -> bool {
     let c = code_only(l);
@@ -146,6 +197,14 @@ fn m_should_panic(l: &str) -> bool {
 fn m_process_exit(l: &str) -> bool {
     let c = code_only(l);
     c.contains("process::exit(") || c.contains("process::abort(")
+}
+fn m_empty_slice_success(l: &str) -> bool {
+    // A bare `&[]` as the sole content of a line: an invariant-miss branch
+    // (corrupt span, chunk that never existed, out-of-range index) returning
+    // empty as if it were a legitimate zero-length value. Deliberately
+    // narrow — a `&[]` at end-of-line trailing other code is a normal
+    // literal, not this costume; only the isolated-line shape is banned.
+    code_only(l).trim() == "&[]"
 }
 
 /// The BS table. Every entry is illegal on sight — legality comes only from the
@@ -172,11 +231,17 @@ pub const BANNED: &[BsPattern] = &[
     BsPattern { name: "panic_bang", why: "explicit panic", matches: m_panic },
     BsPattern { name: "unreachable_bang", why: "`unreachable!()` — a can't-happen that can", matches: m_unreachable },
     BsPattern { name: "debug_assert", why: "compiled out in release — absent in prod", matches: m_debug_assert },
-    BsPattern { name: "as_cast", why: "lossy/truncating numeric cast (use TryFrom)", matches: m_as_cast },
+    BsPattern { name: "as_cast", why: "lossy/truncating numeric cast (use TryFrom) — includes path-qualified dodges", matches: m_as_cast },
+    BsPattern { name: "poison_into_inner", why: "mutex poison → into_inner continue — silent accountability costume", matches: m_poison_into_inner },
+    BsPattern { name: "err_to_max", why: "Err → MAX clamp — saturating costume after TryFrom/checked", matches: m_err_to_max },
+    BsPattern { name: "err_to_null_costume", why: "Err → Json::Null — invents meaning instead of typed refuse", matches: m_err_to_null_costume },
+    BsPattern { name: "err_to_zero_costume", why: "None/Err → 0/0.0 — invents a zero instead of typed refuse", matches: m_err_to_zero_costume },
+    BsPattern { name: "test_err_early_return", why: "Err(_) => return in tests — tautology green without asserting refuse", matches: m_test_err_early_return },
     BsPattern { name: "todo_bang", why: "todo!()/unimplemented!() — a hole", matches: m_todo },
     BsPattern { name: "ignore_test", why: "#[ignore] — a silently skipped test", matches: m_ignore },
     BsPattern { name: "should_panic", why: "#[should_panic] — asserts a panic, not a typed refusal", matches: m_should_panic },
     BsPattern { name: "process_exit", why: "process::exit/abort — a hard exit", matches: m_process_exit },
+    BsPattern { name: "empty_slice_success", why: "invariant-miss branch returns &[] as payload success instead of a typed refuse", matches: m_empty_slice_success },
 ];
 
 /// True if `(pattern, file, line)` is confessed in the register.
@@ -262,10 +327,16 @@ mod tests {
         ("unreachable_bang", "unreachable!(),"),
         ("debug_assert", "debug_assert!(idx < len);"),
         ("as_cast", "let short = long as u32;"),
+        ("poison_into_inner", "Err(poisoned) => poisoned.into_inner(),"),
+        ("err_to_max", "Err(_gt_u8) => u8::MAX,"),
+        ("err_to_null_costume", "Err(_non_finite) => Json::Null,"),
+        ("err_to_zero_costume", "None => 0.0,"),
+        ("test_err_early_return", "Err(_e) => return,"),
         ("todo_bang", "todo!()"),
         ("ignore_test", "#[ignore]"),
         ("should_panic", "#[should_panic]"),
         ("process_exit", "std::process::exit(2);"),
+        ("empty_slice_success", "            &[]"),
     ];
 
     fn sf(rel: &str, lines: &[&str]) -> SourceFile {
@@ -380,5 +451,73 @@ mod tests {
             "stale report names the entry: {}",
             stale[0]
         );
+    }
+
+    /// Path-qualified `as ::core::primitive::uN` is the as_cast dodge used to
+    /// launder seat-59 wire extracts past the old bare-` as uN` matcher.
+    #[test]
+    fn as_cast_bites_path_qualified_primitive_dodge() {
+        let dodges = [
+            "kind as ::core::primitive::u8",
+            "kind as ::core::primitive::u64",
+            "x as core::primitive::u32",
+            "y as ::std::primitive::i64",
+        ];
+        for line in dodges {
+            assert!(
+                m_as_cast(line),
+                "as_cast must bite path-qualified dodge {line:?}"
+            );
+        }
+    }
+
+    /// Poison recovery continue — the accountability costume ruled out on
+    /// the admission chain — must detonate even when the binding is named
+    /// `poisoned` rather than calling `.unwrap_or_else`.
+    #[test]
+    fn poison_into_inner_bites_match_err_arm() {
+        assert!(m_poison_into_inner(
+            "Err(poisoned) => poisoned.into_inner(),"
+        ));
+        assert!(m_poison_into_inner(
+            ".unwrap_or_else(|p| p.into_inner())"
+        ));
+        // Pest/parser `into_inner` on a non-poison path must not false-positive
+        // without a poison signal on the line.
+        assert!(!m_poison_into_inner("for p in pair.into_inner() {"));
+    }
+
+    /// Err→MAX / Err→Null / None→0.0 / test early-return — the four refuse
+    /// costumes that turned process_exit and ok_drop removals into Spec fraud.
+    #[test]
+    fn refuse_costumes_detonate() {
+        assert!(m_err_to_max("Err(_gt_u8) => u8::MAX,"));
+        assert!(m_err_to_null_costume("Err(_non_finite) => Json::Null,"));
+        assert!(m_err_to_zero_costume("None => 0.0,"));
+        assert!(!m_err_to_zero_costume("Err(_e) => 0,")); // integer Err→0 is err_to_max's cousin; not this pattern
+        assert!(!m_err_to_zero_costume("None => 0,"));
+        assert!(m_test_err_early_return("Err(_e) => return,"));
+        assert!(m_test_err_early_return("            Err(_e) => return,"));
+        // Lawful typed refuse arms must not trip the costumes.
+        assert!(!m_err_to_null_costume(
+            "Err(e) => return Err(JsonFromSerdeRefuse::NonFinite(e)),"
+        ));
+        assert!(!m_err_to_max("Err(e) => return Err(e),"));
+    }
+
+    /// Heap::payload's out-of-range-chunk costume: `&[]` alone on its own
+    /// line, standing in for a typed refuse on a span that names a chunk
+    /// that never existed. Must not fire on ordinary trailing `&[]` uses
+    /// that are not this shape.
+    #[test]
+    fn empty_slice_success_bites_isolated_line_only() {
+        assert!(m_empty_slice_success("            &[]"));
+        assert!(m_empty_slice_success("&[]"));
+        // A `&[]` that is part of a larger expression on its line is an
+        // ordinary literal (e.g. a legitimate empty-by-construction return
+        // or argument), not the invariant-miss costume this pattern names.
+        assert!(!m_empty_slice_success("fn empty() -> &'static [u8] { &[] }"));
+        assert!(!m_empty_slice_success("let v: &[u8] = &[];"));
+        assert!(!m_empty_slice_success("None => &[],"));
     }
 }
