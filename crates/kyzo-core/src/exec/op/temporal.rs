@@ -240,10 +240,9 @@ pub struct SpansRA {
 /// How [`DeltaRA`] computes its signed patch — naive dual snapshot, or
 /// posting-index acceleration when compile resolved a temporal index.
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub(crate) enum DeltaScan {
     Naive,
-    Accelerated { posting: RelationHandle },
+    Accelerated { posting: Box<RelationHandle> },
 }
 
 /// Axis-parameterized net diff: `*rel{k} @delta(a, b) sgn` (valid axis,
@@ -623,7 +622,7 @@ impl DeltaRA {
     /// see [`Self::patch_naive`]/[`Self::patch_via_posting`].
     pub(crate) fn iter_batched<'a>(&'a self, tx: &'a impl ReadTx) -> Result<BatchIter<'a>> {
         let patch = match &self.scan {
-            DeltaScan::Accelerated { posting } => self.patch_via_posting(tx, posting)?,
+            DeltaScan::Accelerated { posting } => self.patch_via_posting(tx, posting.as_ref())?,
             DeltaScan::Naive => self.patch_naive(tx)?,
         };
         let mut rows: Vec<Tuple> = patch
@@ -1314,9 +1313,7 @@ mod tests {
             base,
             from,
             to,
-            DeltaScan::Accelerated {
-                posting: idx.clone(),
-            },
+            DeltaScan::Accelerated { posting: Box::new(idx.clone(),) },
         )?;
         assert_eq!(
             naive, fast,

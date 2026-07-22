@@ -59,9 +59,16 @@ const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = match NonZeroU64::new(1 << 32) {
 /// once per session per index (cached by index relation name) — a manifest
 /// that no longer parses, builds, or decodes is a typed refusal at first
 /// touch, never mid-scan corruption.
-// Variant sizes differ by design (LSH carries perms + two handles); a
-// session holds a handful of these in a cache, never hot collections.
-#[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
+pub(crate) struct LshIndexCtx {
+    pub(crate) idx: RelationHandle,
+    pub(crate) inv: RelationHandle,
+    pub(crate) manifest: crate::project::dedup::lsh::MinHashLshIndexManifest,
+    pub(crate) extractor: Expr,
+    pub(crate) analyzer: Arc<crate::project::text::tokenizer::TextAnalyzer>,
+    pub(crate) perms: Arc<crate::project::dedup::lsh::HashPermutations>,
+}
+
 #[derive(Clone)]
 pub(crate) enum IndexCtx {
     Hnsw {
@@ -74,14 +81,7 @@ pub(crate) enum IndexCtx {
         extractor: Expr,
         analyzer: Arc<crate::project::text::tokenizer::TextAnalyzer>,
     },
-    Lsh {
-        idx: RelationHandle,
-        inv: RelationHandle,
-        manifest: crate::project::dedup::lsh::MinHashLshIndexManifest,
-        extractor: Expr,
-        analyzer: Arc<crate::project::text::tokenizer::TextAnalyzer>,
-        perms: Arc<crate::project::dedup::lsh::HashPermutations>,
-    },
+    Lsh(Box<LshIndexCtx>),
 }
 
 /// `::lsh/fts/hnsw create` on a temp base, or an index name that already
@@ -152,14 +152,14 @@ impl<T: WriteTx> SessionTx<T> {
                 extractor: Self::compile_row_extractor(base, &manifest.extractor)?,
                 analyzer: Arc::new(manifest.tokenizer.build(&manifest.filters)?),
             },
-            IndexKind::Lsh { manifest, inverse } => IndexCtx::Lsh {
+            IndexKind::Lsh { manifest, inverse } => IndexCtx::Lsh(Box::new(LshIndexCtx {
                 idx,
                 inv: self.get_relation(&format!("{}:{}", base.name, inverse))?,
                 extractor: Self::compile_row_extractor(base, &manifest.extractor)?,
                 analyzer: Arc::new(manifest.tokenizer.build(&manifest.filters)?),
                 perms: Arc::new(manifest.get_hash_perms()?),
                 manifest: manifest.clone(),
-            },
+            })),
         };
         self.index_ctxs.insert(idx_name.into(), ctx.clone());
         Ok(ctx)
@@ -220,14 +220,15 @@ impl<T: WriteTx> SessionTx<T> {
                     )?;
                 }
             }
-            IndexCtx::Lsh {
-                idx,
-                inv,
-                manifest,
-                extractor,
-                analyzer,
-                perms,
-            } => {
+            IndexCtx::Lsh(lsh) => {
+                let LshIndexCtx {
+                    idx,
+                    inv,
+                    manifest,
+                    extractor,
+                    analyzer,
+                    perms,
+                } = lsh.as_ref();
                 if let Some(old) = old_kv {
                     crate::project::dedup::lsh::lsh_del(&mut self.store, old, None, idx, inv)?;
                 }

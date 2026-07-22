@@ -646,7 +646,6 @@ impl NamespacedRecordIdentity {
 /// chain anchors origin coordinates. Never-anchored is reclaimable under
 /// operator pressure — never exposed as queryable.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub enum ReplicaCustody {
     /// Anchored and part of the queryable semantic view.
     Queryable {
@@ -662,7 +661,7 @@ pub enum ReplicaCustody {
         /// Convergent custody key (same as Queryable once anchored).
         key: ReplicaKey,
         /// Sealed certificate retained opaque until anchored.
-        certificate: AdmissionCertificate,
+        certificate: Box<AdmissionCertificate>,
     },
 }
 
@@ -1055,7 +1054,7 @@ pub fn verify_replica(
             certificate,
             ReplicaCustody::PendingAnchor {
                 key,
-                certificate: certificate.clone(),
+                certificate: Box::new(certificate.clone()),
             },
         )),
     }

@@ -671,9 +671,7 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
-                                posting: idx_store,
-                            };
+                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated { posting: Box::new(idx_store,) };
                         }
                         ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                         ret = ret.join_capturing_premise(
@@ -917,9 +915,7 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
-                                posting: idx_store,
-                            };
+                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated { posting: Box::new(idx_store,) };
                         }
                         ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                         ret =

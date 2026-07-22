@@ -141,8 +141,16 @@ pub(crate) fn verify(
 /// Outcome of one provenance-backed `::verify` run. Never a bare bool: a
 /// MATCH, a budgeted refusal, a reproducible MISMATCH bundle, or a named
 /// unsupported construct.
+/// Payload for [`VerifyOutcome::Mismatch`] — boxed so the outcome enum stays small.
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
+pub struct VerifyMismatch {
+    pub program: MismatchProgram,
+    pub evaluated: BTreeSet<Tuple>,
+    pub provenance: BTreeSet<Tuple>,
+    pub certificate: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub enum VerifyOutcome {
     /// Evaluated entry answers equal provenance support; every answer has
     /// a structurally verified min-cost certificate.
@@ -150,12 +158,7 @@ pub enum VerifyOutcome {
     /// Evaluated answers disagree with provenance support, or a certificate
     /// fails `verify_proof`. Carries both sets plus the typed program for
     /// reproduction.
-    Mismatch {
-        program: MismatchProgram,
-        evaluated: BTreeSet<Tuple>,
-        provenance: BTreeSet<Tuple>,
-        certificate: Option<String>,
-    },
+    Mismatch(Box<VerifyMismatch>),
     /// A construct this door refuses rather than silently mistranslating.
     Unsupported { reason: VerifyUnsupported },
     /// A provenance enumeration or solver ceiling was crossed.
@@ -216,16 +219,12 @@ impl VerifyOutcome {
             VerifyOutcome::Match { row_count } => {
                 ("match", format!("{row_count} row(s) agree"), String::new())
             }
-            VerifyOutcome::Mismatch {
-                program,
-                evaluated,
-                provenance,
-                certificate,
-            } => {
+            VerifyOutcome::Mismatch(m) => {
                 let mut detail = format!(
-                    "program:\n{program}\nevaluated: {evaluated:?}\nprovenance: {provenance:?}"
+                    "program:\n{}\nevaluated: {:?}\nprovenance: {:?}",
+                    m.program, m.evaluated, m.provenance
                 );
-                if let Some(cert) = certificate {
+                if let Some(cert) = &m.certificate {
                     match write!(detail, "\ncertificate: {cert}") {
                         Ok(()) => {}
                         Err(_fmt) => {}
@@ -235,8 +234,8 @@ impl VerifyOutcome {
                     "mismatch",
                     format!(
                         "evaluated {} row(s) vs provenance {} row(s)",
-                        evaluated.len(),
-                        provenance.len()
+                        m.evaluated.len(),
+                        m.provenance.len()
                     ),
                     detail,
                 )
@@ -450,12 +449,12 @@ impl<S: Storage> Engine<S> {
             .collect();
 
         if provenance != evaluated {
-            return Ok(VerifyOutcome::Mismatch {
+            return Ok(VerifyOutcome::Mismatch(Box::new(VerifyMismatch {
                 program: mismatch_program,
                 evaluated,
                 provenance,
                 certificate: None,
-            });
+            })));
         }
 
         for tup in &evaluated {
@@ -464,22 +463,22 @@ impl<S: Storage> Engine<S> {
                 Ok(p) => p,
                 Err(e) => {
                     let cert = format!("extract failed for {tup:?}: {e}");
-                    return Ok(VerifyOutcome::Mismatch {
+                    return Ok(VerifyOutcome::Mismatch(Box::new(VerifyMismatch {
                         program: mismatch_program,
                         evaluated,
                         provenance,
                         certificate: Some(cert),
-                    });
+                    })));
                 }
             };
             if let Err(bad) = verify_proof(&proof, &graph) {
                 let cert = format!("verify_proof rejected {tup:?}: {bad}");
-                return Ok(VerifyOutcome::Mismatch {
+                return Ok(VerifyOutcome::Mismatch(Box::new(VerifyMismatch {
                     program: mismatch_program,
                     evaluated,
                     provenance,
                     certificate: Some(cert),
-                });
+                })));
             }
         }
 
@@ -795,7 +794,7 @@ mod tests {
             .map_err(|e| miette!("verify_script runs: {e}"))?;
         match outcome {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
-            other @ VerifyOutcome::Mismatch { .. }
+            other @ VerifyOutcome::Mismatch(_)
             | other @ VerifyOutcome::Unsupported { .. }
             | other @ VerifyOutcome::BudgetRefused { .. } => {
                 return Err(miette!("expected Match, got {other:?}"))
@@ -927,7 +926,7 @@ mod tests {
                 reason: VerifyUnsupported::IntervalDerivation { name },
             } => assert_eq!(name, "hist"),
             other @ (VerifyOutcome::Match { .. }
-            | VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Mismatch(_)
             | VerifyOutcome::BudgetRefused { .. }
             | VerifyOutcome::Unsupported { .. }) => {
                 return Err(miette!("expected IntervalDerivation {{ hist }}, got {other:?}"))

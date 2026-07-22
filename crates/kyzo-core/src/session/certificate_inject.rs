@@ -101,14 +101,14 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedR
 
     let program = fixture_mismatch_program()?;
     let rows: BTreeSet<Tuple> = BTreeSet::from([answer]);
-    Ok(VerifyOutcome::Mismatch {
+    Ok(VerifyOutcome::Mismatch(Box::new(crate::session::verify::VerifyMismatch {
         program,
         evaluated: rows.clone(),
         provenance: rows,
         certificate: Some(format!(
             "verify_proof rejected injected certificate ({fault:?}): {bad}"
         )),
-    }
+    }))
     .into_named_rows())
 }
 

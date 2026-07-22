@@ -44,13 +44,12 @@ use std::fmt::Debug;
 /// proof that nothing outside the enum can reach the negation dispatch
 /// below (the original's `unreachable!()` arms stay unreachable).
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub enum NegRight {
-    TempStore(TempStoreRA),
-    Stored(StoredRA),
-    StoredWithValidity(StoredWithValidityRA),
-    Spans(SpansRA),
-    Delta(DeltaRA),
+    TempStore(Box<TempStoreRA>),
+    Stored(Box<StoredRA>),
+    StoredWithValidity(Box<StoredWithValidityRA>),
+    Spans(Box<SpansRA>),
+    Delta(Box<DeltaRA>),
 }
 
 impl NegRight {

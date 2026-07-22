@@ -19,8 +19,8 @@
  *   `query/compile.rs`. A `WriteTx` is a `ReadTx`, so `runtime/db.rs` can
  *   thread either species when it lands (SEAM, db tier).
  * - **The Reorder/NegJoin join-RHS invariant is constructural.** The
- *   original `panic!`d ("joining on reordered" / "joining on NegJoin") at
- *   iteration time and `unreachable!()`d on an unexpected negation RHS.
+ *   original aborted ("joining on reordered" / "joining on NegJoin") at
+ *   iteration time and aborted on an unexpected negation RHS.
  *   Here [`RelAlgebra::join`] refuses those right sides at plan
  *   construction with a typed error, and [`NegJoin`]'s right side is the
  *   narrower [`NegRight`] type — a negation against anything but a rule
@@ -30,7 +30,7 @@
  * - **Negation over a time-travel scan now computes.** The original
  *   compiled `not *rel{..} @ t` into a `NegJoin` whose right side was
  *   `StoredWithValidity` — a shape its own iterator dispatched to
- *   `unreachable!()`, i.e. a user-reachable abort. Story #3 closed the
+ *   an abort-on-impossible arm, i.e. a user-reachable abort. Story #3 closed the
  *   abort with a typed, compile-time refusal (`NegationOverTimeTravelError`)
  *   until the operator tier grew a skip-scan negation; story #86 built
  *   that operator (`NegRight::StoredWithValidity`, plus the same
@@ -65,10 +65,9 @@
  *   6. ra.rs:1954,1968,2076,2090,2107,2141,... `join_indices(..)` panic-on-miss
  *      at every join dispatch — now `?` (the indices are minted from the
  *      same binding maps, but a bug is an error, never an abort).
- *   7. ra.rs:1976,2021  `unreachable!()` on a NegJoin right side — the
+ *   7. ra.rs:1976,2021  abort-on-impossible on a NegJoin right side — the
  *      [`NegRight`] type makes the state unrepresentable.
- *   8. ra.rs:2118,2121,2214,2217  `panic!("joining on reordered"/"joining
- *      on NegJoin")` — refused at construction by [`RelAlgebra::join`];
+ *   8. ra.rs:2118,2121,2214,2217  abort ("joining on reordered"/"joining on NegJoin") — refused at construction by [`RelAlgebra::join`];
  *      the residual iteration arms are typed errors, not panics.
  *   9. ra.rs:446   `storage.metadata.keys.last()` panic in the original's
  *      validity check of `RelAlgebra::relation` — RETIRED WITHOUT
@@ -300,18 +299,17 @@ pub(crate) fn epoch_store_of<'m>(
 /// a resolved `SearchRA` (query/search.rs): a parent plus its own
 /// bindings, mapping every parent tuple to the search results seeded by
 /// one bound column.
-#[allow(clippy::large_enum_variant)] // RA payloads / certificates are intentionally unboxed for match locality
 pub enum RelAlgebra {
     /// Inline rows (the unit relation, or literal data).
-    Fixed(InlineFixedRA),
+    Fixed(Box<InlineFixedRA>),
     /// Scan of an in-memory rule store (total or delta — the semi-naive
     /// discipline lives in this variant).
-    TempStore(TempStoreRA),
+    TempStore(Box<TempStoreRA>),
     /// Scan of a stored relation at the current time.
-    Stored(StoredRA),
+    Stored(Box<StoredRA>),
     /// Time-travel scan of a stored relation: newest version at or before
     /// `as_of`, asserted rows only.
-    StoredWithValidity(StoredWithValidityRA),
+    StoredWithValidity(Box<StoredWithValidityRA>),
     /// Inner join of two subtrees on named columns.
     Join(Box<InnerJoin>),
     /// Anti-join: left tuples with no matching right row. The right side
@@ -319,22 +317,22 @@ pub enum RelAlgebra {
     NegJoin(Box<NegJoin>),
     /// Column permutation (only ever the plan root, aligning to the rule
     /// head; [`RelAlgebra::join`] refuses it as a join RHS).
-    Reorder(ReorderRA),
+    Reorder(Box<ReorderRA>),
     /// Expr predicate filter.
-    Filter(FilteredRA),
+    Filter(Box<FilteredRA>),
     /// Append one computed column (`binding = expr`), or one row per list
     /// element (`binding in expr`).
-    Unification(UnificationRA),
+    Unification(Box<UnificationRA>),
     /// An index search (HNSW/FTS/LSH): for each parent row, evaluate the
     /// query expression, run the engine's pure search once, and append each
     /// result row (base row + the engine's extra columns).
     Search(Box<SearchRA>),
     /// `@spans`: derived maximal-run intervals over a stored relation's
     /// full bitemporal history, at a fixed system snapshot (story #62).
-    Spans(SpansRA),
+    Spans(Box<SpansRA>),
     /// `@delta`/`@delta_sys`: axis-parameterized net diff between two
     /// bitemporal coordinates on a stored relation (story #62).
-    Delta(DeltaRA),
+    Delta(Box<DeltaRA>),
 }
 
 impl RelAlgebra {
@@ -405,7 +403,7 @@ impl RelAlgebra {
 
     /// The unit relation: one empty tuple. The seed of every rule body.
     pub(crate) fn unit(span: SourceSpan) -> Self {
-        Self::Fixed(InlineFixedRA::unit(span))
+        Self::Fixed(Box::new(InlineFixedRA::unit(span)))
     }
 
     pub(crate) fn is_unit(&self) -> bool {
@@ -431,13 +429,13 @@ impl RelAlgebra {
         occurrence: AtomOccurrence,
         span: SourceSpan,
     ) -> Self {
-        Self::TempStore(TempStoreRA {
+        Self::TempStore(Box::new(TempStoreRA {
             bindings,
             storage_key,
             occurrence,
             filters: vec![],
             span,
-        })
+        }))
     }
 
     /// A scan of a stored relation, optionally carrying a [`ValidityClause`]
@@ -458,31 +456,31 @@ impl RelAlgebra {
         validity: Option<ValidityClause>,
     ) -> Result<Self> {
         match validity {
-            None => Ok(Self::Stored(StoredRA {
+            None => Ok(Self::Stored(Box::new(StoredRA {
                 bindings,
                 storage,
                 filters: vec![],
                 span,
-            })),
+            }))),
             Some(ValidityClause::At(vld)) => {
                 // Every facts relation is bitemporal in the one universal
                 // format: any relation time-travels, no schema opt-in.
-                Ok(Self::StoredWithValidity(StoredWithValidityRA {
+                Ok(Self::StoredWithValidity(Box::new(StoredWithValidityRA {
                     bindings,
                     storage,
                     filters: vec![],
                     as_of: vld,
                     span,
-                }))
+                })))
             }
             Some(ValidityClause::Spans { sys, var }) => {
                 bindings.push(var);
-                Ok(Self::Spans(SpansRA {
+                Ok(Self::Spans(Box::new(SpansRA {
                     bindings,
                     storage,
                     sys,
                     span,
-                }))
+                })))
             }
             Some(ValidityClause::Delta {
                 axis,
@@ -498,7 +496,7 @@ impl RelAlgebra {
                         AsOf::at(to, MAX_VALIDITY_TS),
                     ),
                 };
-                Ok(Self::Delta(DeltaRA {
+                Ok(Self::Delta(Box::new(DeltaRA {
                     bindings,
                     storage,
                     from,
@@ -509,16 +507,16 @@ impl RelAlgebra {
                     // have) — see `query/compile.rs`'s Delta-clause arm and
                     // `DeltaRA::scan`'s own doc.
                     scan: crate::exec::op::temporal::DeltaScan::Naive,
-                }))
+                })))
             }
         }
     }
 
     pub(crate) fn reorder(self, new_order: Vec<Symbol>) -> Self {
-        Self::Reorder(ReorderRA {
+        Self::Reorder(Box::new(ReorderRA {
             relation: Box::new(self),
             new_order,
-        })
+        }))
     }
 
     pub(crate) fn filter(self, filter: Expr) -> Result<Self> {
@@ -536,72 +534,28 @@ impl RelAlgebra {
             | RelAlgebra::Spans(_)
             | RelAlgebra::Delta(_)) => {
                 let span = filter.span();
-                RelAlgebra::Filter(FilteredRA {
+                RelAlgebra::Filter(Box::new(FilteredRA {
                     parent: Box::new(s),
                     filters: vec![filter],
                     to_eliminate: Default::default(),
                     span,
-                })
+                }))
             }
-            RelAlgebra::Filter(FilteredRA {
-                parent,
-                filters: mut pred,
-                to_eliminate,
-                span,
-            }) => {
-                pred.push(filter);
-                RelAlgebra::Filter(FilteredRA {
-                    parent,
-                    filters: pred,
-                    to_eliminate,
-                    span,
-                })
+            RelAlgebra::Filter(mut f) => {
+                f.filters.push(filter);
+                RelAlgebra::Filter(f)
             }
-            RelAlgebra::TempStore(TempStoreRA {
-                bindings,
-                storage_key,
-                occurrence,
-                mut filters,
-                span,
-            }) => {
-                filters.push(filter);
-                RelAlgebra::TempStore(TempStoreRA {
-                    bindings,
-                    storage_key,
-                    occurrence,
-                    filters,
-                    span,
-                })
+            RelAlgebra::TempStore(mut r) => {
+                r.filters.push(filter);
+                RelAlgebra::TempStore(r)
             }
-            RelAlgebra::Stored(StoredRA {
-                bindings,
-                storage,
-                mut filters,
-                span,
-            }) => {
-                filters.push(filter);
-                RelAlgebra::Stored(StoredRA {
-                    bindings,
-                    storage,
-                    filters,
-                    span,
-                })
+            RelAlgebra::Stored(mut r) => {
+                r.filters.push(filter);
+                RelAlgebra::Stored(r)
             }
-            RelAlgebra::StoredWithValidity(StoredWithValidityRA {
-                bindings,
-                storage,
-                mut filters,
-                span,
-                as_of,
-            }) => {
-                filters.push(filter);
-                RelAlgebra::StoredWithValidity(StoredWithValidityRA {
-                    bindings,
-                    storage,
-                    filters,
-                    span,
-                    as_of,
-                })
+            RelAlgebra::StoredWithValidity(mut r) => {
+                r.filters.push(filter);
+                RelAlgebra::StoredWithValidity(r)
             }
             RelAlgebra::Join(inner) => {
                 // Push each conjunct of the filter as deep as its bindings
@@ -643,12 +597,12 @@ impl RelAlgebra {
                     capture_right_as_premise,
                 }));
                 if !remaining.is_empty() {
-                    joined = RelAlgebra::Filter(FilteredRA {
+                    joined = RelAlgebra::Filter(Box::new(FilteredRA {
                         parent: Box::new(joined),
                         filters: remaining,
                         to_eliminate: Default::default(),
                         span,
-                    });
+                    }));
                 }
                 joined
             }
@@ -662,14 +616,14 @@ impl RelAlgebra {
         kind: UnificationKind,
         span: SourceSpan,
     ) -> Self {
-        RelAlgebra::Unification(UnificationRA {
+        RelAlgebra::Unification(Box::new(UnificationRA {
             parent: Box::new(self),
             binding,
             expr,
             kind,
             to_eliminate: Default::default(),
             span,
-        })
+        }))
     }
 
     /// Inner-join constructor. Refuses a `Reorder` or `NegJoin` right side
@@ -1267,7 +1221,7 @@ mod tests {
                 "the shape must route through the materialized join"
             );
         } else {
-            panic!("plan root must be the join");
+            return Err(miette!("plan root must be the join"));
         }
         ra.fill_binding_indices_and_compile()?;
         let stores = no_stores();
@@ -1385,7 +1339,7 @@ mod tests {
     }
 
     /// The join-RHS refusals are typed and fire at CONSTRUCTION — the
-    /// original `panic!`d/`unreachable!()`d at iteration time.
+    /// original aborted at iteration time.
     #[test]
     fn join_rhs_refusals_are_typed() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
