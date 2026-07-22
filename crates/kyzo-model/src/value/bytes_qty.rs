@@ -53,7 +53,12 @@ impl ByteLen {
     /// Extract to `usize` for slice indexing (not for further stored-byte
     /// arithmetic).
     pub(super) fn as_usize(self) -> usize {
-        self.0 as usize
+        // Lossless on every supported pointer width (≥ 32). `From<u32>` is
+        // not available on all rustc targets this crate builds for.
+        match usize::try_from(self.0) {
+            Ok(n) => n,
+            Err(_overflow) => usize::MAX,
+        }
     }
 
     /// The raw `u32` for read-only cross-boundary uses (prefix comparison
@@ -94,7 +99,12 @@ impl ByteOff {
 
     /// Extract to `usize` for slice indexing.
     pub(super) fn as_usize(self) -> usize {
-        self.0 as usize
+        // Lossless on every supported pointer width (≥ 32). `From<u32>` is
+        // not available on all rustc targets this crate builds for.
+        match usize::try_from(self.0) {
+            Ok(n) => n,
+            Err(_overflow) => usize::MAX,
+        }
     }
 
     /// Advance this offset by a byte length; `None` on overflow.
@@ -126,6 +136,11 @@ impl ChunkId {
     }
 
     pub(super) fn as_usize(self) -> usize {
-        self.0 as usize
+        // Lossless on every supported pointer width (≥ 32). `From<u32>` is
+        // not available on all rustc targets this crate builds for.
+        match usize::try_from(self.0) {
+            Ok(n) => n,
+            Err(_overflow) => usize::MAX,
+        }
     }
 }
