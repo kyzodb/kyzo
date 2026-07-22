@@ -442,6 +442,7 @@ mod tests {
     use super::*;
     use crate::rules::contract::tests_support::{TestInput, empty_opts, opts_map, run_fixed_rule};
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -491,11 +492,11 @@ mod tests {
     /// distinct enough that shortest-path costs are unique, so no tie
     /// resolution (the one documented not-pinnable axis) is exercised.
     #[test]
-    fn parallel_matches_single_thread() {
+    fn parallel_matches_single_thread() -> Result<()> {
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
+            .into_diagnostic()?;
         let seq = single.install(|| {
             run_fixed_rule(
                 &ShortestPathDijkstra,
@@ -503,8 +504,7 @@ mod tests {
                 empty_opts(),
                 CancelFlag::inert(),
             )
-            .unwrap()
-        });
+        })?;
         for _ in 0..8 {
             let par = run_fixed_rule(
                 &ShortestPathDijkstra,
@@ -512,15 +512,16 @@ mod tests {
                 empty_opts(),
                 CancelFlag::inert(),
             )
-            .unwrap();
+            ?;
             assert_eq!(seq, par);
         }
+        Ok(())
     }
 
     /// End-to-end over the payload: the cheap two-hop route beats the
     /// expensive direct edge, and the output is (start, goal, cost, path).
     #[test]
-    fn picks_cheaper_route() {
+    fn picks_cheaper_route() -> Result<()> {
         let got = run_fixed_rule(
             &ShortestPathDijkstra,
             vec![
@@ -534,10 +535,11 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0][2], DataValue::from(2.0));
         assert_eq!(got[0][3], DataValue::List(vec![s("a"), s("c"), s("b")]));
+        Ok(())
     }
 
     /// The tie graph: an expensive direct edge plus two equally cheap
@@ -568,7 +570,7 @@ mod tests {
     /// [a,b,d] and [a,c,d], exactly, and not the cost-3 direct decoy.
     /// (Rows come back store-sorted; [a,b,d] < [a,c,d].)
     #[test]
-    fn keep_ties_returns_all_tied_shortest_paths() {
+    fn keep_ties_returns_all_tied_shortest_paths() -> Result<()> {
         let got = run_fixed_rule(
             &ShortestPathDijkstra,
             vec![
@@ -582,10 +584,10 @@ mod tests {
                     val: DataValue::from(true),
                     span: SourceSpan::default(),
                 },
-            )])),
+            )]))?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![
                 s("a"),
@@ -601,6 +603,7 @@ mod tests {
             ]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// VALUE ORACLE: `keep_ties` with MULTIPLE termination nodes (the
@@ -611,7 +614,7 @@ mod tests {
     /// at the first goal it visits — b (cost 1) is visited before d's
     /// relaxations finish, and d's rows must still be complete.
     #[test]
-    fn keep_ties_with_multiple_goals() {
+    fn keep_ties_with_multiple_goals() -> Result<()> {
         let got = run_fixed_rule(
             &ShortestPathDijkstra,
             vec![
@@ -628,10 +631,10 @@ mod tests {
                     val: DataValue::from(true),
                     span: SourceSpan::default(),
                 },
-            )])),
+            )]))?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![
                 s("a"),
@@ -653,6 +656,7 @@ mod tests {
             ]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// VALUE ORACLE: without `keep_ties` the same graph yields exactly one
@@ -660,7 +664,7 @@ mod tests {
     /// priority-queue pop order among equal costs (hash-seeded, not
     /// pinnable), so the path is asserted structurally: a → (b|c) → d.
     #[test]
-    fn single_result_without_keep_ties() {
+    fn single_result_without_keep_ties() -> Result<()> {
         let got = run_fixed_rule(
             &ShortestPathDijkstra,
             vec![
@@ -671,14 +675,15 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0][2], DataValue::from(2.0));
-        let path = got[0][3].get_slice().unwrap();
+        let path = got[0][3].get_slice().ok_or_else(|| miette!("test expected Some"))?;
         assert_eq!(path.len(), 3);
         assert_eq!(path[0], s("a"));
         assert!(path[1] == s("b") || path[1] == s("c"), "{:?}", path);
         assert_eq!(path[2], s("d"));
+        Ok(())
     }
 
     /// CANCELLATION: the plain `dijkstra` core refuses once its flag is
@@ -686,16 +691,17 @@ mod tests {
     /// leaves the result identical to the always-default runs above — so the
     /// poll never changes an answer. Pins the fix that threaded the flag in.
     #[test]
-    fn plain_dijkstra_honors_cancel() {
+    fn plain_dijkstra_honors_cancel() -> Result<()> {
         let graph =
-            DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64), (1, 2, 1.0), (2, 3, 1.0)]).unwrap();
+            DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64), (1, 2, 1.0), (2, 3, 1.0)])?;
         // Unset flag: the search completes, path 0→3 costs 3.
-        let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::inert()).unwrap();
+        let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::inert())?;
         assert_eq!(ok, vec![(3, 3.0, vec![0, 1, 2, 3])]);
         // Spent authority: the very first pop refuses.
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         assert!(dijkstra(&graph, 0, &Some(3u32), &(), &(), flag).is_err());
+        Ok(())
     }
 
     /// CANCELLATION: pins unconditional top-of-pop in `dijkstra_keep_ties`.
@@ -703,8 +709,8 @@ mod tests {
     /// reaches a mid-scan poll — under the bug a pre-raised flag still
     /// returns Ok (unreachable goal); under the fix the first pop refuses.
     #[test]
-    fn keep_ties_honors_cancel_on_all_forbidden_hub() {
-        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64)]).unwrap();
+    fn keep_ties_honors_cancel_on_all_forbidden_hub() -> Result<()> {
+        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64)])?;
         let forbidden: BTreeSet<(u32, u32)> = BTreeSet::from([(0, 1)]);
         // Unset flag: hub is a dead end; goal 1 stays unreachable.
         let ok = dijkstra_keep_ties(
@@ -715,7 +721,7 @@ mod tests {
             &(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(ok.len(), 1);
         assert!(!ok[0].1.is_finite());
         assert!(ok[0].2.is_empty());
@@ -726,5 +732,6 @@ mod tests {
             dijkstra_keep_ties(&graph, 0, &Some(1u32), &forbidden, &(), flag).is_err(),
             "all-forbidden hub pop must poll cancel (Ok under mid-scan-only poll)"
         );
+        Ok(())
     }
 }
