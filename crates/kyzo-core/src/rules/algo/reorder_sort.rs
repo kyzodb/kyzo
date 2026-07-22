@@ -185,6 +185,7 @@ mod tests {
     use crate::rules::contract::CancelFlag;
     use crate::rules::contract::tests_support::{TestInput, opts_map, run_fixed_rule};
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -204,7 +205,7 @@ mod tests {
     }
 
     /// `out: [x], sort_by: x` over one column of mixed types.
-    fn opts(extra: &[(&str, DataValue)]) -> FixedRuleOptions {
+    fn opts(extra: &[(&str, DataValue)]) -> Result<FixedRuleOptions> {
         let mut m = BTreeMap::from([
             (
                 SmartString::from("out"),
@@ -227,7 +228,7 @@ mod tests {
     /// numerically inside Num (0.5 < 1). Keys are distinct, so ranks are
     /// 1..=5 in that order, each row (rank, id).
     #[test]
-    fn sorts_mixed_types_per_datavalue_order() {
+    fn sorts_mixed_types_per_datavalue_order() -> Result<()> {
         let rows: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("n"), DataValue::Null]),
             Tuple::from_vec(vec![s("b"), DataValue::from(false)]),
@@ -238,10 +239,10 @@ mod tests {
         let got = run_fixed_rule(
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows)],
-            opts(&[]),
+            opts(&[])?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let i = |v: i64| DataValue::from(v);
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("n")]), // Null
@@ -251,6 +252,7 @@ mod tests {
             Tuple::from_vec(vec![i(5), s("s")]), // Str
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// VALUE ORACLE for the rank semantics around ties, descending order,
@@ -264,7 +266,7 @@ mod tests {
     ///                       sort is stable, but tied rows share the rank
     ///                       so store order pins the rows regardless)
     #[test]
-    fn rank_ties_and_descending() {
+    fn rank_ties_and_descending() -> Result<()> {
         let rows = || -> Vec<Tuple> {
             vec![
                 Tuple::from_vec(vec![s("a"), DataValue::from(1i64)]),
@@ -277,10 +279,10 @@ mod tests {
         let got = run_fixed_rule(
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows())],
-            opts(&[]),
+            opts(&[])?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("a")]),
             Tuple::from_vec(vec![i(1), s("b")]),
@@ -291,10 +293,10 @@ mod tests {
         let got = run_fixed_rule(
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows())],
-            opts(&[("break_ties", DataValue::from(true))]),
+            opts(&[("break_ties", DataValue::from(true))])?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("a")]),
             Tuple::from_vec(vec![i(2), s("b")]),
@@ -305,23 +307,24 @@ mod tests {
         let got = run_fixed_rule(
             &ReorderSort,
             vec![TestInput::new(vec!["id", "k"], rows())],
-            opts(&[("descending", DataValue::from(true))]),
+            opts(&[("descending", DataValue::from(true))])?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("c")]),
             Tuple::from_vec(vec![i(2), s("a")]),
             Tuple::from_vec(vec![i(2), s("b")]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// VALUE ORACLE for skip/take: distinct keys (a,1) (b,2) (c,3) with
     /// skip: 1, take: 1 — a is skipped (count 1 ≤ skip), b is emitted at
     /// its overall rank 2, and c breaks the loop (count 3 > take + skip).
     #[test]
-    fn skip_take_window() {
+    fn skip_take_window() -> Result<()> {
         let got = run_fixed_rule(
             &ReorderSort,
             vec![TestInput::new(
@@ -335,11 +338,12 @@ mod tests {
             opts(&[
                 ("skip", DataValue::from(1i64)),
                 ("take", DataValue::from(1i64)),
-            ]),
+            ])?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(2i64), s("b")])];
         assert_eq!(got, want);
+        Ok(())
     }
 }
