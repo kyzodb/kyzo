@@ -1713,6 +1713,7 @@ impl<S: Storage> Engine<S> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use rmp_serde::Serializer;
     use serde::Serialize;
 
@@ -1767,16 +1768,16 @@ mod tests {
     /// (Null < Str in the memcmp encoding), which is what lets `list` scan
     /// the Str range without seeing it.
     #[test]
-    fn system_key_shapes() {
+    fn system_key_shapes() -> Result<()>  {
         let counter = SystemKey::IdCounter.encode();
         assert_eq!(&counter[..8], &[0u8; 8], "SYSTEM prefix");
         let want_counter: Tuple = Tuple::from_vec(vec![DataValue::Null]);
-        assert_eq!(decode_tuple_from_key(&counter, 1).unwrap(), want_counter);
+        assert_eq!(decode_tuple_from_key(&counter, 1)?, want_counter);
 
         let rel = SystemKey::Relation("stored").encode();
         assert_eq!(&rel[..8], &[0u8; 8], "SYSTEM prefix");
         let want_rel: Tuple = Tuple::from_vec(vec![DataValue::from("stored")]);
-        assert_eq!(decode_tuple_from_key(&rel, 1).unwrap(), want_rel);
+        assert_eq!(decode_tuple_from_key(&rel, 1)?, want_rel);
 
         assert!(
             counter.as_bytes() < rel.as_bytes(),
@@ -1785,35 +1786,36 @@ mod tests {
         // And below even the empty-named relation row (the list scan's
         // lower bound).
         assert!(counter.as_bytes() < SystemKey::Relation("").encode().as_bytes());
+        Ok(())
     }
 
     /// Catalog round trip against a real store: create, get, list, write a
     /// row through the handle, destroy — and destroy takes the data with it.
     #[test]
-    fn catalog_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn catalog_round_trip() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
 
         // Create two relations.
-        let mut tx = db.write_tx().unwrap();
-        let a = create_relation(&mut tx, simple_input("alpha"), KeyspaceKind::Facts).unwrap();
-        let b = create_relation(&mut tx, simple_input("beta"), KeyspaceKind::Facts).unwrap();
+        let mut tx = db.write_tx()?;
+        let a = create_relation(&mut tx, simple_input("alpha"), KeyspaceKind::Facts)?;
+        let b = create_relation(&mut tx, simple_input("beta"), KeyspaceKind::Facts)?;
         assert_ne!(a.id, b.id);
-        tx.commit().unwrap();
+        tx.commit()?;
 
         // Get and list see them, in name order.
-        let rtx = db.read_tx().unwrap();
-        let got = get_relation(&rtx, "alpha").unwrap();
+        let rtx = db.read_tx()?;
+        let got = get_relation(&rtx, "alpha")?;
         assert_eq!(got, a);
-        assert!(relation_exists(&rtx, "beta").unwrap());
-        assert!(!relation_exists(&rtx, "gamma").unwrap());
+        assert!(relation_exists(&rtx, "beta")?);
+        assert!(!relation_exists(&rtx, "gamma")?);
         assert!(
             get_relation(&rtx, "gamma")
                 .unwrap_err()
                 .downcast_ref::<StoredRelationNotFoundError>()
                 .is_some()
         );
-        let listed = list_relations(&rtx).unwrap();
+        let listed = list_relations(&rtx)?;
         assert_eq!(
             listed.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
             vec!["alpha", "beta"]
@@ -1823,40 +1825,40 @@ mod tests {
         // Write and read a row through the handle.
         let span = SourceSpan(0, 0);
         let row: Tuple = Tuple::from_vec(vec![DataValue::from(1), DataValue::from("one")]);
-        let mut tx = db.write_tx().unwrap();
-        a.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)
-            .unwrap();
-        tx.commit().unwrap();
+        let mut tx = db.write_tx()?;
+        a.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)?;
+        tx.commit()?;
 
-        let rtx = db.read_tx().unwrap();
-        assert!(a.exists(&rtx, &row.as_slice()[..1]).unwrap());
+        let rtx = db.read_tx()?;
+        assert!(a.exists(&rtx, &row.as_slice()[..1])?);
         assert_eq!(
-            a.get(&rtx, &row.as_slice()[..1]).unwrap(),
+            a.get(&rtx, &row.as_slice()[..1])?,
             Some(row.clone())
         );
         assert_eq!(
-            a.get_val_only(&rtx, &row.as_slice()[..1]).unwrap(),
+            a.get_val_only(&rtx, &row.as_slice()[..1])?,
             Some(Tuple::from_vec(vec![DataValue::from("one")]))
         );
-        let scanned: Vec<Tuple> = a.scan_all(&rtx).map(|t| t.unwrap()).collect();
+        let scanned: Vec<Tuple> = a.scan_all(&rtx).map(|t| t?).collect();
         assert_eq!(scanned, vec![row.clone()]);
         // The row is invisible from beta's keyspace.
         assert_eq!(b.scan_all(&rtx).count(), 0);
         drop(rtx);
 
         // Destroy alpha: catalog row and data both gone.
-        let mut tx = db.write_tx().unwrap();
-        destroy_relation(&mut tx, "alpha").unwrap();
-        tx.commit().unwrap();
+        let mut tx = db.write_tx()?;
+        destroy_relation(&mut tx, "alpha")?;
+        tx.commit()?;
 
-        let rtx = db.read_tx().unwrap();
-        assert!(!relation_exists(&rtx, "alpha").unwrap());
+        let rtx = db.read_tx()?;
+        assert!(!relation_exists(&rtx, "alpha")?);
         assert_eq!(a.scan_all(&rtx).count(), 0, "destroy deletes the keyspace");
-        let listed = list_relations(&rtx).unwrap();
+        let listed = list_relations(&rtx)?;
         assert_eq!(
             listed.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
             vec!["beta"]
         );
+        Ok(())
     }
 
     /// A corrupt catalog row cannot synthesize an out-of-range
@@ -1867,12 +1869,12 @@ mod tests {
     /// could hold. The real `RelationHandle` must refuse decoding it —
     /// typed error, never a panic, never a constructed handle.
     #[test]
-    fn corrupt_catalog_row_refuses_out_of_range_relation_id() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn corrupt_catalog_row_refuses_out_of_range_relation_id() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
         let handle =
-            create_relation(&mut tx, simple_input("hostile"), KeyspaceKind::Facts).unwrap();
+            create_relation(&mut tx, simple_input("hostile"), KeyspaceKind::Facts)?;
 
         #[derive(serde_derive::Serialize)]
         struct ShadowHandle {
@@ -1904,8 +1906,7 @@ mod tests {
         };
         let mut bytes = vec![];
         shadow
-            .serialize(&mut Serializer::new(&mut bytes).with_struct_map())
-            .unwrap();
+            .serialize(&mut Serializer::new(&mut bytes).with_struct_map())?;
 
         // Must refuse typed, not panic and not hand back a handle carrying
         // an out-of-range id.
@@ -1913,70 +1914,72 @@ mod tests {
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     /// `del_range` semantics through destroy: a relation created, filled,
     /// and destroyed within one transaction leaves nothing behind — the
     /// transaction's own writes die with the range.
     #[test]
-    fn destroy_within_one_transaction_kills_own_writes() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
-        let rel = create_relation(&mut tx, simple_input("fleeting"), KeyspaceKind::Facts).unwrap();
+    fn destroy_within_one_transaction_kills_own_writes() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
+        let rel = create_relation(&mut tx, simple_input("fleeting"), KeyspaceKind::Facts)?;
         let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(9), DataValue::from("gone")];
-        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)
-            .unwrap();
-        destroy_relation(&mut tx, "fleeting").unwrap();
-        tx.commit().unwrap();
+        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)?;
+        destroy_relation(&mut tx, "fleeting")?;
+        tx.commit()?;
 
-        let rtx = db.read_tx().unwrap();
-        assert!(!relation_exists(&rtx, "fleeting").unwrap());
+        let rtx = db.read_tx()?;
+        assert!(!relation_exists(&rtx, "fleeting")?);
         assert_eq!(rel.scan_all(&rtx).count(), 0);
+        Ok(())
     }
 
     /// Ids are allocated sequentially from the persisted counter, and the
     /// counter row holds the last id handed out.
     #[test]
-    fn id_counter_allocation() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn id_counter_allocation() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
 
-        let mut tx = db.write_tx().unwrap();
-        let first = create_relation(&mut tx, simple_input("one"), KeyspaceKind::Facts).unwrap();
-        let second = create_relation(&mut tx, simple_input("two"), KeyspaceKind::Facts).unwrap();
-        tx.commit().unwrap();
-        assert_eq!(first.id, RelationId::new(1).expect("below cap"));
-        assert_eq!(second.id, RelationId::new(2).expect("below cap"));
+        let mut tx = db.write_tx()?;
+        let first = create_relation(&mut tx, simple_input("one"), KeyspaceKind::Facts)?;
+        let second = create_relation(&mut tx, simple_input("two"), KeyspaceKind::Facts)?;
+        tx.commit()?;
+        assert_eq!(first.id, RelationId::new(1).map_err(|e| miette!("below cap: {e}"))?);
+        assert_eq!(second.id, RelationId::new(2).map_err(|e| miette!("below cap: {e}"))?);
 
         // A later transaction continues where the counter left off.
-        let mut tx = db.write_tx().unwrap();
-        let third = create_relation(&mut tx, simple_input("three"), KeyspaceKind::Facts).unwrap();
-        tx.commit().unwrap();
-        assert_eq!(third.id, RelationId::new(3).expect("below cap"));
+        let mut tx = db.write_tx()?;
+        let third = create_relation(&mut tx, simple_input("three"), KeyspaceKind::Facts)?;
+        tx.commit()?;
+        assert_eq!(third.id, RelationId::new(3).map_err(|e| miette!("below cap: {e}"))?);
 
-        let rtx = db.read_tx().unwrap();
-        let counter = rtx.get(&SystemKey::IdCounter.encode()).unwrap().unwrap();
+        let rtx = db.read_tx()?;
+        let counter = rtx.get(&SystemKey::IdCounter.encode())??;
         assert_eq!(
-            RelationId::raw_decode(&counter).unwrap(),
-            RelationId::new(3).expect("below cap")
+            RelationId::raw_decode(&counter)?,
+            RelationId::new(3).map_err(|e| miette!("below cap: {e}"))?
         );
+        Ok(())
     }
 
     /// The concurrency story, proven: two transactions racing on the id
     /// counter conflict at commit; exactly one wins and the loser's error
     /// is the typed, retryable `ConflictError`.
     #[test]
-    fn concurrent_creates_conflict_and_retry_succeeds() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn concurrent_creates_conflict_and_retry_succeeds() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
 
-        let mut tx1 = db.write_tx().unwrap();
-        let mut tx2 = db.write_tx().unwrap();
-        create_relation(&mut tx1, simple_input("left"), KeyspaceKind::Facts).unwrap();
-        create_relation(&mut tx2, simple_input("right"), KeyspaceKind::Facts).unwrap();
-        tx1.commit().unwrap();
+        let mut tx1 = db.write_tx()?;
+        let mut tx2 = db.write_tx()?;
+        create_relation(&mut tx1, simple_input("left"), KeyspaceKind::Facts)?;
+        create_relation(&mut tx2, simple_input("right"), KeyspaceKind::Facts)?;
+        tx1.commit()?;
         let err = tx2
             .commit()
             .expect_err("racing counter writes must conflict");
@@ -1987,25 +1990,26 @@ mod tests {
 
         // The retry (a fresh transaction) sees the committed counter and
         // allocates the next id.
-        let mut tx3 = db.write_tx().unwrap();
-        let right = create_relation(&mut tx3, simple_input("right"), KeyspaceKind::Facts).unwrap();
-        tx3.commit().unwrap();
-        assert_eq!(right.id, RelationId::new(2).expect("below cap"));
+        let mut tx3 = db.write_tx()?;
+        let right = create_relation(&mut tx3, simple_input("right"), KeyspaceKind::Facts)?;
+        tx3.commit()?;
+        assert_eq!(right.id, RelationId::new(2).map_err(|e| miette!("below cap: {e}"))?);
+        Ok(())
     }
 
     /// The access ladder gates destructive operations: `Ord` is the
     /// semantics.
     #[test]
-    fn access_level_gates() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn access_level_gates() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
 
-        let mut tx = db.write_tx().unwrap();
-        create_relation(&mut tx, simple_input("guarded"), KeyspaceKind::Facts).unwrap();
-        set_access_level(&mut tx, "guarded", AccessLevel::ReadOnly).unwrap();
-        tx.commit().unwrap();
+        let mut tx = db.write_tx()?;
+        create_relation(&mut tx, simple_input("guarded"), KeyspaceKind::Facts)?;
+        set_access_level(&mut tx, "guarded", AccessLevel::ReadOnly)?;
+        tx.commit()?;
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         // ReadOnly < Normal: destruction refused.
         let err = destroy_relation(&mut tx, "guarded").unwrap_err();
         assert!(err.downcast_ref::<InsufficientAccessLevel>().is_some());
@@ -2030,26 +2034,26 @@ mod tests {
 
         // Restore Normal (setting the level itself is ungated by design)
         // and destruction proceeds.
-        set_access_level(&mut tx, "guarded", AccessLevel::Normal).unwrap();
-        destroy_relation(&mut tx, "guarded").unwrap();
-        tx.commit().unwrap();
+        set_access_level(&mut tx, "guarded", AccessLevel::Normal)?;
+        destroy_relation(&mut tx, "guarded")?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Exhausting the 48-bit id space is a typed error, not the original's
     /// panic.
     #[test]
-    fn relation_id_overflow_is_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn relation_id_overflow_is_error() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         // Force the counter to the last allocatable id, so the next
         // allocation crosses the ceiling.
         tx.put(
             &SystemKey::IdCounter.encode(),
             &(kyzo_model::value::RelationId::CAP - 1).to_be_bytes(),
-        )
-        .unwrap();
+        )?;
         let err =
             create_relation(&mut tx, simple_input("too_many"), KeyspaceKind::Facts).unwrap_err();
         assert!(
@@ -2059,81 +2063,79 @@ mod tests {
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     /// The persistent catalog refuses temp names (the session's temp store
     /// owns them — see the routing seam), and duplicate names.
     #[test]
-    fn create_refuses_temp_names_and_duplicates() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn create_refuses_temp_names_and_duplicates() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let err =
             create_relation(&mut tx, simple_input("_scratch"), KeyspaceKind::Facts).unwrap_err();
         assert!(err.downcast_ref::<TempRelationNotRoutable>().is_some());
 
-        create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap();
+        create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts)?;
         let err = create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap_err();
         assert!(err.downcast_ref::<RelNameConflictError>().is_some());
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     /// Rename moves the catalog row and nothing else: same id, same data.
     #[test]
-    fn rename_moves_the_row_and_keeps_the_keyspace() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
-        let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts).unwrap();
+    fn rename_moves_the_row_and_keeps_the_keyspace() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
+        let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts)?;
         let span = SourceSpan(0, 0);
         let row: Tuple = Tuple::from_vec(vec![DataValue::from(5), DataValue::from("five")]);
-        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)
-            .unwrap();
+        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)?;
         rename_relation(
             &mut tx,
             &Symbol::new("before", SourceSpan(0, 0)),
             &Symbol::new("after", SourceSpan(0, 0)),
-        )
-        .unwrap();
-        tx.commit().unwrap();
+        )?;
+        tx.commit()?;
 
-        let rtx = db.read_tx().unwrap();
-        assert!(!relation_exists(&rtx, "before").unwrap());
-        let renamed = get_relation(&rtx, "after").unwrap();
+        let rtx = db.read_tx()?;
+        assert!(!relation_exists(&rtx, "before")?);
+        let renamed = get_relation(&rtx, "after")?;
         assert_eq!(renamed.id, rel.id, "the id — and the keyspace — survive");
-        assert_eq!(renamed.get(&rtx, &row.as_slice()[..1]).unwrap(), Some(row));
+        assert_eq!(renamed.get(&rtx, &row.as_slice()[..1])?, Some(row));
+        Ok(())
     }
 
     /// Time travel through the handle's skip-scan surface: the newest
     /// version at or before the query time wins, and a retraction is an
     /// honest absence.
     #[test]
-    fn skip_scan_sees_the_asserted_past() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.write_tx().unwrap();
+    fn skip_scan_sees_the_asserted_past() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
+        let mut tx = db.write_tx()?;
         let rel = create_relation(
             &mut tx,
             input_handle("beliefs", vec![col("k", ColType::Int)], vec![]),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let vts_of = |ts: i64| ValidityTs::from_raw(ts);
         // k=1 asserted at valid t=10, retracted at valid t=20, through
         // the handle's own fact writers.
-        rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan(0, 0))
-            .unwrap();
-        rel.retract_fact(&mut tx, &[DataValue::from(1)], vts_of(20), SourceSpan(0, 0))
-            .unwrap();
-        tx.commit().unwrap();
+        rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan(0, 0))?;
+        rel.retract_fact(&mut tx, &[DataValue::from(1)], vts_of(20), SourceSpan(0, 0))?;
+        tx.commit()?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let at = |ts: i64| -> Vec<Tuple> {
             rel.skip_scan_all(&rtx, AsOf::current(ValidityTs::from_raw(ts)))
-                .map(|t| t.unwrap())
+                .map(|t| t?)
                 .collect()
         };
         assert_eq!(at(5).len(), 0, "before the assertion: not yet believed");
@@ -2141,6 +2143,7 @@ mod tests {
         assert_eq!(hits.len(), 1, "between assert and retract: believed");
         assert_eq!(hits[0][0], DataValue::from(1));
         assert_eq!(at(25).len(), 0, "after the retraction: revised away");
+        Ok(())
     }
 
     /// Whole-schema compatibility proof: an input's *dependent* columns are
@@ -2149,18 +2152,18 @@ mod tests {
     /// dependent type through). Partial column approval is impossible —
     /// prove constructs whole or refuses whole.
     #[test]
-    fn prove_compatible_input_checks_input_dependents_whole() {
+    fn prove_compatible_input_checks_input_dependents_whole() -> Result<()>  {
         use kyzo_model::schema::RelationWriteShape::{Put, RemoveOrUpdate};
 
         let stored = RelationHandle::new_from_input(
             simple_input("s"),
-            RelationId::new(1).expect("below cap"),
+            RelationId::new(1).map_err(|e| miette!("below cap: {e}"))?,
             KeyspaceKind::Facts,
         );
         // Compatible input: same shapes → branded proof.
         stored
             .prove_compatible_input(&simple_input("s"), Put)
-            .expect("compatible whole schema");
+            .map_err(|e| miette!("compatible whole schema: {e}"))?;
         // Incompatible dependent type: v as Int against stored String.
         let bad = input_handle(
             "s",
@@ -2175,9 +2178,10 @@ mod tests {
         let keys_only = input_handle("s", vec![col("k", ColType::Int)], vec![]);
         stored
             .prove_compatible_input(&keys_only, RemoveOrUpdate)
-            .expect("keys-only is enough for remove/update");
+            .map_err(|e| miette!("keys-only is enough for remove/update: {e}"))?;
         // ...but a full put requires them (or defaults).
         assert!(stored.prove_compatible_input(&keys_only, Put).is_err());
+        Ok(())
     }
 
     /// The T2 closure: a malformed trigger source is refused at the store
@@ -2188,19 +2192,19 @@ mod tests {
     /// and decodes back to the same provenance, proving the refusal is
     /// specific to malformed input, not "triggers never store".
     #[test]
-    fn malformed_trigger_source_is_refused_and_not_persisted() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn malformed_trigger_source_is_refused_and_not_persisted() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
 
-        let mut tx = db.write_tx().unwrap();
-        create_relation(&mut tx, simple_input("t"), KeyspaceKind::Facts).unwrap();
-        set_access_level(&mut tx, "t", AccessLevel::Protected).unwrap();
-        tx.commit().unwrap();
+        let mut tx = db.write_tx()?;
+        create_relation(&mut tx, simple_input("t"), KeyspaceKind::Facts)?;
+        set_access_level(&mut tx, "t", AccessLevel::Protected)?;
+        tx.commit()?;
 
         // A source that is not a valid single program: refused, and because
         // the parse happens before any catalog write, nothing lands even
         // within the (uncommitted) transaction.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         set_relation_triggers(
             &mut tx,
             &Symbol::new("t", SourceSpan(0, 0)),
@@ -2212,8 +2216,8 @@ mod tests {
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
-        let tx = db.read_tx().unwrap();
-        let handle = get_relation(&tx, "t").unwrap();
+        let tx = db.read_tx()?;
+        let handle = get_relation(&tx, "t")?;
         assert!(
             handle.put_triggers.is_empty() && !handle.has_triggers(),
             "the malformed source never became a stored trigger"
@@ -2222,19 +2226,18 @@ mod tests {
 
         // A valid source persists and survives the catalog round-trip as the
         // same provenance — the non-vacuity half of the closure.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         set_relation_triggers(
             &mut tx,
             &Symbol::new("t", SourceSpan(0, 0)),
             &["?[k, v] := *t[k, v]".to_string()],
             &[],
             &[],
-        )
-        .unwrap();
-        tx.commit().unwrap();
+        )?;
+        tx.commit()?;
 
-        let tx = db.read_tx().unwrap();
-        let handle = get_relation(&tx, "t").unwrap();
+        let tx = db.read_tx()?;
+        let handle = get_relation(&tx, "t")?;
         assert_eq!(handle.put_triggers.len(), 1);
         // Display uses `:rel` for stored-relation atoms; substance is the program.
         assert!(
@@ -2245,6 +2248,7 @@ mod tests {
             "trigger program retained stored-relation body"
         );
         assert!(handle.has_triggers());
+        Ok(())
     }
 
     /// The handle wire format round-trips, and its bytes are pinned: this
@@ -2252,14 +2256,14 @@ mod tests {
     /// bytes), so any change to it must arrive together with a migration
     /// decision — this test failing is that conversation starting.
     #[test]
-    fn handle_wire_format_round_trips_and_is_pinned() {
+    fn handle_wire_format_round_trips_and_is_pinned() -> Result<()>  {
         let mut handle = RelationHandle::new_from_input(
             input_handle(
                 "pin",
                 vec![col("k", ColType::Int)],
                 vec![col("v", ColType::String)],
             ),
-            RelationId::new(7).expect("below cap"),
+            RelationId::new(7).map_err(|e| miette!("below cap: {e}"))?,
             KeyspaceKind::Facts,
         );
         handle.put_triggers = vec![
@@ -2268,7 +2272,7 @@ mod tests {
                 &DEFAULT_FIXED_RULES,
                 trigger_decode_vld(),
             )
-            .unwrap(),
+            ?,
         ];
         handle.access_level = AccessLevel::ReadOnly;
         handle.indices = vec![IndexRef {
@@ -2283,11 +2287,11 @@ mod tests {
                 &DEFAULT_FIXED_RULES,
                 trigger_decode_vld(),
             )
-            .unwrap(),
+            ?,
         ];
 
-        let bytes = handle.encode().unwrap();
-        let decoded = RelationHandle::decode(&bytes).unwrap();
+        let bytes = handle.encode()?;
+        let decoded = RelationHandle::decode(&bytes)?;
         assert_eq!(decoded, handle, "wire round trip");
 
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -2301,6 +2305,7 @@ mod tests {
         let err = RelationHandle::decode(&bytes.as_slice()[..bytes.len() / 2]).unwrap_err();
         assert!(err.downcast_ref::<RelationDeserError>().is_some());
         assert!(RelationHandle::decode(b"garbage").is_err());
+        Ok(())
     }
 
     /// The language surface's coordinate ORDER, pinned with a
@@ -2310,7 +2315,7 @@ mod tests {
     /// coordinates put the system cut before the write's stamp, where the
     /// record knew nothing.
     #[test]
-    fn asof_clause_first_coordinate_is_system_time() {
+    fn asof_clause_first_coordinate_is_system_time() -> Result<()>  {
         use crate::session::db::Engine;
         use kyzo_model::SourceSpan;
         use std::collections::BTreeMap;
@@ -2318,35 +2323,34 @@ mod tests {
         fn no_params() -> BTreeMap<String, DataValue> {
             BTreeMap::new()
         }
-        fn open_engine<S: Storage>(store: S) -> Engine<S> {
-            Engine::compose(store, Catalog::new()).expect("compose engine")
+        fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
+            Ok(Engine::compose(store, Catalog::new())?)
         }
 
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
         db.run_script(
             "?[k, v] <- [[9, 'seed']] :create hist {k => v}",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
         // The retroactive write: valid = 150 µs (ancient), sys = now.
-        let mut tx = db.store.write_tx().unwrap();
-        let handle = get_relation(&tx, "hist").unwrap();
+        let mut tx = db.store.write_tx()?;
+        let handle = get_relation(&tx, "hist")?;
         handle
             .put_fact(
                 &mut tx,
                 &[DataValue::from(1), DataValue::from("retro")],
                 ValidityTs::from_raw(150),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-        tx.commit().unwrap();
-        let now = crate::session::current_validity().unwrap().raw();
+            )?;
+        tx.commit()?;
+        let now = crate::session::current_validity()?.raw();
 
         // (sys=now, valid=200): the record NOW says the fact held at 200.
         let rows = db
             .run_script(&format!("?[v] := *hist[1, v @ {now}, 200]"), no_params())
-            .expect("two-coordinate read");
+            .map_err(|e| miette!("two-coordinate read: {e}"))?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from("retro")])];
         assert_eq!(
             rows.rows(),
@@ -2358,11 +2362,12 @@ mod tests {
         // the row here and the empty set above.
         let rows = db
             .run_script(&format!("?[v] := *hist[1, v @ 200, {now}]"), no_params())
-            .expect("swapped-coordinate read");
+            .map_err(|e| miette!("swapped-coordinate read: {e}"))?;
         assert!(
             rows.rows().is_empty(),
             "at system time 200µs the record knew nothing: {rows:?}"
         );
+        Ok(())
     }
 
     /// The `@` clause parses in both arities through the public script
@@ -2370,27 +2375,28 @@ mod tests {
     /// record as it was). Resolution semantics are pinned by the
     /// time-travel trials; this pins the LANGUAGE surface.
     #[test]
-    fn asof_clause_parses_one_and_two_coordinates() {
+    fn asof_clause_parses_one_and_two_coordinates() -> Result<()>  {
         use crate::session::db::Engine;
         use std::collections::BTreeMap;
 
         fn no_params() -> BTreeMap<String, DataValue> {
             BTreeMap::new()
         }
-        fn open_engine<S: Storage>(store: S) -> Engine<S> {
-            Engine::compose(store, Catalog::new()).expect("compose engine")
+        fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
+            Ok(Engine::compose(store, Catalog::new())?)
         }
 
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
         db.run_script("?[k, v] <- [[1, 10]] :create hist {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] := *hist[k, v @ 12345]", no_params())
-            .expect("single-coordinate as-of parses and runs");
+            .map_err(|e| miette!("single-coordinate as-of parses and runs: {e}"))?;
         db.run_script("?[k, v] := *hist[k, v @ 12345, 67890]", no_params())
-            .expect("two-coordinate as-of parses and runs");
+            .map_err(|e| miette!("two-coordinate as-of parses and runs: {e}"))?;
         db.run_script("?[k, v] := *hist{k, v @ 12345, 67890}", no_params())
-            .expect("two-coordinate as-of parses in named form");
+            .map_err(|e| miette!("two-coordinate as-of parses in named form: {e}"))?;
+            Ok(())
     }
 
     /// The pinned wire bytes of the canonical handle above (msgpack,

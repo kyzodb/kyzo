@@ -492,44 +492,45 @@ impl<S: Storage> Engine<S> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use crate::store::fjall::new_fjall_storage;
 
     fn merkle_budget() -> std::num::NonZeroU64 {
-        std::num::NonZeroU64::new(1_000_000).unwrap()
+        std::num::NonZeroU64::new(1_000_000)?
     }
 
     /// Intact store + lawful chain tip → [`RootVerifyOutcome::Intact`].
     /// A forged [`StateRoot`] sitting in scope is never consulted: `verify`
     /// takes only `(tx, chain, cut, budget)`.
     #[test]
-    fn verify_intact_store_matches_stored_root_chain_tip() {
+    fn verify_intact_store_matches_stored_root_chain_tip() -> Result<()>  {
         use crate::store::epoch::FenceEpoch;
         use crate::store::merkle::{ChainLinkKind, GENESIS_ROOT};
         use crate::store::open::StoreId;
         use crate::store::{Storage, WriteTx};
 
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
         let content: Vec<(Vec<u8>, Vec<u8>)> = vec![
             (b"k00".to_vec(), b"v0".to_vec()),
             (b"k01".to_vec(), b"v1".to_vec()),
             (b"k02".to_vec(), b"v2".to_vec()),
         ];
         {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             for (k, v) in &content {
-                tx.put(k, v).unwrap();
+                tx.put(k, v)?;
             }
-            tx.commit().unwrap();
+            tx.commit()?;
         }
 
         let store_id = StoreId::from_digest([0x29; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let cut = CommitOrdinal::ZERO.successor().unwrap();
+        let cut = CommitOrdinal::ZERO.successor()?;
 
-        let tx = db.read_tx().unwrap();
-        let content_root = StateRoot::from_merkle(state_root(&tx, merkle_budget()).unwrap());
+        let tx = db.read_tx()?;
+        let content_root = StateRoot::from_merkle(state_root(&tx, merkle_budget())?);
 
         let mut chain = RootChain::empty();
         assert_eq!(chain.prior_root(), GENESIS_ROOT);
@@ -541,15 +542,15 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        chain.append(link).unwrap();
+        chain.append(link)?;
 
         // A forged digest in scope — verify never takes it as input.
         let _forged_caller_root = StateRoot::from_digest([0xDE; 32]);
-        assert_ne!(_forged_caller_root, as_of_root(&chain, cut).unwrap());
+        assert_ne!(_forged_caller_root, as_of_root(&chain, cut)?);
 
-        match verify(&tx, &chain, cut, merkle_budget()).expect("verify runs") {
+        match verify(&tx, &chain, cut, merkle_budget()).map_err(|e| miette!("verify runs: {e}"))? {
             RootVerifyOutcome::Intact { root } => {
-                assert_eq!(root, as_of_root(&chain, cut).unwrap());
+                assert_eq!(root, as_of_root(&chain, cut)?);
                 assert!(roots_equal_at_cut(root, chain.prior_root()));
             }
             RootVerifyOutcome::Tampered {
@@ -561,6 +562,7 @@ mod tests {
                 )
             }
         }
+        Ok(())
     }
 
     /// Real security proof: mutate one stored value after the chain tip is
@@ -569,28 +571,28 @@ mod tests {
     /// comparison against the stored [`RootChain`], not AEAD or a delivered
     /// digest.
     #[test]
-    fn verify_detects_store_tamper_against_stored_root_chain() {
+    fn verify_detects_store_tamper_against_stored_root_chain() -> Result<()>  {
         use crate::store::epoch::FenceEpoch;
         use crate::store::merkle::ChainLinkKind;
         use crate::store::open::StoreId;
         use crate::store::{Storage, WriteTx};
 
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path())?;
         {
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"k00", b"honest-v0").unwrap();
-            tx.put(b"k01", b"honest-v1").unwrap();
-            tx.commit().unwrap();
+            let mut tx = db.write_tx()?;
+            tx.put(b"k00", b"honest-v0")?;
+            tx.put(b"k01", b"honest-v1")?;
+            tx.commit()?;
         }
 
         let store_id = StoreId::from_digest([0xA4; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let cut = CommitOrdinal::ZERO.successor().unwrap();
+        let cut = CommitOrdinal::ZERO.successor()?;
 
         let content_root = {
-            let tx = db.read_tx().unwrap();
-            StateRoot::from_merkle(state_root(&tx, merkle_budget()).unwrap())
+            let tx = db.read_tx()?;
+            StateRoot::from_merkle(state_root(&tx, merkle_budget())?)
         };
 
         let mut chain = RootChain::empty();
@@ -602,24 +604,24 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         );
-        chain.append(link).unwrap();
-        let expected_tip = as_of_root(&chain, cut).unwrap();
+        chain.append(link)?;
+        let expected_tip = as_of_root(&chain, cut)?;
 
         // Attacker swaps one value under the sealed tip.
         {
-            let mut tx = db.write_tx().unwrap();
-            tx.put(b"k00", b"TAMPERED!!").unwrap();
-            tx.commit().unwrap();
+            let mut tx = db.write_tx()?;
+            tx.put(b"k00", b"TAMPERED!!")?;
+            tx.commit()?;
         }
 
-        let tx = db.read_tx().unwrap();
-        let tampered_content = StateRoot::from_merkle(state_root(&tx, merkle_budget()).unwrap());
+        let tx = db.read_tx()?;
+        let tampered_content = StateRoot::from_merkle(state_root(&tx, merkle_budget())?);
         assert_ne!(
             tampered_content, content_root,
             "tamper must change the cold content root"
         );
 
-        match verify(&tx, &chain, cut, merkle_budget()).expect("verify runs") {
+        match verify(&tx, &chain, cut, merkle_budget()).map_err(|e| miette!("verify runs: {e}"))? {
             RootVerifyOutcome::Tampered {
                 expected,
                 recomputed,
@@ -632,6 +634,7 @@ mod tests {
                 panic!("tampered store must not Intact; got root={root:?}")
             }
         }
+        Ok(())
     }
 
     /// Valid-but-stale rollback: an older internally-consistent snapshot
@@ -639,7 +642,7 @@ mod tests {
     /// Tampered — same detection class as merkle's stored-prior test, wired
     /// through the session verify door.
     #[test]
-    fn verify_detects_valid_but_stale_rollback_at_tip_cut() {
+    fn verify_detects_valid_but_stale_rollback_at_tip_cut() -> Result<()>  {
         use crate::store::epoch::FenceEpoch;
         use crate::store::merkle::ChainLinkKind;
         use crate::store::open::StoreId;
@@ -664,32 +667,32 @@ mod tests {
         };
 
         fn write_state(pairs: &[(Vec<u8>, Vec<u8>)]) -> crate::store::fjall::FjallStorage {
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
+            let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+            let db = new_fjall_storage(dir.path())?;
             std::mem::forget(dir);
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             for (k, v) in pairs {
-                tx.put(k, v).unwrap();
+                tx.put(k, v)?;
             }
-            tx.commit().unwrap();
+            tx.commit()?;
             db
         }
 
         let db_v1 = write_state(&state_v1);
         let content_v1 =
-            StateRoot::from_merkle(state_root(&db_v1.read_tx().unwrap(), merkle_budget()).unwrap());
+            StateRoot::from_merkle(state_root(&db_v1.read_tx()?, merkle_budget())?);
         let db_v2 = write_state(&state_v2);
         let content_v2 =
-            StateRoot::from_merkle(state_root(&db_v2.read_tx().unwrap(), merkle_budget()).unwrap());
+            StateRoot::from_merkle(state_root(&db_v2.read_tx()?, merkle_budget())?);
         let db_v3 = write_state(&state_v3);
         let content_v3 =
-            StateRoot::from_merkle(state_root(&db_v3.read_tx().unwrap(), merkle_budget()).unwrap());
+            StateRoot::from_merkle(state_root(&db_v3.read_tx()?, merkle_budget())?);
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
-        let o3 = o2.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
+        let o3 = o2.successor()?;
 
         let mut chain = RootChain::empty();
         chain
@@ -700,8 +703,7 @@ mod tests {
                 content_v1,
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         chain
             .append(ChainedStateRoot::mint(
                 store_id,
@@ -710,8 +712,7 @@ mod tests {
                 content_v2,
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
         chain
             .append(ChainedStateRoot::mint(
                 store_id,
@@ -720,31 +721,30 @@ mod tests {
                 content_v3,
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
+            ))?;
 
         // Live tip store matches tip cut.
         assert!(matches!(
-            verify(&db_v3.read_tx().unwrap(), &chain, o3, merkle_budget()).unwrap(),
+            verify(&db_v3.read_tx()?, &chain, o3, merkle_budget())?,
             RootVerifyOutcome::Intact { .. }
         ));
 
         // Attacker restores an older internally-consistent backup (v1 bytes).
         let rolled = write_state(&state_v1);
         let rolled_content = StateRoot::from_merkle(
-            state_root(&rolled.read_tx().unwrap(), merkle_budget()).unwrap(),
+            state_root(&rolled.read_tx()?, merkle_budget())?,
         );
         assert_eq!(
             rolled_content, content_v1,
             "rolled-back store must be internally consistent with v1"
         );
 
-        match verify(&rolled.read_tx().unwrap(), &chain, o3, merkle_budget()).unwrap() {
+        match verify(&rolled.read_tx()?, &chain, o3, merkle_budget())? {
             RootVerifyOutcome::Tampered {
                 expected,
                 recomputed,
             } => {
-                assert_eq!(expected, as_of_root(&chain, o3).unwrap());
+                assert_eq!(expected, as_of_root(&chain, o3)?);
                 assert!(!roots_equal_at_cut(expected, recomputed));
             }
             RootVerifyOutcome::Intact { .. } => {
@@ -753,24 +753,25 @@ mod tests {
         }
 
         // Same rolled-back bytes still Intact at the older cut they match.
-        match verify(&rolled.read_tx().unwrap(), &chain, o1, merkle_budget()).unwrap() {
+        match verify(&rolled.read_tx()?, &chain, o1, merkle_budget())? {
             RootVerifyOutcome::Intact { root } => {
-                assert_eq!(root, as_of_root(&chain, o1).unwrap());
+                assert_eq!(root, as_of_root(&chain, o1)?);
             }
             RootVerifyOutcome::Tampered { .. } => {
                 panic!("v1 bytes must Intact against as-of cut o1")
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn provenance_verify_matches_transitive_closure() {
+    fn provenance_verify_matches_transitive_closure() -> Result<()>  {
         use crate::session::catalog::Catalog;
-        let dir = tempfile::tempdir().unwrap();
-        let storage = new_fjall_storage(dir.path()).unwrap();
-        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let storage = new_fjall_storage(dir.path())?;
+        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}"))?;
         db.run_script(":create edge {a: Int, b: Int}", Default::default())
-            .expect("create schema");
+            .map_err(|e| miette!("create schema: {e}"))?;
         let rows = DataValue::List(vec![
             DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
             DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
@@ -780,7 +781,7 @@ mod tests {
             "?[a, b] <- $rows :put edge {a, b}",
             BTreeMap::from([("rows".into(), rows)]),
         )
-        .expect("seed");
+        .map_err(|e| miette!("seed: {e}"))?;
 
         let outcome = db
             .verify_script(
@@ -792,7 +793,7 @@ mod tests {
                 Default::default(),
                 ScriptOptions::default(),
             )
-            .expect("verify_script runs");
+            .map_err(|e| miette!("verify_script runs: {e}"))?;
         match outcome {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
             other @ VerifyOutcome::Mismatch { .. }
@@ -801,16 +802,17 @@ mod tests {
                 panic!("expected Match, got {other:?}")
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn provenance_verify_directive_returns_match_row() {
+    fn provenance_verify_directive_returns_match_row() -> Result<()>  {
         use crate::session::catalog::Catalog;
-        let dir = tempfile::tempdir().unwrap();
-        let storage = new_fjall_storage(dir.path()).unwrap();
-        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let storage = new_fjall_storage(dir.path())?;
+        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}"))?;
         db.run_script(":create edge {a: Int, b: Int}", Default::default())
-            .expect("create schema");
+            .map_err(|e| miette!("create schema: {e}"))?;
         let rows = DataValue::List(vec![
             DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
             DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
@@ -819,7 +821,7 @@ mod tests {
             "?[a, b] <- $rows :put edge {a, b}",
             BTreeMap::from([("rows".into(), rows)]),
         )
-        .expect("seed");
+        .map_err(|e| miette!("seed: {e}"))?;
 
         let rows = db
             .run_script(
@@ -832,21 +834,22 @@ mod tests {
                 "#,
                 Default::default(),
             )
-            .expect("::verify runs");
+            .map_err(|e| miette!("::verify runs: {e}"))?;
         assert_eq!(rows.headers(), &["status", "summary", "detail"]);
         assert_eq!(rows.rows().len(), 1);
         assert_eq!(rows.rows()[0][0], DataValue::from("match"));
+        Ok(())
     }
 
     /// Seeded edge relation for refuse-path pins through [`Engine::verify_script`].
     fn seeded_edge_db() -> Engine<crate::store::fjall::FjallStorage> {
         use crate::session::catalog::Catalog;
-        let dir = tempfile::tempdir().unwrap();
-        let storage = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let storage = new_fjall_storage(dir.path())?;
         std::mem::forget(dir);
-        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}"))?;
         db.run_script(":create edge {a: Int, b: Int}", Default::default())
-            .expect("create schema");
+            .map_err(|e| miette!("create schema: {e}"))?;
         let rows = DataValue::List(vec![
             DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
             DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
@@ -856,14 +859,14 @@ mod tests {
             "?[a, b] <- $rows :put edge {a, b}",
             BTreeMap::from([("rows".into(), rows)]),
         )
-        .expect("seed");
+        .map_err(|e| miette!("seed: {e}"))?;
         db
     }
 
     /// `:put` reaches [`verify_input_program`] → [`VerifyUnsupported::Mutation`].
     /// Hand-constructed `Unsupported { Mutation }` never proved this door.
     #[test]
-    fn verify_input_program_refuses_mutation() {
+    fn verify_input_program_refuses_mutation() -> Result<()>  {
         let db = seeded_edge_db();
         let outcome = db
             .verify_script(
@@ -871,7 +874,7 @@ mod tests {
                 Default::default(),
                 ScriptOptions::default(),
             )
-            .expect("verify_script returns outcome, not Err");
+            .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
         assert!(
             matches!(
                 outcome,
@@ -881,11 +884,12 @@ mod tests {
             ),
             "expected Mutation refuse, got {outcome:?}"
         );
+        Ok(())
     }
 
     /// `:order` reaches [`verify_input_program`] → [`VerifyUnsupported::OrderLimitOffset`].
     #[test]
-    fn verify_input_program_refuses_order_limit_offset() {
+    fn verify_input_program_refuses_order_limit_offset() -> Result<()>  {
         let db = seeded_edge_db();
         let outcome = db
             .verify_script(
@@ -893,7 +897,7 @@ mod tests {
                 Default::default(),
                 ScriptOptions::default(),
             )
-            .expect("verify_script returns outcome, not Err");
+            .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
         assert!(
             matches!(
                 outcome,
@@ -903,21 +907,22 @@ mod tests {
             ),
             "expected OrderLimitOffset refuse, got {outcome:?}"
         );
+        Ok(())
     }
 
     /// `@spans` reaches [`verify_input_program`] → [`VerifyUnsupported::IntervalDerivation`].
     #[test]
-    fn verify_input_program_refuses_interval_derivation() {
+    fn verify_input_program_refuses_interval_derivation() -> Result<()>  {
         let db = seeded_edge_db();
         db.run_script(":create hist {k: Int => v: Any}", Default::default())
-            .expect("create hist");
+            .map_err(|e| miette!("create hist: {e}"))?;
         let outcome = db
             .verify_script(
                 "?[k, v, iv] := *hist[k, v @spans iv]",
                 Default::default(),
                 ScriptOptions::default(),
             )
-            .expect("verify_script returns outcome, not Err");
+            .map_err(|e| miette!("verify_script returns outcome, not Err: {e}"))?;
         match outcome {
             VerifyOutcome::Unsupported {
                 reason: VerifyUnsupported::IntervalDerivation { name },
@@ -929,19 +934,20 @@ mod tests {
                 panic!("expected IntervalDerivation {{ hist }}, got {other:?}")
             }
         }
+        Ok(())
     }
 
     /// Starved provenance ceiling: eval completes, provenance enumeration
     /// refuses → [`VerifyOutcome::BudgetRefused`] (not Err, not Match).
     #[test]
-    fn verify_input_program_refuses_budget() {
+    fn verify_input_program_refuses_budget() -> Result<()>  {
         use crate::session::catalog::Catalog;
-        let dir = tempfile::tempdir().unwrap();
-        let storage = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let storage = new_fjall_storage(dir.path())?;
         std::mem::forget(dir);
-        let db = Engine::compose(storage, Catalog::new()).expect("compose");
+        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}"))?;
         db.run_script(":create edge {a: Int, b: Int}", Default::default())
-            .expect("create edge");
+            .map_err(|e| miette!("create edge: {e}"))?;
         let mut pairs = Vec::new();
         let layers = [0i64, 4, 8, 12, 16];
         for w in layers.windows(2) {
@@ -969,7 +975,7 @@ mod tests {
             "?[a, b] <- $rows :put edge {a, b}",
             BTreeMap::from([("rows".into(), DataValue::List(pairs))]),
         )
-        .expect("seed dense edge");
+        .map_err(|e| miette!("seed dense edge: {e}"))?;
 
         let outcome = db
             .verify_script(
@@ -985,10 +991,11 @@ mod tests {
                     ..ScriptOptions::default()
                 },
             )
-            .expect("starved ceiling returns BudgetRefused, not Err");
+            .map_err(|e| miette!("starved ceiling returns BudgetRefused, not Err: {e}"))?;
         assert!(
             matches!(outcome, VerifyOutcome::BudgetRefused { .. }),
             "expected BudgetRefused, got {outcome:?}"
         );
+        Ok(())
     }
 }

@@ -806,6 +806,7 @@ impl<S: Storage> Engine<S> {
 /// surface and correction mechanism would call.
 #[cfg(test)]
 mod temporal_index_tests {
+    use miette::{Result, miette};
     use std::cmp::Reverse;
 
     use super::*;
@@ -822,8 +823,8 @@ mod temporal_index_tests {
         ValidityTs::from_raw(t)
     }
 
-    fn open_engine(store: SimStorage) -> Engine<SimStorage> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine(store: SimStorage) -> Result<Engine<SimStorage>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     fn col(name: &str) -> ColumnDef {
@@ -851,7 +852,7 @@ mod temporal_index_tests {
     }
 
     fn open_session(db: &Engine<SimStorage>) -> SessionTx<<SimStorage as Storage>::WriteTx> {
-        SessionTx::new_write(db.store.write_tx().unwrap(), ScriptOptions::default())
+        SessionTx::new_write(db.store.write_tx()?, ScriptOptions::default())
     }
 
     /// Write one base point event directly (bypassing `execute_relation`,
@@ -883,21 +884,17 @@ mod temporal_index_tests {
         let span = SourceSpan::default();
         let row = vec![DataValue::from(k)];
         let key = base
-            .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)
-            .unwrap();
+            .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
         let val = base
-            .encode_bitemporal_val_for_store(&row, polarity, span)
-            .unwrap();
-        stx.put_routed(Residency::Stored, &key, &val).unwrap();
+            .encode_bitemporal_val_for_store(&row, polarity, span)?;
+        stx.put_routed(Residency::Stored, &key, &val)?;
         match polarity {
             ClaimPolarity::Assert => {
                 let old = reasserts_existing.then_some(row.as_slice());
-                stx.update_indices(base, Some(&row), old, vts(valid), vts(sys))
-                    .unwrap();
+                stx.update_indices(base, Some(&row), old, vts(valid), vts(sys))?;
             }
             ClaimPolarity::Retract => {
-                stx.update_indices(base, None, Some(&row), vts(valid), vts(sys))
-                    .unwrap();
+                stx.update_indices(base, None, Some(&row), vts(valid), vts(sys))?;
             }
             ClaimPolarity::Erase => {
                 stx.temporal_index_write(
@@ -907,8 +904,7 @@ mod temporal_index_tests {
                     ClaimPolarity::Erase,
                     vts(valid),
                     vts(sys),
-                )
-                .unwrap();
+                )?;
             }
         }
     }
@@ -926,16 +922,16 @@ mod temporal_index_tests {
         let upper = (idx_handle.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
-                let (k, v) = r.expect("posting row decodes cleanly");
+                let (k, v) = r.map_err(|e| miette!("posting row decodes cleanly: {e}"))?;
                 let tup = kyzo_model::value::decode_tuple_from_key(&k, 4)
-                    .expect("posting key decodes cleanly");
+                    .map_err(|e| miette!("posting key decodes cleanly: {e}"))?;
                 let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
                         panic!("expected the leading Validity column, got {other:?}")
                     }
                 };
-                let key_col = tup[1].get_int().expect("int base key column");
+                let key_col = tup[1].get_int().ok_or_else(|| miette!("int base key column"))?;
                 let tail_valid = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
@@ -949,7 +945,7 @@ mod temporal_index_tests {
                     }
                 };
                 let polarity = crate::store::time::claim_polarity_of_value(&v)
-                    .expect("posting value decodes cleanly");
+                    .map_err(|e| miette!("posting value decodes cleanly: {e}"))?;
                 (leading, key_col, tail_valid, tail_sys, polarity)
             })
             .collect()
@@ -965,10 +961,10 @@ mod temporal_index_tests {
         let upper = (base.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
-                let (k, v) = r.expect("base row decodes cleanly");
+                let (k, v) = r.map_err(|e| miette!("base row decodes cleanly: {e}"))?;
                 let tup = kyzo_model::value::decode_tuple_from_key(&k, 3)
-                    .expect("base key decodes cleanly");
-                let key_col = tup[0].get_int().expect("int base key column");
+                    .map_err(|e| miette!("base key decodes cleanly: {e}"))?;
+                let key_col = tup[0].get_int().ok_or_else(|| miette!("int base key column"))?;
                 let valid = match &tup.as_slice()[1] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => panic!("expected the valid slot, got {other:?}"),
@@ -978,7 +974,7 @@ mod temporal_index_tests {
                     other @ (data_value_any!()) => panic!("expected the sys slot, got {other:?}"),
                 };
                 let polarity = crate::store::time::claim_polarity_of_value(&v)
-                    .expect("base value decodes cleanly");
+                    .map_err(|e| miette!("base value decodes cleanly: {e}"))?;
                 (valid, key_col, valid, sys, polarity)
             })
             .collect()
@@ -998,14 +994,13 @@ mod temporal_index_tests {
     /// the key layout claim directly: the leading Validity column really
     /// does precede the base key bytes, not follow them.
     #[test]
-    fn temporal_index_posting_rows_match_the_scripted_history_exactly() {
+    fn temporal_index_posting_rows_match_the_scripted_history_exactly() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x7E57_0001));
         let mut stx = open_session(&db);
-        stx.create_relation(base_input("e"), KeyspaceKind::Facts)
-            .unwrap();
-        stx.create_temporal_index("e", "t").unwrap();
-        let base = stx.get_relation("e").unwrap();
-        let idx_handle = stx.get_relation("e:t").unwrap();
+        stx.create_relation(base_input("e"), KeyspaceKind::Facts)?;
+        stx.create_temporal_index("e", "t")?;
+        let base = stx.get_relation("e")?;
+        let idx_handle = stx.get_relation("e:t")?;
 
         // (k, valid, sys, polarity). The third event corrects the FIRST
         // one: same valid instant (10), newer sys (3) — an Erase un-
@@ -1018,9 +1013,9 @@ mod temporal_index_tests {
         for &(k, valid, sys, polarity) in &events {
             write_base_event(&mut stx, &base, &idx_handle, k, valid, sys, polarity, false);
         }
-        stx.store.commit().unwrap();
+        stx.store.commit()?;
 
-        let tx = db.store.read_tx().unwrap();
+        let tx = db.store.read_tx()?;
         let mut got = scan_postings(&tx, &idx_handle);
         got.sort_by_key(|r| (Reverse(r.0), r.1, Reverse(r.2), Reverse(r.3)));
         let mut want: Vec<DecodedPosting> = events
@@ -1050,14 +1045,14 @@ mod temporal_index_tests {
                 &(idx_handle.id.raw() + 1).to_be_bytes(),
             )
             .next()
-            .expect("at least one posting at or after the hand-encoded key")
-            .unwrap();
+            .map_err(|e| miette!("at least one posting at or after the hand-encoded key: {e}"))?;
         assert_eq!(
             got_key,
             expected_key.as_ref(),
             "the hand-encoded posting key (leading Validity(10), then k=1, \
              then the tail) must be the literal first key on disk"
         );
+        Ok(())
     }
 
     /// The rebuildability law: an index attached BEFORE any base writes
@@ -1068,7 +1063,7 @@ mod temporal_index_tests {
     /// the same order (base, then index), so their relation ids align and
     /// a literal raw-byte comparison — no id-prefix stripping — is valid.
     #[test]
-    fn temporal_index_backfill_equals_incremental() {
+    fn temporal_index_backfill_equals_incremental() -> Result<()>  {
         // (k, valid, sys, polarity, reasserts_existing) — several keys,
         // mixed polarities, instants not in chronological write order,
         // several sys stamps. The `(1, 120, 14, Assert, true)` event is a
@@ -1091,11 +1086,10 @@ mod temporal_index_tests {
         let db_a = open_engine(SimStorage::new(0xB0071));
         let mut stx_a = open_session(&db_a);
         stx_a
-            .create_relation(base_input("b"), KeyspaceKind::Facts)
-            .unwrap();
-        stx_a.create_temporal_index("b", "t").unwrap();
-        let base_a = stx_a.get_relation("b").unwrap();
-        let idx_a = stx_a.get_relation("b:t").unwrap();
+            .create_relation(base_input("b"), KeyspaceKind::Facts)?;
+        stx_a.create_temporal_index("b", "t")?;
+        let base_a = stx_a.get_relation("b")?;
+        let idx_a = stx_a.get_relation("b:t")?;
         for &(k, valid, sys, polarity, reasserts_existing) in &events {
             write_base_event(
                 &mut stx_a,
@@ -1108,7 +1102,7 @@ mod temporal_index_tests {
                 reasserts_existing,
             );
         }
-        stx_a.store.commit().unwrap();
+        stx_a.store.commit()?;
 
         // Universe B: index attached AFTER the same writes (backfill).
         // No index exists yet, so `write_base_event`'s `update_indices`
@@ -1118,23 +1112,20 @@ mod temporal_index_tests {
         let db_b = open_engine(SimStorage::new(0xB0072));
         let mut stx_b = open_session(&db_b);
         stx_b
-            .create_relation(base_input("b"), KeyspaceKind::Facts)
-            .unwrap();
-        let base_b = stx_b.get_relation("b").unwrap();
+            .create_relation(base_input("b"), KeyspaceKind::Facts)?;
+        let base_b = stx_b.get_relation("b")?;
         for &(k, valid, sys, polarity, _) in &events {
             let span = SourceSpan::default();
             let row = vec![DataValue::from(k)];
             let key = base_b
-                .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)
-                .unwrap();
+                .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
             let val = base_b
-                .encode_bitemporal_val_for_store(&row, polarity, span)
-                .unwrap();
-            stx_b.put_routed(Residency::Stored, &key, &val).unwrap();
+                .encode_bitemporal_val_for_store(&row, polarity, span)?;
+            stx_b.put_routed(Residency::Stored, &key, &val)?;
         }
-        stx_b.create_temporal_index("b", "t").unwrap();
-        let idx_b = stx_b.get_relation("b:t").unwrap();
-        stx_b.store.commit().unwrap();
+        stx_b.create_temporal_index("b", "t")?;
+        let idx_b = stx_b.get_relation("b:t")?;
+        stx_b.store.commit()?;
 
         assert_eq!(
             base_a.id, base_b.id,
@@ -1143,18 +1134,16 @@ mod temporal_index_tests {
         );
         assert_eq!(idx_a.id, idx_b.id);
 
-        let tx_a = db_a.store.read_tx().unwrap();
-        let tx_b = db_b.store.read_tx().unwrap();
+        let tx_a = db_a.store.read_tx()?;
+        let tx_b = db_b.store.read_tx()?;
         let lower: Vec<u8> = Tuple::default().encode_as_key(idx_a.id).as_ref().to_vec();
         let upper = (idx_a.id.raw() + 1).to_be_bytes().to_vec();
         let raw_a: Vec<(Slice, Slice)> = tx_a
             .range_scan(&lower, &upper)
-            .collect::<Result<_>>()
-            .unwrap();
+            .collect::<Result<_>>()?;
         let raw_b: Vec<(Slice, Slice)> = tx_b
             .range_scan(&lower, &upper)
-            .collect::<Result<_>>()
-            .unwrap();
+            .collect::<Result<_>>()?;
         assert!(
             !raw_a.is_empty(),
             "the incremental universe must have posted something"
@@ -1165,20 +1154,20 @@ mod temporal_index_tests {
              writes must reproduce the exact keyspace an index live since \
              the first write would hold"
         );
+        Ok(())
     }
 
     /// Polarity/coordinate mirroring, generalized over a scripted history:
     /// every base row implies exactly one posting at the SAME (valid,
     /// sys, polarity) — not merely for the byte-verified fixture above.
     #[test]
-    fn every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate() {
+    fn every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x7E57_0002));
         let mut stx = open_session(&db);
-        stx.create_relation(base_input("m"), KeyspaceKind::Facts)
-            .unwrap();
-        stx.create_temporal_index("m", "t").unwrap();
-        let base = stx.get_relation("m").unwrap();
-        let idx_handle = stx.get_relation("m:t").unwrap();
+        stx.create_relation(base_input("m"), KeyspaceKind::Facts)?;
+        stx.create_temporal_index("m", "t")?;
+        let base = stx.get_relation("m")?;
+        let idx_handle = stx.get_relation("m:t")?;
 
         let events = [
             (1i64, 5i64, 1i64, ClaimPolarity::Assert),
@@ -1189,9 +1178,9 @@ mod temporal_index_tests {
         for &(k, valid, sys, polarity) in &events {
             write_base_event(&mut stx, &base, &idx_handle, k, valid, sys, polarity, false);
         }
-        stx.store.commit().unwrap();
+        stx.store.commit()?;
 
-        let tx = db.store.read_tx().unwrap();
+        let tx = db.store.read_tx()?;
         let mut base_rows = scan_base_rows(&tx, &base);
         let mut postings = scan_postings(&tx, &idx_handle);
         base_rows.sort_by_key(decoded_posting_sort_key);
@@ -1201,6 +1190,7 @@ mod temporal_index_tests {
             "the posting keyspace, read as (valid, key, valid, sys, \
              polarity), must be a bijection with the base's own rows"
         );
+        Ok(())
     }
 
     /// Hostile-review finding (story #62): `update_indices`'s `Temporal`
@@ -1214,34 +1204,34 @@ mod temporal_index_tests {
     /// removal — the exact previously-uncovered branch — and checks the
     /// exact posting byte set.
     #[test]
-    fn temporal_index_production_pipeline_mirrors_one_posting_per_base_event() {
+    fn temporal_index_production_pipeline_mirrors_one_posting_per_base_event() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x7E57_0003));
         db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         {
             // `::temporal index create` has no parsed surface yet (see
             // the landing report); attach it directly.
             let mut stx = open_session(&db);
-            stx.create_temporal_index("po", "t").unwrap();
-            stx.store.commit().unwrap();
+            stx.create_temporal_index("po", "t")?;
+            stx.store.commit()?;
         }
 
         db.run_script("?[k, v] <- [[1, 100]] :put po {k, v}", BTreeMap::new())
-            .expect("fresh insert");
+            .map_err(|e| miette!("fresh insert: {e}"))?;
         // The overwrite: `current_row_routed` resolves at THIS write's own
         // valid to the prior row (`old_kv = Some`), and this write
         // supplies a new payload (`new_kv = Some`) — both `Some`, the
         // exact branch under review.
         db.run_script("?[k, v] <- [[1, 200]] :put po {k, v}", BTreeMap::new())
-            .expect("overwrite");
+            .map_err(|e| miette!("overwrite: {e}"))?;
         db.run_script("?[k, v] <- [[1, 300]] :update po {k, v}", BTreeMap::new())
-            .expect("update");
+            .map_err(|e| miette!("update: {e}"))?;
         db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
-            .expect("remove");
+            .map_err(|e| miette!("remove: {e}"))?;
 
-        let rtx = SessionTx::new_read(db.store.read_tx().unwrap(), ScriptOptions::default());
-        let base = rtx.get_relation("po").unwrap();
-        let idx_handle = rtx.get_relation("po:t").unwrap();
+        let rtx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::default());
+        let base = rtx.get_relation("po")?;
+        let idx_handle = rtx.get_relation("po:t")?;
         let mut base_rows = scan_base_rows(&rtx.store, &base);
         let mut postings = scan_postings(&rtx.store, &idx_handle);
         assert_eq!(
@@ -1268,6 +1258,7 @@ mod temporal_index_tests {
             "exactly one Retract posting — from the :rm — never one per \
              overwrite/update"
         );
+        Ok(())
     }
 
     /// The write-COUNT law, closing the gap the byte-content tests above
@@ -1297,14 +1288,14 @@ mod temporal_index_tests {
     /// `del_call_count` stays 0 throughout: this bitemporal pipeline never
     /// calls `WriteTx::del`/`del_range` on a mutation path at all.
     #[test]
-    fn temporal_index_write_count_law_holds_for_every_mutation_kind() {
+    fn temporal_index_write_count_law_holds_for_every_mutation_kind() -> Result<()>  {
         let db = open_engine(SimStorage::new(0x7E57_0004));
         db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         {
             let mut stx = open_session(&db);
-            stx.create_temporal_index("po", "t").unwrap();
-            stx.store.commit().unwrap();
+            stx.create_temporal_index("po", "t")?;
+            stx.store.commit()?;
         }
 
         let puts_before_all = db.store.put_call_count();
@@ -1334,18 +1325,18 @@ mod temporal_index_tests {
         // :put fresh — no existing row, so `old_kv` is `None`: the branch
         // the dual-fire mutant cannot distinguish from single-fire.
         db.run_script("?[k, v] <- [[1, 100]] :put po {k, v}", BTreeMap::new())
-            .expect("fresh insert");
+            .map_err(|e| miette!("fresh insert: {e}"))?;
         let (p1, d1) = check_delta("put fresh", puts_before_all, dels_before_all);
 
         // :put overwrite — `old_kv` AND `new_kv` both `Some`: the exact
         // branch story #62's hostile review found unguarded.
         db.run_script("?[k, v] <- [[1, 200]] :put po {k, v}", BTreeMap::new())
-            .expect("overwrite");
+            .map_err(|e| miette!("overwrite: {e}"))?;
         let (p2, d2) = check_delta("put overwrite", p1, d1);
 
         // :update — same both-`Some` shape as the overwrite.
         db.run_script("?[k, v] <- [[1, 300]] :update po {k, v}", BTreeMap::new())
-            .expect("update");
+            .map_err(|e| miette!("update: {e}"))?;
         let (p3, d3) = check_delta("update", p2, d2);
 
         // :rm — `new_kv` is `None`, `old_kv` is `Some`: single-fire and
@@ -1353,13 +1344,15 @@ mod temporal_index_tests {
         // diverge), so this is the control showing the law holds
         // everywhere, not just where the mutant happens to differ.
         db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
-            .expect("remove");
+            .map_err(|e| miette!("remove: {e}"))?;
         check_delta("rm", p3, d3);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod index_surface_tests {
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::data::json::NamedRows;
@@ -1373,8 +1366,8 @@ mod index_surface_tests {
         BTreeMap::new()
     }
 
-    fn open_engine<S: Storage>(store: S) -> Engine<S> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
@@ -1382,7 +1375,7 @@ mod index_surface_tests {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
             .collect();
         out.sort();
         out
@@ -1393,30 +1386,30 @@ mod index_surface_tests {
     /// including one where the fact was retracted and one where its value
     /// changed between coordinates.
     #[test]
-    fn plain_index_asof_reads_match_base_scans() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn plain_index_asof_reads_match_base_scans() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
         db.run_script(
             "?[k, v] <- [[1, 10], [2, 20]] :create t {k => v}",
             no_params(),
         )
-        .expect("create");
+        .map_err(|e| miette!("create: {e}"))?;
         db.run_script("::index create t:by_v {v}", no_params())
-            .expect("::index create must be a live surface");
+            .map_err(|e| miette!("::index create must be a live surface: {e}"))?;
         // History: update k=1, retract k=2 (distinct stamps).
         db.run_script("?[k, v] <- [[1, 11]] :put t {k => v}", no_params())
-            .expect("update");
+            .map_err(|e| miette!("update: {e}"))?;
         db.run_script("?[k] <- [[2]] :rm t {k}", no_params())
-            .expect("retract");
+            .map_err(|e| miette!("retract: {e}"))?;
 
         // The index-served plan binds v first (the index's leading
         // column); the base plan binds k first. Same logical query.
         let via_index = db
             .run_script("?[v, k] := *t:by_v{v, k} :order v", no_params())
-            .expect("index read");
+            .map_err(|e| miette!("index read: {e}"))?;
         let via_base = db
             .run_script("?[v, k] := *t[k, v] :order v", no_params())
-            .expect("base read");
+            .map_err(|e| miette!("base read: {e}"))?;
         assert_eq!(
             via_index.rows(),
             via_base.rows(),
@@ -1425,6 +1418,7 @@ mod index_surface_tests {
         assert_eq!(via_base.rows().len(), 1, "one row: k=1 updated, k=2 gone");
         let want: Tuple = Tuple::from_vec(vec![DataValue::from(11), DataValue::from(1)]);
         assert_eq!(via_base.rows()[0], want);
+        Ok(())
     }
 
     /// Backfill batching at scale: a plain index created over MORE rows
@@ -1432,11 +1426,11 @@ mod index_surface_tests {
     /// the resume bound (fact prefix + `Bot`) must neither skip nor
     /// double-count across batch boundaries.
     #[test]
-    fn index_backfill_resumes_correctly_across_batches() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn index_backfill_resumes_correctly_across_batches() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?);
         db.run_script("?[k, v] <- [[0, 0]] :create big {k => v}", no_params())
-            .expect("create");
+            .map_err(|e| miette!("create: {e}"))?;
         let mut chunk = vec![];
         for i in 0..5000i64 {
             chunk.push(format!("[{}, {}]", i, i * 7));
@@ -1445,15 +1439,15 @@ mod index_surface_tests {
                     &format!("?[k, v] <- [{}] :put big {{k => v}}", chunk.join(", ")),
                     no_params(),
                 )
-                .expect("seed chunk");
+                .map_err(|e| miette!("seed chunk: {e}"))?;
                 chunk.clear();
             }
         }
         db.run_script("::index create big:by_v {v}", no_params())
-            .expect("index create over 5000 rows");
+            .map_err(|e| miette!("index create over 5000 rows: {e}"))?;
         let via_index = db
             .run_script("?[count(v)] := *big:by_v{v, k}", no_params())
-            .expect("count via index");
+            .map_err(|e| miette!("count via index: {e}"))?;
         assert_eq!(
             int_rows(&via_index),
             vec![vec![5000]],
@@ -1465,13 +1459,14 @@ mod index_surface_tests {
                 "?[v] := *big[k, v], k >= 4094, k <= 4098 :order v",
                 no_params(),
             )
-            .expect("base spot");
+            .map_err(|e| miette!("base spot: {e}"))?;
         let via_idx = db
             .run_script(
                 "?[v] := *big:by_v{v, k}, k >= 4094, k <= 4098 :order v",
                 no_params(),
             )
-            .expect("index spot");
+            .map_err(|e| miette!("index spot: {e}"))?;
         assert_eq!(via_base.rows(), via_idx.rows(), "batch-boundary rows agree");
+        Ok(())
     }
 }
