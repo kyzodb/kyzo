@@ -8,6 +8,7 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
+use miette::miette;
 use crate::exec::stdlib::collection::*;
 use crate::exec::stdlib::temporal_format::*;
 use kyzo_model::data_value_any;
@@ -392,7 +393,9 @@ fn test_json_path_negative_index_errors() -> Result<(), Box<dyn std::error::Erro
 // `op_format_timestamp` -> RFC3339 string; helper returns Ok(String)/Err(msg).
 fn fmt(args: &[DataValue]) -> Result<String, String> {
     let v = op_format_timestamp(args).map_err(|e| e.to_string())?;
-    v.get_str().map(|s| s.to_string()).ok_or_else(|| "get_str".to_string())
+    v.get_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "get_str".to_string())
 }
 fn fmt_n(n: f64) -> Result<String, String> {
     fmt(&[DataValue::from(n)])
@@ -454,19 +457,19 @@ fn format_timestamp_numeric_agreed() -> Result<(), Box<dyn std::error::Error + S
 #[test]
 fn format_timestamp_validity_input_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use kyzo_model::value::Validity;
-    let f = |micros: i64| {
+    let f = |micros: i64| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let vld = DataValue::Validity(
             Validity::new(ValidityTs::from_raw(micros), true)
-                .map_err(|e| miette!("non-reserved: {e}"))?
+                .ok_or_else(|| "non-reserved validity".to_string())?
                 .into(),
         );
-        fmt(&[vld])?
+        Ok(fmt(&[vld])?)
     };
     // Validity stores microseconds; the op divides by 1000 to milliseconds.
-    assert_eq!(f(0), "1970-01-01T00:00:00+00:00");
-    assert_eq!(f(1_500_000), "1970-01-01T00:00:01.500+00:00");
-    assert_eq!(f(-1_500_000), "1969-12-31T23:59:58.500+00:00");
-    assert_eq!(f(1_600_000_000_000_000), "2020-09-13T12:26:40+00:00");
+    assert_eq!(f(0)?, "1970-01-01T00:00:00+00:00");
+    assert_eq!(f(1_500_000)?, "1970-01-01T00:00:01.500+00:00");
+    assert_eq!(f(-1_500_000)?, "1969-12-31T23:59:58.500+00:00");
+    assert_eq!(f(1_600_000_000_000_000)?, "2020-09-13T12:26:40+00:00");
     Ok(())
 }
 

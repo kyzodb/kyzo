@@ -104,8 +104,10 @@ fn test_mul() -> Result<()>  {
     Ok(())
 }
 
-fn f64_vec(xs: &[f64]) -> DataValue {
-    DataValue::Vector(Vector::try_new(xs.to_vec())?)
+fn f64_vec(xs: &[f64]) -> Result<DataValue> {
+    Ok(DataValue::Vector(
+        Vector::try_new(xs.to_vec()).ok_or_else(|| miette!("vector"))?,
+    ))
 }
 
 // Regression for the upstream bug where multiplying three or more vectors
@@ -114,18 +116,18 @@ fn f64_vec(xs: &[f64]) -> DataValue {
 #[test]
 fn test_mul_vecs_multiplies() -> Result<()>  {
     assert_eq!(
-        op_mul(&[f64_vec(&[2., 3.]), f64_vec(&[4., 5.])])?,
-        f64_vec(&[8., 15.])
+        op_mul(&[f64_vec(&[2., 3.])?, f64_vec(&[4., 5.])?])?,
+        f64_vec(&[8., 15.])?
     );
     // Three arguments: the buggy version yields [36., 56.] here.
     assert_eq!(
-        op_mul(&[f64_vec(&[2., 3.]), f64_vec(&[4., 5.]), f64_vec(&[6., 7.])])?,
-        f64_vec(&[48., 105.])
+        op_mul(&[f64_vec(&[2., 3.])?, f64_vec(&[4., 5.])?, f64_vec(&[6., 7.])?])?,
+        f64_vec(&[48., 105.])?
     );
     // Scalars broadcast over vectors.
     assert_eq!(
-        op_mul(&[f64_vec(&[2., 3.]), DataValue::from(10.)])?,
-        f64_vec(&[20., 30.])
+        op_mul(&[f64_vec(&[2., 3.])?, DataValue::from(10.)])?,
+        f64_vec(&[20., 30.])?
     );
     Ok(())
 }
@@ -309,7 +311,8 @@ fn test_signum() -> Result<()>  {
     );
     assert!(
         op_signum(&[DataValue::from(f64::NAN)])?
-            .get_float().ok_or_else(|| miette!("float"))?
+            .get_float()
+            .ok_or_else(|| miette!("float"))?
             .is_nan()
     );
     Ok(())
@@ -379,7 +382,8 @@ fn test_exp() -> Result<()>  {
     assert!(close(n, E));
 
     let n = op_exp(&[DataValue::from(50.1)])?
-        .get_float().ok_or_else(|| miette!("float"))?;
+        .get_float()
+        .ok_or_else(|| miette!("float"))?;
     assert!(close(n, 50.1_f64.exp()));
     Ok(())
 }
@@ -387,7 +391,8 @@ fn test_exp() -> Result<()>  {
 #[test]
 fn test_exp2() -> Result<()>  {
     let n = op_exp2(&[DataValue::from(10.)])?
-        .get_float().ok_or_else(|| miette!("float"))?;
+        .get_float()
+        .ok_or_else(|| miette!("float"))?;
     assert_eq!(n, 1024.);
     Ok(())
 }
@@ -420,17 +425,20 @@ fn test_log10() -> Result<()>  {
 fn test_trig() -> Result<()>  {
     assert!(close(
         op_sin(&[DataValue::from(PI / 2.)])?
-            .get_float().ok_or_else(|| miette!("float"))?,
+            .get_float()
+            .ok_or_else(|| miette!("float"))?,
         1.0
     ));
     assert!(close(
         op_cos(&[DataValue::from(PI / 2.)])?
-            .get_float().ok_or_else(|| miette!("float"))?,
+            .get_float()
+            .ok_or_else(|| miette!("float"))?,
         0.0
     ));
     assert!(close(
         op_tan(&[DataValue::from(PI / 4.)])?
-            .get_float().ok_or_else(|| miette!("float"))?,
+            .get_float()
+            .ok_or_else(|| miette!("float"))?,
         1.0
     ));
     Ok(())
@@ -440,7 +448,8 @@ fn test_trig() -> Result<()>  {
 fn test_inv_trig() -> Result<()>  {
     assert!(close(
         op_asin(&[DataValue::from(1.0)])?
-            .get_float().ok_or_else(|| miette!("float"))?,
+            .get_float()
+            .ok_or_else(|| miette!("float"))?,
         PI / 2.
     ));
     assert!(close(
@@ -453,7 +462,8 @@ fn test_inv_trig() -> Result<()>  {
     ));
     assert!(close(
         op_atan2(&[DataValue::from(-1), DataValue::from(-1)])?
-            .get_float().ok_or_else(|| miette!("float"))?,
+            .get_float()
+            .ok_or_else(|| miette!("float"))?,
         -3. * PI / 4.
     ));
     Ok(())
@@ -584,7 +594,8 @@ fn test_pow() -> Result<()>  {
     // far past i64's range saturates to infinity rather than overflowing
     // or panicking, the same as any other float op.
     let huge = op_pow(&[DataValue::from(i64::MAX), DataValue::from(i64::MAX)])?
-        .get_float().ok_or_else(|| miette!("float"))?;
+        .get_float()
+        .ok_or_else(|| miette!("float"))?;
     assert!(huge.is_infinite());
     Ok(())
 }

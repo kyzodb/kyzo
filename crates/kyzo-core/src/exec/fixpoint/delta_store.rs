@@ -1055,7 +1055,8 @@ fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
             }
             Ok(merged)
         },
-    )
+    );
+    Ok(())
 }
 
 /// As [`compact_normal`], for meet levels: newest group value wins whole.
@@ -1091,7 +1092,8 @@ fn compact_meet(_spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) -> Result<
             }
             Ok(merged)
         },
-    )
+    );
+    Ok(())
 }
 
 /// Row-ordered iteration over meet levels within a bound window, newest
@@ -1204,8 +1206,8 @@ fn meet_ranged<'s>(
 
 #[cfg(test)]
 mod level_stack_tests {
-    use miette::{Result, miette};
     use super::*;
+    use miette::{Result, miette};
 
     /// A converging fixpoint's level stack stays bounded: epochs that
     /// admit nothing must not accumulate levels (the consumed empty delta
@@ -2191,11 +2193,17 @@ mod tests {
     }
 
     fn all(store: &EpochStore) -> Result<Vec<Tuple>> {
-        Ok(store.all_iter()?.map(TupleInIter::try_into_tuple).collect::<Result<Vec<_>, _>>()?)
+        Ok(store
+            .all_iter()?
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     fn delta(store: &EpochStore) -> Result<Vec<Tuple>> {
-        Ok(store.delta_all_iter()?.map(TupleInIter::try_into_tuple).collect::<Result<Vec<_>, _>>()?)
+        Ok(store
+            .delta_all_iter()?
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     // ── total/delta discipline ───────────────────────────────────────────
@@ -2707,10 +2715,7 @@ mod tests {
     /// interleaves to a head tuple that `exists` recognizes.
     fn rev_assert_lockstep(store: &MeetAggrStore) -> Result<()> {
         for (k, v) in &store.by_group {
-            let row = store
-                .layout
-                .interleave(k.as_ref(), v.as_slice())
-                .map_err(|e| miette!("group interleaves: {e}"))?;
+            let row = store.layout.interleave(k.as_ref(), v.as_slice())?;
             assert!(
                 store.exists(row.as_slice()),
                 "interleaved head must exist for its group"

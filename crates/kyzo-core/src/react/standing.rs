@@ -516,7 +516,9 @@ mod tests {
             body,
         }
     }
-    fn one_stratum_program(defs: Vec<(&str, Vec<MagicInlineRule>)>) -> StratifiedMagicProgram {
+    fn one_stratum_program(
+        defs: Vec<(&str, Vec<MagicInlineRule>)>,
+    ) -> Result<StratifiedMagicProgram> {
         let prog = defs
             .into_iter()
             .map(|(head, rules)| {
@@ -527,12 +529,11 @@ mod tests {
             })
             .collect();
         StratifiedMagicProgram::from_execution_order(vec![MagicProgram { prog }])
-            .map_err(|e| miette!("well-formed test program: {e}"))?
     }
 
     /// `?(x) :- p(x), not r(x)` — the hard-corner scenario, from a REAL
     /// Db/callback registration through to a real commit's delta.
-    fn hard_corner_program() -> StratifiedMagicProgram {
+    fn hard_corner_program() -> Result<StratifiedMagicProgram> {
         one_stratum_program(vec![(
             "?",
             vec![magic_inline(
@@ -547,7 +548,7 @@ mod tests {
 
     #[test]
     fn register_snapshots_current_state_then_apply_pending_tracks_real_commits() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
         db.run_script(":create p {x: Int =>}", no_params())?;
         db.run_script(":create r {x: Int =>}", no_params())?;
@@ -555,7 +556,7 @@ mod tests {
         db.run_script("?[x] <- [[1]] :put p {x}", no_params())
             ?;
 
-        let mut sq = StandingQuery::register(&db, hard_corner_program())?;
+        let mut sq = StandingQuery::register(&db, hard_corner_program()?)?;
         assert_eq!(
             current_rows(&sq, &sym("?")),
             [vec![v(1)]].into_iter().map(Tuple::from_vec).collect(),
@@ -603,14 +604,14 @@ mod tests {
     /// `Symbol`-keyed calls at every step.
     #[test]
     fn current_answer_and_apply_pending_answer_match_the_symbol_keyed_calls() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
         db.run_script(":create p {x: Int =>}", no_params())?;
         db.run_script(":create r {x: Int =>}", no_params())?;
         db.run_script("?[x] <- [[1]] :put p {x}", no_params())
             ?;
 
-        let mut sq = StandingQuery::register(&db, hard_corner_program())?;
+        let mut sq = StandingQuery::register(&db, hard_corner_program()?)?;
         assert_eq!(
             sq.current_answer().clone(),
             current_rows(&sq, &sym("?"))
@@ -646,7 +647,7 @@ mod tests {
     /// exactly why this hid from it).
     #[test]
     fn apply_pending_nets_multiple_queued_commits_before_evaluating() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
 
         // Repro 1: put-then-rm of the same absent key nets to no change.
@@ -676,7 +677,7 @@ mod tests {
 
         // Repro 2: p(1) already present; rm-then-put in one drain nets to
         // no change (it stays present).
-        let dir2 = tempfile::tempdir()?;
+        let dir2 = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db2 = Engine::compose(new_fjall_storage(dir2.path())?, Catalog::new())?;
         db2.run_script(":create p {x: Int =>}", no_params())
             ?;
@@ -710,7 +711,7 @@ mod tests {
         // key with DIFFERENT values in one drain must never leave both
         // rows in the maintained state — a structural key-uniqueness
         // violation that poisons every downstream rule.
-        let dir3 = tempfile::tempdir()?;
+        let dir3 = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db3 = Engine::compose(new_fjall_storage(dir3.path())?, Catalog::new())?;
         db3.run_script(":create q {k: Int => val: Int}", no_params())
             ?;
@@ -748,11 +749,11 @@ mod tests {
 
     #[test]
     fn teardown_unregisters_every_subscription() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
         db.run_script(":create p {x: Int =>}", no_params())?;
         db.run_script(":create r {x: Int =>}", no_params())?;
-        let sq = StandingQuery::register(&db, hard_corner_program())?;
+        let sq = StandingQuery::register(&db, hard_corner_program()?)?;
         let ids: Vec<_> = sq.subscriptions.values().map(|s| s.id).collect();
         assert!(!ids.is_empty());
         sq.teardown();
@@ -771,12 +772,12 @@ mod tests {
     /// live registration.
     #[test]
     fn drop_on_scope_exit_unregisters_every_subscription() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
         db.run_script(":create p {x: Int =>}", no_params())?;
         db.run_script(":create r {x: Int =>}", no_params())?;
         let ids: Vec<_> = {
-            let sq = StandingQuery::register(&db, hard_corner_program())?;
+            let sq = StandingQuery::register(&db, hard_corner_program()?)?;
             let ids: Vec<_> = sq.subscriptions.values().map(|s| s.id).collect();
             assert!(!ids.is_empty());
             ids
@@ -801,7 +802,7 @@ mod tests {
     /// (e.g. empty) standing query.
     #[test]
     fn register_standing_refuses_a_real_recursive_query() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
         db.run_script(":create edge {a: Int, b: Int =>}", no_params())
             ?;
@@ -829,7 +830,7 @@ mod tests {
     /// a brand new group appearing.
     #[test]
     fn register_standing_maintains_a_real_aggregating_query_across_real_commits() -> Result<()>  {
-        let dir = tempfile::tempdir()?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
         db.run_script(":create p {x: Int, y: Int =>}", no_params())
             ?;
@@ -838,11 +839,8 @@ mod tests {
 
         let query = "?[x, min(y)] := *p[x, y]";
         let mut sq = db.register_standing(query, no_params())?;
-        let real = || -> BTreeSet<Tuple> {
-            db.run_script(query, no_params())
-                ?
-                .into_iter()
-                .collect()
+        let real = || -> Result<BTreeSet<Tuple>> {
+            Ok(db.run_script(query, no_params())?.into_iter().collect())
         };
 
         assert_eq!(
@@ -853,7 +851,7 @@ mod tests {
                 .collect(),
             "initial snapshot: min(y) for x=1 is 10"
         );
-        assert_eq!(current_rows(&sq, &sym("?")), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real()?);
 
         // An unrelated assertion (a new, larger y for the same group)
         // must NOT disturb the current min.
@@ -868,7 +866,7 @@ mod tests {
                 .collect(),
             "min(y) unchanged by a larger sibling"
         );
-        assert_eq!(current_rows(&sq, &sym("?")), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real()?);
 
         // Retracting the CURRENT min: no per-kind formula covers this,
         // only a re-derivation from the group's remaining members {20, 30}.
@@ -883,7 +881,7 @@ mod tests {
                 .collect(),
             "min(y) rescans to the new minimum, 20"
         );
-        assert_eq!(current_rows(&sq, &sym("?")), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real()?);
 
         // A brand new group appears.
         db.run_script("?[x, y] <- [[2, 5]] :put p {x, y}", no_params())
@@ -897,7 +895,7 @@ mod tests {
                 .collect(),
             "a new group appears with its own min"
         );
-        assert_eq!(current_rows(&sq, &sym("?")), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real()?);
 
         // Retracting a group's LAST member: the group vanishes entirely.
         db.run_script("?[x, y] <- [[2, 5]] :rm p {x, y}", no_params())
@@ -911,7 +909,7 @@ mod tests {
                 .collect(),
             "the emptied group's row vanishes, not just its value"
         );
-        assert_eq!(current_rows(&sq, &sym("?")), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real()?);
 
         sq.teardown();
         Ok(())
@@ -972,13 +970,13 @@ mod tests {
         ]
     }
 
-    fn create_relation(db: &Engine<crate::store::fjall::FjallStorage>, name: &str, arity: usize) {
+    fn create_relation(db: &Engine<crate::store::fjall::FjallStorage>, name: &str, arity: usize) -> Result<()> {
         let cols = (0..arity)
             .map(|i| format!("k{i}: Int"))
             .collect::<Vec<_>>()
-            .join(", ");
-        db.run_script(&format!(":create {name} {{{cols} =>}}"), no_params())
-            ?;
+            .join(", ")?;
+        db.run_script(&format!(":create {name} {{{cols} =>}}"), no_params())?;
+        Ok(())
     }
 
     fn tuple_script(op: &str, rel: &str, arity: usize, row: &[i64]) -> String {
@@ -1006,14 +1004,14 @@ mod tests {
         let mut cases = 0;
         for shape in shapes() {
             for _iteration in 0..8 {
-                let dir = tempfile::tempdir()?;
+                let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
                 let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
                     ?;
                 // `live: what every EDB relation ACTUALLY holds right now,
                 // mirrored in-process so a `Minus` picks a real victim.
                 let mut live: BTreeMap<&str, BTreeSet<Vec<i64>>> = BTreeMap::new();
                 for &(rel, arity) in shape.edb {
-                    create_relation(&db, rel, arity);
+                    create_relation(&db, rel, arity)?;
                     let mut rows = BTreeSet::new();
                     let n = next_range(4);
                     for _ in 0..n {
@@ -1104,7 +1102,7 @@ mod tests {
         let mut cases = 0;
         for query in queries {
             for _iteration in 0..20 {
-                let dir = tempfile::tempdir()?;
+                let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
                 let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
                     ?;
                 db.run_script(":create q {k: Int => val: Int}", no_params())
