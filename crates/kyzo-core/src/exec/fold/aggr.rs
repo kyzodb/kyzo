@@ -266,35 +266,35 @@ pub(crate) fn meet_op(a: &Aggregation) -> Option<MeetAggr> {
 /// meet included, has one).
 pub(crate) fn normal_op(a: &Aggregation, args: &[DataValue]) -> Result<NormalAggr> {
     match a.name {
-        "and" => Ok(NormalAggr::And(AggrAnd::default())),
-        "or" => Ok(NormalAggr::Or(AggrOr::default())),
-        "unique" => Ok(NormalAggr::Unique(AggrUnique::default())),
-        "group_count" => Ok(NormalAggr::GroupCount(AggrGroupCount::default())),
-        "count_unique" => Ok(NormalAggr::CountUnique(AggrCountUnique::default())),
-        "union" => Ok(NormalAggr::Union(AggrUnion::default())),
-        "intersection" => Ok(NormalAggr::Intersection(AggrIntersection::default())),
+        "and" => Ok(NormalAggr::And(AggrAnd::empty())),
+        "or" => Ok(NormalAggr::Or(AggrOr::empty())),
+        "unique" => Ok(NormalAggr::Unique(AggrUnique::empty())),
+        "group_count" => Ok(NormalAggr::GroupCount(AggrGroupCount::empty())),
+        "count_unique" => Ok(NormalAggr::CountUnique(AggrCountUnique::empty())),
+        "union" => Ok(NormalAggr::Union(AggrUnion::empty())),
+        "intersection" => Ok(NormalAggr::Intersection(AggrIntersection::empty())),
         "collect" => collect_factory(args),
-        "count" => Ok(NormalAggr::Count(AggrCount::default())),
-        "variance" => Ok(NormalAggr::Variance(AggrVariance::default())),
-        "std_dev" => Ok(NormalAggr::StdDev(AggrStdDev::default())),
-        "mean" => Ok(NormalAggr::Mean(AggrMean::default())),
-        "sum" => Ok(NormalAggr::Sum(AggrSum::default())),
-        "product" => Ok(NormalAggr::Product(AggrProduct::default())),
-        "min" => Ok(NormalAggr::Min(AggrMin::default())),
-        "max" => Ok(NormalAggr::Max(AggrMax::default())),
-        "latest_by" => Ok(NormalAggr::LatestBy(AggrLatestBy::default())),
-        "smallest_by" => Ok(NormalAggr::SmallestBy(AggrSmallestBy::default())),
-        "min_cost" => Ok(NormalAggr::MinCost(AggrMinCost::default())),
-        "shortest" => Ok(NormalAggr::Shortest(AggrShortest::default())),
-        "choice" => Ok(NormalAggr::Choice(AggrChoice::default())),
-        "bit_and" => Ok(NormalAggr::BitAnd(AggrBitAnd::default())),
-        "bit_or" => Ok(NormalAggr::BitOr(AggrBitOr::default())),
-        "bit_xor" => Ok(NormalAggr::BitXor(AggrBitXor::default())),
-        "hll" => Ok(NormalAggr::Hll(AggrHll::default())),
-        "hll_sketch" => Ok(NormalAggr::HllSketch(AggrHllSketch::default())),
-        "hll_union" => Ok(NormalAggr::HllUnion(AggrHllUnion::default())),
-        "count_min" => Ok(NormalAggr::CountMin(AggrCountMin::default())),
-        "tdigest" => Ok(NormalAggr::TDigest(AggrTDigest::default())),
+        "count" => Ok(NormalAggr::Count(AggrCount::empty())),
+        "variance" => Ok(NormalAggr::Variance(AggrVariance::empty())),
+        "std_dev" => Ok(NormalAggr::StdDev(AggrStdDev::empty())),
+        "mean" => Ok(NormalAggr::Mean(AggrMean::empty())),
+        "sum" => Ok(NormalAggr::Sum(AggrSum::empty())),
+        "product" => Ok(NormalAggr::Product(AggrProduct::empty())),
+        "min" => Ok(NormalAggr::Min(AggrMin::empty())),
+        "max" => Ok(NormalAggr::Max(AggrMax::empty())),
+        "latest_by" => Ok(NormalAggr::LatestBy(AggrLatestBy::empty())),
+        "smallest_by" => Ok(NormalAggr::SmallestBy(AggrSmallestBy::empty())),
+        "min_cost" => Ok(NormalAggr::MinCost(AggrMinCost::empty())),
+        "shortest" => Ok(NormalAggr::Shortest(AggrShortest::empty())),
+        "choice" => Ok(NormalAggr::Choice(AggrChoice::empty())),
+        "bit_and" => Ok(NormalAggr::BitAnd(AggrBitAnd::empty())),
+        "bit_or" => Ok(NormalAggr::BitOr(AggrBitOr::empty())),
+        "bit_xor" => Ok(NormalAggr::BitXor(AggrBitXor::empty())),
+        "hll" => Ok(NormalAggr::Hll(AggrHll::empty())),
+        "hll_sketch" => Ok(NormalAggr::HllSketch(AggrHllSketch::empty())),
+        "hll_union" => Ok(NormalAggr::HllUnion(AggrHllUnion::empty())),
+        "count_min" => Ok(NormalAggr::CountMin(AggrCountMin::empty())),
+        "tdigest" => Ok(NormalAggr::TDigest(AggrTDigest::empty())),
         "quantile" => crate::exec::fold::sketch::aggr::quantile_factory(args),
         other => bail!("no fold factory for aggregation '{other}'"),
     }
@@ -308,8 +308,9 @@ pub(crate) struct AggrAnd {
     accum: bool,
 }
 
-impl Default for AggrAnd {
-    fn default() -> Self {
+impl AggrAnd {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
         Self { accum: true }
     }
 }
@@ -360,9 +361,17 @@ impl MeetAggrObj for MeetAggrAnd {
 }
 
 /// Disjunction as a fold: `false` until any row is `true`.
-#[derive(Default)]
 pub(crate) struct AggrOr {
     accum: bool,
+}
+
+impl AggrOr {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            accum: false,
+        }
+    }
 }
 
 impl seal::Sealed for AggrOr {}
@@ -411,9 +420,17 @@ impl MeetAggrObj for MeetAggrOr {
 }
 
 /// The distinct values seen, as a sorted list.
-#[derive(Default)]
 pub(crate) struct AggrUnique {
     accum: BTreeSet<DataValue>,
+}
+
+impl AggrUnique {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            accum: BTreeSet::new(),
+        }
+    }
 }
 
 impl seal::Sealed for AggrUnique {}
@@ -430,16 +447,24 @@ impl NormalAggrObj for AggrUnique {
 }
 
 /// Each distinct value with its multiplicity, as a sorted list of pairs.
-#[derive(Default)]
 pub(crate) struct AggrGroupCount {
     accum: BTreeMap<DataValue, i64>,
+}
+
+impl AggrGroupCount {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            accum: BTreeMap::new(),
+        }
+    }
 }
 
 impl seal::Sealed for AggrGroupCount {}
 
 impl NormalAggrObj for AggrGroupCount {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        let entry = self.accum.entry(value.clone()).or_default();
+        let entry = self.accum.entry(value.clone()).or_insert(0);
         *entry += 1;
         Ok(())
     }
@@ -455,10 +480,19 @@ impl NormalAggrObj for AggrGroupCount {
 }
 
 /// How many distinct values were seen.
-#[derive(Default)]
 pub(crate) struct AggrCountUnique {
     count: i64,
     accum: BTreeSet<DataValue>,
+}
+
+impl AggrCountUnique {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            count: 0,
+            accum: BTreeSet::new(),
+        }
+    }
 }
 
 impl seal::Sealed for AggrCountUnique {}
@@ -478,9 +512,17 @@ impl NormalAggrObj for AggrCountUnique {
 }
 
 /// Set union of list-valued rows, as a fold.
-#[derive(Default)]
 pub(crate) struct AggrUnion {
     accum: BTreeSet<DataValue>,
+}
+
+impl AggrUnion {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            accum: BTreeSet::new(),
+        }
+    }
 }
 
 impl seal::Sealed for AggrUnion {}
@@ -549,9 +591,17 @@ impl MeetAggrObj for MeetAggrUnion {
 }
 
 /// Set intersection of list-valued rows, as a fold.
-#[derive(Default)]
 pub(crate) struct AggrIntersection {
     accum: Option<BTreeSet<DataValue>>,
+}
+
+impl AggrIntersection {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            accum: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrIntersection {}
@@ -642,7 +692,7 @@ impl MeetAggrObj for MeetAggrIntersection {
 /// `collect` takes an optional positive limit as its compile-time argument.
 fn collect_factory(args: &[DataValue]) -> Result<NormalAggr> {
     Ok(match args.first() {
-        None => NormalAggr::Collect(AggrCollect::default()),
+        None => NormalAggr::Collect(AggrCollect::empty()),
         Some(arg) => {
             let limit = arg.get_int().ok_or_else(|| {
                 miette!(
@@ -663,17 +713,24 @@ fn collect_factory(args: &[DataValue]) -> Result<NormalAggr> {
 }
 
 /// The values in arrival order, as a list, optionally truncated to a limit.
-#[derive(Default)]
 pub(crate) struct AggrCollect {
     limit: Option<usize>,
     accum: Vec<DataValue>,
 }
 
 impl AggrCollect {
+    /// Empty accumulator — unlimited collect identity.
+    pub(crate) fn empty() -> Self {
+        Self {
+            limit: None,
+            accum: Vec::new(),
+        }
+    }
+
     fn new(limit: usize) -> Self {
         Self {
             limit: Some(limit),
-            accum: vec![],
+            accum: Vec::new(),
         }
     }
 }
@@ -697,9 +754,17 @@ impl NormalAggrObj for AggrCollect {
 }
 
 /// How many rows were seen (including nulls).
-#[derive(Default)]
 pub(crate) struct AggrCount {
     count: i64,
+}
+
+impl AggrCount {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            count: 0,
+        }
+    }
 }
 
 impl seal::Sealed for AggrCount {}
@@ -716,11 +781,21 @@ impl NormalAggrObj for AggrCount {
 }
 
 /// Sample variance (Bessel-corrected), accumulated in floating point.
-#[derive(Default)]
 pub(crate) struct AggrVariance {
     count: i64,
     sum: f64,
     sum_sq: f64,
+}
+
+impl AggrVariance {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            count: 0,
+            sum: 0.0,
+            sum_sq: 0.0,
+        }
+    }
 }
 
 impl seal::Sealed for AggrVariance {}
@@ -750,11 +825,21 @@ impl NormalAggrObj for AggrVariance {
 }
 
 /// Sample standard deviation (sqrt of sample variance).
-#[derive(Default)]
 pub(crate) struct AggrStdDev {
     count: i64,
     sum: f64,
     sum_sq: f64,
+}
+
+impl AggrStdDev {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            count: 0,
+            sum: 0.0,
+            sum_sq: 0.0,
+        }
+    }
 }
 
 impl seal::Sealed for AggrStdDev {}
@@ -783,10 +868,19 @@ impl NormalAggrObj for AggrStdDev {
 }
 
 /// The arithmetic mean, accumulated in floating point.
-#[derive(Default)]
 pub(crate) struct AggrMean {
     count: i64,
     sum: f64,
+}
+
+impl AggrMean {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            count: 0,
+            sum: 0.0,
+        }
+    }
 }
 
 impl seal::Sealed for AggrMean {}
@@ -848,8 +942,9 @@ pub(crate) struct AggrSum {
     sum: NumAccum,
 }
 
-impl Default for AggrSum {
-    fn default() -> Self {
+impl AggrSum {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
         Self {
             sum: NumAccum::Int(0),
         }
@@ -877,8 +972,9 @@ pub(crate) struct AggrProduct {
     prod: NumAccum,
 }
 
-impl Default for AggrProduct {
-    fn default() -> Self {
+impl AggrProduct {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
         Self {
             prod: NumAccum::Int(1),
         }
@@ -905,9 +1001,17 @@ impl NormalAggrObj for AggrProduct {
 
 /// The numerical minimum, ignoring nulls; `Null` *result* when no row had
 /// a number. In-state absence is [`Option::None`], never a Null sentinel.
-#[derive(Default)]
 pub(crate) struct AggrMin {
     found: Option<DataValue>,
+}
+
+impl AggrMin {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            found: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrMin {}
@@ -979,9 +1083,17 @@ impl MeetAggrObj for MeetAggrMin {
 }
 
 /// The greatest numeric value, via exact [`Num`] order. Nulls are skipped.
-#[derive(Default)]
 pub(crate) struct AggrMax {
     found: Option<DataValue>,
+}
+
+impl AggrMax {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            found: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrMax {}
@@ -1053,10 +1165,19 @@ impl MeetAggrObj for MeetAggrMax {
 }
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts greatest.
-#[derive(Default)]
 pub(crate) struct AggrLatestBy {
     found: Option<DataValue>,
     cost: Option<DataValue>,
+}
+
+impl AggrLatestBy {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            found: None,
+            cost: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrLatestBy {}
@@ -1088,10 +1209,19 @@ impl NormalAggrObj for AggrLatestBy {
 }
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts least.
-#[derive(Default)]
 pub(crate) struct AggrSmallestBy {
     found: Option<DataValue>,
     cost: Option<DataValue>,
+}
+
+impl AggrSmallestBy {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            found: None,
+            cost: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrSmallestBy {}
@@ -1123,10 +1253,19 @@ impl NormalAggrObj for AggrSmallestBy {
 }
 
 /// Of `[payload, cost]` pairs, the pair with the numerically least cost.
-#[derive(Default)]
 pub(crate) struct AggrMinCost {
     found: Option<DataValue>,
     cost: Option<f64>,
+}
+
+impl AggrMinCost {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            found: None,
+            cost: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrMinCost {}
@@ -1217,9 +1356,17 @@ impl MeetAggrObj for MeetAggrMinCost {
 }
 
 /// The shortest list-valued row; ties keep the incumbent.
-#[derive(Default)]
 pub(crate) struct AggrShortest {
     found: Option<Vec<DataValue>>,
+}
+
+impl AggrShortest {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            found: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrShortest {}
@@ -1283,9 +1430,17 @@ impl MeetAggrObj for MeetAggrShortest {
 }
 
 /// An arbitrary non-null row: the first one seen wins.
-#[derive(Default)]
 pub(crate) struct AggrChoice {
     found: Option<DataValue>,
+}
+
+impl AggrChoice {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            found: None,
+        }
+    }
 }
 
 impl seal::Sealed for AggrChoice {}
@@ -1328,9 +1483,17 @@ impl MeetAggrObj for MeetAggrChoice {
 }
 
 /// Bytewise AND of equal-length byte strings, as a fold.
-#[derive(Default)]
 pub(crate) struct AggrBitAnd {
     res: Vec<u8>,
+}
+
+impl AggrBitAnd {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            res: Vec::new(),
+        }
+    }
 }
 
 impl seal::Sealed for AggrBitAnd {}
@@ -1410,9 +1573,17 @@ impl MeetAggrObj for MeetAggrBitAnd {
 }
 
 /// Bytewise OR of equal-length byte strings, as a fold.
-#[derive(Default)]
 pub(crate) struct AggrBitOr {
     res: Vec<u8>,
+}
+
+impl AggrBitOr {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            res: Vec::new(),
+        }
+    }
 }
 
 impl seal::Sealed for AggrBitOr {}
@@ -1492,9 +1663,17 @@ impl MeetAggrObj for MeetAggrBitOr {
 }
 
 /// Bytewise XOR of equal-length byte strings. Not a meet.
-#[derive(Default)]
 pub(crate) struct AggrBitXor {
     res: Vec<u8>,
+}
+
+impl AggrBitXor {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            res: Vec::new(),
+        }
+    }
 }
 
 impl seal::Sealed for AggrBitXor {}
@@ -1745,8 +1924,8 @@ mod tests {
             assert_eq!(acc, hi);
 
             for order in [[&lo, &hi], [&hi, &lo]] {
-                let mut min = AggrMin::default();
-                let mut max = AggrMax::default();
+                let mut min = AggrMin::empty();
+                let mut max = AggrMax::empty();
                 for a in order {
                     min.set(&a.to_value()).unwrap();
                     max.set(&a.to_value()).unwrap();
@@ -1817,52 +1996,52 @@ mod tests {
     /// All-integer sum/product return exact Int; float input demotes.
     #[test]
     fn sum_product_exact_int() {
-        let mut op = AggrSum::default();
+        let mut op = AggrSum::empty();
         for i in [1i64, 2, 3] {
             op.set(&DataValue::from(i)).unwrap();
         }
         assert_eq!(op.get().unwrap(), DataValue::from(6i64));
 
-        let mut op = AggrSum::default();
+        let mut op = AggrSum::empty();
         op.set(&DataValue::from(1i64)).unwrap();
         op.set(&DataValue::from(2.0)).unwrap();
         assert_eq!(op.get().unwrap(), DataValue::from(3.0));
 
         let a = (1i64 << 53) + 1;
         let b = (1i64 << 53) + 3;
-        let mut op = AggrSum::default();
+        let mut op = AggrSum::empty();
         op.set(&DataValue::from(a)).unwrap();
         op.set(&DataValue::from(b)).unwrap();
         assert_eq!(op.get().unwrap(), DataValue::from(a + b));
 
-        let mut op = AggrSum::default();
+        let mut op = AggrSum::empty();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         assert_eq!(op.get().unwrap(), DataValue::from(2.0 * Num::int(i64::MAX).to_f64()));
-        let mut op = AggrSum::default();
+        let mut op = AggrSum::empty();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         op.set(&DataValue::from(i64::MIN)).unwrap();
         assert_eq!(op.get().unwrap(), DataValue::from(i64::MAX - 1));
 
-        let mut op = AggrProduct::default();
+        let mut op = AggrProduct::empty();
         for i in [2i64, 3, 4] {
             op.set(&DataValue::from(i)).unwrap();
         }
         assert_eq!(op.get().unwrap(), DataValue::from(24i64));
 
-        let mut op = AggrProduct::default();
+        let mut op = AggrProduct::empty();
         op.set(&DataValue::from(2i64)).unwrap();
         op.set(&DataValue::from(0.5)).unwrap();
         assert_eq!(op.get().unwrap(), DataValue::from(1.0));
 
-        let mut op = AggrProduct::default();
+        let mut op = AggrProduct::empty();
         op.set(&DataValue::from(i64::MAX)).unwrap();
         op.set(&DataValue::from(4i64)).unwrap();
         assert_eq!(op.get().unwrap(), DataValue::from(Num::int(i64::MAX).to_f64() * 4.0));
 
-        assert_eq!(AggrSum::default().get().unwrap(), DataValue::from(0i64));
-        assert_eq!(AggrProduct::default().get().unwrap(), DataValue::from(1i64));
+        assert_eq!(AggrSum::empty().get().unwrap(), DataValue::from(0i64));
+        assert_eq!(AggrProduct::empty().get().unwrap(), DataValue::from(1i64));
     }
 
     /// Fold ops agree with model kind for every registered name.
@@ -1934,7 +2113,7 @@ mod tests {
     /// F1: i128-overflow demotion arm of `NumAccum` is reachable in product.
     #[test]
     fn product_overflowing_i128_demotes_with_both_operands() {
-        let mut acc = AggrProduct::default();
+        let mut acc = AggrProduct::empty();
         for _ in 0..3 {
             acc.set(&DataValue::from(i64::MAX)).unwrap();
         }

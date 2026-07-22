@@ -43,8 +43,9 @@ pub(crate) struct AggrHll {
     hll: HyperLogLog,
 }
 
-impl Default for AggrHll {
-    fn default() -> Self {
+impl AggrHll {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
         Self {
             hll: HyperLogLog::default_precision(),
         }
@@ -69,8 +70,9 @@ pub(crate) struct AggrHllSketch {
     hll: HyperLogLog,
 }
 
-impl Default for AggrHllSketch {
-    fn default() -> Self {
+impl AggrHllSketch {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
         Self {
             hll: HyperLogLog::default_precision(),
         }
@@ -134,9 +136,17 @@ impl MeetAggrObj for MeetAggrHllUnion {
 }
 
 /// The normal form of `hll_union`, for use outside recursion.
-#[derive(Default)]
 pub(crate) struct AggrHllUnion {
     acc: Option<HyperLogLog>,
+}
+
+impl AggrHllUnion {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            acc: None,
+        }
+    }
 }
 
 impl crate::exec::fold::aggr::seal::Sealed for AggrHllUnion {}
@@ -168,8 +178,9 @@ pub(crate) struct AggrCountMin {
     cms: CountMinSketch,
 }
 
-impl Default for AggrCountMin {
-    fn default() -> Self {
+impl AggrCountMin {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
         Self {
             cms: CountMinSketch::default_dims(),
         }
@@ -202,9 +213,17 @@ impl NormalAggrObj for AggrCountMin {
 
 /// `tdigest(x)`: buffer raw numeric elements and, at finalization, build the
 /// digest from them **sorted** — returning the digest as `Bytes`.
-#[derive(Default)]
 pub(crate) struct AggrTDigest {
     buf: Vec<DataValue>,
+}
+
+impl AggrTDigest {
+    /// Empty accumulator — the fold identity for this aggregation.
+    pub(crate) fn empty() -> Self {
+        Self {
+            buf: Vec::new(),
+        }
+    }
 }
 
 impl crate::exec::fold::aggr::seal::Sealed for AggrTDigest {}
