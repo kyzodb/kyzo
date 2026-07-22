@@ -18,7 +18,7 @@
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result};
+    use miette::{IntoDiagnostic, Result, miette};
 
     use super::super::super::DataValue;
     use super::super::super::canonical::{Datum, decode, encode};
@@ -40,7 +40,9 @@ mod tests {
                 assert!(matches!(&items[1], DataValue::List(l)
                     if matches!(&l[0], DataValue::Num(n) if *n == Num::int(2))));
             }
-            other @ (data_value_any!()) => panic!("wrong shape: {other:?}"),
+            other @ (data_value_any!()) => {
+                return Err(miette!("wrong shape: {other:?}"));
+            }
         }
         Ok(())
     }

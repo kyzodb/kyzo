@@ -315,7 +315,7 @@ mod tests {
             "open interval round-trips unchanged (no sentinel)"
         );
         let DataValue::Interval(o2iv) = o2 else {
-            panic!("interval")
+            return Err(miette::miette!("decoded non-interval"));
         };
         assert_eq!(
             o2iv.end(),

@@ -600,7 +600,9 @@ mod tests {
     fn decode_int(bytes: &[u8]) -> Result<i64> {
         match super::super::canonical::decode(bytes).into_diagnostic()? {
             DataValue::Num(n) => Ok(n.as_int().ok_or_else(|| miette!("int"))?),
-            other @ (data_value_any!()) => panic!("not an int: {other:?}"),
+            other @ (data_value_any!()) => {
+                return Err(miette!("not an int: {other:?}"));
+            }
         }
     }
 }

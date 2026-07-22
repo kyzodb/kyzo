@@ -459,10 +459,9 @@ impl std::fmt::Display for DataValue {
         match self {
             DataValue::Null => write!(f, "null"),
             DataValue::Bool(b) => write!(f, "{b}"),
-            DataValue::Num(n) => match (n.as_int(), n.as_float()) {
-                (Some(i), _) => write!(f, "{i}"),
-                (_, Some(x)) => write!(f, "{x:?}"),
-                _other => unreachable!("Num is int or float"),
+            DataValue::Num(n) => match n.repr() {
+                NumRepr::Int(i) => write!(f, "{i}"),
+                NumRepr::Float(x) => write!(f, "{x:?}"),
             },
             DataValue::Str(s) => write!(f, "{s:?}"),
             DataValue::Bytes(b) => {
@@ -957,7 +956,7 @@ mod facade_tests {
                 .ok_or_else(|| miette!("try_new"))?,
             ),
             10 => {
-                let ts = ValidityTs::from_raw(rng.next().cast_signed());
+                let ts = ValidityTs::of_micros(rng.next().cast_signed());
                 let is_assert = rng.next().is_multiple_of(2);
                 DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
             }

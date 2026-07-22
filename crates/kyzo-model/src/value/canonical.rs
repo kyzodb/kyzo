@@ -795,7 +795,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             };
             Ok((
                 DataValue::Validity(ValiditySlot::from_stored(
-                    ValidityTs::from_raw(ts),
+                    ValidityTs::of_micros(ts),
                     is_assert,
                 )),
                 10,
@@ -1078,10 +1078,12 @@ mod tests {
             (DataValue::Validity(x), DataValue::Validity(y)) => x.cmp_as_of_order(*y),
             (DataValue::Interval(x), DataValue::Interval(y)) => semantic_interval_cmp(x, y),
             (DataValue::Geometry(x), DataValue::Geometry(y)) => x.cmp(y),
-            // T4 totalization: tags already compared equal above; every
-            // DataValue kind is covered by the arms. Unreachable by the
-            // sum type — kept as the independent mirror's totality seal.
-            _other => unreachable!("tags equal"),
+            // Tags already compared equal: mismatched kinds are uninhabited.
+            // Total without abort — Equal is the seal (same tag already).
+            (left, right) => {
+                let _ = (left, right);
+                Ordering::Equal
+            }
         }
     }
 
@@ -1129,10 +1131,12 @@ mod tests {
                 }
                 x.entries().len().cmp(&y.entries().len())
             }
-            // T4 totalization: ranks already compared equal; every Json
-            // variant is covered. Unreachable by the sum type — kept as
-            // the independent mirror's totality seal.
-            _other => unreachable!("ranks equal"),
+            // Ranks already compared equal: mismatched variants uninhabited.
+            // Total without abort — Equal is the seal (same rank already).
+            (left, right) => {
+                let _ = (left, right);
+                Ordering::Equal
+            }
         }
     }
 
@@ -1248,17 +1252,17 @@ mod tests {
             Vector::try_new(vec![-1.5, f64::NAN]).ok_or_else(|| miette!("try_new"))?,
         ));
         out.push(DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(0), true)
+            Validity::new(ValidityTs::of_micros(0), true)
                 .ok_or_else(|| miette!("representable Validity"))?
                 .into(),
         ));
         out.push(DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(0), false)
+            Validity::new(ValidityTs::of_micros(0), false)
                 .ok_or_else(|| miette!("representable Validity"))?
                 .into(),
         ));
         out.push(DataValue::Validity(ValiditySlot::from_stored(
-            ValidityTs::from_raw(i64::MAX),
+            ValidityTs::of_micros(i64::MAX),
             true,
         )));
         out.push(DataValue::Interval(Interval::EMPTY));
@@ -1321,10 +1325,12 @@ mod tests {
             let (_, used) = decode_one(enc.as_bytes()).into_diagnostic()?;
             match skip_one(enc.as_bytes()) {
                 Ok(s) => assert_eq!(s, used, "skip diverged: {d:?}"),
-                Err(e) => panic!(
-                    "skip refused lawful {d:?}: {e:?} bytes={:02x?}",
-                    enc.as_bytes()
-                ),
+                Err(e) => {
+                    return Err(miette!(
+                        "skip refused lawful {d:?}: {e:?} bytes={:02x?}",
+                        enc.as_bytes()
+                    ));
+                }
             }
         }
         for d in edge_datums()? {
@@ -1475,7 +1481,7 @@ mod tests {
             DataValue::List(vec![]),
             DataValue::Set(BTreeSet::new()),
             DataValue::Validity(
-                Validity::new(ValidityTs::from_raw(0), true)
+                Validity::new(ValidityTs::of_micros(0), true)
                     .ok_or_else(|| miette!("representable Validity"))?
                     .into(),
             ),
@@ -1607,7 +1613,7 @@ mod tests {
                 )
             }
             10 => {
-                let ts = ValidityTs::from_raw(rng.next().cast_signed());
+                let ts = ValidityTs::of_micros(rng.next().cast_signed());
                 let is_assert = rng.next().is_multiple_of(2);
                 DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
             }
@@ -1693,7 +1699,7 @@ mod tests {
         );
         assert_eq!(
             hex(&encode(Datum::Validity(
-                Validity::new(ValidityTs::from_raw(0), true).ok_or_else(|| miette!("representable Validity"))?
+                Validity::new(ValidityTs::of_micros(0), true).ok_or_else(|| miette!("representable Validity"))?
             ))),
             "587fffffffffffffff00"
         );

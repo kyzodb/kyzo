@@ -77,7 +77,7 @@ impl std::hash::Hash for VectorComponent {
 
 /// Vector dimensionality as stored: a `u32` count proven at the admit
 /// door. Private field; mint only through [`try_from_len`] /
-/// [`from_len_unchecked`].
+/// [`of_proven_len`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
 pub struct VectorDimension(u32);
@@ -92,7 +92,7 @@ impl VectorDimension {
     }
 
     /// Post-proof mint: length already proven at [`Vector::try_new`].
-    pub(crate) fn from_len_unchecked(len: u32) -> VectorDimension {
+    pub(crate) fn of_proven_len(len: u32) -> VectorDimension {
         VectorDimension(len)
     }
 
@@ -299,7 +299,9 @@ mod tests {
         let enc = encode(Datum::Vector(&original));
         let back = match decode(enc.as_bytes()).into_diagnostic()? {
             DataValue::Vector(v) => v,
-            other => panic!("expected Vector, got {other:?}"),
+            other => {
+                return Err(miette!("expected Vector, got {other:?}"));
+            }
         };
         // Exact float is authority through the codec — bit-exact meter
         // (NaN has bits; bare f64 PartialEq treats NaN ≠ NaN).

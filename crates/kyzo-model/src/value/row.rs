@@ -727,7 +727,9 @@ mod tests {
                     super::super::DataValue::Num(n) => {
                         n.as_int().ok_or_else(|| miette!("int domain"))?
                     }
-                    other @ (data_value_any!()) => panic!("wrong kind: {other:?}"),
+                    other @ (data_value_any!()) => {
+                        return Err(miette!("wrong kind: {other:?}"));
+                    }
                 };
                 if n + 3 <= 12 {
                     fresh.push(stamp_of(&mut arena, Datum::Num(Num::int(n + 3)))?);
@@ -921,14 +923,14 @@ mod tests {
         use super::super::kind::validity::{Validity, ValiditySlot, ValidityTs};
         let enc = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
             ValiditySlot::Value(
-                Validity::new(ValidityTs::from_raw(123), true)
+                Validity::new(ValidityTs::of_micros(123), true)
                     .ok_or_else(|| miette!("non-reserved"))?,
             ),
         ));
         assert_eq!(enc.len(), StorageKey::VALIDITY_TAIL_LEN);
         let enc2 = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
             ValiditySlot::Value(
-                Validity::new(ValidityTs::from_raw(i64::MIN), false)
+                Validity::new(ValidityTs::of_micros(i64::MIN), false)
                     .ok_or_else(|| miette!("retract admits every tick"))?,
             ),
         ));

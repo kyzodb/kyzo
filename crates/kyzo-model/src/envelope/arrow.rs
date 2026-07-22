@@ -319,9 +319,30 @@ impl ArrowNullability {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlannedArrowType {
+    Int,
+    FloatingPoint,
+    Utf8,
+    Bool,
+    Binary,
+}
+
+impl PlannedArrowType {
+    fn wire(self) -> u8 {
+        match self {
+            Self::Int => TYPE_INT,
+            Self::FloatingPoint => TYPE_FLOATING_POINT,
+            Self::Utf8 => TYPE_UTF8,
+            Self::Bool => TYPE_BOOL,
+            Self::Binary => TYPE_BINARY,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct PlannedColumn {
-    arrow_type: u8,
+    arrow_type: PlannedArrowType,
     nullability: ArrowNullability,
     null_count: i64,
     /// In per-buffer order (validity, [offsets], values) — omitted
@@ -387,19 +408,19 @@ fn offsets_and_values<'a>(items: impl Iterator<Item = &'a [u8]>) -> Result<(Vec<
 fn plan_column(col: &ColumnVec) -> Result<PlannedColumn> {
     match col {
         ColumnVec::I64(v) => Ok(PlannedColumn {
-            arrow_type: TYPE_INT,
+            arrow_type: PlannedArrowType::Int,
             nullability: ArrowNullability::Required,
             null_count: 0,
             buffers: vec![Vec::new(), le_bytes_i64(v)],
         }),
         ColumnVec::F64(v) => Ok(PlannedColumn {
-            arrow_type: TYPE_FLOATING_POINT,
+            arrow_type: PlannedArrowType::FloatingPoint,
             nullability: ArrowNullability::Required,
             null_count: 0,
             buffers: vec![Vec::new(), le_bytes_f64(v)],
         }),
         ColumnVec::Bool(v) => Ok(PlannedColumn {
-            arrow_type: TYPE_BOOL,
+            arrow_type: PlannedArrowType::Bool,
             nullability: ArrowNullability::Required,
             null_count: 0,
             buffers: vec![Vec::new(), bool_bitpack(v)],
@@ -407,7 +428,7 @@ fn plan_column(col: &ColumnVec) -> Result<PlannedColumn> {
         ColumnVec::Str(v) => {
             let (offsets, values) = offsets_and_values(v.iter().map(|s| s.as_bytes()))?;
             Ok(PlannedColumn {
-                arrow_type: TYPE_UTF8,
+                arrow_type: PlannedArrowType::Utf8,
                 nullability: ArrowNullability::Required,
                 null_count: 0,
                 buffers: vec![Vec::new(), offsets, values],
@@ -472,7 +493,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             // concrete kinds above) — pick Int64 as the total-null case.
             let zeros = vec![0i64; values.len()];
             Ok(PlannedColumn {
-                arrow_type: TYPE_INT,
+                arrow_type: PlannedArrowType::Int,
                 nullability: ArrowNullability::Optional,
                 null_count: values.len() as i64,
                 buffers: vec![validity, le_bytes_i64(&zeros)],
@@ -487,7 +508,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 })
                 .collect();
             Ok(PlannedColumn {
-                arrow_type: TYPE_INT,
+                arrow_type: PlannedArrowType::Int,
                 nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, le_bytes_i64(&vals)],
@@ -505,7 +526,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 })
                 .collect();
             Ok(PlannedColumn {
-                arrow_type: TYPE_FLOATING_POINT,
+                arrow_type: PlannedArrowType::FloatingPoint,
                 nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, le_bytes_f64(&vals)],
@@ -517,7 +538,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 .map(|v| matches!(v, DataValue::Bool(true)))
                 .collect();
             Ok(PlannedColumn {
-                arrow_type: TYPE_BOOL,
+                arrow_type: PlannedArrowType::Bool,
                 nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, bool_bitpack(&vals)],
@@ -530,7 +551,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 data_value_any!() => empty.as_bytes(),
             }))?;
             Ok(PlannedColumn {
-                arrow_type: TYPE_UTF8,
+                arrow_type: PlannedArrowType::Utf8,
                 nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, offsets, data],
@@ -543,7 +564,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 data_value_any!() => empty.as_slice(),
             }))?;
             Ok(PlannedColumn {
-                arrow_type: TYPE_BINARY,
+                arrow_type: PlannedArrowType::Binary,
                 nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, offsets, data],
@@ -592,32 +613,31 @@ fn build_field<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     name: &str,
     nullability: ArrowNullability,
-    arrow_type: u8,
+    arrow_type: PlannedArrowType,
 ) -> WIPOffset<UOffsetT> {
     let type_offset: WIPOffset<UOffsetT> = match arrow_type {
-        TYPE_INT => {
+        PlannedArrowType::Int => {
             let start = fbb.start_table();
             fbb.push_slot_always::<i32>(4, 64); // bitWidth
             fbb.push_slot_always::<bool>(6, true); // is_signed
             WIPOffset::new(fbb.end_table(start).value())
         }
-        TYPE_FLOATING_POINT => {
+        PlannedArrowType::FloatingPoint => {
             let start = fbb.start_table();
             fbb.push_slot_always::<i16>(4, PRECISION_DOUBLE); // precision
             WIPOffset::new(fbb.end_table(start).value())
         }
-        TYPE_UTF8 | TYPE_BOOL | TYPE_BINARY => {
+        PlannedArrowType::Utf8 | PlannedArrowType::Bool | PlannedArrowType::Binary => {
             // Empty tables (Utf8 {}, Bool {}, Binary {}): no fields to push.
             let start = fbb.start_table();
             WIPOffset::new(fbb.end_table(start).value())
         }
-        _other => unreachable!("plan_column only ever produces the types matched above"),
     };
     let name_offset = fbb.create_string(name);
     let field_start = fbb.start_table();
     fbb.push_slot_always(4, name_offset); // name
     fbb.push_slot_always::<bool>(6, nullability.is_optional()); // nullable
-    fbb.push_slot_always::<u8>(8, arrow_type); // type_type
+    fbb.push_slot_always::<u8>(8, arrow_type.wire()); // type_type
     fbb.push_slot_always(10, type_offset); // type_
     // slots 12 (dictionary), 14 (children), 16 (custom_metadata) omitted —
     // all optional, and every field here is a leaf with no dictionary.
@@ -793,7 +813,7 @@ mod tests {
     fn plan_mixed_column_accepts_a_nullable_int_column() -> Result<()> {
         let values = vec![v_int(1), DataValue::Null, v_int(3)];
         let planned = plan_mixed_column(&values)?;
-        assert_eq!(planned.arrow_type, TYPE_INT);
+        assert_eq!(planned.arrow_type, PlannedArrowType::Int);
         assert_eq!(planned.nullability, ArrowNullability::Optional);
         assert_eq!(planned.null_count, 1);
         Ok(())
