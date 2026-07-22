@@ -95,7 +95,22 @@ impl Tag {
     /// The canonical tag byte (the discriminant).
     #[inline]
     pub fn byte(self) -> u8 {
-        self as u8
+        match self {
+            Tag::Null => 0x05,
+            Tag::Bool => 0x08,
+            Tag::Num => 0x10,
+            Tag::Str => 0x18,
+            Tag::Bytes => 0x20,
+            Tag::Uuid => 0x28,
+            Tag::Regex => 0x30,
+            Tag::Json => 0x38,
+            Tag::Vector => 0x40,
+            Tag::List => 0x48,
+            Tag::Set => 0x50,
+            Tag::Validity => 0x58,
+            Tag::Interval => 0x60,
+            Tag::Geometry => 0x68,
+        }
     }
 
     /// Decode a tag byte. Total: reserved and structural bytes are `None`,
