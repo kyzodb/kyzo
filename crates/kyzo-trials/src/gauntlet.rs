@@ -665,6 +665,7 @@ pub(crate) fn node_payload(kind: PayloadKind, i: i64) -> DataValue {
         PayloadKind::Vector => {
             let fi = f64::from(require(i32::try_from(i), "node index fits i32"));
             let fj = f64::from(require(
+                // INVARIANT(SeedMix): identity-stable payload scale; wrap is intentional diffusion.
                 i32::try_from(i64::wrapping_mul(i, 3)),
                 "scaled node index fits i32",
             ));
@@ -675,6 +676,7 @@ pub(crate) fn node_payload(kind: PayloadKind, i: i64) -> DataValue {
         }
         PayloadKind::Geometry => {
             let lat = require(u32::try_from(i), "node index fits u32");
+            // INVARIANT(SeedMix): identity-stable cell mix; wrap is intentional diffusion.
             let lon = u32::wrapping_add(u32::wrapping_mul(lat, 7), 1);
             DataValue::Geometry(Geometry::from_cells(lat, lon))
         }
@@ -776,6 +778,7 @@ pub(crate) fn generate(seed: u64) -> Generated {
     // draws (and the substantial-EDB law) stay seed-stable; kind still
     // varies across seeds and is what Cap1 actually materializes.
     let payload_kind = choose_payload_kind(&mut Rng::new(
+        // INVARIANT(SeedMix): independent stream mix; wrap is the published seed contract.
         u64::wrapping_add(u64::wrapping_mul(seed, 0xA24B_AED4_96E9_F2D9), 1),
     ));
     let mut rng = Rng::new(seed);
@@ -1060,6 +1063,7 @@ fn fixed_endpoints(inputs: &[BTreeSet<Tuple>]) -> BTreeSet<Tuple> {
 pub(crate) fn generate_in_flight_probe(seed: u64) -> Generated {
     // Independent stream from [`generate`] so Cap1's main corpus RNG is
     // not coupled to the in-flight arm's sizing draws.
+    // INVARIANT(SeedMix): independent stream mix; wrap is the published seed contract.
     let mut rng = Rng::new(u64::wrapping_add(u64::wrapping_mul(seed, 0xD2B7_44F4_5AD5_5A5A), 1));
     let kind = choose_payload_kind(&mut rng);
     // 70..=119 per side → product ≫ ceiling+stride; one join epoch trips
@@ -1345,6 +1349,7 @@ fn generator_emits_vector_and_geometry_payloads_for_some_seeds() {
     let mut saw_geometry = false;
     let mut saw_int = false;
     for i in 0..96u64 {
+        // INVARIANT(SeedMix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
         let g = generate(seed);
         // edge feeds path recursion; node feeds negation; seed keys feed meet.
@@ -1404,6 +1409,7 @@ fn in_flight_probe_refuses_in_flight_derivations() {
     let mut saw_geometry = false;
     for i in 0..48u64 {
         let seed =
+            // INVARIANT(SeedMix): property-test seed diffusion uses modular golden mix.
             Rng::new(u64::wrapping_mul(u64::wrapping_add(0x1F_u64, i), 0x9E37_79B9_7F4A_7C15)).next_u64();
         let g = generate_in_flight_probe(seed);
         saw_vector |= fact_has_kind(&g, |v| matches!(v, DataValue::Vector(_)));

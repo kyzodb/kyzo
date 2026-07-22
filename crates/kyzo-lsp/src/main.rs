@@ -59,7 +59,7 @@ use lsp_types::{
 use serde_json::{Value, json};
 
 mod translate;
-use translate::{LineIndex, diagnostics_from_report, word_at};
+use translate::{LineIndex, diagnostics_from_report, unspanned_error, word_at};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Wire transport: Content-Length-framed JSON-RPC over stdio, per the LSP
@@ -130,20 +130,31 @@ fn response(id: Value, result: Value) -> Value {
 /// this document is just as important as reporting new ones), one or more
 /// on failure. Speaks kyzo-model's public parse surface — the language
 /// door — never an engine host façade.
+fn live_session_stamp() -> Result<ValidityTs, String> {
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("INVARIANT(SystemClock): system clock before the epoch: {e}"))?
+        .as_micros();
+    let micros = i64::try_from(micros).map_err(|_| {
+        "INVARIANT(SystemClock): system clock beyond i64 microseconds".to_string()
+    })?;
+    Ok(ValidityTs::of_micros(micros))
+}
+
 fn validate(text: &str) -> Vec<Diagnostic> {
     let params = BTreeMap::<String, DataValue>::new();
-    // Live session stamp for `@` / `@ NOW` — wall-clock micros, never the
-    // from_raw(0) open-end sentinel the parse door forbids.
-    let cur_vld = ValidityTs::of_micros(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_micros() as i64)
-            .unwrap_or(1),
-    );
+    let cur_vld = match live_session_stamp() {
+        Ok(v) => v,
+        Err(msg) => return vec![unspanned_error(msg)],
+    };
     match kyzo_model::parse::parse_script(text, &params, cur_vld) {
         Ok(_) => Vec::new(),
         Err(report) => diagnostics_from_report(&report, text, &LineIndex::new(text)),
     }
+}
+
+fn error_response(id: Value, code: i64, message: String) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -159,13 +170,19 @@ fn validate(text: &str) -> Vec<Diagnostic> {
 /// consulted — no guessing from `rootUri`, since pointing an LSP session at
 /// the wrong on-disk store (or silently creating one nobody asked for) is
 /// a worse failure mode than "no catalog features this session."
-fn open_catalog_db(initialize_params: &Value) -> Option<Engine<FjallStorage>> {
-    let db_path = initialize_params
-        .get("initializationOptions")?
-        .get("dbPath")?
-        .as_str()?;
-    let storage = new_fjall_storage(db_path).ok()?;
-    Engine::compose(storage, Catalog::new()).ok()
+fn open_catalog_db(initialize_params: &Value) -> Result<Option<Engine<FjallStorage>>, String> {
+    let Some(db_path) = initialize_params
+        .get("initializationOptions")
+        .and_then(|o| o.get("dbPath"))
+        .and_then(|p| p.as_str())
+    else {
+        return Ok(None);
+    };
+    let storage = new_fjall_storage(db_path)
+        .map_err(|e| format!("dbPath open refused: {e}"))?;
+    let engine = Engine::compose(storage, Catalog::new())
+        .map_err(|e| format!("dbPath engine compose refused: {e}"))?;
+    Ok(Some(engine))
 }
 
 /// `::relations`' rows as `(name, arity)` pairs.
@@ -189,13 +206,15 @@ fn columns_for_relation(db: &Engine<FjallStorage>, name: &str) -> Option<Vec<(St
     // collide with a reserved word (`create`, say); `::columns` itself is
     // the authority on whether that succeeds, not a lookalike check here.
     let script = format!("::columns {name}");
-    let rows = db.run_script(&script, Default::default()).ok()?;
-    Some(
-        rows.rows()
-            .iter()
-            .filter_map(|row| Some((row.first()?.get_str()?.to_string(), row.get(1)?.get_bool()?)))
-            .collect(),
-    )
+    match db.run_script(&script, Default::default()) {
+        Ok(rows) => Some(
+            rows.rows()
+                .iter()
+                .filter_map(|row| Some((row.first()?.get_str()?.to_string(), row.get(1)?.get_bool()?)))
+                .collect(),
+        ),
+        Err(_query_refused) => None,
+    }
 }
 
 fn completion_items(db: Option<&Engine<FjallStorage>>) -> Vec<CompletionItem> {
@@ -275,13 +294,26 @@ fn main() -> io::Result<()> {
         let Some(msg) = read_message(&mut reader)? else {
             return Ok(()); // client closed stdin without an `exit`: shut down quietly
         };
-        let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+        let Some(method) = msg.get("method").and_then(Value::as_str) else {
+            continue;
+        };
         let id = msg.get("id").cloned();
 
         match method {
             "initialize" => {
                 if let Some(params) = msg.get("params") {
-                    db = open_catalog_db(params);
+                    match open_catalog_db(params) {
+                        Ok(engine) => db = engine,
+                        Err(refuse) => {
+                            if let Some(id) = id.clone() {
+                                write_message(
+                                    &mut writer,
+                                    &error_response(id, -32602, refuse),
+                                )?;
+                            }
+                            continue;
+                        }
+                    }
                 }
                 let result = InitializeResult {
                     capabilities: ServerCapabilities {
@@ -313,33 +345,33 @@ fn main() -> io::Result<()> {
                     let hover = msg.get("params").and_then(|params| {
                         let uri = params["textDocument"]["uri"].as_str()?;
                         let text = open_docs.get(uri)?;
-                        let position: Position =
-                            serde_json::from_value(params["position"].clone()).ok()?;
-                        hover_at(db.as_ref(), text, position)
+                        match serde_json::from_value::<Position>(params["position"].clone()) {
+                            Ok(position) => hover_at(db.as_ref(), text, position),
+                            Err(_bad_position) => None,
+                        }
                     });
                     write_message(&mut writer, &response(id, serde_json::to_value(hover)?))?;
                 }
             }
             "textDocument/didOpen" => {
                 if let Some(params) = msg.get("params") {
-                    let uri = params["textDocument"]["uri"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string();
-                    let text = params["textDocument"]["text"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string();
-                    publish(&mut writer, &uri, &text)?;
-                    open_docs.insert(uri, text);
+                    if let (Some(uri), Some(text)) = (
+                        params["textDocument"]["uri"].as_str(),
+                        params["textDocument"]["text"].as_str(),
+                    ) {
+                        let uri = uri.to_string();
+                        let text = text.to_string();
+                        publish(&mut writer, &uri, &text)?;
+                        open_docs.insert(uri, text);
+                    }
                 }
             }
             "textDocument/didChange" => {
                 if let Some(params) = msg.get("params") {
-                    let uri = params["textDocument"]["uri"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string();
+                    let Some(uri) = params["textDocument"]["uri"].as_str() else {
+                        continue;
+                    };
+                    let uri = uri.to_string();
                     // Full-document sync only (declared above): the last
                     // content change IS the whole new document, never a
                     // range patch to apply.
@@ -356,7 +388,9 @@ fn main() -> io::Result<()> {
             }
             "textDocument/didClose" => {
                 if let Some(params) = msg.get("params") {
-                    let uri = params["textDocument"]["uri"].as_str().unwrap_or_default();
+                    let Some(uri) = params["textDocument"]["uri"].as_str() else {
+                        continue;
+                    };
                     open_docs.remove(uri);
                     // Clear diagnostics for a document the editor no longer
                     // has open, rather than leaving stale squiggles behind.
@@ -378,7 +412,18 @@ fn main() -> io::Result<()> {
                 }
             }
             "exit" => return Ok(()),
-            _ => {} // an unhandled request/notification: ignored, not an error
+            unknown => {
+                if let Some(id) = id {
+                    write_message(
+                        &mut writer,
+                        &error_response(
+                            id,
+                            -32601,
+                            format!("method not found: {unknown}"),
+                        ),
+                    )?;
+                }
+            }
         }
     }
 }

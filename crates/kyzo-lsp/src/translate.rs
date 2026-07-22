@@ -48,13 +48,17 @@ impl LineIndex {
     /// clamp is a wrong-looking diagnostic, never a crashed server.
     pub(crate) fn position(&self, text: &str, byte_offset: usize) -> Position {
         let byte_offset = byte_offset.min(text.len());
-        let line = self
-            .line_starts
-            .binary_search(&byte_offset)
-            .unwrap_or_else(|insert_at| insert_at - 1);
+        let line = match self.line_starts.binary_search(&byte_offset) {
+            Ok(exact) => exact,
+            Err(insert_at) => insert_at.checked_sub(1).expect(
+                "INVARIANT(LineIndexNonEmpty): line_starts starts at byte 0",
+            ),
+        };
         let line_start = self.line_starts[line];
-        let character = text[line_start..byte_offset].encode_utf16().count() as u32;
-        Position::new(line as u32, character)
+        let character = u32::try_from(text[line_start..byte_offset].encode_utf16().count())
+            .expect("INVARIANT(LspUtf16Column): UTF-16 column count fits u32");
+        let line = u32::try_from(line).expect("INVARIANT(LspLine): line index fits u32");
+        Position::new(line, character)
     }
 
     /// The inverse of [`LineIndex::position`]: the byte offset a [`Position`]
@@ -64,23 +68,43 @@ impl LineIndex {
     /// character past the line's real length to the line's end (the LSP
     /// spec's own rule for an over-long position, not an error).
     pub(crate) fn offset(&self, text: &str, position: Position) -> usize {
-        let line = position.line as usize;
+        let line = usize::try_from(position.line)
+            .expect("INVARIANT(LspLine): u32 line fits usize");
         let Some(&line_start) = self.line_starts.get(line) else {
             return text.len();
         };
-        let line_end = self
-            .line_starts
-            .get(line + 1)
-            .map_or(text.len(), |&next| next.saturating_sub(1).max(line_start));
+        let line_end = match self.line_starts.get(line + 1) {
+            None => text.len(),
+            Some(&next) => match next.checked_sub(1) {
+                Some(end) => end.max(line_start),
+                None => line_start,
+            },
+        };
         let line_text = &text[line_start..line_end.min(text.len())];
         let mut units = 0u32;
         for (byte_idx, ch) in line_text.char_indices() {
             if units >= position.character {
                 return line_start + byte_idx;
             }
-            units += ch.len_utf16() as u32;
+            units = match units.checked_add(u32::try_from(ch.len_utf16()).expect(
+                "INVARIANT(LspUtf16Width): char UTF-16 width fits u32",
+            )) {
+                Some(n) => n,
+                None => return line_start + line_text.len(),
+            };
         }
         line_start + line_text.len()
+    }
+}
+
+/// Unspanned ERROR diagnostic — refuse surfaces (clock, etc.) with no parser label.
+pub(crate) fn unspanned_error(message: String) -> Diagnostic {
+    Diagnostic {
+        range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("kyzoscript".to_string()),
+        message,
+        ..Diagnostic::default()
     }
 }
 

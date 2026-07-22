@@ -207,7 +207,7 @@ why_not_sabotage = "KEEP: crash_consistency_process_abort child deliberately abo
 [[bs_detector]]
 pattern = "ignore_test"
 file = "crates/kyzo-trials/src/gauntlet.rs"
-line = 1442
+line = 1448
 why_not_sabotage = "KEEP: disclosed open seat `demand-rewriter-generative-gap`. Cap1's RuleBody seam is post-stratification and cannot exercise magic-set demand rewriting; the ignored test names the missing public door (`stratified_magic_compile` / Engine generative magic-vs-bypass) and fails loud if un-ignored before that door exists. Not a soft-green skip — the reason string is the standing obligation."
 
 # ---------------------------------------------------------------------------
@@ -237,3 +237,33 @@ pattern = "default_impl"
 file = "crates/kyzo-crashfs/src/sim.rs"
 line = 179
 why_not_sabotage = "KEEP: FaultConfig::default is FaultConfig::none — all ppm rates zero, pure MVCC/SSI. Trials DST uses Default as the no-fault pole of the ppm dial; not a domain sentinel inventing meaning."
+
+[[bs_detector]]
+file = "crates/kyzo-lsp/src/translate.rs"
+line = 59
+pattern = "expect"
+why_not_sabotage = "KEEP: LspUtf16Column — UTF-16 column count of a single line fits u32 by LSP position law. TryFrom.expect is the typed door; inventing 0 would lie to the editor."
+
+[[bs_detector]]
+file = "crates/kyzo-lsp/src/translate.rs"
+line = 60
+pattern = "expect"
+why_not_sabotage = "KEEP: LspLine — line index from LineIndex fits u32. TryFrom.expect is the typed door."
+
+[[bs_detector]]
+file = "crates/kyzo-lsp/src/translate.rs"
+line = 72
+pattern = "expect"
+why_not_sabotage = "KEEP: LspLine — line index fits u32/usize. TryFrom.expect is the typed door."
+
+[[bs_detector]]
+file = "crates/kyzo-lsp/src/translate.rs"
+line = 53
+pattern = "expect"
+why_not_sabotage = "KEEP: LineIndexNonEmpty — line_starts always begins at byte 0; checked_sub on binary_search Err is the sole line pick. Loud INVARIANT expect is fail-closed, not silent clamp theater."
+
+[[bs_detector]]
+file = "crates/kyzo-lsp/src/translate.rs"
+line = 89
+pattern = "expect"
+why_not_sabotage = "KEEP: LspUtf16Width — char::len_utf16 is 1 or 2; fits u32. TryFrom.expect is the typed door for the width add."
