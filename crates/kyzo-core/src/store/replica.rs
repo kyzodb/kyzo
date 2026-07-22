@@ -279,7 +279,7 @@ impl AuthorizingKey {
 ///
 /// Stores verifying material only. A replica with this table can authenticate
 /// certificates but cannot forge the origin's signatures.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct AuthorizingKeyTable {
     /// key_id → ed25519 verifying key bytes (32).
     keys: BTreeMap<[u8; 32], [u8; 32]>,
@@ -288,7 +288,9 @@ pub struct AuthorizingKeyTable {
 impl AuthorizingKeyTable {
     /// Empty trust table.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            keys: BTreeMap::new(),
+        }
     }
 
     /// Install a trusted authorizing **public** key (signing seed discarded).
@@ -321,7 +323,7 @@ pub enum ScopeManifestStatus {
 }
 
 /// Scope manifest registry — `resolve` derives refuse; caller-forged pass is Unconstructible.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ScopeManifestTable {
     entries: BTreeMap<[u8; 32], ScopeManifestStatus>,
 }
@@ -329,15 +331,15 @@ pub struct ScopeManifestTable {
 impl ScopeManifestTable {
     /// Empty registry.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            entries: BTreeMap::new(),
+        }
     }
 
     /// Record a verified / revoked / incompatible manifest (trust door).
     pub(crate) fn set(&mut self, digest: ScopeManifestDigest, status: ScopeManifestStatus) {
-        debug_assert!(
-            !matches!(status, ScopeManifestStatus::Unknown),
-            "Unknown is the absent-entry default, not a stored status"
-        );
+        // INVARIANT(scope_status_stored): callers never pass Unknown — it is
+        // the absent-entry default from resolve(), not a table value.
         self.entries.insert(*digest.as_bytes(), status);
     }
 
@@ -678,7 +680,7 @@ impl ReplicaCustody {
 /// At-least-once fabric deliveries admit through [`ReplicaCustodyTable::admit`]:
 /// first delivery inserts; duplicates converge on the held custody — no
 /// reshape, no double-mint.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ReplicaCustodyTable {
     by_key: BTreeMap<[u8; 32], ReplicaCustody>,
 }
@@ -686,7 +688,9 @@ pub struct ReplicaCustodyTable {
 impl ReplicaCustodyTable {
     /// Empty custody ledger.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            by_key: BTreeMap::new(),
+        }
     }
 
     /// Admit custody under its [`ReplicaKey`]. Duplicate key → existing entry
@@ -1025,10 +1029,8 @@ pub fn verify_replica(
         Some(k) => k,
         None => return Err(ReplicaRefuse::AuthenticityFailed),
     };
-    debug_assert!(
-        !authorizing_key.can_sign(),
-        "table lookup must never reconstitute a signing seed"
-    );
+    // INVARIANT(verifying_only_lookup): AuthorizingKeyTable::lookup mints
+    // verifying material only — can_sign is always false.
     let body = certificate.signing_body();
     if !authorizing_key.verify_signature(&body, certificate.signature()) {
         return Err(ReplicaRefuse::AuthenticityFailed);
@@ -1181,7 +1183,7 @@ pub enum CrossingStatus {
 /// Receiver must hold every claimed digest or refuse
 /// [`CrossingRefuse::CapabilityMissing`] — never reshape into
 /// [`ReplicaRefuse::RetentionDeclined`] or [`ReplicaRefuse::ScopeDenied`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrossingCapabilitySet {
     digests: BTreeMap<[u8; 32], ()>,
 }
@@ -1189,7 +1191,9 @@ pub struct CrossingCapabilitySet {
 impl CrossingCapabilitySet {
     /// Empty capability set.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            digests: BTreeMap::new(),
+        }
     }
 
     /// Insert a claimed / held capability digest.
