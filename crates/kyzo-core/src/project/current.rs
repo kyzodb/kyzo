@@ -296,7 +296,7 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
+    use miette::{Result, miette};
 
     use super::*;
     use crate::store::Storage;
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn classify_serves_matching_generation_and_rejects_stale() -> Result<()> {
         let db = SimStorage::new(3);
-        let rtx = db.read_tx().into_diagnostic()?;
+        let rtx = db.read_tx()?;
         let engine = SegmentEngine::new();
         let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
         let live = engine.witness_after_snapshot(&rtx, relation);
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn orphan_evict_held_arc_still_serves() -> Result<()> {
         let db = SimStorage::new(3);
-        let rtx = db.read_tx().into_diagnostic()?;
+        let rtx = db.read_tx()?;
         let engine = SegmentEngine::new();
         let relation = RelationId::new(5).ok_or_else(|| miette!("below cap"))?;
         let live = engine.witness_after_snapshot(&rtx, relation);
