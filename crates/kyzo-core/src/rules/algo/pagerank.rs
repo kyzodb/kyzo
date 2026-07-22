@@ -183,6 +183,7 @@ mod tests {
     use super::*;
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     /// The termination metric a Jacobi run stops on. `page_rank` uses
     /// [`Term::Sum`] (`Σ|Δ|`); [`Term::Max`] exists only so a test can pin
     /// that choice by showing the two metrics stop at different iterations.
@@ -323,22 +324,23 @@ mod tests {
         edges
     }
 
-    fn graph_of(edges: &[(u32, u32)]) -> DirectedCsrGraph {
-        DirectedCsrGraph::from_edges(edges.iter().map(|&(f, t)| (f, t, ()))).unwrap()
+    fn graph_of(edges: &[(u32, u32)]) -> Result<DirectedCsrGraph> {
+        DirectedCsrGraph::from_edges(edges.iter().map(|&(f, t)| (f, t, ())))
     }
 
     /// Qualitative sanity, unchanged from the interim port: node 1 collects
     /// rank from 0 and 2, which keep the base score; all scores finite and
     /// positive. Holds under Jacobi as under Gauss-Seidel.
     #[test]
-    fn ranks_sinks_and_sources() {
+    fn ranks_sinks_and_sources() -> Result<()> {
         // 0 → 1, 2 → 1: node 1 collects rank, 0 and 2 keep the base score.
-        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (2, 1, ())]).unwrap();
-        let ranks = page_rank(&graph, 0.85, 1e-7, 50, CancelFlag::inert()).unwrap();
+        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (2, 1, ())])?;
+        let ranks = page_rank(&graph, 0.85, 1e-7, 50, CancelFlag::inert())?;
         assert_eq!(ranks.len(), 3);
         assert!(ranks[1] > ranks[0]);
         assert!((ranks[0] - ranks[2]).abs() < 1e-6);
         assert!(ranks.iter().all(|r| r.is_finite() && *r > 0.));
+        Ok(())
     }
 
     /// VALUE ORACLE: `page_rank` computes exactly the naive two-buffer
@@ -349,21 +351,22 @@ mod tests {
     /// would fail at any iteration count where the two schemes' iterates
     /// differ.
     #[test]
-    fn value_oracle_matches_naive_jacobi() {
+    fn value_oracle_matches_naive_jacobi() -> Result<()> {
         // A small graph with a hub, a sink, and a cycle, at several
         // iteration budgets (few enough that Jacobi and Gauss-Seidel
         // iterates are still distinct — see the divergence test below).
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
-        let graph = graph_of(&edges);
+        let graph = graph_of(&edges)?;
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         for &iters in &[1usize, 2, 5, 10] {
-            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert()).unwrap();
+            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert())?;
             let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum);
             assert_eq!(
                 got, want,
                 "page_rank must equal the naive Jacobi reference at {iters} iterations"
             );
         }
+        Ok(())
     }
 
     /// VALUE ORACLE, WIDE HUB — pins the in-neighbor summation ORDER, not
@@ -379,7 +382,7 @@ mod tests {
     /// fold — breaks this equality. This is the executable proof of the
     /// docstring's "ascending CSR order" claim.
     #[test]
-    fn value_oracle_wide_hub_pins_fold_order() {
+    fn value_oracle_wide_hub_pins_fold_order() -> Result<()> {
         // Node 0: 300 in-neighbors (sources 1..=300). out_degree(s) = s,
         // realized as one edge (s, 0) plus s-1 parallel edges (s, 301).
         // Node 301 is a shared dummy sink so the node count stays at 302.
@@ -390,11 +393,11 @@ mod tests {
                 edges.push((s, 301));
             }
         }
-        let graph = graph_of(&edges);
+        let graph = graph_of(&edges)?;
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         assert_eq!(n, 302, "hub graph should span nodes 0..=301");
         for &iters in &[1usize, 2, 3] {
-            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert()).unwrap();
+            let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert())?;
             let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum);
             assert_eq!(
                 got, want,
@@ -402,6 +405,7 @@ mod tests {
                  (fold order pinned to ascending CSR source)"
             );
         }
+        Ok(())
     }
 
     /// TERMINATION METRIC is `Σ|Δ|`, not `max|Δ|`. The tolerance-0 oracles
@@ -413,12 +417,12 @@ mod tests {
     /// actually distinguishes the metrics (else the test would prove
     /// nothing).
     #[test]
-    fn termination_metric_is_sum_not_max() {
+    fn termination_metric_is_sum_not_max() -> Result<()> {
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
-        let graph = graph_of(&edges);
+        let graph = graph_of(&edges)?;
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 0.1;
-        let got = page_rank(&graph, 0.85, tol, 50, CancelFlag::inert()).unwrap();
+        let got = page_rank(&graph, 0.85, tol, 50, CancelFlag::inert())?;
         let want_sum = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Sum);
         let want_max = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Max);
         assert_ne!(
@@ -429,6 +433,7 @@ mod tests {
             got, want_sum,
             "page_rank must terminate on Σ|Δ| (stops one iteration later than max|Δ| here)"
         );
+        Ok(())
     }
 
     /// VALUE ORACLE through the full rule path (`run_fixed_rule` →
@@ -437,7 +442,7 @@ mod tests {
     /// (indices, output shape, f32→f64 widening) on top of the numeric
     /// oracle above.
     #[test]
-    fn through_rule_matches_reference() {
+    fn through_rule_matches_reference() -> Result<()> {
         use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
 
         let s = |v: &str| DataValue::from(v);
@@ -458,7 +463,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
 
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         // Defaults the rule applies: theta 0.85, epsilon 1e-4, iterations 10.
@@ -469,6 +474,7 @@ mod tests {
             .map(|(name, score)| Tuple::from_vec(vec![s(name), DataValue::from(*score)]))
             .collect();
         assert_eq!(got, want);
+        Ok(())
     }
 
     /// DETERMINISM (a): a single-thread rayon pool and the default
@@ -476,33 +482,35 @@ mod tests {
     /// `page_rank` returns an ordered `Vec`, so this pins both value AND
     /// order at every thread count.
     #[test]
-    fn single_thread_matches_default_pool() {
+    fn single_thread_matches_default_pool() -> Result<()> {
         let edges = pseudo_random_edges(500, 4000);
-        let graph = graph_of(&edges);
+        let graph = graph_of(&edges)?;
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
+            .into_diagnostic()?;
         let seq =
-            single.install(|| page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap());
+            single.install(|| page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()))?;
         for _ in 0..20 {
-            let par = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap();
+            let par = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert())?;
             assert_eq!(
                 seq, par,
                 "single-thread and default-pool scores must be identical"
             );
         }
+        Ok(())
     }
 
     /// DETERMINISM (b): the default pool run twice is byte-identical (no
     /// run-to-run drift from scheduling).
     #[test]
-    fn run_twice_identical() {
+    fn run_twice_identical() -> Result<()> {
         let edges = pseudo_random_edges(500, 4000);
-        let graph = graph_of(&edges);
-        let a = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap();
-        let b = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()).unwrap();
+        let graph = graph_of(&edges)?;
+        let a = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert())?;
+        let b = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert())?;
         assert_eq!(a, b);
+        Ok(())
     }
 
     /// SAME FIXPOINT, DIFFERENT PATH: run both schemes to convergence (a
@@ -512,17 +520,17 @@ mod tests {
     /// Gauss-Seidel differ only in the transient, not in what they converge
     /// to.
     #[test]
-    fn converges_to_same_fixpoint_as_gauss_seidel() {
+    fn converges_to_same_fixpoint_as_gauss_seidel() -> Result<()> {
         // A strongly connected but degree-IRREGULAR graph, so PageRank does
         // not stay uniform and the two schemes' transients genuinely differ
         // (a regular graph would leave both trivially uniform and equal,
         // hiding the divergence). Out-degrees: 0→{1,2}, 1→{2,3}, 2→{0},
         // 3→{0}; every node both reaches and is reached from 0.
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
-        let graph = graph_of(&edges);
+        let graph = graph_of(&edges)?;
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 1e-9;
-        let jac = page_rank(&graph, 0.85, tol, 100_000, CancelFlag::inert()).unwrap();
+        let jac = page_rank(&graph, 0.85, tol, 100_000, CancelFlag::inert())?;
         let gs = naive_gauss_seidel(n, &edges, 0.85, tol, 100_000);
         for (a, b) in jac.iter().zip(gs.iter()) {
             assert!(
@@ -533,22 +541,24 @@ mod tests {
         // And Jacobi is not trivially equal to GS mid-transient (guards
         // against the reference collapsing into the implementation): at a
         // small iteration count the two schemes disagree somewhere.
-        let jac_few = page_rank(&graph, 0.85, 0.0, 3, CancelFlag::inert()).unwrap();
+        let jac_few = page_rank(&graph, 0.85, 0.0, 3, CancelFlag::inert())?;
         let gs_few = naive_gauss_seidel(n, &edges, 0.85, 0.0, 3);
         assert!(
             jac_few.iter().zip(gs_few.iter()).any(|(a, b)| a != b),
             "Jacobi and Gauss-Seidel iterates should differ before convergence"
         );
+        Ok(())
     }
 
     /// Cancellation is honoured: a spent authority refuses before any
     /// iteration completes.
     #[test]
-    fn cancellation_refuses() {
-        let graph = graph_of(&pseudo_random_edges(200, 1000));
+    fn cancellation_refuses() -> Result<()> {
+        let graph = graph_of(&pseudo_random_edges(200, 1000))?;
         let (auth, cancel) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         let res = page_rank(&graph, 0.85, 0.0, 30, cancel);
         assert!(res.is_err());
+        Ok(())
     }
 }
