@@ -293,7 +293,8 @@ mod tests {
     use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
     use kyzo_model::program::rule::FixedRuleOptions;
 
-    fn options(content: &str) -> FixedRuleOptions {
+    use miette::{IntoDiagnostic, Result, miette};
+    fn options(content: &str) -> Result<FixedRuleOptions> {
         opts_map(BTreeMap::from([
             (
                 SmartString::from("content"),
@@ -326,10 +327,10 @@ mod tests {
     /// Host-admitted content reads and coerces per `types`, including a
     /// nullable column absorbing a bad cell.
     #[test]
-    fn reads_content_with_typing() {
+    fn reads_content_with_typing() -> Result<()> {
         let content = "a,1,1.5\nb,2,oops";
         let got =
-            run_fixed_rule(&CsvReader, vec![], options(content), CancelFlag::inert()).unwrap();
+            run_fixed_rule(&CsvReader, vec![], options(content)?, CancelFlag::inert())?;
         assert_eq!(got.len(), 2);
         let want: Tuple = Tuple::from_vec(vec![
             DataValue::from("a"),
@@ -338,6 +339,7 @@ mod tests {
         ]);
         assert_eq!(got[0], want);
         assert_eq!(got[1][2], DataValue::Null); // nullable Float? absorbed "oops"
+        Ok(())
     }
 
     /// CANCELLATION: a raised flag refuses before the rows are emitted (the
@@ -345,16 +347,17 @@ mod tests {
     /// interruptible; the unset-flag read above emitted every row, so the
     /// poll changes nothing when the flag is clear.
     #[test]
-    fn honors_cancel() {
+    fn honors_cancel() -> Result<()> {
         let content = "a,1,1.5";
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
-        assert!(run_fixed_rule(&CsvReader, vec![], options(content), flag).is_err());
+        assert!(run_fixed_rule(&CsvReader, vec![], options(content)?, flag).is_err());
+        Ok(())
     }
 
     /// The `file://` arm is the filesystem seam: typed refusal, no open.
     #[test]
-    fn file_fetch_refuses_typed() {
+    fn file_fetch_refuses_typed() -> Result<()> {
         let err = run_fixed_rule(
             &CsvReader,
             vec![],
@@ -377,16 +380,17 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])),
+            ]))?,
             CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("filesystem"), "{err}");
+        Ok(())
     }
 
     /// The URL arm is the network seam: typed refusal, no fetch.
     #[test]
-    fn url_fetch_refuses_typed() {
+    fn url_fetch_refuses_typed() -> Result<()> {
         let err = run_fixed_rule(
             &CsvReader,
             vec![],
@@ -409,10 +413,11 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])),
+            ]))?,
             CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("network"), "{err}");
+        Ok(())
     }
 }
