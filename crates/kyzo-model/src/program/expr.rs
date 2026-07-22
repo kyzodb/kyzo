@@ -320,9 +320,10 @@ impl Display for Expr {
                 // (OpDecl names are OP_-prefixed by construction); fall back
                 // to the raw name rather than panic if that ever changes.
                 let mut writer = f.debug_tuple(
-                    op.name
-                        .strip_prefix("OP_")
-                        .unwrap_or(op.name)
+                    match op.name.strip_prefix("OP_") {
+                        Some(s) => s,
+                        None => op.name,
+                    }
                         .to_lowercase()
                         .as_str(),
                 );
@@ -591,7 +592,9 @@ impl Expr {
             // deliberately later, not a side effect of folding.
             // Deterministic Apply folding requires the engine apply door;
             // leave the Apply here for the engine folder/evaluator.
-            let _ = (all_evaluated, op, span);
+            match (all_evaluated, op, span) {
+        unused => core::mem::drop(unused),
+    }
             // nested not's can accumulate during conversion to normal form
             if let Expr::Apply {
                 op: op1,
@@ -717,7 +720,7 @@ impl Expr {
                     }
                     ValueRange::default()
                 }
-                _ => ValueRange::default(),
+                _other => ValueRange::default(),
             },
             Expr::UnboundApply { op, span, .. } => {
                 bail!(NoImplementationError(*span, op.to_string()));

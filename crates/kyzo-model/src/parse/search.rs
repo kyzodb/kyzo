@@ -304,7 +304,7 @@ impl FtsExpr {
                 match flattened.len() {
                     0 => Self::empty_node(),
                     1 => flattened.remove(0),
-                    _ => FtsExpr::and(flattened),
+                    _other => FtsExpr::and(flattened),
                 }
             }
             FtsExpr::Or(exprs) => {
@@ -325,7 +325,7 @@ impl FtsExpr {
                 match flattened.len() {
                     0 => Self::empty_node(),
                     1 => flattened.remove(0),
-                    _ => FtsExpr::or(flattened),
+                    _other => FtsExpr::or(flattened),
                 }
             }
             FtsExpr::Not(lhs, rhs) => {
@@ -507,7 +507,7 @@ fn parse_fts_expr(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<
                     }
                 }
             }
-            _ => {}
+            _other => {}
         }
     }
 
@@ -545,7 +545,7 @@ fn build_infix(lhs: Result<FtsExpr>, op: Pair<'_>, rhs: Result<FtsExpr>) -> Resu
             }
         },
         Rule::fts_not => FtsExpr::Not(Box::new(lhs), Box::new(rhs)),
-        _ => return Err(unexpected("an FTS operator", &op)),
+        _other => return Err(unexpected("an FTS operator", &op)),
     })
 }
 
@@ -579,13 +579,13 @@ fn build_term(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<FtsE
                         distance = u32::try_from(i)
                             .map_err(|_| BadFtsNumber(pair.as_str().to_string(), span))?;
                     }
-                    _ => literals.push(build_phrase(pair)?),
+                    _other => literals.push(build_phrase(pair)?),
                 }
             }
             FtsExpr::near(literals, distance)
         }
         Rule::fts_phrase => FtsExpr::Literal(build_phrase(pair)?),
-        _ => return Err(unexpected("an FTS term", &pair)),
+        _other => return Err(unexpected("an FTS term", &pair)),
     })
 }
 
@@ -596,7 +596,7 @@ fn build_phrase(pair: Pair<'_>) -> Result<FtsLiteral> {
     let core_text = match kernel.as_rule() {
         Rule::fts_phrase_group => SmartString::from(kernel.as_str().trim()),
         Rule::quoted_string | Rule::s_quoted_string | Rule::raw_string => parse_string(kernel)?,
-        _ => return Err(unexpected("a phrase kernel", &kernel)),
+        _other => return Err(unexpected("a phrase kernel", &kernel)),
     };
     let mut is_prefix = false;
     let mut booster = 1.0;
@@ -624,10 +624,10 @@ fn build_phrase(pair: Pair<'_>) -> Result<FtsLiteral> {
                             .map_err(|_| BadFtsNumber(boosted.as_str().to_string(), span))?;
                         booster = i as f64;
                     }
-                    _ => return Err(unexpected("a booster value", &boosted)),
+                    _other => return Err(unexpected("a booster value", &boosted)),
                 }
             }
-            _ => return Err(unexpected("a phrase modifier", &pair)),
+            _other => return Err(unexpected("a phrase modifier", &pair)),
         }
     }
     FtsLiteral::new(core_text, is_prefix, booster).ok_or_else(|| BadFtsLiteral(span).into())

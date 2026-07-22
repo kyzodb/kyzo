@@ -124,7 +124,10 @@ pub fn json_from_serde(v: &JsonValue) -> Json {
         JsonValue::Number(n) => {
             let num = match n.as_i64() {
                 Some(i) => Num::int(i),
-                None => Num::float(n.as_f64().unwrap_or(0.0)),
+                None => Num::float(match n.as_f64() {
+                Some(f) => f,
+                None => 0.0,
+            }),
             };
             Json::Num(JsonNum::new(num).expect("serde numbers are finite"))
         }
@@ -149,7 +152,7 @@ pub fn serde_from_json(j: &Json) -> JsonValue {
         Json::Num(n) => match (n.num().as_int(), n.num().as_float()) {
             (Some(i), _) => JsonValue::Number(i.into()),
             (_, Some(f)) => json!(f),
-            _ => unreachable!("Num is int or float"),
+            _other => unreachable!("Num is int or float"),
         },
         Json::Str(s) => JsonValue::String(s.clone()),
         Json::Arr(a) => JsonValue::Array(a.iter().map(serde_from_json).collect()),
@@ -226,7 +229,7 @@ impl TryFrom<&DataValue> for JsonValue {
             DataValue::Num(n) => match (n.as_int(), n.as_float()) {
                 (Some(i), _) => Ok(JsonValue::Number(i.into())),
                 (_, Some(f)) => json_number_from_finite_f64(f),
-                _ => unreachable!("Num is int or float"),
+                _other => unreachable!("Num is int or float"),
             },
             DataValue::Str(s) => Ok(JsonValue::String(s.to_string())),
             DataValue::Bytes(bytes) => Ok(JsonValue::String(STANDARD.encode(bytes))),

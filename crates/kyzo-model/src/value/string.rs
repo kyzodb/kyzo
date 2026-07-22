@@ -106,10 +106,19 @@ impl GermanStr {
         let content = &payload[..payload.len().saturating_sub(2)];
         if !content.contains(&0x00) {
             // No escapes: the content bytes are the string bytes.
-            return std::str::from_utf8(content).ok().map(Cow::Borrowed);
+            return match std::str::from_utf8(content) {
+                Ok(s) => Some(Cow::Borrowed(s)),
+                Err(_utf8) => None,
+            };
         }
-        let (raw, _) = decode_terminated(payload).ok()?;
-        String::from_utf8(raw).ok().map(Cow::Owned)
+        let raw = match decode_terminated(payload) {
+            Ok((raw, _rest)) => raw,
+            Err(_dec) => return None,
+        };
+        match String::from_utf8(raw) {
+            Ok(s) => Some(Cow::Owned(s)),
+            Err(_utf8) => None,
+        }
     }
 
     /// The bytes content, if inline: the `Bytes`-kind mirror of
@@ -124,8 +133,10 @@ impl GermanStr {
         if !content.contains(&0x00) {
             return Some(Cow::Borrowed(content));
         }
-        let (raw, _) = decode_terminated(payload).ok()?;
-        Some(Cow::Owned(raw))
+        match decode_terminated(payload) {
+            Ok((raw, _rest)) => Some(Cow::Owned(raw)),
+            Err(_dec) => None,
+        }
     }
 }
 

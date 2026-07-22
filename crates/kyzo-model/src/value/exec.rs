@@ -83,7 +83,10 @@ impl ExecRows {
     }
 
     pub fn len(&self) -> usize {
-        self.codes.len().checked_div(self.arity.get()).unwrap_or(0)
+        match self.codes.len().checked_div(self.arity.get()) {
+            Some(n) => n,
+            None => 0,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -425,7 +428,9 @@ mod tests {
         dedup.absorb(&e).expect("lawful absorb");
         dedup.absorb(&step1).expect("lawful absorb");
         dedup.absorb(&step2).expect("lawful absorb");
-        let _ = dedup.to_exec();
+        match dedup.to_exec() {
+        exec => core::mem::drop(exec),
+    }
 
         // No value was interned by recombination or dedup: they only COPY
         // and COMPARE admitted codes.

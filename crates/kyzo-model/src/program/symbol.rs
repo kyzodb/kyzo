@@ -100,7 +100,7 @@ impl Symbol {
             "_" => SymbolKind::Ignored,
             s if s.starts_with('~') => SymbolKind::GeneratedIgnored,
             s if s.starts_with('*') => SymbolKind::Generated,
-            _ => SymbolKind::User,
+            _other => SymbolKind::User,
         }
     }
 

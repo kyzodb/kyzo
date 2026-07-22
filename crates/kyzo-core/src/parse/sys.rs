@@ -709,9 +709,12 @@ mod tests {
     #[test]
     fn fts_index_config_is_the_sole_spelling() {
         fn session_tier_consumes(cfg: &crate::parse::sys::FtsIndexConfig) {
-            let _: &FtsIndexConfig = cfg;
+            fn takes_local(_: &FtsIndexConfig) {}
+            takes_local(cfg);
         }
-        let _ = session_tier_consumes;
+        match session_tier_consumes {
+            f => core::mem::drop(f),
+        }
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut defs = Vec::new();

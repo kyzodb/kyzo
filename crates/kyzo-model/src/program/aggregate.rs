@@ -152,6 +152,6 @@ pub fn parse_aggr(name: &str) -> Result<Option<Aggregation>, AggrRefuse> {
         "count_min" => normal("count_min"),
         "tdigest" => normal("tdigest"),
         "quantile" => normal("quantile"),
-        _ => return Ok(None),
+        _other => return Ok(None),
     }))
 }

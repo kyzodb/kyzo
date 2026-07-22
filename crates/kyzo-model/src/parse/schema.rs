@@ -89,11 +89,14 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
             Rule::out_arg => {
                 binding_candidate = Some(Symbol::new(nxt.as_str(), nxt.extract_span()))
             }
-            _ => bail!(UnexpectedRule(nxt.extract_span())),
+            _other => bail!(UnexpectedRule(nxt.extract_span())),
         }
     }
     let binding =
-        binding_candidate.unwrap_or_else(|| Symbol::new(&name as &str, name_p.extract_span()));
+        match binding_candidate {
+        Some(b) => b,
+        None => Symbol::new(&name as &str, name_p.extract_span()),
+    };
     Ok((
         ColumnDef {
             name,
@@ -184,6 +187,6 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
             }
             ColType::Tuple(cols)
         }
-        _ => bail!(UnexpectedRule(pair.extract_span())),
+        _other => bail!(UnexpectedRule(pair.extract_span())),
     })
 }

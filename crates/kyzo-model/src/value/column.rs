@@ -665,7 +665,7 @@ mod tests {
             intern_num(&mut arena, i);
         }
         let remap = arena.seal().expect("lawful seal");
-        let _ = remap;
+        match remap { value => core::mem::drop(value) };
         // Re-intern: all sealed hits now.
         let stamps: Vec<StampedCode> = [5i64, -3, 99, 0, 42, -3]
             .iter()

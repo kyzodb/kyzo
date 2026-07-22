@@ -76,7 +76,7 @@ impl SurfaceTag {
             1 => Some(Self::Embedding),
             2 => Some(Self::FullText),
             3 => Some(Self::Lexical),
-            _ => None,
+            _other => None,
         }
     }
 

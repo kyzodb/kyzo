@@ -282,12 +282,12 @@ impl Num {
                     match repr {
                         REPR_INT => Self::rebuild_int(neg, e, frac72)?,
                         REPR_FLOAT => Self::rebuild_float(neg, e, frac72)?,
-                        _ => return Err(NumDecodeError::BadRepr),
+                        _other => return Err(NumDecodeError::BadRepr),
                     }
                 };
                 Ok((value, 13))
             }
-            _ => Err(NumDecodeError::BadClass),
+            _other => Err(NumDecodeError::BadClass),
         }
     }
 
@@ -456,7 +456,7 @@ impl Ord for Num {
         }
         match ca {
             CLASS_ZERO | CLASS_NAN => self.repr_byte().cmp(&other.repr_byte()),
-            _ => {
+            _other => {
                 let (neg, ma) = self.sign_magnitude();
                 let (_, mb) = other.sign_magnitude();
                 let mag = match (ma, mb) {
@@ -1058,7 +1058,11 @@ mod tests {
         for _ in 0..20_000 {
             let len = (rng.next() % 16) as usize;
             let bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-            let _ = Num::decode_key(&bytes); // must not panic
+            match Num::decode_key(&bytes) {
+        // must not panic
+        Ok(v) => core::mem::drop(v),
+        Err(e) => core::mem::drop(e),
+    }
         }
         let k = key(Num::int(12345));
         for cut in 0..k.len() {

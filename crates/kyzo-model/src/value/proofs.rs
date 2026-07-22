@@ -69,7 +69,10 @@ macro_rules! assert_not_impl {
             // Unresolvable (ambiguous) the moment `$t` implements the
             // traits; resolvable — this line compiles — only while it does
             // not.
-            let _ = <$t as AmbiguousIfImpl<_>>::__proof;
+            {
+                let proof_fn = <$t as AmbiguousIfImpl<_>>::__proof;
+                proof_fn();
+            }
         };
     };
 }
@@ -113,12 +116,14 @@ const _: fn() = || {
     fn spend_alias(s: SpendAdmission) -> BulkSpendAuthority {
         s
     }
-    let _ = (
+    match (
         admission_is_domain_ctx,
         denial_is_refusal,
         nested_alias,
         spend_alias,
-    );
+    ) {
+        proof => core::mem::drop(proof),
+    }
 };
 
 // An admission token cannot be conjured empty — only from_observer /

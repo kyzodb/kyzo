@@ -446,7 +446,10 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
         .map(|v| !matches!(v, DataValue::Null))
         .collect();
     let (null_count, validity) = validity_bitmap(&valid);
-    let validity = validity.unwrap_or_default();
+    let validity = match validity {
+        Some(v) => v,
+        None => Vec::new(),
+    };
     match kind {
         None => {
             // Every value null: type is arbitrary (Arrow's own `Null` type
@@ -461,7 +464,13 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             })
         }
         Some(Kind::Int) => {
-            let vals: Vec<i64> = values.iter().map(|v| v.get_int().unwrap_or(0)).collect();
+            let vals: Vec<i64> = values
+                .iter()
+                .map(|v| match v.get_int() {
+                    Some(n) => n,
+                    None => 0,
+                })
+                .collect();
             Ok(PlannedColumn {
                 arrow_type: TYPE_INT,
                 nullability: ArrowNullability::Optional,
@@ -473,7 +482,10 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let vals: Vec<f64> = values
                 .iter()
                 .map(|v| match v {
-                    DataValue::Num(n) => n.as_float().unwrap_or(0.0),
+                    DataValue::Num(n) => match n.as_float() {
+                        Some(f) => f,
+                        None => 0.0,
+                    },
                     data_value_any!() => 0.0,
                 })
                 .collect();
@@ -584,7 +596,7 @@ fn build_field<'a>(
             let start = fbb.start_table();
             WIPOffset::new(fbb.end_table(start).value())
         }
-        _ => unreachable!("plan_column only ever produces the types matched above"),
+        _other => unreachable!("plan_column only ever produces the types matched above"),
     };
     let name_offset = fbb.create_string(name);
     let field_start = fbb.start_table();

@@ -246,7 +246,7 @@ fn skip_at(bytes: &[u8], depth: usize) -> Result<usize, DecodeError> {
                             }
                             at += 9;
                         }
-                        _ => return Err(DecodeError::IntervalNotCanonical),
+                        _other => return Err(DecodeError::IntervalNotCanonical),
                     }
                 }
                 Ok(1 + at)
@@ -268,7 +268,7 @@ fn skip_terminated(body: &[u8]) -> Result<usize, DecodeError> {
                 // Terminator [0x00, 0x00]; escaped zero [0x00, 0xFF].
                 Some(0x00) => return Ok(at + 2),
                 Some(0xFF) => at += 2,
-                _ => return Err(DecodeError::BadEscape),
+                _other => return Err(DecodeError::BadEscape),
             },
             Some(_) => at += 1,
         }
@@ -1073,7 +1073,7 @@ mod tests {
             // T4 totalization: tags already compared equal above; every
             // DataValue kind is covered by the arms. Unreachable by the
             // sum type — kept as the independent mirror's totality seal.
-            _ => unreachable!("tags equal"),
+            _other => unreachable!("tags equal"),
         }
     }
 
@@ -1124,7 +1124,7 @@ mod tests {
             // T4 totalization: ranks already compared equal; every Json
             // variant is covered. Unreachable by the sum type — kept as
             // the independent mirror's totality seal.
-            _ => unreachable!("ranks equal"),
+            _other => unreachable!("ranks equal"),
         }
     }
 
@@ -1518,7 +1518,9 @@ mod tests {
         let corpus: Vec<DataValue> = (0..200).map(|_| random_datum(&mut rng, 0)).collect();
         for a in &corpus {
             for b in &corpus {
-                let _ = a.cmp(b);
+                match a.cmp(b) {
+        ord => core::mem::drop(ord),
+    }
                 assert!(a.partial_cmp(b).is_some());
             }
         }
@@ -1587,7 +1589,7 @@ mod tests {
                 Interval::new(Bound::Closed(lo), Bound::Closed(lo.saturating_add(span)))
             }),
             12 => DataValue::Geometry(Geometry::from_cells(rng.next() as u32, rng.next() as u32)),
-            _ => DataValue::Json(random_json(rng, 0)),
+            _other => DataValue::Json(random_json(rng, 0)),
         }
     }
 
@@ -1613,7 +1615,7 @@ mod tests {
                     .map(|_| random_json(rng, depth + 1))
                     .collect(),
             ),
-            _ => {
+            _other => {
                 let keys = ["a", "b", "cc"];
                 let n = rng.below(3);
                 let entries: Vec<(String, Json)> = (0..n)
@@ -1759,7 +1761,11 @@ mod tests {
         for _ in 0..20_000 {
             let len = rng.below(24);
             let bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-            let _ = decode(&bytes); // must not panic
+            match decode(&bytes) {
+        // must not panic
+        Ok(v) => core::mem::drop(v),
+        Err(e) => core::mem::drop(e),
+    }
         }
         for d in edge_datums() {
             let enc = encode_owned(&d);

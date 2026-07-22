@@ -977,7 +977,13 @@ impl InputProgram {
         }
         let (entry_name, entry) = prog
             .remove_entry(&Symbol::prog_entry(SourceSpan::default()))
-            .ok_or_else(|| NoEntry(Some(prog.keys().next().map(|s| s.span).unwrap_or_default())))?;
+            .ok_or_else(|| {
+                let span = match prog.keys().next() {
+                    Some(s) => s.span,
+                    None => SourceSpan::default(),
+                };
+                NoEntry(Some(span))
+            })?;
         Ok(Self {
             entry_name,
             entry,
@@ -1116,7 +1122,10 @@ impl InputProgram {
             InputInlineRulesOrFixed::Fixed { fixed } => {
                 if fixed.head.is_empty() {
                     bail!(EntryHeadNotExplicitlyDefined(
-                        self.entry.first_span().unwrap_or(self.entry_name.span)
+                        match self.entry.first_span() {
+                            Some(s) => s,
+                            None => self.entry_name.span,
+                        }
                     ))
                 } else {
                     Ok(fixed.head.to_vec())

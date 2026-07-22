@@ -803,7 +803,9 @@ mod tests {
             foreign_rows.push_encoded(&key, &mut arena),
             Err(PushError::ForeignArena)
         ));
-        let _ = other.epoch();
+        match other.epoch() {
+            epoch => core::mem::drop(epoch),
+        }
     }
 
     /// The exhaustion door: ids at/beyond the cap refuse at decode, so

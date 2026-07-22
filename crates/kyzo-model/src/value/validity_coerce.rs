@@ -56,7 +56,7 @@ pub fn data_value_to_vld_spec(
             "END" => Ok(MAX_VALIDITY_TS),
             s => Ok(str2vld(s).map_err(|_| BadValiditySpecification(span))?),
         },
-        _ => bail!(BadValiditySpecification(span)),
+        _other => bail!(BadValiditySpecification(span)),
     }
 }
 

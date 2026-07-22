@@ -96,7 +96,7 @@ fn parse_imperative_stmt(
                             store_as,
                         })))
                     }
-                    _ => return Err(unexpected("a returned query or relation name", &p)),
+                    _other => return Err(unexpected("a returned query or relation name", &p)),
                 }
             }
             ImperativeStmt::Return { returns: rets }
@@ -119,7 +119,7 @@ fn parse_imperative_stmt(
                     let store_as = src.next().map(|p| SmartString::from(p.as_str().trim()));
                     QueryOrRelation::Query(Box::new(ImperativeStmtClause { prog, store_as }))
                 }
-                _ => return Err(unexpected("an if-condition", &condition)),
+                _other => return Err(unexpected("an if-condition", &condition)),
             };
             let then_branch =
                 parse_stmt_children(inner.expect("the then-branch")?, param_pool, cur_vld)?;
@@ -189,7 +189,7 @@ fn parse_imperative_stmt(
                 prog: ImperativeStmtClause { prog, store_as },
             }
         }
-        _ => return Err(unexpected("an imperative statement", &pair)),
+        _other => return Err(unexpected("an imperative statement", &pair)),
     })
 }
 

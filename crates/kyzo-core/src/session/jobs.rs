@@ -361,7 +361,9 @@ mod tests {
         db.in_flight_tx_end();
         let after = db.list_running_jobs().expect("list after end");
         assert_eq!(after.rows()[0][0].get_int().unwrap(), 0);
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     #[test]

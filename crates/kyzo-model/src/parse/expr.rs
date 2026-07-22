@@ -86,7 +86,7 @@ pub(crate) fn build_expr(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue
                     args: [rhs].into(),
                     span: op.extract_span().merge(rhs_span),
                 },
-                _ => bail!(UnexpectedRule(op.extract_span())),
+                _other => bail!(UnexpectedRule(op.extract_span())),
             })
         })
         .parse(pair.into_inner())
@@ -184,7 +184,7 @@ fn build_expr_infix(lhs: Result<Expr>, op: Pair<'_>, rhs: Result<Expr>) -> Resul
             args: args.into(),
             span,
         },
-        _ => bail!(UnexpectedRule(op.extract_span())),
+        _other => bail!(UnexpectedRule(op.extract_span())),
     })
 }
 
@@ -337,7 +337,7 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
                                 val: DataValue::Bool(true),
                                 ..
                             } => {}
-                            _ => {
+                            _other => {
                                 clauses.push((
                                     Expr::Const {
                                         val: DataValue::from(true),
@@ -371,14 +371,17 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
                             val: DataValue::from(true),
                             span,
                         },
-                        args.next().unwrap_or(Expr::Const {
-                            val: DataValue::Null,
-                            span,
-                        }),
+                        match args.next() {
+                            Some(e) => e,
+                            None => Expr::Const {
+                                val: DataValue::Null,
+                                span,
+                            },
+                        },
                     ));
                     Expr::Cond { clauses, span }
                 }
-                _ => match resolve_decl(ident) {
+                _other => match resolve_decl(ident) {
                     None => Expr::UnboundApply {
                         op: ident.into(),
                         args: args.into(),
@@ -419,7 +422,7 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             }
         }
         Rule::grouping => build_expr(pair.into_inner().next().unwrap(), param_pool)?,
-        _ => bail!(UnexpectedRule(pair.extract_span())),
+        _other => bail!(UnexpectedRule(pair.extract_span())),
     })
 }
 
@@ -440,7 +443,7 @@ pub(crate) fn parse_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
         Rule::s_quoted_string => Ok(parse_s_quoted_string(pair)?),
         Rule::raw_string => Ok(parse_raw_string(pair)?),
         Rule::ident => Ok(SmartString::from(pair.as_str())),
-        _ => bail!(UnexpectedRule(pair.extract_span())),
+        _other => bail!(UnexpectedRule(pair.extract_span())),
     }
 }
 

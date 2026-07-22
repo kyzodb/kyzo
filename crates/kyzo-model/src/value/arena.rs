@@ -196,9 +196,10 @@ impl Heap {
             let chunk = self.chunk_id()?;
             // Prove end_off: ZERO + vlen is the length itself when vlen is
             // a lawful ByteLen; keep the checked door for one mint law.
-            let _ = ByteOff::ZERO
-                .checked_add(vlen)
-                .ok_or(Denial::ExtentOverflow)?;
+            match ByteOff::ZERO.checked_add(vlen) {
+                Some(end) => core::mem::drop(end),
+                None => return Err(Denial::ExtentOverflow),
+            }
             self.frozen.push(Arc::from(value));
             return Ok(Span {
                 chunk,
@@ -211,7 +212,10 @@ impl Heap {
         }
         let chunk = self.chunk_id()?;
         let off = ByteOff::from_usize(self.live.len()).ok_or(Denial::ExtentOverflow)?;
-        let _ = off.checked_add(vlen).ok_or(Denial::ExtentOverflow)?;
+        match off.checked_add(vlen) {
+            Some(end) => core::mem::drop(end),
+            None => return Err(Denial::ExtentOverflow),
+        }
         self.live.extend_from_slice(value);
         Ok(Span {
             chunk,
@@ -371,7 +375,7 @@ impl Run {
                 .all(|w| w[0].cmp_entry(&w[1], heap) == Ordering::Less),
             "from_sorted precondition violated"
         );
-        let _ = heap;
+        match heap { value => core::mem::drop(value) };
         Run { entries }
     }
 
@@ -858,7 +862,7 @@ impl EpochRemap {
                 }
             }
             r.checked_add(lo)
-                .and_then(|n| u32::try_from(n).ok())
+                .and_then(|n| match u32::try_from(n) { Ok(v) => Some(v), Err(_overflow) => None })
                 .map(Code)
                 .ok_or(Denial::CodeRemapOverflow)
         } else {
@@ -1765,7 +1769,10 @@ fn take_geometric_merge_pair(runs: &mut Vec<Arc<Run>>) -> Option<[Arc<Run>; 2]> 
         return None;
     }
     let pair = runs.split_off(n - 2);
-    <[Arc<Run>; 2]>::try_from(pair).ok()
+    match <[Arc<Run>; 2]>::try_from(pair) {
+        Ok(arr) => Some(arr),
+        Err(_len) => None,
+    }
 }
 
 impl Default for Arena {
@@ -2186,7 +2193,7 @@ mod tests {
             let alphabet: &[u8] = match seed % 3 {
                 0 => &[0x00, 0x01],
                 1 => b"abcdefghij",
-                _ => &[],
+                _other => &[],
             };
             let mut history: Vec<Vec<u8>> = Vec::new();
             let mut ops = Vec::new();

@@ -101,8 +101,13 @@ fn encode(v: &DataValue) -> Vec<u8> {
 fn law1_round_trip_corpus() {
     for v in corpus() {
         let buf = encode(&v);
-        let (decoded, rest) = DataValue::decode_from_key(&buf)
-            .unwrap_or_else(|e| panic!("decode failed for {v:?}: {e}"));
+        let (decoded, rest) = match DataValue::decode_from_key(&buf) {
+            Ok(pair) => pair,
+            Err(e) => {
+                assert!(false, "decode failed for {v:?}: {e}");
+                return;
+            }
+        };
         assert_eq!(decoded, v, "round-trip failed for {v:?}");
         assert!(rest.is_empty(), "trailing bytes for {v:?}");
     }
@@ -137,7 +142,10 @@ fn law3_byte_flip_harness() {
             for flip in [0x01u8, 0x80, 0xFF] {
                 let mut m = buf.clone();
                 m[i] ^= flip;
-                let _ = DataValue::decode_from_key(&m);
+                match DataValue::decode_from_key(&m) {
+                    Ok(v) => core::mem::drop(v),
+                    Err(e) => core::mem::drop(e),
+                }
             }
         }
     }

@@ -79,7 +79,7 @@ impl JsonNum {
     pub fn new(n: Num) -> Result<JsonNum, NonFiniteJsonNumber> {
         match n.as_float() {
             Some(f) if !f.is_finite() => Err(NonFiniteJsonNumber),
-            _ => Ok(JsonNum(n)),
+            _other => Ok(JsonNum(n)),
         }
     }
 

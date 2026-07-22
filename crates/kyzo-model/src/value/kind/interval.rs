@@ -120,7 +120,7 @@ impl Interval {
     pub fn start(self) -> Option<i64> {
         match self.ends() {
             Some((Lo::At(t), _)) => Some(t),
-            _ => None,
+            _other => None,
         }
     }
 
@@ -129,7 +129,7 @@ impl Interval {
     pub fn end(self) -> Option<i64> {
         match self.ends() {
             Some((_, Hi::At(t))) => Some(t),
-            _ => None,
+            _other => None,
         }
     }
 
@@ -162,42 +162,42 @@ impl Interval {
             // checked successor: an end at the +inf sentinel has none,
             // and is before nothing (the unchecked `+ 1` wrapped).
             (Some((_, ah)), Some((bl, _))) => ah.checked_add(1).is_some_and(|s| s < bl),
-            _ => false,
+            _other => false,
         }
     }
 
     pub fn meets(self, other: Interval) -> bool {
         match (self.wide_ends(), other.wide_ends()) {
             (Some((_, ah)), Some((bl, _))) => ah.checked_add(1) == Some(bl),
-            _ => false,
+            _other => false,
         }
     }
 
     pub fn overlaps(self, other: Interval) -> bool {
         match (self.wide_ends(), other.wide_ends()) {
             (Some((al, ah)), Some((bl, bh))) => al < bl && bl <= ah && ah < bh,
-            _ => false,
+            _other => false,
         }
     }
 
     pub fn starts(self, other: Interval) -> bool {
         match (self.wide_ends(), other.wide_ends()) {
             (Some((al, ah)), Some((bl, bh))) => al == bl && ah < bh,
-            _ => false,
+            _other => false,
         }
     }
 
     pub fn during(self, other: Interval) -> bool {
         match (self.wide_ends(), other.wide_ends()) {
             (Some((al, ah)), Some((bl, bh))) => bl < al && ah < bh,
-            _ => false,
+            _other => false,
         }
     }
 
     pub fn finishes(self, other: Interval) -> bool {
         match (self.wide_ends(), other.wide_ends()) {
             (Some((al, ah)), Some((bl, bh))) => ah == bh && bl < al,
-            _ => false,
+            _other => false,
         }
     }
 
@@ -205,7 +205,7 @@ impl Interval {
     pub fn intersects(self, other: Interval) -> bool {
         match (self.wide_ends(), other.wide_ends()) {
             (Some((al, ah)), Some((bl, bh))) => al.max(bl) <= ah.min(bh),
-            _ => false,
+            _other => false,
         }
     }
 

@@ -163,7 +163,7 @@ pub fn footprints_overlap(a: &Footprint, b: &Footprint) -> bool {
         (Footprint::Frontier(f1), Footprint::Frontier(f2)) => f1.edge == f2.edge,
         (Footprint::Underivable, _) | (_, Footprint::Underivable) => true,
         // Cross-kind: cannot prove disjoint without a shared coordinate → overlap.
-        _ => true,
+        _other => true,
     }
 }
 

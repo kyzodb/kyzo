@@ -42,7 +42,7 @@ impl ByteLen {
     /// `Span` passes through here, so the stored field can never silently
     /// truncate.
     pub(super) fn from_usize(n: usize) -> Option<ByteLen> {
-        u32::try_from(n).ok().map(ByteLen)
+        (match u32::try_from(n) { Ok(v) => Some(ByteLen(v)), Err(_overflow) => None })
     }
 
     /// [`TryFrom`] door — same refusal as [`from_usize`].
@@ -84,7 +84,7 @@ impl ByteOff {
 
     /// Construct from a `usize`; `None` if `n > u32::MAX`.
     pub(super) fn from_usize(n: usize) -> Option<ByteOff> {
-        u32::try_from(n).ok().map(ByteOff)
+        (match u32::try_from(n) { Ok(v) => Some(ByteOff(v)), Err(_overflow) => None })
     }
 
     /// [`TryFrom`] door — same refusal as [`from_usize`].
@@ -117,7 +117,7 @@ const _: () = assert!(std::mem::align_of::<ChunkId>() == std::mem::align_of::<u3
 impl ChunkId {
     /// Construct from a `usize`; `None` if `n > u32::MAX`.
     pub(super) fn from_usize(n: usize) -> Option<ChunkId> {
-        u32::try_from(n).ok().map(ChunkId)
+        (match u32::try_from(n) { Ok(v) => Some(ChunkId(v)), Err(_overflow) => None })
     }
 
     /// [`TryFrom`] door — same refusal as [`from_usize`].

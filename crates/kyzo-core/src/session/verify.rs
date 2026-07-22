@@ -230,7 +230,10 @@ impl VerifyOutcome {
                     "program:\n{program}\nevaluated: {evaluated:?}\nprovenance: {provenance:?}"
                 );
                 if let Some(cert) = certificate {
-                    let _ = write!(detail, "\ncertificate: {cert}");
+                    match write!(detail, "\ncertificate: {cert}") {
+                        Ok(()) => {}
+                        Err(_fmt) => {}
+                    }
                 }
                 (
                     "mismatch",
@@ -353,7 +356,9 @@ impl<S: Storage> Engine<S> {
             &mut |app| Ok(SessionFixedRule::new(app, view, cancel.clone())),
         )?;
 
-        let _ = cur_vld;
+        match cur_vld {
+            value => core::mem::drop(value),
+        }
         let budget = build_budget(options, &out_opts, cancel)?;
 
         // Provenance needs every rule store live through the final stratum.
@@ -382,10 +387,11 @@ impl<S: Storage> Engine<S> {
             .collect::<Result<BTreeSet<_>, _>>()?;
 
         let derivation_ceiling = NonZeroU64::new(
-            options
-                .derived_tuple_ceiling
-                .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING)
-                .max(1),
+            match options.derived_tuple_ceiling {
+                Some(v) => v,
+                None => DEFAULT_DERIVED_TUPLE_CEILING,
+            }
+            .max(1),
         )
         .expect("max(1) is nonzero");
         let unit = NonZeroU64::new(1).expect("1 is nonzero");
@@ -410,10 +416,11 @@ impl<S: Storage> Engine<S> {
             };
 
         let solver_ceiling = NonZeroU32::new(
-            options
-                .epoch_ceiling
-                .unwrap_or(DEFAULT_EPOCH_CEILING)
-                .max(1),
+            match options.epoch_ceiling {
+                Some(v) => v,
+                None => DEFAULT_EPOCH_CEILING,
+            }
+            .max(1),
         )
         .expect("max(1) is nonzero");
         let ann = match solve::<TropicalAnn, _>(&graph, &SolverBudget::new(solver_ceiling)) {
@@ -435,7 +442,7 @@ impl<S: Storage> Engine<S> {
                 ((PremiseSource::Rule(sym), tup), Cost::Finite(_)) if *sym == entry => {
                     Some(tup.clone())
                 }
-                _ => None,
+                _other => None,
             })
             .collect();
 

@@ -376,7 +376,7 @@ impl Ord for DataValue {
             // Tags already agreed; every same-kind arm is covered above.
             // Equal is the total-order refuse of panic — compare never panics
             // for any constructible DataValue pair (the T4 law).
-            _ => Ordering::Equal,
+            _other => Ordering::Equal,
         }
     }
 }
@@ -422,7 +422,7 @@ fn json_storage_cmp(a: &Json, b: &Json) -> Ordering {
             }
             x.entries().len().cmp(&y.entries().len())
         }
-        _ => Ordering::Equal,
+        _other => Ordering::Equal,
     }
 }
 
@@ -465,7 +465,7 @@ impl std::fmt::Display for DataValue {
             DataValue::Num(n) => match (n.as_int(), n.as_float()) {
                 (Some(i), _) => write!(f, "{i}"),
                 (_, Some(x)) => write!(f, "{x:?}"),
-                _ => unreachable!("Num is int or float"),
+                _other => unreachable!("Num is int or float"),
             },
             DataValue::Str(s) => write!(f, "{s:?}"),
             DataValue::Bytes(b) => {
@@ -746,7 +746,10 @@ pub fn bare_prefix_len(bytes: &[u8], n_cols: usize) -> Option<usize> {
         if at >= bytes.len() {
             return None;
         }
-        at += canonical::skip_one(&bytes[at..]).ok()?;
+        at += match canonical::skip_one(&bytes[at..]) {
+            Ok(n) => n,
+            Err(_skip) => return None,
+        };
     }
     Some(at)
 }
@@ -802,7 +805,13 @@ pub fn decode_tuple_from_kv(
     val: &[u8],
     size_hint: Option<usize>,
 ) -> Result<Tuple, DecodeError> {
-    let mut out = decode_tuple_from_key(key, size_hint.unwrap_or(0))?;
+    let mut out = decode_tuple_from_key(
+        key,
+        match size_hint {
+            Some(v) => v,
+            None => 0,
+        },
+    )?;
     extend_tuple_from_v(&mut out, val)?;
     Ok(out)
 }
@@ -945,7 +954,7 @@ mod facade_tests {
                 Interval::new(Bound::Closed(rng.next() as i64 % 1000), Bound::Unbounded)
             }),
             12 => DataValue::Geometry(Geometry::from_cells(rng.next() as u32, rng.next() as u32)),
-            _ => DataValue::Json(if rng.next().is_multiple_of(2) {
+            _other => DataValue::Json(if rng.next().is_multiple_of(2) {
                 Json::Null
             } else {
                 Json::Str("k".into())

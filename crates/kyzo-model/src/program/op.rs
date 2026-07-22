@@ -55,9 +55,10 @@ impl OpDecl {
     }
 
     pub fn display_name(self) -> String {
-        self.name
-            .strip_prefix("OP_")
-            .unwrap_or(self.name)
+        match self.name.strip_prefix("OP_") {
+            Some(s) => s,
+            None => self.name,
+        }
             .to_lowercase()
     }
 
@@ -224,9 +225,10 @@ pub const OP_WINDOWS: OpDecl = OpDecl::new("OP_WINDOWS", 2, false, true);
 
 /// Resolve a KyzoScript / serde display name to an [`OpDecl`] (no body).
 pub fn resolve_decl(name: &str) -> Option<OpDecl> {
-    let key = name
-        .strip_prefix("OP_")
-        .unwrap_or(name)
+    let key = match name.strip_prefix("OP_") {
+        Some(s) => s,
+        None => name,
+    }
         .to_ascii_lowercase();
     Some(match key.as_str() {
         "abs" => OP_ABS,
@@ -378,7 +380,7 @@ pub fn resolve_decl(name: &str) -> Option<OpDecl> {
         "validity" => OP_VALIDITY,
         "vec" => OP_VEC,
         "windows" => OP_WINDOWS,
-        _ => return None,
+        _other => return None,
     })
 }
 
@@ -490,7 +492,7 @@ pub fn resolve_fixed_rule_option(name: &str) -> Option<FixedRuleOptionDecl> {
         "undirected" => OPT_UNDIRECTED,
         "url" => OPT_URL,
         "weight" => OPT_WEIGHT,
-        _ => return None,
+        _other => return None,
     })
 }
 
@@ -576,7 +578,7 @@ pub fn resolve_search_modality_option(name: &str) -> Option<SearchModalityOption
         "bind_vector" => SEARCH_OPT_BIND_VECTOR,
         "bind_score" => SEARCH_OPT_BIND_SCORE,
         "score_kind" => SEARCH_OPT_SCORE_KIND,
-        _ => return None,
+        _other => return None,
     })
 }
 

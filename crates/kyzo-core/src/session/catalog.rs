@@ -461,13 +461,14 @@ fn program_wire_eq(a: &InputProgram, b: &InputProgram) -> bool {
     use serde::Serialize;
     let enc = |p: &InputProgram| -> Option<Vec<u8>> {
         let mut ret = vec![];
-        p.serialize(&mut Serializer::new(&mut ret).with_struct_map())
-            .ok()?;
-        Some(ret)
+        match p.serialize(&mut Serializer::new(&mut ret).with_struct_map()) {
+            Ok(()) => Some(ret),
+            Err(_ser) => None,
+        }
     };
     match (enc(a), enc(b)) {
         (Some(x), Some(y)) => x == y,
-        _ => false,
+        _other => false,
     }
 }
 
@@ -625,7 +626,10 @@ mod catalog {
         // never constructed as a value.
         struct _Marker;
         impl<T: CatalogRecord> AmbiguousIfImpl<_Marker> for T {}
-        let _ = <kyzo_model::value::DataValue as AmbiguousIfImpl<_>>::__proof;
+        {
+            let proof_fn = <kyzo_model::value::DataValue as AmbiguousIfImpl<_>>::__proof;
+            proof_fn();
+        }
     };
 
     /// Serialize a catalog record: msgpack with struct maps. Infallible in
@@ -1906,7 +1910,9 @@ mod tests {
         // Must refuse typed, not panic and not hand back a handle carrying
         // an out-of-range id.
         RelationHandle::decode(&bytes).unwrap_err();
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// `del_range` semantics through destroy: a relation created, filled,
@@ -2050,7 +2056,9 @@ mod tests {
             err.downcast_ref::<RelationIdSpaceExhausted>().is_some(),
             "expected typed exhaustion, got: {err:?}"
         );
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// The persistent catalog refuses temp names (the session's temp store
@@ -2068,7 +2076,9 @@ mod tests {
         create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap();
         let err = create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap_err();
         assert!(err.downcast_ref::<RelNameConflictError>().is_some());
-        let _ = tx.abort();
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// Rename moves the catalog row and nothing else: same id, same data.
@@ -2199,8 +2209,9 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        let _ = tx.abort();
-
+        match tx.abort() {
+            crate::store::tx::Aborted => {}
+        }
         let tx = db.read_tx().unwrap();
         let handle = get_relation(&tx, "t").unwrap();
         assert!(

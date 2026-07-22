@@ -628,7 +628,9 @@ impl<S: Storage> Engine<S> {
             RowLimit::default()
         };
 
-        let _ = cur_vld;
+        match cur_vld {
+            value => core::mem::drop(value),
+        }
         let budget = build_budget(options, &out_opts, cancel)?;
         let outcome = stratified_evaluate(&eval_prog, &lifetimes, limit, &budget, None)?;
         Ok((outcome.store, outcome.limited, head, out_opts))
@@ -658,7 +660,10 @@ impl<S: Storage> Engine<S> {
             }
         } else {
             let sorted = sort_and_collect(result, &out_opts.sorters, head)?;
-            let skip = out_opts.offset.unwrap_or(0);
+            let skip = match out_opts.offset {
+                Some(v) => v,
+                None => 0,
+            };
             let sorted = sorted.into_iter().skip(skip);
             match out_opts.limit {
                 Some(n) => sorted.take(n).collect(),
@@ -719,7 +724,7 @@ impl<S: Storage> Engine<S> {
                     )));
                 }
                 RelationOp::Create | RelationOp::Replace => {}
-                _ if !exists => {
+                _other if !exists => {
                     bail!(EngineRefuse::StoreRelationPrecondition(format!(
                         "relation '{}' does not exist",
                         meta.name.name
@@ -901,19 +906,26 @@ pub(crate) fn build_budget(
     out_opts: &QueryOutOptions,
     cancel: CancelFlag,
 ) -> Result<Budget> {
-    let ceiling = options.epoch_ceiling.unwrap_or(DEFAULT_EPOCH_CEILING);
+    let ceiling = match options.epoch_ceiling {
+        Some(v) => v,
+        None => DEFAULT_EPOCH_CEILING,
+    };
     let ceiling = NonZeroU32::new(ceiling.max(1)).expect("max(1) is nonzero");
     let mut budget = Budget::new(ceiling).with_cancel(cancel);
-    let derived_tuple_ceiling = options
-        .derived_tuple_ceiling
-        .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING);
+    let derived_tuple_ceiling = match options.derived_tuple_ceiling {
+        Some(v) => v,
+        None => DEFAULT_DERIVED_TUPLE_CEILING,
+    };
     budget = budget.with_derived_tuple_ceiling(derived_tuple_ceiling);
     // The tighter of the caller's deadline and the query's own :timeout.
     let deadline = [options.timeout_secs, out_opts.timeout]
         .into_iter()
         .flatten()
         .filter(|s| *s > 0.0)
-        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        .min_by(|a, b| match a.partial_cmp(b) {
+            Some(ord) => ord,
+            None => std::cmp::Ordering::Equal,
+        });
     if let Some(secs) = deadline {
         let duration =
             Duration::try_from_secs_f64(secs).map_err(|_| EngineRefuse::InvalidTimeout(secs))?;
@@ -1070,7 +1082,9 @@ impl<T: WriteTx> SessionTx<T> {
             store, mut temp, ..
         } = self;
         temp.discard();
-        let _ = store.abort();
+        match store.abort() {
+            crate::store::tx::Aborted => {}
+        }
     }
 
     /// Commit the persistent write tx and spend the session scratch Open.
@@ -1095,10 +1109,10 @@ impl<T: WriteTx> SessionTx<T> {
             .or_else(current_live_sweep)
             .ok_or(CommitFailure::Io(CommitIo::DurableAckArmRefused))?;
         let store_id = sweep.store_id();
-        let client_op = options
-            .client_operation_id
-            .clone()
-            .unwrap_or_else(|| sweep.next_anon_operation_id());
+        let client_op = match options.client_operation_id.clone() {
+            Some(id) => id,
+            None => sweep.next_anon_operation_id(),
+        };
         let preimage = SingleStoreKeyPreimage {
             domain_label: b"kyzo.script.write".to_vec(),
             client_operation_id: client_op.clone(),
@@ -1491,11 +1505,16 @@ mod tests {
         // error as `EvalRaisedError` (its message, not its type, survives
         // — in the struct's own help string, not its fixed `Display`) —
         // the same wrapping every other op error gets.
-        let wrapped = err
-            .downcast_ref::<kyzo_model::program::expr::EvalRaisedError>()
-            .unwrap_or_else(|| {
-                panic!("expected an EvalRaisedError wrapping the overflow, got: {err}")
-            });
+        let wrapped = match err.downcast_ref::<kyzo_model::program::expr::EvalRaisedError>() {
+            Some(w) => w,
+            None => {
+                assert!(
+                    false,
+                    "expected an EvalRaisedError wrapping the overflow, got: {err}"
+                );
+                return;
+            }
+        };
         assert!(
             wrapped.1.contains("integer overflow"),
             "expected an integer-overflow message, got: {}",

@@ -406,7 +406,7 @@ pub(crate) fn parse_sys(
                 "protected" => AccessLevel::Protected,
                 "read_only" => AccessLevel::ReadOnly,
                 "hidden" => AccessLevel::Hidden,
-                _ => return Err(unexpected("an access level", &level_p)),
+                _other => return Err(unexpected("an access level", &level_p)),
             };
             let mut rels = vec![];
             for rel_p in ps {
@@ -440,7 +440,7 @@ pub(crate) fn parse_sys(
                     Rule::trigger_put => puts.push(script_str.to_string()),
                     Rule::trigger_rm => rms.push(script_str.to_string()),
                     Rule::trigger_replace => replaces.push(script_str.to_string()),
-                    _ => return Err(unexpected("a trigger kind", &op)),
+                    _other => return Err(unexpected("a trigger kind", &op)),
                 }
             }
             SysScript::SetTriggers(rel, puts, rms, replaces)
@@ -467,7 +467,7 @@ pub(crate) fn parse_sys(
                     SysScript::RemoveConstraint(Symbol::new(name_p.as_str(), name_p.extract_span()))
                 }
                 Rule::constraint_list => SysScript::ListConstraints,
-                _ => return Err(unexpected("a constraint operation", &op)),
+                _other => return Err(unexpected("a constraint operation", &op)),
             }
         }
         Rule::lsh_idx_op => {
@@ -607,7 +607,7 @@ pub(crate) fn parse_sys(
                             "filters" => {
                                 filters = parse_filters_expr(build_expr(opt_val, param_pool)?)?;
                             }
-                            _ => {
+                            _other => {
                                 return Err(IndexOptionError(
                                     format!("Unknown option {} for LSH index", opt_name.as_str()),
                                     name_span,
@@ -678,7 +678,7 @@ pub(crate) fn parse_sys(
                     })
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an LSH index operation", &inner)),
+                _other => return Err(unexpected("an LSH index operation", &inner)),
             }
         }
         Rule::fts_idx_op => {
@@ -717,7 +717,7 @@ pub(crate) fn parse_sys(
                             "filters" => {
                                 filters = parse_filters_expr(build_expr(opt_val, param_pool)?)?;
                             }
-                            _ => {
+                            _other => {
                                 return Err(IndexOptionError(
                                     format!("Unknown option {} for FTS index", opt_name.as_str()),
                                     name_span,
@@ -737,7 +737,7 @@ pub(crate) fn parse_sys(
                     })
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an FTS index operation", &inner)),
+                _other => return Err(unexpected("an FTS index operation", &inner)),
             }
         }
         Rule::vec_idx_op => {
@@ -838,7 +838,7 @@ pub(crate) fn parse_sys(
                                 dtype = match opt_val.as_str() {
                                     "F32" | "Float" => VecElementType::F32,
                                     "F64" | "Double" => VecElementType::F64,
-                                    _ => {
+                                    _other => {
                                         return Err(IndexOptionError(
                                             format!("Invalid dtype: {}", opt_val.as_str()),
                                             val_span,
@@ -856,7 +856,7 @@ pub(crate) fn parse_sys(
                                     "L2" => HnswDistance::L2,
                                     "IP" => HnswDistance::InnerProduct,
                                     "Cosine" => HnswDistance::Cosine,
-                                    _ => {
+                                    _other => {
                                         return Err(IndexOptionError(
                                             format!("Invalid distance: {}", opt_val.as_str()),
                                             val_span,
@@ -876,7 +876,7 @@ pub(crate) fn parse_sys(
                             "keep_pruned_connections" => {
                                 keep_pruned_connections = opt_val.as_str().trim() == "true";
                             }
-                            _ => {
+                            _other => {
                                 return Err(IndexOptionError(
                                     format!("Invalid option: {}", opt_name.as_str()),
                                     name_span,
@@ -912,7 +912,7 @@ pub(crate) fn parse_sys(
                     })
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an HNSW index operation", &inner)),
+                _other => return Err(unexpected("an HNSW index operation", &inner)),
             }
         }
         Rule::index_op => {
@@ -943,11 +943,11 @@ pub(crate) fn parse_sys(
                     )
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an index operation", &inner)),
+                _other => return Err(unexpected("an index operation", &inner)),
             }
         }
         Rule::list_fixed_rules => SysScript::ListFixedRules,
-        _ => return Err(unexpected("a system operation", &inner)),
+        _other => return Err(unexpected("a system operation", &inner)),
     })
 }
 

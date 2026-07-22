@@ -116,7 +116,7 @@ impl Tag {
             0x58 => Tag::Validity,
             0x60 => Tag::Interval,
             0x68 => Tag::Geometry,
-            _ => return None,
+            _other => return None,
         })
     }
 

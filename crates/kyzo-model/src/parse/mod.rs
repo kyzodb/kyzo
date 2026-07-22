@@ -227,7 +227,7 @@ pub fn parse_script(
             let op = sys::parse_sys(parsed.into_inner(), param_pool, cur_vld)?;
             Script::Sys(op)
         }
-        _ => bail!(UnexpectedRule(parsed.extract_span())),
+        _other => bail!(UnexpectedRule(parsed.extract_span())),
     })
 }
 
@@ -268,7 +268,7 @@ pub fn parse_sys(
     )?;
     match parsed.as_rule() {
         Rule::sys_script => sys::parse_sys(parsed.into_inner(), param_pool, cur_vld),
-        _ => bail!(UnexpectedRule(parsed.extract_span())),
+        _other => bail!(UnexpectedRule(parsed.extract_span())),
     }
 }
 

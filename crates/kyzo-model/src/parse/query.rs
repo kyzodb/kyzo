@@ -264,7 +264,10 @@ pub(crate) fn parse_query(
                 // (`OP_LIST` stays Apply until the engine apply door). Const
                 // rules with empty heads (`start[] <- [['FRA']]`) must still
                 // learn arity from the list-of-lists shape at parse time.
-                let arity = const_rule_data_arity(&data).unwrap_or_else(|| head.len());
+                let arity = match const_rule_data_arity(&data) {
+        Some(a) => a,
+        None => head.len(),
+    };
 
                 ensure!(arity != 0 || !head.is_empty(), EmptyRowForConstRule(span));
                 if !head.is_empty() {
@@ -360,7 +363,7 @@ pub(crate) fn parse_query(
                             }
                             Rule::sort_asc => dir = SortDir::Asc,
                             Rule::sort_desc => dir = SortDir::Dsc,
-                            _ => bail!(UnexpectedRule(a.extract_span())),
+                            _other => bail!(UnexpectedRule(a.extract_span())),
                         }
                     }
                     out_opts.sorters.push((Symbol::new(var, span), dir));
@@ -383,7 +386,7 @@ pub(crate) fn parse_query(
                     Rule::relation_delete => RelationOp::Delete,
                     Rule::relation_ensure => RelationOp::Ensure,
                     Rule::relation_ensure_not => RelationOp::EnsureNot,
-                    _ => bail!(UnexpectedRule(op_pair.extract_span())),
+                    _other => bail!(UnexpectedRule(op_pair.extract_span())),
                 };
 
                 let name_p = args.next().unwrap();
@@ -491,7 +494,7 @@ pub(crate) fn parse_query(
                 disable_magic_rewrite = val;
             }
             Rule::EOI => break,
-            _ => bail!(UnexpectedRule(pair.extract_span())),
+            _other => bail!(UnexpectedRule(pair.extract_span())),
         }
     }
 
@@ -707,7 +710,7 @@ fn parse_disjunction(
     for v in pair.into_inner() {
         match v.as_rule() {
             Rule::or_op => {}
-            _ => res.push(parse_atom(v, param_pool, cur_vld, ignored_counter)?),
+            _other => res.push(parse_atom(v, param_pool, cur_vld, ignored_counter)?),
         }
     }
     Ok(if res.len() == 1 {
@@ -878,7 +881,7 @@ fn parse_atom(
                 },
             }
         }
-        _ => bail!(UnexpectedRule(src.extract_span())),
+        _other => bail!(UnexpectedRule(src.extract_span())),
     })
 }
 
@@ -947,7 +950,7 @@ fn parse_rule_head_arg(
                 HeadAggrSlot::Aggregated { aggr, args },
             )
         }
-        _ => bail!(UnexpectedRule(src.extract_span())),
+        _other => bail!(UnexpectedRule(src.extract_span())),
     })
 }
 
@@ -1039,7 +1042,7 @@ fn parse_fixed_rule(
                                 Rule::validity_clause => {
                                     as_of = Some(parse_at_clause(v, param_pool, cur_vld)?)
                                 }
-                                _ => bail!(UnexpectedRule(v.extract_span())),
+                                _other => bail!(UnexpectedRule(v.extract_span())),
                             }
                         }
                         rule_args.push(FixedRuleArg::Stored {
@@ -1082,7 +1085,7 @@ fn parse_fixed_rule(
                                 Rule::validity_clause => {
                                     as_of = Some(parse_at_clause(p, param_pool, cur_vld)?)
                                 }
-                                _ => bail!(UnexpectedRule(p.extract_span())),
+                                _other => bail!(UnexpectedRule(p.extract_span())),
                             }
                         }
 
@@ -1096,7 +1099,7 @@ fn parse_fixed_rule(
                             span,
                         })
                     }
-                    _ => bail!(UnexpectedRule(inner.extract_span())),
+                    _other => bail!(UnexpectedRule(inner.extract_span())),
                 }
             }
             Rule::fixed_opt_pair => {
@@ -1107,7 +1110,7 @@ fn parse_fixed_rule(
                 let val = build_expr(val, param_pool)?;
                 options.insert(name, val)?;
             }
-            _ => bail!(UnexpectedRule(nxt.extract_span())),
+            _other => bail!(UnexpectedRule(nxt.extract_span())),
         }
     }
 
@@ -1253,14 +1256,20 @@ fn const_rule_data_arity(data: &Expr) -> Option<usize> {
                     val: DataValue::List(cols),
                     ..
                 }) => Some(cols.len()),
-                _ => None,
+                _other => None,
             }
         }
-        _ => data.clone().eval_to_const().ok().and_then(|v| match v {
-            DataValue::List(rows) if rows.is_empty() => None,
-            DataValue::List(rows) => rows.first().and_then(|r| r.get_slice()).map(|s| s.len()),
-            _ => None,
-        }),
+        _other => match data.clone().eval_to_const() {
+            Ok(v) => match v {
+                DataValue::List(rows) if rows.is_empty() => None,
+                DataValue::List(rows) => rows.first().and_then(|r| r.get_slice()).map(|s| s.len()),
+                _other_val => {
+                    core::mem::drop(_other_val);
+                    None
+                }
+            },
+            Err(_eval) => None,
+        },
     }
 }
 
@@ -1334,7 +1343,7 @@ fn parse_read_validity_clause(
                 var,
             }
         }
-        _ => bail!(UnexpectedRule(clause.extract_span())),
+        _other => bail!(UnexpectedRule(clause.extract_span())),
     }))
 }
 
