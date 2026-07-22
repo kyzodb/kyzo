@@ -189,6 +189,8 @@ pub fn interval_to_json(iv: &Interval) -> JsonValue {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
     use crate::value::{RegexFlags, RegexSource, UuidWrapper, Vector};
 
@@ -197,11 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn regex_flags_participate_in_json_identity() {
+    fn regex_flags_participate_in_json_identity() -> Result<()> {
         let ci = DataValue::Regex(
-            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).unwrap(),
+            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).into_diagnostic()?,
         );
-        let cs = DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap());
+        let cs = DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).into_diagnostic()?);
         assert_ne!(
             to_json(&ci),
             to_json(&cs),
@@ -211,22 +213,24 @@ mod tests {
         assert_eq!(rt(cs.clone()), cs);
         // Flagged source must not collapse to the pattern-only string.
         assert!(matches!(rt(ci), DataValue::Regex(_)));
+        Ok(())
     }
 
     #[test]
-    fn bytes_uuid_vector_round_trip_preserve_kind() {
+    fn bytes_uuid_vector_round_trip_preserve_kind() -> Result<()> {
         let bytes = DataValue::Bytes(vec![0, 1, 255, 0x80]);
         assert_eq!(rt(bytes.clone()), bytes);
         assert!(matches!(rt(bytes), DataValue::Bytes(_)));
 
-        let u = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let u = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").into_diagnostic()?;
         let uuid = DataValue::Uuid(UuidWrapper::new(u));
         assert_eq!(rt(uuid.clone()), uuid);
         assert!(matches!(rt(uuid), DataValue::Uuid(_)));
 
-        let vec = DataValue::Vector(Vector::try_new(vec![1.0, -2.5, 0.0]).unwrap());
+        let vec = DataValue::Vector(Vector::try_new(vec![1.0, -2.5, 0.0]).ok_or_else(|| miette!("try_new"))?);
         assert_eq!(rt(vec.clone()), vec);
         assert!(matches!(rt(vec), DataValue::Vector(_)));
+        Ok(())
     }
 
     #[test]

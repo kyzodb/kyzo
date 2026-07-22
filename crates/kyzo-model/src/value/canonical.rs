@@ -971,6 +971,8 @@ pub(super) fn decode_terminated(body: &[u8]) -> Result<(Vec<u8>, usize), DecodeE
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use std::collections::BTreeSet;
 
     use super::super::kind::interval::Bound;
@@ -1132,11 +1134,81 @@ mod tests {
             // the independent mirror's totality seal.
             _other => unreachable!("ranks equal"),
         }
+    }        fn rank(j: &Json) -> u8 {
+            match j {
+                Json::Null => 0x05,
+                Json::Bool(false) => 0x06,
+                Json::Bool(true) => 0x07,
+                Json::Num(_) => 0x10,
+                Json::Str(_) => 0x18,
+                Json::Arr(_) => 0x48,
+                Json::Obj(_) => 0x4C,
+            }
+        }
+        let r = rank(a).cmp(&rank(b));
+        if r != Ordering::Equal {
+            return r;
+        }
+        match (a, b) {
+            (Json::Null, Json::Null)
+            | (Json::Bool(false), Json::Bool(false))
+            | (Json::Bool(true), Json::Bool(true)) => Ordering::Equal,
+            (Json::Num(x), Json::Num(y)) => x.num().cmp(&y.num()),
+            (Json::Str(x), Json::Str(y)) => x.as_bytes().cmp(y.as_bytes()),
+            (Json::Arr(x), Json::Arr(y)) => {
+                for (i, j) in x.iter().zip(y.iter()) {
+                    let c = semantic_json_cmp(i, j);
+                    if c != Ordering::Equal {
+                        return c;
+                    }
+                }
+                x.len().cmp(&y.len())
+            }
+            (Json::Obj(x), Json::Obj(y)) => {
+                for ((ka, va), (kb, vb)) in x.entries().iter().zip(y.entries().iter()) {
+                    let c = ka
+                        .as_bytes()
+                        .cmp(kb.as_bytes())
+                        .then_with(|| semantic_json_cmp(va, vb));
+                    if c != Ordering::Equal {
+                        return c;
+                    }
+                }
+                x.entries().len().cmp(&y.entries().len())
+            }
+            // T4 totalization: ranks already compared equal; every Json
+            // variant is covered. Unreachable by the sum type — kept as
+            // the independent mirror's totality seal.
+            _other => unreachable!("ranks equal"),
+        }
     }
 
     /// Independent mirror of the interval grammar's deterministic order.
     fn semantic_interval_cmp(a: &Interval, b: &Interval) -> Ordering {
         fn key(iv: &Interval) -> (u8, u8, i64, u8, i64) {
+            match iv.ends() {
+                None => (0x01, 0, 0, 0, 0),
+                Some((lo, hi)) => {
+                    let (lm, lt) = match lo {
+                        Lo::NegUnbounded => (0x01, 0),
+                        Lo::At(t) => (0x02, t),
+                    };
+                    let (hm, ht) = match hi {
+                        Hi::PosUnbounded => (0x01, 0),
+                        Hi::At(t) => (0x02, t),
+                    };
+                    (0x02, lm, lt, hm, ht)
+                }
+            }
+        }
+        let (af, alm, alt, ahm, aht) = key(a);
+        let (bf, blm, blt, bhm, bht) = key(b);
+        af.cmp(&bf)
+            .then(alm.cmp(&blm))
+            .then(alt.cmp(&blt))
+            .then(ahm.cmp(&bhm))
+            .then(aht.cmp(&bht))
+    }        fn key(iv: &Interval) -> (u8, u8, i64, u8, i64) {
             match iv.ends() {
                 None => (0x01, 0, 0, 0, 0),
                 Some((lo, hi)) => {
@@ -1173,7 +1245,7 @@ mod tests {
 
     const U1: [u8; 16] = [0x11; 16];
 
-    fn edge_datums() -> Vec<DataValue> {
+    fn edge_datums() -> Result<Vec<DataValue>> {
         let nums = [
             Num::int(0),
             Num::float(0.0),
@@ -1212,21 +1284,21 @@ mod tests {
         out.push(DataValue::Set(BTreeSet::new()));
         out.push(DataValue::Set([a.clone(), b.clone()].into_iter().collect()));
         out.push(DataValue::Regex(
-            RegexSource::validated(RegexFlags::NONE, "a+".into()).expect("valid"),
+            RegexSource::validated(RegexFlags::NONE, "a+".into()).into_diagnostic()?,
         ));
         out.push(DataValue::Regex(
-            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "a+".into()).expect("valid"),
+            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "a+".into()).into_diagnostic()?,
         ));
         out.push(DataValue::Json(Json::Null));
         out.push(DataValue::Json(Json::Obj(
             JsonObj::new(vec![
                 (
                     "b".into(),
-                    Json::Num(JsonNum::new(Num::int(2)).expect("finite")),
+                    Json::Num(JsonNum::new(Num::int(2)).into_diagnostic()?),
                 ),
                 ("a".into(), Json::Str("x\u{0}y".into())),
             ])
-            .expect("lawful"),
+            .into_diagnostic()?,
         )));
         out.push(DataValue::Json(Json::Arr(vec![
             Json::Bool(true),
@@ -1237,21 +1309,21 @@ mod tests {
                 ("\u{0}k".into(), Json::Null),
                 ("k".into(), Json::Bool(false)),
             ])
-            .expect("lawful"),
+            .into_diagnostic()?,
         )));
-        out.push(DataValue::Vector(Vector::try_new(vec![]).unwrap()));
-        out.push(DataValue::Vector(Vector::try_new(vec![0.0]).unwrap()));
+        out.push(DataValue::Vector(Vector::try_new(vec![]).ok_or_else(|| miette!("try_new"))?));
+        out.push(DataValue::Vector(Vector::try_new(vec![0.0]).ok_or_else(|| miette!("try_new"))?));
         out.push(DataValue::Vector(
-            Vector::try_new(vec![-1.5, f64::NAN]).unwrap(),
+            Vector::try_new(vec![-1.5, f64::NAN]).ok_or_else(|| miette!("try_new"))?,
         ));
         out.push(DataValue::Validity(
             Validity::new(ValidityTs::from_raw(0), true)
-                .expect("non-reserved")
+                .into_diagnostic()?
                 .into(),
         ));
         out.push(DataValue::Validity(
             Validity::new(ValidityTs::from_raw(0), false)
-                .expect("retract admits every tick")
+                .into_diagnostic()?
                 .into(),
         ));
         out.push(DataValue::Validity(ValiditySlot::from_stored(
@@ -1278,14 +1350,14 @@ mod tests {
             u32::MAX,
             u32::MAX,
         )));
-        out
+        Ok(out)
     }
 
     /// THE one-law triple on the edge corpus: canonical byte order ==
     /// `DataValue::Ord` == independent semantic order. Every pair.
     #[test]
-    fn law_order_embedding_edge_corpus() {
-        let corpus = edge_datums();
+    fn law_order_embedding_edge_corpus() -> Result<()> {
+        let corpus = edge_datums()?;
         let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
         for i in 0..corpus.len() {
             for j in 0..corpus.len() {
@@ -1304,17 +1376,18 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     /// skip_one is decode_one's length, everywhere (including nested
     /// containers), and refuses garbage decode refuses.
     #[test]
-    fn law_skip_matches_decode_consumed_length() {
+    fn law_skip_matches_decode_consumed_length() -> Result<()> {
         let mut rng = Rng(0x5C1B);
         for _ in 0..400 {
-            let d = random_datum(&mut rng, 0);
+            let d = random_datum(&mut rng, 0)?;
             let enc = encode_owned(&d);
-            let (_, used) = decode_one(enc.as_bytes()).expect("lawful");
+            let (_, used) = decode_one(enc.as_bytes()).into_diagnostic()?;
             match skip_one(enc.as_bytes()) {
                 Ok(s) => assert_eq!(s, used, "skip diverged: {d:?}"),
                 Err(e) => panic!(
@@ -1323,11 +1396,11 @@ mod tests {
                 ),
             }
         }
-        for d in edge_datums() {
+        for d in edge_datums()? {
             let enc = encode_owned(&d);
-            let (_, used) = decode_one(enc.as_bytes()).expect("lawful");
+            let (_, used) = decode_one(enc.as_bytes()).into_diagnostic()?;
             assert_eq!(
-                skip_one(enc.as_bytes()).expect("lawful"),
+                skip_one(enc.as_bytes()).into_diagnostic()?,
                 used,
                 "skip diverged: {d:?}"
             );
@@ -1335,21 +1408,23 @@ mod tests {
         assert!(skip_one(&[]).is_err());
         assert!(skip_one(&[0xEE]).is_err());
         assert!(skip_one(&[Tag::Str.byte(), 0x61]).is_err());
+        Ok(())
     }
 
     /// Round-trip totality over the edge corpus.
     #[test]
-    fn law_round_trip_edge_corpus() {
-        for d in edge_datums() {
+    fn law_round_trip_edge_corpus() -> Result<()> {
+        for d in edge_datums()? {
             let enc = encode_owned(&d);
-            let back = decode(enc.as_bytes()).expect("decode own encoding");
+            let back = decode(enc.as_bytes()).into_diagnostic()?;
             assert_eq!(back, d, "round-trip changed {d:?}");
         }
+        Ok(())
     }
 
     /// The mandated grammar prefix cases, pinned explicitly.
     #[test]
-    fn law_sequence_grammar_prefix_cases() {
+    fn law_sequence_grammar_prefix_cases() -> Result<()> {
         let a = Datum::Str("a");
         let b = Datum::Str("b");
         let empty = Datum::List(&[]);
@@ -1410,20 +1485,21 @@ mod tests {
         // Vector storage order is dimension-first: fewer dimensions sort
         // before more, regardless of component values.
         assert!(
-            encode(Datum::Vector(&Vector::try_new(vec![9e300]).unwrap()))
-                < encode(Datum::Vector(&Vector::try_new(vec![0.0, 0.0]).unwrap()))
+            encode(Datum::Vector(&Vector::try_new(vec![9e300]).ok_or_else(|| miette!("try_new"))?))
+                < encode(Datum::Vector(&Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("try_new"))?))
         );
+        Ok(())
     }
 
     /// Randomized one-law triple + round-trip: generated scalars and
     /// shallow sequences, adversarial alphabets (NUL-heavy strings),
     /// every kind including Interval.
     #[test]
-    fn law_order_embedding_randomized() {
+    fn law_order_embedding_randomized() -> Result<()> {
         let mut rng = Rng(0xC0FFEE);
         let mut corpus: Vec<DataValue> = Vec::new();
         for _ in 0..300 {
-            corpus.push(random_datum(&mut rng, 0));
+            corpus.push(random_datum(&mut rng, 0)?);
         }
         let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
         for i in 0..corpus.len() {
@@ -1444,15 +1520,16 @@ mod tests {
             }
         }
         for (d, enc) in corpus.iter().zip(encoded.iter()) {
-            assert_eq!(&decode(enc.as_bytes()).expect("round-trip"), d);
+            assert_eq!(&decode(enc.as_bytes()).into_diagnostic()?, d);
         }
+        Ok(())
     }
 
     /// Totality of the storage order over every constructible kind:
     /// no NaN hole, no cross-kind ambiguity, no panic on compare,
     /// `PartialOrd` always `Some`. The tie-break authority #199 stands on.
     #[test]
-    fn law_datavalue_order_is_total_no_holes() {
+    fn law_datavalue_order_is_total_no_holes() -> Result<()> {
         // One representative per kind — tag-byte order IS cross-kind order.
         let kinds: [DataValue; 14] = [
             DataValue::Null,
@@ -1461,14 +1538,14 @@ mod tests {
             DataValue::Str(String::new()),
             DataValue::Bytes(vec![]),
             DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(U1))),
-            DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid")),
+            DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "a".into()).into_diagnostic()?),
             DataValue::Json(Json::Null),
-            DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
+            DataValue::Vector(Vector::try_new(vec![f64::NAN]).ok_or_else(|| miette!("try_new"))?),
             DataValue::List(vec![]),
             DataValue::Set(BTreeSet::new()),
             DataValue::Validity(
                 Validity::new(ValidityTs::from_raw(0), true)
-                    .expect("non-reserved")
+                    .into_diagnostic()?
                     .into(),
             ),
             DataValue::Interval(Interval::EMPTY),
@@ -1521,7 +1598,7 @@ mod tests {
         }
         // Randomized stress: compare must not panic for any generated pair.
         let mut rng = Rng(0x70_7A_11);
-        let corpus: Vec<DataValue> = (0..200).map(|_| random_datum(&mut rng, 0)).collect();
+        let corpus: Vec<DataValue> = (0..200).map(|_| random_datum(&mut rng, 0)?).collect();
         for a in &corpus {
             for b in &corpus {
                 match a.cmp(b) {
@@ -1530,9 +1607,10 @@ mod tests {
                 assert!(a.partial_cmp(b).is_some());
             }
         }
+        Ok(())
     }
 
-    fn random_datum(rng: &mut Rng, depth: usize) -> DataValue {
+    fn random_datum(rng: &mut Rng, depth: usize) -> Result<DataValue> {
         // Depth 0: all 14 kinds. Nested: scalars + List/Set only.
         let roll = rng.below(if depth == 0 { 14 } else { 7 });
         match roll {
@@ -1562,28 +1640,28 @@ mod tests {
             }
             6 => {
                 let len = rng.below(4);
-                DataValue::List((0..len).map(|_| random_datum(rng, depth + 1)).collect())
+                DataValue::List((0..len).map(|_| random_datum(rng, depth + 1)?).collect())
             }
             7 => {
                 let len = rng.below(4);
-                DataValue::Set((0..len).map(|_| random_datum(rng, depth + 1)).collect())
+                DataValue::Set((0..len).map(|_| random_datum(rng, depth + 1)?).collect())
             }
             8 => {
                 let flags = RegexFlags::from_bits(match u8::try_from(rng.next() % 0x40) {
                     Ok(b) => b,
                     Err(_) => 0,
                 })
-                .expect("masked");
+                .into_diagnostic()?;
                 let pattern = ["", "a", "a\\+", "^x$"][rng.below(4)].to_string();
                 DataValue::Regex(
-                    RegexSource::validated(flags, pattern).expect("corpus patterns are valid"),
+                    RegexSource::validated(flags, pattern).into_diagnostic()?,
                 )
             }
             9 => {
                 let len = rng.below(3);
                 DataValue::Vector(
                     Vector::try_new((0..len).map(|_| f64::from_bits(rng.next())).collect())
-                        .unwrap(),
+                        .ok_or_else(|| miette!("try_new"))?,
                 )
             }
             10 => {
@@ -1602,11 +1680,11 @@ mod tests {
                 match u32::try_from(rng.next() & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 },
                 match u32::try_from(rng.next() & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 },
             )),
-            _other => DataValue::Json(random_json(rng, 0)),
-        }
+            _other => DataValue::Json(random_json(rng, 0)?),
+        Ok(})
     }
 
-    fn random_json(rng: &mut Rng, depth: usize) -> Json {
+    fn random_json(rng: &mut Rng, depth: usize) -> Result<Json> {
         let roll = rng.below(if depth < 2 { 7 } else { 5 });
         match roll {
             0 => Json::Null,
@@ -1619,30 +1697,30 @@ mod tests {
                     let f = f64::from_bits(rng.next());
                     Num::float(if f.is_finite() { f } else { 0.25 })
                 };
-                Json::Num(JsonNum::new(n).expect("finite by construction"))
+                Json::Num(JsonNum::new(n).into_diagnostic()?)
             }
             3 => Json::Str(["", "k", "\u{0}v"][rng.below(3)].to_string()),
             4 => Json::Str("s".into()),
             5 => Json::Arr(
                 (0..rng.below(3))
-                    .map(|_| random_json(rng, depth + 1))
+                    .map(|_| random_json(rng, depth + 1)?)
                     .collect(),
             ),
             _other => {
                 let keys = ["a", "b", "cc"];
                 let n = rng.below(3);
                 let entries: Vec<(String, Json)> = (0..n)
-                    .map(|i| (keys[i].to_string(), random_json(rng, depth + 1)))
+                    .map(|i| (keys[i].to_string(), random_json(rng, depth + 1)?))
                     .collect();
-                Json::Obj(JsonObj::new(entries).expect("distinct keys"))
+                Json::Obj(JsonObj::new(entries).into_diagnostic()?)
             }
-        }
+        Ok(})
     }
 
     /// Format v1 golden vectors for composite encodings: permanent bytes
     /// (seat 59). A failure means the on-disk canonical form moved.
     #[test]
-    fn format_v1_golden_vectors() {
+    fn format_v1_golden_vectors() -> Result<()> {
         let hex = |cb: &CanonicalBytes| -> String {
             cb.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
         };
@@ -1661,15 +1739,15 @@ mod tests {
             "48100304398000000000000000000001"
         );
         assert_eq!(hex(&encode(Datum::Set(&[]))), "5001");
-        let re_a = RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid");
+        let re_a = RegexSource::validated(RegexFlags::NONE, "a".into()).into_diagnostic()?;
         assert_eq!(hex(&encode(Datum::Regex(&re_a))), "3000610000");
         assert_eq!(
-            hex(&encode(Datum::Vector(&Vector::try_new(vec![1.0]).unwrap()))),
+            hex(&encode(Datum::Vector(&Vector::try_new(vec![1.0]).ok_or_else(|| miette!("try_new"))?))),
             "400000000103043980000000000000000001"
         );
         assert_eq!(
             hex(&encode(Datum::Validity(
-                Validity::new(ValidityTs::from_raw(0), true).expect("non-reserved")
+                Validity::new(ValidityTs::from_raw(0), true).into_diagnostic()?
             ))),
             "587fffffffffffffff00"
         );
@@ -1697,7 +1775,7 @@ mod tests {
         );
         // Json: the value bytes are pinned exactly; the trailing hash is
         // verified against an INDEPENDENT in-test FNV implementation.
-        let obj = Json::Obj(JsonObj::new(vec![("a".into(), Json::Null)]).expect("lawful"));
+        let obj = Json::Obj(JsonObj::new(vec![("a".into(), Json::Null)]).into_diagnostic()?);
         let enc = encode(Datum::Json(&obj));
         let bytes = enc.as_bytes();
         let value_span = &bytes[1..bytes.len() - 8];
@@ -1712,6 +1790,7 @@ mod tests {
             h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
         }
         assert_eq!(&bytes[bytes.len() - 8..], h.to_be_bytes());
+        Ok(())
     }
 
     /// REGRESSION (adversarial storage review): byte order == DataValue::Ord
@@ -1720,13 +1799,13 @@ mod tests {
     /// that sorted BELOW the empty object's 0x01 terminator — the two order
     /// authorities disagreed, silently mis-ordering stored JSON keys.
     #[test]
-    fn json_object_byte_order_matches_structural_order_with_nul_key() {
+    fn json_object_byte_order_matches_structural_order_with_nul_key() -> Result<()> {
         use crate::value::DataValue;
         let empty = DataValue::Json(crate::value::Json::Obj(
-            JsonObj::new(vec![]).expect("lawful"),
+            JsonObj::new(vec![]).into_diagnostic()?,
         ));
         let nul = DataValue::Json(crate::value::Json::Obj(
-            JsonObj::new(vec![("\u{0}".into(), Json::Null)]).expect("lawful"),
+            JsonObj::new(vec![("\u{0}".into(), Json::Null)]).into_diagnostic()?,
         ));
         // Structural order: fewer entries is less.
         assert_eq!(empty.cmp(&nul), std::cmp::Ordering::Less);
@@ -1739,13 +1818,13 @@ mod tests {
             "encode_owned byte order must match DataValue::Ord for objects with a NUL-leading key"
         );
         // And both still round-trip.
-        assert_eq!(decode(eb.as_bytes()).unwrap(), empty);
-        assert_eq!(decode(nb.as_bytes()).unwrap(), nul);
+        assert_eq!(decode(eb.as_bytes()).into_diagnostic()?, empty);
+        assert_eq!(decode(nb.as_bytes()).into_diagnostic()?, nul);
         // The LAW, over several NUL-key-bearing pairs: byte order AGREES
         // with structural order, whatever the direction. (JsonObj sorts
         // keys, so a "\0" key leads.)
         let mk = |kvs: Vec<(String, Json)>| {
-            DataValue::Json(crate::value::Json::Obj(JsonObj::new(kvs).expect("lawful")))
+            DataValue::Json(crate::value::Json::Obj(JsonObj::new(kvs).into_diagnostic()?))
         };
         let objs = [
             mk(vec![]),
@@ -1764,12 +1843,13 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     /// Decode totality: random bytes and truncations never panic; every
     /// valid encoding's strict prefixes are errors.
     #[test]
-    fn decode_is_total() {
+    fn decode_is_total() -> Result<()> {
         let mut rng = Rng(0xDEAD);
         for _ in 0..20_000 {
             let len = rng.below(24);
@@ -1782,7 +1862,7 @@ mod tests {
         Err(e) => core::mem::drop(e),
     }
         }
-        for d in edge_datums() {
+        for d in edge_datums()? {
             let enc = encode_owned(&d);
             for cut in 0..enc.len() {
                 assert!(
@@ -1809,7 +1889,7 @@ mod tests {
         // Non-canonical JSON: a corrupted hash and an unsorted object are
         // both refused, never repaired.
         let good = {
-            let obj = Json::Obj(JsonObj::new(vec![("a".into(), Json::Null)]).expect("lawful"));
+            let obj = Json::Obj(JsonObj::new(vec![("a".into(), Json::Null)]).into_diagnostic()?);
             encode(Datum::Json(&obj))
         };
         let mut bad_hash = good.as_bytes().to_vec();
@@ -1831,6 +1911,7 @@ mod tests {
         bad_iv.push(0x02);
         bad_iv.extend_from_slice(&asc_ts_key(1));
         assert_eq!(decode(&bad_iv), Err(DecodeError::IntervalNotCanonical));
+        Ok(())
     }
 
     /// Malformed wide-kind payloads refuse with their typed error, kind
@@ -1917,7 +1998,7 @@ mod tests {
     /// finish before the heat death of the universe; this test completing
     /// at all is the proof the fix holds — no wall-clock bound needed.
     #[test]
-    fn nested_set_decode_is_linear_not_exponential() {
+    fn nested_set_decode_is_linear_not_exponential() -> Result<()> {
         // Safely below MAX_DEPTH (128) so the well-formed control decodes
         // rather than hitting `TooDeep`; 2^NEST_DEPTH is astronomically
         // larger than anything the old two-pass decode could finish.
@@ -1935,7 +2016,7 @@ mod tests {
         let good = encode_owned(&value);
 
         // Well-formed control: decodes to the exact value.
-        let decoded = decode(good.as_bytes()).expect("lawful nested set decodes");
+        let decoded = decode(good.as_bytes()).into_diagnostic()?;
         assert_eq!(decoded, value, "round-trip changed the nested value");
 
         // Hostile bytes: the SAME encoding with the outermost terminator
@@ -1947,6 +2028,7 @@ mod tests {
         let mut hostile = good.as_bytes().to_vec();
         hostile.pop();
         assert_eq!(decode(&hostile), Err(DecodeError::Truncated));
+        Ok(())
     }
 
     /// Deliberate construction of refusal variants that the random totality

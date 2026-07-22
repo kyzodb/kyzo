@@ -736,6 +736,8 @@ pub enum NumDecodeError {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
 
     // ---- GUARDIAN ONE-LAW HUNT: independent true-numeric-order oracle ----
@@ -822,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn one_law_holds_at_int_float_boundary_and_ugly_floats() {
+    fn one_law_holds_at_int_float_boundary_and_ugly_floats() -> Result<()> {
         let corpus = [
             HuntV::I(0),
             HuntV::F(0.0),
@@ -865,6 +867,7 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
@@ -1015,8 +1018,8 @@ mod tests {
     /// Ord (the decomposition path) agrees with the oracle (the floor
     /// path) on every pair.
     #[test]
-    fn law_semantic_order_matches_independent_oracle() {
-        let mut c = corpus();
+    fn law_semantic_order_matches_independent_oracle() -> Result<()> {
+        let mut c = corpus()?;
         extend_random(&mut c, 400, 0xA11CE);
         for &a in &c {
             for &b in &c {
@@ -1027,12 +1030,13 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     /// Key byte order equals semantic order on every pair.
     #[test]
-    fn law_key_order_embeds_semantic_order() {
-        let mut c = corpus();
+    fn law_key_order_embeds_semantic_order() -> Result<()> {
+        let mut c = corpus()?;
         extend_random(&mut c, 400, 0xB0B);
         let keys: Vec<Vec<u8>> = c.iter().map(|&n| key(n)).collect();
         for i in 0..c.len() {
@@ -1046,21 +1050,23 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     /// Total round-trip: identity-exact (repr and bits), with the
     /// normalizations applied at construction.
     #[test]
-    fn law_round_trip_total() {
-        let mut c = corpus();
+    fn law_round_trip_total() -> Result<()> {
+        let mut c = corpus()?;
         extend_random(&mut c, 4000, 0x5EED);
         for &n in &c {
             let k = key(n);
-            let (back, used) = Num::decode_key(&k).expect("decode own encoding");
+            let (back, used) = Num::decode_key(&k).into_diagnostic()?;
             assert_eq!(used, k.len());
             assert_eq!(back, n, "round-trip changed identity for {n:?}");
             assert_eq!(back.repr_byte(), n.repr_byte(), "repr changed for {n:?}");
         }
+        Ok(())
     }
 
     /// Query-semantic numeric order: ties equal, exact beyond 2^53, typed
@@ -1094,7 +1100,7 @@ mod tests {
         assert_eq!(Num::int(1).cmp(&Num::float(1.0)), Ordering::Less);
         // Differential vs storage over the corpus: equal reals are the
         // ONLY places the two authorities differ.
-        let mut c = corpus();
+        let mut c = corpus()?;
         extend_random(&mut c, 300, 0xACE);
         for &a in &c {
             for &b in &c {
@@ -1111,12 +1117,12 @@ mod tests {
     /// are construction law matching Cockroach/TiDB — not a hole to fill
     /// toward strict IEEE 754-2019 totalOrder payload fidelity.
     #[test]
-    fn identity_law_edges() {
+    fn identity_law_edges() -> Result<()> {
         // -0.0 collapses at construction (not a distinct stored identity).
         assert_eq!(Num::float(-0.0), Num::float(0.0));
         assert_eq!(key(Num::float(-0.0)), key(Num::float(0.0)));
         assert_eq!(
-            Num::float(-0.0).as_float().unwrap().to_bits(),
+            Num::float(-0.0).as_float().ok_or_else(|| miette!("as_float"))?.to_bits(),
             0.0f64.to_bits()
         );
         // All NaN payloads are one canonical NaN, equal to itself, greatest.
@@ -1134,13 +1140,14 @@ mod tests {
         assert!(Num::int(i64::MAX) < Num::float(9_223_372_036_854_775_808.0));
         assert!(Num::float(f64::INFINITY) > Num::int(i64::MAX));
         assert!(Num::float(f64::NEG_INFINITY) < Num::int(i64::MIN));
+        Ok(())
     }
 
     /// `Num`'s order is total: `PartialOrd` never returns `None` — the
     /// IEEE NaN hole is closed at construction (one canonical NaN).
     #[test]
-    fn law_num_partial_ord_is_total_no_nan_hole() {
-        let mut c = corpus();
+    fn law_num_partial_ord_is_total_no_nan_hole() -> Result<()> {
+        let mut c = corpus()?;
         extend_random(&mut c, 200, 0xBAD_70_E1);
         // Inject many raw NaN bit patterns; construction collapses them.
         for bits in [
@@ -1165,12 +1172,13 @@ mod tests {
             nan.partial_cmp(&Num::float(f64::INFINITY)),
             Some(Ordering::Greater)
         );
+        Ok(())
     }
 
     /// Format v1 golden vectors: these bytes are permanent. A failure here
     /// means the on-disk numeric key moved, which is forbidden.
     #[test]
-    fn format_v1_golden_vectors() {
+    fn format_v1_golden_vectors() -> Result<()> {
         let cases: [(Num, &str); 12] = [
             (Num::int(0), "0200"),
             (Num::float(0.0), "0201"),
@@ -1190,6 +1198,7 @@ mod tests {
             let got: String = k.iter().map(|b| format!("{b:02x}")).collect();
             assert_eq!(got, hex, "golden vector moved for {n:?}");
         }
+        Ok(())
     }
 
     /// Decode totality: arbitrary bytes are Ok or a typed error, never a

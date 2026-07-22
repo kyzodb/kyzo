@@ -216,66 +216,71 @@ impl std::hash::Hash for Vector {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::super::super::canonical::{Datum, decode, encode};
     use super::super::super::number::Num;
     use super::{Vector, VectorComponent, VectorDimension};
     use crate::value::DataValue;
 
     #[test]
-    fn component_identity_follows_num_law() {
-        let a = encode(Datum::Vector(&Vector::try_new(vec![0.0, 1.0]).unwrap()));
-        let b = encode(Datum::Vector(&Vector::try_new(vec![-0.0, 1.0]).unwrap()));
+    fn component_identity_follows_num_law() -> Result<()> {
+        let a = encode(Datum::Vector(&Vector::try_new(vec![0.0, 1.0]).ok_or_else(|| miette!("try_new"))?));
+        let b = encode(Datum::Vector(&Vector::try_new(vec![-0.0, 1.0]).ok_or_else(|| miette!("try_new"))?));
         assert_eq!(a, b);
-        let v = Vector::try_new(vec![-0.0, 1.0]).unwrap();
-        assert_eq!(v.dimension(), VectorDimension::try_from_len(2).unwrap());
+        let v = Vector::try_new(vec![-0.0, 1.0]).ok_or_else(|| miette!("try_new"))?;
+        assert_eq!(v.dimension(), VectorDimension::try_from_len(2).ok_or_else(|| miette!("try_from_len"))?);
         assert_eq!(
             v.components().map(|c| c.get()).collect::<Vec<_>>(),
             vec![0.0, 1.0]
         );
         assert_eq!(
             VectorComponent::admit(f64::NAN).get().to_bits(),
-            Num::float(f64::NAN).as_float().unwrap().to_bits()
+            Num::float(f64::NAN).as_float().ok_or_else(|| miette!("as_float"))?.to_bits()
         );
+        Ok(())
     }
 
     #[test]
-    fn same_content_same_identity() {
-        let a = Vector::try_new(vec![1.0, 2.0, 3.0]).unwrap();
-        let b = Vector::try_new(vec![1.0, 2.0, 3.0]).unwrap();
+    fn same_content_same_identity() -> Result<()> {
+        let a = Vector::try_new(vec![1.0, 2.0, 3.0]).ok_or_else(|| miette!("try_new"))?;
+        let b = Vector::try_new(vec![1.0, 2.0, 3.0]).ok_or_else(|| miette!("try_new"))?;
         assert_eq!(a.content_id(), b.content_id());
         assert_eq!(a, b);
         // Num law: −0 and +0 are one content → one identity.
-        let pos = Vector::try_new(vec![0.0, 1.0]).unwrap();
-        let neg = Vector::try_new(vec![-0.0, 1.0]).unwrap();
+        let pos = Vector::try_new(vec![0.0, 1.0]).ok_or_else(|| miette!("try_new"))?;
+        let neg = Vector::try_new(vec![-0.0, 1.0]).ok_or_else(|| miette!("try_new"))?;
         assert_eq!(pos.content_id(), neg.content_id());
         assert_eq!(pos, neg);
         // Same content constructed twice is not row-positional.
-        let again = Vector::try_new(vec![0.0, 1.0]).unwrap();
+        let again = Vector::try_new(vec![0.0, 1.0]).ok_or_else(|| miette!("try_new"))?;
         assert_eq!(pos.content_id(), again.content_id());
+        Ok(())
     }
 
     #[test]
-    fn one_bit_change_different_identity() {
-        let a = Vector::try_new(vec![1.0, 2.0]).unwrap();
+    fn one_bit_change_different_identity() -> Result<()> {
+        let a = Vector::try_new(vec![1.0, 2.0]).ok_or_else(|| miette!("try_new"))?;
         let mut bits = 2.0f64.to_bits();
         bits ^= 1;
-        let b = Vector::try_new(vec![1.0, f64::from_bits(bits)]).unwrap();
+        let b = Vector::try_new(vec![1.0, f64::from_bits(bits)]).ok_or_else(|| miette!("try_new"))?;
         assert_ne!(a.content_id(), b.content_id());
         assert_ne!(a, b);
         // Dimension change is also different content.
-        let c = Vector::try_new(vec![1.0, 2.0, 0.0]).unwrap();
+        let c = Vector::try_new(vec![1.0, 2.0, 0.0]).ok_or_else(|| miette!("try_new"))?;
         assert_ne!(a.content_id(), c.content_id());
+        Ok(())
     }
 
     #[test]
-    fn content_hash_determinism() {
-        let v = Vector::try_new(vec![f64::NAN, -1.5, 0.0]).unwrap();
+    fn content_hash_determinism() -> Result<()> {
+        let v = Vector::try_new(vec![f64::NAN, -1.5, 0.0]).ok_or_else(|| miette!("try_new"))?;
         let id = v.content_id();
         assert_eq!(id, v.content_id());
         assert_eq!(
             id,
             Vector::try_new(vec![f64::NAN, -1.5, -0.0])
-                .unwrap()
+                .ok_or_else(|| miette!("try_new"))?
                 .content_id()
         );
         // Independent recomputation from the same exact bits matches.
@@ -285,13 +290,14 @@ mod tests {
             bytes.extend_from_slice(&c.get().to_bits().to_be_bytes());
         }
         assert_eq!(id.get(), super::super::json::fnv1a64(&bytes));
+        Ok(())
     }
 
     #[test]
-    fn exact_float_round_trip() {
-        let original = Vector::try_new(vec![-0.0, 1.5, f64::NAN, f64::INFINITY]).unwrap();
+    fn exact_float_round_trip() -> Result<()> {
+        let original = Vector::try_new(vec![-0.0, 1.5, f64::NAN, f64::INFINITY]).ok_or_else(|| miette!("try_new"))?;
         let enc = encode(Datum::Vector(&original));
-        let back = match decode(enc.as_bytes()).expect("decode own encoding") {
+        let back = match decode(enc.as_bytes()).into_diagnostic()? {
             DataValue::Vector(v) => v,
             other => panic!("expected Vector, got {other:?}"),
         };
@@ -312,5 +318,6 @@ mod tests {
         assert_eq!(back.content_id(), original.content_id());
         // −0 admitted to +0 before encode; round-trip keeps that form.
         assert_eq!(back.to_f64s()[0].to_bits(), 0.0f64.to_bits());
+        Ok(())
     }
 }

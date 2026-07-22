@@ -723,6 +723,8 @@ pub fn encode_stream(batch: &ColumnBatch, names: &[&str]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
     use crate::value::Num;
 
@@ -745,27 +747,29 @@ mod tests {
     }
 
     #[test]
-    fn validity_bitmap_marks_lsb_first_bits() {
+    fn validity_bitmap_marks_lsb_first_bits() -> Result<()> {
         // Row 0 null, rows 1-2 valid, row 3 null, rows 4-7 valid: byte 0
         // should have bits 1,2,4,5,6,7 set (LSB = row 0).
         let (null_count, buf) =
             validity_bitmap(&[false, true, true, false, true, true, true, true]);
         assert_eq!(null_count, 2);
-        let buf = buf.unwrap();
+        let buf = buf.into_diagnostic()?;
         assert_eq!(buf.len(), 1);
         assert_eq!(buf[0], 0b1111_0110);
+        Ok(())
     }
 
     #[test]
-    fn offsets_and_values_starts_at_zero_and_is_monotone() {
+    fn offsets_and_values_starts_at_zero_and_is_monotone() -> Result<()> {
         let items: Vec<&[u8]> = vec![b"ab", b"", b"cde"];
-        let (offsets, values) = offsets_and_values(items.into_iter()).unwrap();
+        let (offsets, values) = offsets_and_values(items.into_iter()).into_diagnostic()?;
         let off_i32: Vec<i32> = offsets
             .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+            .map(|c| i32::from_le_bytes(c.try_into().into_diagnostic()?))
             .collect();
         assert_eq!(off_i32, vec![0, 2, 2, 5]);
         assert_eq!(values, b"abcde");
+        Ok(())
     }
 
     #[test]
@@ -783,19 +787,20 @@ mod tests {
     }
 
     #[test]
-    fn plan_mixed_column_accepts_a_nullable_int_column() {
+    fn plan_mixed_column_accepts_a_nullable_int_column() -> Result<()> {
         let values = vec![v_int(1), DataValue::Null, v_int(3)];
-        let planned = plan_mixed_column(&values).unwrap();
+        let planned = plan_mixed_column(&values).into_diagnostic()?;
         assert_eq!(planned.arrow_type, TYPE_INT);
         assert_eq!(planned.nullability, ArrowNullability::Optional);
         assert_eq!(planned.null_count, 1);
+        Ok(())
     }
 
     /// A minimal, real stream: one Int64 column, three rows, encodes
     /// without error and produces bytes shaped like a stream (continuation
     /// marker to start, non-zero length, ends in the EOS marker).
     #[test]
-    fn encode_stream_produces_a_framed_byte_sequence() {
+    fn encode_stream_produces_a_framed_byte_sequence() -> Result<()> {
         let batch = ColumnBatch::from_rows(
             vec![
                 Tuple::from_vec(vec![v_int(1)]),
@@ -804,7 +809,7 @@ mod tests {
             ],
             1,
         );
-        let bytes = encode_stream(&batch, &["n"]).unwrap();
+        let bytes = encode_stream(&batch, &["n"]).into_diagnostic()?;
         assert!(bytes.len() > 16);
         assert_eq!(&bytes[0..4], &CONTINUATION_MARKER.to_le_bytes());
         assert_eq!(
@@ -812,6 +817,7 @@ mod tests {
             &CONTINUATION_MARKER.to_le_bytes()
         );
         assert_eq!(&bytes[bytes.len() - 4..], &0u32.to_le_bytes());
+        Ok(())
     }
 
     #[test]

@@ -58,26 +58,6 @@ use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
 use kyzo_model::program::symbol::Symbol;
 
 
-fn usize_to_f64(n: usize) -> f64 {
-    match u32::try_from(n) {
-        Ok(v) => f64::from(v),
-        Err(_) => match i64::try_from(n) {
-            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-            Err(_) => 0.0,
-        },
-    }
-}
-fn u64_to_f64(n: u64) -> f64 {
-    match i64::try_from(n) {
-        Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-        Err(_) => {
-            let lo = match u32::try_from(n & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 };
-            let hi = match u32::try_from(n >> 32) { Ok(v) => v, Err(_) => 0 };
-            f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Local schema helpers (the draft's live in `mod tests`; kept private there).
 // ---------------------------------------------------------------------------
@@ -1047,8 +1027,14 @@ fn min_k_matches_tiny_match_sets() {
 /// cluster around the origin, keys `half..n` are the SAME random spread
 /// translated `+40` in every dimension — a "far" cluster with no vector-space
 /// overlap with the near one. Returns `(n, half, rows)`.
+///
+/// Thin wrapper over [`near_far_cluster_corpus_n`] at the Phase-2 standard `N`.
 fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
-    let n = P2_N;
+    near_far_cluster_corpus_n(dim, P2_N)
+}
+
+/// Parameterized near/far cluster corpus (shared by Phase-2 and T13).
+fn near_far_cluster_corpus_n(dim: usize, n: i64) -> (i64, i64, Vec<Tuple>) {
     let half = n / 2;
     let mut state = P2_CORPUS_SEED ^ 0xA5A5_5A5A_1234_9876;
     let rows: Vec<Tuple> = (0..n)
@@ -1061,7 +1047,10 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
             };
             Tuple::from_vec(vec![
                 DataValue::from(k),
-                DataValue::Vector(Vector::try_new(v.clone()).unwrap()),
+                DataValue::Vector(match Vector::try_new(v) {
+                    Some(vec) => vec,
+                    None => panic!("near_far: Vector::try_new refused components"),
+                }),
             ])
         })
         .collect();
@@ -1561,23 +1550,7 @@ fn t13_band_accept(target: f64, n: i64) -> i64 {
 }
 
 fn t13_near_far(dim: usize, n: i64) -> (i64, i64, Vec<Tuple>) {
-    let half = n / 2;
-    let mut state = P2_CORPUS_SEED ^ 0xA5A5_5A5A_1234_9876;
-    let rows: Vec<Tuple> = (0..n)
-        .map(|k| {
-            let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-            let v = if k < half {
-                comps
-            } else {
-                comps.iter().map(|c| c + 40.0).collect()
-            };
-            Tuple::from_vec(vec![
-                DataValue::from(k),
-                DataValue::Vector(t13_vector(v)),
-            ])
-        })
-        .collect();
-    (n, half, rows)
+    near_far_cluster_corpus_n(dim, n)
 }
 
 /// Commit-per-remove: batching many `hnsw_remove` calls in one write TX hits

@@ -288,6 +288,8 @@ pub fn json_to_datavalue(v: &JsonValue) -> DataValue {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
     use crate::value::Num;
 
@@ -310,10 +312,10 @@ mod tests {
     }
 
     #[test]
-    fn finite_num_round_trip_preserves_num_kind() {
+    fn finite_num_round_trip_preserves_num_kind() -> Result<()> {
         for f in [0.0_f64, -0.0, 1.5, -2.25, 1e308, f64::MIN_POSITIVE] {
             let v = DataValue::Num(Num::float(f));
-            let wire = datavalue_to_json(&v).expect("finite Num encodes");
+            let wire = datavalue_to_json(&v).into_diagnostic()?;
             assert!(
                 matches!(wire, JsonValue::Number(_)),
                 "finite Num must wire as JSON number, got {wire:?}"
@@ -326,10 +328,11 @@ mod tests {
             assert_eq!(back, v);
         }
         let i = DataValue::Num(Num::int(42));
-        let wire = datavalue_to_json(&i).expect("int Num encodes");
+        let wire = datavalue_to_json(&i).into_diagnostic()?;
         let back = json_to_datavalue(&wire);
         assert_eq!(back, i);
         assert!(matches!(back, DataValue::Num(_)));
+        Ok(())
     }
 
     #[test]
@@ -340,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn infinity_string_decode_stays_str_not_num() {
+    fn infinity_string_decode_stays_str_not_num() -> Result<()> {
         // Former Cozo remap tokens must not invent Num on the way back.
         for s in ["INFINITY", "NEGATIVE_INFINITY", "NaN", "nan", "Inf"] {
             let back = json_to_datavalue(&JsonValue::String(s.to_string()));
@@ -349,5 +352,6 @@ mod tests {
                 "{s:?} must decode as Str, got {back:?}"
             );
         }
+        Ok(())
     }
 }

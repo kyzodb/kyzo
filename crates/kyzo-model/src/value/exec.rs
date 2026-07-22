@@ -335,74 +335,78 @@ impl ExecDedup {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::super::DataValue;
     use super::super::arena::Arena;
     use super::super::canonical::encode_owned;
     use super::*;
 
     /// Intern a value's canonical bytes, returning its stamped code.
-    fn intern(arena: &mut Arena, v: i64) -> super::super::code::StampedCode {
-        arena
+    fn intern(arena: &mut Arena, v: i64) -> Result<super::super::code::StampedCode> {
+        Ok(arena
             .intern(encode_owned(&DataValue::from(v)).as_bytes())
-            .expect("intern")
+            .into_diagnostic()?)
     }
 
     /// Build a 2-arity Rows of (a, b) pairs in `arena`.
-    fn rows_of(arena: &mut Arena, pairs: &[(i64, i64)]) -> Rows {
-        let stamps: Vec<(
+    fn rows_of(arena: &mut Arena, pairs: &[(i64, i64)])? -> Result<Rows> {
+        let mut stamps: Vec<(
             super::super::code::StampedCode,
             super::super::code::StampedCode,
-        )> = pairs
-            .iter()
-            .map(|&(a, b)| (intern(arena, a), intern(arena, b)))
-            .collect();
-        let f = arena.frame();
-        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &f);
-        for (a, b) in stamps {
-            rows.push_row(&[a, b]).expect("lawful push");
+        )> = Vec::with_capacity(pairs.len());
+        for &(a, b) in pairs {
+            stamps.push((intern(arena, a)?, intern(arena, b)?));
         }
-        rows
+        let f = arena.frame();
+        let mut rows = Rows::new_in(Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?, &f);
+        for (a, b) in stamps {
+            rows.push_row(&[a, b]).into_diagnostic()?;
+        }
+        Ok(rows)
     }
 
     /// The transitive-closure recombination step on codes, checked against
     /// a value oracle: path(x,z) :- edge(x,y), edge(y,z).
     #[test]
-    fn join_project_recombines_by_code_identity() {
+    fn join_project_recombines_by_code_identity() -> Result<()> {
         let mut arena = Arena::new();
         // edges 1->2, 2->3, 3->4, 1->5
-        let edges = rows_of(&mut arena, &[(1, 2), (2, 3), (3, 4), (1, 5)]);
+        let edges = rows_of(&mut arena, &[(1, 2), (2, 3), (3, 4), (1, 5)])?;
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
+        let e = ExecRows::admit(&edges, &f).into_diagnostic()?;
         // one TC step: join edge(x,y) with edge(y,z) on y, emit (x, z).
         let step = e
             .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
-            .expect("lawful join");
+            .into_diagnostic()?;
         // Resolve the produced code pairs back to values and compare to
         // the hand oracle {(1,3),(2,4)}.
         let mut got: Vec<(i64, i64)> = Vec::new();
         for r in 0..step.len() {
-            let x = decode_int(step.resolve_cell(&f, r, 0).expect("lawful resolve"));
-            let z = decode_int(step.resolve_cell(&f, r, 1).expect("lawful resolve"));
+            let x = decode_int(step.resolve_cell(&f, r, 0).into_diagnostic()?)?;
+            let z = decode_int(step.resolve_cell(&f, r, 1).into_diagnostic()?)?;
             got.push((x, z));
         }
         got.sort();
         assert_eq!(got, vec![(1, 3), (2, 4)]);
+        Ok(())
     }
 
     /// Dedup is exact u32-tuple identity: re-deriving an existing pair is
     /// not new.
     #[test]
-    fn dedup_is_u32_tuple_identity() {
+    fn dedup_is_u32_tuple_identity() -> Result<()> {
         let mut arena = Arena::new();
-        let rows = rows_of(&mut arena, &[(1, 2), (2, 3), (1, 2)]);
+        let rows = rows_of(&mut arena, &[(1, 2), (2, 3), (1, 2)])?;
         let f = arena.frame();
-        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
-        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).expect("test arity 2"));
-        let new = dedup.absorb(&e).expect("lawful absorb");
+        let e = ExecRows::admit(&rows, &f).into_diagnostic()?;
+        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?);
+        let new = dedup.absorb(&e).into_diagnostic()?;
         assert_eq!(new, 2, "the duplicate (1,2) must not be a new tuple");
         assert_eq!(dedup.len(), 2);
         // A second absorb of the same rows adds nothing.
-        assert_eq!(dedup.absorb(&e).expect("lawful absorb"), 0);
+        assert_eq!(dedup.absorb(&e).into_diagnostic()?, 0);
+        Ok(())
     }
 
     /// THE FOUNDATIONAL GUARANTEE (why this exists): the recombine door
@@ -413,25 +417,25 @@ mod tests {
     /// UNCHANGED (no re-intern) and its compare-deref counter at ZERO (no
     /// payload dereference -- pure u32 identity).
     #[test]
-    fn recombine_and_dedup_never_intern_encode_or_deref() {
+    fn recombine_and_dedup_never_intern_encode_or_deref() -> Result<()> {
         let mut arena = Arena::new();
-        let edges = rows_of(&mut arena, &[(1, 2), (2, 3), (3, 4), (1, 5), (4, 6)]);
+        let edges = rows_of(&mut arena, &[(1, 2), (2, 3), (3, 4), (1, 5), (4, 6)])?;
         let interned_after_load = arena.len();
         let derefs_after_load = arena.compare_derefs();
 
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
+        let e = ExecRows::admit(&edges, &f).into_diagnostic()?;
         // Two TC steps + dedup -- the recombination hot loop.
         let step1 = e
             .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
-            .expect("lawful join");
+            .into_diagnostic()?;
         let step2 = step1
             .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
-            .expect("lawful join");
-        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).expect("test arity 2"));
-        dedup.absorb(&e).expect("lawful absorb");
-        dedup.absorb(&step1).expect("lawful absorb");
-        dedup.absorb(&step2).expect("lawful absorb");
+            .into_diagnostic()?;
+        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?);
+        dedup.absorb(&e).into_diagnostic()?;
+        dedup.absorb(&step1).into_diagnostic()?;
+        dedup.absorb(&step2).into_diagnostic()?;
         match dedup.to_exec() {
         exec => core::mem::drop(exec),
     }
@@ -450,6 +454,7 @@ mod tests {
             "recombine/dedup dereferenced a payload -- the hot loop must not encode/deref"
         );
         assert!(!dedup.is_empty());
+        Ok(())
     }
 
     /// The narrow door has no back door: `ExecRows` cannot be built from
@@ -460,16 +465,17 @@ mod tests {
     /// / StampedCode forge vectors themselves are proven absent in
     /// `data::value::proofs`.)
     #[test]
-    fn exec_rows_has_no_raw_constructor() {
+    fn exec_rows_has_no_raw_constructor() -> Result<()> {
         // Compile-time witness: the only paths to an ExecRows are the two
         // doors. This test documents the structural guarantee; the
         // absence of a raw constructor is enforced by the private `codes`
         // field (no external module can name it).
         let mut arena = Arena::new();
-        let rows = rows_of(&mut arena, &[(1, 2)]);
+        let rows = rows_of(&mut arena, &[(1, 2)])?;
         let f = arena.frame();
-        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
-        assert_eq!(e.arity(), Arity::try_new(2).expect("test arity 2"));
+        let e = ExecRows::admit(&rows, &f).into_diagnostic()?;
+        assert_eq!(e.arity(), Arity::try_new(2).ok_or_else(|| miette!("test arity 2"))?);
+        Ok(())
     }
 
     /// DIFFERENTIAL: `join_project` on codes equals a naive nested-loop
@@ -477,7 +483,7 @@ mod tests {
     /// path and the value oracle must agree on the exact multiset of output
     /// pairs (order aside).
     #[test]
-    fn join_project_equals_naive_value_join() {
+    fn join_project_equals_naive_value_join() -> Result<()> {
         // A handful of adversarial edge sets: self-loops, duplicate edges,
         // fan-in/fan-out, disconnected, and a value range wider than a byte.
         let cases: &[&[(i64, i64)]] = &[
@@ -491,21 +497,20 @@ mod tests {
         ];
         for pairs in cases {
             let mut arena = Arena::new();
-            let edges = rows_of(&mut arena, pairs);
+            let edges = rows_of(&mut arena, pairs)?;
             let f = arena.frame();
-            let e = ExecRows::admit(&edges, &f).expect("lawful admit");
+            let e = ExecRows::admit(&edges, &f).into_diagnostic()?;
             // Code path: edge(x,y) ⋈_y edge(y,z) → (x, z).
             let step = e
                 .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
-                .expect("lawful join");
-            let mut got: Vec<(i64, i64)> = (0..step.len())
-                .map(|r| {
-                    (
-                        decode_int(step.resolve_cell(&f, r, 0).expect("lawful resolve")),
-                        decode_int(step.resolve_cell(&f, r, 1).expect("lawful resolve")),
-                    )
-                })
-                .collect();
+                .into_diagnostic()?;
+            let mut got: Vec<(i64, i64)> = Vec::with_capacity(step.len());
+            for r in 0..step.len() {
+                got.push((
+                    decode_int(step.resolve_cell(&f, r, 0).into_diagnostic()?)?,
+                    decode_int(step.resolve_cell(&f, r, 1).into_diagnostic()?)?,
+                ));
+            }
             got.sort();
             // Naive oracle on the raw values.
             let mut want: Vec<(i64, i64)> = Vec::new();
@@ -522,6 +527,7 @@ mod tests {
                 "code join disagreed with the value oracle on {pairs:?}"
             );
         }
+        Ok(())
     }
 
     /// DETERMINISM: `join_project` is a pure function of its inputs — the
@@ -530,18 +536,18 @@ mod tests {
     /// schedule-independence law is preserved when this becomes the
     /// fixpoint currency.
     #[test]
-    fn join_project_output_is_deterministic() {
+    fn join_project_output_is_deterministic() -> Result<()> {
         let pairs = &[(1, 9), (2, 9), (3, 9), (9, 10), (9, 11), (9, 12)];
         let mut arena = Arena::new();
-        let edges = rows_of(&mut arena, pairs);
+        let edges = rows_of(&mut arena, pairs)?;
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
+        let e = ExecRows::admit(&edges, &f).into_diagnostic()?;
         let a = e
             .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
-            .expect("lawful join");
+            .into_diagnostic()?;
         let b = e
             .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
-            .expect("lawful join");
+            .into_diagnostic()?;
         assert_eq!(
             a.raw(),
             b.raw(),
@@ -549,34 +555,36 @@ mod tests {
         );
         // And it is the left-row-major order the fixpoint relies on.
         assert_eq!(a.len(), 9, "3 left rows × 3 right matches on code 9");
+        Ok(())
     }
 
     /// Empty projection invents no width — refuse typed, never fabricate Arity::ONE.
     #[test]
-    fn join_project_empty_projection_refuses_typed() {
+    fn join_project_empty_projection_refuses_typed() -> Result<()> {
         let mut arena = Arena::new();
-        let rows = rows_of(&mut arena, &[(1, 2)]);
+        let rows = rows_of(&mut arena, &[(1, 2)])?;
         let f = arena.frame();
-        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
+        let e = ExecRows::admit(&rows, &f).into_diagnostic()?;
         assert!(
             matches!(e.join_project(&e, 0, 0, &[]), Err(Denial::EmptyProjection)),
             "empty out must refuse typed — never invent a width"
         );
+        Ok(())
     }
 
     /// The domain guard: joining rows from two DIFFERENT arenas is refused
     /// typed — u32 code identity is only value identity within one arena+epoch.
     #[test]
-    fn join_project_across_arenas_refuses_typed() {
+    fn join_project_across_arenas_refuses_typed() -> Result<()> {
         let mut a1 = Arena::new();
-        let r1 = rows_of(&mut a1, &[(1, 2)]);
+        let r1 = rows_of(&mut a1, &[(1, 2)])?;
         let f1 = a1.frame();
-        let e1 = ExecRows::admit(&r1, &f1).expect("lawful admit");
+        let e1 = ExecRows::admit(&r1, &f1).into_diagnostic()?;
 
         let mut a2 = Arena::new();
-        let r2 = rows_of(&mut a2, &[(2, 3)]);
+        let r2 = rows_of(&mut a2, &[(2, 3)])?;
         let f2 = a2.frame();
-        let e2 = ExecRows::admit(&r2, &f2).expect("lawful admit");
+        let e2 = ExecRows::admit(&r2, &f2).into_diagnostic()?;
 
         // Same shape, foreign arena: the codes are incomparable.
         assert!(
@@ -586,12 +594,13 @@ mod tests {
             ),
             "cross-arena join must refuse typed — never panic"
         );
+        Ok(())
     }
 
-    fn decode_int(bytes: &[u8]) -> i64 {
-        match super::super::canonical::decode(bytes).expect("lawful") {
-            DataValue::Num(n) => n.as_int().expect("int"),
+    fn decode_int(bytes: &[u8]) -> Result<i64> {
+        match super::super::canonical::decode(bytes).into_diagnostic()? {
+            DataValue::Num(n) => n.as_int().ok_or_else(|| miette!("int"))?,
             other @ (data_value_any!()) => panic!("not an int: {other:?}"),
-        }
+        Ok(})
     }
 }

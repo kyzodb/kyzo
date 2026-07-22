@@ -131,6 +131,8 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
 
     #[test]
@@ -149,12 +151,12 @@ mod tests {
     }
 
     #[test]
-    fn objects_canonicalize_key_order_and_refuse_duplicates() {
+    fn objects_canonicalize_key_order_and_refuse_duplicates() -> Result<()> {
         let a = JsonObj::new(vec![
             ("b".into(), Json::Null),
             ("a".into(), Json::Bool(true)),
         ])
-        .expect("lawful");
+        .into_diagnostic()?;
         assert_eq!(a.entries()[0].0, "a");
         assert_eq!(a.entries()[1].0, "b");
         let dup = JsonObj::new(vec![
@@ -162,6 +164,7 @@ mod tests {
             ("k".into(), Json::Bool(false)),
         ]);
         assert_eq!(dup, Err(DuplicateKey("k".into())));
+        Ok(())
     }
 
     #[test]

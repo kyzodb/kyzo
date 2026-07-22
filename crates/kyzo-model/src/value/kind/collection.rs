@@ -18,17 +18,19 @@
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::super::super::DataValue;
     use super::super::super::canonical::{Datum, decode, encode};
     use super::super::super::number::Num;
     use crate::data_value_any;
 
     #[test]
-    fn nested_collection_identity_round_trips() {
+    fn nested_collection_identity_round_trips() -> Result<()> {
         let inner = [Datum::Num(Num::int(2)), Datum::Num(Num::int(1))];
         let outer = [Datum::Set(&inner), Datum::List(&inner)];
         let enc = encode(Datum::List(&outer));
-        let back = decode(enc.as_bytes()).expect("round-trip");
+        let back = decode(enc.as_bytes()).into_diagnostic()?;
         match &back {
             DataValue::List(items) => {
                 // The set canonicalized to sorted order; the list kept
@@ -40,5 +42,6 @@ mod tests {
             }
             other @ (data_value_any!()) => panic!("wrong shape: {other:?}"),
         }
+        Ok(())
     }
 }

@@ -497,24 +497,27 @@ impl NullableColType {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::*;
     use crate::value::{RegexFlags, RegexSource, ValidityTs};
 
     #[test]
-    fn json_coerce_preserves_regex_flags_via_to_json() {
+    fn json_coerce_preserves_regex_flags_via_to_json() -> Result<()> {
         let col = NullableColType::required(ColType::Json);
         let cur = ValidityTs::from_raw(0);
         let ci = DataValue::Regex(
-            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).unwrap(),
+            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into()).into_diagnostic()?,
         );
-        let cs = DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).unwrap());
-        let j_ci = col.coerce(ci, cur).unwrap();
-        let j_cs = col.coerce(cs, cur).unwrap();
+        let cs = DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "foo".into()).into_diagnostic()?);
+        let j_ci = col.coerce(ci, cur).into_diagnostic()?;
+        let j_cs = col.coerce(cs, cur).into_diagnostic()?;
         assert_ne!(j_ci, j_cs, "Json coerce must not drop regex flags");
+        Ok(())
     }
 
     #[test]
-    fn required_null_refuses_optional_null_admits() {
+    fn required_null_refuses_optional_null_admits() -> Result<()> {
         let cur = ValidityTs::from_raw(0);
         assert!(
             NullableColType::required(ColType::Int)
@@ -524,21 +527,23 @@ mod tests {
         assert_eq!(
             NullableColType::optional(ColType::Int)
                 .coerce(DataValue::Null, cur)
-                .unwrap(),
+                .into_diagnostic()?,
             DataValue::Null
         );
+        Ok(())
     }
 
     #[test]
-    fn bytes_from_base64_string_and_uuid_from_str() {
+    fn bytes_from_base64_string_and_uuid_from_str() -> Result<()> {
         let cur = ValidityTs::from_raw(0);
         let b = NullableColType::required(ColType::Bytes)
             .coerce(DataValue::from("AQID"), cur)
-            .unwrap();
+            .into_diagnostic()?;
         assert_eq!(b, DataValue::Bytes(vec![1, 2, 3]));
         let u = NullableColType::required(ColType::Uuid)
             .coerce(DataValue::from("550e8400-e29b-41d4-a716-446655440000"), cur)
-            .unwrap();
+            .into_diagnostic()?;
         assert!(matches!(u, DataValue::Uuid(_)));
+        Ok(())
     }
 }
