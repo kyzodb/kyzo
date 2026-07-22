@@ -7,30 +7,48 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Phase-1 scaffolding for the filter-aware HNSW ascent (story #3).
+//! Filter-aware HNSW proof harness (story #3 / #87) and the
+//! **filtered-ANN-under-churn** first milestone (story #376 T13).
 //!
-//! These are "the ropes": the ground-truth oracle, the selectivity-sweep
-//! generator, the recall meter, and the determinism harness the Phase-2 climb
-//! is measured against. They drive a *search closure*, so they exercise the
-//! draft's post-filter `hnsw_knn` today (to pin the baseline table) and the new
-//! filter-aware entry point in Phase 2 with no change to the instruments.
+//! ## Instruments (stories #3 / #87)
 //!
-//! Wiring: declared as `#[cfg(test)] mod hnsw_filter_harness;` at the foot of
-//! `runtime/hnsw.rs`, a sibling of `mod tests`. `use super::*` inherits the
-//! hnsw module's own imports (the same way `mod tests` gets `ColType`,
-//! `RankScore`, …); everything else is imported explicitly here so the
-//! module stands on its own.
+//! Ground-truth oracle, selectivity-sweep generator, recall meter, and
+//! determinism harness. They drive a *search closure* through the production
+//! filter-aware entry (`Hnsw::knn` → `hnsw_knn_filtered`).
+//!
+//! Wiring: `#[cfg(test)] mod hnsw_filter_harness;` at the foot of `hnsw.rs`.
 //!
 //! ADVERSARIAL INDEPENDENCE: the oracle re-implements the filter predicate in
 //! native Rust (`FilterSpec::passes`) and scores with `IndexVec::dist`; it
-//! shares no code with the engine's bytecode filter eval or its graph walk, so
-//! agreement between oracle and engine is evidence, not tautology.
+//! shares no code with the engine's bytecode filter eval or its graph walk.
+//!
+//! ## Filtered-ANN-under-churn — written design (#376 T13)
+//!
+//! Target: prove filtered ANN correct under insert/delete/compaction on one
+//! ordered substrate — ACORN-style evaluator-fed traversal + Window-Filters
+//! range-recall bounds + deletes through the remove/compaction path + DST
+//! connectivity.
+//!
+//! ### Claude adversaries (binding)
+//!
+//! 1. **ACORN failure mode** — predicate excludes every neighbour of the
+//!    entry point; matching points must still be FOUND.
+//! 2. **Delete-then-search** — never returns a deleted id through the durable
+//!    remove/LSM path (reopen-after-commit), not a memory flag.
+//! 3. **Interleaved churn connectivity** — insert/delete/durable-reopen
+//!    cycles keep `min(k, M')` and never resurface deleted ids.
+//!
+//! ### Named blocker
+//!
+//! No `kyzo-trials` DST lane yet interleaves filtered HNSW search with
+//! concurrent insert/delete/compaction while asserting connectivity +
+//! Window-Filters theoretical range-recall bounds as a CI theorem.
 
 use super::*;
 
 use proptest::prelude::*;
 
-use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
+use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation, get_relation};
 use crate::store::Storage;
 use crate::store::fjall::new_fjall_storage;
 use kyzo_model::data_value_any;
@@ -1470,6 +1488,310 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
             got, baseline,
             "a concurrent OS thread's graph-plan tie-break diverged from the baseline"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Story #376 T13 — filtered-ANN-under-churn first milestone.
+// New code: no `.unwrap()`, no lossy `as` casts (Claude whip).
+// ---------------------------------------------------------------------------
+
+const T13_N: i64 = 200;
+const T13_DIM: usize = 16;
+
+fn t13_ok<T, E: std::fmt::Debug>(r: Result<T, E>, ctx: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => panic!("{ctx}: {e:?}"),
+    }
+}
+
+fn t13_row_key(row: &Tuple) -> i64 {
+    match row[0].get_int() {
+        Some(k) => k,
+        None => panic!("T13: key column must be Int"),
+    }
+}
+
+fn t13_vector(comps: Vec<f64>) -> Vector {
+    match Vector::try_new(comps) {
+        Some(v) => v,
+        None => panic!("T13: Vector::try_new refused components"),
+    }
+}
+
+fn t13_band_accept(target: f64, n: i64) -> i64 {
+    if (target - 0.01).abs() < 1e-12 {
+        n / 100
+    } else if (target - 0.10).abs() < 1e-12 {
+        n / 10
+    } else if (target - 0.50).abs() < 1e-12 {
+        n / 2
+    } else if (target - 0.90).abs() < 1e-12 {
+        (n * 9) / 10
+    } else {
+        panic!("T13: unknown selectivity band {target}");
+    }
+}
+
+fn t13_near_far(dim: usize, n: i64) -> (i64, i64, Vec<Tuple>) {
+    let half = n / 2;
+    let mut state = P2_CORPUS_SEED ^ 0xA5A5_5A5A_1234_9876;
+    let rows: Vec<Tuple> = (0..n)
+        .map(|k| {
+            let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
+            let v = if k < half {
+                comps
+            } else {
+                comps.iter().map(|c| c + 40.0).collect()
+            };
+            Tuple::from_vec(vec![
+                DataValue::from(k),
+                DataValue::Vector(t13_vector(v)),
+            ])
+        })
+        .collect();
+    (n, half, rows)
+}
+
+/// Commit-per-remove: batching many `hnsw_remove` calls in one write TX hits
+/// "neighbour has no node row" when two deleted vectors share an edge.
+fn t13_remove_committed(
+    db: &impl Storage,
+    base: &RelationHandle,
+    idx: &RelationHandle,
+    row: &Tuple,
+) {
+    let mut tx = t13_ok(db.write_tx(), "write_tx remove");
+    t13_ok(
+        hnsw_remove(&mut tx, base, idx, row.as_slice()),
+        "hnsw_remove",
+    );
+    t13_ok(tx.commit(), "commit remove");
+}
+
+/// Adversary 1 — ACORN: filter excludes entry-point neighbourhood; matches
+/// live only in a translated far cluster. Graph walk alone must FIND them.
+#[test]
+fn t13_acorn_entry_neighbourhood_excluded_still_finds_matches() {
+    let dim = T13_DIM;
+    let (_n, half, rows) = t13_near_far(dim, T13_N);
+    let dir = t13_ok(tempfile::tempdir(), "tempdir");
+    let db = t13_ok(new_fjall_storage(dir.path()), "open store");
+    let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
+    let rtx = t13_ok(db.read_tx(), "read_tx");
+    let q = seeded_query(dim, P2_QUERY_SEED);
+    let f = FilterSpec::AtLeast { threshold: half };
+    let matches = f.true_match_count(&rows);
+    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
+
+    let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
+    let params = knn_params_p2(P2_K, P2_EF);
+    let fb = f.filter_expr();
+    let hits = t13_ok(
+        hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false),
+        "ACORN graph walk",
+    );
+    let ekeys = keys_of(&hits);
+
+    assert_eq!(
+        hits.len(),
+        P2_K.min(matches),
+        "ACORN: filter-excluded entry neighbourhood must still seat min(k, matches)"
+    );
+    for k in &ekeys {
+        assert!(
+            *k >= half,
+            "ACORN: returned key {k} is not in the far (matching) cluster"
+        );
+    }
+    assert_eq!(
+        count_recall(&ekeys, &truth, P2_K),
+        1.0,
+        "ACORN: unaided graph walk must find the full disconnected match set"
+    );
+}
+
+/// Adversary 2 — delete-then-search never returns a deleted id through the
+/// durable remove path (commit-per-remove + reopen), not a memory flag.
+#[test]
+fn t13_delete_then_search_never_returns_deleted_id_after_reopen() {
+    let rows = seeded_rows(T13_N, T13_DIM, P2_CORPUS_SEED);
+    let dir = t13_ok(tempfile::tempdir(), "tempdir");
+    let path = dir.path().to_path_buf();
+    let deleted: FxHashSet<i64> = {
+        let db = t13_ok(new_fjall_storage(&path), "open store");
+        let (base, idx, _m) = hsetup(&db, T13_DIM, HnswDistance::L2, &rows);
+        const DELETE_MOD: i64 = 5;
+        let mut deleted = FxHashSet::default();
+        for r in &rows {
+            let k = t13_row_key(r);
+            if k.rem_euclid(DELETE_MOD) == 0 {
+                t13_remove_committed(&db, &base, &idx, r);
+                deleted.insert(k);
+            }
+        }
+        assert!(!deleted.is_empty(), "precondition: churn must delete keys");
+        deleted
+    };
+
+    let db = t13_ok(new_fjall_storage(&path), "reopen store after deletes");
+    let rtx = t13_ok(db.read_tx(), "read_tx after reopen");
+    let base = t13_ok(get_relation(&rtx, "corpus"), "get corpus");
+    let idx = t13_ok(get_relation(&rtx, "corpus:by_v"), "get corpus:by_v");
+    let m = hmanifest(T13_DIM, HnswDistance::L2);
+    let q = seeded_query(T13_DIM, P2_QUERY_SEED);
+
+    let live: Vec<Tuple> = rows
+        .iter()
+        .filter(|r| !deleted.contains(&t13_row_key(r)))
+        .cloned()
+        .collect();
+
+    for (band_i, &target) in SELECTIVITY_BANDS.iter().enumerate() {
+        let accept = t13_band_accept(target, T13_N);
+        let f = if band_i % 2 == 0 {
+            FilterSpec::LessThan { threshold: accept }
+        } else {
+            FilterSpec::AtLeast {
+                threshold: T13_N - accept,
+            }
+        };
+        let matches = f.true_match_count(&live);
+        let truth = brute_force_filtered_knn(&q, P2_K, &f, &live, &m);
+        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+        let ekeys = keys_of(&hits);
+
+        assert_eq!(
+            hits.len(),
+            P2_K.min(matches),
+            "band {target}: min(k, M') after durable delete reopen"
+        );
+        for k in &ekeys {
+            assert!(
+                !deleted.contains(k),
+                "deleted key {k} resurfaced after durable reopen (not a memory flag)"
+            );
+        }
+        assert!(
+            (count_recall(&ekeys, &truth, P2_K) - 1.0).abs() < 1e-9,
+            "band {target}: count_recall must be exact after durable delete"
+        );
+        if matches * 10 <= live.len() && matches > 0 {
+            assert!(
+                (recall_at_k(&ekeys, &truth, P2_K) - 1.0).abs() < 1e-9,
+                "Window-Filters selective band {target}: recall must be exact"
+            );
+        }
+    }
+}
+
+/// Adversary 3 — connectivity under interleaved insert/delete with durable
+/// reopen between waves (compaction-path stand-in).
+#[test]
+fn t13_connectivity_under_interleaved_insert_delete_reopen() {
+    let dim = T13_DIM;
+    let (n, half, mut live_rows) = t13_near_far(dim, T13_N);
+    let dir = t13_ok(tempfile::tempdir(), "tempdir");
+    let path = dir.path().to_path_buf();
+    let mut deleted: FxHashSet<i64> = FxHashSet::default();
+    let q = seeded_query(dim, P2_QUERY_SEED);
+    let f = FilterSpec::AtLeast { threshold: half };
+    let m = hmanifest(dim, HnswDistance::L2);
+
+    {
+        let db = t13_ok(new_fjall_storage(&path), "open store");
+        let (_base, _idx, _m) = hsetup(&db, dim, HnswDistance::L2, &live_rows);
+    }
+
+    for wave in 0i64..3 {
+        let db = t13_ok(new_fjall_storage(&path), "reopen for wave");
+        let rtx = t13_ok(db.read_tx(), "read before mutate");
+        let base = t13_ok(get_relation(&rtx, "corpus"), "corpus");
+        let idx = t13_ok(get_relation(&rtx, "corpus:by_v"), "corpus:by_v");
+        drop(rtx);
+
+        let mut removed_this_wave: Vec<Tuple> = Vec::new();
+        for r in live_rows.iter() {
+            let k = t13_row_key(r);
+            if k < half && k.rem_euclid(3) == wave {
+                t13_remove_committed(&db, &base, &idx, r);
+                deleted.insert(k);
+                removed_this_wave.push(r.clone());
+            }
+        }
+        for r in &removed_this_wave {
+            let gone = t13_row_key(r);
+            live_rows.retain(|x| t13_row_key(x) != gone);
+        }
+
+        let new_key = n + wave + 1;
+        let mut comps = vec![40.0; dim];
+        comps[0] = match wave {
+            0 => 40.00,
+            1 => 40.01,
+            2 => 40.02,
+            _ => panic!("T13: wave out of range"),
+        };
+        let new_row = Tuple::from_vec(vec![
+            DataValue::from(new_key),
+            DataValue::Vector(t13_vector(comps)),
+        ]);
+        {
+            let mut tx = t13_ok(db.write_tx(), "wave insert tx");
+            t13_ok(
+                base.put_fact(
+                    &mut tx,
+                    new_row.as_slice(),
+                    kyzo_model::value::ValidityTs::from_raw(0),
+                    SourceSpan(0, 0),
+                ),
+                "put_fact insert",
+            );
+            t13_ok(
+                hnsw_put(&mut tx, &m, &base, &idx, None, new_row.as_slice()),
+                "hnsw_put insert",
+            );
+            t13_ok(tx.commit(), "commit insert");
+        }
+        live_rows.push(new_row);
+        drop(db);
+
+        let db = t13_ok(new_fjall_storage(&path), "reopen after wave");
+        let rtx = t13_ok(db.read_tx(), "search read_tx");
+        let base = t13_ok(get_relation(&rtx, "corpus"), "corpus after reopen");
+        let idx = t13_ok(get_relation(&rtx, "corpus:by_v"), "idx after reopen");
+
+        let matches = f.true_match_count(&live_rows);
+        let truth = brute_force_filtered_knn(&q, P2_K, &f, &live_rows, &m);
+        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+        let ekeys = keys_of(&hits);
+
+        assert_eq!(
+            hits.len(),
+            P2_K.min(matches),
+            "wave {wave}: connectivity must seat min(k, M') after interleaved churn"
+        );
+        for k in &ekeys {
+            assert!(
+                !deleted.contains(k),
+                "wave {wave}: deleted key {k} resurfaced under interleaved churn"
+            );
+            assert!(
+                *k >= half || *k > n,
+                "wave {wave}: hit {k} must be a far-cluster / inserted match"
+            );
+        }
+        assert!(
+            (count_recall(&ekeys, &truth, P2_K) - 1.0).abs() < 1e-9,
+            "wave {wave}: count_recall must stay exact under interleaved churn"
+        );
+        if truth.contains(&new_key) {
+            assert!(
+                ekeys.contains(&new_key),
+                "wave {wave}: inserted far-cluster key {new_key} missing from hits"
+            );
+        }
     }
 }
 
