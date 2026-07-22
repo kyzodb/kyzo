@@ -736,6 +736,8 @@ pub enum NumDecodeError {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
+
     use super::*;
 
     // ---- GUARDIAN ONE-LAW HUNT: independent true-numeric-order oracle ----
@@ -801,28 +803,30 @@ mod tests {
 
     /// Independent STORAGE order: exact real order, NaN greatest and equal to
     /// itself, ties broken Int < Float (REPR_INT < REPR_FLOAT). -0.0 == +0.0.
-    fn hunt_true_order(a: HuntV, b: HuntV) -> Ordering {
+    fn hunt_true_order(a: HuntV, b: HuntV) -> Result<Ordering> {
         match (hunt_is_nan(a), hunt_is_nan(b)) {
-            (true, true) => return Ordering::Equal,
-            (true, false) => return Ordering::Greater,
-            (false, true) => return Ordering::Less,
+            (true, true) => return Ok(Ordering::Equal),
+            (true, false) => return Ok(Ordering::Greater),
+            (false, true) => return Ok(Ordering::Less),
             (false, false) => {}
         }
         let real = match (a, b) {
             (HuntV::I(x), HuntV::I(y)) => x.cmp(&y),
-            (HuntV::F(x), HuntV::F(y)) => x.partial_cmp(&y).expect("no NaN in this arm"),
+            (HuntV::F(x), HuntV::F(y)) => {
+                x.partial_cmp(&y).ok_or_else(|| miette!("no NaN in this arm"))?
+            }
             (HuntV::I(x), HuntV::F(y)) => hunt_cmp_i_f(x, y),
             (HuntV::F(x), HuntV::I(y)) => hunt_cmp_i_f(y, x).reverse(),
         };
         if real != Ordering::Equal {
-            return real;
+            return Ok(real);
         }
         let rank = |v: HuntV| u8::from(matches!(v, HuntV::F(_)));
-        rank(a).cmp(&rank(b))
+        Ok(rank(a).cmp(&rank(b)))
     }
 
     #[test]
-    fn one_law_holds_at_int_float_boundary_and_ugly_floats() {
+    fn one_law_holds_at_int_float_boundary_and_ugly_floats() -> Result<()> {
         let corpus = [
             HuntV::I(0),
             HuntV::F(0.0),
@@ -853,7 +857,7 @@ mod tests {
         for &a in &corpus {
             for &b in &corpus {
                 let byte = hunt_enc(a).cmp(&hunt_enc(b));
-                let truth = hunt_true_order(a, b);
+                let truth = hunt_true_order(a, b)?;
                 assert_eq!(
                     byte, truth,
                     "ONE-LAW VIOLATION: byte order {byte:?} != true numeric order {truth:?} for {a:?} vs {b:?}"
@@ -865,6 +869,7 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
@@ -915,18 +920,18 @@ mod tests {
         }
     }
 
-    fn oracle_cmp(a: Num, b: Num) -> Ordering {
-        match (a.0, b.0) {
+    fn oracle_cmp(a: Num, b: Num) -> Result<Ordering> {
+        Ok(match (a.0, b.0) {
             (Repr::Int(x), Repr::Int(y)) => x.cmp(&y),
             (Repr::Float(x), Repr::Float(y)) => match (x.is_nan(), y.is_nan()) {
                 (true, true) => Ordering::Equal,
                 (true, false) => Ordering::Greater,
                 (false, true) => Ordering::Less,
-                (false, false) => x.partial_cmp(&y).expect("no NaN here"),
+                (false, false) => x.partial_cmp(&y).ok_or_else(|| miette!("no NaN here"))?,
             },
             (Repr::Int(x), Repr::Float(y)) => oracle_int_float(x, y),
             (Repr::Float(x), Repr::Int(y)) => oracle_int_float(y, x).reverse(),
-        }
+        })
     }
 
     // ------------------------------------------------------------------
@@ -1015,18 +1020,19 @@ mod tests {
     /// Ord (the decomposition path) agrees with the oracle (the floor
     /// path) on every pair.
     #[test]
-    fn law_semantic_order_matches_independent_oracle() {
+    fn law_semantic_order_matches_independent_oracle() -> Result<()> {
         let mut c = corpus();
         extend_random(&mut c, 400, 0xA11CE);
         for &a in &c {
             for &b in &c {
                 assert_eq!(
                     a.cmp(&b),
-                    oracle_cmp(a, b),
+                    oracle_cmp(a, b)?,
                     "cmp diverged from oracle for {a:?} vs {b:?}"
                 );
             }
         }
+        Ok(())
     }
 
     /// Key byte order equals semantic order on every pair.
@@ -1051,16 +1057,18 @@ mod tests {
     /// Total round-trip: identity-exact (repr and bits), with the
     /// normalizations applied at construction.
     #[test]
-    fn law_round_trip_total() {
+    fn law_round_trip_total() -> Result<()> {
         let mut c = corpus();
         extend_random(&mut c, 4000, 0x5EED);
         for &n in &c {
             let k = key(n);
-            let (back, used) = Num::decode_key(&k).expect("decode own encoding");
+            let (back, used) = Num::decode_key(&k)
+                .map_err(|e| miette!("decode own encoding: {e:?}"))?;
             assert_eq!(used, k.len());
             assert_eq!(back, n, "round-trip changed identity for {n:?}");
             assert_eq!(back.repr_byte(), n.repr_byte(), "repr changed for {n:?}");
         }
+        Ok(())
     }
 
     /// Query-semantic numeric order: ties equal, exact beyond 2^53, typed
@@ -1111,12 +1119,15 @@ mod tests {
     /// are construction law matching Cockroach/TiDB — not a hole to fill
     /// toward strict IEEE 754-2019 totalOrder payload fidelity.
     #[test]
-    fn identity_law_edges() {
+    fn identity_law_edges() -> Result<()> {
         // -0.0 collapses at construction (not a distinct stored identity).
         assert_eq!(Num::float(-0.0), Num::float(0.0));
         assert_eq!(key(Num::float(-0.0)), key(Num::float(0.0)));
         assert_eq!(
-            Num::float(-0.0).as_float().unwrap().to_bits(),
+            Num::float(-0.0)
+                .as_float()
+                .ok_or_else(|| miette!("as_float"))?
+                .to_bits(),
             0.0f64.to_bits()
         );
         // All NaN payloads are one canonical NaN, equal to itself, greatest.
@@ -1134,6 +1145,7 @@ mod tests {
         assert!(Num::int(i64::MAX) < Num::float(9_223_372_036_854_775_808.0));
         assert!(Num::float(f64::INFINITY) > Num::int(i64::MAX));
         assert!(Num::float(f64::NEG_INFINITY) < Num::int(i64::MIN));
+        Ok(())
     }
 
     /// `Num`'s order is total: `PartialOrd` never returns `None` — the
