@@ -154,6 +154,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -187,7 +188,7 @@ mod tests {
     /// cycle-closers): a-b (1) ✓, b-c (2) ✓, c-d (3) ✓, a-c (4) closes a
     /// cycle ⇒ tree {a-b:1, b-c:2, c-d:3}, total 6.
     #[test]
-    fn unique_mst_edge_set() {
+    fn unique_mst_edge_set() -> Result<()> {
         let got = run_fixed_rule(
             &MinimumSpanningForestKruskal,
             vec![TestInput::new(
@@ -202,7 +203,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(
             normalized(got),
             vec![
@@ -211,6 +212,7 @@ mod tests {
                 (s("c"), s("d"), DataValue::from(3.0)),
             ]
         );
+        Ok(())
     }
 
     /// MULTIGRAPH: two parallel a-b edges (weights 5 and 2) plus b-c: 3.
@@ -220,7 +222,7 @@ mod tests {
     /// plain `pq.push` would leave on the key — this test fails against that
     /// mutant and passes with `push_increase`.
     #[test]
-    fn parallel_edges_take_cheapest() {
+    fn parallel_edges_take_cheapest() -> Result<()> {
         let got = run_fixed_rule(
             &MinimumSpanningForestKruskal,
             vec![TestInput::new(
@@ -234,7 +236,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(
             normalized(got),
             vec![
@@ -242,6 +244,7 @@ mod tests {
                 (s("b"), s("c"), DataValue::from(3.0)),
             ]
         );
+        Ok(())
     }
 
     /// TIE BEHAVIOR: equal weights on a path a-b: 1, b-c: 1 force both
@@ -251,7 +254,7 @@ mod tests {
     /// among equal priorities, which is hash-seeded and deliberately not
     /// pinned.)
     #[test]
-    fn equal_weight_path_keeps_all_edges() {
+    fn equal_weight_path_keeps_all_edges() -> Result<()> {
         let got = run_fixed_rule(
             &MinimumSpanningForestKruskal,
             vec![TestInput::new(
@@ -264,7 +267,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(
             normalized(got),
             vec![
@@ -272,5 +275,6 @@ mod tests {
                 (s("b"), s("c"), DataValue::from(1.0)),
             ]
         );
+        Ok(())
     }
 }
