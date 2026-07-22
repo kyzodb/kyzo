@@ -1017,6 +1017,7 @@ mod exactly_once_battery {
     //! Absorbed from runtime/db_battery.rs (story #350 T2): callback
     //! exactly-once under contention and seeded spurious conflicts.
 
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::session::catalog::Catalog;
@@ -1029,8 +1030,8 @@ mod exactly_once_battery {
         BTreeMap::new()
     }
 
-    fn open_engine<S: crate::store::Storage>(store: S) -> Engine<S> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine<S: crate::store::Storage>(store: S) -> Result<Engine<S>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     /// The phantom-event law, actually exercised: a callback registered on a
@@ -1038,11 +1039,11 @@ mod exactly_once_battery {
     /// increment — the new values are exactly {1..=N}, no duplicates from
     /// conflicted-and-retried attempts, none missing.
     #[test]
-    fn rs3_callbacks_exactly_once_under_contention() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn rs3_callbacks_exactly_once_under_contention() -> Result<()>  {
+        let dir = tempfile::tempdir()?;
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
-            .expect("create counter");
+            .map_err(|e| miette!("create counter: {e}"))?;
 
         let (_id, receiver) = db.register_callback("ctr");
 
@@ -1051,15 +1052,18 @@ mod exactly_once_battery {
         std::thread::scope(|scope| {
             for _ in 0..THREADS {
                 let db = db.clone();
-                scope.spawn(move || {
+                scope.spawn(move || -> Result<()> {
                     for _ in 0..PER_THREAD {
                         db.run_script(
                             "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
                             no_params(),
                         )
-                        .expect("increment");
+                        .map_err(|e| miette!("increment: {e}"))?;
                     }
-                });
+                    Ok(())
+                })
+                .join()
+                .map_err(|_| miette!("thread join"))??;
             }
         });
 
@@ -1067,7 +1071,7 @@ mod exactly_once_battery {
         while let Ok(event) = receiver.try_recv() {
             assert_eq!(event.op.as_str(), "Put");
             for row in event.new_rows.rows() {
-                new_values.push(row[1].get_int().expect("int"));
+                new_values.push(row[1].get_int().ok_or_else(|| miette!("int"))?);
             }
         }
         new_values.sort();
@@ -1077,6 +1081,7 @@ mod exactly_once_battery {
             "exactly one event per committed increment: a conflicted attempt must \
              leak nothing and a committed one must lose nothing"
         );
+        Ok(())
     }
 
     /// DETERMINISTIC phantom-event detector: seeded spurious conflicts force the
@@ -1084,14 +1089,14 @@ mod exactly_once_battery {
     /// not rebuilt per attempt (or delivered pre-commit) duplicates events; the
     /// callback stream must be exactly one Put event per committed increment.
     #[test]
-    fn rs3_callbacks_exactly_once_under_seeded_spurious_conflicts() {
+    fn rs3_callbacks_exactly_once_under_seeded_spurious_conflicts() -> Result<()>  {
         let faults = FaultConfig {
             spurious_conflict_ppm: 400_000, // ~40% of commits conflict spuriously
             ..Default::default()
         };
-        let db = open_engine(SimStorage::with_faults(77, faults));
+        let db = open_engine(SimStorage::with_faults(77, faults))?;
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
-            .expect("create counter (retries through spurious conflicts)");
+            .map_err(|e| miette!("create counter (retries through spurious conflicts): {e}"))?;
 
         let (_id, receiver) = db.register_callback("ctr");
         const N: i64 = 20;
@@ -1100,13 +1105,13 @@ mod exactly_once_battery {
                 "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
                 no_params(),
             )
-            .expect("increment (retries through spurious conflicts)");
+            .map_err(|e| miette!("increment (retries through spurious conflicts): {e}"))?;
         }
 
         let mut new_values: Vec<i64> = vec![];
         while let Ok(event) = receiver.try_recv() {
             for row in event.new_rows.rows() {
-                new_values.push(row[1].get_int().expect("int"));
+                new_values.push(row[1].get_int().ok_or_else(|| miette!("int"))?);
             }
         }
         new_values.sort();
@@ -1115,6 +1120,7 @@ mod exactly_once_battery {
             new_values, want,
             "spurious-conflict retries must leak no phantom events and lose none"
         );
+        Ok(())
     }
 }
 
@@ -1122,6 +1128,7 @@ mod exactly_once_battery {
 mod deep_verify_schedule {
     //! Operator-scheduled deep-verify: last_result + staleness are queryable.
 
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::session::catalog::Catalog;
@@ -1135,14 +1142,12 @@ mod deep_verify_schedule {
     }
 
     #[test]
-    fn scheduled_deep_verify_persists_queryable_last_result_and_staleness() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
-            .expect("compose");
-        db.run_script("?[k, v] <- [[1, 7]] :create t {k => v}", no_params())
-            .unwrap();
-        db.run_script("::index create t:by_v {v}", no_params())
-            .unwrap();
+    fn scheduled_deep_verify_persists_queryable_last_result_and_staleness() -> Result<()>  {
+        let dir = tempfile::tempdir()?;
+        let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
+            .map_err(|e| miette!("compose: {e}"))?;
+        db.run_script("?[k, v] <- [[1, 7]] :create t {k => v}", no_params())?;
+        db.run_script("::index create t:by_v {v}", no_params())?;
 
         assert!(matches!(
             db.deep_verify_staleness(),
@@ -1159,13 +1164,13 @@ mod deep_verify_schedule {
 
         let result = db
             .run_scheduled_deep_verify()
-            .expect("deep-verify runs")
-            .expect("pending schedule must produce a result");
+            .map_err(|e| miette!("deep-verify runs: {e}"))?
+            .map_err(|e| miette!("pending schedule must produce a result: {e}"))?;
         assert!(result.clean, "healthy store deep-verify: {result:?}");
         assert!(result.indices_checked >= 1);
         assert_eq!(result.schedule_ordinal, ord);
 
-        let persisted = db.deep_verify_last_result().expect("last_result queryable");
+        let persisted = db.deep_verify_last_result().map_err(|e| miette!("last_result queryable: {e}"))?;
         assert_eq!(persisted, result);
         assert!(matches!(
             db.deep_verify_staleness(),
@@ -1188,8 +1193,9 @@ mod deep_verify_schedule {
                 last_result: None, ..
             }) => panic!("expected Stale with prior result, got {other:?}"),
         }
-        assert!(db.run_scheduled_deep_verify().unwrap().is_some());
-        assert!(db.run_scheduled_deep_verify().unwrap().is_none());
+        assert!(db.run_scheduled_deep_verify()?.is_some());
+        assert!(db.run_scheduled_deep_verify()?.is_none());
+        Ok(())
     }
 }
 
@@ -1198,6 +1204,7 @@ mod tenant_blind_operator_surface {
     //! §82: quarantine / failure topology unreachable without OperatorCap.
     //! Cap-absent refuses; Cap (pub(crate) mint) sees data. Not a costume gate.
 
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::session::catalog::Catalog;
@@ -1214,12 +1221,11 @@ mod tenant_blind_operator_surface {
 
     /// Adversarial: quarantine unreachable without Cap — not "pass Tenant → refuse".
     #[test]
-    fn quarantine_unreachable_without_operator_cap() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
-            .expect("compose");
-        db.run_script("?[k, v] <- [[1, 7]] :create t {k => v}", no_params())
-            .unwrap();
+    fn quarantine_unreachable_without_operator_cap() -> Result<()>  {
+        let dir = tempfile::tempdir()?;
+        let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
+            .map_err(|e| miette!("compose: {e}"))?;
+        db.run_script("?[k, v] <- [[1, 7]] :create t {k => v}", no_params())?;
 
         db.operator_record_quarantine(mint_quarantine(
             KeyspaceId::from_raw(3),
@@ -1231,9 +1237,9 @@ mod tenant_blind_operator_surface {
         let tenant = db.operator_ephemeral_relations();
         assert!(!tenant.has_operator_cap());
         assert_eq!(
-            tenant.in_flight_tx_relation().unwrap().rows()[0][0]
+            tenant.in_flight_tx_relation()?.rows()[0][0]
                 .get_int()
-                .unwrap(),
+                ?,
             0
         );
         assert!(matches!(
@@ -1256,8 +1262,9 @@ mod tenant_blind_operator_surface {
 
         let op = db.operator_ephemeral_relations_for(cap);
         assert!(op.has_operator_cap());
-        assert_eq!(op.quarantine_relation().unwrap().rows().len(), 1);
+        assert_eq!(op.quarantine_relation()?.rows().len(), 1);
         assert!(op.failure_topology(&lattice).is_ok());
+        Ok(())
     }
 }
 
@@ -1266,6 +1273,7 @@ mod one_counter_per_metric {
     //! Adversarial: one authoritative counter per metric; exporters render,
     //! never recompute a divergent value (§20 / §42 / §44).
 
+    use miette::{Result, miette};
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::session::generation::{
@@ -1279,9 +1287,9 @@ mod one_counter_per_metric {
     /// is THE index-status counter; MetricExporter can only render those —
     /// a forged recompute disagrees and is not on the export path.
     #[test]
-    fn exporters_render_one_counter_never_recompute_divergent() {
+    fn exporters_render_one_counter_never_recompute_divergent() -> Result<()>  {
         let mut ledger = DebtLedger::with_ceiling(100);
-        ledger.admit(17).expect("admit debt");
+        ledger.admit(17).map_err(|e| miette!("admit debt: {e}"))?;
 
         let debt_counter = compaction_debt_counter(&ledger);
         let debt_exporter = MetricExporter::from_counter(debt_counter);
@@ -1313,25 +1321,26 @@ mod one_counter_per_metric {
             index_exporter.value()
         );
         // Forged recompute from sealed generation alone diverges from live Catalog.
-        let forged_from_sealed = status.sealed().unwrap().counter();
+        let forged_from_sealed = status.sealed()?.counter();
         assert_ne!(
             index_exporter.value(),
             forged_from_sealed,
             "index-status exporter renders Catalog generation, not a recomputed sealed stamp"
         );
+        Ok(())
     }
 
     /// Engine projects DebtLedger + IndexStatus into ephemeral relations —
     /// relation rows agree with exporters; a mismatched ephemeral seed is
     /// overwritten by authority on seal (no second counter survives).
     #[test]
-    fn engine_projects_authorities_so_ephemeral_cannot_diverge() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
-            .expect("compose");
+    fn engine_projects_authorities_so_ephemeral_cannot_diverge() -> Result<()>  {
+        let dir = tempfile::tempdir()?;
+        let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
+            .map_err(|e| miette!("compose: {e}"))?;
 
         let mut debt = DebtLedger::with_ceiling(50);
-        debt.admit(11).expect("admit");
+        debt.admit(11).map_err(|e| miette!("admit: {e}"))?;
         let mut surface = OperatorHealthSurface::default();
         let cap = OperatorCap::mint();
         surface.set_debt(&cap, debt);
@@ -1343,9 +1352,9 @@ mod one_counter_per_metric {
         assert_eq!(db.compaction_debt_exporter().value(), 11);
         let rels = db.operator_ephemeral_relations();
         assert_eq!(
-            rels.compaction_debt_relation().unwrap().rows()[0][0]
+            rels.compaction_debt_relation()?.rows()[0][0]
                 .get_int()
-                .unwrap(),
+                ?,
             11,
             "relation must render DebtLedger, not a forged ephemeral seed"
         );
@@ -1360,23 +1369,22 @@ mod one_counter_per_metric {
         assert_eq!(db.index_status_exporter().value(), 7);
         assert_eq!(
             db.operator_ephemeral_relations()
-                .index_status_relation()
-                .unwrap()
+                .index_status_relation()?;
                 .rows()[0][0]
                 .get_int()
-                .unwrap(),
+                ?,
             7
         );
         // Exporter and relation are the same counter — not two sources.
         assert_eq!(
             db.index_status_exporter().value(),
             db.operator_ephemeral_relations()
-                .index_status_relation()
-                .unwrap()
+                .index_status_relation()?;
                 .rows()[0][0]
                 .get_int()
-                .unwrap() as u64
+                ? as u64
         );
+        Ok(())
     }
 }
 
@@ -1385,6 +1393,7 @@ mod health_tiers_and_tracing {
     //! Adversarial: three independently-queryable health tiers (not one bool
     //! with three faces); tracing verbosity never changes result rows or budget.
 
+    use miette::{Result, miette};
     use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
@@ -1402,16 +1411,16 @@ mod health_tiers_and_tracing {
                 Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)]),
             ],
         )
-        .expect("probe rows")
+        .map_err(|e| miette!("probe rows: {e}"))?
     }
 
     /// Prove: liveness / readiness / integrity are three distinct doors that
     /// can disagree — flipping one never mutates the other two.
     #[test]
-    fn three_tiers_independently_queryable_not_one_bool() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
-            .expect("compose");
+    fn three_tiers_independently_queryable_not_one_bool() -> Result<()>  {
+        let dir = tempfile::tempdir()?;
+        let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
+            .map_err(|e| miette!("compose: {e}"))?;
 
         // Defaults: live + ready; integrity fails until verify witnesses clean.
         assert!(db.liveness().is_passing());
@@ -1467,15 +1476,16 @@ mod health_tiers_and_tracing {
             ready.relation().headers(),
             "tiers must not share one relation face"
         );
+        Ok(())
     }
 
     /// Prove: turning tracing verbosity up/down changes neither result rows
     /// nor budget spend — only diagnostic emission may differ.
     #[test]
-    fn tracing_verbosity_behavior_invariant_rows_and_budget() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new())
-            .expect("compose");
+    fn tracing_verbosity_behavior_invariant_rows_and_budget() -> Result<()>  {
+        let dir = tempfile::tempdir()?;
+        let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
+            .map_err(|e| miette!("compose: {e}"))?;
 
         let rows = probe_rows();
         let charge = 5u64;
@@ -1567,5 +1577,6 @@ mod health_tiers_and_tracing {
             emit_lo.event_count, emit_hi.event_count,
             "engine verbosity must still change diagnostics"
         );
+        Ok(())
     }
 }
