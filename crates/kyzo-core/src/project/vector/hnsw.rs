@@ -250,6 +250,9 @@ use kyzo_model::schema::VecElementType;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{
+    DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, decode_tuple_from_key,
+    encode_owned,
+};
 
 /// usize → f64 without `as` (prefer u32, else i64 via Num).
 fn usize_to_f64(n: usize) -> f64 {
@@ -292,11 +295,6 @@ fn usize_to_i64(n: usize) -> Result<i64> {
 fn i64_to_usize(n: i64) -> Result<usize> {
     usize::try_from(n).map_err(|_| miette!("i64 {n} does not fit usize"))
 }
-
-
-    DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, decode_tuple_from_key,
-    encode_owned,
-};
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -988,38 +986,38 @@ fn canary_key(base_key_len: usize) -> Tuple {
 }
 
 impl HnswRow {
-    fn key_tuple(&self, base_key_len: usize) -> Tuple {
+    fn key_tuple(&self, base_key_len: usize) -> Result<Tuple> {
         match self {
-            HnswRow::Node { layer, at, .. } => node_key(*layer, at)?,
-            HnswRow::Edge { layer, fr, to, .. } => edge_key(*layer, fr, to)?,
-            HnswRow::Canary { .. } => canary_key(base_key_len),
+            HnswRow::Node { layer, at, .. } => node_key(*layer, at),
+            HnswRow::Edge { layer, fr, to, .. } => edge_key(*layer, fr, to),
+            HnswRow::Canary { .. } => Ok(canary_key(base_key_len)),
         }
     }
 
-    fn val_tuple(&self) -> Tuple {
+    fn val_tuple(&self) -> Result<Tuple> {
         match self {
             HnswRow::Node {
                 degree, vec_hash, ..
-            } => Tuple::from_vec(vec![
+            } => Ok(Tuple::from_vec(vec![
                 DataValue::from(usize_to_i64(*degree)?),
                 DataValue::Bytes(vec_hash.as_bytes().to_vec()),
                 DataValue::from(false),
-            ]),
+            ])),
             HnswRow::Edge {
                 dist, ignore_link, ..
-            } => Tuple::from_vec(vec![
+            } => Ok(Tuple::from_vec(vec![
                 DataValue::from(*dist),
                 DataValue::Null,
                 DataValue::from(*ignore_link),
-            ]),
+            ])),
             HnswRow::Canary {
                 bottom_layer,
                 entry_key,
-            } => Tuple::from_vec(vec![
+            } => Ok(Tuple::from_vec(vec![
                 DataValue::from(*bottom_layer),
                 DataValue::Bytes(entry_key.as_bytes().to_vec()),
                 DataValue::from(false),
-            ]),
+            ])),
         }
     }
 
@@ -1031,11 +1029,11 @@ impl HnswRow {
         base_key_len: usize,
     ) -> Result<()> {
         let key = idx.encode_key_for_store(
-            self.key_tuple(base_key_len).as_slice(),
+            self.key_tuple(base_key_len)?.as_slice(),
             SourceSpan::default(),
         )?;
         let val =
-            idx.encode_val_only_for_store(self.val_tuple().as_slice(), SourceSpan::default())?;
+            idx.encode_val_only_for_store(self.val_tuple()?.as_slice(), SourceSpan::default())?;
         tx.put(&key, &val)
     }
 
@@ -2436,7 +2434,7 @@ fn remove_vec<T: WriteTx>(
                         bottom_layer,
                         entry_key: HnswEntryKey::from_storage_key(entry_key),
                     }
-                    .val_tuple()
+                    .val_tuple()?
                     .as_slice(),
                     SourceSpan::default(),
                 )?;
@@ -4679,7 +4677,7 @@ mod tests {
     /// Node, edge, and canary rows round-trip through the typed codec, and
     /// the wire shapes are the documented ones.
     #[test]
-    fn row_kinds_round_trip() {
+    fn row_kinds_round_trip() -> Result<()> {
         let kl = 1usize;
         let at = VectorId {
             tuple_key: Tuple::from_vec(vec![DataValue::from(7)]),
@@ -4713,8 +4711,8 @@ mod tests {
             },
         ];
         for row in rows {
-            let mut tuple = row.key_tuple(kl);
-            tuple.extend(row.val_tuple());
+            let mut tuple = row.key_tuple(kl)?;
+            tuple.extend(row.val_tuple()?);
             let decoded = HnswRow::decode(tuple.as_slice(), kl, "t").unwrap();
             assert_eq!(decoded, row, "round trip");
         }
@@ -4726,7 +4724,7 @@ mod tests {
             degree: 0,
             vec_hash: VecContentHash::from_sha256_digest(vec![0u8; 32]),
         };
-        let k = node.key_tuple(kl);
+        let k = node.key_tuple(kl)?;
         assert_eq!(k.len(), 2 * kl + 5);
         assert_eq!(k[0], DataValue::from(0i64));
         assert_eq!(
@@ -4742,12 +4740,13 @@ mod tests {
                 &[],
             )),
         }
-        .key_tuple(kl);
+        .key_tuple(kl)?;
         assert_eq!(c[0], DataValue::from(CANARY_LAYER));
         assert!(c.as_slice()[1..].iter().all(|v| *v == DataValue::Null));
 
         // Degree is Int on the wire (the original stored it as Float).
-        assert_eq!(node.val_tuple()[0], DataValue::from(0i64));
+        assert_eq!(node.val_tuple()?[0], DataValue::from(0i64));
+        Ok(())
     }
 
     /// Corrupt index rows are typed errors, never panics: both
