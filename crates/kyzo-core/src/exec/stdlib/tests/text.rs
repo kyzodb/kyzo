@@ -8,84 +8,86 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
+use miette::{Result, miette};
 use crate::exec::stdlib::text::*;
 use kyzo_model::value::DataValue;
 
 
 #[test]
-fn test_str_includes() {
+fn test_str_includes() -> Result<()>  {
     assert_eq!(
         op_str_includes(&[
             DataValue::Str("abcdef".into()),
             DataValue::Str("bcd".into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(true)
     );
     assert_eq!(
-        op_str_includes(&[DataValue::Str("abcdef".into()), DataValue::Str("bd".into())]).unwrap(),
+        op_str_includes(&[DataValue::Str("abcdef".into()), DataValue::Str("bd".into())])?,
         DataValue::from(false)
     );
+    Ok(())
 }
 
 #[test]
-fn test_casings() {
+fn test_casings() -> Result<()>  {
     assert_eq!(
-        op_lowercase(&[DataValue::Str("NAÏVE".into())]).unwrap(),
+        op_lowercase(&[DataValue::Str("NAÏVE".into())])?,
         DataValue::Str("naïve".into())
     );
     assert_eq!(
-        op_uppercase(&[DataValue::Str("naïve".into())]).unwrap(),
+        op_uppercase(&[DataValue::Str("naïve".into())])?,
         DataValue::Str("NAÏVE".into())
     );
+    Ok(())
 }
 
 #[test]
-fn test_trim() {
+fn test_trim() -> Result<()>  {
     assert_eq!(
-        op_trim(&[DataValue::Str(" a ".into())]).unwrap(),
+        op_trim(&[DataValue::Str(" a ".into())])?,
         DataValue::Str("a".into())
     );
     assert_eq!(
-        op_trim_start(&[DataValue::Str(" a ".into())]).unwrap(),
+        op_trim_start(&[DataValue::Str(" a ".into())])?,
         DataValue::Str("a ".into())
     );
     assert_eq!(
-        op_trim_end(&[DataValue::Str(" a ".into())]).unwrap(),
+        op_trim_end(&[DataValue::Str(" a ".into())])?,
         DataValue::Str(" a".into())
     );
+    Ok(())
 }
 
 #[test]
-fn test_starts_ends_with() {
+fn test_starts_ends_with() -> Result<()>  {
     assert_eq!(
         op_starts_with(&[
             DataValue::Str("abcdef".into()),
             DataValue::Str("abc".into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(true)
     );
     assert_eq!(
-        op_starts_with(&[DataValue::Str("abcdef".into()), DataValue::Str("bc".into())]).unwrap(),
+        op_starts_with(&[DataValue::Str("abcdef".into()), DataValue::Str("bc".into())])?,
         DataValue::from(false)
     );
     assert_eq!(
         op_ends_with(&[
             DataValue::Str("abcdef".into()),
             DataValue::Str("def".into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(true)
     );
     assert_eq!(
-        op_ends_with(&[DataValue::Str("abcdef".into()), DataValue::Str("bc".into())]).unwrap(),
+        op_ends_with(&[DataValue::Str("abcdef".into()), DataValue::Str("bc".into())])?,
         DataValue::from(false)
     );
+    Ok(())
 }
 
 #[test]
-fn test_regex() {
+fn test_regex() -> Result<()>  {
     assert_eq!(
         op_regex_matches(&[
             DataValue::Str("abcdef".into()),
@@ -93,11 +95,9 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "c.e".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             )
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(true)
     );
 
@@ -108,11 +108,9 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "c.ef$".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             )
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(true)
     );
 
@@ -123,11 +121,9 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "c.e$".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             )
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(false)
     );
 
@@ -138,12 +134,10 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "[be]".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             ),
             DataValue::Str("x".into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::Str("axcdef".into())
     );
 
@@ -154,12 +148,10 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "[be]".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             ),
             DataValue::Str("x".into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::Str("axcdxf".into())
     );
     assert_eq!(
@@ -169,11 +161,9 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "[xayef]|(GH)".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             )
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![
             DataValue::Str("a".into()),
             DataValue::Str("e".into()),
@@ -188,11 +178,9 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "[xayef]|(GH)".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             )
-        ])
-        .unwrap(),
+        ])?,
         DataValue::Str("a".into()),
     );
     assert_eq!(
@@ -202,11 +190,9 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "xyz".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             )
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![])
     );
 
@@ -217,28 +203,28 @@ fn test_regex() {
                 kyzo_model::value::RegexSource::validated(
                     kyzo_model::value::RegexFlags::NONE,
                     "xyz".into()
-                )
-                .unwrap()
+                ).map_err(|e| miette!("{e}"))?
             )
-        ])
-        .unwrap(),
+        ])?,
         DataValue::Null
     );
+    Ok(())
 }
 
 #[test]
-fn test_unicode_normalize() {
+fn test_unicode_normalize() -> Result<()>  {
     assert_eq!(
-        op_unicode_normalize(&[DataValue::Str("abc".into()), DataValue::Str("nfc".into())])
-            .unwrap(),
+        op_unicode_normalize(&[DataValue::Str("abc".into()), DataValue::Str("nfc".into())])?,
         DataValue::Str("abc".into())
-    )
+    );
+    Ok(())
 }
 
 #[test]
-fn test_chars() {
+fn test_chars() -> Result<()>  {
     assert_eq!(
-        op_from_substrings(&[op_chars(&[DataValue::Str("abc".into())]).unwrap()]).unwrap(),
+        op_from_substrings(&[op_chars(&[DataValue::Str("abc".into())])?])?,
         DataValue::Str("abc".into())
-    )
+    );
+    Ok(())
 }

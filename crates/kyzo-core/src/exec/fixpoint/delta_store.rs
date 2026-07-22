@@ -1204,6 +1204,7 @@ fn meet_ranged<'s>(
 
 #[cfg(test)]
 mod level_stack_tests {
+    use miette::{Result, miette};
     use super::*;
 
     /// A converging fixpoint's level stack stays bounded: epochs that
@@ -1211,18 +1212,18 @@ mod level_stack_tests {
     /// drops when the next seals), and admit-heavy runs stay logarithmic
     /// through compaction.
     #[test]
-    fn level_stack_stays_bounded() {
+    fn level_stack_stays_bounded() -> Result<()>  {
         let mut store = EpochStore::new_normal(1);
         // Ten productive epochs...
         for i in 0..10i64 {
             let mut out = RegularTempStore::default();
             out.put(Tuple::from_vec(vec![DataValue::from(i)]));
-            store.merge_in(out.wrap(), &mut ()).unwrap();
+            store.merge_in(out.wrap(), &mut ())?;
         }
         // ...then fifty empty (converged) epochs.
         for _ in 0..50 {
             let out = RegularTempStore::default();
-            store.merge_in(out.wrap(), &mut ()).unwrap();
+            store.merge_in(out.wrap(), &mut ())?;
             assert!(!store.has_delta());
         }
         let LevelKind::Normal(levels) = &store.kind else {
@@ -1234,7 +1235,8 @@ mod level_stack_tests {
             levels.len()
         );
         // Totals intact through it all.
-        assert_eq!(store.all_iter().unwrap().count(), 10);
+        assert_eq!(store.all_iter()?.count(), 10);
+        Ok(())
     }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -2152,6 +2154,7 @@ impl Iterator for TupleInIterIterator<'_> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use kyzo_model::program::aggregate::parse_aggr;
     use kyzo_model::value::ScanBound;
@@ -2187,22 +2190,12 @@ mod tests {
         }
     }
 
-    fn all(store: &EpochStore) -> Vec<Tuple> {
-        store
-            .all_iter()
-            .unwrap()
-            .map(TupleInIter::try_into_tuple)
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap()
+    fn all(store: &EpochStore) -> Result<Vec<Tuple>> {
+        Ok(store.all_iter()?.map(TupleInIter::try_into_tuple).collect::<Result<Vec<_>, _>>()?)
     }
 
-    fn delta(store: &EpochStore) -> Vec<Tuple> {
-        store
-            .delta_all_iter()
-            .unwrap()
-            .map(TupleInIter::try_into_tuple)
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap()
+    fn delta(store: &EpochStore) -> Result<Vec<Tuple>> {
+        Ok(store.delta_all_iter()?.map(TupleInIter::try_into_tuple).collect::<Result<Vec<_>, _>>()?)
     }
 
     // ── total/delta discipline ───────────────────────────────────────────
@@ -2211,7 +2204,7 @@ mod tests {
     /// are all delta; re-derivation produces an empty delta (fixpoint);
     /// a genuinely new tuple produces exactly itself as the delta.
     #[test]
-    fn regular_total_delta_discipline() {
+    fn regular_total_delta_discipline() -> Result<()>  {
         let mut store = EpochStore::new_normal(2);
         assert_eq!(store.arity, 2);
         assert!(!store.has_delta());
@@ -2221,55 +2214,57 @@ mod tests {
         let mut out0 = RegularTempStore::default();
         out0.put(t(&[1, 1]));
         out0.put(t(&[1, 2]));
-        let admitted = store.merge_in(out0.wrap(), &mut ()).unwrap();
+        let admitted = store.merge_in(out0.wrap(), &mut ())?;
         assert_eq!(admitted, Admitted(2));
         assert!(store.has_delta());
-        assert_eq!(all(&store), vec![t(&[1, 1]), t(&[1, 2])]);
-        assert_eq!(delta(&store), all(&store)); // first epoch: delta == total
+        assert_eq!(all(&store)?, vec![t(&[1, 1]), t(&[1, 2])]);
+        assert_eq!(delta(&store)?, all(&store)?); // first epoch: delta == total
 
         // Epoch 1: pure re-derivation — empty delta, nothing admitted.
         // This is the termination certificate: eval stops here.
         let mut out1 = RegularTempStore::default();
         out1.put(t(&[1, 1]));
-        let admitted = store.merge_in(out1.wrap(), &mut ()).unwrap();
+        let admitted = store.merge_in(out1.wrap(), &mut ())?;
         assert_eq!(admitted, Admitted(0));
         assert!(!store.has_delta());
-        assert!(delta(&store).is_empty());
-        assert_eq!(all(&store).len(), 2); // total unharmed
+        assert!(delta(&store)?.is_empty());
+        assert_eq!(all(&store)?.len(), 2); // total unharmed
 
         // Epoch 2: one re-derived + one genuinely new — the delta is
         // exactly the new tuple, never the re-derived one.
         let mut out2 = RegularTempStore::default();
         out2.put(t(&[1, 1]));
         out2.put(t(&[2, 3]));
-        let admitted = store.merge_in(out2.wrap(), &mut ()).unwrap();
+        let admitted = store.merge_in(out2.wrap(), &mut ())?;
         assert_eq!(admitted, Admitted(1));
         assert!(store.has_delta());
-        assert_eq!(delta(&store), vec![t(&[2, 3])]);
-        assert_eq!(all(&store), vec![t(&[1, 1]), t(&[1, 2]), t(&[2, 3])]);
+        assert_eq!(delta(&store)?, vec![t(&[2, 3])]);
+        assert_eq!(all(&store)?, vec![t(&[1, 1]), t(&[1, 2]), t(&[2, 3])]);
+        Ok(())
     }
 
     /// An empty epoch is a fixpoint signal even against a non-empty total.
     #[test]
-    fn empty_epoch_is_fixpoint() {
+    fn empty_epoch_is_fixpoint() -> Result<()>  {
         let mut store = EpochStore::new_normal(1);
         let mut out = RegularTempStore::default();
         out.put(t(&[7]));
-        store.merge_in(out.wrap(), &mut ()).unwrap();
+        store.merge_in(out.wrap(), &mut ())?;
         assert!(store.has_delta());
 
         store
             .merge_in(RegularTempStore::default().wrap(), &mut ())
-            .unwrap();
+            ?;
         assert!(!store.has_delta());
-        assert_eq!(all(&store), vec![t(&[7])]); // total survives
+        assert_eq!(all(&store)?, vec![t(&[7])]); // total survives
+        Ok(())
     }
 
     /// The admission sink observes every admission, in canonical key
     /// order, on both the swap fast path and the incremental path — the
     /// deterministic sequence provenance witnesses will bind to.
     #[test]
-    fn admission_sink_sees_admissions_in_canonical_order() {
+    fn admission_sink_sees_admissions_in_canonical_order() -> Result<()>  {
         let mut store = EpochStore::new_normal(1);
 
         // Swap path: puts arrive out of order, admissions are reported in
@@ -2278,7 +2273,7 @@ mod tests {
         out0.put(t(&[3]));
         out0.put(t(&[1]));
         let mut rec = Recorder::default();
-        let admitted = store.merge_in(out0.wrap(), &mut rec).unwrap();
+        let admitted = store.merge_in(out0.wrap(), &mut rec)?;
         assert_eq!(admitted, Admitted(2));
         assert_eq!(rec.0, vec![t(&[1]), t(&[3])]);
 
@@ -2287,9 +2282,10 @@ mod tests {
         out1.put(t(&[3])); // re-derived
         out1.put(t(&[2])); // new
         let mut rec = Recorder::default();
-        let admitted = store.merge_in(out1.wrap(), &mut rec).unwrap();
+        let admitted = store.merge_in(out1.wrap(), &mut rec)?;
         assert_eq!(admitted, Admitted(1));
         assert_eq!(rec.0, vec![t(&[2])]);
+        Ok(())
     }
 
     // ── the meet changed-flag regression ─────────────────────────────────
@@ -2308,35 +2304,35 @@ mod tests {
     /// never sees g turn true: a premature fixpoint with silently missing
     /// answers. With the landed corrected ops the delta MUST be non-empty.
     #[test]
-    fn meet_delta_regression_changed_flag_drives_delta() {
-        let or_aggr = parse_aggr("or").unwrap().unwrap();
+    fn meet_delta_regression_changed_flag_drives_delta() -> Result<()>  {
+        let or_aggr = parse_aggr("or")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![plain(), aggr_slot(or_aggr)];
-        let mut store = EpochStore::new_meet(&spec).unwrap();
+        let mut store = EpochStore::new_meet(&spec)?;
 
         // Epoch 0: g starts false.
-        let mut out0 = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out0 = MeetAggrStore::new(spec.clone())?;
         out0.meet_put(gv("g", DataValue::from(false)).as_slice())
-            .unwrap();
-        let admitted = store.merge_in(out0.wrap(), &mut ()).unwrap();
+            ?;
+        let admitted = store.merge_in(out0.wrap(), &mut ())?;
         assert_eq!(admitted, Admitted(1));
         assert!(store.has_delta());
-        assert_eq!(all(&store), vec![gv("g", DataValue::from(false))]);
+        assert_eq!(all(&store)?, vec![gv("g", DataValue::from(false))]);
 
         // Epoch 1: the epoch derives (g, true) — the value changes.
         // Old inverted flag: empty delta here (the bug). Landed contract:
         // the changed group, with its UPDATED value, is the delta.
-        let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out1 = MeetAggrStore::new(spec.clone())?;
         out1.meet_put(gv("g", DataValue::from(true)).as_slice())
-            .unwrap();
+            ?;
         let mut rec = Recorder::default();
-        let admitted = store.merge_in(out1.wrap(), &mut rec).unwrap();
+        let admitted = store.merge_in(out1.wrap(), &mut rec)?;
         assert_eq!(admitted, Admitted(1));
         assert!(
             store.has_delta(),
             "changed meet value must produce a delta; empty means premature fixpoint"
         );
-        assert_eq!(delta(&store), vec![gv("g", DataValue::from(true))]);
-        assert_eq!(all(&store), vec![gv("g", DataValue::from(true))]);
+        assert_eq!(delta(&store)?, vec![gv("g", DataValue::from(true))]);
+        assert_eq!(all(&store)?, vec![gv("g", DataValue::from(true))]);
         // The admission (where a provenance witness would bind) carries the
         // updated value too.
         assert_eq!(rec.0, vec![gv("g", DataValue::from(true))]);
@@ -2345,13 +2341,14 @@ mod tests {
         // unchanged — genuinely no delta, the fixpoint. (The old inverted
         // flag would have reported "changed" here: spurious epochs, the
         // benign direction of the same bug.)
-        let mut out2 = MeetAggrStore::new(spec).unwrap();
+        let mut out2 = MeetAggrStore::new(spec)?;
         out2.meet_put(gv("g", DataValue::from(false)).as_slice())
-            .unwrap();
-        let admitted = store.merge_in(out2.wrap(), &mut ()).unwrap();
+            ?;
+        let admitted = store.merge_in(out2.wrap(), &mut ())?;
         assert_eq!(admitted, Admitted(0));
         assert!(!store.has_delta());
-        assert_eq!(all(&store), vec![gv("g", DataValue::from(true))]);
+        assert_eq!(all(&store)?, vec![gv("g", DataValue::from(true))]);
+        Ok(())
     }
 
     /// The same contract at the `meet_put` level: a fold that moves the
@@ -2359,60 +2356,62 @@ mod tests {
     /// exercised for both a lattice where the bug lived (`or`) and an
     /// always-correct one (`min`).
     #[test]
-    fn meet_put_changed_flag() {
-        let or_aggr = parse_aggr("or").unwrap().unwrap();
+    fn meet_put_changed_flag() -> Result<()>  {
+        let or_aggr = parse_aggr("or")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![plain(), aggr_slot(or_aggr)];
-        let mut store = MeetAggrStore::new(spec).unwrap();
+        let mut store = MeetAggrStore::new(spec)?;
         assert!(store.is_empty());
         // New group: changed.
         assert!(
             store
                 .meet_put(gv("g", DataValue::from(false)).as_slice())
-                .unwrap()
+                ?
         );
         // false | true = true: CHANGED (the old inverted flag said false).
         assert!(
             store
                 .meet_put(gv("g", DataValue::from(true)).as_slice())
-                .unwrap()
+                ?
         );
         // true | true = true: unchanged (the old flag said changed).
         assert!(
             !store
                 .meet_put(gv("g", DataValue::from(true)).as_slice())
-                .unwrap()
+                ?
         );
         assert!(!store.is_empty());
 
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![plain(), aggr_slot(min_aggr)];
-        let mut store = MeetAggrStore::new(spec).unwrap();
+        let mut store = MeetAggrStore::new(spec)?;
         assert!(
             store
                 .meet_put(gv("g", DataValue::from(5i64)).as_slice())
-                .unwrap()
+                ?
         );
         assert!(
             !store
                 .meet_put(gv("g", DataValue::from(7i64)).as_slice())
-                .unwrap()
+                ?
         ); // 5 stays
         assert!(
             store
                 .meet_put(gv("g", DataValue::from(3i64)).as_slice())
-                .unwrap()
+                ?
         ); // 3 wins
         assert!(store.exists(gv("g", DataValue::from(999i64)).as_slice())); // group-key lookup
+        Ok(())
     }
 
     /// A meet store refuses a normal-only aggregation at construction —
     /// a typed error where the original unwrapped an `Option` per row.
     #[test]
-    fn meet_store_rejects_normal_aggregation() {
-        let count = parse_aggr("count").unwrap().unwrap();
+    fn meet_store_rejects_normal_aggregation() -> Result<()>  {
+        let count = parse_aggr("count")?.ok_or_else(|| miette!("parse_aggr"))?;
         assert!(!count.is_meet());
         let res = MeetAggrStore::new(vec![plain(), aggr_slot(count)]);
         assert!(res.is_err());
+        Ok(())
     }
 
     // ── iteration surface ────────────────────────────────────────────────
@@ -2423,34 +2422,34 @@ mod tests {
     /// prefix, so scans look like a regular store — the non-suffix cases
     /// below prove the same surface holds when the group key is not a prefix.
     #[test]
-    fn meet_iteration_spans_key_and_value() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
+    fn meet_iteration_spans_key_and_value() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![plain(), aggr_slot(min_aggr)];
-        let mut store = EpochStore::new_meet(&spec).unwrap();
+        let mut store = EpochStore::new_meet(&spec)?;
         assert_eq!(store.arity, 2);
 
-        let mut out = MeetAggrStore::new(spec).unwrap();
+        let mut out = MeetAggrStore::new(spec)?;
         out.meet_put(gv("a", DataValue::from(4i64)).as_slice())
-            .unwrap();
+            ?;
         out.meet_put(gv("b", DataValue::from(2i64)).as_slice())
-            .unwrap();
-        store.merge_in(out.wrap(), &mut ()).unwrap();
+            ?;
+        store.merge_in(out.wrap(), &mut ())?;
 
         assert!(store.exists(gv("a", DataValue::from(0i64)).as_slice()));
         assert!(!store.exists(gv("c", DataValue::from(0i64)).as_slice()));
 
         let got = store
             .prefix_iter(&Tuple::from_vec(vec![DataValue::from("b")]))
-            .unwrap()
+            ?
             .map(TupleInIter::try_into_tuple)
             .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            ?;
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
 
         // Indexed access crosses the key/value seam.
-        let row = store.all_iter().unwrap().next().unwrap();
-        assert_eq!(row.try_get(0).unwrap(), DataValue::from("a"));
-        assert_eq!(row.try_get(1).unwrap(), DataValue::from(4i64));
+        let row = store.all_iter()?.next().ok_or_else(|| miette!("row"))?;
+        assert_eq!(row.try_get(0)?, DataValue::from("a"));
+        assert_eq!(row.try_get(1)?, DataValue::from(4i64));
 
         // Bounded range scans over the whole head tuple (derived order).
         let bounds = |group: &str, v: i64| {
@@ -2463,58 +2462,61 @@ mod tests {
         let upper = bounds("b", 2); // exactly (b, 2)
         let got = store
             .range_iter(&lower, &upper, true)
-            .unwrap()
+            ?
             .map(TupleInIter::try_into_tuple)
             .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            ?;
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
         let got = store
             .range_iter(&lower, &upper, false)
-            .unwrap()
+            ?
             .map(TupleInIter::try_into_tuple)
             .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            ?;
         assert!(got.is_empty());
+        Ok(())
     }
 
     /// Limiter-skipped tuples participate in joins (all_iter) but not in
     /// the early-returned rows.
     #[test]
-    fn skip_flags_gate_early_return_only() {
+    fn skip_flags_gate_early_return_only() -> Result<()>  {
         let mut store = EpochStore::new_normal(1);
         let mut out = RegularTempStore::default();
         out.put(t(&[1]));
         out.put_with_skip(t(&[2]));
         assert!(out.exists(t(&[2]).as_slice()));
-        store.merge_in(out.wrap(), &mut ()).unwrap();
+        store.merge_in(out.wrap(), &mut ())?;
 
         assert!(store.exists(t(&[2]).as_slice()));
-        assert_eq!(all(&store).len(), 2);
+        assert_eq!(all(&store)?.len(), 2);
         let returned = store
             .early_returned_iter()
-            .unwrap()
+            ?
             .map(TupleInIter::try_into_tuple)
             .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            ?;
         assert_eq!(returned, vec![t(&[1])]);
 
         // Delta iteration honors the same store (first epoch: via total).
         let d = store
             .delta_prefix_iter(&Tuple::from_vec(vec![DataValue::from(2i64)]))
-            .unwrap()
+            ?
             .map(TupleInIter::try_into_tuple)
             .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            ?;
         assert_eq!(d, vec![t(&[2])]);
+        Ok(())
     }
 
     /// Mismatched store kinds at a merge are an error, not an abort.
     #[test]
-    fn kind_mismatch_is_error_not_panic() {
+    fn kind_mismatch_is_error_not_panic() -> Result<()>  {
         let mut store = EpochStore::new_normal(1);
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
-        let meet_out = MeetAggrStore::new(vec![aggr_slot(min_aggr)]).unwrap();
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
+        let meet_out = MeetAggrStore::new(vec![aggr_slot(min_aggr)])?;
         assert!(store.merge_in(meet_out.wrap(), &mut ()).is_err());
+        Ok(())
     }
 
     // ── non-suffix meet layouts: positional grouping ─────────────────────
@@ -2531,9 +2533,9 @@ mod tests {
     /// it exactly, leaving no `Null`. This is the layout proof the whole
     /// positional grouping rests on — the mutation target.
     #[test]
-    fn meet_layout_projection_round_trips_interleaved() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
-        let max_aggr = parse_aggr("max").unwrap().unwrap();
+    fn meet_layout_projection_round_trips_interleaved() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
+        let max_aggr = parse_aggr("max")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![aggr_slot(min_aggr), plain(), aggr_slot(max_aggr)];
         let layout = MeetLayout::from_signature(&spec);
         assert_eq!(layout.key_positions, vec![HeadPos::from_index(1)]);
@@ -2560,10 +2562,11 @@ mod tests {
         assert_eq!(
             layout
                 .interleave(&OwnBareKey::encode(key.as_slice()), vals.as_slice())
-                .unwrap(),
+                ?,
             row,
             "interleave is the exact inverse of the two projections"
         );
+        Ok(())
     }
 
     /// Meet at position 0: the fold groups on position 1, values fold at
@@ -2571,46 +2574,47 @@ mod tests {
     /// the scan surface iterates whole head tuples in canonical (value-first)
     /// order.
     #[test]
-    fn meet_put_and_scan_non_suffix() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
+    fn meet_put_and_scan_non_suffix() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![aggr_slot(min_aggr), plain()];
-        let mut out = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out = MeetAggrStore::new(spec.clone())?;
         // group "a": min(4, 2, 9) = 2 ; group "b": 5.
         assert!(
             out.meet_put(vg(DataValue::from(4i64), "a").as_slice())
-                .unwrap()
+                ?
         );
         assert!(
             out.meet_put(vg(DataValue::from(2i64), "a").as_slice())
-                .unwrap()
+                ?
         ); // 2 < 4
         assert!(
             !out.meet_put(vg(DataValue::from(9i64), "a").as_slice())
-                .unwrap()
+                ?
         ); // 2 stays
         assert!(
             out.meet_put(vg(DataValue::from(5i64), "b").as_slice())
-                .unwrap()
+                ?
         );
         // `exists` is group membership, projected to position 1 (the value
         // in the probe is irrelevant).
         assert!(out.exists(vg(DataValue::from(999i64), "a").as_slice()));
         assert!(!out.exists(vg(DataValue::from(0i64), "c").as_slice()));
 
-        let mut store = EpochStore::new_meet(&spec).unwrap();
-        store.merge_in(out.wrap(), &mut ()).unwrap();
+        let mut store = EpochStore::new_meet(&spec)?;
+        store.merge_in(out.wrap(), &mut ())?;
         // Head-tuple order (derived from by_group): (2,"a") < (5,"b") on position 0.
         assert_eq!(
-            all(&store),
+            all(&store)?,
             vec![
                 vg(DataValue::from(2i64), "a"),
                 vg(DataValue::from(5i64), "b")
             ]
         );
         // Indexed access spans the whole logical tuple.
-        let row = store.all_iter().unwrap().next().unwrap();
-        assert_eq!(row.try_get(0).unwrap(), DataValue::from(2i64));
-        assert_eq!(row.try_get(1).unwrap(), DataValue::from("a"));
+        let row = store.all_iter()?.next().ok_or_else(|| miette!("row"))?;
+        assert_eq!(row.try_get(0)?, DataValue::from(2i64));
+        assert_eq!(row.try_get(1)?, DataValue::from("a"));
+        Ok(())
     }
 
     /// The determinism-critical seam: for a non-suffix layout the group-key
@@ -2620,21 +2624,21 @@ mod tests {
     /// (derived via interleave) stays in head-tuple order. A store that
     /// admitted in row order would reorder every witness table.
     #[test]
-    fn meet_admissions_follow_group_key_order_not_row_order_non_suffix() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
+    fn meet_admissions_follow_group_key_order_not_row_order_non_suffix() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![aggr_slot(min_aggr), plain()];
-        let mut out = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out = MeetAggrStore::new(spec.clone())?;
         // Group "a" holds value 9, group "z" holds value 1. Group-key order
         // is a < z; head-tuple (value-first) order is (1,z) < (9,a) — the
         // two orders disagree, which is the whole point.
         out.meet_put(vg(DataValue::from(9i64), "a").as_slice())
-            .unwrap();
+            ?;
         out.meet_put(vg(DataValue::from(1i64), "z").as_slice())
-            .unwrap();
+            ?;
 
-        let mut store = EpochStore::new_meet(&spec).unwrap();
+        let mut store = EpochStore::new_meet(&spec)?;
         let mut rec = Recorder::default();
-        store.merge_in(out.wrap(), &mut rec).unwrap();
+        store.merge_in(out.wrap(), &mut rec)?;
         assert_eq!(
             rec.0,
             vec![
@@ -2644,13 +2648,14 @@ mod tests {
             "admissions are in group-key order (a before z)"
         );
         assert_eq!(
-            all(&store),
+            all(&store)?,
             vec![
                 vg(DataValue::from(1i64), "z"),
                 vg(DataValue::from(9i64), "a")
             ],
             "the scan surface is in head-tuple order (value-first)"
         );
+        Ok(())
     }
 
     /// The changed-flag delta discipline holds at a non-suffix layout too:
@@ -2659,36 +2664,37 @@ mod tests {
     /// nothing and yields an empty delta (the fixpoint). The scan surface
     /// stays the interleave of `by_group` across the update.
     #[test]
-    fn meet_merge_delta_non_suffix() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
+    fn meet_merge_delta_non_suffix() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![aggr_slot(min_aggr), plain()];
-        let mut store = EpochStore::new_meet(&spec).unwrap();
+        let mut store = EpochStore::new_meet(&spec)?;
 
-        let mut out0 = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out0 = MeetAggrStore::new(spec.clone())?;
         out0.meet_put(vg(DataValue::from(5i64), "a").as_slice())
-            .unwrap();
-        assert_eq!(store.merge_in(out0.wrap(), &mut ()).unwrap(), Admitted(1));
-        assert_eq!(all(&store), vec![vg(DataValue::from(5i64), "a")]);
+            ?;
+        assert_eq!(store.merge_in(out0.wrap(), &mut ())?, Admitted(1));
+        assert_eq!(all(&store)?, vec![vg(DataValue::from(5i64), "a")]);
 
         // Epoch 1: a lower value moves the group — delta carries it, and the
         // scan surface reflects the new row, not the old.
-        let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out1 = MeetAggrStore::new(spec.clone())?;
         out1.meet_put(vg(DataValue::from(3i64), "a").as_slice())
-            .unwrap();
+            ?;
         let mut rec = Recorder::default();
-        assert_eq!(store.merge_in(out1.wrap(), &mut rec).unwrap(), Admitted(1));
+        assert_eq!(store.merge_in(out1.wrap(), &mut rec)?, Admitted(1));
         assert!(store.has_delta());
-        assert_eq!(delta(&store), vec![vg(DataValue::from(3i64), "a")]);
-        assert_eq!(all(&store), vec![vg(DataValue::from(3i64), "a")]);
+        assert_eq!(delta(&store)?, vec![vg(DataValue::from(3i64), "a")]);
+        assert_eq!(all(&store)?, vec![vg(DataValue::from(3i64), "a")]);
         assert_eq!(rec.0, vec![vg(DataValue::from(3i64), "a")]);
 
         // Epoch 2: a non-improving value changes nothing — empty delta.
-        let mut out2 = MeetAggrStore::new(spec).unwrap();
+        let mut out2 = MeetAggrStore::new(spec)?;
         out2.meet_put(vg(DataValue::from(8i64), "a").as_slice())
-            .unwrap();
-        assert_eq!(store.merge_in(out2.wrap(), &mut ()).unwrap(), Admitted(0));
+            ?;
+        assert_eq!(store.merge_in(out2.wrap(), &mut ())?, Admitted(0));
         assert!(!store.has_delta());
-        assert_eq!(all(&store), vec![vg(DataValue::from(3i64), "a")]);
+        assert_eq!(all(&store)?, vec![vg(DataValue::from(3i64), "a")]);
+        Ok(())
     }
 
     // ── adversarial reviewer attacks (adopted from the hostile pass) ──────
@@ -2699,22 +2705,23 @@ mod tests {
 
     /// P036: `by_group` is the sole MeetAggrStore authority — every group
     /// interleaves to a head tuple that `exists` recognizes.
-    fn rev_assert_lockstep(store: &MeetAggrStore) {
+    fn rev_assert_lockstep(store: &MeetAggrStore) -> Result<()> {
         for (k, v) in &store.by_group {
             let row = store
                 .layout
                 .interleave(k.as_ref(), v.as_slice())
-                .expect("group interleaves");
+                .map_err(|e| miette!("group interleaves: {e}"))?;
             assert!(
                 store.exists(row.as_slice()),
                 "interleaved head must exist for its group"
             );
         }
+        Ok(())
     }
 
     /// Scan surface equals the interleave of every sealed meet level's groups
     /// (newest owner wins per group key).
-    fn rev_assert_scan_from_groups(store: &EpochStore) {
+    fn rev_assert_scan_from_groups(store: &EpochStore) -> Result<()> {
         let LevelKind::Meet { spec, levels } = &store.kind else {
             // #[cfg(test)] helper — wrong kind is a test bug, not a product path.
             panic!("rev_assert_scan_from_groups: expected meet EpochStore");
@@ -2724,17 +2731,18 @@ mod tests {
             for (k, v) in &level.groups {
                 by_group.insert(
                     k.clone(),
-                    spec.layout.interleave(k.as_ref(), v.as_slice()).unwrap(),
+                    spec.layout.interleave(k.as_ref(), v.as_slice())?,
                 );
             }
         }
         let mut derived: Vec<Tuple> = by_group.into_values().collect();
         derived.sort();
         assert_eq!(
-            all(store),
+            all(store)?,
             derived,
             "scan surface diverged from interleave of groups (P036)"
         );
+        Ok(())
     }
 
     /// ATTACK 2a/2c: drive a non-suffix meet EpochStore through every
@@ -2742,46 +2750,46 @@ mod tests {
     /// incremental merge (vacant, changed, unchanged), empty-epoch merge —
     /// asserting the scan surface stays the interleave of groups.
     #[test]
-    fn rev_meet_views_lockstep_through_all_paths() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
+    fn rev_meet_views_lockstep_through_all_paths() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![aggr_slot(min_aggr), plain()];
 
         // meet_put: vacant, changed, unchanged.
-        let mut out = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out = MeetAggrStore::new(spec.clone())?;
         assert!(
             out.meet_put(vg(DataValue::from(9i64), "a").as_slice())
-                .unwrap()
+                ?
         );
         assert!(
             out.meet_put(vg(DataValue::from(4i64), "a").as_slice())
-                .unwrap()
+                ?
         );
         assert!(
             !out.meet_put(vg(DataValue::from(7i64), "a").as_slice())
-                .unwrap()
+                ?
         );
         assert!(
             out.meet_put(vg(DataValue::from(1i64), "z").as_slice())
-                .unwrap()
+                ?
         );
 
         // Fast-path swap into an empty total (use_total_for_delta epoch).
-        let mut store = EpochStore::new_meet(&spec).unwrap();
-        store.merge_in(out.wrap(), &mut ()).unwrap();
-        rev_assert_scan_from_groups(&store);
+        let mut store = EpochStore::new_meet(&spec)?;
+        store.merge_in(out.wrap(), &mut ())?;
+        rev_assert_scan_from_groups(&store)?;
 
         // Incremental merge: one changed group, one unchanged, one vacant.
-        let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
+        let mut out1 = MeetAggrStore::new(spec.clone())?;
         out1.meet_put(vg(DataValue::from(2i64), "a").as_slice())
-            .unwrap(); // changes 4 -> 2
+            ?; // changes 4 -> 2
         out1.meet_put(vg(DataValue::from(5i64), "z").as_slice())
-            .unwrap(); // no change
+            ?; // no change
         out1.meet_put(vg(DataValue::from(8i64), "q").as_slice())
-            .unwrap(); // vacant
-        store.merge_in(out1.wrap(), &mut ()).unwrap();
-        rev_assert_scan_from_groups(&store);
+            ?; // vacant
+        store.merge_in(out1.wrap(), &mut ())?;
+        rev_assert_scan_from_groups(&store)?;
         assert_eq!(
-            all(&store),
+            all(&store)?,
             vec![
                 vg(DataValue::from(1i64), "z"),
                 vg(DataValue::from(2i64), "a"),
@@ -2790,7 +2798,7 @@ mod tests {
             "scan surface reflects post-merge rows in head-tuple order"
         );
         assert_eq!(
-            delta(&store),
+            delta(&store)?,
             vec![
                 vg(DataValue::from(2i64), "a"),
                 vg(DataValue::from(8i64), "q"),
@@ -2799,46 +2807,48 @@ mod tests {
         );
 
         // Empty epoch: fixpoint; totals untouched, delta empty.
-        let out2 = MeetAggrStore::new(spec.clone()).unwrap();
-        store.merge_in(out2.wrap(), &mut ()).unwrap();
-        rev_assert_scan_from_groups(&store);
+        let out2 = MeetAggrStore::new(spec.clone())?;
+        store.merge_in(out2.wrap(), &mut ())?;
+        rev_assert_scan_from_groups(&store)?;
         assert!(!store.has_delta());
 
         // The stale old row must be GONE from the scan surface (not shadowed).
-        assert_eq!(all(&store).len(), 3);
-        assert!(!all(&store).contains(&vg(DataValue::from(4i64), "a")));
+        assert_eq!(all(&store)?.len(), 3);
+        assert!(!all(&store)?.contains(&vg(DataValue::from(4i64), "a")));
+        Ok(())
     }
 
     /// ATTACK 1: empty group key (all positions aggregated) — the group key
     /// is the empty tuple, one group total; exists() answers for any probe;
     /// scans see the single interleaved row.
     #[test]
-    fn rev_meet_all_aggregated_single_group() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
-        let max_aggr = parse_aggr("max").unwrap().unwrap();
+    fn rev_meet_all_aggregated_single_group() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
+        let max_aggr = parse_aggr("max")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![aggr_slot(min_aggr), aggr_slot(max_aggr)];
-        let mut out = MeetAggrStore::new(spec.clone()).unwrap();
-        assert!(out.meet_put(t(&[5, 5]).as_slice()).unwrap());
-        assert!(out.meet_put(t(&[3, 9]).as_slice()).unwrap()); // min 3, max 9
-        assert!(!out.meet_put(t(&[4, 6]).as_slice()).unwrap()); // no change
+        let mut out = MeetAggrStore::new(spec.clone())?;
+        assert!(out.meet_put(t(&[5, 5]).as_slice())?);
+        assert!(out.meet_put(t(&[3, 9]).as_slice())?); // min 3, max 9
+        assert!(!out.meet_put(t(&[4, 6]).as_slice())?); // no change
         assert_eq!(out.by_group.len(), 1, "one group keyed by the empty tuple");
         assert!(
             out.exists(t(&[100, -100]).as_slice()),
             "any probe hits the one group"
         );
-        rev_assert_lockstep(&out);
+        rev_assert_lockstep(&out)?;
 
-        let mut store = EpochStore::new_meet(&spec).unwrap();
-        store.merge_in(out.wrap(), &mut ()).unwrap();
-        assert_eq!(all(&store), vec![t(&[3, 9])]);
+        let mut store = EpochStore::new_meet(&spec)?;
+        store.merge_in(out.wrap(), &mut ())?;
+        assert_eq!(all(&store)?, vec![t(&[3, 9])]);
+        Ok(())
     }
 
     /// ATTACK 3: admissions across WILDLY different insertion orders are
     /// identical (group-key order), and the merged store is byte-identical
     /// — insertion order must be laundered out by both views.
     #[test]
-    fn rev_meet_admissions_insertion_order_independent() {
-        let min_aggr = parse_aggr("min").unwrap().unwrap();
+    fn rev_meet_admissions_insertion_order_independent() -> Result<()>  {
+        let min_aggr = parse_aggr("min")?.ok_or_else(|| miette!("parse_aggr"))?;
         let spec = vec![aggr_slot(min_aggr), plain()];
         let rows: Vec<Tuple> = vec![
             vg(DataValue::from(9i64), "m"),
@@ -2848,19 +2858,19 @@ mod tests {
             vg(DataValue::from(7i64), "b"),
             vg(DataValue::from(2i64), "a"),
         ];
-        let run = |order: &[usize]| -> (Vec<Tuple>, Vec<Tuple>, Vec<Tuple>) {
-            let mut out = MeetAggrStore::new(spec.clone()).unwrap();
+        let run = |order: &[usize]| -> Result<(Vec<Tuple>, Vec<Tuple>, Vec<Tuple>)> {
+            let mut out = MeetAggrStore::new(spec.clone())?;
             for i in order {
-                out.meet_put(rows[*i].as_slice()).unwrap();
+                out.meet_put(rows[*i].as_slice())?;
             }
-            let mut store = EpochStore::new_meet(&spec).unwrap();
+            let mut store = EpochStore::new_meet(&spec)?;
             let mut rec = Recorder::default();
-            store.merge_in(out.wrap(), &mut rec).unwrap();
-            (rec.0, all(&store), delta(&store))
+            store.merge_in(out.wrap(), &mut rec)?;
+            Ok((rec.0, all(&store)?, delta(&store)?))
         };
-        let baseline = run(&[0, 1, 2, 3, 4, 5]);
+        let baseline = run(&[0, 1, 2, 3, 4, 5])?;
         for order in [[5, 4, 3, 2, 1, 0], [3, 0, 5, 2, 4, 1], [2, 5, 0, 3, 1, 4]] {
-            assert_eq!(run(&order), baseline, "order {order:?} diverged");
+            assert_eq!(run(&order)?, baseline, "order {order:?} diverged");
         }
         // And the admission sequence really is group-key order.
         assert_eq!(
@@ -2872,11 +2882,12 @@ mod tests {
                 vg(DataValue::from(1i64), "z"),
             ]
         );
+        Ok(())
     }
 
     /// TupleInIter comparison: against other views and plain slices.
     #[test]
-    fn tuple_in_iter_ordering() {
+    fn tuple_in_iter_ordering() -> Result<()>  {
         let k1 = t(&[1]);
         let v1 = t(&[5]);
         let k2 = t(&[1, 5]);
@@ -2893,5 +2904,6 @@ mod tests {
             Some(Ordering::Less)
         );
         assert!(joined.eq(t(&[1, 5]).as_slice()));
+        Ok(())
     }
 }

@@ -8,49 +8,51 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
+use miette::{Result, miette};
 use crate::exec::stdlib::nondet::*;
 use crate::exec::stdlib::temporal_format::*;
 use kyzo_model::value::DataValue;
 
 
 #[test]
-fn test_rand() {
-    let n = op_rand_float(&[]).unwrap().get_float().unwrap();
+fn test_rand() -> Result<()>  {
+    let n = op_rand_float(&[])?.get_float().ok_or_else(|| miette!("get_float"))?;
     assert!(n >= 0.);
     assert!(n <= 1.);
     assert_eq!(
-        op_rand_bernoulli(&[DataValue::from(0)]).unwrap(),
+        op_rand_bernoulli(&[DataValue::from(0)])?,
         DataValue::from(false)
     );
     assert_eq!(
-        op_rand_bernoulli(&[DataValue::from(1)]).unwrap(),
+        op_rand_bernoulli(&[DataValue::from(1)])?,
         DataValue::from(true)
     );
     assert!(op_rand_bernoulli(&[DataValue::from(2)]).is_err());
-    let n = op_rand_int(&[DataValue::from(100), DataValue::from(200)])
-        .unwrap()
+    let n = op_rand_int(&[DataValue::from(100), DataValue::from(200)])?
         .get_int()
-        .unwrap();
+        ?;
     assert!(n >= 100);
     assert!(n <= 200);
     // An empty range is an error, not a panic.
     assert!(op_rand_int(&[DataValue::from(200), DataValue::from(100)]).is_err());
     assert_eq!(
-        op_rand_choose(&[DataValue::List(vec![])]).unwrap(),
+        op_rand_choose(&[DataValue::List(vec![])])?,
         DataValue::Null
     );
     assert_eq!(
-        op_rand_choose(&[DataValue::List(vec![DataValue::from(123)])]).unwrap(),
+        op_rand_choose(&[DataValue::List(vec![DataValue::from(123)])])?,
         DataValue::from(123)
     );
+    Ok(())
 }
 
 #[test]
-fn test_now() {
-    let now = op_now(&[]).unwrap();
+fn test_now() -> Result<()>  {
+    let now = op_now(&[])?;
     assert!(matches!(now, DataValue::Num(_)));
-    let s = op_format_timestamp(&[now]).unwrap();
-    let _dt = op_parse_timestamp(&[s]).unwrap();
+    let s = op_format_timestamp(&[now])?;
+    let _dt = op_parse_timestamp(&[s])?;
+    Ok(())
 }
 
 // A pre-epoch datetime is a negative count, not a panic: the upstream

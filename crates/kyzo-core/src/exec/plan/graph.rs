@@ -34,7 +34,7 @@
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
 
-use miette::{Diagnostic, Result, ensure};
+use miette::{Diagnostic, Result, ensure, miette};
 use thiserror::Error;
 
 /// A directed graph as an adjacency map: node → successors.
@@ -329,6 +329,7 @@ impl<'a> TarjanScc<'a> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use proptest::prelude::*;
 
     use super::*;
@@ -344,12 +345,11 @@ mod tests {
     }
 
     /// SCCs as an order-free partition, for comparing against the oracle.
-    fn scc_partition(graph: &Graph<usize>) -> BTreeSet<BTreeSet<usize>> {
-        strongly_connected_components(graph)
-            .expect("valid graph")
+    fn scc_partition(graph: &Graph<usize>) -> Result<BTreeSet<BTreeSet<usize>>> {
+        Ok(strongly_connected_components(graph)?
             .into_iter()
             .map(|c| c.into_iter().copied().collect())
-            .collect()
+            .collect())
     }
 
     /// The obviously-correct SCC oracle: `u` and `v` share a component iff
@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn scc_on_a_known_graph() {
+    fn scc_on_a_known_graph() -> Result<()>  {
         // Two 2-cycles bridged by a one-way edge, plus a free-standing node.
         let g = graph_of(&[(0, 1), (1, 0), (1, 2), (2, 3), (3, 2)], 5);
         let want: BTreeSet<BTreeSet<usize>> = [
@@ -458,21 +458,23 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        assert_eq!(scc_partition(&g), want);
+        assert_eq!(scc_partition(&g)?, want);
+        Ok(())
     }
 
     #[test]
-    fn scc_single_node_with_and_without_self_loop() {
+    fn scc_single_node_with_and_without_self_loop() -> Result<()>  {
         // A self-loop and its absence both yield the singleton component:
         // the stratifier distinguishes them by the edge, not the SCC.
         assert_eq!(
-            scc_partition(&graph_of(&[(0, 0)], 1)),
-            scc_partition(&graph_of(&[], 1))
+            scc_partition(&graph_of(&[(0, 0)], 1))?,
+            scc_partition(&graph_of(&[], 1))?
         );
+        Ok(())
     }
 
     #[test]
-    fn scc_ignores_edges_to_undefined_nodes() {
+    fn scc_ignores_edges_to_undefined_nodes() -> Result<()>  {
         // Node 0 points at a name that is not a key (the stratifier's
         // graphs mention undefined rules); it must simply not count.
         let mut g: Graph<usize> = BTreeMap::from([(0, vec![7]), (1, vec![0])]);
@@ -480,7 +482,8 @@ mod tests {
         let want: BTreeSet<BTreeSet<usize>> = [BTreeSet::from([0]), BTreeSet::from([1])]
             .into_iter()
             .collect();
-        assert_eq!(scc_partition(&g), want);
+        assert_eq!(scc_partition(&g)?, want);
+        Ok(())
     }
 
     proptest! {
@@ -490,13 +493,14 @@ mod tests {
         fn scc_matches_naive_reachability_oracle(
             n in 1usize..12,
             edges in proptest::collection::vec((0usize..12, 0usize..12), 0..60)
-        ) {
+        ) -> Result<(), TestCaseError> {
             let edges: Vec<(usize, usize)> = edges
                 .into_iter()
                 .map(|(a, b)| (a % n, b % n))
                 .collect();
             let g = graph_of(&edges, n);
-            prop_assert_eq!(scc_partition(&g), naive_scc(&g, n));
+            prop_assert_eq!(scc_partition(&g).map_err(|e| TestCaseError::fail(format!("{e}")))?, naive_scc(&g, n));
+            Ok(())
         }
 
         /// The iterative Tarjan is *output-identical* to the original
@@ -506,16 +510,17 @@ mod tests {
         fn iterative_tarjan_is_output_identical_to_recursive(
             n in 1usize..12,
             edges in proptest::collection::vec((0usize..12, 0usize..12), 0..60)
-        ) {
+        ) -> Result<(), TestCaseError> {
             let mut idx_graph: Vec<Vec<usize>> = vec![vec![]; n];
             for (a, b) in edges {
                 idx_graph[a % n].push(b % n);
             }
             let iterative = TarjanScc::new(&idx_graph)
-                .expect("validated targets")
+                .map_err(|e| TestCaseError::fail(format!("validated targets: {e}")))?
                 .run();
             let recursive = RecursiveTarjan::new(&idx_graph).run();
             prop_assert_eq!(iterative, recursive);
+            Ok(())
         }
 
         /// Kahn's output on a random poisoned DAG is a stratification:
@@ -525,7 +530,7 @@ mod tests {
         fn kahn_output_is_a_stratification(
             n in 1usize..12,
             edges in proptest::collection::vec((0usize..12, 0usize..12, any::<bool>()), 0..60)
-        ) {
+        ) -> Result<(), TestCaseError> {
             // Orient every edge low → high so the graph is a DAG.
             let mut g: StratifiedGraph<usize> = BTreeMap::new();
             for (a, b, poisoned) in edges {
@@ -537,7 +542,7 @@ mod tests {
                 let e = g.entry(fr).or_default().entry(to).or_insert(false);
                 *e = *e || poisoned;
             }
-            let strata = generalized_kahn(&g, n).expect("a DAG stratifies");
+            let strata = generalized_kahn(&g, n).map_err(|e| TestCaseError::fail(format!("a DAG stratifies: {e}")))?;
             let mut stratum_of: BTreeMap<usize, usize> = BTreeMap::new();
             for (idx, stratum) in strata.iter().enumerate() {
                 for node in stratum {
@@ -556,20 +561,22 @@ mod tests {
                     }
                 }
             }
+            Ok(())
         }
     }
 
     #[test]
-    fn kahn_poisoned_edges_split_strata() {
+    fn kahn_poisoned_edges_split_strata() -> Result<()>  {
         // 0 → 1 poisoned, 0 → 2 clean: 1 must wait a stratum, 2 need not.
         let g: StratifiedGraph<usize> =
             BTreeMap::from([(0, BTreeMap::from([(1, true), (2, false)]))]);
-        let strata = generalized_kahn(&g, 3).expect("stratifies");
+        let strata = generalized_kahn(&g, 3).map_err(|e| miette!("stratifies: {e}"))?;
         assert_eq!(strata, vec![vec![0, 2], vec![1]]);
+        Ok(())
     }
 
     #[test]
-    fn kahn_refuses_a_cyclic_graph() {
+    fn kahn_refuses_a_cyclic_graph() -> Result<()>  {
         // The condensation the stratifier feeds in is always a DAG; a cycle
         // here means corrupt bookkeeping. The original debug_assert let a
         // release build return a truncated stratification for this input.
@@ -579,33 +586,37 @@ mod tests {
         ]);
         let err = generalized_kahn(&g, 2).expect_err("cycle must be refused");
         assert!(err.to_string().contains("invariant"), "got: {err}");
+        Ok(())
     }
 
     #[test]
-    fn kahn_refuses_out_of_range_nodes() {
+    fn kahn_refuses_out_of_range_nodes() -> Result<()>  {
         let g: StratifiedGraph<usize> = BTreeMap::from([(0, BTreeMap::from([(9, false)]))]);
         assert!(generalized_kahn(&g, 2).is_err());
         let g: StratifiedGraph<usize> = BTreeMap::from([(9, BTreeMap::new())]);
         assert!(generalized_kahn(&g, 2).is_err());
+        Ok(())
     }
 
     /// The reason these traversals are iterative: a deep chain must not
     /// overflow the stack. Run in a deliberately small-stack thread — the
     /// original recursive formulations overflow it.
     #[test]
-    fn deep_chain_does_not_overflow_the_stack() {
+    fn deep_chain_does_not_overflow_the_stack() -> Result<()>  {
         let handle = std::thread::Builder::new()
             .stack_size(256 * 1024)
-            .spawn(|| {
+            .spawn(|| -> Result<()> {
                 const N: usize = 50_000;
                 let edges: Vec<(usize, usize)> = (0..N - 1).map(|i| (i, i + 1)).collect();
                 let g = graph_of(&edges, N);
-                let sccs = strongly_connected_components(&g).expect("chain is valid");
+                let sccs = strongly_connected_components(&g)?;
                 assert_eq!(sccs.len(), N, "a chain is all singletons");
                 let reached = reachable_components(&g, &0);
                 assert_eq!(reached.len(), N);
+                Ok(())
             })
-            .expect("spawn test thread");
-        handle.join().expect("no stack overflow");
+            .map_err(|e| miette!("spawn test thread: {e}"))?;
+        handle.join().map_err(|_| miette!("no stack overflow"))??;
+        Ok(())
     }
 }

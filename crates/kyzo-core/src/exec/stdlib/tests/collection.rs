@@ -18,22 +18,23 @@ use serde_json::json;
 
 
 #[test]
-fn test_list() {
-    assert_eq!(op_list(&[]).unwrap(), DataValue::List(vec![]));
+fn test_list() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    assert_eq!(op_list(&[])?, DataValue::List(vec![]));
     assert_eq!(
-        op_list(&[DataValue::from(1)]).unwrap(),
+        op_list(&[DataValue::from(1)])?,
         DataValue::List(vec![DataValue::from(1)])
     );
     assert_eq!(
-        op_list(&[DataValue::from(1), DataValue::List(vec![])]).unwrap(),
+        op_list(&[DataValue::from(1), DataValue::List(vec![])])?,
         DataValue::List(vec![DataValue::from(1), DataValue::List(vec![])])
     );
+    Ok(())
 }
 
 #[test]
-fn test_concat() {
+fn test_concat() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
-        op_concat(&[DataValue::Str("abc".into()), DataValue::Str("def".into())]).unwrap(),
+        op_concat(&[DataValue::Str("abc".into()), DataValue::Str("def".into())])?,
         DataValue::Str("abcdef".into())
     );
 
@@ -41,24 +42,23 @@ fn test_concat() {
         op_concat(&[
             DataValue::List(vec![DataValue::from(true), DataValue::from(false)]),
             DataValue::List(vec![DataValue::from(true)])
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![
             DataValue::from(true),
             DataValue::from(false),
             DataValue::from(true),
         ])
     );
+    Ok(())
 }
 
 #[test]
-fn test_prepend_append() {
+fn test_prepend_append() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
         op_prepend(&[
             DataValue::List(vec![DataValue::from(1), DataValue::from(2)]),
             DataValue::Null,
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![
             DataValue::Null,
             DataValue::from(1),
@@ -69,42 +69,42 @@ fn test_prepend_append() {
         op_append(&[
             DataValue::List(vec![DataValue::from(1), DataValue::from(2)]),
             DataValue::Null,
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![
             DataValue::from(1),
             DataValue::from(2),
             DataValue::Null,
         ]),
     );
+    Ok(())
 }
 
 #[test]
-fn test_length() {
+fn test_length() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
-        op_length(&[DataValue::Str("abc".into())]).unwrap(),
+        op_length(&[DataValue::Str("abc".into())])?,
         DataValue::from(3)
     );
     assert_eq!(
-        op_length(&[DataValue::List(vec![])]).unwrap(),
+        op_length(&[DataValue::List(vec![])])?,
         DataValue::from(0)
     );
     assert_eq!(
-        op_length(&[DataValue::Bytes([].into())]).unwrap(),
+        op_length(&[DataValue::Bytes([].into())])?,
         DataValue::from(0)
     );
+    Ok(())
 }
 
 #[test]
-fn test_sort_reverse() {
+fn test_sort_reverse() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
         op_sorted(&[DataValue::List(vec![
             DataValue::from(2.0),
             DataValue::from(1),
             DataValue::from(2),
             DataValue::Null,
-        ])])
-        .unwrap(),
+        ])])?,
         DataValue::List(vec![
             DataValue::Null,
             DataValue::from(1),
@@ -118,47 +118,46 @@ fn test_sort_reverse() {
             DataValue::from(1),
             DataValue::from(2),
             DataValue::Null,
-        ])])
-        .unwrap(),
+        ])])?,
         DataValue::List(vec![
             DataValue::Null,
             DataValue::from(2),
             DataValue::from(1),
             DataValue::from(2.0),
         ])
-    )
+    );
+    Ok(())
 }
 
 #[test]
-fn test_first_last() {
+fn test_first_last() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
-        op_first(&[DataValue::List(vec![])]).unwrap(),
+        op_first(&[DataValue::List(vec![])])?,
         DataValue::Null,
     );
     assert_eq!(
-        op_last(&[DataValue::List(vec![])]).unwrap(),
+        op_last(&[DataValue::List(vec![])])?,
         DataValue::Null,
     );
     assert_eq!(
         op_first(&[DataValue::List(vec![
             DataValue::from(1),
             DataValue::from(2),
-        ])])
-        .unwrap(),
+        ])])?,
         DataValue::from(1),
     );
     assert_eq!(
         op_last(&[DataValue::List(vec![
             DataValue::from(1),
             DataValue::from(2),
-        ])])
-        .unwrap(),
+        ])])?,
         DataValue::from(2),
     );
+    Ok(())
 }
 
 #[test]
-fn test_chunks() {
+fn test_chunks() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
         op_chunks(&[
             DataValue::List(vec![
@@ -169,8 +168,7 @@ fn test_chunks() {
                 DataValue::from(5),
             ]),
             DataValue::from(2),
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![
             DataValue::List(vec![DataValue::from(1), DataValue::from(2)]),
             DataValue::List(vec![DataValue::from(3), DataValue::from(4)]),
@@ -187,8 +185,7 @@ fn test_chunks() {
                 DataValue::from(5),
             ]),
             DataValue::from(2),
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![
             DataValue::List(vec![DataValue::from(1), DataValue::from(2)]),
             DataValue::List(vec![DataValue::from(3), DataValue::from(4)]),
@@ -204,8 +201,7 @@ fn test_chunks() {
                 DataValue::from(5),
             ]),
             DataValue::from(3),
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![
             DataValue::List(vec![
                 DataValue::from(1),
@@ -223,11 +219,12 @@ fn test_chunks() {
                 DataValue::from(5),
             ]),
         ])
-    )
+    );
+    Ok(())
 }
 
 #[test]
-fn test_get() {
+fn test_get() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert!(op_get(&[DataValue::List(vec![]), DataValue::from(0)]).is_err());
     assert_eq!(
         op_get(&[
@@ -237,12 +234,11 @@ fn test_get() {
                 DataValue::from(3),
             ]),
             DataValue::from(1)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(2)
     );
     assert_eq!(
-        op_maybe_get(&[DataValue::List(vec![]), DataValue::from(0)]).unwrap(),
+        op_maybe_get(&[DataValue::List(vec![]), DataValue::from(0)])?,
         DataValue::Null
     );
     assert_eq!(
@@ -253,14 +249,14 @@ fn test_get() {
                 DataValue::from(3),
             ]),
             DataValue::from(1)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(2)
     );
+    Ok(())
 }
 
 #[test]
-fn test_slice() {
+fn test_slice() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert!(
         op_slice(&[
             DataValue::List(vec![
@@ -296,21 +292,20 @@ fn test_slice() {
             ]),
             DataValue::from(1),
             DataValue::from(-1)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List(vec![DataValue::from(2)])
     );
+    Ok(())
 }
 
 #[test]
-fn test_set_ops() {
+fn test_set_ops() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
         op_union(&[
             DataValue::List([1, 2, 3].into_iter().map(DataValue::from).collect()),
             DataValue::List([2, 3, 4].into_iter().map(DataValue::from).collect()),
             DataValue::List([3, 4, 5].into_iter().map(DataValue::from).collect())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List([1, 2, 3, 4, 5].into_iter().map(DataValue::from).collect())
     );
     assert_eq!(
@@ -323,8 +318,7 @@ fn test_set_ops() {
             ),
             DataValue::List([2, 3, 4].into_iter().map(DataValue::from).collect()),
             DataValue::List([3, 4, 5].into_iter().map(DataValue::from).collect())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List([3, 4].into_iter().map(DataValue::from).collect())
     );
     assert_eq!(
@@ -337,24 +331,24 @@ fn test_set_ops() {
             ),
             DataValue::List([2, 3, 4].into_iter().map(DataValue::from).collect()),
             DataValue::List([3, 4, 5].into_iter().map(DataValue::from).collect())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::List([1, 6].into_iter().map(DataValue::from).collect())
     );
+    Ok(())
 }
 
 #[test]
-fn test_range() {
+fn test_range() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
-        op_int_range(&[DataValue::from(1), DataValue::from(5)]).unwrap(),
+        op_int_range(&[DataValue::from(1), DataValue::from(5)])?,
         DataValue::List([1, 2, 3, 4].into_iter().map(DataValue::from).collect())
     );
     assert_eq!(
-        op_int_range(&[DataValue::from(5)]).unwrap(),
+        op_int_range(&[DataValue::from(5)])?,
         DataValue::List([0, 1, 2, 3, 4].into_iter().map(DataValue::from).collect())
     );
     assert_eq!(
-        op_int_range(&[DataValue::from(15), DataValue::from(3), DataValue::from(-2)]).unwrap(),
+        op_int_range(&[DataValue::from(15), DataValue::from(3), DataValue::from(-2)])?,
         DataValue::List(
             [15, 13, 11, 9, 7, 5]
                 .into_iter()
@@ -362,13 +356,14 @@ fn test_range() {
                 .collect()
         )
     );
+    Ok(())
 }
 
 // Base64 vector payloads must be a whole number of elements: trailing
 // bytes are an error, the same exact-length law as schema coercion (the
 // upstream original silently ignored them).
 #[test]
-fn test_json_path_negative_index_errors() {
+fn test_json_path_negative_index_errors() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let arr = DataValue::Json(crate::data::json::json_from_serde(&json!([1, 2, 3])));
     let neg_path = DataValue::List(vec![DataValue::from(-1)]);
     assert!(op_set_json_path(&[arr.clone(), neg_path.clone(), DataValue::from(9)]).is_err());
@@ -376,9 +371,10 @@ fn test_json_path_negative_index_errors() {
     assert!(op_get(&[arr.clone(), neg_path]).is_err());
     // Positive control: a valid index works.
     assert_eq!(
-        op_get(&[arr, DataValue::List(vec![DataValue::from(1)])]).unwrap(),
+        op_get(&[arr, DataValue::List(vec![DataValue::from(1)])])?,
         DataValue::from(2)
     );
+    Ok(())
 }
 
 // ===========================================================================
@@ -395,18 +391,16 @@ fn test_json_path_negative_index_errors() {
 
 // `op_format_timestamp` -> RFC3339 string; helper returns Ok(String)/Err(msg).
 fn fmt(args: &[DataValue]) -> Result<String, String> {
-    op_format_timestamp(args)
-        .map(|v| v.get_str().unwrap().to_string())
-        .map_err(|e| e.to_string())
+    let v = op_format_timestamp(args).map_err(|e| e.to_string())?;
+    v.get_str().map(|s| s.to_string()).ok_or_else(|| "get_str".to_string())
 }
 fn fmt_n(n: f64) -> Result<String, String> {
     fmt(&[DataValue::from(n)])
 }
 // `op_parse_timestamp` -> float seconds.
 fn parse_secs(s: &str) -> Result<f64, String> {
-    op_parse_timestamp(&[DataValue::from(s)])
-        .map(|v| v.get_float().unwrap())
-        .map_err(|e| e.to_string())
+    let v = op_parse_timestamp(&[DataValue::from(s)]).map_err(|e| e.to_string())?;
+    v.get_float().ok_or_else(|| "get_float".to_string())
 }
 // `str2vld` -> signed microseconds.
 fn vld_micros(s: &str) -> Result<i64, String> {
@@ -425,80 +419,82 @@ fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
 }
 
 #[test]
-fn format_timestamp_numeric_agreed() {
+fn format_timestamp_numeric_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Whole seconds: no fractional digits (chrono SecondsFormat::AutoSi).
-    assert_eq!(fmt_n(0.0).unwrap(), "1970-01-01T00:00:00+00:00");
-    assert_eq!(fmt_n(1.0).unwrap(), "1970-01-01T00:00:01+00:00");
-    assert_eq!(fmt_n(-1.0).unwrap(), "1969-12-31T23:59:59+00:00");
+    assert_eq!(fmt_n(0.0)?, "1970-01-01T00:00:00+00:00");
+    assert_eq!(fmt_n(1.0)?, "1970-01-01T00:00:01+00:00");
+    assert_eq!(fmt_n(-1.0)?, "1969-12-31T23:59:59+00:00");
     // UTC renders as `+00:00`, never `Z` (matches chrono's DateTime::to_rfc3339).
-    assert_eq!(fmt_n(1600000000.0).unwrap(), "2020-09-13T12:26:40+00:00");
+    assert_eq!(fmt_n(1600000000.0)?, "2020-09-13T12:26:40+00:00");
     // Millisecond subsecond -> exactly 3 digits.
-    assert_eq!(fmt_n(1.5).unwrap(), "1970-01-01T00:00:01.500+00:00");
-    assert_eq!(fmt_n(-1.5).unwrap(), "1969-12-31T23:59:58.500+00:00");
+    assert_eq!(fmt_n(1.5)?, "1970-01-01T00:00:01.500+00:00");
+    assert_eq!(fmt_n(-1.5)?, "1969-12-31T23:59:58.500+00:00");
     assert_eq!(
-        fmt_n(1600000000.5).unwrap(),
+        fmt_n(1600000000.5)?,
         "2020-09-13T12:26:40.500+00:00"
     );
-    assert_eq!(fmt_n(0.123).unwrap(), "1970-01-01T00:00:00.123+00:00");
-    assert_eq!(fmt_n(0.001).unwrap(), "1970-01-01T00:00:00.001+00:00");
+    assert_eq!(fmt_n(0.123)?, "1970-01-01T00:00:00.123+00:00");
+    assert_eq!(fmt_n(0.001)?, "1970-01-01T00:00:00.001+00:00");
     // Sub-millisecond input is truncated to whole seconds by the `* 1000` path.
-    assert_eq!(fmt_n(0.0005).unwrap(), "1970-01-01T00:00:00+00:00");
+    assert_eq!(fmt_n(0.0005)?, "1970-01-01T00:00:00+00:00");
     // Fractional beyond milliseconds is dropped (the op keeps only millis).
     assert_eq!(
-        fmt_n(1234567890.123456).unwrap(),
+        fmt_n(1234567890.123456)?,
         "2009-02-13T23:31:30.123+00:00"
     );
     // Pre-epoch and small positive years (0000..=9999) print 4-digit years.
-    assert_eq!(fmt_n(-2208988800.0).unwrap(), "1900-01-01T00:00:00+00:00");
-    assert_eq!(fmt_n(-30610224000.0).unwrap(), "1000-01-01T00:00:00+00:00");
-    assert_eq!(fmt_n(-46394772000.0).unwrap(), "0499-10-22T11:20:00+00:00");
-    assert_eq!(fmt_n(-62135596800.0).unwrap(), "0001-01-01T00:00:00+00:00");
-    assert_eq!(fmt_n(-62162035200.0).unwrap(), "0000-03-01T00:00:00+00:00");
+    assert_eq!(fmt_n(-2208988800.0)?, "1900-01-01T00:00:00+00:00");
+    assert_eq!(fmt_n(-30610224000.0)?, "1000-01-01T00:00:00+00:00");
+    assert_eq!(fmt_n(-46394772000.0)?, "0499-10-22T11:20:00+00:00");
+    assert_eq!(fmt_n(-62135596800.0)?, "0001-01-01T00:00:00+00:00");
+    assert_eq!(fmt_n(-62162035200.0)?, "0000-03-01T00:00:00+00:00");
+    Ok(())
 }
 
 #[test]
-fn format_timestamp_validity_input_agreed() {
+fn format_timestamp_validity_input_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use kyzo_model::value::Validity;
     let f = |micros: i64| {
         let vld = DataValue::Validity(
             Validity::new(ValidityTs::from_raw(micros), true)
-                .expect("non-reserved")
+                .map_err(|e| miette!("non-reserved: {e}"))?
                 .into(),
         );
-        fmt(&[vld]).unwrap()
+        fmt(&[vld])?
     };
     // Validity stores microseconds; the op divides by 1000 to milliseconds.
     assert_eq!(f(0), "1970-01-01T00:00:00+00:00");
     assert_eq!(f(1_500_000), "1970-01-01T00:00:01.500+00:00");
     assert_eq!(f(-1_500_000), "1969-12-31T23:59:58.500+00:00");
     assert_eq!(f(1_600_000_000_000_000), "2020-09-13T12:26:40+00:00");
+    Ok(())
 }
 
 #[test]
-fn format_timestamp_timezone_agreed() {
+fn format_timestamp_timezone_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let z = |n: f64, tz: &str| fmt(&[DataValue::from(n), DataValue::from(tz)]);
     // Named zones apply the offset in effect AT that instant (incl. DST).
-    assert_eq!(z(0.0, "UTC").unwrap(), "1970-01-01T00:00:00+00:00");
+    assert_eq!(z(0.0, "UTC")?, "1970-01-01T00:00:00+00:00");
     assert_eq!(
-        z(0.0, "Asia/Shanghai").unwrap(),
+        z(0.0, "Asia/Shanghai")?,
         "1970-01-01T08:00:00+08:00"
     );
     assert_eq!(
-        z(0.0, "America/New_York").unwrap(),
+        z(0.0, "America/New_York")?,
         "1969-12-31T19:00:00-05:00"
     );
     assert_eq!(
-        z(0.0, "Europe/London").unwrap(),
+        z(0.0, "Europe/London")?,
         "1970-01-01T01:00:00+01:00"
     );
-    assert_eq!(z(0.0, "Asia/Kolkata").unwrap(), "1970-01-01T05:30:00+05:30");
+    assert_eq!(z(0.0, "Asia/Kolkata")?, "1970-01-01T05:30:00+05:30");
     // September 2020: New York is on EDT (-04:00), not EST.
     assert_eq!(
-        z(1600000000.0, "America/New_York").unwrap(),
+        z(1600000000.0, "America/New_York")?,
         "2020-09-13T08:26:40-04:00"
     );
     assert_eq!(
-        z(1600000000.5, "Asia/Kolkata").unwrap(),
+        z(1600000000.5, "Asia/Kolkata")?,
         "2020-09-13T17:56:40.500+05:30"
     );
     // Unknown / empty zone is rejected with the same message chrono produced.
@@ -507,33 +503,34 @@ fn format_timestamp_timezone_agreed() {
         "bad timezone specification: bogus/zone"
     );
     assert_eq!(z(0.0, "").unwrap_err(), "bad timezone specification: ");
+    Ok(())
 }
 
 #[test]
-fn parse_timestamp_agreed() {
-    assert_eq!(parse_secs("1970-01-01T00:00:00Z").unwrap(), 0.0);
-    assert_eq!(parse_secs("2020-01-01T00:00:00Z").unwrap(), 1577836800.0);
-    assert_eq!(parse_secs("2020-01-01T00:00:00.5Z").unwrap(), 1577836800.5);
+fn parse_timestamp_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    assert_eq!(parse_secs("1970-01-01T00:00:00Z")?, 0.0);
+    assert_eq!(parse_secs("2020-01-01T00:00:00Z")?, 1577836800.0);
+    assert_eq!(parse_secs("2020-01-01T00:00:00.5Z")?, 1577836800.5);
     assert_eq!(
-        parse_secs("2020-01-01T00:00:00+08:00").unwrap(),
+        parse_secs("2020-01-01T00:00:00+08:00")?,
         1577808000.0
     );
     assert_eq!(
-        parse_secs("2020-01-01T00:00:00-05:00").unwrap(),
+        parse_secs("2020-01-01T00:00:00-05:00")?,
         1577854800.0
     );
     assert_eq!(
-        parse_secs("2020-01-01T00:00:00-00:00").unwrap(),
+        parse_secs("2020-01-01T00:00:00-00:00")?,
         1577836800.0
     );
     // Pre-epoch parses to a negative count, not a panic (pinned regression).
-    assert_eq!(parse_secs("1969-07-20T20:17:00Z").unwrap(), -14182980.0);
-    assert_eq!(parse_secs("1969-12-31T23:59:59.5Z").unwrap(), -0.5);
-    assert_eq!(parse_secs("1900-01-01T00:00:00Z").unwrap(), -2208988800.0);
-    assert_eq!(parse_secs("0000-01-01T00:00:00Z").unwrap(), -62167219200.0);
+    assert_eq!(parse_secs("1969-07-20T20:17:00Z")?, -14182980.0);
+    assert_eq!(parse_secs("1969-12-31T23:59:59.5Z")?, -0.5);
+    assert_eq!(parse_secs("1900-01-01T00:00:00Z")?, -2208988800.0);
+    assert_eq!(parse_secs("0000-01-01T00:00:00Z")?, -62167219200.0);
     // RFC3339 leniencies both libraries share: space separator, lowercase t/z.
-    assert_eq!(parse_secs("2020-01-01 00:00:00Z").unwrap(), 1577836800.0);
-    assert_eq!(parse_secs("2020-01-01t00:00:00z").unwrap(), 1577836800.0);
+    assert_eq!(parse_secs("2020-01-01 00:00:00Z")?, 1577836800.0);
+    assert_eq!(parse_secs("2020-01-01t00:00:00z")?, 1577836800.0);
     // Rejections shared with chrono.
     for bad in [
         "garbage",
@@ -546,6 +543,7 @@ fn parse_timestamp_agreed() {
     ] {
         assert!(parse_secs(bad).is_err(), "expected {bad:?} to be rejected");
     }
+    Ok(())
 }
 
 /// `op_parse_timestamp` returns lossy f64 seconds. For sub-microsecond pre-epoch
@@ -553,59 +551,61 @@ fn parse_timestamp_agreed() {
 /// chrono's exact bit pattern because both floor the whole second and add a
 /// non-negative subsecond fraction. Pins that bit-identity.
 #[test]
-fn parse_timestamp_sub_microsecond_matches_chrono() {
+fn parse_timestamp_sub_microsecond_matches_chrono() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(
-        parse_secs("1969-12-31T23:59:59.123456789Z").unwrap(),
+        parse_secs("1969-12-31T23:59:59.123456789Z")?,
         -0.876543211
     );
     assert_eq!(
-        parse_secs("1970-01-01T00:00:00.123456789Z").unwrap(),
+        parse_secs("1970-01-01T00:00:00.123456789Z")?,
         0.123456789
     );
     assert_eq!(
-        parse_secs("1970-01-01T00:00:00.0000005Z").unwrap(),
+        parse_secs("1970-01-01T00:00:00.0000005Z")?,
         0.0000005
     );
     // The ULP-noisy pair chrono produced (floored second -1 + 0.9999995):
     assert_eq!(
-        parse_secs("1969-12-31T23:59:59.9999995Z").unwrap(),
+        parse_secs("1969-12-31T23:59:59.9999995Z")?,
         -0.0000004999999999588667
     );
     assert_eq!(
-        parse_secs("1969-12-31T23:59:59.999999Z").unwrap(),
+        parse_secs("1969-12-31T23:59:59.999999Z")?,
         -0.0000010000000000287557
     );
+    Ok(())
 }
 
 #[test]
-fn str2vld_agreed() {
-    assert_eq!(vld_micros("1970-01-01T00:00:00Z").unwrap(), 0);
+fn str2vld_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    assert_eq!(vld_micros("1970-01-01T00:00:00Z")?, 0);
     assert_eq!(
-        vld_micros("2020-01-01T00:00:00Z").unwrap(),
+        vld_micros("2020-01-01T00:00:00Z")?,
         1577836800000000
     );
     assert_eq!(
-        vld_micros("2020-01-01T00:00:00.123456Z").unwrap(),
+        vld_micros("2020-01-01T00:00:00.123456Z")?,
         1577836800123456
     );
     assert_eq!(
-        vld_micros("2020-01-01T00:00:00+08:00").unwrap(),
+        vld_micros("2020-01-01T00:00:00+08:00")?,
         1577808000000000
     );
     // Pre-epoch validity is a negative microsecond count.
-    assert_eq!(vld_micros("1969-07-20T20:17:00Z").unwrap(), -14182980000000);
-    assert_eq!(vld_micros("1969-12-31T23:59:59.5Z").unwrap(), -500000);
+    assert_eq!(vld_micros("1969-07-20T20:17:00Z")?, -14182980000000);
+    assert_eq!(vld_micros("1969-12-31T23:59:59.5Z")?, -500000);
     assert_eq!(
-        vld_micros("1900-01-01T00:00:00Z").unwrap(),
+        vld_micros("1900-01-01T00:00:00Z")?,
         -2208988800000000
     );
     assert_eq!(
-        vld_micros("0000-01-01T00:00:00Z").unwrap(),
+        vld_micros("0000-01-01T00:00:00Z")?,
         -62167219200000000
     );
     for bad in ["garbage", "", "2020-01-01", "2020-13-01T00:00:00Z"] {
         assert!(vld_micros(bad).is_err(), "expected {bad:?} to be rejected");
     }
+    Ok(())
 }
 
 /// Microsecond timestamps floor toward negative infinity (the microsecond that
@@ -614,7 +614,7 @@ fn str2vld_agreed() {
 /// truncates toward zero, so this pins the shared `timestamp_to_micros` helper
 /// that restores the floor. Sub-microsecond finer than a µs is dropped downward.
 #[test]
-fn validity_micros_floor_agreed_pre_and_post_epoch() {
+fn validity_micros_floor_agreed_pre_and_post_epoch() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // (input, floored micros) — chrono baseline; jiff matches after the fix.
     let cases: &[(&str, i64)] = &[
         // Post-epoch: floor == truncate, unaffected by the fix.
@@ -628,43 +628,45 @@ fn validity_micros_floor_agreed_pre_and_post_epoch() {
         ("1969-12-31T23:59:59.000001Z", -999999),
     ];
     for &(s, micros) in cases {
-        assert_eq!(vld_micros(s).unwrap(), micros, "str2vld({s:?})");
-        assert_eq!(coerce_vld(s).unwrap(), (micros, true), "coerce({s:?})");
+        assert_eq!(vld_micros(s)?, micros, "str2vld({s:?})");
+        assert_eq!(coerce_vld(s)?, (micros, true), "coerce({s:?})");
     }
+    Ok(())
 }
 
 #[test]
-fn validity_coerce_agreed() {
-    assert_eq!(coerce_vld("ASSERT").unwrap(), (999, true));
-    assert_eq!(coerce_vld("RETRACT").unwrap(), (999, false));
+fn validity_coerce_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    assert_eq!(coerce_vld("ASSERT")?, (999, true));
+    assert_eq!(coerce_vld("RETRACT")?, (999, false));
     assert_eq!(
-        coerce_vld("2020-01-01T00:00:00Z").unwrap(),
+        coerce_vld("2020-01-01T00:00:00Z")?,
         (1577836800000000, true)
     );
     assert_eq!(
-        coerce_vld("~2020-01-01T00:00:00Z").unwrap(),
+        coerce_vld("~2020-01-01T00:00:00Z")?,
         (1577836800000000, false)
     );
     assert_eq!(
-        coerce_vld("2020-01-01T00:00:00.123456Z").unwrap(),
+        coerce_vld("2020-01-01T00:00:00.123456Z")?,
         (1577836800123456, true)
     );
     assert_eq!(
-        coerce_vld("2020-01-01T00:00:00+08:00").unwrap(),
+        coerce_vld("2020-01-01T00:00:00+08:00")?,
         (1577808000000000, true)
     );
     // Pre-epoch, asserted and retracted.
     assert_eq!(
-        coerce_vld("1969-07-20T20:17:00Z").unwrap(),
+        coerce_vld("1969-07-20T20:17:00Z")?,
         (-14182980000000, true)
     );
     assert_eq!(
-        coerce_vld("~1969-07-20T20:17:00Z").unwrap(),
+        coerce_vld("~1969-07-20T20:17:00Z")?,
         (-14182980000000, false)
     );
     for bad in ["garbage", "~garbage", ""] {
         assert!(coerce_vld(bad).is_err(), "expected {bad:?} to be rejected");
     }
+    Ok(())
 }
 
 /// Pins every input where jiff diverges from the chrono baseline. Each assert
@@ -672,13 +674,13 @@ fn validity_coerce_agreed() {
 /// If a future jiff upgrade shifts any of these, this test fails loudly rather
 /// than letting a semantics change land silently.
 #[test]
-fn datetime_deltas_vs_chrono() {
+fn datetime_deltas_vs_chrono() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // -- Delta 1: leap-second ":60". chrono folds :60 UP to the next second;
     //    jiff clamps it DOWN to :59. A ":60" timestamp parses 1 second earlier.
-    assert_eq!(parse_secs("2016-12-31T23:59:60Z").unwrap(), 1483228799.0); // chrono: 1483228800.0
-    assert_eq!(parse_secs("2020-01-01T00:00:60Z").unwrap(), 1577836859.0); // chrono: 1577836860.0
+    assert_eq!(parse_secs("2016-12-31T23:59:60Z")?, 1483228799.0); // chrono: 1483228800.0
+    assert_eq!(parse_secs("2020-01-01T00:00:60Z")?, 1577836859.0); // chrono: 1577836860.0
     assert_eq!(
-        vld_micros("2016-12-31T23:59:60Z").unwrap(),
+        vld_micros("2016-12-31T23:59:60Z")?,
         1483228799000000
     ); // chrono: 1483228800000000
 
@@ -696,38 +698,38 @@ fn datetime_deltas_vs_chrono() {
     //    signed 6-digit year; chrono emitted a signed minimal-width year. Only
     //    affects years < 0 (positive years 0000..=9999 are byte-identical).
     assert_eq!(
-        fmt_n(-250000000000.0).unwrap(),
+        fmt_n(-250000000000.0)?,
         "-005953-10-25T11:33:20+00:00"
     ); // chrono: "-5953-10-25T11:33:20+00:00"
 
     // -- Delta 4: jiff ACCEPTS parse forms chrono rejected (Temporal/RFC9557).
     //    Each was `bad datetime` under chrono; jiff yields the instant below.
-    assert_eq!(parse_secs("+002020-01-01T00:00:00Z").unwrap(), 1577836800.0); // expanded-year sign
+    assert_eq!(parse_secs("+002020-01-01T00:00:00Z")?, 1577836800.0); // expanded-year sign
     assert_eq!(
-        parse_secs("2020-01-01T00:00:00+0000").unwrap(),
+        parse_secs("2020-01-01T00:00:00+0000")?,
         1577836800.0
     ); // offset without colon
     assert_eq!(
-        parse_secs("2020-01-01T00:00:00Z[UTC]").unwrap(),
+        parse_secs("2020-01-01T00:00:00Z[UTC]")?,
         1577836800.0
     ); // RFC9557 zone annotation
-    assert_eq!(parse_secs("2020-01-01T00:00:00,5Z").unwrap(), 1577836800.5); // comma decimal separator
+    assert_eq!(parse_secs("2020-01-01T00:00:00,5Z")?, 1577836800.5); // comma decimal separator
     assert_eq!(
-        parse_secs("2020-01-01T00:00:00+05:30:30").unwrap(),
+        parse_secs("2020-01-01T00:00:00+05:30:30")?,
         1577816970.0
     ); // offset with seconds
-    assert_eq!(parse_secs("2020-01-01T00:00Z").unwrap(), 1577836800.0); // seconds field omitted
+    assert_eq!(parse_secs("2020-01-01T00:00Z")?, 1577836800.0); // seconds field omitted
     assert_eq!(
-        parse_secs("2020-01-01T00:00:00+24:00").unwrap(),
+        parse_secs("2020-01-01T00:00:00+24:00")?,
         1577750400.0
     ); // out-of-range (>23:59) offset
     // The widening reaches the validity paths too.
     assert_eq!(
-        vld_micros("2020-01-01T00:00:00,5Z").unwrap(),
+        vld_micros("2020-01-01T00:00:00,5Z")?,
         1577836800500000
     ); // chrono: ERR
     assert_eq!(
-        coerce_vld("2020-01-01T00:00:00+05:30:30").unwrap(),
+        coerce_vld("2020-01-01T00:00:00+05:30:30")?,
         (1577816970000000, true)
     ); // chrono: ERR
 
@@ -738,4 +740,5 @@ fn datetime_deltas_vs_chrono() {
     // `as_microsecond` truncates) is NOT listed here: it is fixed in
     // `timestamp_to_micros` and pinned as agreed behavior in
     // `validity_micros_floor_agreed_pre_and_post_epoch`.
+    Ok(())
 }

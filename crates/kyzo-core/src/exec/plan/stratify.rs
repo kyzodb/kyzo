@@ -67,7 +67,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
-use miette::{Diagnostic, Result, bail, ensure};
+use miette::{Diagnostic, Result, bail, ensure, miette};
 use thiserror::Error;
 
 use crate::exec::plan::graph::{
@@ -512,6 +512,7 @@ impl NormalFormProgram {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
 
     use super::*;
     use crate::exec::plan::program::{
@@ -716,7 +717,7 @@ mod tests {
     ///     z[count] := y ; z[count] := y
     ///     ? := z ; ? := w
     #[test]
-    fn dependencies_stratify_in_execution_order() {
+    fn dependencies_stratify_in_execution_order() -> Result<()>  {
         let (program, lifetimes) = Prog::default()
             .fixed("x", &[])
             .rule("w", &[None], vec![])
@@ -728,13 +729,13 @@ mod tests {
             .rule("?", &[None], vec![dep("z")])
             .rule("?", &[None], vec![dep("w")])
             .stratify()
-            .expect("the program is stratifiable");
+            .map_err(|e| miette!("the program is stratifiable: {e}"))?;
 
-        let w = stratum_of(&program, "w").expect("w is reachable");
-        let x = stratum_of(&program, "x").expect("x is reachable");
-        let y = stratum_of(&program, "y").expect("y is reachable");
-        let z = stratum_of(&program, "z").expect("z is reachable");
-        let entry = stratum_of(&program, "?").expect("the entry is always placed");
+        let w = stratum_of(&program, "w").ok_or_else(|| miette!("w is reachable"))?;
+        let x = stratum_of(&program, "x").ok_or_else(|| miette!("x is reachable"))?;
+        let y = stratum_of(&program, "y").ok_or_else(|| miette!("y is reachable"))?;
+        let z = stratum_of(&program, "z").ok_or_else(|| miette!("z is reachable"))?;
+        let entry = stratum_of(&program, "?").ok_or_else(|| miette!("the entry is always placed"))?;
 
         // Aggregations force strict boundaries below their dependencies…
         assert!(x < y, "y counts over the fixed rule x");
@@ -760,6 +761,7 @@ mod tests {
             !lifetimes.is_live_at(&muggle("?"), 0),
             "nothing reads the entry"
         );
+        Ok(())
     }
 
     /// Law 2 refusal shapes, run through the *real* stratifier. The sealed
@@ -767,7 +769,7 @@ mod tests {
     /// re-checked from `kyzo-trials`; this in-crate pin keeps a few named
     /// shapes local so the stratifier cannot drift without a core-local meter.
     #[test]
-    fn the_oracle_refusal_corpus_is_refused() {
+    fn the_oracle_refusal_corpus_is_refused() -> Result<()>  {
         let cases: [(&str, fn() -> Prog); 3] = [
             ("direct negation cycle", || {
                 Prog::default().rule("p", &[None], vec![neg_dep("p")]).rule(
@@ -795,6 +797,7 @@ mod tests {
                 .expect_err(&format!("must refuse: {name}"));
             assert_unstratifiable(&err, name);
         }
+        Ok(())
     }
 
     /// Recursion through a *normal* aggregation is refused: the fold is
@@ -802,7 +805,7 @@ mod tests {
     /// inside its own recursion. (Accepting this answers wrongly, it does
     /// not crash — the refusal is the feature.)
     #[test]
-    fn recursive_normal_aggregation_is_refused() {
+    fn recursive_normal_aggregation_is_refused() -> Result<()>  {
         let err = Prog::default()
             .rule("p", &[Some("count")], vec![dep("d")])
             .rule("p", &[Some("count")], vec![dep("p")])
@@ -811,39 +814,42 @@ mod tests {
             .stratify()
             .expect_err("count through recursion must be refused");
         assert_unstratifiable(&err, "recursive count");
+        Ok(())
     }
 
     /// The one legal aggregation inside recursion: every rule of the head
     /// aggregates with meet forms, and the recursion reads the head itself,
     /// positively.
     #[test]
-    fn all_meet_self_recursion_is_accepted() {
+    fn all_meet_self_recursion_is_accepted() -> Result<()>  {
         let (program, _) = Prog::default()
             .rule("m", &[None, Some("min")], vec![dep("seed")])
             .rule("m", &[None, Some("min")], vec![dep("m")])
             .rule("seed", &[None], vec![])
             .rule("?", &[None], vec![dep("m")])
             .stratify()
-            .expect("all-meet self-recursion is stratifiable");
+            .map_err(|e| miette!("all-meet self-recursion is stratifiable: {e}"))?;
         assert!(stratum_of(&program, "m").is_some());
+        Ok(())
     }
 
     /// Mixing a meet with a normal aggregation on a recursive head is
     /// refused: one non-meet position poisons the whole head's recursion.
     #[test]
-    fn mixed_meet_and_normal_recursion_is_refused() {
+    fn mixed_meet_and_normal_recursion_is_refused() -> Result<()>  {
         let err = Prog::default()
             .rule("q", &[None, Some("min"), Some("count")], vec![dep("q")])
             .rule("?", &[None], vec![dep("q")])
             .stratify()
             .expect_err("min+count through recursion must be refused");
         assert_unstratifiable(&err, "mixed meet+normal");
+        Ok(())
     }
 
     /// A meet head negating itself is refused: the exemption is for
     /// positive self-reads only.
     #[test]
-    fn meet_negating_itself_is_refused() {
+    fn meet_negating_itself_is_refused() -> Result<()>  {
         let err = Prog::default()
             .rule("m", &[Some("min")], vec![dep("d"), neg_dep("m")])
             .rule("d", &[None], vec![])
@@ -851,13 +857,14 @@ mod tests {
             .stratify()
             .expect_err("meet self-negation must be refused");
         assert_unstratifiable(&err, "meet self-negation");
+        Ok(())
     }
 
     /// The meet exemption is for a head reading *itself*: meet recursion
     /// routed through an intermediary rule is refused, exactly as the
     /// original decided it. (Deliberately preserved upstream behavior.)
     #[test]
-    fn meet_recursion_through_an_intermediary_is_refused() {
+    fn meet_recursion_through_an_intermediary_is_refused() -> Result<()>  {
         let err = Prog::default()
             .rule("p", &[Some("min")], vec![dep("q")])
             .rule("q", &[None], vec![dep("p")])
@@ -865,23 +872,24 @@ mod tests {
             .stratify()
             .expect_err("indirect meet recursion must be refused");
         assert_unstratifiable(&err, "meet through intermediary");
+        Ok(())
     }
 
     /// Fixed rules are always stratum-bounded: inputs complete strictly
     /// before, readers start strictly after — but out of recursion they
     /// stratify fine.
     #[test]
-    fn fixed_rules_are_stratum_bounded() {
+    fn fixed_rules_are_stratum_bounded() -> Result<()>  {
         let (program, _) = Prog::default()
             .rule("base", &[None], vec![])
             .fixed("f", &["base"])
             .rule("p", &[None], vec![dep("f")])
             .rule("?", &[None], vec![dep("p")])
             .stratify()
-            .expect("a fixed rule outside recursion stratifies");
-        let base = stratum_of(&program, "base").expect("base placed");
-        let f = stratum_of(&program, "f").expect("f placed");
-        let p = stratum_of(&program, "p").expect("p placed");
+            .map_err(|e| miette!("a fixed rule outside recursion stratifies: {e}"))?;
+        let base = stratum_of(&program, "base").ok_or_else(|| miette!("base placed"))?;
+        let f = stratum_of(&program, "f").ok_or_else(|| miette!("f placed"))?;
+        let p = stratum_of(&program, "p").ok_or_else(|| miette!("p placed"))?;
         assert!(base < f, "inputs complete strictly before the fixed rule");
         assert!(f < p, "readers start strictly after the fixed rule");
 
@@ -892,12 +900,13 @@ mod tests {
             .stratify()
             .expect_err("a fixed rule inside recursion must be refused");
         assert_unstratifiable(&err, "fixed rule in recursion");
+        Ok(())
     }
 
     /// Plain negation of a completed dependency is stratified negation —
     /// accepted, with the dependency strictly below.
     #[test]
-    fn stratified_negation_is_accepted_with_a_boundary() {
+    fn stratified_negation_is_accepted_with_a_boundary() -> Result<()>  {
         let (program, _) = Prog::default()
             .rule("r", &[None], vec![dep("s")])
             .rule("s", &[None], vec![])
@@ -905,31 +914,33 @@ mod tests {
             .rule("q", &[None], vec![])
             .rule("?", &[None], vec![dep("p")])
             .stratify()
-            .expect("negation of a non-recursive dependency is fine");
-        let r = stratum_of(&program, "r").expect("r placed");
-        let p = stratum_of(&program, "p").expect("p placed");
+            .map_err(|e| miette!("negation of a non-recursive dependency is fine: {e}"))?;
+        let r = stratum_of(&program, "r").ok_or_else(|| miette!("r placed"))?;
+        let p = stratum_of(&program, "p").ok_or_else(|| miette!("p placed"))?;
         assert!(r < p, "the negated relation completes strictly below");
+        Ok(())
     }
 
     /// Rules unreachable from the entry are pruned before the check — even
     /// unstratifiable ones. Deliberately preserved upstream behavior: the
     /// soundness proof is about what will be *evaluated*.
     #[test]
-    fn unreachable_rules_are_pruned_not_checked() {
+    fn unreachable_rules_are_pruned_not_checked() -> Result<()>  {
         let (program, _) = Prog::default()
             .rule("a", &[None], vec![])
             .rule("orphan", &[None], vec![neg_dep("orphan")])
             .rule("?", &[None], vec![dep("a")])
             .stratify()
-            .expect("the unreachable orphan is pruned, not refused");
+            .map_err(|e| miette!("the unreachable orphan is pruned, not refused: {e}"))?;
         assert_eq!(stratum_of(&program, "orphan"), None, "orphan is pruned");
         assert!(stratum_of(&program, "a").is_some());
+        Ok(())
     }
 
     /// The refusal carries the source span of the body atom that closes
     /// the forbidden cycle, so the diagnostic can point at it.
     #[test]
-    fn the_refusal_points_at_the_offending_dependency() {
+    fn the_refusal_points_at_the_offending_dependency() -> Result<()>  {
         let offending = SourceSpan(42, 7);
         let err = Prog::default()
             .rule(
@@ -954,9 +965,9 @@ mod tests {
             .stratify()
             .expect_err("self-negation must be refused");
         let refusal = err
-            .downcast_ref::<UnStratifiableProgram>()
-            .expect("the unstratifiable refusal");
+            .downcast_ref::<UnStratifiableProgram>().ok_or_else(|| miette!("the unstratifiable refusal"))?;
         assert_eq!(refusal.span, offending);
+        Ok(())
     }
 
     /// The refusal labels the atom that ESTABLISHES the poison, not the
@@ -973,7 +984,7 @@ mod tests {
     /// read that actually forbids stratification), not at the innocent
     /// positive read whose symbol happens to hold the map key.
     #[test]
-    fn the_refusal_points_at_the_poisoning_atom_not_the_first_read() {
+    fn the_refusal_points_at_the_poisoning_atom_not_the_first_read() -> Result<()>  {
         let positive = SourceSpan(10, 1);
         let poisoning = SourceSpan(42, 7);
         let dep_at = |name: &str, span: SourceSpan| InputAtom::Rule {
@@ -1001,45 +1012,47 @@ mod tests {
             .stratify()
             .expect_err("negated self-read must be refused");
         let refusal = err
-            .downcast_ref::<UnStratifiableProgram>()
-            .expect("the unstratifiable refusal");
+            .downcast_ref::<UnStratifiableProgram>().ok_or_else(|| miette!("the unstratifiable refusal"))?;
         assert_eq!(
             refusal.span, poisoning,
             "the label must land on `not p`, not the positive self-read"
         );
+        Ok(())
     }
 
     /// Law 5 at the stratifier: a ten-thousand-rule dependency chain
     /// stratifies on a deliberately small thread stack. The original's
     /// recursive Tarjan/reachability overflowed here.
     #[test]
-    fn a_deep_rule_chain_stratifies_without_stack_overflow() {
+    fn a_deep_rule_chain_stratifies_without_stack_overflow() -> Result<()>  {
         let handle = std::thread::Builder::new()
             .stack_size(256 * 1024)
-            .spawn(|| {
+            .spawn(|| -> Result<()> {
                 const N: usize = 10_000;
                 let mut prog = Prog::default().rule("?", &[None], vec![dep("r0")]);
                 for i in 0..N - 1 {
                     prog = prog.rule(&format!("r{i}"), &[None], vec![dep(&format!("r{}", i + 1))]);
                 }
                 prog = prog.rule(&format!("r{}", N - 1), &[None], vec![]);
-                let (program, _) = prog.stratify().expect("a plain chain stratifies");
+                let (program, _) = prog.stratify()?;
                 // No poisoned edges anywhere: one stratum holds the chain.
                 assert_eq!(program.strata().len(), 1);
                 assert_eq!(program.strata()[0].rules.len(), N + 1);
+                Ok(())
             })
-            .expect("spawn test thread");
-        handle.join().expect("no stack overflow");
+            .map_err(|e| miette!("spawn test thread: {e}"))?;
+        handle.join().map_err(|_| miette!("no stack overflow"))??;
+        Ok(())
     }
 
     /// The entry field carries its real span into the pipeline (the
     /// original rebuilt `?` with a dummy span to look it up).
     #[test]
-    fn a_minimal_program_stratifies_to_one_stratum() {
+    fn a_minimal_program_stratifies_to_one_stratum() -> Result<()>  {
         let (program, lifetimes) = Prog::default()
             .rule("?", &[None], vec![])
             .stratify()
-            .expect("the minimal program stratifies");
+            .map_err(|e| miette!("the minimal program stratifies: {e}"))?;
         assert_eq!(program.strata().len(), 1);
         assert!(
             program.strata()[0]
@@ -1048,5 +1061,6 @@ mod tests {
                 .any(|k| k.kind() == SymbolKind::Entry)
         );
         assert!(!lifetimes.is_live_at(&MagicSymbol::Muggle { inner: sym("?") }, 0));
+        Ok(())
     }
 }

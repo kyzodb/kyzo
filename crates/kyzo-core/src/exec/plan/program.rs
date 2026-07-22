@@ -24,7 +24,7 @@ use std::collections::btree_map::Entry;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
-use miette::{Diagnostic, Result, bail};
+use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
 use kyzo_model::program::expr::{BindingPos, Expr};
@@ -807,6 +807,7 @@ impl StratifiedMagicProgram {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use kyzo_model::program::rule::{HeadAggrSlot, InputInlineRule, InputInlineRulesOrFixed};
 
@@ -848,16 +849,16 @@ mod tests {
     /// becomes a generated `***n` binding plus a unification atom in the
     /// body, and the generated name classifies as Generated.
     #[test]
-    fn normalization_deduplicates_head_variables() {
+    fn normalization_deduplicates_head_variables() -> Result<()>  {
         let mut prog = BTreeMap::new();
         prog.insert(
             Symbol::prog_entry(SourceSpan(0, 1)),
             rules_def(vec![rule(&["a", "a"])]),
         );
-        let p = InputProgram::new(prog, QueryOutOptions::default(), false).expect("valid program");
+        let p = InputProgram::new(prog, QueryOutOptions::default(), false).map_err(|e| miette!("valid program: {e}"))?;
         let (normalized, _opts) =
-            into_normalized_program(p, &mut TrivialNormalizer).expect("normalizes");
-        let rules = normalized.entry().rules().expect("entry is rules");
+            into_normalized_program(p, &mut TrivialNormalizer).map_err(|e| miette!("normalizes: {e}"))?;
+        let rules = normalized.entry().rules().ok_or_else(|| miette!("entry is rules"))?;
         assert_eq!(rules.len(), 1);
         let entry_rule = &rules[0];
         assert_eq!(entry_rule.head[0].name.as_str(), "a");
@@ -887,25 +888,27 @@ mod tests {
             | other @ NormalFormAtom::Predicate(_)
             | other @ NormalFormAtom::Search(_) => panic!("expected a unification, got {other:?}"),
         }
+        Ok(())
     }
 
     /// The normal-form tier keeps the entry as a field: normalization is
     /// the only mint, and the proof carries over.
     #[test]
-    fn normalization_carries_the_entry_field() {
+    fn normalization_carries_the_entry_field() -> Result<()>  {
         let mut prog = BTreeMap::new();
         prog.insert(
             Symbol::prog_entry(SourceSpan(3, 1)),
             rules_def(vec![rule(&["x"])]),
         );
         prog.insert(sym("r"), rules_def(vec![rule(&["y"])]));
-        let p = InputProgram::new(prog, QueryOutOptions::default(), true).expect("valid program");
+        let p = InputProgram::new(prog, QueryOutOptions::default(), true).map_err(|e| miette!("valid program: {e}"))?;
         let (normalized, _) =
-            into_normalized_program(p, &mut TrivialNormalizer).expect("normalizes");
+            into_normalized_program(p, &mut TrivialNormalizer).map_err(|e| miette!("normalizes: {e}"))?;
         assert_eq!(normalized.entry_name().span, SourceSpan(3, 1));
         assert!(normalized.disable_magic_rewrite());
         assert_eq!(normalized.rules().len(), 1);
         assert_eq!(normalized.iter_all().count(), 2);
+        Ok(())
     }
 
     fn nf_stratum(names: &[&str]) -> NormalFormStratum {
@@ -934,10 +937,10 @@ mod tests {
     /// stratifier's reversed output and reverses it exactly once, and the
     /// entry ends up in the final stratum.
     #[test]
-    fn stratified_tier_stores_execution_order() {
+    fn stratified_tier_stores_execution_order() -> Result<()>  {
         let reversed = vec![nf_stratum(&["?"]), nf_stratum(&["r"])];
         let stratified = StratifiedNormalFormProgram::from_reverse_execution_order(reversed, false)
-            .expect("stratifies");
+            .map_err(|e| miette!("stratifies: {e}"))?;
         let strata = stratified.strata();
         assert_eq!(strata.len(), 2);
         assert!(
@@ -952,12 +955,13 @@ mod tests {
                 .keys()
                 .any(|k| k.kind() == SymbolKind::Entry)
         );
+        Ok(())
     }
 
     /// Losing the entry across stratification is a construction error, not
     /// a later panic or a silent wrong answer.
     #[test]
-    fn stratified_tier_requires_the_entry() {
+    fn stratified_tier_requires_the_entry() -> Result<()>  {
         let err = StratifiedNormalFormProgram::from_reverse_execution_order(
             vec![nf_stratum(&["r"])],
             false,
@@ -968,23 +972,25 @@ mod tests {
         let err = StratifiedNormalFormProgram::from_reverse_execution_order(vec![], false)
             .expect_err("no strata means no entry");
         assert!(err.to_string().contains("no entry"), "got: {err}");
+        Ok(())
     }
 
     /// An entry in a non-final stratum is a stratifier bug, reported as the
     /// tier-invariant error rather than accepted or panicked on.
     #[test]
-    fn entry_must_sit_in_the_final_stratum() {
+    fn entry_must_sit_in_the_final_stratum() -> Result<()>  {
         let reversed = vec![nf_stratum(&["r"]), nf_stratum(&["?"])];
         let err = StratifiedNormalFormProgram::from_reverse_execution_order(reversed, false)
             .expect_err("misplaced entry must be refused");
         assert!(err.to_string().contains("invariant"), "got: {err}");
+        Ok(())
     }
 
     /// Store lifetimes: `note_use` keeps the maximum, `is_live_at` encodes
     /// evaluation's drop rule (`last_use >= stratum`), and unknown stores
     /// are never live across strata.
     #[test]
-    fn store_lifetimes_semantics() {
+    fn store_lifetimes_semantics() -> Result<()>  {
         let name = MagicSymbol::Muggle { inner: sym("r") };
         let mut lifetimes = StoreLifetimes::default();
         lifetimes.note_use(name.clone(), 1);
@@ -994,12 +1000,13 @@ mod tests {
         assert!(!lifetimes.is_live_at(&name, 4));
         let unknown = MagicSymbol::Muggle { inner: sym("s") };
         assert!(!lifetimes.is_live_at(&unknown, 0));
+        Ok(())
     }
 
     /// The magic tier's entry proof: execution-ordered strata whose final
     /// stratum holds the unadorned (Muggle) entry.
     #[test]
-    fn magic_tier_requires_the_entry_in_the_final_stratum() {
+    fn magic_tier_requires_the_entry_in_the_final_stratum() -> Result<()>  {
         let mut entry_stratum = MagicProgram::default();
         entry_stratum.prog.insert(
             MagicSymbol::Muggle {
@@ -1023,7 +1030,7 @@ mod tests {
         );
 
         let ok = StratifiedMagicProgram::from_execution_order(vec![other, entry_stratum])
-            .expect("entry in final stratum is accepted");
+            .map_err(|e| miette!("entry in final stratum is accepted: {e}"))?;
         assert_eq!(ok.strata().len(), 2);
         assert!(ok.strata()[1].holds_entry());
 
@@ -1038,12 +1045,13 @@ mod tests {
         let err = StratifiedMagicProgram::from_execution_order(vec![lone])
             .expect_err("entry-less magic strata must be refused");
         assert!(err.to_string().contains("no entry"), "got: {err}");
+        Ok(())
     }
 
     /// An adorned name is never the entry, even over the `?` symbol; only
     /// the unadorned Muggle form is.
     #[test]
-    fn adorned_entry_is_not_the_entry() {
+    fn adorned_entry_is_not_the_entry() -> Result<()>  {
         let muggle = MagicSymbol::Muggle {
             inner: Symbol::prog_entry(SourceSpan(0, 1)),
         };
@@ -1055,12 +1063,13 @@ mod tests {
         assert!(!magic.is_prog_entry());
         assert!(magic.has_bound_adornment());
         assert_eq!(muggle.magic_adornment(), &[] as &[AdornmentMark]);
+        Ok(())
     }
 
     /// The magic-symbol debug rendering is load-bearing for logs and error
     /// messages: adornments render as `b`/`f` after the role marker.
     #[test]
-    fn magic_symbol_debug_rendering() {
+    fn magic_symbol_debug_rendering() -> Result<()>  {
         let s = MagicSymbol::Sup {
             inner: sym("r"),
             adornment: vec![AdornmentMark::Bound, AdornmentMark::Free],
@@ -1080,20 +1089,22 @@ mod tests {
         assert_eq!(format!("{i:?}"), "r|Ib");
         let mu = MagicSymbol::Muggle { inner: sym("r") };
         assert_eq!(format!("{mu:?}"), "r");
+        Ok(())
     }
 
     /// The transient empty rule set (`MagicRulesOrFixed::default`) reports
     /// an error when asked for its arity — the original panicked.
     #[test]
-    fn empty_magic_rule_set_arity_is_an_error() {
+    fn empty_magic_rule_set_arity_is_an_error() -> Result<()>  {
         let empty = MagicRulesOrFixed::default();
         assert!(empty.arity().is_err());
+        Ok(())
     }
 
     /// A missing positional fixed-rule argument is a diagnostic, not a
     /// panic, and the count accessor agrees.
     #[test]
-    fn magic_fixed_rule_relation_lookup() {
+    fn magic_fixed_rule_relation_lookup() -> Result<()>  {
         struct NoRule;
         impl FixedRule for NoRule {
             fn arity(
@@ -1135,8 +1146,9 @@ mod tests {
             err.to_string().contains("positional argument"),
             "got: {err}"
         );
-        let map = apply.relation(0).expect("in range").get_binding_map(3);
+        let map = apply.relation(0).map_err(|e| miette!("in range: {e}"))?.get_binding_map(3);
         assert_eq!(map.get(&sym("a")), Some(&3));
         assert_eq!(map.get(&sym("b")), Some(&4));
+        Ok(())
     }
 }

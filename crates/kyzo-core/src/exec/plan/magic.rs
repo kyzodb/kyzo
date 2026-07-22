@@ -137,7 +137,7 @@ use std::collections::BTreeSet;
 use std::collections::btree_map::Entry;
 use std::mem;
 
-use miette::{Diagnostic, Result, bail, ensure};
+use miette::{Diagnostic, Result, bail, ensure, miette};
 use thiserror::Error;
 
 use crate::exec::plan::program::{
@@ -1241,11 +1241,10 @@ mod tests {
     fn stratified(
         exec_order: Vec<NormalFormStratum>,
         disable_magic_rewrite: bool,
-    ) -> StratifiedNormalFormProgram {
+    ) -> Result<StratifiedNormalFormProgram> {
         let mut reversed = exec_order;
         reversed.reverse();
         StratifiedNormalFormProgram::from_reverse_execution_order(reversed, disable_magic_rewrite)
-            .expect("test strata are well-formed")
     }
 
     /// No stored relations exist: any schema lookup is a test failure.
@@ -1343,7 +1342,7 @@ mod tests {
     /// end-to-end row assertion re-lands with `DbInstance`, and the
     /// naive-oracle differential covers the answer itself.
     #[test]
-    fn strange_case_with_disabled_rewrite_is_identity() {
+    fn strange_case_with_disabled_rewrite_is_identity() -> Result<()>  {
         // Normal form of the program above (head dedup makes y's first rule
         // `y[A, ***0] := A = 1, ***0 = A`; `_` becomes an ignored binding).
         let make_strata = || {
@@ -1376,9 +1375,9 @@ mod tests {
             ])]
         };
 
-        let rewritten = stratified(make_strata(), true)
+        let rewritten = stratified(make_strata(), true)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         assert_eq!(rewritten.strata().len(), 1);
         let out = &rewritten.strata()[0];
         assert_eq!(
@@ -1395,14 +1394,15 @@ mod tests {
 
         // Contrast, proving the flag is load-bearing: the same program with
         // the rewrite enabled does adorn (`y[C, A]` sees A bound).
-        let rewritten = stratified(make_strata(), false)
+        let rewritten = stratified(make_strata(), false)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         let names = key_names(&rewritten.strata()[0]);
         assert!(
             names.iter().any(|n| n.starts_with("y|M")),
             "enabled rewrite adorns y; got {names:?}"
         );
+        Ok(())
     }
 
     /// The demand rewrite on a bound transitive closure, checkable by hand:
@@ -1425,7 +1425,7 @@ mod tests {
     /// reads only `tc|Mbf[s, …]` with `s` demanded — so `?` derives exactly
     /// the rows the unrewritten program derives, from fewer facts.
     #[test]
-    fn bound_entry_transitive_closure_rewrites_demand_only() {
+    fn bound_entry_transitive_closure_rewrites_demand_only() -> Result<()>  {
         let strata = vec![stratum(vec![
             (
                 "tc",
@@ -1446,9 +1446,9 @@ mod tests {
             ),
         ])];
 
-        let rewritten = stratified(strata, false)
+        let rewritten = stratified(strata, false)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         assert_eq!(rewritten.strata().len(), 1);
         let out = &rewritten.strata()[0];
 
@@ -1514,20 +1514,21 @@ mod tests {
             atom_names(&entry_rules[0]),
             vec!["rule ?|S.0.0", "rule tc|Mbf"]
         );
+        Ok(())
     }
 
     /// Exemption: the entry. Even with an empty exempt set the entry is
     /// never rewritten — structurally, by `SymbolKind::Entry`, not via a
     /// seeded `?` symbol.
     #[test]
-    fn entry_is_always_exempt() {
+    fn entry_is_always_exempt() -> Result<()>  {
         let strata = vec![stratum(vec![
             ("r", vec![nf_rule(&["x"], vec![stored_app("e", &["x"])])]),
             ("?", vec![nf_rule(&["x"], vec![rule_app("r", &["x"])])]),
         ])];
-        let rewritten = stratified(strata, false)
+        let rewritten = stratified(strata, false)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         let out = &rewritten.strata()[0];
         let names = key_names(out);
         assert!(names.contains("?"), "entry must survive as Muggle");
@@ -1539,6 +1540,7 @@ mod tests {
         // the callee — with no bound position, no Input/Sup appears.
         assert!(names.contains("r|Mf"));
         assert!(!names.iter().any(|n| n.starts_with("r|I")));
+        Ok(())
     }
 
     /// Exemption: aggregating rules. A rule with an aggregation anywhere in
@@ -1546,8 +1548,8 @@ mod tests {
     /// an aggregate over a demand-restricted subset would be a different
     /// value, which the law forbids.
     #[test]
-    fn aggregation_rules_are_exempt() {
-        let count = parse_aggr("count").unwrap().expect("count exists");
+    fn aggregation_rules_are_exempt() -> Result<()>  {
+        let count = parse_aggr("count")?.ok_or_else(|| miette!("count exists"))?;
         let mut agg_rule = nf_rule(&["a", "n"], vec![stored_app("e", &["a", "n"])]);
         agg_rule.aggr[1] = HeadAggrSlot::Aggregated {
             aggr: count,
@@ -1564,9 +1566,9 @@ mod tests {
                 )],
             ),
         ])];
-        let rewritten = stratified(strata, false)
+        let rewritten = stratified(strata, false)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         let out = &rewritten.strata()[0];
         let names = key_names(out);
         assert!(names.contains("agg"), "aggregating rule stays Muggle");
@@ -1582,12 +1584,13 @@ mod tests {
         );
         // The aggregation itself is untouched.
         assert!(rules_of(out, "agg")[0].aggr[1].is_aggregated());
+        Ok(())
     }
 
     /// Exemption: `:disable_magic_rewrite`. The flag lives once on the tier
     /// (not per stratum) and must exempt every rule in every stratum.
     #[test]
-    fn disable_magic_rewrite_exempts_every_stratum() {
+    fn disable_magic_rewrite_exempts_every_stratum() -> Result<()>  {
         let strata = vec![
             stratum(vec![(
                 "r",
@@ -1601,9 +1604,9 @@ mod tests {
                 )],
             )]),
         ];
-        let rewritten = stratified(strata, true)
+        let rewritten = stratified(strata, true)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         assert_eq!(rewritten.strata().len(), 2);
         assert_eq!(
             key_names(&rewritten.strata()[0]),
@@ -1613,6 +1616,7 @@ mod tests {
             key_names(&rewritten.strata()[1]),
             BTreeSet::from(["?".to_string()])
         );
+        Ok(())
     }
 
     /// Exemption: cross-stratum producers — and with it, the direction of
@@ -1624,7 +1628,7 @@ mod tests {
     /// evaluation would then read an empty store — silently wrong answers.
     /// This test is the standing regression for an inverted walk.
     #[test]
-    fn cross_stratum_consumers_keep_producers_unrewritten() {
+    fn cross_stratum_consumers_keep_producers_unrewritten() -> Result<()>  {
         let strata = vec![
             stratum(vec![(
                 "r",
@@ -1638,9 +1642,9 @@ mod tests {
                 )],
             )]),
         ];
-        let rewritten = stratified(strata, false)
+        let rewritten = stratified(strata, false)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         assert_eq!(rewritten.strata().len(), 2);
 
         // Producer stratum: r survives, Muggle, body intact.
@@ -1656,13 +1660,14 @@ mod tests {
             atom_names(&rules_of(consumer, "?")[0]),
             vec!["unify v", "rule r"]
         );
+        Ok(())
     }
 
     /// Adornment correctness on a mixed application: `r[v, y, w]` with `v`
     /// and `w` bound by unifications and `y` free must adorn as `bfb`, and
     /// the input relation must carry exactly the bound positions.
     #[test]
-    fn adornment_marks_bound_and_free_positions() {
+    fn adornment_marks_bound_and_free_positions() -> Result<()>  {
         let strata = vec![stratum(vec![
             (
                 "r",
@@ -1683,9 +1688,9 @@ mod tests {
                 )],
             ),
         ])];
-        let rewritten = stratified(strata, false)
+        let rewritten = stratified(strata, false)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         let out = &rewritten.strata()[0];
         let names = key_names(out);
         assert!(names.contains("r|Mbfb"), "got {names:?}");
@@ -1701,6 +1706,7 @@ mod tests {
         let sup0 = rules_of(out, "r|S.0.0bfb");
         assert_eq!(head_names(&sup0[0]), vec!["a", "c"]);
         assert_eq!(atom_names(&sup0[0]), vec!["rule r|Ibfb"]);
+        Ok(())
     }
 
     /// Repeated-variable adornment, pinned exactly — deliberately preserved
@@ -1713,7 +1719,7 @@ mod tests {
     /// newly-introduced binding free) is a demand-shape change to make
     /// deliberately, against the naive oracle — never silently in a port.
     #[test]
-    fn repeated_variable_adorns_later_positions_bound() {
+    fn repeated_variable_adorns_later_positions_bound() -> Result<()>  {
         let strata = vec![stratum(vec![
             (
                 "r",
@@ -1730,9 +1736,9 @@ mod tests {
                 )],
             ),
         ])];
-        let rewritten = stratified(strata, false)
+        let rewritten = stratified(strata, false)?
             .magic_sets_rewrite(&NoSchemas)
-            .expect("rewrite succeeds");
+            .map_err(|e| miette!("rewrite succeeds: {e}"))?;
         let out = &rewritten.strata()[0];
 
         // The exact adornment vector: bound, free, bound.
@@ -1762,13 +1768,14 @@ mod tests {
         // The demand relation carries exactly the bound slots, in order:
         // v and the (repeated) y.
         assert_eq!(head_names(&rules_of(out, "r|Ibfb")[0]), vec!["v", "y"]);
+        Ok(())
     }
 
     /// The seam: named-field bindings on a stored fixed-rule argument
     /// resolve to positional bindings against the declared schema, with
     /// digit-named fillers for unbound columns; unknown fields are refused.
     #[test]
-    fn named_stored_fixed_rule_args_resolve_positionally() {
+    fn named_stored_fixed_rule_args_resolve_positionally() -> Result<()>  {
         let schema = FixedSchema(StoredRelationMetadata {
             keys: vec![column("a", ColType::Int), column("b", ColType::Int)],
             non_keys: vec![column("c", ColType::Int)],
@@ -1791,7 +1798,7 @@ mod tests {
         };
 
         let adorned =
-            adorn_fixed_rule_apply(&apply(&[("b", "x"), ("c", "y")]), &schema).expect("resolves");
+            adorn_fixed_rule_apply(&apply(&[("b", "x"), ("c", "y")]), &schema).map_err(|e| miette!("resolves: {e}"))?;
         match &adorned.rule_args[0] {
             MagicFixedRuleRuleArg::Stored { bindings, .. } => {
                 let names: Vec<_> = bindings.iter().map(|s| s.name.as_str()).collect();
@@ -1806,13 +1813,14 @@ mod tests {
             err.to_string().contains("does not have field"),
             "got: {err}"
         );
+        Ok(())
     }
 
     /// The seam: time travel is refused unless the last key column is
     /// non-nullable `Validity` — including the keyless-relation shape the
     /// original panicked on.
     #[test]
-    fn time_travel_requires_a_validity_keyed_relation() {
+    fn time_travel_requires_a_validity_keyed_relation() -> Result<()>  {
         use kyzo_model::value::ValidityTs;
 
         let apply = FixedRuleApply {
@@ -1838,13 +1846,14 @@ mod tests {
             keys: vec![column("a", ColType::Int)],
             non_keys: vec![],
         });
-        adorn_fixed_rule_apply(&apply, &plain).expect("any facts relation time-travels");
+        adorn_fixed_rule_apply(&apply, &plain).map_err(|e| miette!("any facts relation time-travels: {e}"))?;
 
         let keyless = FixedSchema(StoredRelationMetadata {
             keys: vec![],
             non_keys: vec![column("a", ColType::Int)],
         });
         adorn_fixed_rule_apply(&apply, &keyless)
-            .expect("a keyless relation adorns without panicking");
+            .map_err(|e| miette!("a keyless relation adorns without panicking: {e}"))?;
+            Ok(())
     }
 }

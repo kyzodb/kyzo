@@ -8,6 +8,7 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
+use miette::{Result, miette};
 use crate::exec::stdlib::geo::*;
 use kyzo_model::value::DataValue;
 use std::f64::consts::PI;
@@ -17,16 +18,15 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 #[test]
-fn test_haversine() {
+fn test_haversine() -> Result<()>  {
     let d = op_haversine_deg_input(&[
         DataValue::from(0),
         DataValue::from(0),
         DataValue::from(0),
         DataValue::from(180),
-    ])
-    .unwrap()
+    ])?
     .get_float()
-    .unwrap();
+    ?;
     assert!(close(d, PI));
 
     let d = op_haversine_deg_input(&[
@@ -34,10 +34,9 @@ fn test_haversine() {
         DataValue::from(0),
         DataValue::from(0),
         DataValue::from(123),
-    ])
-    .unwrap()
+    ])?
     .get_float()
-    .unwrap();
+    ?;
     assert!(close(d, PI / 2.));
 
     let d = op_haversine(&[
@@ -45,21 +44,22 @@ fn test_haversine() {
         DataValue::from(0),
         DataValue::from(0),
         DataValue::from(PI),
-    ])
-    .unwrap()
+    ])?
     .get_float()
-    .unwrap();
+    ?;
     assert!(close(d, PI));
+    Ok(())
 }
 
 #[test]
-fn test_deg_rad() {
+fn test_deg_rad() -> Result<()>  {
     assert_eq!(
-        op_deg_to_rad(&[DataValue::from(180)]).unwrap(),
+        op_deg_to_rad(&[DataValue::from(180)])?,
         DataValue::from(PI)
     );
     assert_eq!(
-        op_rad_to_deg(&[DataValue::from(PI)]).unwrap(),
+        op_rad_to_deg(&[DataValue::from(PI)])?,
         DataValue::from(180.0)
     );
+    Ok(())
 }

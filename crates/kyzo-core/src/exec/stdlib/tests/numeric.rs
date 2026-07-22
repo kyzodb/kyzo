@@ -8,6 +8,7 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
+use miette::{Result, miette};
 use crate::exec::stdlib::numeric::*;
 use kyzo_model::value::{DataValue, Vector};
 use std::f64::consts::{E, PI};
@@ -17,73 +18,75 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 #[test]
-fn test_add() {
-    assert_eq!(op_add(&[]).unwrap(), DataValue::from(0));
-    assert_eq!(op_add(&[DataValue::from(1)]).unwrap(), DataValue::from(1));
+fn test_add() -> Result<()>  {
+    assert_eq!(op_add(&[])?, DataValue::from(0));
+    assert_eq!(op_add(&[DataValue::from(1)])?, DataValue::from(1));
     assert_eq!(
-        op_add(&[DataValue::from(1), DataValue::from(2)]).unwrap(),
+        op_add(&[DataValue::from(1), DataValue::from(2)])?,
         DataValue::from(3)
     );
     assert_eq!(
-        op_add(&[DataValue::from(1), DataValue::from(2.5)]).unwrap(),
+        op_add(&[DataValue::from(1), DataValue::from(2.5)])?,
         DataValue::from(3.5)
     );
     assert_eq!(
-        op_add(&[DataValue::from(1.5), DataValue::from(2.5)]).unwrap(),
+        op_add(&[DataValue::from(1.5), DataValue::from(2.5)])?,
         DataValue::from(4.0)
     );
     // Boundary: i64::MAX stays exact right up to the edge, then errors
     // rather than wrapping to i64::MIN (release builds) or panicking
     // (debug builds).
     assert_eq!(
-        op_add(&[DataValue::from(i64::MAX - 1), DataValue::from(1)]).unwrap(),
+        op_add(&[DataValue::from(i64::MAX - 1), DataValue::from(1)])?,
         DataValue::from(i64::MAX)
     );
     assert!(op_add(&[DataValue::from(i64::MAX), DataValue::from(1)]).is_err());
     assert!(op_add(&[DataValue::from(i64::MIN), DataValue::from(-1)]).is_err());
+    Ok(())
 }
 
 #[test]
-fn test_sub() {
+fn test_sub() -> Result<()>  {
     assert_eq!(
-        op_sub(&[DataValue::from(1), DataValue::from(2)]).unwrap(),
+        op_sub(&[DataValue::from(1), DataValue::from(2)])?,
         DataValue::from(-1)
     );
     assert_eq!(
-        op_sub(&[DataValue::from(1), DataValue::from(2.5)]).unwrap(),
+        op_sub(&[DataValue::from(1), DataValue::from(2.5)])?,
         DataValue::from(-1.5)
     );
     assert_eq!(
-        op_sub(&[DataValue::from(1.5), DataValue::from(2.5)]).unwrap(),
+        op_sub(&[DataValue::from(1.5), DataValue::from(2.5)])?,
         DataValue::from(-1.0)
     );
     // Boundary: i64::MIN - 1 (and i64::MAX - (-1)) overflow and error.
     assert_eq!(
-        op_sub(&[DataValue::from(i64::MIN + 1), DataValue::from(1)]).unwrap(),
+        op_sub(&[DataValue::from(i64::MIN + 1), DataValue::from(1)])?,
         DataValue::from(i64::MIN)
     );
     assert!(op_sub(&[DataValue::from(i64::MIN), DataValue::from(1)]).is_err());
     assert!(op_sub(&[DataValue::from(i64::MAX), DataValue::from(-1)]).is_err());
+    Ok(())
 }
 
 #[test]
-fn test_mul() {
-    assert_eq!(op_mul(&[]).unwrap(), DataValue::from(1));
+fn test_mul() -> Result<()>  {
+    assert_eq!(op_mul(&[])?, DataValue::from(1));
     assert_eq!(
-        op_mul(&[DataValue::from(2), DataValue::from(3)]).unwrap(),
+        op_mul(&[DataValue::from(2), DataValue::from(3)])?,
         DataValue::from(6)
     );
     assert_eq!(
-        op_mul(&[DataValue::from(0.5), DataValue::from(0.25)]).unwrap(),
+        op_mul(&[DataValue::from(0.5), DataValue::from(0.25)])?,
         DataValue::from(0.125)
     );
     assert_eq!(
-        op_mul(&[DataValue::from(0.5), DataValue::from(3)]).unwrap(),
+        op_mul(&[DataValue::from(0.5), DataValue::from(3)])?,
         DataValue::from(1.5)
     );
     // Boundary: i64::MAX itself stays exact; doubling it overflows.
     assert_eq!(
-        op_mul(&[DataValue::from(i64::MAX), DataValue::from(1)]).unwrap(),
+        op_mul(&[DataValue::from(i64::MAX), DataValue::from(1)])?,
         DataValue::from(i64::MAX)
     );
     assert!(op_mul(&[DataValue::from(i64::MAX), DataValue::from(2)]).is_err());
@@ -98,47 +101,50 @@ fn test_mul() {
         ])
         .is_err()
     );
+    Ok(())
 }
 
 fn f64_vec(xs: &[f64]) -> DataValue {
-    DataValue::Vector(Vector::try_new(xs.to_vec()).unwrap())
+    DataValue::Vector(Vector::try_new(xs.to_vec())?)
 }
 
 // Regression for the upstream bug where multiplying three or more vectors
 // recursed into vector *addition* for the prefix: `v1 * v2 * v3` computed
 // `(v1 + v2) * v3`. Multiplication must multiply.
 #[test]
-fn test_mul_vecs_multiplies() {
+fn test_mul_vecs_multiplies() -> Result<()>  {
     assert_eq!(
-        op_mul(&[f64_vec(&[2., 3.]), f64_vec(&[4., 5.])]).unwrap(),
+        op_mul(&[f64_vec(&[2., 3.]), f64_vec(&[4., 5.])])?,
         f64_vec(&[8., 15.])
     );
     // Three arguments: the buggy version yields [36., 56.] here.
     assert_eq!(
-        op_mul(&[f64_vec(&[2., 3.]), f64_vec(&[4., 5.]), f64_vec(&[6., 7.])]).unwrap(),
+        op_mul(&[f64_vec(&[2., 3.]), f64_vec(&[4., 5.]), f64_vec(&[6., 7.])])?,
         f64_vec(&[48., 105.])
     );
     // Scalars broadcast over vectors.
     assert_eq!(
-        op_mul(&[f64_vec(&[2., 3.]), DataValue::from(10.)]).unwrap(),
+        op_mul(&[f64_vec(&[2., 3.]), DataValue::from(10.)])?,
         f64_vec(&[20., 30.])
     );
+    Ok(())
 }
 
 #[test]
-fn test_div() {
+fn test_div() -> Result<()>  {
     assert_eq!(
-        op_div(&[DataValue::from(1), DataValue::from(1)]).unwrap(),
+        op_div(&[DataValue::from(1), DataValue::from(1)])?,
         DataValue::from(1.0)
     );
     assert_eq!(
-        op_div(&[DataValue::from(1), DataValue::from(2)]).unwrap(),
+        op_div(&[DataValue::from(1), DataValue::from(2)])?,
         DataValue::from(0.5)
     );
     assert_eq!(
-        op_div(&[DataValue::from(7.0), DataValue::from(0.5)]).unwrap(),
+        op_div(&[DataValue::from(7.0), DataValue::from(0.5)])?,
         DataValue::from(14.0)
     );
+    Ok(())
 }
 
 /// Division and modulo by zero must both raise the same typed refusal,
@@ -146,7 +152,7 @@ fn test_div() {
 /// used to disagree (`div` float-promoted to `Infinity`, `mod` alone
 /// refused); this locks the two to one consistent typed error.
 #[test]
-fn test_div_mod_by_zero_typed_error() {
+fn test_div_mod_by_zero_typed_error() -> Result<()>  {
     for res in [
         op_div(&[DataValue::from(1), DataValue::from(0)]),
         op_div(&[DataValue::from(1.0), DataValue::from(0.0)]),
@@ -161,19 +167,19 @@ fn test_div_mod_by_zero_typed_error() {
             "expected the division-by-zero diagnostic code, got: {msg}"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn test_max_min() {
-    assert_eq!(op_max(&[DataValue::from(1)]).unwrap(), DataValue::from(1));
+fn test_max_min() -> Result<()>  {
+    assert_eq!(op_max(&[DataValue::from(1)])?, DataValue::from(1));
     assert_eq!(
         op_max(&[
             DataValue::from(1),
             DataValue::from(2),
             DataValue::from(3),
             DataValue::from(4)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(4)
     );
     assert_eq!(
@@ -182,8 +188,7 @@ fn test_max_min() {
             DataValue::from(2),
             DataValue::from(3),
             DataValue::from(4)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(4)
     );
     assert_eq!(
@@ -192,21 +197,19 @@ fn test_max_min() {
             DataValue::from(2),
             DataValue::from(3),
             DataValue::from(4.0)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(4.0)
     );
     assert!(op_max(&[DataValue::from(true)]).is_err());
 
-    assert_eq!(op_min(&[DataValue::from(1)]).unwrap(), DataValue::from(1));
+    assert_eq!(op_min(&[DataValue::from(1)])?, DataValue::from(1));
     assert_eq!(
         op_min(&[
             DataValue::from(1),
             DataValue::from(2),
             DataValue::from(3),
             DataValue::from(4)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(1)
     );
     assert_eq!(
@@ -215,8 +218,7 @@ fn test_max_min() {
             DataValue::from(2),
             DataValue::from(3),
             DataValue::from(4)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(1.0)
     );
     assert_eq!(
@@ -225,240 +227,236 @@ fn test_max_min() {
             DataValue::from(2),
             DataValue::from(3),
             DataValue::from(4.0)
-        ])
-        .unwrap(),
+        ])?,
         DataValue::from(1)
     );
     assert!(op_max(&[DataValue::from(true)]).is_err());
+    Ok(())
 }
 
 #[test]
-fn test_minus() {
+fn test_minus() -> Result<()>  {
     assert_eq!(
-        op_minus(&[DataValue::from(-1)]).unwrap(),
+        op_minus(&[DataValue::from(-1)])?,
         DataValue::from(1)
     );
     assert_eq!(
-        op_minus(&[DataValue::from(1)]).unwrap(),
+        op_minus(&[DataValue::from(1)])?,
         DataValue::from(-1)
     );
     assert_eq!(
-        op_minus(&[DataValue::from(f64::INFINITY)]).unwrap(),
+        op_minus(&[DataValue::from(f64::INFINITY)])?,
         DataValue::from(f64::NEG_INFINITY)
     );
     assert_eq!(
-        op_minus(&[DataValue::from(f64::NEG_INFINITY)]).unwrap(),
+        op_minus(&[DataValue::from(f64::NEG_INFINITY)])?,
         DataValue::from(f64::INFINITY)
     );
     // Boundary: i64::MIN has no positive i64 counterpart (i64::MAX is one
     // short of |i64::MIN|), so negating it errors instead of wrapping.
     assert_eq!(
-        op_minus(&[DataValue::from(i64::MIN + 1)]).unwrap(),
+        op_minus(&[DataValue::from(i64::MIN + 1)])?,
         DataValue::from(i64::MAX)
     );
     assert!(op_minus(&[DataValue::from(i64::MIN)]).is_err());
+    Ok(())
 }
 
 #[test]
-fn test_abs() {
-    assert_eq!(op_abs(&[DataValue::from(-1)]).unwrap(), DataValue::from(1));
-    assert_eq!(op_abs(&[DataValue::from(1)]).unwrap(), DataValue::from(1));
+fn test_abs() -> Result<()>  {
+    assert_eq!(op_abs(&[DataValue::from(-1)])?, DataValue::from(1));
+    assert_eq!(op_abs(&[DataValue::from(1)])?, DataValue::from(1));
     assert_eq!(
-        op_abs(&[DataValue::from(-1.5)]).unwrap(),
+        op_abs(&[DataValue::from(-1.5)])?,
         DataValue::from(1.5)
     );
     // Boundary: same asymmetry as unary minus.
     assert_eq!(
-        op_abs(&[DataValue::from(i64::MIN + 1)]).unwrap(),
+        op_abs(&[DataValue::from(i64::MIN + 1)])?,
         DataValue::from(i64::MAX)
     );
     assert!(op_abs(&[DataValue::from(i64::MIN)]).is_err());
+    Ok(())
 }
 
 #[test]
-fn test_signum() {
+fn test_signum() -> Result<()>  {
     assert_eq!(
-        op_signum(&[DataValue::from(0.1)]).unwrap(),
+        op_signum(&[DataValue::from(0.1)])?,
         DataValue::from(1)
     );
     assert_eq!(
-        op_signum(&[DataValue::from(-0.1)]).unwrap(),
+        op_signum(&[DataValue::from(-0.1)])?,
         DataValue::from(-1)
     );
     assert_eq!(
-        op_signum(&[DataValue::from(0.0)]).unwrap(),
+        op_signum(&[DataValue::from(0.0)])?,
         DataValue::from(0)
     );
     // `-0.0` collapses to `+0.0` in the value plane (one canonical zero),
     // so its signum is `0`, not `-1`.
     assert_eq!(
-        op_signum(&[DataValue::from(-0.0)]).unwrap(),
+        op_signum(&[DataValue::from(-0.0)])?,
         DataValue::from(0)
     );
     assert_eq!(
-        op_signum(&[DataValue::from(-3)]).unwrap(),
+        op_signum(&[DataValue::from(-3)])?,
         DataValue::from(-1)
     );
     assert_eq!(
-        op_signum(&[DataValue::from(f64::NEG_INFINITY)]).unwrap(),
+        op_signum(&[DataValue::from(f64::NEG_INFINITY)])?,
         DataValue::from(-1)
     );
     assert!(
-        op_signum(&[DataValue::from(f64::NAN)])
-            .unwrap()
-            .get_float()
-            .unwrap()
+        op_signum(&[DataValue::from(f64::NAN)])?
+            .get_float().ok_or_else(|| miette!("float"))?
             .is_nan()
     );
+    Ok(())
 }
 
 #[test]
-fn test_floor_ceil() {
+fn test_floor_ceil() -> Result<()>  {
     assert_eq!(
-        op_floor(&[DataValue::from(-1)]).unwrap(),
+        op_floor(&[DataValue::from(-1)])?,
         DataValue::from(-1)
     );
     assert_eq!(
-        op_floor(&[DataValue::from(-1.5)]).unwrap(),
+        op_floor(&[DataValue::from(-1.5)])?,
         DataValue::from(-2.0)
     );
     assert_eq!(
-        op_floor(&[DataValue::from(1.5)]).unwrap(),
+        op_floor(&[DataValue::from(1.5)])?,
         DataValue::from(1.0)
     );
     assert_eq!(
-        op_ceil(&[DataValue::from(-1)]).unwrap(),
+        op_ceil(&[DataValue::from(-1)])?,
         DataValue::from(-1)
     );
     assert_eq!(
-        op_ceil(&[DataValue::from(-1.5)]).unwrap(),
+        op_ceil(&[DataValue::from(-1.5)])?,
         DataValue::from(-1.0)
     );
     assert_eq!(
-        op_ceil(&[DataValue::from(1.5)]).unwrap(),
+        op_ceil(&[DataValue::from(1.5)])?,
         DataValue::from(2.0)
     );
+    Ok(())
 }
 
 #[test]
-fn test_round() {
+fn test_round() -> Result<()>  {
     assert_eq!(
-        op_round(&[DataValue::from(0.6)]).unwrap(),
+        op_round(&[DataValue::from(0.6)])?,
         DataValue::from(1.0)
     );
     assert_eq!(
-        op_round(&[DataValue::from(0.5)]).unwrap(),
+        op_round(&[DataValue::from(0.5)])?,
         DataValue::from(1.0)
     );
     assert_eq!(
-        op_round(&[DataValue::from(1.5)]).unwrap(),
+        op_round(&[DataValue::from(1.5)])?,
         DataValue::from(2.0)
     );
     assert_eq!(
-        op_round(&[DataValue::from(-0.6)]).unwrap(),
+        op_round(&[DataValue::from(-0.6)])?,
         DataValue::from(-1.0)
     );
     assert_eq!(
-        op_round(&[DataValue::from(-0.5)]).unwrap(),
+        op_round(&[DataValue::from(-0.5)])?,
         DataValue::from(-1.0)
     );
     assert_eq!(
-        op_round(&[DataValue::from(-1.5)]).unwrap(),
+        op_round(&[DataValue::from(-1.5)])?,
         DataValue::from(-2.0)
     );
+    Ok(())
 }
 
 #[test]
-fn test_exp() {
-    let n = op_exp(&[DataValue::from(1)]).unwrap().get_float().unwrap();
+fn test_exp() -> Result<()>  {
+    let n = op_exp(&[DataValue::from(1)])?.get_float().ok_or_else(|| miette!("get_float"))?;
     assert!(close(n, E));
 
-    let n = op_exp(&[DataValue::from(50.1)])
-        .unwrap()
-        .get_float()
-        .unwrap();
+    let n = op_exp(&[DataValue::from(50.1)])?
+        .get_float().ok_or_else(|| miette!("float"))?;
     assert!(close(n, 50.1_f64.exp()));
+    Ok(())
 }
 
 #[test]
-fn test_exp2() {
-    let n = op_exp2(&[DataValue::from(10.)])
-        .unwrap()
-        .get_float()
-        .unwrap();
+fn test_exp2() -> Result<()>  {
+    let n = op_exp2(&[DataValue::from(10.)])?
+        .get_float().ok_or_else(|| miette!("float"))?;
     assert_eq!(n, 1024.);
+    Ok(())
 }
 
 #[test]
-fn test_ln() {
-    assert_eq!(op_ln(&[DataValue::from(E)]).unwrap(), DataValue::from(1.0));
+fn test_ln() -> Result<()>  {
+    assert_eq!(op_ln(&[DataValue::from(E)])?, DataValue::from(1.0));
+    Ok(())
 }
 
 #[test]
-fn test_log2() {
+fn test_log2() -> Result<()>  {
     assert_eq!(
-        op_log2(&[DataValue::from(1024)]).unwrap(),
+        op_log2(&[DataValue::from(1024)])?,
         DataValue::from(10.)
     );
+    Ok(())
 }
 
 #[test]
-fn test_log10() {
+fn test_log10() -> Result<()>  {
     assert_eq!(
-        op_log10(&[DataValue::from(1000)]).unwrap(),
+        op_log10(&[DataValue::from(1000)])?,
         DataValue::from(3.0)
     );
+    Ok(())
 }
 
 #[test]
-fn test_trig() {
+fn test_trig() -> Result<()>  {
     assert!(close(
-        op_sin(&[DataValue::from(PI / 2.)])
-            .unwrap()
-            .get_float()
-            .unwrap(),
+        op_sin(&[DataValue::from(PI / 2.)])?
+            .get_float().ok_or_else(|| miette!("float"))?,
         1.0
     ));
     assert!(close(
-        op_cos(&[DataValue::from(PI / 2.)])
-            .unwrap()
-            .get_float()
-            .unwrap(),
+        op_cos(&[DataValue::from(PI / 2.)])?
+            .get_float().ok_or_else(|| miette!("float"))?,
         0.0
     ));
     assert!(close(
-        op_tan(&[DataValue::from(PI / 4.)])
-            .unwrap()
-            .get_float()
-            .unwrap(),
+        op_tan(&[DataValue::from(PI / 4.)])?
+            .get_float().ok_or_else(|| miette!("float"))?,
         1.0
     ));
+    Ok(())
 }
 
 #[test]
-fn test_inv_trig() {
+fn test_inv_trig() -> Result<()>  {
     assert!(close(
-        op_asin(&[DataValue::from(1.0)])
-            .unwrap()
-            .get_float()
-            .unwrap(),
+        op_asin(&[DataValue::from(1.0)])?
+            .get_float().ok_or_else(|| miette!("float"))?,
         PI / 2.
     ));
     assert!(close(
-        op_acos(&[DataValue::from(0)]).unwrap().get_float().unwrap(),
+        op_acos(&[DataValue::from(0)])?.get_float().ok_or_else(|| miette!("get_float"))?,
         PI / 2.
     ));
     assert!(close(
-        op_atan(&[DataValue::from(1)]).unwrap().get_float().unwrap(),
+        op_atan(&[DataValue::from(1)])?.get_float().ok_or_else(|| miette!("get_float"))?,
         PI / 4.
     ));
     assert!(close(
-        op_atan2(&[DataValue::from(-1), DataValue::from(-1)])
-            .unwrap()
-            .get_float()
-            .unwrap(),
+        op_atan2(&[DataValue::from(-1), DataValue::from(-1)])?
+            .get_float().ok_or_else(|| miette!("float"))?,
         -3. * PI / 4.
     ));
+    Ok(())
 }
 
 /// The same silent-poison shape `DivisionByZero` fixed for `div`/`mod`:
@@ -466,7 +464,7 @@ fn test_inv_trig() {
 /// out-of-domain input with a typed `domain_error`, never a quiet `NaN`
 /// (or, at a domain boundary that diverges, a quiet infinity).
 #[test]
-fn test_math_domain_errors_typed() {
+fn test_math_domain_errors_typed() -> Result<()>  {
     for res in [
         op_sqrt(&[DataValue::from(-1)]),
         op_ln(&[DataValue::from(0)]),
@@ -495,38 +493,40 @@ fn test_math_domain_errors_typed() {
             "expected the domain-error diagnostic code, got: {msg}"
         );
     }
+    Ok(())
 }
 
 /// The vector lane of the same ops must refuse an out-of-domain element
 /// too, rather than poisoning the whole vector with a `NaN` at that
 /// position.
 #[test]
-fn test_math_domain_errors_vector() {
-    let has_negative = Vector::try_new(vec![1.0, -1.0, 4.0]).unwrap();
+fn test_math_domain_errors_vector() -> Result<()>  {
+    let has_negative = Vector::try_new(vec![1.0, -1.0, 4.0]).ok_or_else(|| miette!("vector"))?;
     assert!(op_sqrt(&[DataValue::Vector(has_negative)]).is_err());
 
-    let has_out_of_range = Vector::try_new(vec![0.0f64, 2.0]).unwrap();
+    let has_out_of_range = Vector::try_new(vec![0.0f64, 2.0]).ok_or_else(|| miette!("vector"))?;
     assert!(op_asin(&[DataValue::Vector(has_out_of_range)]).is_err());
 
-    let has_non_positive = Vector::try_new(vec![1.0, 0.0]).unwrap();
+    let has_non_positive = Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector"))?;
     assert!(op_ln(&[DataValue::Vector(has_non_positive)]).is_err());
+    Ok(())
 }
 
 /// Valid, in-domain inputs to the same ops still compute the correct
 /// value — the domain guard must not reject anything it shouldn't.
 #[test]
-fn test_math_valid_inputs_unaffected() {
+fn test_math_valid_inputs_unaffected() -> Result<()>  {
     assert_eq!(
-        op_sqrt(&[DataValue::from(4)]).unwrap(),
+        op_sqrt(&[DataValue::from(4)])?,
         DataValue::from(2.0)
     );
-    assert_eq!(op_ln(&[DataValue::from(1)]).unwrap(), DataValue::from(0.0));
+    assert_eq!(op_ln(&[DataValue::from(1)])?, DataValue::from(0.0));
     assert_eq!(
-        op_asin(&[DataValue::from(0)]).unwrap(),
+        op_asin(&[DataValue::from(0)])?,
         DataValue::from(0.0)
     );
     assert_eq!(
-        op_acos(&[DataValue::from(1)]).unwrap(),
+        op_acos(&[DataValue::from(1)])?,
         DataValue::from(0.0)
     );
     // Boundary lock: the exact edges the domain guards must NOT refuse, so a
@@ -536,11 +536,11 @@ fn test_math_valid_inputs_unaffected() {
     // must still compute; a negative base with an integral exponent is a real
     // power `pow` must not refuse.
     assert_eq!(
-        op_sqrt(&[DataValue::from(0)]).unwrap(),
+        op_sqrt(&[DataValue::from(0)])?,
         DataValue::from(0.0)
     );
     assert_eq!(
-        op_acosh(&[DataValue::from(1)]).unwrap(),
+        op_acosh(&[DataValue::from(1)])?,
         DataValue::from(0.0)
     );
     assert!(
@@ -560,10 +560,11 @@ fn test_math_valid_inputs_unaffected() {
         "atanh(0.5) is strictly inside the open interval"
     );
     assert_eq!(
-        op_pow(&[DataValue::from(-2.0), DataValue::from(3.0)]).unwrap(),
+        op_pow(&[DataValue::from(-2.0), DataValue::from(3.0)])?,
         DataValue::from(-8.0),
         "a negative base with an integral exponent is a real power"
     );
+    Ok(())
 }
 
 /// The same silent-NaN class the partial scalar ops were swept for also
@@ -573,26 +574,25 @@ fn test_math_valid_inputs_unaffected() {
 /// `domain_error`, on both the F32 and F64 lanes, while non-degenerate
 /// vectors still compute.
 #[test]
-fn test_pow() {
+fn test_pow() -> Result<()>  {
     assert_eq!(
-        op_pow(&[DataValue::from(2), DataValue::from(10)]).unwrap(),
+        op_pow(&[DataValue::from(2), DataValue::from(10)])?,
         DataValue::from(1024.0)
     );
     // `pow` always promotes integer operands to f64 (unlike `+`/`-`/`*`,
     // which stay exact `i64` until they overflow it): a result or exponent
     // far past i64's range saturates to infinity rather than overflowing
     // or panicking, the same as any other float op.
-    let huge = op_pow(&[DataValue::from(i64::MAX), DataValue::from(i64::MAX)])
-        .unwrap()
-        .get_float()
-        .unwrap();
+    let huge = op_pow(&[DataValue::from(i64::MAX), DataValue::from(i64::MAX)])?
+        .get_float().ok_or_else(|| miette!("float"))?;
     assert!(huge.is_infinite());
+    Ok(())
 }
 
 #[test]
-fn test_mod() {
+fn test_mod() -> Result<()>  {
     assert_eq!(
-        op_mod(&[DataValue::from(-10), DataValue::from(7)]).unwrap(),
+        op_mod(&[DataValue::from(-10), DataValue::from(7)])?,
         DataValue::from(-3)
     );
     // A zero divisor is refused the same way regardless of which operand
@@ -608,71 +608,73 @@ fn test_mod() {
     // from, and in addition to, the zero-divisor case above.
     assert!(op_mod(&[DataValue::from(i64::MIN), DataValue::from(-1)]).is_err());
     assert_eq!(
-        op_mod(&[DataValue::from(i64::MIN), DataValue::from(2)]).unwrap(),
+        op_mod(&[DataValue::from(i64::MIN), DataValue::from(2)])?,
         DataValue::from(0)
     );
+    Ok(())
 }
 
 #[test]
-fn test_boolean() {
+fn test_boolean() -> Result<()>  {
     // `and`/`or` are language forms (`Expr::Lazy`), not ops; their
     // semantics — including short-circuit — are pinned in
     // `data/tests/exprs.rs`. Only negation remains an op.
     assert_eq!(
-        op_negate(&[DataValue::from(false)]).unwrap(),
+        op_negate(&[DataValue::from(false)])?,
         DataValue::from(true)
     );
+    Ok(())
 }
 
 #[test]
-fn test_bits() {
+fn test_bits() -> Result<()>  {
     assert_eq!(
         op_bit_and(&[
             DataValue::Bytes([0b111000].into()),
             DataValue::Bytes([0b010101].into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::Bytes([0b010000].into())
     );
     assert_eq!(
         op_bit_or(&[
             DataValue::Bytes([0b111000].into()),
             DataValue::Bytes([0b010101].into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::Bytes([0b111101].into())
     );
     assert_eq!(
-        op_bit_not(&[DataValue::Bytes([0b00111000].into())]).unwrap(),
+        op_bit_not(&[DataValue::Bytes([0b00111000].into())])?,
         DataValue::Bytes([0b11000111].into())
     );
     assert_eq!(
         op_bit_xor(&[
             DataValue::Bytes([0b111000].into()),
             DataValue::Bytes([0b010101].into())
-        ])
-        .unwrap(),
+        ])?,
         DataValue::Bytes([0b101101].into())
     );
+    Ok(())
 }
 
 #[test]
-fn test_pack_bits() {
+fn test_pack_bits() -> Result<()>  {
     assert_eq!(
-        op_pack_bits(&[DataValue::List(vec![DataValue::from(true)])]).unwrap(),
+        op_pack_bits(&[DataValue::List(vec![DataValue::from(true)])])?,
         DataValue::Bytes([0b10000000].into())
-    )
+    );
+    Ok(())
 }
 
 #[test]
-fn test_unpack_bits() {
+fn test_unpack_bits() -> Result<()>  {
     assert_eq!(
-        op_unpack_bits(&[DataValue::Bytes([0b10101010].into())]).unwrap(),
+        op_unpack_bits(&[DataValue::Bytes([0b10101010].into())])?,
         DataValue::List(
             [true, false, true, false, true, false, true, false]
                 .into_iter()
                 .map(DataValue::Bool)
                 .collect()
         )
-    )
+    );
+    Ok(())
 }
