@@ -1383,8 +1383,8 @@ impl RaBitQRotation {
             // quantity; saturating/checked mul would change the seeded
             // orthogonal family.
             let attempt_seed = seed
-                ^ match u64::try_from(dim) { Ok(v) => v, Err(_d) => 0 }.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                ^ attempt.wrapping_mul(0xD1B5_4A32_D192_ED03);
+                ^ (std::num::Wrapping(match u64::try_from(dim) { Ok(v) => v, Err(_d) => 0 }) * std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0
+                ^ (std::num::Wrapping(attempt) * std::num::Wrapping(0xD1B5_4A32_D192_ED03)).0;
             if let Some(rot) = Self::try_orthogonal(dim, attempt_seed)
                 && rot.orthonormality_error() < 1e-10
             {
@@ -1871,16 +1871,21 @@ impl Beam {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn search_layer(
-    tx: &impl ReadTx,
+
+/// Shared graph-walk seats for layer search / neighbour selection.
+struct HnswWalkCtx<'w, 'c, T: ReadTx> {
+    tx: &'w T,
+    base: &'w RelationHandle,
+    idx: &'w RelationHandle,
+    cache: &'w mut VectorCache<'c>,
+}
+
+fn search_layer<T: ReadTx>(
+    walk: &mut HnswWalkCtx<'_, '_, T>,
     q: &IndexVec,
     ef: usize,
     layer: i64,
-    base: &RelationHandle,
-    idx: &RelationHandle,
     found_nn: &mut PriorityQueue<VectorId, Beam>,
-    cache: &mut VectorCache<'_>,
 ) -> Result<()> {
     let mut visited: FxHashSet<VectorId> = FxHashSet::default();
     // min queue
@@ -1899,12 +1904,12 @@ fn search_layer(
         if found_nn.len() >= ef && candidate_dist > furthest.dist() {
             break;
         }
-        for (neighbour, _) in neighbours(tx, base, idx, &candidate, layer, false)? {
+        for (neighbour, _) in neighbours(walk.tx, walk.base, walk.idx, &candidate, layer, false)? {
             if visited.contains(&neighbour) {
                 continue;
             }
-            cache.ensure(tx, base, &neighbour)?;
-            let neighbour_dist = cache.v_dist(q, &neighbour)?;
+            walk.cache.ensure(walk.tx, walk.base, &neighbour)?;
+            let neighbour_dist = walk.cache.v_dist(q, &neighbour)?;
             let Some((_, cand_furthest)) = found_nn.peek() else {
                 break;
             };
@@ -2272,7 +2277,13 @@ fn put_vector<T: WriteTx>(
     let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     let ep_beam = Beam::of(ep_distance, &ep_id);
     found_nn.push(ep_id, ep_beam);
-    search_layer(tx, q, params.l(), layer, base, idx, &mut found_nn, cache)?;
+    search_layer(
+            &mut HnswWalkCtx { tx, base, idx, cache },
+            q,
+            params.l(),
+            layer,
+            &mut found_nn,
+        )?;
 
     let mut candidates: Vec<(VectorId, f64)> = found_nn
         .iter()
@@ -2916,9 +2927,31 @@ fn hnsw_knn_body(
     found_nn.push(ep_id, ep_beam);
     for layer in bottom_layer..0 {
         cancel.check()?;
-        search_layer(tx, &q, 1, layer, base, idx, &mut found_nn, &mut cache)?;
+        search_layer(
+            &mut HnswWalkCtx {
+                tx,
+                base,
+                idx,
+                cache: &mut cache,
+            },
+            &q,
+            1,
+            layer,
+            &mut found_nn,
+        )?;
     }
-    search_layer(tx, &q, params.ef, 0, base, idx, &mut found_nn, &mut cache)?;
+    search_layer(
+        &mut HnswWalkCtx {
+            tx,
+            base,
+            idx,
+            cache: &mut cache,
+        },
+        &q,
+        params.ef,
+        0,
+        &mut found_nn,
+    )?;
     if found_nn.is_empty() {
         return Ok(vec![]);
     }
@@ -3507,10 +3540,22 @@ fn graph_filtered(
     let ep_beam = Beam::of(ep_d, &ep_id);
     found_nn.push(ep_id, ep_beam);
     for layer in bottom_layer..0 {
-        search_layer(tx, q, 1, layer, base, idx, &mut found_nn, cache)?;
+        search_layer(
+            &mut HnswWalkCtx { tx, base, idx, cache },
+            q,
+            1,
+            layer,
+            &mut found_nn,
+        )?;
     }
     let seeds: Vec<VectorId> = found_nn.iter().map(|(id, _)| id.clone()).collect();
-    let visit_cap = ef2.saturating_mul(manifest.m_max0.max(1)).saturating_mul(4);
+    let visit_cap = match ef2
+        .checked_mul(manifest.m_max0.max(1))
+        .and_then(|v| v.checked_mul(4))
+    {
+        Some(v) => v,
+        None => usize::MAX,
+    };
     let results = graph_search_layer0(
         tx, q, ef2, base, idx, &seeds, params, filter, cache, visit_cap,
     )?;
