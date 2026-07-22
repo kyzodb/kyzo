@@ -981,7 +981,7 @@ mod tests {
     }
 
     fn assert_agree(g: &Gazetteer, pairs: &[(i64, &str)], text: &str, ci: bool) -> Result<()> {
-        let tags = g.tag(text)?;
+        let tags = g.tag(text);
         for t in &tags {
             assert!(
                 text.is_char_boundary(t.start),
