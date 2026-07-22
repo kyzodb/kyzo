@@ -7,7 +7,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use miette::{Result, miette};
+use miette::{Result, bail, miette};
 use std::collections::BTreeMap;
 
 use kyzo_model::value::{DataValue, ValidityTs};
@@ -172,30 +172,44 @@ fn negation_and_named_field_through_public_api() -> Result<()> {
 /// The compiled plan's symbols, so a test can prove the magic-sets
 /// rewrite actually fired (a non-`Muggle` symbol) rather than trusting a
 /// bound-recursive query to have triggered it.
-fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
+fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Result<Vec<String>> {
     match db {
         // fixed rules bind later at session normalize; parse is params-only
         value => core::mem::drop(value),
     }
-    let prog = match parse_script(script, &no_params(), test_vld()).expect("test helper") {
+    let prog = match parse_script(script, &no_params(), test_vld())
+        .map_err(|e| miette!("parse_script: {e}"))?
+    {
         Script::Query(p) => p,
-        Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
+        Script::Imperative(_) | Script::Sys(_) => {
+            bail!("expected a single query")
+        }
     };
-    let tx = SessionTx::new_read(db.store.read_tx().expect("test helper"), ScriptOptions::new());
+    let tx = SessionTx::new_read(
+        db.store
+            .read_tx()
+            .map_err(|e| miette!("read_tx: {e}"))?,
+        ScriptOptions::new(),
+    );
     let view = SessionView {
         store: &tx.store,
         temp: &tx.temp,
     };
     let mut normalizer = SessionNormalizer::new(view, CancelFlag::inert());
-    let (nf, _) = crate::exec::plan::program::into_normalized_program(prog, &mut normalizer).expect("test helper");
-    let (strat, _lifetimes) = nf.into_stratified_program().expect("test helper");
-    let magic = strat.magic_sets_rewrite(&view).expect("test helper");
-    magic
+    let (nf, _) = crate::exec::plan::program::into_normalized_program(prog, &mut normalizer)
+        .map_err(|e| miette!("into_normalized_program: {e}"))?;
+    let (strat, _lifetimes) = nf
+        .into_stratified_program()
+        .map_err(|e| miette!("into_stratified_program: {e}"))?;
+    let magic = strat
+        .magic_sets_rewrite(&view)
+        .map_err(|e| miette!("magic_sets_rewrite: {e}"))?;
+    Ok(magic
         .into_strata()
         .into_iter()
         .flat_map(|m| m.prog.into_keys())
         .map(|sym| format!("{sym:?}"))
-        .collect()
+        .collect())
 }
 
 /// The last unexercised engine law (query/mod.rs #1, magic-sets half):
@@ -225,7 +239,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()> {
     // A rewritten plan carries adorned symbols (`path|Mbf` magic, `path|Ibf`
     // input, `path|S…` supplementary); a Muggle symbol has no `|adornment`.
     let q1 = format!("{recursive_rule}\n?[d] := path[1, d]");
-    let syms1 = compiled_magic_symbols(&db, &q1);
+    let syms1 = compiled_magic_symbols(&db, &q1)?;
     assert!(
         syms1.iter().any(|s| s.contains('|')),
         "the bound-first-arg query must trigger the magic-sets rewrite; symbols were {syms1:?}"
@@ -238,7 +252,7 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()> {
 
     // Demand pattern 2: second argument bound (who reaches 4).
     let q2 = format!("{recursive_rule}\n?[a] := path[a, 4]");
-    let syms2 = compiled_magic_symbols(&db, &q2);
+    let syms2 = compiled_magic_symbols(&db, &q2)?;
     assert!(
         syms2.iter().any(|s| s.contains('|')),
         "the bound-second-arg query must trigger the magic-sets rewrite; symbols were {syms2:?}"
@@ -283,7 +297,7 @@ fn pointsto_magic_symbols_are_unadorned() -> Result<()> {
         pt[z, w] := *store[y, x], pt[y, z], pt[x, w]
         ?[y, x] := pt[y, x]
     ";
-    let syms = compiled_magic_symbols(&db, script);
+    let syms = compiled_magic_symbols(&db, script)?;
     eprintln!("pointsto compiled symbols: {syms:?}");
     // The fully-unbound entry demands only `pt`'s ff (fully-free)
     // variant — issue #68's fix (`AdornedProgram::collapse_ff_redundant_variants`)
@@ -317,7 +331,7 @@ fn transitive_closure_magic_symbols_under_unbound_query() -> Result<()> {
         path[a, b] := *edge[a, c], path[c, b]
         ?[a, b] := path[a, b]
     ";
-    let syms = compiled_magic_symbols(&db, script);
+    let syms = compiled_magic_symbols(&db, script)?;
     eprintln!("tc compiled symbols (fully unbound query): {syms:?}");
     assert_eq!(
         syms,
@@ -352,22 +366,22 @@ mod magic_bypass_differential {
     /// Every non-`?` symbol name, sorted — order-independent, so this
     /// doesn't couple to `BTreeMap` iteration order the way the
     /// hand-pinned tests above (deliberately) do.
-    fn sorted_syms<S: Storage>(db: &Engine<S>, script: &str) -> Vec<String> {
-        let mut syms = compiled_magic_symbols(db, script);
+    fn sorted_syms<S: Storage>(db: &Engine<S>, script: &str) -> Result<Vec<String>> {
+        let mut syms = compiled_magic_symbols(db, script)?;
         syms.sort();
-        syms
+        Ok(syms)
     }
 
     /// Same program + facts with magic rewrite forced off — the production
     /// bypass twin of a magic-rewritten plan.
-    fn run_bypass<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Vec<i64>> {
+    fn run_bypass<S: Storage>(db: &Engine<S>, script: &str) -> Result<Vec<Vec<i64>>> {
         int_rows(
             &db.run_script(
                 &format!("{script}\n:disable_magic_rewrite true"),
                 no_params(),
             )
-            .map_err(|e| miette!("bypass query: {e}")).expect("test helper"),
-        ).expect("test helper")
+            .map_err(|e| miette!("bypass query: {e}"))?,
+        )
     }
 
     /// Transitive closure over a tiny deterministic chain (`0→1→…→n-1`).
@@ -391,14 +405,14 @@ mod magic_bypass_differential {
             &db.run_script(script, no_params())
                 .map_err(|e| miette!("query: {e}"))?,
         )?;
-        let bypass_rows = run_bypass(&db, script);
+        let bypass_rows = run_bypass(&db, script)?;
 
         assert_eq!(
             public_rows, bypass_rows,
             "public path and bypass path must derive the identical answer"
         );
         assert_eq!(
-            sorted_syms(&db, script),
+            sorted_syms(&db, script)?,
             vec!["?".to_string(), "path|Mff".to_string()],
             "a fully-unbound entry must leave path as its one ff variant, matching the \
              bypass path's cost (no Input/Sup machinery)"
@@ -419,40 +433,38 @@ mod magic_bypass_differential {
 
         let (vars, addrs, assigns, loads, stores) = (12u64, 8u64, 10u64, 6u64, 6u64);
         let seed = 0x5EED_0068u64;
+        let vars_i = i64::try_from(vars).map_err(|_| miette!("vars fits i64"))?;
 
-        let gen_rel = |label: u64, count: u64| -> Vec<(i64, i64)> {
+        let gen_rel = |label: u64, count: u64| -> Result<Vec<(i64, i64)>> {
             let mut rng = StdRng::seed_from_u64(seed ^ (label << 32));
             let mut rows: BTreeSet<(i64, i64)> = BTreeSet::new();
-            while u64::try_from(rows.len())
-                .expect("INVARIANT(normalize_rows_fits_u64): rows.len fits u64")
-                < count
+            while u64::try_from(rows.len()).map_err(|_| {
+                miette!("INVARIANT(normalize_rows_fits_u64): rows.len fits u64")
+            })? < count
             {
-                let y = rng.random_range(
-                    0..i64::try_from(vars).expect("vars fits i64"),
-                );
-                let x = rng.random_range(
-                    0..i64::try_from(vars).expect("vars fits i64"),
-                );
+                let y = rng.random_range(0..vars_i);
+                let x = rng.random_range(0..vars_i);
                 if y != x {
                     rows.insert((y, x));
                 }
             }
-            rows.into_iter().collect()
+            Ok(rows.into_iter().collect())
         };
 
         let db = open_engine(SimStorage::new(68_002))?;
-        let load_rel = |name: &str, rows: &[(i64, i64)]| {
+        let load_rel = |name: &str, rows: &[(i64, i64)]| -> Result<()> {
             let literal: String = rows.iter().map(|(y, x)| format!("[{y},{x}],")).collect();
             db.run_script(
                 &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
                 no_params(),
             )
-            .expect("create");
+            .map_err(|e| miette!("create {name}: {e}"))?;
+            Ok(())
         };
-        load_rel("addr_of", &gen_rel(1, addrs));
-        load_rel("assign", &gen_rel(2, assigns));
-        load_rel("load", &gen_rel(3, loads));
-        load_rel("store", &gen_rel(4, stores));
+        load_rel("addr_of", &gen_rel(1, addrs)?)?;
+        load_rel("assign", &gen_rel(2, assigns)?)?;
+        load_rel("load", &gen_rel(3, loads)?)?;
+        load_rel("store", &gen_rel(4, stores)?)?;
         let script = "
             pt[y, x] := *addr_of[y, x]
             pt[y, x] := *assign[y, z], pt[z, x]
@@ -464,14 +476,14 @@ mod magic_bypass_differential {
             &db.run_script(script, no_params())
                 .map_err(|e| miette!("query: {e}"))?,
         )?;
-        let bypass_rows = run_bypass(&db, script);
+        let bypass_rows = run_bypass(&db, script)?;
 
         assert_eq!(
             public_rows, bypass_rows,
             "public path and bypass path must derive the identical answer"
         );
         assert_eq!(
-            sorted_syms(&db, script),
+            sorted_syms(&db, script)?,
             vec!["?".to_string(), "pt|Mff".to_string()],
             "a fully-unbound entry must leave pt as its one ff variant, matching the bypass \
              path's cost (no Input/Sup machinery) — issue #68's regression shape"
@@ -516,7 +528,7 @@ mod magic_bypass_differential {
         )?;
         assert_eq!(got, expected, "mutual recursion answer");
 
-        let syms = sorted_syms(&db, script);
+        let syms = sorted_syms(&db, script)?;
         assert!(
             syms.iter()
                 .filter(|s| s.starts_with("p|M"))
@@ -564,7 +576,7 @@ mod magic_bypass_differential {
         )?;
         assert_eq!(got, expected, "negation alongside ff-sibling answer");
         assert_eq!(
-            sorted_syms(&db, script),
+            sorted_syms(&db, script)?,
             vec![
                 "?".to_string(),
                 "excluded|Mff".to_string(),
@@ -662,7 +674,7 @@ mod magic_bypass_differential {
         )?;
         assert_eq!(got, expected, "helper-inside-self-join answer");
 
-        let syms = sorted_syms(&db, script);
+        let syms = sorted_syms(&db, script)?;
         assert!(
             syms.iter()
                 .filter(|s| s.starts_with("pt|M"))

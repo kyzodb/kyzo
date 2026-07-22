@@ -1329,9 +1329,13 @@ mod pins {
             let tuple: Tuple = Tuple::from_vec(vec![DataValue::from(0), slot.clone(), slot]);
             tuple.encode_as_key(rel)
         };
-        let current = |rows: Vec<Tuple>| -> i64 {
+        let current = |rows: Vec<Tuple>| -> Result<i64> {
             assert_eq!(rows.len(), 1, "exactly one live fact, got {rows:?}");
-            rows[0].last().expect("col").get_int().expect("int")
+            rows[0]
+                .last()
+                .ok_or_else(|| miette!("col"))?
+                .get_int()
+                .ok_or_else(|| miette!("int"))
         };
 
         {
@@ -1361,7 +1365,7 @@ mod pins {
                                     AsOf::current(ValidityTs::of_micros(i64::MAX)),
                                 )
                                 .collect::<Result<_>>()?;
-                            let old = current(rows);
+                            let old = current(rows)?;
                             tx.put(&key_at(stamp), &val_of(old + 1))?;
                             match tx.commit() {
                                 Ok(_committed) => {
@@ -1389,7 +1393,7 @@ mod pins {
             )
             .collect::<Result<_>>()?;
         assert_eq!(
-            current(rows),
+            current(rows)?,
             2 * PER_THREAD,
             "every Ok commit observed ({} commits)",
             commits.load(Ordering::SeqCst)

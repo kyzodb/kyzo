@@ -1354,18 +1354,18 @@ mod tests {
     }
 
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
-    fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
             .map(|r| {
                 r.iter()
-                    .map(|v| v.get_int().expect("int"))
-                    .collect()
+                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort();
-        out
+        Ok(out)
     }
 
     /// The fixed-rule mid-run spend guard, end to end: a row-amplifying
@@ -1585,7 +1585,7 @@ mod tests {
         // within the cycle every pair. (Identical to the compile-tier test,
         // now reached through parse → compile → RA → eval → results.)
         assert_eq!(
-            int_rows(&out),
+            int_rows(&out)?,
             vec![
                 vec![1, 2],
                 vec![1, 3],
@@ -1632,7 +1632,7 @@ mod tests {
             .map_err(|e| miette!("create counter: {e}"))?;
 
         const PER_THREAD: i64 = 25;
-        std::thread::scope(|scope| {
+        std::thread::scope(|scope| -> Result<()> {
             for _ in 0..2 {
                 let db = db.clone();
                 scope
@@ -1647,13 +1647,13 @@ mod tests {
                         Ok(())
                     })
                     .join()
-                    .expect("thread join")
-                    .expect("thread result");
+                    .map_err(|_| miette!("thread join"))??;
             }
-        });
+            Ok(())
+        })?;
 
         assert_eq!(
-            current(&db),
+            current(&db)?,
             2 * PER_THREAD,
             "every increment landed; the retry loop lost no update"
         );
@@ -1670,44 +1670,45 @@ mod tests {
     /// delete-reinsert lost the row for the life of the process.)
     #[test]
     fn retraction_governs_across_transactions_on_both_backends() -> Result<()> {
-        fn drive<S: Storage>(db: Engine<S>) {
+        fn drive<S: Storage>(db: Engine<S>) -> Result<()> {
             db.run_script("?[k, v] <- [[1, 'first']] :create t {k => v}", no_params())
-                .map_err(|e| miette!("create: {e}")).expect("test helper");
+                .map_err(|e| miette!("create: {e}"))?;
             db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
-                .map_err(|e| miette!("rm: {e}")).expect("test helper");
+                .map_err(|e| miette!("rm: {e}"))?;
             let gone = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
-                .map_err(|e| miette!("read: {e}")).expect("test helper");
+                .map_err(|e| miette!("read: {e}"))?;
             assert!(
                 gone.rows().is_empty(),
                 "retracted fact must be absent: {gone:?}"
             );
             db.run_script("?[k, v] <- [[1, 'second']] :put t {k => v}", no_params())
-                .map_err(|e| miette!("reinsert: {e}")).expect("test helper");
+                .map_err(|e| miette!("reinsert: {e}"))?;
             let back = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
-                .map_err(|e| miette!("read: {e}")).expect("test helper");
+                .map_err(|e| miette!("read: {e}"))?;
             assert_eq!(back.rows().len(), 1, "reinserted fact must be present");
             assert_eq!(back.rows()[0][1], DataValue::from("second"));
             // And once more: the second retraction must also govern.
             db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
-                .map_err(|e| miette!("rm again: {e}")).expect("test helper");
+                .map_err(|e| miette!("rm again: {e}"))?;
             let gone = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
-                .map_err(|e| miette!("read: {e}")).expect("test helper");
+                .map_err(|e| miette!("read: {e}"))?;
             assert!(gone.rows().is_empty(), "re-retracted fact must be absent");
+            Ok(())
         }
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        drive(open_engine(new_fjall_storage(dir.path())?)?);
-        drive(open_engine(crate::store::sim::SimStorage::new(7))?);
+        drive(open_engine(new_fjall_storage(dir.path())?)?)?;
+        drive(open_engine(crate::store::sim::SimStorage::new(7))?)?;
         Ok(())
     }
 
-    fn current<S: Storage>(db: &Engine<S>) -> i64 {
+    fn current<S: Storage>(db: &Engine<S>) -> Result<i64> {
         let out = db
             .run_script("?[v] := *ctr[k, v]", no_params())
-            .map_err(|e| miette!("read counter: {e}")).expect("test helper");
-        out.rows()[0][0].get_int().ok_or_else(|| miette!("int")).expect("test helper")
+            .map_err(|e| miette!("read counter: {e}"))?;
+        out.rows()[0][0].get_int().ok_or_else(|| miette!("int"))
     }
 
     /// A deterministic derived-tuple ceiling refuses a query that would derive
@@ -1938,29 +1939,29 @@ mod db_battery {
         Ok(Engine::compose(store, Catalog::new())?)
     }
 
-    fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
             .map(|r| {
                 r.iter()
-                    .map(|v| v.get_int().expect("int"))
-                    .collect()
+                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort();
-        out
+        Ok(out)
     }
 
-    fn raw_int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+    fn raw_int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
         nr.rows()
             .iter()
             .map(|r| {
                 r.iter()
-                    .map(|v| v.get_int().expect("int"))
-                    .collect()
+                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()
     }
 
     /// Reviewer's own end-to-end scenario over fjall: schema with keyed relation,
@@ -1983,13 +1984,13 @@ mod db_battery {
         let agg = db
             .run_script("?[sum(b)] := *sal[_, b]", no_params())
             .map_err(|e| miette!("aggregation: {e}"))?;
-        assert_eq!(int_rows(&agg), vec![vec![80]]);
+        assert_eq!(int_rows(&agg)?, vec![vec![80]]);
 
         // :order desc by value, tie broken asc by key, :limit 2.
         let top = db
             .run_script("?[a, b] := *sal[a, b] :order -b, a :limit 2", no_params())
             .map_err(|e| miette!("order+limit: {e}"))?;
-        assert_eq!(raw_int_rows(&top), vec![vec![3, 30], vec![2, 20]]);
+        assert_eq!(raw_int_rows(&top)?, vec![vec![3, 30], vec![2, 20]]);
 
         // :update rewrites the dependent column of an existing key.
         db.run_script("?[a, b] <- [[1, 11]] :update sal {a, b}", no_params())
@@ -1997,7 +1998,7 @@ mod db_battery {
         let after_update = db
             .run_script("?[b] := *sal[1, b]", no_params())
             .map_err(|e| miette!("read back: {e}"))?;
-        assert_eq!(int_rows(&after_update), vec![vec![11]]);
+        assert_eq!(int_rows(&after_update)?, vec![vec![11]]);
 
         // :insert on an existing key is a typed refusal.
         let err = db
@@ -2020,7 +2021,7 @@ mod db_battery {
         let rest = db
             .run_script("?[a, b] := *sal[a, b]", no_params())
             .map_err(|e| miette!("scan: {e}"))?;
-        assert_eq!(int_rows(&rest), vec![vec![2, 20], vec![3, 30]]);
+        assert_eq!(int_rows(&rest)?, vec![vec![2, 20], vec![3, 30]]);
 
         // :returning on a put reports the mutated rows.
         let ret = db
@@ -2029,7 +2030,7 @@ mod db_battery {
                 no_params(),
             )
             .map_err(|e| miette!("put returning: {e}"))?;
-        assert_eq!(int_rows(&ret), vec![vec![7, 70]]);
+        assert_eq!(int_rows(&ret)?, vec![vec![7, 70]]);
         Ok(())
     }
 
@@ -2042,7 +2043,7 @@ mod db_battery {
             .map_err(|e| miette!("create counter: {e}"))?;
 
         const PER_THREAD: i64 = 10;
-        std::thread::scope(|scope| {
+        std::thread::scope(|scope| -> Result<()> {
             for _ in 0..3 {
                 let db = db.clone();
                 scope
@@ -2057,14 +2058,14 @@ mod db_battery {
                         Ok(())
                     })
                     .join()
-                    .expect("thread join")
-                    .expect("thread result");
+                    .map_err(|_| miette!("thread join"))??;
             }
-        });
+            Ok(())
+        })?;
         let out = db
             .run_script("?[v] := *ctr[0, v]", no_params())
             .map_err(|e| miette!("read: {e}"))?;
-        assert_eq!(int_rows(&out), vec![vec![30]]);
+        assert_eq!(int_rows(&out)?, vec![vec![30]]);
         Ok(())
     }
 
@@ -2073,12 +2074,12 @@ mod db_battery {
     /// a budget refusal renders identically on repeated runs.
     #[test]
     fn rs3_determinism_across_backends_and_repeats() -> Result<()> {
-        fn scenario<S: Storage>(db: &Engine<S>) -> (Vec<Vec<i64>>, Vec<Vec<i64>>) {
+        fn scenario<S: Storage>(db: &Engine<S>) -> Result<(Vec<Vec<i64>>, Vec<Vec<i64>>)> {
             db.run_script(
                 "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2], [5, 6]] :create edge {a, b}",
                 no_params(),
             )
-            .map_err(|e| miette!("create: {e}")).expect("test helper");
+            .map_err(|e| miette!("create: {e}"))?;
             let q = "
                 path[a, b] := *edge[a, b]
                 path[a, b] := *edge[a, c], path[c, b]
@@ -2086,13 +2087,13 @@ mod db_battery {
             ";
             let first = raw_int_rows(
                 &db.run_script(q, no_params())
-                    .map_err(|e| miette!("closure: {e}")).expect("test helper"),
-            );
+                    .map_err(|e| miette!("closure: {e}"))?,
+            )?;
             let second = raw_int_rows(
                 &db.run_script(q, no_params())
-                    .map_err(|e| miette!("closure again: {e}")).expect("test helper"),
-            );
-            (first, second)
+                    .map_err(|e| miette!("closure again: {e}"))?,
+            )?;
+            Ok((first, second))
         }
 
         let dir1 = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
@@ -2101,9 +2102,9 @@ mod db_battery {
         let db2 = open_engine(new_fjall_storage(dir2.path())?)?;
         let db3 = open_engine(SimStorage::new(99))?;
 
-        let (a1, a2) = scenario(&db1);
-        let (b1, _) = scenario(&db2);
-        let (c1, _) = scenario(&db3);
+        let (a1, a2) = scenario(&db1)?;
+        let (b1, _) = scenario(&db2)?;
+        let (c1, _) = scenario(&db3)?;
         assert_eq!(a1, a2, "same db, repeated run: identical rows in order");
         assert_eq!(a1, b1, "fresh fjall dbs: identical rows in order");
         assert_eq!(a1, c1, "fjall vs sim: identical rows in order");
@@ -2206,7 +2207,7 @@ mod db_battery {
             .run_script("?[x] := *ack_survive[x]", no_params())
             .map_err(|e| miette!("acked write must be query-visible after power cut: {e}"))?;
         assert_eq!(
-            int_rows(&rows),
+            int_rows(&rows)?,
             vec![vec![42]],
             "acknowledged live write must survive SimStorage::sim_powercut \
              (StableCommitCap NativeFsyncProof barrier)"

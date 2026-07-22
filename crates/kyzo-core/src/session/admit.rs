@@ -2847,7 +2847,7 @@ mod live_certificate_verifiability {
     use kyzo_model::value::DataValue;
     use miette::{Result, ensure, miette};
 
-    fn claim_parts(store: StoreId, live: LiveCertificateInputs) -> AdmitRecordParts {
+    fn claim_parts(store: StoreId, live: LiveCertificateInputs) -> Result<AdmitRecordParts> {
         claim_parts_with_digest(store, live, [0xE4; 32])
     }
 
@@ -2855,24 +2855,24 @@ mod live_certificate_verifiability {
         store: StoreId,
         live: LiveCertificateInputs,
         digest_bytes: [u8; 32],
-    ) -> AdmitRecordParts {
+    ) -> Result<AdmitRecordParts> {
         let digest = RecordContentDigest::from_digest(digest_bytes);
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("live-subject")),
             crate::data::statement::StatementPredicate::new("about")
-                .expect("predicate"),
+                .map_err(|e| miette!("predicate: {e}"))?,
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
             StatementContext::Scoped(ContextId::from_digest([0xC4; 32])),
             StatementSource::unbound(),
         );
-        AdmitRecordParts::new(
+        Ok(AdmitRecordParts::new(
             RecordCore::new(store, digest, SemanticSurface::None, None, kind, statement),
             Placement::Unrestricted,
             None,
             IngestShape::Record,
             live,
-        )
+        ))
     }
 
     /// #374 T4 nasty: admit via the live door with a registered authorizing key,
@@ -2900,7 +2900,7 @@ mod live_certificate_verifiability {
         )
         .map_err(|e| miette!("registered key must open the live door: {e}"))?;
 
-        let (_record, cert) = admit_record(claim_parts(store, live))
+        let (_record, cert) = admit_record(claim_parts(store, live)?)
             .map_err(|e| miette!("admit through live door: {e}"))?;
 
         verify_replica(&cert, store, CommitOrdinal::ZERO, &keys, &scopes, None)
@@ -2916,7 +2916,7 @@ mod live_certificate_verifiability {
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(2),
         ))?;
-        let (_record, cert) = admit_record(claim_parts(seats.store_id(), live))
+        let (_record, cert) = admit_record(claim_parts(seats.store_id(), live)?)
             .map_err(|e| miette!("admit via seats: {e}"))?;
 
         verify_replica(
@@ -2932,7 +2932,7 @@ mod live_certificate_verifiability {
         let live2 = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(3),
         ))?;
-        let (record2, cert2) = admit_record(claim_parts(seats.store_id(), live2))
+        let (record2, cert2) = admit_record(claim_parts(seats.store_id(), live2)?)
             .map_err(|e| miette!("second admit: {e}"))?;
         seats
             .attach_verified(&record2, cert2)
@@ -2999,7 +2999,7 @@ mod live_certificate_verifiability {
             seats.store_id(),
             live_a,
             [0xA1; 32],
-        ))
+        )?)
         .map_err(|e| miette!("admit record A: {e}"))?;
         let live_b = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(11),
@@ -3008,7 +3008,7 @@ mod live_certificate_verifiability {
             seats.store_id(),
             live_b,
             [0xB2; 32],
-        ))
+        )?)
         .map_err(|e| miette!("admit record B: {e}"))?;
 
         let err = seats
@@ -3044,7 +3044,7 @@ mod live_certificate_verifiability {
             .ok_or_else(|| miette!("genesis seats carry a tip link"))?;
         let predecessor_history_digest = *tip.predecessor_root().as_bytes();
         let (record, cert) =
-            admit_record(claim_parts(seats.store_id(), live)).map_err(|e| miette!("admit: {e}"))?;
+            admit_record(claim_parts(seats.store_id(), live)?).map_err(|e| miette!("admit: {e}"))?;
 
         let mut flipped = *cert.signature().as_bytes();
         flipped[0] ^= 0x01;
@@ -3093,7 +3093,7 @@ mod live_certificate_verifiability {
         let live = origin.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(13),
         ))?;
-        let (record, cert) = admit_record(claim_parts(origin.store_id(), live))
+        let (record, cert) = admit_record(claim_parts(origin.store_id(), live)?)
             .map_err(|e| miette!("admit on origin: {e}"))?;
 
         let err = foreign
@@ -3253,16 +3253,16 @@ mod bulk_write_tests {
     /// finds nothing), re-puts of existing keys (probe finds a row,
     /// `has_indices`/`need_to_collect` both false so only the probe and the
     /// write run), and removals (retraction through the same key encoder).
-    fn run_seeded_workload(db: &Engine<SimStorage>) {
+    fn run_seeded_workload(db: &Engine<SimStorage>) -> Result<()> {
         db.run_script("?[k, v] <- [] :create w {k => v}", no_params())
-            .map_err(|e| miette!("create: {e}")).expect("test helper");
+            .map_err(|e| miette!("create: {e}"))?;
         let mut fresh = String::from("?[k, v] <- [");
         for i in 0..500i64 {
             fresh.push_str(&format!("[{i},{}],", i * 3));
         }
         fresh.push_str("] :put w {k => v}");
         db.run_script(&fresh, no_params())
-            .map_err(|e| miette!("bulk insert: {e}")).expect("test helper");
+            .map_err(|e| miette!("bulk insert: {e}"))?;
 
         // Re-put 200 of those keys with a different value: exercises the
         // probe's FOUND branch (`current_row` returns `Some`) through the
@@ -3273,7 +3273,7 @@ mod bulk_write_tests {
         }
         updates.push_str("] :put w {k => v}");
         db.run_script(&updates, no_params())
-            .map_err(|e| miette!("re-put: {e}")).expect("test helper");
+            .map_err(|e| miette!("re-put: {e}"))?;
 
         // Retract 100 keys: exercises `remove_from_relation`'s use of the
         // same key encoder for a Retract row.
@@ -3283,9 +3283,9 @@ mod bulk_write_tests {
         }
         removals.push_str("] :rm w {k}");
         db.run_script(&removals, no_params())
-            .map_err(|e| miette!("bulk remove: {e}")).expect("test helper");
+            .map_err(|e| miette!("bulk remove: {e}"))?;
+        Ok(())
     }
-
     /// The bulk-write allocation fix (`encode_key_with_suffix` replacing
     /// the materialize-then-encode `Vec<DataValue>` in both
     /// `encode_bitemporal_key_for_store` and `current_row`) must not move a
@@ -3298,7 +3298,7 @@ mod bulk_write_tests {
     #[test]
     fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() -> Result<()> {
         let db = open_engine(SimStorage::new(0xB01C_0001))?;
-        run_seeded_workload(&db);
+        run_seeded_workload(&db)?;
 
         let tx = db.store.read_tx().map_err(|e| miette!("read tx: {e}"))?;
         let scan: Vec<(Slice, Slice)> = tx
@@ -3542,18 +3542,18 @@ mod trigger_cache_battery {
         Ok(Engine::compose(store, Catalog::new())?)
     }
 
-    fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
             .map(|r| {
                 r.iter()
-                    .map(|v| v.get_int().expect("int"))
-                    .collect()
+                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort();
-        out
+        Ok(out)
     }
 
     /// Two `on put` triggers on one relation fire in ONE session, and each runs
@@ -3583,7 +3583,7 @@ mod trigger_cache_battery {
             .run_script("?[a, b] := *mirror[a, b]", no_params())
             .map_err(|e| miette!("mirror scan: {e}"))?;
         assert_eq!(
-            int_rows(&mirror),
+            int_rows(&mirror)?,
             vec![vec![0, 0], vec![1, 10], vec![2, 20]],
             "first on-put trigger must mirror the new rows"
         );
@@ -3591,7 +3591,7 @@ mod trigger_cache_battery {
             .run_script("?[a, b] := *mirror2[a, b]", no_params())
             .map_err(|e| miette!("mirror2 scan: {e}"))?;
         assert_eq!(
-            int_rows(&mirror2),
+            int_rows(&mirror2)?,
             vec![vec![0, 0], vec![1, 10], vec![2, 20]],
             "second on-put trigger must run ITS program, not a cache-collided one"
         );
@@ -3615,7 +3615,7 @@ mod trigger_cache_battery {
             .run_script("?[a, b] := *edge[a, b]", no_params())
             .map_err(|e| miette!("scan: {e}"))?;
         // The old three rows are gone; only the replacement survives.
-        assert_eq!(int_rows(&out), vec![vec![9, 9]]);
+        assert_eq!(int_rows(&out)?, vec![vec![9, 9]]);
         Ok(())
     }
 }

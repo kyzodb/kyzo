@@ -835,50 +835,56 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn witnesses_are_deterministic_across_thread_counts_and_backends() -> Result<()> {
-        fn violate<S: Storage>(db: &Engine<S>) -> (String, usize, Vec<Tuple>) {
+        fn violate<S: Storage>(db: &Engine<S>) -> Result<(String, usize, Vec<Tuple>)> {
             db.run_script("?[k, v] <- [[0, 0]] :create scores {k => v}", no_params())
-                .map_err(|e| miette!("create: {e}")).expect("test helper");
+                .map_err(|e| miette!("create: {e}"))?;
             db.run_script(
                 "::constraint create nonneg { ?[k, v] := *scores[k, v], v < 0 }",
                 no_params(),
             )
-            .map_err(|e| miette!("constraint: {e}")).expect("test helper");
+            .map_err(|e| miette!("constraint: {e}"))?;
             let rows: Vec<String> = (1..=20).map(|i| format!("[{i}, {}]", -i)).collect();
             let script = format!("?[k, v] <- [{}] :put scores {{k, v}}", rows.join(", "));
             let err = db
                 .run_script(&script, no_params())
                 .expect_err("20 violations denied");
             let viol = err
-                .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed:")).expect("test helper");
-            (viol.name.clone(), viol.total, viol.witnesses.clone())
+                .downcast_ref::<ConstraintViolation>()
+                .ok_or_else(|| miette!("typed:"))?;
+            Ok((viol.name.clone(), viol.total, viol.witnesses.clone()))
         }
 
-        fn at_thread_count<T: Send>(threads: usize, f: impl FnOnce() -> T + Send) -> T {
+        fn at_thread_count<T: Send>(
+            threads: usize,
+            f: impl FnOnce() -> Result<T> + Send,
+        ) -> Result<T> {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
-                .expect("thread pool")
+                .map_err(|e| miette!("thread pool: {e}"))?
                 .install(f)
         }
 
-        let baseline = at_thread_count(1, || violate(&open_engine(SimStorage::new(7)).expect("engine")));
+        let baseline = at_thread_count(1, || violate(&open_engine(SimStorage::new(7))?))?;
         assert_eq!(baseline.1, 20, "full violation count reported");
         assert_eq!(baseline.2.len(), WITNESS_CAP, "witness list capped");
         // Sorted ⇒ the cap keeps the smallest keys 1..=8.
         assert_eq!(
-            baseline.2.first().expect("witness"),
+            baseline.2.first().ok_or_else(|| miette!("witness"))?,
             &Tuple::from_vec(vec![DataValue::from(1), DataValue::from(-1)])
         );
 
         for threads in [2, 4] {
-            let got = at_thread_count(threads, || violate(&open_engine(SimStorage::new(7)).expect("engine")));
+            let got = at_thread_count(threads, || {
+                violate(&open_engine(SimStorage::new(7))?)
+            })?;
             assert_eq!(got, baseline, "witnesses differ at {threads} threads");
         }
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let on_fjall = at_thread_count(2, || {
             let path = dir.path();
-            violate(&open_engine(new_fjall_storage(path).expect("fjall")).expect("engine"))
-        });
+            violate(&open_engine(new_fjall_storage(path)?)?)
+        })?;
         assert_eq!(on_fjall, baseline, "witnesses differ across backends");
         Ok(())
     }

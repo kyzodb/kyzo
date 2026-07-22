@@ -1048,7 +1048,7 @@ mod exactly_once_battery {
 
         const PER_THREAD: i64 = 15;
         const THREADS: i64 = 2;
-        std::thread::scope(|scope| {
+        std::thread::scope(|scope| -> Result<()> {
             for _ in 0..THREADS {
                 let db = db.clone();
                 scope
@@ -1063,16 +1063,16 @@ mod exactly_once_battery {
                         Ok(())
                     })
                     .join()
-                    .expect("thread join")
-                    .expect("thread result");
+                    .map_err(|e| miette!("thread join: {e:?}"))??;
             }
-        });
+            Ok(())
+        })?;
 
         let mut new_values: Vec<i64> = vec![];
         while let Ok(event) = receiver.try_recv() {
             assert_eq!(event.op.as_str(), "Put");
             for row in event.new_rows.rows() {
-                new_values.push(row[1].get_int().expect("int"));
+                new_values.push(row[1].get_int().ok_or_else(|| miette!("int"))?);
             }
         }
         new_values.sort();
@@ -1416,7 +1416,7 @@ mod health_tiers_and_tracing {
     use kyzo_model::value::{DataValue, Tuple};
     use miette::{Result, miette};
 
-    fn probe_rows() -> NamedRows {
+    fn probe_rows() -> Result<NamedRows> {
         NamedRows::try_new(
             vec!["k".into(), "v".into()],
             vec![
@@ -1424,7 +1424,7 @@ mod health_tiers_and_tracing {
                 Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)]),
             ],
         )
-        .map_err(|e| miette!("probe rows: {e}")).expect("test helper")
+        .map_err(|e| miette!("probe rows: {e}"))
     }
 
     /// Prove: liveness / readiness / integrity are three distinct doors that
@@ -1500,7 +1500,7 @@ mod health_tiers_and_tracing {
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
             .map_err(|e| miette!("compose: {e}"))?;
 
-        let rows = probe_rows();
+        let rows = probe_rows()?;
         let charge = 5u64;
         let ceiling = 100u64;
         let verbosities = [
@@ -1564,11 +1564,11 @@ mod health_tiers_and_tracing {
         // Engine door: set_tracing_verbosity up/down — same rows + budget.
         db.set_tracing_verbosity(TracingVerbosity::Silent);
         let mut budget_lo = ObservationBudget::with_ceiling(ceiling);
-        let (lo, emit_lo) = db.observe_under_tracing(probe_rows(), charge, &mut budget_lo);
+        let (lo, emit_lo) = db.observe_under_tracing(probe_rows()?, charge, &mut budget_lo);
 
         db.set_tracing_verbosity(TracingVerbosity::Detail);
         let mut budget_hi = ObservationBudget::with_ceiling(ceiling);
-        let (hi, emit_hi) = db.observe_under_tracing(probe_rows(), charge, &mut budget_hi);
+        let (hi, emit_hi) = db.observe_under_tracing(probe_rows()?, charge, &mut budget_hi);
 
         assert_eq!(
             lo.rows().headers(),

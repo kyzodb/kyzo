@@ -493,8 +493,8 @@ mod tests {
     use crate::store::fjall::new_fjall_storage;
     use miette::{Result, miette};
 
-    fn merkle_budget() -> std::num::NonZeroU64 {
-        std::num::NonZeroU64::new(1_000_000).expect("literal 1_000_000 is nonzero")
+    fn merkle_budget() -> Result<std::num::NonZeroU64> {
+        std::num::NonZeroU64::new(1_000_000).ok_or_else(|| miette!("nonzero budget"))
     }
 
     /// Intact store + lawful chain tip → [`RootVerifyOutcome::Intact`].
@@ -527,7 +527,7 @@ mod tests {
         let cut = CommitOrdinal::ZERO.successor()?;
 
         let tx = db.read_tx()?;
-        let content_root = StateRoot::from_merkle(state_root(&tx, merkle_budget())?);
+        let content_root = StateRoot::from_merkle(state_root(&tx, merkle_budget()?)?);
 
         let mut chain = RootChain::empty();
         assert_eq!(chain.prior_root(), GENESIS_ROOT);
@@ -545,7 +545,7 @@ mod tests {
         let _forged_caller_root = StateRoot::from_digest([0xDE; 32]);
         assert_ne!(_forged_caller_root, as_of_root(&chain, cut)?);
 
-        match verify(&tx, &chain, cut, merkle_budget()).map_err(|e| miette!("verify runs: {e}"))? {
+        match verify(&tx, &chain, cut, merkle_budget()?).map_err(|e| miette!("verify runs: {e}"))? {
             RootVerifyOutcome::Intact { root } => {
                 assert_eq!(root, as_of_root(&chain, cut)?);
                 assert!(roots_equal_at_cut(root, chain.prior_root()));
@@ -589,7 +589,7 @@ mod tests {
 
         let content_root = {
             let tx = db.read_tx()?;
-            StateRoot::from_merkle(state_root(&tx, merkle_budget())?)
+            StateRoot::from_merkle(state_root(&tx, merkle_budget()?)?)
         };
 
         let mut chain = RootChain::empty();
@@ -612,13 +612,13 @@ mod tests {
         }
 
         let tx = db.read_tx()?;
-        let tampered_content = StateRoot::from_merkle(state_root(&tx, merkle_budget())?);
+        let tampered_content = StateRoot::from_merkle(state_root(&tx, merkle_budget()?)?);
         assert_ne!(
             tampered_content, content_root,
             "tamper must change the cold content root"
         );
 
-        match verify(&tx, &chain, cut, merkle_budget()).map_err(|e| miette!("verify runs: {e}"))? {
+        match verify(&tx, &chain, cut, merkle_budget()?).map_err(|e| miette!("verify runs: {e}"))? {
             RootVerifyOutcome::Tampered {
                 expected,
                 recomputed,
@@ -663,24 +663,24 @@ mod tests {
             s
         };
 
-        fn write_state(pairs: &[(Vec<u8>, Vec<u8>)]) -> crate::store::fjall::FjallStorage {
-            let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}")).expect("test helper");
-            let db = new_fjall_storage(dir.path()).expect("test helper");
+        fn write_state(pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<crate::store::fjall::FjallStorage> {
+            let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+            let db = new_fjall_storage(dir.path())?;
             std::mem::forget(dir);
-            let mut tx = db.write_tx().expect("test helper");
+            let mut tx = db.write_tx()?;
             for (k, v) in pairs {
-                tx.put(k, v).expect("test helper");
+                tx.put(k, v)?;
             }
-            tx.commit().expect("test helper");
-            db
+            tx.commit()?;
+            Ok(db)
         }
 
-        let db_v1 = write_state(&state_v1);
-        let content_v1 = StateRoot::from_merkle(state_root(&db_v1.read_tx()?, merkle_budget())?);
-        let db_v2 = write_state(&state_v2);
-        let content_v2 = StateRoot::from_merkle(state_root(&db_v2.read_tx()?, merkle_budget())?);
-        let db_v3 = write_state(&state_v3);
-        let content_v3 = StateRoot::from_merkle(state_root(&db_v3.read_tx()?, merkle_budget())?);
+        let db_v1 = write_state(&state_v1)?;
+        let content_v1 = StateRoot::from_merkle(state_root(&db_v1.read_tx()?, merkle_budget()?)?);
+        let db_v2 = write_state(&state_v2)?;
+        let content_v2 = StateRoot::from_merkle(state_root(&db_v2.read_tx()?, merkle_budget()?)?);
+        let db_v3 = write_state(&state_v3)?;
+        let content_v3 = StateRoot::from_merkle(state_root(&db_v3.read_tx()?, merkle_budget()?)?);
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 
@@ -716,20 +716,20 @@ mod tests {
 
         // Live tip store matches tip cut.
         assert!(matches!(
-            verify(&db_v3.read_tx()?, &chain, o3, merkle_budget())?,
+            verify(&db_v3.read_tx()?, &chain, o3, merkle_budget()?)?,
             RootVerifyOutcome::Intact { .. }
         ));
 
         // Attacker restores an older internally-consistent backup (v1 bytes).
-        let rolled = write_state(&state_v1);
+        let rolled = write_state(&state_v1)?;
         let rolled_content =
-            StateRoot::from_merkle(state_root(&rolled.read_tx()?, merkle_budget())?);
+            StateRoot::from_merkle(state_root(&rolled.read_tx()?, merkle_budget()?)?);
         assert_eq!(
             rolled_content, content_v1,
             "rolled-back store must be internally consistent with v1"
         );
 
-        match verify(&rolled.read_tx()?, &chain, o3, merkle_budget())? {
+        match verify(&rolled.read_tx()?, &chain, o3, merkle_budget()?)? {
             RootVerifyOutcome::Tampered {
                 expected,
                 recomputed,
@@ -743,7 +743,7 @@ mod tests {
         }
 
         // Same rolled-back bytes still Intact at the older cut they match.
-        match verify(&rolled.read_tx()?, &chain, o1, merkle_budget())? {
+        match verify(&rolled.read_tx()?, &chain, o1, merkle_budget()?)? {
             RootVerifyOutcome::Intact { root } => {
                 assert_eq!(root, as_of_root(&chain, o1)?);
             }
@@ -832,14 +832,14 @@ mod tests {
     }
 
     /// Seeded edge relation for refuse-path pins through [`Engine::verify_script`].
-    fn seeded_edge_db() -> Engine<crate::store::fjall::FjallStorage> {
+    fn seeded_edge_db() -> Result<Engine<crate::store::fjall::FjallStorage>> {
         use crate::session::catalog::Catalog;
-        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}")).expect("test helper");
-        let storage = new_fjall_storage(dir.path()).expect("test helper");
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let storage = new_fjall_storage(dir.path())?;
         std::mem::forget(dir);
-        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}")).expect("test helper");
+        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}"))?;
         db.run_script(":create edge {a: Int, b: Int}", Default::default())
-            .map_err(|e| miette!("create schema: {e}")).expect("test helper");
+            .map_err(|e| miette!("create schema: {e}"))?;
         let rows = DataValue::List(vec![
             DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
             DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
@@ -849,15 +849,15 @@ mod tests {
             "?[a, b] <- $rows :put edge {a, b}",
             BTreeMap::from([("rows".into(), rows)]),
         )
-        .map_err(|e| miette!("seed: {e}")).expect("test helper");
-        db
+        .map_err(|e| miette!("seed: {e}"))?;
+        Ok(db)
     }
 
     /// `:put` reaches [`verify_input_program`] → [`VerifyUnsupported::Mutation`].
     /// Hand-constructed `Unsupported { Mutation }` never proved this door.
     #[test]
     fn verify_input_program_refuses_mutation() -> Result<()> {
-        let db = seeded_edge_db();
+        let db = seeded_edge_db()?;
         let outcome = db
             .verify_script(
                 "?[a, b] := *edge[a, b] :put edge {a, b}",
@@ -880,7 +880,7 @@ mod tests {
     /// `:order` reaches [`verify_input_program`] → [`VerifyUnsupported::OrderLimitOffset`].
     #[test]
     fn verify_input_program_refuses_order_limit_offset() -> Result<()> {
-        let db = seeded_edge_db();
+        let db = seeded_edge_db()?;
         let outcome = db
             .verify_script(
                 "?[a, b] := *edge[a, b] :order a",
@@ -903,7 +903,7 @@ mod tests {
     /// `@spans` reaches [`verify_input_program`] → [`VerifyUnsupported::IntervalDerivation`].
     #[test]
     fn verify_input_program_refuses_interval_derivation() -> Result<()> {
-        let db = seeded_edge_db();
+        let db = seeded_edge_db()?;
         db.run_script(":create hist {k: Int => v: Any}", Default::default())
             .map_err(|e| miette!("create hist: {e}"))?;
         let outcome = db

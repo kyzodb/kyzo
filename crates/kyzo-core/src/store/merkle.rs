@@ -1449,26 +1449,27 @@ mod tests {
             roots_equal_at_cut,
         };
 
-        fn copy_dir_recursive(src: &Path, dst: &Path) {
-            std::fs::create_dir_all(dst).into_diagnostic().expect("test helper");
-            for entry in std::fs::read_dir(src).expect("test helper") {
-                let entry = entry.expect("test helper");
-                let ty = entry.file_type().expect("test helper");
+        fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+            std::fs::create_dir_all(dst).into_diagnostic()?;
+            for entry in std::fs::read_dir(src).into_diagnostic()? {
+                let entry = entry.into_diagnostic()?;
+                let ty = entry.file_type().into_diagnostic()?;
                 let from = entry.path();
                 let to = dst.join(entry.file_name());
                 if ty.is_dir() {
-                    copy_dir_recursive(&from, &to);
+                    copy_dir_recursive(&from, &to)?;
                 } else {
-                    std::fs::copy(&from, &to).expect("test helper");
+                    std::fs::copy(&from, &to).into_diagnostic()?;
                 }
             }
+            Ok(())
         }
 
-        fn replace_dir_with(src: &Path, dst: &Path) {
+        fn replace_dir_with(src: &Path, dst: &Path) -> Result<()> {
             if dst.exists() {
-                std::fs::remove_dir_all(dst).into_diagnostic().expect("test helper");
+                std::fs::remove_dir_all(dst).into_diagnostic()?;
             }
-            copy_dir_recursive(src, dst);
+            copy_dir_recursive(src, dst)
         }
 
         let store_id = StoreId::from_digest([0x5D; 32]);
@@ -1493,7 +1494,7 @@ mod tests {
             drop(db);
             content
         };
-        copy_dir_recursive(&live, &backup_v1);
+        copy_dir_recursive(&live, &backup_v1)?;
 
         // Advance live store to v3; mint RootChain under the advanced tip.
         let (content_v3, chain) = {
@@ -1547,7 +1548,7 @@ mod tests {
         assert!(roots_equal_at_cut(tip_prior, tip_as_of));
 
         // Attacker restores the v1 directory under the advanced tip.
-        replace_dir_with(&backup_v1, &live);
+        replace_dir_with(&backup_v1, &live)?;
         let restored_content = {
             let db = new_fjall_storage(&live)?;
             StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget()?)?)

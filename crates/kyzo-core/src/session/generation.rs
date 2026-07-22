@@ -268,18 +268,18 @@ mod tests {
     }
 
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
-    fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
             .map(|r| {
                 r.iter()
-                    .map(|v| v.get_int().expect("int"))
-                    .collect()
+                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort();
-        out
+        Ok(out)
     }
 
     /// The segment law, end to end: a run of pure reads with no
@@ -306,29 +306,29 @@ mod tests {
         // way both reads return the correct answer.
         let q = "?[k, v] := *w[k, v]";
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![2, 20]]
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![2, 20]]
         );
 
         // A committed write orphans the segment: the re-read sees it.
         db.run_script("?[k, v] <- [[3, 30]] :put w {k, v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![2, 20], vec![3, 30]]
         );
 
         // A retraction is a write like any other: served state updates.
         db.run_script("?[k, v] <- [[2, 20]] :rm w {k, v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![3, 30]]
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![3, 30]]
         );
 
@@ -346,7 +346,7 @@ mod tests {
             "violating write denied"
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![3, 30]]
         );
 
@@ -357,12 +357,12 @@ mod tests {
         db.run_script("::index create w:by_v {v}", no_params())?;
         let qi = "?[v, k] := *w:by_v{v, k}";
         assert_eq!(
-            int_rows(&db.run_script(qi, no_params())?),
+            int_rows(&db.run_script(qi, no_params())?)?,
             vec![vec![10, 1], vec![30, 3]]
         );
         db.run_script("?[k, v] <- [[5, 50]] :put w {k, v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(qi, no_params())?),
+            int_rows(&db.run_script(qi, no_params())?)?,
             vec![vec![10, 1], vec![30, 3], vec![50, 5]],
             "an index segment must never outlive a base write"
         );
@@ -389,25 +389,25 @@ mod tests {
         // miss is at the same stable generation and builds jr's segment, so
         // its point-lookup probe is served from the cache from here on.
         let q = "?[k, v] := *jl[k], *jr[k, v]";
-        assert_eq!(int_rows(&db.run_script(q, no_params())?), vec![vec![1, 10]]);
-        assert_eq!(int_rows(&db.run_script(q, no_params())?), vec![vec![1, 10]]);
+        assert_eq!(int_rows(&db.run_script(q, no_params())?)?, vec![vec![1, 10]]);
+        assert_eq!(int_rows(&db.run_script(q, no_params())?)?, vec![vec![1, 10]]);
 
         // A committed write to jr — the PROBE side of the join — orphans
         // its segment: the re-read must see the new row, not a stale
         // probe answer served from before the write.
         db.run_script("?[k2, v] <- [[2, 20]] :put jr {k2 => v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![2, 20]]
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
+            int_rows(&db.run_script(q, no_params())?)?,
             vec![vec![1, 10], vec![2, 20]]
         );
 
         // A retraction on the probe side is a write like any other.
         db.run_script("?[k2, v] <- [[1, 10]] :rm jr {k2, v}", no_params())?;
-        assert_eq!(int_rows(&db.run_script(q, no_params())?), vec![vec![2, 20]]);
+        assert_eq!(int_rows(&db.run_script(q, no_params())?)?, vec![vec![2, 20]]);
         Ok(())
     }
 }

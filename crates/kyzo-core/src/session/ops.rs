@@ -857,8 +857,10 @@ mod temporal_index_tests {
         }
     }
 
-    fn open_session(db: &Engine<SimStorage>) -> SessionTx<<SimStorage as Storage>::WriteTx> {
-        SessionTx::new_write(db.store.write_tx().expect("test helper"), ScriptOptions::new())
+    fn open_session(
+        db: &Engine<SimStorage>,
+    ) -> Result<SessionTx<<SimStorage as Storage>::WriteTx>> {
+        Ok(SessionTx::new_write(db.store.write_tx()?, ScriptOptions::new()))
     }
 
     /// Write one base point event directly (bypassing `execute_relation`,
@@ -1019,7 +1021,7 @@ mod temporal_index_tests {
     #[test]
     fn temporal_index_posting_rows_match_the_scripted_history_exactly() -> Result<()> {
         let db = open_engine(SimStorage::new(0x7E57_0001))?;
-        let mut stx = open_session(&db);
+        let mut stx = open_session(&db)?;
         stx.create_relation(base_input("e"), KeyspaceKind::Facts)?;
         stx.create_temporal_index("e", "t")?;
         let base = stx.get_relation("e")?;
@@ -1116,7 +1118,7 @@ mod temporal_index_tests {
 
         // Universe A: index live from the start (incremental).
         let db_a = open_engine(SimStorage::new(0xB0071))?;
-        let mut stx_a = open_session(&db_a);
+        let mut stx_a = open_session(&db_a)?;
         stx_a.create_relation(base_input("b"), KeyspaceKind::Facts)?;
         stx_a.create_temporal_index("b", "t")?;
         let base_a = stx_a.get_relation("b")?;
@@ -1141,7 +1143,7 @@ mod temporal_index_tests {
         // directly instead, to keep the helper's contract ("an index is
         // attached") honest.
         let db_b = open_engine(SimStorage::new(0xB0072))?;
-        let mut stx_b = open_session(&db_b);
+        let mut stx_b = open_session(&db_b)?;
         stx_b.create_relation(base_input("b"), KeyspaceKind::Facts)?;
         let base_b = stx_b.get_relation("b")?;
         for &(k, valid, sys, polarity, _) in &events {
@@ -1187,7 +1189,7 @@ mod temporal_index_tests {
     #[test]
     fn every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate() -> Result<()> {
         let db = open_engine(SimStorage::new(0x7E57_0002))?;
-        let mut stx = open_session(&db);
+        let mut stx = open_session(&db)?;
         stx.create_relation(base_input("m"), KeyspaceKind::Facts)?;
         stx.create_temporal_index("m", "t")?;
         let base = stx.get_relation("m")?;
@@ -1244,7 +1246,7 @@ mod temporal_index_tests {
         {
             // `::temporal index create` has no parsed surface yet (see
             // the landing report); attach it directly.
-            let mut stx = open_session(&db);
+            let mut stx = open_session(&db)?;
             stx.create_temporal_index("po", "t")?;
             stx.store.commit()?;
         }
@@ -1326,7 +1328,7 @@ mod temporal_index_tests {
         db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
             .map_err(|e| miette!("create: {e}"))?;
         {
-            let mut stx = open_session(&db);
+            let mut stx = open_session(&db)?;
             stx.create_temporal_index("po", "t")?;
             stx.store.commit()?;
         }
@@ -1404,18 +1406,18 @@ mod index_surface_tests {
     }
 
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
-    fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
+    fn int_rows(nr: &NamedRows) -> Result<Vec<Vec<i64>>> {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
             .map(|r| {
                 r.iter()
-                    .map(|v| v.get_int().expect("int"))
-                    .collect()
+                    .map(|v| v.get_int().ok_or_else(|| miette!("int")))
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         out.sort();
-        out
+        Ok(out)
     }
 
     /// Index-served as-of reads answer exactly like base scans, through
@@ -1486,7 +1488,7 @@ mod index_surface_tests {
             .run_script("?[count(v)] := *big:by_v{v, k}", no_params())
             .map_err(|e| miette!("count via index: {e}"))?;
         assert_eq!(
-            int_rows(&via_index),
+            int_rows(&via_index)?,
             vec![vec![5000]],
             "every row indexed once"
         );

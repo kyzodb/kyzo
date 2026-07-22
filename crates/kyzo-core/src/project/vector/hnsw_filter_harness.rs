@@ -48,6 +48,7 @@ use super::*;
 
 use miette::{IntoDiagnostic, Result, bail, miette};
 use proptest::prelude::*;
+use proptest::test_runner::TestCaseError;
 
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation, get_relation};
 use crate::store::Storage;
@@ -221,13 +222,15 @@ enum FilterSpec {
 
 impl FilterSpec {
     /// Native predicate over a BASE row `[k, v, …]`. The oracle's truth.
-    fn passes(&self, row: &[DataValue]) -> bool {
-        let k = row[0].get_int().expect("key is int");
-        match *self {
+    fn passes(&self, row: &[DataValue]) -> Result<bool> {
+        let k = row[0]
+            .get_int()
+            .ok_or_else(|| miette!("key is int"))?;
+        Ok(match *self {
             FilterSpec::LessThan { threshold } => k < threshold,
             FilterSpec::ModLessThan { modulus, accept } => k.rem_euclid(modulus) < accept,
             FilterSpec::AtLeast { threshold } => k >= threshold,
-        }
+        })
     }
 
     /// Expr filter over the ENGINE's appended output row. Binding
@@ -288,12 +291,18 @@ impl FilterSpec {
 
     /// True selectivity over a concrete corpus — VERIFIES the sweep generator
     /// lands in its band before any search runs.
-    fn true_selectivity(&self, rows: &[Tuple]) -> f64 {
-        usize_to_f64(self.true_match_count(rows)) / usize_to_f64(rows.len())
+    fn true_selectivity(&self, rows: &[Tuple]) -> Result<f64> {
+        Ok(usize_to_f64(self.true_match_count(rows)?) / usize_to_f64(rows.len()))
     }
 
-    fn true_match_count(&self, rows: &[Tuple]) -> usize {
-        rows.iter().filter(|r| self.passes(r.as_slice())).count()
+    fn true_match_count(&self, rows: &[Tuple]) -> Result<usize> {
+        let mut n = 0usize;
+        for r in rows {
+            if self.passes(r.as_slice())? {
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 }
 
@@ -343,7 +352,10 @@ fn brute_force_filtered_knn(
 ) -> Result<Vec<i64>> {
     let qv = IndexVec::admit(q, manifest)?;
     let mut scored: Vec<(RankScore, i64)> = Vec::new();
-    for r in rows.iter().filter(|r| filter.passes(r.as_slice())) {
+    for r in rows {
+        if !filter.passes(r.as_slice())? {
+            continue;
+        }
         let key = r[0].get_int().ok_or_else(|| miette!("key is int"))?;
         let v = match &r.as_slice()[1] {
             DataValue::Vector(v) => v.clone(),
@@ -506,7 +518,7 @@ fn sweep_generator_hits_its_bands() -> Result<()> {
             } % 2
                 == 0,
         );
-        let s = f.true_selectivity(&rows);
+        let s = f.true_selectivity(&rows)?;
         assert!(
             (s - target).abs() <= 0.01,
             "band {target}: got selectivity {s}"
@@ -1027,7 +1039,7 @@ fn production_fallback_repairs_starved_real_search() -> Result<()> {
     // No duplicates: a naive "concat the partial with the scan, then
     // truncate" repair would double-count whatever the partial already
     // found.
-    let mut ekeys = keys_of(&hits).expect("keys_of");
+    let mut ekeys = keys_of(&hits)?;
     let before = ekeys.len();
     ekeys.sort_unstable();
     ekeys.dedup();
@@ -1198,7 +1210,7 @@ fn min_k_matches_law_generative() -> Result<()> {
             "pinned band: the production fallback must repair the non-empty \
              partial to exactly k rows"
         );
-        let mut ekeys = keys_of(&hits).expect("keys_of");
+        let mut ekeys = keys_of(&hits)?;
         let before = ekeys.len();
         ekeys.sort_unstable();
         ekeys.dedup();
@@ -1219,8 +1231,22 @@ fn min_k_matches_law_generative() -> Result<()> {
     proptest!(ProptestConfig::with_cases(64), |(k in 1usize..=15, modulus in 2i64..=64, accept_raw in 0i64..64)| {
         let accept = accept_raw % modulus;
         let f = FilterSpec::ModLessThan { modulus, accept };
-        let matches = f.true_match_count(&rows);
-        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f }).expect("filtered_search");
+        let matches = f
+            .true_match_count(&rows)
+            .map_err(|e| TestCaseError::fail(format!("{e}")))?;
+        let hits = filtered_search(
+            &rtx,
+            FilteredSearchSpec {
+                q: &q,
+                manifest: &m,
+                base: &base,
+                idx: &idx,
+                k: k,
+                ef: P2_EF,
+                filter: &f,
+            },
+        )
+        .map_err(|e| TestCaseError::fail(format!("{e}")))?;
         prop_assert_eq!(
             hits.len(),
             k.min(matches),
@@ -1228,10 +1254,13 @@ fn min_k_matches_law_generative() -> Result<()> {
             k, modulus, accept, matches, hits.len()
         );
         for h in &hits {
-            prop_assert!(f.passes(h.as_slice()), "returned row {h:?} fails its own filter");
+            let ok = f
+                .passes(h.as_slice())
+                .map_err(|e| TestCaseError::fail(format!("{e}")))?;
+            prop_assert!(ok, "returned row {h:?} fails its own filter");
         }
         // No duplicates: every returned key is distinct.
-        let mut ekeys = keys_of(&hits).expect("keys_of");
+        let mut ekeys = keys_of(&hits).map_err(|e| TestCaseError::fail(format!("{e}")))?;
         let before = ekeys.len();
         ekeys.sort_unstable();
         ekeys.dedup();
@@ -1255,7 +1284,7 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
 
     for threshold in [1i64, 2, 3] {
         let f = FilterSpec::LessThan { threshold };
-        let matches = f.true_match_count(&rows);
+        let matches = f.true_match_count(&rows)?;
         assert_eq!(
             matches,
             match usize::try_from(threshold) {
@@ -1299,8 +1328,9 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
 fn near_far_cluster_corpus_n(dim: usize, n: i64) -> Result<(i64, i64, Vec<Tuple>)> {
     let half = n / 2;
     let mut rows = seeded_rows(n, dim, P2_CORPUS_SEED)?;
-    let far_start = usize::try_from(half)
-        .expect("INVARIANT(near_far_half_fits_usize): corpus half fits usize");
+    let far_start = usize::try_from(half).map_err(|_| {
+        miette!("INVARIANT(near_far_half_fits_usize): corpus half fits usize")
+    })?;
     for row in rows.iter_mut().skip(far_start) {
         let comps = match row.get(1) {
             Some(DataValue::Vector(v)) => v.to_f64s().into_iter().map(|c| c + 40.0).collect(),
@@ -1339,7 +1369,7 @@ fn min_k_matches_disconnected_from_entry_region() -> Result<()> {
     let q = seeded_query(dim, P2_QUERY_SEED)?;
 
     let f = FilterSpec::AtLeast { threshold: half }; // matches only the far cluster
-    let matches = f.true_match_count(&rows);
+    let matches = f.true_match_count(&rows)?;
     assert_eq!(
         usize_to_i64(matches)?,
         n - half
@@ -1392,7 +1422,7 @@ fn assert_graph_walk_alone_reaches_far_cluster(dim: usize, n: i64, label: &str) 
     let rtx = db.read_tx()?;
     let q = seeded_query(dim, P2_QUERY_SEED)?;
     let f = FilterSpec::AtLeast { threshold: half };
-    let matches = f.true_match_count(&rows);
+    let matches = f.true_match_count(&rows)?;
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
 
     let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
@@ -1460,7 +1490,7 @@ fn min_k_matches_zero_matches() -> Result<()> {
     let q = seeded_query(P2_DIM, P2_QUERY_SEED)?;
 
     let f = FilterSpec::LessThan { threshold: 0 }; // keys are 0..n, so nothing passes
-    assert_eq!(f.true_match_count(&rows), 0);
+    assert_eq!(f.true_match_count(&rows)?, 0);
     let hits = filtered_search(
         &rtx,
         FilteredSearchSpec {
@@ -1496,7 +1526,7 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() -> Result<()> {
         modulus: 1,
         accept: 1,
     }; // (k mod 1) < 1 is always true
-    assert_eq!(f.true_match_count(&rows), rows.len());
+    assert_eq!(f.true_match_count(&rows)?, rows.len());
 
     let params = knn_params_p2(P2_K, P2_EF);
     let unfiltered = crate::project::contract::search_rows(Hnsw::knn(
@@ -1589,7 +1619,7 @@ fn filtered_search_is_thread_count_invariant() -> Result<()> {
 
     // Genuinely concurrent: every band searched from its own OS thread at
     // once, sharing one read transaction.
-    let concurrent: Vec<Vec<Tuple>> = std::thread::scope(|scope| {
+    let concurrent: Vec<Vec<Tuple>> = std::thread::scope(|scope| -> Result<Vec<Vec<Tuple>>> {
         let handles: Vec<_> = SELECTIVITY_BANDS
             .iter()
             .map(|&t| {
@@ -1612,15 +1642,15 @@ fn filtered_search_is_thread_count_invariant() -> Result<()> {
                             filter: &f,
                         },
                     )
-                    .expect("filtered_search")
                 })
             })
             .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("join"))
-            .collect()
-    });
+        let mut out = Vec::with_capacity(handles.len());
+        for h in handles {
+            out.push(h.join().map_err(|_| miette!("join panicked"))??);
+        }
+        Ok(out)
+    })?;
     assert_eq!(
         baseline, concurrent,
         "concurrent OS threads diverged from the sequential baseline"
@@ -1644,7 +1674,7 @@ fn min_k_matches_k_exceeds_entire_population() -> Result<()> {
 
     let k = rows.len() * 10; // an order of magnitude past the whole corpus
     let f = filter_at_selectivity(0.10, true); // a genuine subset, M = 400
-    let matches = f.true_match_count(&rows);
+    let matches = f.true_match_count(&rows)?;
     assert!(
         matches < rows.len(),
         "sanity: the filter must be a proper subset of the corpus"
@@ -1662,7 +1692,7 @@ fn min_k_matches_k_exceeds_entire_population() -> Result<()> {
             filter: &f,
         },
     )?;
-    let mut ekeys = keys_of(&hits).expect("keys_of");
+    let mut ekeys = keys_of(&hits)?;
 
     assert_eq!(
         hits.len(),
@@ -1878,7 +1908,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
              from the 1-thread baseline"
         );
     }
-    let concurrent: Vec<Vec<Tuple>> = std::thread::scope(|scope| {
+    let concurrent: Vec<Vec<Tuple>> = std::thread::scope(|scope| -> Result<Vec<Vec<Tuple>>> {
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 let rtx = &rtx;
@@ -1900,15 +1930,15 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
                             filter: f,
                         },
                     )
-                    .expect("filtered_search")
                 })
             })
             .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("join"))
-            .collect()
-    });
+        let mut out = Vec::with_capacity(handles.len());
+        for h in handles {
+            out.push(h.join().map_err(|_| miette!("join panicked"))??);
+        }
+        Ok(out)
+    })?;
     for got in concurrent {
         assert_eq!(
             got, baseline,
@@ -2003,11 +2033,12 @@ fn t13_delete_then_search_never_returns_deleted_id_after_reopen() -> Result<()> 
     let m = hmanifest(T13_DIM, HnswDistance::L2)?;
     let q = seeded_query(T13_DIM, P2_QUERY_SEED)?;
 
-    let live: Vec<Tuple> = rows
-        .iter()
-        .filter(|r| !deleted.contains(&t13_row_key(r).expect("t13 key")))
-        .cloned()
-        .collect();
+    let mut live: Vec<Tuple> = Vec::new();
+    for r in &rows {
+        if !deleted.contains(&t13_row_key(r)?) {
+            live.push(r.clone());
+        }
+    }
 
     for (band_i, &target) in SELECTIVITY_BANDS.iter().enumerate() {
         let accept = t13_band_accept(target, T13_N)?;
@@ -2018,7 +2049,7 @@ fn t13_delete_then_search_never_returns_deleted_id_after_reopen() -> Result<()> 
                 threshold: T13_N - accept,
             }
         };
-        let matches = f.true_match_count(&live);
+        let matches = f.true_match_count(&live)?;
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &live, &m)?;
         let hits = filtered_search(
             &rtx,
@@ -2077,7 +2108,10 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
         let (_base, _idx, _m) = hsetup(&db, dim, HnswDistance::L2, &live_rows)?;
     }
 
-    for wave in 0i64..3 {
+    const WAVE_COMP0: [f64; 3] = [40.00, 40.01, 40.02];
+    for (wave_usize, &comp0) in WAVE_COMP0.iter().enumerate() {
+        let wave = i64::try_from(wave_usize)
+            .map_err(|_| miette!("T13: wave index fits i64"))?;
         let db = new_fjall_storage(&path).map_err(|e| miette!("reopen for wave: {e:?}"))?;
         let rtx = db
             .read_tx()
@@ -2110,12 +2144,7 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
 
         let new_key = n + wave + 1;
         let mut comps = vec![40.0; dim];
-        comps[0] = match wave {
-            0 => 40.00,
-            1 => 40.01,
-            2 => 40.02,
-            _ => bail!("T13: wave out of range"),
-        };
+        comps[0] = comp0;
         let new_row = Tuple::from_vec(vec![
             DataValue::from(new_key),
             DataValue::Vector(t13_vector(comps)?),
@@ -2143,7 +2172,7 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
         let idx =
             get_relation(&rtx, "corpus:by_v").map_err(|e| miette!("idx after reopen: {e:?}"))?;
 
-        let matches = f.true_match_count(&live_rows);
+        let matches = f.true_match_count(&live_rows)?;
         let truth = brute_force_filtered_knn(&q, P2_K, &f, &live_rows, &m)?;
         let hits = filtered_search(
             &rtx,

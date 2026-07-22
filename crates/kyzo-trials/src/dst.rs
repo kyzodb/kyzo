@@ -96,7 +96,7 @@ use crate::exec::plan::program::{
 use crate::project::current::Segments;
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::store::sim::{FaultConfig, SimRng, SimStorage, SimWriteTx, for_each_seed};
-use crate::store::{Storage, WriteTx};
+use crate::store::{Aborted, Storage, WriteTx};
 
 // ═════════════════════════════════════════════════════════════════════════
 // Loud harness doors (bs_detector: no unwrap/expect/panic costumes).
@@ -418,7 +418,9 @@ fn write_then_commit<S: Storage>(
             Ok(())
         }
         Err(e) => {
-            let _ = tx.abort();
+            match tx.abort() {
+                Aborted => {}
+            }
             Err(e)
         }
     }
@@ -989,14 +991,18 @@ fn crash_recovery_under_faults_never_tears() {
             ) {
                 Ok(h) => h,
                 Err(e) => {
-                    let _ = tx.abort();
+                    match tx.abort() {
+                        Aborted => {}
+                    }
                     return Err(e);
                 }
             };
             for (a, b) in [(1, 2), (2, 3)] {
                 let row = vec![v(a), v(b)];
                 if let Err(e) = h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp()) {
-                    let _ = tx.abort();
+                    match tx.abort() {
+                        Aborted => {}
+                    }
                     return Err(e);
                 }
             }
@@ -1025,7 +1031,9 @@ fn crash_recovery_under_faults_never_tears() {
                     if tx.commit().is_err() { /* buffer tier; fault is the campaign observation */ }
                 }
                 Err(_) => {
-                    let _ = tx.abort();
+                    match tx.abort() {
+                        Aborted => {}
+                    }
                 }
             }
         }
@@ -1126,7 +1134,7 @@ fn snapshot_isolation_holds_at_answer_level() {
         move || {
             let mut rng = SimRng::new(0xB0B0);
             for _ in 0..200 {
-                let k = fit_i64(rng.below(u64::try_from(C).expect("C") + 1));
+                let k = fit_i64(rng.below(fit_u64(fit_usz_i64(C)) + 1));
                 // Update both rows atomically in one commit: a=k, b=C-k.
                 let mut done = false;
                 for _ in 0..1000 {
@@ -1153,7 +1161,9 @@ fn snapshot_isolation_holds_at_answer_level() {
                             break;
                         }
                     } else {
-                        let _ = tx.abort();
+                        match tx.abort() {
+                            Aborted => {}
+                        }
                     }
                 }
                 assert!(done, "writer could not land an atomic pair update");
@@ -3530,7 +3540,13 @@ pub mod storage_campaign_lanes {
                         corrupt.permanence_candidate_manifest
                     );
                 }
-                _ => unreachable!("primary = seed % 4"),
+                other => {
+                    assert!(
+                        false,
+                        "INVARIANT/harness: primary = seed % 4, got {other}"
+                    );
+                    loop {}
+                }
             }
             if dual {
                 // Second binding distinct from primary — never prefer-dump.
@@ -3657,7 +3673,7 @@ pub mod storage_campaign_lanes {
         let mut saw_non_mid = false;
         let mid = golden.len() / 2;
         for seed in 0..golden.len().min(64) {
-            let idx = fit_usize(wrap_mul_add(u64::try_from(seed).expect("seed"), 13, 7)) % golden.len();
+            let idx = fit_usize(wrap_mul_add(fit_u64(seed), 13, 7)) % golden.len();
             offsets.insert(idx);
             if idx != mid {
                 saw_non_mid = true;
