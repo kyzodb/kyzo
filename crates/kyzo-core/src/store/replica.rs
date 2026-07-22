@@ -1794,7 +1794,10 @@ impl SignedStateRootHead {
     /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
     /// head fields.
     pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
-        let body = Digest::from_bytes(head.compact_digest().map_err(|_| ReplicaRefuse::AuthenticityFailed)?);
+        let body = Digest::from_bytes(
+            head.compact_digest()
+                .map_err(|_| ReplicaRefuse::AuthenticityFailed)?,
+        );
         let signature = key.sign(&body)?;
         Ok(Self {
             head,
@@ -1827,7 +1830,11 @@ impl SignedStateRootHead {
             Some(k) => k,
             None => return Err(ReplicaRefuse::AuthenticityFailed),
         };
-        let body = Digest::from_bytes(self.head.compact_digest().map_err(|_| ReplicaRefuse::AuthenticityFailed)?);
+        let body = Digest::from_bytes(
+            self.head
+                .compact_digest()
+                .map_err(|_| ReplicaRefuse::AuthenticityFailed)?,
+        );
         if key.verify_signature(&body, &self.signature) {
             Ok(())
         } else {
@@ -1868,9 +1875,9 @@ pub fn enforce_sth_gossip(
 
 #[cfg(test)]
 mod authorizing_key_ed25519_tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use ed25519_dalek::Verifier;
+    use miette::{IntoDiagnostic, Result, miette};
 
     /// GUARDIAN RED GATE (#376 T1) -- empirically confirmed against the pinned
     /// ed25519-dalek 3.0.0-rc.1. `verify_signature` uses the PERMISSIVE `.verify()`,
@@ -1889,8 +1896,10 @@ mod authorizing_key_ed25519_tests {
         // forged signature: R = identity, S = 0 (probe-confirmed permissive-accepted).
         let mut forged_sig = [0u8; 64];
         forged_sig[0] = 1;
-        let weak =
-            AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xAA; 32]), identity_key)?;
+        let weak = AuthorizingKey::mint_verifying(
+            AuthorizingKeyId::from_digest([0xAA; 32]),
+            identity_key,
+        )?;
         assert!(
             !weak.verify_signature(
                 &Digest::from_bytes([0x99u8; 32]),
@@ -1900,7 +1909,7 @@ mod authorizing_key_ed25519_tests {
              (identity) authorizing key over an arbitrary body -- the permissive \
              .verify() must become verify_strict"
         );
-    
+
         Ok(())
     }
 
@@ -1938,8 +1947,7 @@ mod authorizing_key_ed25519_tests {
             vk.verify(b"", &rfc_sig).is_ok(),
             "RFC 8032 TEST 1 signature must verify under RFC public key"
         );
-        let receiver =
-            AuthorizingKey::mint_verifying([0xA1; 32], expect_pk)?;
+        let receiver = AuthorizingKey::mint_verifying([0xA1; 32], expect_pk)?;
         assert!(!receiver.can_sign());
         assert!(
             matches!(
@@ -1959,14 +1967,13 @@ mod authorizing_key_ed25519_tests {
         let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
         assert!(
-            AuthorizingKey::mint_verifying([0xA1; 32], dalek_pk)?
-                .verify_signature(&body, &sig),
+            AuthorizingKey::mint_verifying([0xA1; 32], dalek_pk)?.verify_signature(&body, &sig),
             "receiver with public-only table material verifies origin sig"
         );
         // RFC public key must not verify a signature under the dalek-derived
         // key from this seed if they diverge — document the installed dalek
         // wire; RFC vector above remains the public-verify golden.
-    
+
         Ok(())
     }
 
@@ -1989,10 +1996,10 @@ mod authorizing_key_ed25519_tests {
         let sig = origin.sign(&body)?;
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&origin.id())??;
+        let looked = table.lookup(&origin.id())?;
         assert!(!looked.can_sign());
         assert!(looked.verify_signature(&body, &sig));
-    
+
         Ok(())
     }
 
@@ -2008,7 +2015,7 @@ mod authorizing_key_ed25519_tests {
 
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&id)??;
+        let looked = table.lookup(&id)?;
         assert!(
             !looked.can_sign(),
             "table must not reconstitute signing seed"
@@ -2022,7 +2029,7 @@ mod authorizing_key_ed25519_tests {
             matches!(looked.sign(&body), Err(ReplicaRefuse::AuthenticityFailed)),
             "receiver without seed cannot forge"
         );
-    
+
         Ok(())
     }
 
@@ -2046,34 +2053,31 @@ mod authorizing_key_ed25519_tests {
 
         // Table with wrong public key → verify fails.
         let mut table = AuthorizingKeyTable::new();
-        table.insert(other.authorizing_public());
-        let looked = table
-            .lookup(&AuthorizingKeyId::from_digest([0x02; 32]))?
-            ?;
+        table.insert(other.authorizing_public()?);
+        let looked = table.lookup(&AuthorizingKeyId::from_digest([0x02; 32]))??;
         assert!(!looked.verify_signature(&body, &sig));
-    
+
         Ok(())
     }
 
     impl AuthorizingKey {
         /// Test helper: public-only clone (same as table insert/lookup shape).
-        fn authorizing_public(&self) -> AuthorizingKey {
-            AuthorizingKey::mint_verifying(self.id, self.verifying_bytes())
-                .expect("verifying bytes round-trip")
+        fn authorizing_public(&self) -> Result<AuthorizingKey> {
+            AuthorizingKey::mint_verifying(self.id, self.verifying_bytes()).into_diagnostic()
         }
     }
 }
 
 #[cfg(test)]
 mod crossing_contract_tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
+    use miette::{IntoDiagnostic, Result, miette};
 
     fn mint_signed(
         key: &AuthorizingKey,
         scope: ScopeManifestDigest,
         schema_cut: [u8; 32],
-    ) -> AdmissionCertificate {
+    ) -> Result<AdmissionCertificate> {
         let store = StoreId::from_digest([0xC7; 32]);
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
@@ -2089,8 +2093,8 @@ mod crossing_contract_tests {
             operation_key: None,
             signature: Signature::from_bytes([0u8; 64]),
         };
-        parts.signature = sign_admission_parts(&parts, key).expect("sign");
-        mint_admission_certificate(parts).expect("mint")
+        parts.signature = sign_admission_parts(&parts, key).into_diagnostic()?;
+        mint_admission_certificate(parts).into_diagnostic()
     }
 
     fn matching_envelope(cert: &AdmissionCertificate) -> CrossingEnvelope {
@@ -2115,7 +2119,7 @@ mod crossing_contract_tests {
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let cert = mint_signed(&key, scope, [0x51; 32])?;
         let local = StoreId::from_digest([0xD1; 32]);
 
         let envelope = CrossingEnvelope::new(
@@ -2144,7 +2148,7 @@ mod crossing_contract_tests {
             Err(CrossingRefuse::DeclaredEvidenceMissing),
             "missing declared evidence must typed-refuse, not silent drop"
         );
-    
+
         Ok(())
     }
 
@@ -2154,7 +2158,7 @@ mod crossing_contract_tests {
         let scope = ScopeManifestDigest::from_digest([0x5D; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
-        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let cert = mint_signed(&key, scope, [0x51; 32])?;
         let local = StoreId::from_digest([0xD2; 32]);
         let envelope = matching_envelope(&cert);
         let held = CrossingCapabilitySet::new();
@@ -2219,7 +2223,7 @@ mod crossing_contract_tests {
             CrossingRefuse::DeclaredEvidenceMissing,
             CrossingRefuse::Replica(ReplicaRefuse::RetentionDeclined)
         );
-    
+
         Ok(())
     }
 
@@ -2231,7 +2235,7 @@ mod crossing_contract_tests {
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let cert = mint_signed(&key, scope, [0x51; 32])?;
         let local = StoreId::from_digest([0xD3; 32]);
         let mut claimed = CrossingCapabilitySet::new();
         claimed.insert([0xCA; 32]);
@@ -2309,7 +2313,7 @@ mod crossing_contract_tests {
             refuse_in_place_local_reinterpretation(),
             CrossingRefuse::LocalReinterpretationUnconstructible
         );
-    
+
         Ok(())
     }
 
@@ -2321,7 +2325,7 @@ mod crossing_contract_tests {
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, [0x51; 32]);
+        let cert = mint_signed(&key, scope, [0x51; 32])?;
         let local = StoreId::from_digest([0xD4; 32]);
 
         let bad_schema = CrossingEnvelope::new(
@@ -2407,7 +2411,7 @@ mod crossing_contract_tests {
             CrossingContext::from_wire(2, None),
             Err(CrossingRefuse::ContextInvalid)
         );
-    
+
         Ok(())
     }
 }
@@ -2418,6 +2422,7 @@ mod crossing_contract_tests {
 #[cfg(test)]
 mod identity {
     use super::*;
+    use miette::{IntoDiagnostic, Result};
 
     fn mint_signed(
         origin_store: StoreId,
@@ -2426,7 +2431,7 @@ mod identity {
         record_digest: [u8; 32],
         key: &AuthorizingKey,
         scope: ScopeManifestDigest,
-    ) -> AdmissionCertificate {
+    ) -> Result<AdmissionCertificate> {
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
             origin_store,
@@ -2441,8 +2446,8 @@ mod identity {
             operation_key: None,
             signature: Signature::from_bytes([0u8; 64]),
         };
-        parts.signature = sign_admission_parts(&parts, key).expect("sign");
-        mint_admission_certificate(parts).expect("mint")
+        parts.signature = sign_admission_parts(&parts, key).into_diagnostic()?;
+        mint_admission_certificate(parts).into_diagnostic()
     }
 
     #[test]
@@ -2510,7 +2515,7 @@ mod identity {
     }
 
     #[test]
-    fn certificate_bind_carries_authority_and_content() {
+    fn certificate_bind_carries_authority_and_content() -> Result<()> {
         let store = StoreId::from_digest([0xC7; 32]);
         let key = AuthorizingKey::mint_with_verifying_id([0xC1; 32]);
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
@@ -2522,13 +2527,14 @@ mod identity {
             content,
             &key,
             scope,
-        );
+        )?;
         let tenant = TenantId::from_digest([0x7E; 32]);
         let id = NamespacedRecordIdentity::from_certificate(content, &cert, tenant);
         assert_eq!(id.origin_authority(), key.id());
         assert_eq!(id.content(), &content);
         assert_eq!(id.tenant(), tenant);
         assert_eq!(id.local_id(), &content);
+        Ok(())
     }
 
     #[test]
@@ -2565,7 +2571,7 @@ mod identity {
     }
 
     #[test]
-    fn replica_key_custody_idempotent_under_duplicate_delivery() {
+    fn replica_key_custody_idempotent_under_duplicate_delivery() -> Result<()> {
         let origin = StoreId::from_digest([0x69; 32]);
         let local = StoreId::from_digest([0x70; 32]);
         let origin_epoch = FenceEpoch::genesis(origin);
@@ -2585,7 +2591,7 @@ mod identity {
             record_digest,
             &key,
             scope,
-        );
+        )?;
         let expected = ReplicaKey::derive(origin, origin_epoch, origin_commit, &record_digest);
         let tenant = TenantId::from_digest([0x7E; 32]);
         let namespaced = NamespacedRecordIdentity::from_certificate(record_digest, &cert, tenant);
@@ -2608,7 +2614,7 @@ mod identity {
                 Ok(c) => c,
                 Err(e) => {
                     assert!(false, "delivery {delivery}: verify_replica {e:?}");
-                    return;
+                    return Ok(());
                 }
             };
             assert_eq!(custody.key(), expected, "delivery {delivery}: ReplicaKey");
@@ -2628,6 +2634,7 @@ mod identity {
             "five at-least-once deliveries → exactly one custody"
         );
         assert_eq!(table.get(&expected), first.as_ref());
+        Ok(())
     }
 
     #[test]
@@ -2655,8 +2662,8 @@ mod identity {
 /// Promotion replay equality + graph-bound key proofs (#270 T3).
 #[cfg(test)]
 mod promotion {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
+    use miette::{IntoDiagnostic, Result, miette};
 
     fn sample_meaning(schema_cut: [u8; 32], provenance: [u8; 32]) -> PromotionMeaning {
         let identity = NamespacedRecordIdentity::bind(
@@ -2676,7 +2683,7 @@ mod promotion {
         assert!(before.replay_equal(&after));
         assert_eq!(before.digest(), after.digest());
         assert_eq!(prove_promotion_replay(&before, &after), Ok(()));
-    
+
         Ok(())
     }
 
@@ -2689,7 +2696,7 @@ mod promotion {
             prove_promotion_replay(&before, &after),
             Err(PromotionRefuse::MeaningDiverged)
         );
-    
+
         Ok(())
     }
 
@@ -2701,7 +2708,7 @@ mod promotion {
             prove_promotion_replay(&before, &after),
             Err(PromotionRefuse::MeaningDiverged)
         );
-    
+
         Ok(())
     }
 
@@ -2737,7 +2744,7 @@ mod promotion {
             projection.local_schema_cut(),
             projection.origin().schema_cut()
         );
-    
+
         Ok(())
     }
 
@@ -2764,19 +2771,19 @@ mod promotion {
             foreign_bound.authorize(home),
             Err(KeyBoundaryRefuse::KeyCrossesGraphBoundary)
         );
-    
+
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod sth_gossip_obligation_tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::merkle::{
         ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, GossipConsistency, RootChain, StateRoot,
         StateRootHead, build_consistency_proof,
     };
+    use miette::{IntoDiagnostic, Result, miette};
 
     /// Fabric carriage is JetStream-only — subject names the Store; no peer-dial.
     #[test]
@@ -2790,7 +2797,7 @@ mod sth_gossip_obligation_tests {
         let subject = obligation.subject().jetstream_subject();
         assert!(subject.starts_with("kyzo.sth."));
         assert_eq!(subject.len(), "kyzo.sth.".len() + 64);
-    
+
         Ok(())
     }
 
@@ -2807,30 +2814,26 @@ mod sth_gossip_obligation_tests {
         let content_a = StateRoot::from_digest([0xA1; 32]);
         let content_b = StateRoot::from_digest([0xB2; 32]);
         let mut chain_a = RootChain::empty();
-        chain_a
-            .append(ChainedStateRoot::mint(
-                store,
-                fence,
-                o1,
-                content_a,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
+        chain_a.append(ChainedStateRoot::mint(
+            store,
+            fence,
+            o1,
+            content_a,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
         let mut chain_b = RootChain::empty();
-        chain_b
-            .append(ChainedStateRoot::mint(
-                store,
-                fence,
-                o1,
-                content_b,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
+        chain_b.append(ChainedStateRoot::mint(
+            store,
+            fence,
+            o1,
+            content_b,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
 
-        let signed_a =
-            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_a)?, &key)?;
-        let signed_b =
-            SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_b)?, &key)?;
+        let signed_a = SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_a)?, &key)?;
+        let signed_b = SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_b)?, &key)?;
         assert_ne!(signed_a.head().root(), signed_b.head().root());
 
         let obligation = SthGossipObligation::on_jetstream(store);
@@ -2844,7 +2847,7 @@ mod sth_gossip_obligation_tests {
             enforce_sth_gossip(&obligation, &signed_a, &signed_a, None, &keys),
             Ok(GossipConsistency::Identical)
         );
-    
+
         Ok(())
     }
 
@@ -2860,36 +2863,32 @@ mod sth_gossip_obligation_tests {
         keys.insert(key.clone());
 
         let mut chain = RootChain::empty();
-        chain
-            .append(ChainedStateRoot::mint(
-                store,
-                fence,
-                o1,
-                StateRoot::from_digest([0x01; 32]),
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
-        chain
-            .append(ChainedStateRoot::mint(
-                store,
-                fence,
-                o2,
-                StateRoot::from_digest([0x02; 32]),
-                chain.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
+        chain.append(ChainedStateRoot::mint(
+            store,
+            fence,
+            o1,
+            StateRoot::from_digest([0x01; 32]),
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
+        chain.append(ChainedStateRoot::mint(
+            store,
+            fence,
+            o2,
+            StateRoot::from_digest([0x02; 32]),
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))?;
 
-        let older =
-            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1)?, &key)?;
-        let newer =
-            SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2)?, &key)?;
+        let older = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1)?, &key)?;
+        let newer = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2)?, &key)?;
         let proof = build_consistency_proof(&chain, o1, o2)?;
         let obligation = SthGossipObligation::on_jetstream(store);
         assert_eq!(
             enforce_sth_gossip(&obligation, &older, &newer, Some(&proof), &keys),
             Ok(GossipConsistency::ConsistentExtension)
         );
-    
+
         Ok(())
     }
 }
