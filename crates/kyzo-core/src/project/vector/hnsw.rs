@@ -2383,7 +2383,10 @@ fn remove_vec<T: WriteTx>(
             HnswRow::Node {
                 layer,
                 at: neighbour.clone(),
-                degree: degree.saturating_sub(1),
+                degree: match degree.checked_sub(1) {
+                    Some(v) => v,
+                    None => 0,
+                },
                 vec_hash,
             }
             .write(tx, idx, base_key_len)?;
@@ -3310,7 +3313,11 @@ fn select_strategy(
         None => 0,
     };
     let d_bar = manifest.m_max0.max(1);
-    let t_scan = HNSW_K_SCAN.saturating_mul(params.k).max(params.ef);
+    let t_scan = match HNSW_K_SCAN.checked_mul(params.k) {
+        Some(v) => v,
+        None => usize::MAX,
+    }
+    .max(params.ef);
     // Estimated graph work to seat `ef` passing candidates ≈ (ef/s)·D̄; if that
     // meets or exceeds `N`, the scan (cost ~N) wins outright.
     let graph_work = if s <= 0.0 {
@@ -3324,10 +3331,12 @@ fn select_strategy(
     if s <= 0.0 || m_hat <= t_scan || graph_work >= n {
         Ok(SearchPlan::Scan)
     } else {
-        let ef_max = HNSW_EF_MAX_FACTOR
-            .saturating_mul(params.ef)
-            .min(n)
-            .max(params.ef);
+        let ef_max = match HNSW_EF_MAX_FACTOR.checked_mul(params.ef) {
+            Some(v) => v,
+            None => usize::MAX,
+        }
+        .min(n)
+        .max(params.ef);
         let ef2 = match kyzo_model::value::Num::float((usize_to_f64(params.ef) / s).ceil()).to_int_coerced() {
             Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
             None => 0,
@@ -3628,12 +3637,12 @@ mod tests {
     use super::*;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::value::{TupleT, encode_key_with_suffix};
-    use miette::IntoDiagnostic;
+    use miette::{IntoDiagnostic, Result, miette};
 
     macro_rules! knn_rows {
-        ($($arg:expr),* $(,)?) => {
-            crate::project::contract::search_rows(Hnsw::knn($($arg),*).unwrap()).unwrap()
-        };
+        ($($arg:expr),* $(,)?) => {{
+            crate::project::contract::search_rows(Hnsw::knn($($arg),*)?)?
+        }};
     }
     use crate::rules::contract::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
@@ -3682,7 +3691,7 @@ mod tests {
         }
     }
 
-    fn manifest(distance: HnswDistance) -> HnswIndexManifest {
+    fn manifest(distance: HnswDistance) -> Result<HnswIndexManifest> {
         HnswIndexManifest::admit(
             SmartString::from("vecs"),
             SmartString::from("by_v"),
@@ -3696,15 +3705,16 @@ mod tests {
             false,
             false,
         )
-        .expect("canonical test manifest admits")
     }
 
-    fn vec2(x: f64, y: f64) -> DataValue {
-        DataValue::Vector(Vector::try_new(vec![x, y]).unwrap())
+    fn vec2(x: f64, y: f64) -> Result<DataValue> {
+        Ok(DataValue::Vector(
+            Vector::try_new(vec![x, y]).ok_or_else(|| miette!("vec2 refused"))?,
+        ))
     }
 
-    fn row(k: i64, x: f64, y: f64) -> Tuple {
-        Tuple::from_vec(vec![DataValue::from(k), vec2(x, y)])
+    fn row(k: i64, x: f64, y: f64) -> Result<Tuple> {
+        Ok(Tuple::from_vec(vec![DataValue::from(k), vec2(x, y)?]))
     }
 
     /// A base relation and its HNSW index relation on a real store.
@@ -3712,33 +3722,30 @@ mod tests {
         db: &impl Storage,
         distance: HnswDistance,
         rows: &[Tuple],
-    ) -> (RelationHandle, RelationHandle, HnswIndexManifest) {
-        let m = manifest(distance);
-        let mut tx = db.write_tx().unwrap();
+    ) -> Result<(RelationHandle, RelationHandle, HnswIndexManifest)> {
+        let m = manifest(distance)?;
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("vecs", base_metadata()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         for r in rows {
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
+            )?;
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
-        tx.commit().unwrap();
-        (base, idx, m)
+        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok((base, idx, m))
     }
 
     fn knn_params(k: usize) -> HnswKnnParams {
@@ -3758,14 +3765,16 @@ mod tests {
     /// A deterministic unit-ish vector, drawn from the same splitmix64
     /// stream `random_level` uses — no new dependency, portable, and a
     /// fixed seed reproduces the exact same build every run.
-    fn probe_vec(dim: usize, state: &mut u64) -> DataValue {
+    fn probe_vec(dim: usize, state: &mut u64) -> Result<DataValue> {
         let mut v = Vec::with_capacity(dim);
         for _ in 0..dim {
             let bits = splitmix64(state);
             let unit = u64_to_f64(bits >> 11) / u64_to_f64(1u64 << 53); // [0, 1)
             v.push(unit * 2.0 - 1.0);
         }
-        DataValue::Vector(Vector::try_new(v).unwrap())
+        Ok(DataValue::Vector(
+            Vector::try_new(v).ok_or_else(|| miette!("probe_vec refused"))?,
+        ))
     }
 
     /// Build an `n`-vector index inside ONE write transaction (mirrors the
@@ -3774,13 +3783,13 @@ mod tests {
     /// and the bench harness in `kyzo-bench/benches/vector`), at the bench's
     /// parameters (`m: 16, ef_construction: 200`). Returns wall time and the
     /// probe counters accumulated over the whole build.
-    fn probe_build(n: usize, seed: u64) -> (f64, probe::Snapshot) {
+    fn probe_build(n: usize, seed: u64) -> Result<(f64, probe::Snapshot)> {
         probe_build_dim(n, seed, 16)
     }
 
-    fn probe_build_dim(n: usize, seed: u64, dim: usize) -> (f64, probe::Snapshot) {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn probe_build_dim(n: usize, seed: u64, dim: usize) -> Result<(f64, probe::Snapshot)> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let base_meta = StoredRelationMetadata {
             keys: vec![col("k", ColType::Int)],
             non_keys: vec![col(
@@ -3791,14 +3800,14 @@ mod tests {
                 },
             )],
         };
-        let mut m = manifest(HnswDistance::L2);
+        let mut m = manifest(HnswDistance::L2)?;
         m.vec_dim = dim;
         m.ef_construction = 200;
-        let m16 = MNeighbours::new(16).unwrap();
+        let m16 = MNeighbours::new(16)?;
         m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
-        // `manifest()`'s default (`1/ln(8)`) is sized for its own m=8 tests;
+        // `manifest()?`'s default (`1/ln(8)`) is sized for its own m=8 tests;
         // this harness runs at m_neighbours=16, so the level multiplier must
         // match (`build_graph_shape_probe` and
         // `tombstone_fix_preserves_recall_at_10k` already reset it — this
@@ -3806,39 +3815,36 @@ mod tests {
         // to the bench parameters this harness claims to mirror).
         m.level_multiplier = m16.level_multiplier();
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("vecs", base_meta),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
 
         probe::reset();
         let mut state = seed;
         let t0 = std::time::Instant::now();
         for k in 0..n {
-            let v = probe_vec(dim, &mut state);
+            let v = probe_vec(dim, &mut state)?;
             let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
+            )?;
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
         let elapsed = t0.elapsed().as_secs_f64();
         let snap = probe::snapshot();
-        tx.commit().unwrap();
-        (elapsed, snap)
+        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok((elapsed, snap))
     }
 
     /// Discriminator: is the residual growth `build_time_complexity_probe`
@@ -3855,9 +3861,9 @@ mod tests {
         n: usize,
         seed: u64,
         dim: usize,
-    ) -> (f64, probe::Snapshot) {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    ) -> Result<(f64, probe::Snapshot)> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let base_meta = StoredRelationMetadata {
             keys: vec![col("k", ColType::Int)],
             non_keys: vec![col(
@@ -3868,50 +3874,47 @@ mod tests {
                 },
             )],
         };
-        let mut m = manifest(HnswDistance::L2);
+        let mut m = manifest(HnswDistance::L2)?;
         m.vec_dim = dim;
         m.ef_construction = 200;
-        let m16 = MNeighbours::new(16).unwrap();
+        let m16 = MNeighbours::new(16)?;
         m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
         m.level_multiplier = m16.level_multiplier();
 
-        let mut setup_tx = db.write_tx().unwrap();
+        let mut setup_tx = db.write_tx()?;
         let base = create_relation(
             &mut setup_tx,
             input_handle("vecs", base_meta),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut setup_tx,
             input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
-        setup_tx.commit().unwrap();
+        )?;
+        setup_tx.commit().map_err(|e| miette!("{e}"))?;
 
         probe::reset();
         let mut state = seed;
         let t0 = std::time::Instant::now();
         for k in 0..n {
-            let v = probe_vec(dim, &mut state);
+            let v = probe_vec(dim, &mut state)?;
             let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             base.put_fact(
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
-            tx.commit().unwrap();
+            )?;
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
+            tx.commit().map_err(|e| miette!("{e}"))?;
         }
         let elapsed = t0.elapsed().as_secs_f64();
         let snap = probe::snapshot();
-        (elapsed, snap)
+        Ok((elapsed, snap))
     }
 
     /// LAW (story #76): per-insert search cost is bounded, not open-ended.
@@ -3932,13 +3935,13 @@ mod tests {
     /// past the ceiling, this fails before anyone has to notice a build-
     /// time regression by hand.
     #[test]
-    fn per_insert_search_cost_is_bounded_by_construction() {
+    fn per_insert_search_cost_is_bounded_by_construction() -> Result<()> {
         let n = 8000;
         let ef_construction = 200;
         let m_max0 = 32;
         let ceiling = usize_to_f64(ef_construction) * usize_to_f64(m_max0);
 
-        let (_elapsed, snap) = probe_build(n, 0x5EED_1234_ABCD_0000);
+        let (_elapsed, snap) = probe_build(n, 0x5EED_1234_ABCD_0000)?;
         let v_dist_per_insert = u64_to_f64(snap.v_dist_calls) / usize_to_f64(n);
         let k_dist_per_insert = u64_to_f64(snap.k_dist_calls) / usize_to_f64(n);
         eprintln!(
@@ -3957,6 +3960,7 @@ mod tests {
             "k_dist/insert {k_dist_per_insert:.1} exceeded the structural ceiling \
              ef_construction*m_max0={ceiling} — the pruning heuristic's cost is no longer bounded"
         );
+        Ok(())
     }
 
     /// DIAGNOSTIC, not a correctness assertion: build `n` vectors, then
@@ -3968,11 +3972,11 @@ mod tests {
     /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_graph_shape_probe -- --ignored --nocapture`
     #[test]
     #[ignore = "HNSW graph-shape measurement rig; run explicitly with --ignored"]
-    fn build_graph_shape_probe() {
+    fn build_graph_shape_probe() -> Result<()> {
         for &n in &[1000usize, 8000] {
             let dim = 16;
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let db = new_fjall_storage(dir.path())?;
             let base_meta = StoredRelationMetadata {
                 keys: vec![col("k", ColType::Int)],
                 non_keys: vec![col(
@@ -3983,40 +3987,37 @@ mod tests {
                     },
                 )],
             };
-            let mut m = manifest(HnswDistance::L2);
+            let mut m = manifest(HnswDistance::L2)?;
             m.vec_dim = dim;
             m.ef_construction = 200;
-            let m16 = MNeighbours::new(16).unwrap();
+            let m16 = MNeighbours::new(16)?;
             m.m_neighbours = m16;
             m.m_max = 16;
             m.m_max0 = 32;
             m.level_multiplier = m16.level_multiplier();
 
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             let base = create_relation(
                 &mut tx,
                 input_handle("vecs", base_meta),
                 KeyspaceKind::Facts,
-            )
-            .unwrap();
+            )?;
             let idx = create_relation(
                 &mut tx,
                 input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
                 KeyspaceKind::AlgorithmState,
-            )
-            .unwrap();
+            )?;
             let mut state = 0xA5A5_1234_0000_0000u64;
             for k in 0..n {
-                let v = probe_vec(dim, &mut state);
+                let v = probe_vec(dim, &mut state)?;
                 let r = vec![DataValue::from(match usize_to_i64(k) { Ok(i) => i, Err(_e) => 0 }), v];
                 base.put_fact(
                     &mut tx,
                     r.as_slice(),
                     kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
-                )
-                .unwrap();
-                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
+                )?;
+                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
             }
 
             // Every row in the index relation, decoded — a full unfiltered
@@ -4027,8 +4028,8 @@ mod tests {
             let mut total_edges = 0u64;
             let mut total_ignored_edges = 0u64;
             for row in idx.scan_prefix(&tx, &Tuple::default()) {
-                let row = row.unwrap();
-                match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name).unwrap()
+                let row = row?;
+                match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)?
                 {
                     HnswRow::Node { layer, .. } => {
                         *layer_node_counts.entry(layer).or_insert(0) += 1;
@@ -4074,8 +4075,9 @@ mod tests {
              ({:.2}% of all edge rows)",
                 100.0 * u64_to_f64(total_ignored_edges) / u64_to_f64(total_edges.max(1))
             );
-            tx.commit().unwrap();
+            tx.commit().map_err(|e| miette!("{e}"))?;
         }
+        Ok(())
     }
 
     /// DIAGNOSTIC, not a correctness assertion: reproduces the bench lane's
@@ -4086,7 +4088,7 @@ mod tests {
     /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_time_complexity_probe -- --ignored --nocapture`
     #[test]
     #[ignore = "HNSW build-time complexity probe; run explicitly with --ignored"]
-    fn build_time_complexity_probe() {
+    fn build_time_complexity_probe() -> Result<()> {
         // n=64000 is omitted: it exceeds this suite's `ulimit -v 12582912`
         // memory cap (observed: a 16 GiB single allocation aborts the
         // process) — a resource ceiling of this machine-capped harness, not
@@ -4095,7 +4097,7 @@ mod tests {
         let mut times = vec![];
         let mut prev: Option<(usize, f64)> = None;
         for &n in &sizes {
-            let (t, snap) = probe_build(n, 0x5EED_1234_ABCD_0000);
+            let (t, snap) = probe_build(n, 0x5EED_1234_ABCD_0000)?;
             let ratio_note = if let Some((pn, pt)) = prev {
                 let n_ratio = usize_to_f64(n) / usize_to_f64(pn);
                 let t_ratio = t / pt;
@@ -4148,6 +4150,7 @@ mod tests {
              dist_calls exponent={dist_exp:.3} (R²={dist_r2:.4})",
             times.iter().map(|&(n, _, _)| n).collect::<Vec<_>>()
         );
+        Ok(())
     }
 
     /// Least-squares fit of `cost = C * n^exponent` via ordinary linear
@@ -4193,11 +4196,11 @@ mod tests {
     /// `cargo test -p kyzo --release project::vector::hnsw::tests::build_time_transaction_lifetime_probe -- --ignored --nocapture`
     #[test]
     #[ignore = "HNSW build-time transaction-lifetime probe; run explicitly with --ignored"]
-    fn build_time_transaction_lifetime_probe() {
+    fn build_time_transaction_lifetime_probe() -> Result<()> {
         for &n in &[1000usize, 4000] {
-            let (t_one, snap_one) = probe_build_dim(n, 0x5EED_1234_ABCD_0000, 16);
+            let (t_one, snap_one) = probe_build_dim(n, 0x5EED_1234_ABCD_0000, 16)?;
             let (t_many, snap_many) =
-                probe_build_dim_per_insert_commit(n, 0x5EED_1234_ABCD_0000, 16);
+                probe_build_dim_per_insert_commit(n, 0x5EED_1234_ABCD_0000, 16)?;
             eprintln!(
                 "n={n:>5} ONE-TX build={t_one:>8.3}s v_dist={:>9} ({:>6.1}/insert) \
                  k_dist={:>9} ({:>6.1}/insert) | PER-INSERT-COMMIT build={t_many:>8.3}s \
@@ -4212,6 +4215,7 @@ mod tests {
                 u64_to_f64(snap_many.k_dist_calls) / usize_to_f64(n),
             );
         }
+        Ok(())
     }
 
     /// Recall regression guard for the `shrink_neighbour` tombstone-reclaim
@@ -4223,11 +4227,11 @@ mod tests {
     /// stored edges are live vs. tombstoned at any instant; this is the
     /// check that graph quality — not just build time — survived it.
     #[test]
-    fn tombstone_fix_preserves_recall_at_10k() {
+    fn tombstone_fix_preserves_recall_at_10k() -> Result<()> {
         let dim = 16;
         let n = 10_000usize;
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let base_meta = StoredRelationMetadata {
             keys: vec![col("k", ColType::Int)],
             non_keys: vec![col(
@@ -4238,33 +4242,31 @@ mod tests {
                 },
             )],
         };
-        let mut m = manifest(HnswDistance::L2);
+        let mut m = manifest(HnswDistance::L2)?;
         m.vec_dim = dim;
         m.ef_construction = 200;
-        let m16 = MNeighbours::new(16).unwrap();
+        let m16 = MNeighbours::new(16)?;
         m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
         m.level_multiplier = m16.level_multiplier();
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("vecs", base_meta),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
 
         let mut state = 0x9EC4_11AA_0000_0000u64;
         let mut stored: Vec<Vec<f64>> = Vec::with_capacity(n);
         for k in 0..n {
-            let v = probe_vec(dim, &mut state);
+            let v = probe_vec(dim, &mut state)?;
             let DataValue::Vector(ref arr) = v else {
                 unreachable!()
             };
@@ -4275,20 +4277,19 @@ mod tests {
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
+            )?;
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
         let k = 10usize;
         let n_queries = 30;
         let mut query_state = 0x9EC4_11AA_FFFF_FFFFu64; // disjoint stream from `state`
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let mut total_recall = 0.0;
         let mut worst = 1.0f64;
         for _ in 0..n_queries {
-            let q_data = probe_vec(dim, &mut query_state);
+            let q_data = probe_vec(dim, &mut query_state)?;
             let DataValue::Vector(ref q_vec) = q_data else {
                 unreachable!()
             };
@@ -4330,12 +4331,12 @@ mod tests {
                     },
                     &None,
                     &CancelFlag::inert(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-            let engine_ids: FxHashSet<i64> =
-                hits.iter().map(|row| row[0].get_int().unwrap()).collect();
+                )?,
+            )?;
+            let engine_ids: FxHashSet<i64> = hits
+                .iter()
+                .map(|row| row[0].get_int().ok_or_else(|| miette!("expected int")))
+                .collect::<Result<FxHashSet<_>>>()?;
 
             let hit_count = truth_ids.intersection(&engine_ids).count();
             let recall = usize_to_f64(hit_count) / usize_to_f64(k);
@@ -4350,24 +4351,25 @@ mod tests {
             avg_recall >= 0.85,
             "recall@10 regressed after the tombstone-reclaim fix: avg={avg_recall:.3} (want >= 0.85)"
         );
+        Ok(())
     }
 
     /// Exact neighbour sets on a hand-computed layout: four points, L2
     /// (SQUARED) metric, nearest-first order, distances checked by hand.
     #[test]
-    fn knn_exact_on_hand_computed_layout() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn knn_exact_on_hand_computed_layout() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows = vec![
-            row(1, 0.0, 0.0),
-            row(2, 1.0, 0.0),
-            row(3, 0.0, 1.0),
-            row(4, 5.0, 5.0),
+            row(1, 0.0, 0.0)?,
+            row(2, 1.0, 0.0)?,
+            row(3, 0.0, 1.0)?,
+            row(4, 5.0, 5.0)?,
         ];
-        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
+        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
 
-        let rtx = db.read_tx().unwrap();
-        let q = Vector::try_new(vec![0.9, 0.1]).unwrap();
+        let rtx = db.read_tx()?;
+        let q = Vector::try_new(vec![0.9, 0.1]).ok_or_else(|| miette!("vector refused"))?;
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -4386,8 +4388,8 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0][0], DataValue::from(2), "nearest first");
         assert_eq!(hits[1][0], DataValue::from(1));
-        let d0 = hits[0][2].get_float().unwrap();
-        let d1 = hits[1][2].get_float().unwrap();
+        let d0 = hits[0][2].get_float().ok_or_else(|| miette!("expected float"))?;
+        let d1 = hits[1][2].get_float().ok_or_else(|| miette!("expected float"))?;
         assert!((d0 - 0.02).abs() < 1e-6, "L2 is SQUARED: got {d0}");
         assert!((d1 - 0.82).abs() < 1e-6, "L2 is SQUARED: got {d1}");
 
@@ -4411,28 +4413,30 @@ mod tests {
         );
         assert_eq!(hits.len(), 4);
         assert_eq!(
-            hits.iter()
-                .map(|t| t[0].get_int().unwrap())
-                .collect::<Vec<_>>(),
+            hits
+                .iter()
+                .map(|t| t[0].get_int().ok_or_else(|| miette!("expected int")))
+                .collect::<Result<Vec<_>>>()?,
             vec![2, 1, 3, 4]
         );
+        Ok(())
     }
 
     /// Cosine: vectors are normalized at ingest, the query too; scale is
     /// irrelevant and distances are 1 - cos(angle).
     #[test]
-    fn knn_cosine_normalizes_at_ingest() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn knn_cosine_normalizes_at_ingest() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows = vec![
-            row(1, 10.0, 0.0), // same direction as the query
-            row(2, 0.0, 0.1),  // orthogonal
-            row(3, -3.0, 0.0), // opposite
+            row(1, 10.0, 0.0)?, // same direction as the query
+            row(2, 0.0, 0.1)?,  // orthogonal
+            row(3, -3.0, 0.0)?, // opposite
         ];
-        let (base, idx, m) = setup(&db, HnswDistance::Cosine, &rows);
+        let (base, idx, m) = setup(&db, HnswDistance::Cosine, &rows)?;
 
-        let rtx = db.read_tx().unwrap();
-        let q = Vector::try_new(vec![2.0, 0.0]).unwrap();
+        let rtx = db.read_tx()?;
+        let q = Vector::try_new(vec![2.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -4444,29 +4448,31 @@ mod tests {
             &CancelFlag::inert(),
         );
         assert_eq!(
-            hits.iter()
-                .map(|t| t[0].get_int().unwrap())
-                .collect::<Vec<_>>(),
+            hits
+                .iter()
+                .map(|t| t[0].get_int().ok_or_else(|| miette!("expected int")))
+                .collect::<Result<Vec<_>>>()?,
             vec![1, 2, 3]
         );
-        let dists: Vec<f64> = hits.iter().map(|t| t[2].get_float().unwrap()).collect();
+        let dists: Vec<f64> = hits.iter().map(|t| t[2].get_float().ok_or_else(|| miette!("expected float"))).collect::<Result<Vec<_>>>()?;
         assert!((dists[0] - 0.0).abs() < 1e-6, "aligned: {}", dists[0]);
         assert!((dists[1] - 1.0).abs() < 1e-6, "orthogonal: {}", dists[1]);
         assert!((dists[2] - 2.0).abs() < 1e-6, "opposite: {}", dists[2]);
         assert!(dists.iter().all(|d| d.is_finite()));
+        Ok(())
     }
 
     /// The ratified zero-vector refusal: typed at insert time and at query
     /// time, cosine metric only.
     #[test]
-    fn zero_vector_refused_typed_under_cosine() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let (base, idx, m) = setup(&db, HnswDistance::Cosine, &[row(1, 1.0, 0.0)]);
+    fn zero_vector_refused_typed_under_cosine() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let (base, idx, m) = setup(&db, HnswDistance::Cosine, &[row(1, 1.0, 0.0)?])?;
 
         // Insert refusal.
-        let mut tx = db.write_tx().unwrap();
-        let zero = row(9, 0.0, 0.0);
+        let mut tx = db.write_tx()?;
+        let zero = row(9, 0.0, 0.0)?;
         let err = hnsw_put(&mut tx, &m, &base, &idx, None, zero.as_slice()).unwrap_err();
         assert!(
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
@@ -4476,10 +4482,10 @@ mod tests {
             crate::store::tx::Aborted => {}
         }
         // Query refusal.
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let err = Hnsw::knn(
             &rtx,
-            &Vector::try_new(vec![0.0, 0.0]).unwrap(),
+            &Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("vector refused"))?,
             &m,
             &base,
             &idx,
@@ -4492,68 +4498,66 @@ mod tests {
 
         // L2 admits the zero vector (its distance is well-defined).
         let (base2, idx2, m2) = {
-            let m2 = manifest(HnswDistance::L2);
-            let mut tx = db.write_tx().unwrap();
+            let m2 = manifest(HnswDistance::L2)?;
+            let mut tx = db.write_tx()?;
             let base2 = create_relation(
                 &mut tx,
                 input_handle("vecs2", base_metadata()),
                 KeyspaceKind::Facts,
-            )
-            .unwrap();
+            )?;
             let idx2 = create_relation(
                 &mut tx,
                 input_handle("vecs2:by_v", hnsw_index_metadata(&base2.metadata)),
                 KeyspaceKind::AlgorithmState,
-            )
-            .unwrap();
-            tx.commit().unwrap();
+            )?;
+            tx.commit().map_err(|e| miette!("{e}"))?;
             (base2, idx2, m2)
         };
-        let mut tx = db.write_tx().unwrap();
-        let zrow = row(1, 0.0, 0.0);
+        let mut tx = db.write_tx()?;
+        let zrow = row(1, 0.0, 0.0)?;
         base2
             .put_fact(
                 &mut tx,
                 zrow.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, zrow.as_slice()).unwrap());
-        tx.commit().unwrap();
+            )?;
+        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, zrow.as_slice())?);
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
         // Non-finite components are refused under every metric.
-        let mut tx = db.write_tx().unwrap();
-        let nan_row = row(2, f64::NAN, 0.0);
+        let mut tx = db.write_tx()?;
+        let nan_row = row(2, f64::NAN, 0.0)?;
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, nan_row.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<NonFiniteVectorRefused>().is_some());
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
-            DataValue::Vector(Vector::try_new(vec![1.0, 2.0, 3.0]).unwrap()),
+            DataValue::Vector(Vector::try_new(vec![1.0, 2.0, 3.0]).ok_or_else(|| miette!("vector refused"))?),
         ];
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     /// Removal takes a vector out of the results; removing the last vector
     /// retires the canary and empties the index.
     #[test]
-    fn remove_updates_results_and_retires_canary() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let rows = vec![row(1, 0.0, 0.0), row(2, 1.0, 0.0)];
-        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
+    fn remove_updates_results_and_retires_canary() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let rows = vec![row(1, 0.0, 0.0)?, row(2, 1.0, 0.0)?];
+        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
 
-        let mut tx = db.write_tx().unwrap();
-        hnsw_remove(&mut tx, &base, &idx, rows[1].as_slice()).unwrap();
-        tx.commit().unwrap();
+        let mut tx = db.write_tx()?;
+        hnsw_remove(&mut tx, &base, &idx, rows[1].as_slice())?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
-        let q = Vector::try_new(vec![1.0, 0.0]).unwrap();
+        let rtx = db.read_tx()?;
+        let q = Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -4568,11 +4572,11 @@ mod tests {
         assert_eq!(hits[0][0], DataValue::from(1));
         drop(rtx);
 
-        let mut tx = db.write_tx().unwrap();
-        hnsw_remove(&mut tx, &base, &idx, rows[0].as_slice()).unwrap();
-        tx.commit().unwrap();
+        let mut tx = db.write_tx()?;
+        hnsw_remove(&mut tx, &base, &idx, rows[0].as_slice())?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -4589,35 +4593,35 @@ mod tests {
             0,
             "the canary retired with the last vector"
         );
+        Ok(())
     }
 
     /// Re-putting an unchanged row is a no-op; a changed vector re-indexes.
     #[test]
-    fn re_put_detects_change_via_content_hash() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let rows = vec![row(1, 0.0, 0.0), row(2, 1.0, 0.0)];
-        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
+    fn re_put_detects_change_via_content_hash() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let rows = vec![row(1, 0.0, 0.0)?, row(2, 1.0, 0.0)?];
+        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
         // Unchanged put.
-        let mut tx = db.write_tx().unwrap();
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, rows[0].as_slice()).unwrap());
-        tx.commit().unwrap();
+        let mut tx = db.write_tx()?;
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, rows[0].as_slice())?);
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
         // Changed vector: base row rewritten, index follows.
-        let moved = row(1, 4.0, 4.0);
-        let mut tx = db.write_tx().unwrap();
+        let moved = row(1, 4.0, 4.0)?;
+        let mut tx = db.write_tx()?;
         base.put_fact(
             &mut tx,
             moved.as_slice(),
             kyzo_model::value::ValidityTs::of_micros(0),
             SourceSpan(0, 0),
-        )
-        .unwrap();
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, moved.as_slice()).unwrap());
-        tx.commit().unwrap();
+        )?;
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, moved.as_slice())?);
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
-        let q = Vector::try_new(vec![4.0, 4.0]).unwrap();
+        let rtx = db.read_tx()?;
+        let q = Vector::try_new(vec![4.0, 4.0]).ok_or_else(|| miette!("vector refused"))?;
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -4629,26 +4633,27 @@ mod tests {
             &CancelFlag::inert(),
         );
         assert_eq!(hits[0][0], DataValue::from(1), "found at its new position");
+        Ok(())
     }
 
     /// NaN-impossible property: random unit vectors under every metric
     /// yield finite distances, and cosine distances lie in [0, 2].
     #[test]
-    fn nan_impossible_property() {
-        let m_cos = manifest(HnswDistance::Cosine);
-        let m_l2 = manifest(HnswDistance::L2);
-        let m_ip = manifest(HnswDistance::InnerProduct);
+    fn nan_impossible_property() -> Result<()> {
+        let m_cos = manifest(HnswDistance::Cosine)?;
+        let m_l2 = manifest(HnswDistance::L2)?;
+        let m_ip = manifest(HnswDistance::InnerProduct)?;
         proptest!(|(ax in -1e3f64..1e3, ay in -1e3f64..1e3, bx in -1e3f64..1e3, by in -1e3f64..1e3)| {
             // Skip degenerate near-zero draws for the unit-vector premise.
             prop_assume!(ax.abs() + ay.abs() > 1e-3);
             prop_assume!(bx.abs() + by.abs() > 1e-3);
             let na = (ax * ax + ay * ay).sqrt();
             let nb = (bx * bx + by * by).sqrt();
-            let a = Vector::try_new(vec![ax / na, ay / na]).unwrap();
-            let b = Vector::try_new(vec![bx / nb, by / nb]).unwrap();
+            let Some(a) = Vector::try_new(vec![ax / na, ay / na]) else { return Ok(()); };
+            let Some(b) = Vector::try_new(vec![bx / nb, by / nb]) else { return Ok(()); };
             for m in [&m_cos, &m_l2, &m_ip] {
-                let va = IndexVec::admit(&a, m).unwrap();
-                let vb = IndexVec::admit(&b, m).unwrap();
+                let Ok(va) = IndexVec::admit(&a, m) else { return Ok(()); };
+                let Ok(vb) = IndexVec::admit(&b, m) else { return Ok(()); };
                 let d = va.dist(&vb, m.distance);
                 prop_assert!(d.is_finite(), "metric {:?} gave {d}", m.distance);
                 if m.distance == HnswDistance::Cosine {
@@ -4656,6 +4661,7 @@ mod tests {
                 }
             }
         });
+        Ok(())
     }
 
     /// Node, edge, and canary rows round-trip through the typed codec, and
@@ -4697,7 +4703,7 @@ mod tests {
         for row in rows {
             let mut tuple = row.key_tuple(kl)?;
             tuple.extend(row.val_tuple()?);
-            let decoded = HnswRow::decode(tuple.as_slice(), kl, "t").unwrap();
+            let decoded = HnswRow::decode(tuple.as_slice(), kl, "t")?;
             assert_eq!(decoded, row, "round trip");
         }
 
@@ -4765,8 +4771,8 @@ mod tests {
         // panic.
         let dir = tempfile::tempdir().into_diagnostic()?;
         let db = new_fjall_storage(dir.path())?;
-        let rows = vec![row(1, 0.0, 0.0), row(2, 1.0, 0.0)];
-        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
+        let rows = vec![row(1, 0.0, 0.0)?, row(2, 1.0, 0.0)?];
+        let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
 
         // Overwrite every index row's value with garbage msgpack.
         let mut tx = db.write_tx()?;
@@ -4810,13 +4816,13 @@ mod tests {
     /// persisted inside the base relation's catalog row, so any change is a
     /// format migration, not a refactor.
     #[test]
-    fn manifest_wire_format_round_trips_and_is_pinned() {
+    fn manifest_wire_format_round_trips_and_is_pinned() -> Result<()> {
         use serde::Serialize;
-        let m = manifest(HnswDistance::Cosine);
+        let m = manifest(HnswDistance::Cosine)?;
         let mut bytes = vec![];
         m.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
-            .unwrap();
-        let decoded: HnswIndexManifest = rmp_serde::from_slice(&bytes).unwrap();
+            .map_err(|e| miette!("{e}"))?;
+        let decoded: HnswIndexManifest = rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
         assert_eq!(decoded, m, "wire round trip");
 
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -4829,6 +4835,7 @@ mod tests {
             rmp_serde::from_slice::<HnswIndexManifest>(&bytes.as_slice()[..bytes.len() / 2])
                 .is_err()
         );
+        Ok(())
     }
 
     /// The pinned wire bytes of the canonical manifest above (msgpack,
@@ -5007,7 +5014,7 @@ mod tests {
         let mut same_rows: Vec<Tuple> = Vec::with_capacity(24);
         for k in 0..24 {
             let (x, y) = fixture_xy(k);
-            same_rows.push(row(k, x, y));
+            same_rows.push(row(k, x, y)?);
         }
 
         let dump_set = |rows: &[Tuple]| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
@@ -5037,7 +5044,7 @@ mod tests {
         let mut flipped_rows = same_rows.clone();
         let (x0, y0) = fixture_xy(0);
         let x_flip = f64::from_bits(x0.to_bits() ^ 1);
-        flipped_rows[0] = row(0, x_flip, y0);
+        flipped_rows[0] = row(0, x_flip, y0)?;
         let g_flip = dump_set(&flipped_rows)?;
         assert_ne!(
             g_fwd, g_flip,
@@ -5090,7 +5097,7 @@ mod tests {
             let bits_y = splitmix64(&mut state) >> 12;
             let x = f64::from_bits(0x3FF0_0000_0000_0000 | bits_x) - 1.0;
             let y = f64::from_bits(0x3FF0_0000_0000_0000 | bits_y) - 1.0;
-            rows.push(row(k, x * 2.0 - 1.0, y * 2.0 - 1.0));
+            rows.push(row(k, x * 2.0 - 1.0, y * 2.0 - 1.0)?);
             k += 1;
         }
         let mut tx = db.write_tx()?;
@@ -5164,26 +5171,25 @@ mod tests {
             .map(|i| -> Result<Tuple> {
                 let x = (usize_to_f64(i) * 0.37).sin();
                 let y = (usize_to_f64(i) * 0.71).cos();
-                Ok(row(usize_to_i64(i)?, x, y))
+                Ok(row(usize_to_i64(i)?, x, y)?)
             })
             .collect::<Result<Vec<_>>>()?;
 
         // Compare graph structure independent of relation-id allocation: strip
         // the 8-byte relation-id prefix (key) and header (value).
-        let dump = || -> Vec<(Vec<u8>, Vec<u8>)> {
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
-            let (_base, idx, _m) = setup(&db, HnswDistance::Cosine, &rows);
-            let rtx = db.read_tx().unwrap();
+        let dump = || -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let db = new_fjall_storage(dir.path())?;
+            let (_base, idx, _m) = setup(&db, HnswDistance::Cosine, &rows)?;
+            let rtx = db.read_tx()?;
             let lower = idx.id.raw_encode();
             let upper = (idx.id.raw() + 1).to_be_bytes();
             rtx.range_scan(&lower, &upper)
                 .map(|kv| kv.map(|(k, v)| (k[8..].to_vec(), v[8..].to_vec())))
                 .collect::<Result<Vec<_>>>()
-                .unwrap()
         };
-        let a = dump();
-        let b = dump();
+        let a = dump()?;
+        let b = dump()?;
         assert!(!a.is_empty());
         assert_eq!(a, b, "the HNSW graph must be byte-identical across builds");
         Ok(())
@@ -5196,14 +5202,14 @@ mod tests {
     /// k-truncation boundary is nondeterministic (a determinism-law violation,
     /// and the assumption the filter-aware ascent is built on).
     #[test]
-    fn equidistant_results_are_deterministically_tie_broken() {
-        let run = || -> Vec<i64> {
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
-            let rows: Vec<Tuple> = (1..=6).map(|k| row(k, 1.0, 0.0)).collect();
-            let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
-            let rtx = db.read_tx().unwrap();
-            let q = Vector::try_new(vec![1.0, 0.0]).unwrap();
+    fn equidistant_results_are_deterministically_tie_broken() -> Result<()> {
+        let run = || -> Result<Vec<i64>> {
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let db = new_fjall_storage(dir.path())?;
+            let rows: Vec<Tuple> = (1..=6).map(|k| row(k, 1.0, 0.0)).collect::<Result<Vec<_>>>()?;
+            let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
+            let rtx = db.read_tx()?;
+            let q = Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
             let hits = knn_rows!(
                 &rtx,
                 &q,
@@ -5216,23 +5222,27 @@ mod tests {
             );
             // Every hit is at distance 0 (identical vectors).
             for h in &hits {
-                assert!(h[2].get_float().unwrap().abs() < 1e-9, "all equidistant");
+                assert!(h[2].get_float().ok_or_else(|| miette!("expected float"))?.abs() < 1e-9, "all equidistant");
             }
-            hits.iter().map(|t| t[0].get_int().unwrap()).collect()
+            Ok(hits
+                .iter()
+                .map(|t| t[0].get_int().ok_or_else(|| miette!("expected int")))
+                .collect::<Result<Vec<_>>>()?)
         };
-        let a = run();
-        let b = run();
+        let a = run()?;
+        let b = run()?;
         assert_eq!(a, vec![1, 2, 3], "smallest keys win the tie, in key order");
         assert_eq!(
             a, b,
             "the equidistant tie-break is deterministic across runs"
         );
+        Ok(())
     }
 
     /// Pin Theorem 3.2 Eq (14)/(16) formula + [`RABITQ_EPSILON_0`] = 1.9 so a
     /// mutated bound expression fails without needing random trials.
     #[test]
-    fn rabitq_theorem_3_2_formula_pinned() {
+    fn rabitq_theorem_3_2_formula_pinned() -> Result<()> {
         // ⟨ō,o⟩ ≈ 0.8 (paper concentration), D = 100, ε₀ = 1.9.
         let ip = 0.8f64;
         let dim = 100usize;
@@ -5244,18 +5254,21 @@ mod tests {
             RABITQ_EPSILON_0
         );
         assert_eq!(RABITQ_EPSILON_0.to_bits(), 1.9f64.to_bits());
+        Ok(())
     }
 
     /// Rotation door must mint a true orthonormal `P⁻¹` — classical GS alone
     /// fails this at D=128 and was the prior Check-red root cause.
     #[test]
-    fn rabitq_rotation_is_orthonormal() {
-        let rot = RaBitQRotation::from_seed(128, 0x0AB1_7000).expect("rotation");
+    fn rabitq_rotation_is_orthonormal() -> Result<()> {
+        let rot = RaBitQRotation::from_seed(128, 0x0AB1_7000)
+            .ok_or_else(|| miette!("rotation"))?;
         assert!(
             rot.orthonormality_error() < 1e-10,
             "P⁻¹ columns must be orthonormal, err={}",
             rot.orthonormality_error()
         );
+        Ok(())
     }
 
     /// #376 T10 — Theorem 3.2 property (Gao & Long, SIGMOD 2024 / arXiv
@@ -5278,7 +5291,7 @@ mod tests {
     /// accelerator-only. Calls [`RaBitQCode::encode`],
     /// [`RaBitQCode::estimate_inner_product`], [`rabitq_error_bound`].
     #[test]
-    fn rabitq_inner_product_error_bound_holds() {
+    fn rabitq_inner_product_error_bound_holds() -> Result<()> {
         const DIM: usize = 128;
         const TRIALS: u64 = 300;
         // Ceiling ≫ paper ANN-recall folklore; ≪ a broken always-0 estimator.
@@ -5295,13 +5308,14 @@ mod tests {
         for trial in 0..TRIALS {
             let raw_o: Vec<f64> = (0..DIM).map(|_| rng.gauss()).collect();
             let raw_q: Vec<f64> = (0..DIM).map(|_| rng.gauss()).collect();
-            let o = normalize_unit(&raw_o).expect("gaussian unit o");
-            let q = normalize_unit(&raw_q).expect("gaussian unit q");
-            let rot = RaBitQRotation::from_seed(DIM, trial ^ 0x0AB1_7A7A).expect("rotation");
-            let code = RaBitQCode::encode(&o, &rot).expect("encode");
+            let o = normalize_unit(&raw_o).ok_or_else(|| miette!("gaussian unit o"))?;
+            let q = normalize_unit(&raw_q).ok_or_else(|| miette!("gaussian unit q"))?;
+            let rot = RaBitQRotation::from_seed(DIM, trial ^ 0x0AB1_7A7A)
+                .ok_or_else(|| miette!("rotation"))?;
+            let code = RaBitQCode::encode(&o, &rot).ok_or_else(|| miette!("encode"))?;
             let est = code
                 .estimate_inner_product(&q, &rot)
-                .expect("dim-matched estimate");
+                .ok_or_else(|| miette!("dim-matched estimate"))?;
             let truth = exact_inner_product(&o, &q);
             let err = (est - truth).abs();
             sum_err += est - truth;
@@ -5356,29 +5370,39 @@ mod tests {
             mean_bias.abs() < 0.05,
             "Theorem 3.2 unbiasedness: |mean(est−truth)|={mean_bias} too large"
         );
+        Ok(())
     }
 
     /// Exact-float authority: IndexVec distance ignores RaBitQ codes.
     /// Quantized estimate may differ; exact path stays bit-stable.
     #[test]
-    fn rabitq_is_accelerator_exact_float_remains_authority() {
+    fn rabitq_is_accelerator_exact_float_remains_authority() -> Result<()> {
         let dim = 32usize;
-        let rot = RaBitQRotation::from_seed(dim, 0x0AB1_A07B).expect("rotation");
+        let rot = RaBitQRotation::from_seed(dim, 0x0AB1_A07B)
+            .ok_or_else(|| miette!("rotation"))?;
         let o =
-            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 1.0).sin()).collect::<Vec<_>>()).unwrap();
+            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 1.0).sin()).collect::<Vec<_>>()).ok_or_else(|| miette!("normalize_unit refused"))?;
         let q =
-            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 2.0).cos()).collect::<Vec<_>>()).unwrap();
-        let code = RaBitQCode::encode(&o, &rot).expect("encode");
-        let est = code.estimate_inner_product(&q, &rot).unwrap();
+            normalize_unit(&(0..dim).map(|i| (usize_to_f64(i) + 2.0).cos()).collect::<Vec<_>>()).ok_or_else(|| miette!("normalize_unit refused"))?;
+        let code = RaBitQCode::encode(&o, &rot).ok_or_else(|| miette!("encode"))?;
+        let est = code
+            .estimate_inner_product(&q, &rot)
+            .ok_or_else(|| miette!("estimate"))?;
         let truth = exact_inner_product(&o, &q);
         assert!(
             (est - truth).abs() <= code.error_bound() + 1e-12,
             "accelerator estimate must sit inside the proven bound"
         );
-        let mut m = manifest(HnswDistance::Cosine);
+        let mut m = manifest(HnswDistance::Cosine)?;
         m.vec_dim = dim;
-        let va = IndexVec::admit(&Vector::try_new(o.clone()).unwrap(), &m).unwrap();
-        let vb = IndexVec::admit(&Vector::try_new(q.clone()).unwrap(), &m).unwrap();
+        let va = IndexVec::admit(
+            &Vector::try_new(o.clone()).ok_or_else(|| miette!("vector refused"))?,
+            &m,
+        )?;
+        let vb = IndexVec::admit(
+            &Vector::try_new(q.clone()).ok_or_else(|| miette!("vector refused"))?,
+            &m,
+        )?;
         let d1 = va.dist(&vb, HnswDistance::Cosine);
         let d2 = va.dist(&vb, HnswDistance::Cosine);
         assert_eq!(d1.to_bits(), d2.to_bits(), "exact path must be bit-stable");
@@ -5393,6 +5417,7 @@ mod tests {
         // Encode refusal: non-unit input cannot mint a code (no second authority).
         let non_unit = vec![2.0f64; dim];
         assert!(RaBitQCode::encode(&non_unit, &rot).is_none());
+        Ok(())
     }
 }
 
