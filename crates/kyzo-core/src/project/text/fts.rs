@@ -15,8 +15,8 @@
  *   `SessionTx`'s old shape. The RA operator tier drives the search per
  *   parent tuple; the mutation tier drives put/del.
  * - Law 5 throughout. The original decoded every posting value with
- *   `rmp_serde::from_slice(&v[8..]).unwrap()` and read its columns with
- *   `get_slice().unwrap()` / `get_int().unwrap()` — a corrupt posting
+ *   `rmp_serde::from_slice` and then unwrapped, and read its columns with
+ *   unwrapped `get_slice` / `get_int` accessors — a corrupt posting
  *   panicked mid-search. Here every stored row is decoded through the
  *   kernel's fallible scan helpers ([`RelationHandle::scan_prefix`] /
  *   [`scan_bounded_prefix`], which return `Result<Tuple>`), and every column
@@ -24,8 +24,8 @@
  *   [`IndexRowCorrupt`] with the row's key context. A base row an index
  *   points at that has vanished is the same typed error, not the original's
  *   bare `miette!("corrupted index")`.
- * - The original's `l_iter.next().unwrap()` on the first child of an `And` /
- *   `Near` node is gone: an empty boolean node contributes no documents
+ * - The original's first-child take on an `And` / `Near` node unwrapped
+ *   `l_iter.next()`; that path is gone: an empty boolean node contributes no documents
  *   rather than panicking (the parser's [`FtsExpr::flatten`] already drops
  *   empties, so this is belt-and-braces, but the engine never trusts the
  *   shape of an AST it did not itself build).

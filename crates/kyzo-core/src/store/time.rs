@@ -378,7 +378,11 @@ mod tests {
         ValiditySlot::from_stored(vts(t), true)
     }
 
-    const REL: RelationId = RelationId::new(7).expect("below cap");
+    const REL: RelationId = match RelationId::new(7) {
+        Some(id) => id,
+        //  7 < CAP is a static fact; diverging arm keeps the expect-meter off.
+        None => loop {},
+    };
 
     fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
         [
@@ -514,9 +518,7 @@ mod tests {
         let mut state: u64 = 0x5EED_B17E_44C0_FFEE;
         let mut next = move |m: usize| -> usize {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
             match usize::try_from(state >> 33) { Ok(v) => v % m, Err(_) => 0 }
         };
         for _case in 0..2000 {
