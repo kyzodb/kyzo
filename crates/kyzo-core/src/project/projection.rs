@@ -33,7 +33,47 @@ use std::fmt;
 use miette::Result;
 
 use crate::store::ReadTx;
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{RelationId, SearchHits};
+
+/// One required scalar column in an index relation (leading key or value).
+pub(crate) fn index_col(name: &str, coltype: ColType) -> ColumnDef {
+    ColumnDef {
+        name: name.into(),
+        typing: NullableColType::required(coltype),
+        default_gen: None,
+    }
+}
+
+/// One required `List<eltype>` value column in an index relation.
+pub(crate) fn index_list_col(name: &str, eltype: ColType) -> ColumnDef {
+    ColumnDef {
+        name: name.into(),
+        typing: NullableColType::required(ColType::List {
+            eltype: Box::new(NullableColType::required(eltype)),
+            len: None,
+        }),
+        default_gen: None,
+    }
+}
+
+/// One door for every posting-style index relation schema: leading key
+/// column(s), then `src_*` copies of `base.keys`, then non-key columns.
+/// LSH / FTS / sparse / spatial each own their leading and value seats;
+/// the `src_*` scaffold is shared so it cannot drift per engine.
+pub(crate) fn index_relation_metadata(
+    leading_keys: impl IntoIterator<Item = ColumnDef>,
+    base: &StoredRelationMetadata,
+    non_keys: Vec<ColumnDef>,
+) -> StoredRelationMetadata {
+    let mut keys: Vec<ColumnDef> = leading_keys.into_iter().collect();
+    keys.extend(base.keys.iter().map(|k| ColumnDef {
+        name: format!("src_{}", k.name).into(),
+        typing: k.typing.clone(),
+        default_gen: None,
+    }));
+    StoredRelationMetadata { keys, non_keys }
+}
 
 /// A projection kind's identity in the build→seal→freshness machine.
 ///

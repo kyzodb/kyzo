@@ -182,47 +182,17 @@ pub(crate) struct FtsExtractorType {
 /// arrays, one entry per occurrence of `word` in the document) and
 /// `total_length` (the document's total token count).
 pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
-    let mut keys = vec![ColumnDef {
-        name: SmartString::from("word"),
-        typing: NullableColType::required(ColType::String),
-        default_gen: None,
-    }];
-    for k in base.keys.iter() {
-        keys.push(ColumnDef {
-            name: format!("src_{}", k.name).into(),
-            typing: k.typing.clone(),
-            default_gen: None,
-        });
-    }
-    let int_list = || {
-        NullableColType::required(ColType::List {
-            eltype: Box::new(NullableColType::required(ColType::Int)),
-            len: None,
-        })
-    };
-    let non_keys = vec![
-        ColumnDef {
-            name: SmartString::from("offset_from"),
-            typing: int_list(),
-            default_gen: None,
-        },
-        ColumnDef {
-            name: SmartString::from("offset_to"),
-            typing: int_list(),
-            default_gen: None,
-        },
-        ColumnDef {
-            name: SmartString::from("position"),
-            typing: int_list(),
-            default_gen: None,
-        },
-        ColumnDef {
-            name: SmartString::from("total_length"),
-            typing: NullableColType::required(ColType::Int),
-            default_gen: None,
-        },
-    ];
-    StoredRelationMetadata { keys, non_keys }
+    use crate::project::projection::{index_col, index_list_col, index_relation_metadata};
+    index_relation_metadata(
+        [index_col("word", ColType::String)],
+        base,
+        vec![
+            index_list_col("offset_from", ColType::Int),
+            index_list_col("offset_to", ColType::Int),
+            index_list_col("position", ColType::Int),
+            index_col("total_length", ColType::Int),
+        ],
+    )
 }
 
 // ---------------------------------------------------------------------------

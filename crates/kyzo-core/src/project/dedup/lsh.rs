@@ -260,22 +260,8 @@ impl MinHashLshIndexManifest {
 /// Mint the index relation's column metadata for an LSH index over `base`:
 /// keys `[hash: Bytes, src_*…]`, no value columns.
 pub(crate) fn lsh_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
-    let mut keys = vec![ColumnDef {
-        name: SmartString::from("hash"),
-        typing: NullableColType::required(ColType::Bytes),
-        default_gen: None,
-    }];
-    for k in base.keys.iter() {
-        keys.push(ColumnDef {
-            name: format!("src_{}", k.name).into(),
-            typing: k.typing.clone(),
-            default_gen: None,
-        });
-    }
-    StoredRelationMetadata {
-        keys,
-        non_keys: vec![],
-    }
+    use crate::project::projection::{index_col, index_relation_metadata};
+    index_relation_metadata([index_col("hash", ColType::Bytes)], base, vec![])
 }
 
 /// Mint the inverse relation's column metadata: keyed by the base key,

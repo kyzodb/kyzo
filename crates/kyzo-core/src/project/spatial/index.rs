@@ -374,32 +374,15 @@ pub(crate) struct SpatialIndexManifest {
 /// the precise re-check — deliberate denormalization so the filter needs no
 /// base fetch per over-scanned candidate).
 pub(crate) fn spatial_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
-    let mut keys = vec![ColumnDef {
-        name: SmartString::from("curve"),
-        typing: NullableColType::required(ColType::Bytes),
-        default_gen: None,
-    }];
-    for k in base.keys.iter() {
-        keys.push(ColumnDef {
-            name: format!("src_{}", k.name).into(),
-            typing: k.typing.clone(),
-            default_gen: None,
-        });
-    }
-    let coord = || NullableColType::required(ColType::Float);
-    let non_keys = vec![
-        ColumnDef {
-            name: SmartString::from("lat"),
-            typing: coord(),
-            default_gen: None,
-        },
-        ColumnDef {
-            name: SmartString::from("lon"),
-            typing: coord(),
-            default_gen: None,
-        },
-    ];
-    StoredRelationMetadata { keys, non_keys }
+    use crate::project::projection::{index_col, index_relation_metadata};
+    index_relation_metadata(
+        [index_col("curve", ColType::Bytes)],
+        base,
+        vec![
+            index_col("lat", ColType::Float),
+            index_col("lon", ColType::Float),
+        ],
+    )
 }
 
 // ---------------------------------------------------------------------------

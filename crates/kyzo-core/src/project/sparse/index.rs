@@ -241,24 +241,12 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
 /// leading key column so a query dimension's posting list is a single prefix
 /// scan.
 pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
-    let mut keys = vec![ColumnDef {
-        name: SmartString::from("dim"),
-        typing: NullableColType::required(ColType::Int),
-        default_gen: None,
-    }];
-    for k in base.keys.iter() {
-        keys.push(ColumnDef {
-            name: format!("src_{}", k.name).into(),
-            typing: k.typing.clone(),
-            default_gen: None,
-        });
-    }
-    let non_keys = vec![ColumnDef {
-        name: SmartString::from("weight"),
-        typing: NullableColType::required(ColType::Float),
-        default_gen: None,
-    }];
-    StoredRelationMetadata { keys, non_keys }
+    use crate::project::projection::{index_col, index_relation_metadata};
+    index_relation_metadata(
+        [index_col("dim", ColType::Int)],
+        base,
+        vec![index_col("weight", ColType::Float)],
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +257,37 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
 /// row. Callers prepend the dimension themselves — no placeholder slot.
 fn posting_src_tail(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
     Tuple::from_iter(tuple[..base_key_len].iter().cloned())
+}
+
+/// Walk every admitted posting key for `tuple`/`vector`, invoking `write`
+/// once per dimension. Put and delete share this door so the encode-key
+/// skeleton cannot drift between them.
+fn sparse_for_each_posting<T: WriteTx>(
+    tx: &mut T,
+    tuple: &[DataValue],
+    vector: &[(u32, f32)],
+    base: &RelationHandle,
+    idx: &RelationHandle,
+    mut write: impl FnMut(&mut T, &[u8], f32) -> Result<()>,
+) -> Result<()> {
+    let base_key_len = base.metadata.keys.len();
+    if tuple.len() < base_key_len {
+        bail!(IndexRowCorrupt::new(
+            &base.name,
+            tuple,
+            IndexCorruptReason::RowShorterThanKey,
+        ));
+    }
+    let vector = admit_sparse(vector)?;
+    let tail = posting_src_tail(base_key_len, tuple);
+    for (dim, weight) in vector {
+        let mut key = Tuple::with_capacity(1 + base_key_len);
+        key.push(DataValue::from(i64::from(dim)));
+        key.extend(tail.as_slice().iter().cloned());
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
+        write(tx, &key_bytes, weight)?;
+    }
+    Ok(())
 }
 
 /// Index one base-relation row's sparse vector: write one posting per
@@ -293,26 +312,11 @@ pub(crate) fn sparse_put<T: WriteTx>(
     base: &RelationHandle,
     idx: &RelationHandle,
 ) -> Result<()> {
-    let base_key_len = base.metadata.keys.len();
-    if tuple.len() < base_key_len {
-        bail!(IndexRowCorrupt::new(
-            &base.name,
-            tuple,
-            IndexCorruptReason::RowShorterThanKey,
-        ));
-    }
-    let vector = admit_sparse(vector)?;
-    let tail = posting_src_tail(base_key_len, tuple);
-    for (dim, weight) in vector {
-        let mut key = Tuple::with_capacity(1 + base_key_len);
-        key.push(DataValue::from(i64::from(dim)));
-        key.extend(tail.as_slice().iter().cloned());
+    sparse_for_each_posting(tx, tuple, vector, base, idx, |tx, key_bytes, weight| {
         let val = [DataValue::from(f64::from(weight))];
-        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
         let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::empty())?;
-        tx.put(&key_bytes, &val_bytes)?;
-    }
-    Ok(())
+        tx.put(key_bytes, &val_bytes)
+    })
 }
 
 /// Un-index one base-relation row: delete every posting its sparse vector
@@ -332,24 +336,9 @@ pub(crate) fn sparse_del<T: WriteTx>(
     base: &RelationHandle,
     idx: &RelationHandle,
 ) -> Result<()> {
-    let base_key_len = base.metadata.keys.len();
-    if tuple.len() < base_key_len {
-        bail!(IndexRowCorrupt::new(
-            &base.name,
-            tuple,
-            IndexCorruptReason::RowShorterThanKey,
-        ));
-    }
-    let vector = admit_sparse(vector)?;
-    let tail = posting_src_tail(base_key_len, tuple);
-    for (dim, _weight) in vector {
-        let mut key = Tuple::with_capacity(1 + base_key_len);
-        key.push(DataValue::from(i64::from(dim)));
-        key.extend(tail.as_slice().iter().cloned());
-        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
-        tx.del(&key_bytes)?;
-    }
-    Ok(())
+    sparse_for_each_posting(tx, tuple, vector, base, idx, |tx, key_bytes, _weight| {
+        tx.del(key_bytes)
+    })
 }
 
 // ---------------------------------------------------------------------------
