@@ -1065,8 +1065,8 @@ mod tests {
     use crate::store::{Storage, WriteTx};
     use kyzo_model::value::RelationId;
 
-    fn big_budget() -> NonZeroU64 {
-        NonZeroU64::new(1_000_000).unwrap()
+    fn big_budget() -> Result<NonZeroU64> {
+        NonZeroU64::new(1_000_000).ok_or_else(|| miette!("nonzero budget"))
     }
 
     // ── golden vectors: LITERAL SHA-256 digests, computed off-tree from the
@@ -1083,7 +1083,7 @@ mod tests {
             empty_hash().to_hex(),
             "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986"
         );
-    
+
         Ok(())
     }
 
@@ -1096,10 +1096,10 @@ mod tests {
         // A one-entry root is exactly that leaf (no interior node).
         let root = root_over(
             Box::new(std::iter::once(Ok((Slice::from(k), Slice::from(v))))),
-            big_budget(),
+            big_budget()?,
         )?;
         assert_eq!(root.to_hex(), golden);
-    
+
         Ok(())
     }
 
@@ -1130,10 +1130,10 @@ mod tests {
                 .into_iter()
                 .map(Ok),
             ),
-            big_budget(),
+            big_budget()?,
         )?;
         assert_eq!(root.to_hex(), golden);
-    
+
         Ok(())
     }
 
@@ -1142,7 +1142,7 @@ mod tests {
         // (key=ab, value=c) and (key=a, value=bc) share the byte stream
         // "abc" but must not collide, because the key length is prefixed.
         assert_ne!(leaf_hash(b"ab", b"c"), leaf_hash(b"a", b"bc"));
-    
+
         Ok(())
     }
 
@@ -1165,16 +1165,15 @@ mod tests {
         }
     }
 
-    fn root_of_pairs(pairs: &[(Vec<u8>, Vec<u8>)]) -> MerkleHash {
+    fn root_of_pairs(pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<MerkleHash> {
         root_over(
             Box::new(
                 pairs
                     .iter()
                     .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
             ),
-            big_budget(),
+            big_budget()?,
         )
-        .unwrap()
     }
 
     #[test]
@@ -1190,12 +1189,12 @@ mod tests {
                 .collect();
             let leaves: Vec<MerkleHash> = pairs.iter().map(|(k, v)| leaf_hash(k, v)).collect();
             assert_eq!(
-                root_of_pairs(&pairs),
+                root_of_pairs(&pairs)?,
                 recursive_mth(&leaves),
                 "streaming ≠ recursive MTH at n={n}"
             );
         }
-    
+
         Ok(())
     }
 
@@ -1225,11 +1224,10 @@ mod tests {
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
 
         let mut aad_b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
-        aad_b
-            .append_u64(
-                FieldId::ARTIFACT_KIND,
-                SealedArtifactKind::AuditKeyLeaf.tag(),
-            )?;
+        aad_b.append_u64(
+            FieldId::ARTIFACT_KIND,
+            SealedArtifactKind::AuditKeyLeaf.tag(),
+        )?;
         let aad = aad_b.seal();
 
         let logical: Vec<(Vec<u8>, Vec<u8>)> = (0..8u32)
@@ -1242,7 +1240,7 @@ mod tests {
             .collect();
 
         // Plaintext observation: leaf over canonical plaintext.
-        let plaintext_root = root_of_pairs(&logical);
+        let plaintext_root = root_of_pairs(&logical)?;
 
         // Encrypted carriage: seal each value; open before the leaf (the
         // only lawful merkle input). Ciphertext body must not be the leaf.
@@ -1251,8 +1249,7 @@ mod tests {
             let mut nonce_bytes = [0u8; 12];
             nonce_bytes[..4].copy_from_slice(&(i as u32).to_be_bytes());
             let nonce = Nonce::from_bytes(nonce_bytes);
-            let ct =
-                compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)?;
+            let ct = compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)?;
             assert_ne!(
                 ct.body(),
                 plaintext.as_slice(),
@@ -1268,7 +1265,7 @@ mod tests {
             assert_eq!(&round, plaintext);
             opened_pairs.push((k.clone(), round));
         }
-        let encrypted_obs_root = root_of_pairs(&opened_pairs);
+        let encrypted_obs_root = root_of_pairs(&opened_pairs)?;
 
         assert_eq!(
             plaintext_root, encrypted_obs_root,
@@ -1289,14 +1286,14 @@ mod tests {
         }
         tx.commit()?;
         let tx = db.read_tx()?;
-        let store_root = state_root(&tx, big_budget())?;
+        let store_root = state_root(&tx, big_budget()?)?;
         assert_eq!(store_root, plaintext_root);
         assert_eq!(
             StateRoot::from_merkle(store_root),
             StateRoot::from_merkle(encrypted_obs_root),
             "encrypted vs plaintext identical StateRoot via state_root"
         );
-    
+
         Ok(())
     }
 
@@ -1337,9 +1334,9 @@ mod tests {
             s
         };
 
-        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1));
-        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2));
-        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3));
+        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1)?);
+        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2)?);
+        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3)?);
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 
@@ -1391,7 +1388,7 @@ mod tests {
 
         // Attacker swaps an older internally-consistent state (v1 snapshot).
         // Recompute: content root of the restored bytes is well-formed.
-        let restored_content = StateRoot::from_merkle(root_of_pairs(&state_v1));
+        let restored_content = StateRoot::from_merkle(root_of_pairs(&state_v1)?);
         assert_eq!(
             restored_content, content_v1,
             "older state remains internally consistent"
@@ -1424,7 +1421,7 @@ mod tests {
         // Controls: same cut equals itself; tip equals tip.
         assert!(roots_equal_at_cut(stale_as_of, root_at_v1));
         assert!(roots_equal_at_cut(stored_prior, chain.prior_root()));
-    
+
         Ok(())
     }
 
@@ -1485,8 +1482,7 @@ mod tests {
             tx.put(b"k00", b"v0")?;
             tx.put(b"k01", b"v1")?;
             tx.commit()?;
-            let content =
-                StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?);
+            let content = StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget()?)?);
             drop(db);
             content
         };
@@ -1500,46 +1496,41 @@ mod tests {
                 tx.put(b"k02", b"v2")?;
                 tx.commit()?;
             }
-            let content_v2 =
-                StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?);
+            let content_v2 = StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget()?)?);
             {
                 let mut tx = db.write_tx()?;
                 tx.put(b"k03", b"v3")?;
                 tx.commit()?;
             }
-            let content_v3 =
-                StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?);
+            let content_v3 = StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget()?)?);
             assert_ne!(content_v1, content_v2);
             assert_ne!(content_v2, content_v3);
 
             let mut chain = RootChain::empty();
-            chain
-                .append(ChainedStateRoot::mint(
-                    store_id,
-                    fence,
-                    o1,
-                    content_v1,
-                    GENESIS_ROOT,
-                    ChainLinkKind::Ordinary,
-                ))?;
-            chain
-                .append(ChainedStateRoot::mint(
-                    store_id,
-                    fence,
-                    o2,
-                    content_v2,
-                    chain.prior_root(),
-                    ChainLinkKind::Ordinary,
-                ))?;
-            chain
-                .append(ChainedStateRoot::mint(
-                    store_id,
-                    fence,
-                    o3,
-                    content_v3,
-                    chain.prior_root(),
-                    ChainLinkKind::Ordinary,
-                ))?;
+            chain.append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o1,
+                content_v1,
+                GENESIS_ROOT,
+                ChainLinkKind::Ordinary,
+            ))?;
+            chain.append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o2,
+                content_v2,
+                chain.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))?;
+            chain.append(ChainedStateRoot::mint(
+                store_id,
+                fence,
+                o3,
+                content_v3,
+                chain.prior_root(),
+                ChainLinkKind::Ordinary,
+            ))?;
             drop(db);
             (content_v3, chain)
         };
@@ -1552,7 +1543,7 @@ mod tests {
         replace_dir_with(&backup_v1, &live);
         let restored_content = {
             let db = new_fjall_storage(&live)?;
-            StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget())?)
+            StateRoot::from_merkle(state_root(&db.read_tx()?, big_budget()?)?)
         };
 
         assert_eq!(
@@ -1580,7 +1571,7 @@ mod tests {
             !roots_equal_at_cut(tip_prior, recomputed_at_tip),
             "valid-but-stale on-disk rollback: stored tip prior ≠ tip rebound over restored bytes"
         );
-    
+
         Ok(())
     }
 
@@ -1624,10 +1615,10 @@ mod tests {
             s
         };
 
-        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1));
-        let content_v1_edited = StateRoot::from_merkle(root_of_pairs(&state_v1_edited));
-        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2));
-        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3));
+        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1)?);
+        let content_v1_edited = StateRoot::from_merkle(root_of_pairs(&state_v1_edited)?);
+        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2)?);
+        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3)?);
         assert_ne!(
             content_v1, content_v1_edited,
             "historical edit must change past content root"
@@ -1723,7 +1714,7 @@ mod tests {
             Err(MerkleChainRefuse::PredecessorMismatch),
             "historical_edit: honest forward link refuses edited past tip"
         );
-    
+
         Ok(())
     }
 
@@ -1760,9 +1751,9 @@ mod tests {
             s
         };
 
-        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1));
-        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2));
-        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3));
+        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1)?);
+        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2)?);
+        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3)?);
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 
@@ -1836,7 +1827,7 @@ mod tests {
             !roots_equal_at_cut(as_of_o2, tip_as_of),
             "point-in-time: mid cut differs from tip"
         );
-    
+
         Ok(())
     }
 
@@ -1853,7 +1844,7 @@ mod tests {
             as_of_root(&chain, cut),
             Err(MerkleChainRefuse::CutBeforeGenesis)
         );
-    
+
         Ok(())
     }
 
@@ -1877,30 +1868,28 @@ mod tests {
         let o3 = o2.successor()?;
 
         let mut chain = RootChain::empty();
-        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"a".to_vec(), b"1".to_vec())]));
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"a".to_vec(), b"1".to_vec())])?);
         let c3 = StateRoot::from_merkle(root_of_pairs(&[
             (b"a".to_vec(), b"1".to_vec()),
             (b"c".to_vec(), b"3".to_vec()),
-        ]));
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o1,
-                c1,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
+        ])?);
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            c1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
         // Skip o2 deliberately — gap between o1 and o3.
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o3,
-                c3,
-                chain.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            c3,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))?;
 
         assert_eq!(
             build_consistency_proof(&chain, o3, o1),
@@ -1917,7 +1906,7 @@ mod tests {
             build_consistency_proof(&RootChain::empty(), o1, o3),
             Err(MerkleChainRefuse::CutBeforeGenesis)
         );
-    
+
         Ok(())
     }
 
@@ -1937,9 +1926,9 @@ mod tests {
         let fence_a_later = FenceEpoch::from_raw(store_a, 1);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
-        let root = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+        let root = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())])?);
         let other_root =
-            StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"OTHER".to_vec())]));
+            StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"OTHER".to_vec())])?);
 
         let a = ForkPoint::seal(root, store_a, fence_a, o1);
         let same = ForkPoint::seal(root, store_a, fence_a, o1);
@@ -1961,7 +1950,7 @@ mod tests {
             !fork_equivalence(&a, &ForkPoint::seal(root, store_a, fence_a, o2)),
             "foreign commit ordinal must not equate"
         );
-    
+
         Ok(())
     }
 
@@ -1971,32 +1960,32 @@ mod tests {
     /// batching, then return the whole-store root. The batching (how the
     /// puts are split across commits, and their order) is the "write
     /// history" that must NOT affect the root.
-    fn root_after_history(content: &[(Vec<u8>, Vec<u8>)], batches: &[usize]) -> MerkleHash {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn root_after_history(content: &[(Vec<u8>, Vec<u8>)], batches: &[usize]) -> Result<MerkleHash> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let mut idx = 0usize;
         for &batch in batches {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             for _ in 0..batch {
                 if idx >= content.len() {
                     break;
                 }
                 let (k, v) = &content[idx];
-                tx.put(k, v).unwrap();
+                tx.put(k, v)?;
                 idx += 1;
             }
-            tx.commit().unwrap();
+            tx.commit()?;
         }
         // Any remainder in one last commit.
         if idx < content.len() {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             for (k, v) in &content[idx..] {
-                tx.put(k, v).unwrap();
+                tx.put(k, v)?;
             }
-            tx.commit().unwrap();
+            tx.commit()?;
         }
-        let tx = db.read_tx().unwrap();
-        state_root(&tx, big_budget()).unwrap()
+        let tx = db.read_tx()?;
+        state_root(&tx, big_budget()?)
     }
 
     #[test]
@@ -2013,13 +2002,13 @@ mod tests {
         content.dedup_by(|a, b| a.0 == b.0);
 
         // History A: insertion order = content order, one big commit.
-        let root_a = root_after_history(&content, &[content.len()]);
+        let root_a = root_after_history(&content, &[content.len()])?;
 
         // History B: reversed insertion order, split across many small,
         // uneven commits.
         let mut reversed = content.clone();
         reversed.reverse();
-        let root_b = root_after_history(&reversed, &[1, 5, 2, 9, 3, 7, 11]);
+        let root_b = root_after_history(&reversed, &[1, 5, 2, 9, 3, 7, 11])?;
 
         // History C: a shuffle (deterministic), yet another batching.
         let mut shuffled = content.clone();
@@ -2032,11 +2021,11 @@ mod tests {
             }
             s
         });
-        let root_c = root_after_history(&shuffled, &[13, 13, 13, 13, 13]);
+        let root_c = root_after_history(&shuffled, &[13, 13, 13, 13, 13])?;
 
         assert_eq!(root_a, root_b, "write history changed the root (A vs B)");
         assert_eq!(root_a, root_c, "write history changed the root (A vs C)");
-    
+
         Ok(())
     }
 
@@ -2050,24 +2039,24 @@ mod tests {
                 )
             })
             .collect();
-        let root = root_after_history(&base, &[8, 8, 8, 8]);
+        let root = root_after_history(&base, &[8, 8, 8, 8])?;
 
         // Flip one byte of one value.
         let mut edited_val = base.clone();
         edited_val[10].1[1] ^= 0x01;
-        assert_ne!(root, root_after_history(&edited_val, &[32]), "value edit");
+        assert_ne!(root, root_after_history(&edited_val, &[32])?, "value edit");
 
         // Flip one byte of one key.
         let mut edited_key = base.clone();
         edited_key[20].0[1] ^= 0x01;
         edited_key.sort();
-        assert_ne!(root, root_after_history(&edited_key, &[32]), "key edit");
+        assert_ne!(root, root_after_history(&edited_key, &[32])?, "key edit");
 
         // Drop one pair entirely.
         let mut dropped = base.clone();
         dropped.remove(5);
-        assert_ne!(root, root_after_history(&dropped, &[31]), "missing pair");
-    
+        assert_ne!(root, root_after_history(&dropped, &[31])?, "missing pair");
+
         Ok(())
     }
 
@@ -2090,13 +2079,13 @@ mod tests {
             }
             tx.commit()?;
             let tx = db.read_tx()?;
-            state_root(&tx, big_budget())?
+            state_root(&tx, big_budget()?)?
         };
         // Reopen the same directory; the root must be byte-identical.
         let db = new_fjall_storage(dir.path())?;
         let tx = db.read_tx()?;
-        assert_eq!(first, state_root(&tx, big_budget())?);
-    
+        assert_eq!(first, state_root(&tx, big_budget()?)?);
+
         Ok(())
     }
 
@@ -2128,14 +2117,14 @@ mod tests {
         tx.commit()?;
         let tx = db.read_tx()?;
 
-        let via_relation = relation_root(&tx, rel_a, big_budget())?;
+        let via_relation = relation_root(&tx, rel_a, big_budget()?)?;
         let via_pairs = root_over(
             Box::new(
                 a_pairs
                     .into_iter()
                     .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
             ),
-            big_budget(),
+            big_budget()?,
         )?;
         assert_eq!(via_relation, via_pairs);
 
@@ -2146,11 +2135,8 @@ mod tests {
         tx.put(&k, b"changed")?;
         tx.commit()?;
         let tx = db.read_tx()?;
-        assert_eq!(
-            via_relation,
-            relation_root(&tx, rel_a, big_budget())?
-        );
-    
+        assert_eq!(via_relation, relation_root(&tx, rel_a, big_budget()?)?);
+
         Ok(())
     }
 
@@ -2160,11 +2146,15 @@ mod tests {
         let db = new_fjall_storage(dir.path())?;
         let tx = db.read_tx()?;
         assert_eq!(
-            relation_root(&tx, RelationId::new(3).ok_or_else(|| miette!("relation id"))?, big_budget())?,
+            relation_root(
+                &tx,
+                RelationId::new(3).ok_or_else(|| miette!("relation id"))?,
+                big_budget()?
+            )?,
             empty_hash()
         );
-        assert_eq!(state_root(&tx, big_budget())?, empty_hash());
-    
+        assert_eq!(state_root(&tx, big_budget()?)?, empty_hash());
+
         Ok(())
     }
 
@@ -2184,7 +2174,7 @@ mod tests {
         assert!(err.to_string().contains("ceiling"), "{err}");
         // Ceiling at the exact count succeeds.
         assert!(state_root(&tx, NonZeroU64::new(10).ok_or_else(|| miette!("nonzero"))?).is_ok());
-    
+
         Ok(())
     }
 
@@ -2218,8 +2208,8 @@ mod tests {
             (b"k01".to_vec(), b"v1".to_vec()),
             (b"k02".to_vec(), b"v2".to_vec()),
         ];
-        let content_a = StateRoot::from_merkle(root_of_pairs(&facts));
-        let content_b = StateRoot::from_merkle(root_of_pairs(&facts));
+        let content_a = StateRoot::from_merkle(root_of_pairs(&facts)?);
+        let content_b = StateRoot::from_merkle(root_of_pairs(&facts)?);
         assert_eq!(
             content_a, content_b,
             "independent cold folds of the same ordered facts must agree"
@@ -2254,7 +2244,7 @@ mod tests {
         // Divergent facts on B — independent recompute must disagree.
         let mut facts_divergent = facts.clone();
         facts_divergent[1].1 = b"vX".to_vec();
-        let content_divergent = StateRoot::from_merkle(root_of_pairs(&facts_divergent));
+        let content_divergent = StateRoot::from_merkle(root_of_pairs(&facts_divergent)?);
         assert_ne!(content_a, content_divergent);
         let instance_b_divergent = ReplicaCutRecompute::from_local(
             store_id,
@@ -2297,7 +2287,7 @@ mod tests {
             MerkleChainRefuse::PathUrlSameness,
             "path/URL sameness claim must refuse — not store equivalence"
         );
-    
+
         Ok(())
     }
 
@@ -2319,7 +2309,7 @@ mod tests {
         let store_id = StoreId::from_digest([0x24; 32]);
         let fence = FenceEpoch::genesis(store_id);
         let ordinal = CommitOrdinal::ZERO.successor()?;
-        let content = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+        let content = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())])?);
 
         let meaning = ChainedStateRoot::mint(
             store_id,
@@ -2349,7 +2339,7 @@ mod tests {
 
         // Break meaning bind (different content → different chained root).
         let other_content =
-            StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"X".to_vec())]));
+            StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"X".to_vec())])?);
         let broken_meaning = ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2413,20 +2403,20 @@ mod tests {
             wal_broken.composed(),
             "real compose covers wal_final_hash — WAL tip break changes composed"
         );
-    
+
         Ok(())
     }
 
     // ── STH gossip non-equivocation (CT; seats 2/56/58/69) ────────────────
 
-    fn sth_demo_chain() -> (
+    fn sth_demo_chain() -> Result<(
         crate::store::open::StoreId,
         crate::store::epoch::FenceEpoch,
         super::RootChain,
         crate::store::sweep::CommitOrdinal,
         crate::store::sweep::CommitOrdinal,
         crate::store::sweep::CommitOrdinal,
-    ) {
+    )> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
@@ -2435,53 +2425,47 @@ mod tests {
 
         let store_id = StoreId::from_digest([0xC7; 32]);
         let fence = FenceEpoch::genesis(store_id);
-        let o1 = CommitOrdinal::ZERO.successor().unwrap();
-        let o2 = o1.successor().unwrap();
-        let o3 = o2.successor().unwrap();
+        let o1 = CommitOrdinal::ZERO.successor()?;
+        let o2 = o1.successor()?;
+        let o3 = o2.successor()?;
 
-        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"a".to_vec(), b"1".to_vec())]));
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"a".to_vec(), b"1".to_vec())])?);
         let c2 = StateRoot::from_merkle(root_of_pairs(&[
             (b"a".to_vec(), b"1".to_vec()),
             (b"b".to_vec(), b"2".to_vec()),
-        ]));
+        ])?);
         let c3 = StateRoot::from_merkle(root_of_pairs(&[
             (b"a".to_vec(), b"1".to_vec()),
             (b"b".to_vec(), b"2".to_vec()),
             (b"c".to_vec(), b"3".to_vec()),
-        ]));
+        ])?);
 
         let mut chain = RootChain::empty();
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o1,
-                c1,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o2,
-                c2,
-                chain.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o3,
-                c3,
-                chain.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))
-            .unwrap();
-        (store_id, fence, chain, o1, o2, o3)
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            c1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            c2,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))?;
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            c3,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))?;
+        Ok((store_id, fence, chain, o1, o2, o3))
     }
 
     /// Nasty: equivocating Store shows divergent histories to two peers —
@@ -2504,39 +2488,37 @@ mod tests {
 
         // Peer A observes honest chain tip at o2.
         let mut honest = RootChain::empty();
-        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())])?);
         let c2 = StateRoot::from_merkle(root_of_pairs(&[
             (b"k".to_vec(), b"v".to_vec()),
             (b"m".to_vec(), b"n".to_vec()),
-        ]));
-        honest
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o1,
-                c1,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
-        honest
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o2,
-                c2,
-                honest.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
+        ])?);
+        honest.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            c1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
+        honest.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            c2,
+            honest.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))?;
         let head_a = StateRootHead::from_chain_tip(&honest)?;
 
         // Peer B observes an equivocating fork: same StoreId/epoch/ordinal,
         // divergent content under o2 (split-view).
         let mut evil = RootChain::empty();
-        let evil_c1 = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())]));
+        let evil_c1 = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())])?);
         let evil_c2 = StateRoot::from_merkle(root_of_pairs(&[
             (b"k".to_vec(), b"v".to_vec()),
             (b"m".to_vec(), b"EVIL".to_vec()),
-        ]));
+        ])?);
         evil.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2576,7 +2558,7 @@ mod tests {
             check_sth_gossip(&head_a, &head_a, None),
             Ok(GossipConsistency::Identical)
         );
-    
+
         Ok(())
     }
 
@@ -2601,40 +2583,37 @@ mod tests {
         let o2 = o1.successor()?;
 
         let mut chain_a = RootChain::empty();
-        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())]));
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())])?);
         let c2 = StateRoot::from_merkle(root_of_pairs(&[
             (b"x".to_vec(), b"1".to_vec()),
             (b"y".to_vec(), b"2".to_vec()),
-        ]));
-        chain_a
-            .append(ChainedStateRoot::mint(
-                store_a,
-                fence_a,
-                o1,
-                c1,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
-        chain_a
-            .append(ChainedStateRoot::mint(
-                store_a,
-                fence_a,
-                o2,
-                c2,
-                chain_a.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
+        ])?);
+        chain_a.append(ChainedStateRoot::mint(
+            store_a,
+            fence_a,
+            o1,
+            c1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
+        chain_a.append(ChainedStateRoot::mint(
+            store_a,
+            fence_a,
+            o2,
+            c2,
+            chain_a.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))?;
 
         let mut chain_b = RootChain::empty();
-        chain_b
-            .append(ChainedStateRoot::mint(
-                store_b,
-                fence_b,
-                o1,
-                c1,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
+        chain_b.append(ChainedStateRoot::mint(
+            store_b,
+            fence_b,
+            o1,
+            c1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
 
         let head_a = StateRootHead::from_cut(&chain_a, o1)?;
         let head_b = StateRootHead::from_cut(&chain_b, o1)?;
@@ -2652,7 +2631,7 @@ mod tests {
             Err(MerkleChainRefuse::SthStoreMismatch),
             "cross-store heads must refuse even with a well-formed same-store proof"
         );
-    
+
         Ok(())
     }
 
@@ -2664,7 +2643,7 @@ mod tests {
             verify_consistency_proof,
         };
 
-        let (_store, _fence, chain, o1, _o2, o3) = sth_demo_chain();
+        let (_store, _fence, chain, o1, _o2, o3) = sth_demo_chain()?;
         let older = StateRootHead::from_cut(&chain, o1)?;
         let newer = StateRootHead::from_cut(&chain, o3)?;
         let proof = build_consistency_proof(&chain, o1, o3)?;
@@ -2678,7 +2657,7 @@ mod tests {
             check_sth_gossip(&older, &newer, None),
             Err(super::MerkleChainRefuse::ConsistencyProofRequired)
         ));
-    
+
         Ok(())
     }
 
@@ -2700,29 +2679,27 @@ mod tests {
         let o2 = o1.successor()?;
 
         let mut honest = RootChain::empty();
-        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())]));
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())])?);
         let c2 = StateRoot::from_merkle(root_of_pairs(&[
             (b"x".to_vec(), b"1".to_vec()),
             (b"y".to_vec(), b"2".to_vec()),
-        ]));
-        honest
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o1,
-                c1,
-                GENESIS_ROOT,
-                ChainLinkKind::Ordinary,
-            ))?;
-        honest
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o2,
-                c2,
-                honest.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
+        ])?);
+        honest.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            c1,
+            GENESIS_ROOT,
+            ChainLinkKind::Ordinary,
+        ))?;
+        honest.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            c2,
+            honest.prior_root(),
+            ChainLinkKind::Ordinary,
+        ))?;
 
         let older = StateRootHead::from_cut(&honest, o1)?;
         // Equivocating "newer" tip: same ordinal family but forged root bytes
@@ -2741,7 +2718,7 @@ mod tests {
             let evil_c2 = StateRoot::from_merkle(root_of_pairs(&[
                 (b"x".to_vec(), b"1".to_vec()),
                 (b"y".to_vec(), b"FORGED".to_vec()),
-            ]));
+            ])?);
             evil.append(ChainedStateRoot::mint(
                 store_id,
                 fence,
@@ -2764,7 +2741,7 @@ mod tests {
             Err(MerkleChainRefuse::SplitViewDetected),
             "forged extension must surface as split-view on gossip"
         );
-    
+
         Ok(())
     }
 }
