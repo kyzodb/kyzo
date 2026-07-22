@@ -473,12 +473,14 @@ mod tests {
         )
     }
 
-    fn facts_of(tuples: &[Tuple]) -> Vec<i64> {
+    fn facts_of(tuples: &[Tuple]) -> Result<Vec<i64>> {
         tuples
             .iter()
             .map(|t| match &t[0] {
-                DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                other @ (data_value_any!()) => panic!("non-integer fact column: {other:?}"),
+                DataValue::Num(n) => n.as_int().ok_or_else(|| miette!("int-domain column")),
+                other @ (data_value_any!()) => {
+                    Err(miette!("non-integer fact column: {other:?}"))
+                }
             })
             .collect()
     }
@@ -583,7 +585,7 @@ mod tests {
             }
             for sys_at in [-40i64, -25, -5, 0, 5, 15, 25, 40] {
                 for valid_at in [-40i64, -30, -10, -3, 0, 10, 20, 30, 40] {
-                    let got = facts_of(&walk(&store, sys_at, valid_at)?);
+                    let got = facts_of(&walk(&store, sys_at, valid_at)?)?;
                     let want = oracle(&rows, sys_at, valid_at);
                     assert_eq!(
                         got, want,
@@ -671,7 +673,7 @@ mod tests {
         store
             .map
             .insert(bikey(9, i64::MIN, i64::MIN), bval(ClaimPolarity::Retract));
-        let got = facts_of(&walk(&store, i64::MAX, 10)?);
+        let got = facts_of(&walk(&store, i64::MAX, 10)?)?;
         assert_eq!(got, vec![1]);
     
         Ok(())
@@ -725,7 +727,7 @@ mod tests {
         let results: Vec<_> = SkipWalk::new(cursor, &lo, &hi, as_of)
             .collect::<Result<Vec<_>>>()?;
 
-        assert_eq!(facts_of(&results).len(), 100, "every fact resolved");
+        assert_eq!(facts_of(&results)?.len(), 100, "every fact resolved");
         assert_eq!(
             store.opens.get(),
             1,
