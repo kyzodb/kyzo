@@ -85,7 +85,7 @@ pub fn into_normalized_program(
     // InputProgram keeps normalize-facing fields private; clone via accessors.
     // (A consuming `into_parts` on the model seat would avoid the clone.)
     let entry = normalize_ruleset(prog.entry().clone(), normalizer)?;
-    let mut rules: BTreeMap<Symbol, NormalFormRulesOrFixed> = Default::default();
+    let mut rules: BTreeMap<Symbol, NormalFormRulesOrFixed> = BTreeMap::new();
     for (k, ruleset) in prog.rules() {
         let normalized = normalize_ruleset(ruleset.clone(), normalizer)?;
         rules.insert(k.clone(), normalized);
@@ -297,7 +297,7 @@ impl NormalFormProgram {
 // ─────────────────────────────────────────────────────────────────────────
 
 /// One stratum: the definitions that evaluate together in one fixpoint.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NormalFormStratum {
     /// The stratifier distributes rule sets in here; by construction of
     /// [`StratifiedNormalFormProgram`] the final stratum holds the entry.
@@ -305,6 +305,13 @@ pub struct NormalFormStratum {
 }
 
 impl NormalFormStratum {
+    /// Empty stratum — no rule definitions yet.
+    pub(crate) fn empty() -> Self {
+        Self {
+            rules: BTreeMap::new(),
+        }
+    }
+
     fn holds_entry(&self) -> bool {
         self.rules.keys().any(|k| k.kind() == SymbolKind::Entry)
     }
@@ -362,10 +369,15 @@ impl StratifiedNormalFormProgram {
 /// that reads it**. Produced by stratification alongside the stratified
 /// program; consumed by evaluation, which drops a store before running
 /// stratum `s` unless `last_use >= s` (see [`Self::is_live_at`]).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StoreLifetimes(BTreeMap<MagicSymbol, usize>);
 
 impl StoreLifetimes {
+    /// No recorded uses yet.
+    pub(crate) fn empty() -> Self {
+        Self(BTreeMap::new())
+    }
+
     /// Record that `store` is read by the stratum at execution-order index
     /// `last_use`; keeps the maximum across calls.
     pub fn note_use(&mut self, store: MagicSymbol, last_use: usize) {
@@ -535,15 +547,14 @@ pub enum MagicRulesOrFixed {
     Fixed { fixed: MagicFixedRuleApply },
 }
 
-impl Default for MagicRulesOrFixed {
-    fn default() -> Self {
+impl MagicRulesOrFixed {
+    /// Empty rule set — transient before rules are installed.
+    pub(crate) fn empty() -> Self {
         Self::Rules { rules: vec![] }
     }
-}
 
-impl MagicRulesOrFixed {
     /// The output arity of this definition. Errors on a rule set that is
-    /// still empty (the transient `Default` state).
+    /// still empty (the transient empty state).
     pub(crate) fn arity(&self) -> Result<usize> {
         match self {
             MagicRulesOrFixed::Rules { rules } => match rules.first() {
@@ -755,12 +766,19 @@ pub struct MagicRelationApplyAtom {
 }
 
 /// One stratum after the magic rewrite.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MagicProgram {
     pub prog: BTreeMap<MagicSymbol, MagicRulesOrFixed>,
 }
 
 impl MagicProgram {
+    /// Empty magic stratum — no definitions yet.
+    pub(crate) fn empty() -> Self {
+        Self {
+            prog: BTreeMap::new(),
+        }
+    }
+
     fn holds_entry(&self) -> bool {
         self.prog.keys().any(MagicSymbol::is_prog_entry)
     }
@@ -809,7 +827,7 @@ impl StratifiedMagicProgram {
 mod tests {
     use miette::{Result, miette};
     use super::*;
-    use kyzo_model::program::rule::{HeadAggrSlot, InputInlineRule, InputInlineRulesOrFixed};
+    use kyzo_model::program::rule::{HeadAggrSlot, InputInlineRule, InputInlineRulesOrFixed, Trivia};
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan(0, 0))
@@ -821,7 +839,7 @@ mod tests {
             aggr: head.iter().map(|_| HeadAggrSlot::Plain).collect(),
             body: vec![],
             span: SourceSpan(0, 0),
-            trivia: Default::default(),
+            trivia: Trivia::default(),
         }
     }
 
@@ -912,7 +930,7 @@ mod tests {
     }
 
     fn nf_stratum(names: &[&str]) -> NormalFormStratum {
-        let mut stratum = NormalFormStratum::default();
+        let mut stratum = NormalFormStratum::empty();
         for name in names {
             let key = if *name == "?" {
                 Symbol::prog_entry(SourceSpan(0, 1))
@@ -992,7 +1010,7 @@ mod tests {
     #[test]
     fn store_lifetimes_semantics() -> Result<()>  {
         let name = MagicSymbol::Muggle { inner: sym("r") };
-        let mut lifetimes = StoreLifetimes::default();
+        let mut lifetimes = StoreLifetimes::empty();
         lifetimes.note_use(name.clone(), 1);
         lifetimes.note_use(name.clone(), 3);
         lifetimes.note_use(name.clone(), 2);
@@ -1007,7 +1025,7 @@ mod tests {
     /// stratum holds the unadorned (Muggle) entry.
     #[test]
     fn magic_tier_requires_the_entry_in_the_final_stratum() -> Result<()>  {
-        let mut entry_stratum = MagicProgram::default();
+        let mut entry_stratum = MagicProgram::empty();
         entry_stratum.prog.insert(
             MagicSymbol::Muggle {
                 inner: Symbol::prog_entry(SourceSpan(0, 1)),
@@ -1020,13 +1038,13 @@ mod tests {
                 }],
             },
         );
-        let mut other = MagicProgram::default();
+        let mut other = MagicProgram::empty();
         other.prog.insert(
             MagicSymbol::Magic {
                 inner: sym("r"),
                 adornment: vec![AdornmentMark::Bound, AdornmentMark::Free],
             },
-            MagicRulesOrFixed::default(),
+            MagicRulesOrFixed::empty(),
         );
 
         let ok = StratifiedMagicProgram::from_execution_order(vec![other, entry_stratum])
@@ -1034,13 +1052,13 @@ mod tests {
         assert_eq!(ok.strata().len(), 2);
         assert!(ok.strata()[1].holds_entry());
 
-        let mut lone = MagicProgram::default();
+        let mut lone = MagicProgram::empty();
         lone.prog.insert(
             MagicSymbol::Magic {
                 inner: sym("r"),
                 adornment: vec![],
             },
-            MagicRulesOrFixed::default(),
+            MagicRulesOrFixed::empty(),
         );
         let err = StratifiedMagicProgram::from_execution_order(vec![lone])
             .expect_err("entry-less magic strata must be refused");
@@ -1096,7 +1114,7 @@ mod tests {
     /// an error when asked for its arity — the original panicked.
     #[test]
     fn empty_magic_rule_set_arity_is_an_error() -> Result<()>  {
-        let empty = MagicRulesOrFixed::default();
+        let empty = MagicRulesOrFixed::empty();
         assert!(empty.arity().is_err());
         Ok(())
     }

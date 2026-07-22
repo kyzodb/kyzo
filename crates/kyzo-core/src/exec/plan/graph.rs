@@ -11,7 +11,7 @@
  * stacks (the original recursed once per graph edge, so a rule chain a few
  * thousand deep overflowed the thread stack); `generalized_kahn`'s
  * in-degree bookkeeping is checked in every build with a typed internal
- * error (the original guarded it with a `debug_assert_eq!` that release
+ * error (the original guarded it with a `release-absent assert` that release
  * builds skipped, so a cyclic or corrupted reduced graph would silently
  * yield a truncated stratification — wrong answers, not a refusal); node
  * indices arriving as data are validated up front instead of trusted; the
@@ -124,7 +124,7 @@ pub(crate) fn reachable_components<'a, T: Ord>(
 /// exit. A graph that is not a DAG (the condensation the stratifier feeds
 /// in always is) is therefore a typed error here, never a silently
 /// truncated result — the CozoDB original checked this only with a
-/// `debug_assert_eq!` that release builds compiled out.
+/// `release-absent assert` that release builds compiled out.
 pub(crate) fn generalized_kahn(
     graph: &StratifiedGraph<usize>,
     num_nodes: usize,
@@ -198,7 +198,7 @@ pub(crate) fn generalized_kahn(
             }
         }
     }
-    // The original's graph.rs:129 `debug_assert_eq!`, as a real invariant:
+    // The original's graph.rs:129 `release-absent assert`, as a real invariant:
     // every edge must have been consumed, or some node was never emitted.
     ensure!(
         in_degree.iter().all(|d| *d == 0),
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn kahn_refuses_a_cyclic_graph() -> Result<()>  {
         // The condensation the stratifier feeds in is always a DAG; a cycle
-        // here means corrupt bookkeeping. The original debug_assert let a
+        // here means corrupt bookkeeping. The original release-absent assert let a
         // release build return a truncated stratification for this input.
         let g: StratifiedGraph<usize> = BTreeMap::from([
             (0, BTreeMap::from([(1, false)])),

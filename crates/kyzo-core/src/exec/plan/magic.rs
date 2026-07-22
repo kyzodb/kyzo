@@ -249,9 +249,17 @@ impl AdornedHead {
 /// One stratum between the two phases: adorned, not yet rewritten. A local
 /// intermediate — it never leaves this file, which is what keeps the
 /// Muggle-or-Magic proof airtight.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AdornedProgram {
     prog: std::collections::BTreeMap<AdornedHead, MagicRulesOrFixed>,
+}
+
+impl AdornedProgram {
+    fn empty() -> Self {
+        Self {
+            prog: std::collections::BTreeMap::new(),
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -416,7 +424,7 @@ impl NormalFormStratum {
             .collect();
 
         let mut pending_adornment: Vec<AdornedHead> = vec![];
-        let mut adorned_prog = AdornedProgram::default();
+        let mut adorned_prog = AdornedProgram::empty();
 
         // Processing starts with the rules NOT subject to rewrite: they
         // keep their Muggle names, and their bodies seed the demand.
@@ -916,7 +924,7 @@ impl AdornedProgram {
     /// sup-rule synthesis; fixed-rule applications pass through under their
     /// (always Muggle) names.
     fn magic_rewrite(self) -> Result<MagicProgram> {
-        let mut ret_prog = MagicProgram::default();
+        let mut ret_prog = MagicProgram::empty();
         for (rule_head, ruleset) in self.prog {
             match ruleset {
                 MagicRulesOrFixed::Rules { rules: ruleset } => {
@@ -1222,7 +1230,7 @@ mod tests {
     }
 
     fn stratum(defs: Vec<(&str, Vec<NormalFormInlineRule>)>) -> NormalFormStratum {
-        let mut stratum = NormalFormStratum::default();
+        let mut stratum = NormalFormStratum::empty();
         for (name, rules) in defs {
             let key = if name == "?" {
                 Symbol::prog_entry(SourceSpan(0, 1))

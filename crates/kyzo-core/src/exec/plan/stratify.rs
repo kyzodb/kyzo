@@ -433,7 +433,7 @@ impl NormalFormProgram {
         // 7. store lifetimes: each dependency's store is read by its
         // dependents, so it must live to the last execution-order stratum
         // holding one; `note_use` keeps the maximum.
-        let mut store_lifetimes = StoreLifetimes::default();
+        let mut store_lifetimes = StoreLifetimes::empty();
         for (fr, tos) in &stratified_graph {
             if let Some(fr_component) = invert_indices.get(*fr)
                 && let Some(fr_exec_stratum) = exec_stratum_of.get(fr_component)
@@ -446,14 +446,13 @@ impl NormalFormProgram {
                     // to its dependencies, so `to`'s execution-order index
                     // can never exceed `fr`'s. A violation here would mean a
                     // rule reading state that has not been computed yet.
-                    debug_assert!(
-                        invert_indices
-                            .get(to)
-                            .and_then(|to_component| exec_stratum_of.get(to_component))
-                            .is_none_or(|to_exec_stratum| *to_exec_stratum <= *fr_exec_stratum),
-                        "stratum ordering violated: dependency {to:?} (stratum {:?}) executes \
-                         after its dependent {fr:?} (stratum {fr_exec_stratum})",
-                        invert_indices.get(to).and_then(|c| exec_stratum_of.get(c))
+                    let order_ok = invert_indices
+                        .get(to)
+                        .and_then(|to_component| exec_stratum_of.get(to_component))
+                        .is_none_or(|to_exec_stratum| *to_exec_stratum <= *fr_exec_stratum);
+                    ensure!(
+                        order_ok,
+                        "stratum ordering violated: dependency {to:?} executes after its dependent {fr:?}"
                     );
                     store_lifetimes.note_use(
                         MagicSymbol::Muggle {
@@ -471,7 +470,7 @@ impl NormalFormProgram {
         // unreachable ones; a reachable rule missing from the sort would
         // mean Kahn dropped a node, which its own checks refute.
         let mut reversed_strata: Vec<NormalFormStratum> = (0..sort_result.len())
-            .map(|_| NormalFormStratum::default())
+            .map(|_| NormalFormStratum::empty())
             .collect();
         let ((entry_name, entry_rules), rules, disable_magic_rewrite) = self.into_parts();
         for (name, ruleset) in rules
@@ -608,12 +607,17 @@ mod tests {
     }
 
     /// A tiny program builder over the real tier constructors.
-    #[derive(Default)]
     struct Prog {
         prog: BTreeMap<Symbol, InputInlineRulesOrFixed>,
     }
 
     impl Prog {
+        fn empty() -> Self {
+            Self {
+                prog: BTreeMap::new(),
+            }
+        }
+
         /// Add one rule `head[…] := body…`, `aggrs` naming the per-position
         /// head aggregations (`None` = plain position).
         fn rule(self, head: &str, aggrs: &[Option<&str>], body: Vec<InputAtom>) -> Self {
@@ -718,7 +722,7 @@ mod tests {
     ///     ? := z ; ? := w
     #[test]
     fn dependencies_stratify_in_execution_order() -> Result<()>  {
-        let (program, lifetimes) = Prog::default()
+        let (program, lifetimes) = Prog::empty()
             .fixed("x", &[])
             .rule("w", &[None], vec![])
             .rule("w", &[None], vec![dep("w")])
@@ -772,20 +776,20 @@ mod tests {
     fn the_oracle_refusal_corpus_is_refused() -> Result<()>  {
         let cases: [(&str, fn() -> Prog); 3] = [
             ("direct negation cycle", || {
-                Prog::default().rule("p", &[None], vec![neg_dep("p")]).rule(
+                Prog::empty().rule("p", &[None], vec![neg_dep("p")]).rule(
                     "?",
                     &[None],
                     vec![dep("p")],
                 )
             }),
             ("mutual negation", || {
-                Prog::default()
+                Prog::empty()
                     .rule("p", &[None], vec![neg_dep("q")])
                     .rule("q", &[None], vec![neg_dep("p")])
                     .rule("?", &[None], vec![dep("p")])
             }),
             ("negation through positive edge to negated", || {
-                Prog::default()
+                Prog::empty()
                     .rule("a", &[None], vec![dep("b")])
                     .rule("b", &[None], vec![neg_dep("a")])
                     .rule("?", &[None], vec![dep("a")])
@@ -806,7 +810,7 @@ mod tests {
     /// not crash — the refusal is the feature.)
     #[test]
     fn recursive_normal_aggregation_is_refused() -> Result<()>  {
-        let err = Prog::default()
+        let err = Prog::empty()
             .rule("p", &[Some("count")], vec![dep("d")])
             .rule("p", &[Some("count")], vec![dep("p")])
             .rule("d", &[None], vec![])
@@ -822,7 +826,7 @@ mod tests {
     /// positively.
     #[test]
     fn all_meet_self_recursion_is_accepted() -> Result<()>  {
-        let (program, _) = Prog::default()
+        let (program, _) = Prog::empty()
             .rule("m", &[None, Some("min")], vec![dep("seed")])
             .rule("m", &[None, Some("min")], vec![dep("m")])
             .rule("seed", &[None], vec![])
@@ -837,7 +841,7 @@ mod tests {
     /// refused: one non-meet position poisons the whole head's recursion.
     #[test]
     fn mixed_meet_and_normal_recursion_is_refused() -> Result<()>  {
-        let err = Prog::default()
+        let err = Prog::empty()
             .rule("q", &[None, Some("min"), Some("count")], vec![dep("q")])
             .rule("?", &[None], vec![dep("q")])
             .stratify()
@@ -850,7 +854,7 @@ mod tests {
     /// positive self-reads only.
     #[test]
     fn meet_negating_itself_is_refused() -> Result<()>  {
-        let err = Prog::default()
+        let err = Prog::empty()
             .rule("m", &[Some("min")], vec![dep("d"), neg_dep("m")])
             .rule("d", &[None], vec![])
             .rule("?", &[None], vec![dep("m")])
@@ -865,7 +869,7 @@ mod tests {
     /// original decided it. (Deliberately preserved upstream behavior.)
     #[test]
     fn meet_recursion_through_an_intermediary_is_refused() -> Result<()>  {
-        let err = Prog::default()
+        let err = Prog::empty()
             .rule("p", &[Some("min")], vec![dep("q")])
             .rule("q", &[None], vec![dep("p")])
             .rule("?", &[None], vec![dep("p")])
@@ -880,7 +884,7 @@ mod tests {
     /// stratify fine.
     #[test]
     fn fixed_rules_are_stratum_bounded() -> Result<()>  {
-        let (program, _) = Prog::default()
+        let (program, _) = Prog::empty()
             .rule("base", &[None], vec![])
             .fixed("f", &["base"])
             .rule("p", &[None], vec![dep("f")])
@@ -893,7 +897,7 @@ mod tests {
         assert!(base < f, "inputs complete strictly before the fixed rule");
         assert!(f < p, "readers start strictly after the fixed rule");
 
-        let err = Prog::default()
+        let err = Prog::empty()
             .rule("r", &[None], vec![dep("f")])
             .fixed("f", &["r"])
             .rule("?", &[None], vec![dep("r")])
@@ -907,7 +911,7 @@ mod tests {
     /// accepted, with the dependency strictly below.
     #[test]
     fn stratified_negation_is_accepted_with_a_boundary() -> Result<()>  {
-        let (program, _) = Prog::default()
+        let (program, _) = Prog::empty()
             .rule("r", &[None], vec![dep("s")])
             .rule("s", &[None], vec![])
             .rule("p", &[None], vec![dep("q"), neg_dep("r")])
@@ -926,7 +930,7 @@ mod tests {
     /// soundness proof is about what will be *evaluated*.
     #[test]
     fn unreachable_rules_are_pruned_not_checked() -> Result<()>  {
-        let (program, _) = Prog::default()
+        let (program, _) = Prog::empty()
             .rule("a", &[None], vec![])
             .rule("orphan", &[None], vec![neg_dep("orphan")])
             .rule("?", &[None], vec![dep("a")])
@@ -942,7 +946,7 @@ mod tests {
     #[test]
     fn the_refusal_points_at_the_offending_dependency() -> Result<()>  {
         let offending = SourceSpan(42, 7);
-        let err = Prog::default()
+        let err = Prog::empty()
             .rule(
                 "p",
                 &[None],
@@ -994,7 +998,7 @@ mod tests {
                 span,
             },
         };
-        let err = Prog::default()
+        let err = Prog::empty()
             .rule("p", &[None], vec![dep_at("p", positive), dep("d")])
             .rule(
                 "p",
@@ -1029,7 +1033,7 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| -> Result<()> {
                 const N: usize = 10_000;
-                let mut prog = Prog::default().rule("?", &[None], vec![dep("r0")]);
+                let mut prog = Prog::empty().rule("?", &[None], vec![dep("r0")]);
                 for i in 0..N - 1 {
                     prog = prog.rule(&format!("r{i}"), &[None], vec![dep(&format!("r{}", i + 1))]);
                 }
@@ -1049,7 +1053,7 @@ mod tests {
     /// original rebuilt `?` with a dummy span to look it up).
     #[test]
     fn a_minimal_program_stratifies_to_one_stratum() -> Result<()>  {
-        let (program, lifetimes) = Prog::default()
+        let (program, lifetimes) = Prog::empty()
             .rule("?", &[None], vec![])
             .stratify()
             .map_err(|e| miette!("the minimal program stratifies: {e}"))?;
