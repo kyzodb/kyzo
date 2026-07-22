@@ -611,43 +611,56 @@ fn erase_bug_manifests(history: &[Event], key: &Tuple) -> bool {
     false
 }
 
+/// Mutant campaign: does `gen` expose `manifests` across `seeds` from `seed_mix`?
+fn campaign_catches_bug(
+    seed_mix: u64,
+    seeds: u64,
+    key: &Tuple,
+    gen: impl Fn(&mut Rng, &Tuple, &TemporalGenParams) -> Vec<Event>,
+    manifests: impl Fn(&[Event], &Tuple) -> bool,
+) -> bool {
+    let mut caught = false;
+    for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
+        let mut rng = Rng::new(seed_mix ^ mix_seed(seed));
+        let params = gen_temporal_params(&mut rng);
+        let history = gen(&mut rng, key, &params);
+        caught |= manifests(&history, key);
+    }
+    caught
+}
+
 #[test]
 fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
     let seeds = 300u64;
     let key: Tuple = Tuple::from_vec(vec![v(0)]);
+    let mix = 0xE1A5_E000_u64;
 
-    let mut caught_without_erase = false;
-    for seed in 0..seeds {
-        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xE1A5_E000_u64 ^ mix_seed(seed));
-        let params = gen_temporal_params(&mut rng);
-        let history = gen_temporal_history_no_erase(&mut rng, &key, &params);
-        caught_without_erase |= erase_bug_manifests(&history, &key);
-    }
     assert!(
-        !caught_without_erase,
+        !campaign_catches_bug(mix, seeds, &key, gen_temporal_history_no_erase, erase_bug_manifests),
         "without Erase in generation, the erase-mishandling bug is structurally unreachable"
     );
-
-    let mut caught_with_erase = false;
-    for seed in 0..seeds {
-        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xE1A5_E000_u64 ^ mix_seed(seed));
-        let params = gen_temporal_params(&mut rng);
-        let history = gen_temporal_history(&mut rng, &key, &params);
-        caught_with_erase |= erase_bug_manifests(&history, &key);
-    }
     assert!(
-        caught_with_erase,
+        campaign_catches_bug(mix, seeds, &key, gen_temporal_history, erase_bug_manifests),
         "the real generator (with Erase) must expose the erase-mishandling bug"
     );
 }
 
-fn derive_intervals_abs_sort_bug(
+/// Deliberate interval-derivation mutants — one door, two independent faults.
+#[derive(Clone, Copy)]
+enum IntervalBug {
+    /// Sort breaks by `|coord|` instead of signed order.
+    AbsSort,
+    /// End a closed interval one tick early (`breaks[j+1] - 1`).
+    ShortEnd,
+}
+
+fn derive_intervals_bug(
     history: &[Event],
     key: &Tuple,
     axis: Axis,
     fixed: i64,
+    bug: IntervalBug,
 ) -> Vec<Interval> {
     let mut breaks: Vec<i64> = history
         .iter()
@@ -657,7 +670,10 @@ fn derive_intervals_abs_sort_bug(
             Axis::Sys => e.sys(),
         })
         .collect();
-    breaks.sort_unstable_by_key(|b| b.unsigned_abs());
+    match bug {
+        IntervalBug::AbsSort => breaks.sort_unstable_by_key(|b| b.unsigned_abs()),
+        IntervalBug::ShortEnd => breaks.sort_unstable(),
+    }
     breaks.dedup();
     let coordinate = |pt: i64| -> AsOf {
         match axis {
@@ -686,7 +702,10 @@ fn derive_intervals_abs_sort_bug(
             j += 1;
         }
         let end = if j + 1 < breaks.len() {
-            breaks[j + 1]
+            match bug {
+                IntervalBug::AbsSort => breaks[j + 1],
+                IntervalBug::ShortEnd => breaks[j + 1] - 1,
+            }
         } else {
             OPEN_END
         };
@@ -694,6 +713,25 @@ fn derive_intervals_abs_sort_bug(
         i = j + 1;
     }
     out
+}
+
+fn interval_bug_manifests(history: &[Event], key: &Tuple, grid: &[i64], bug: IntervalBug) -> bool {
+    let ivs = derive_intervals_bug(history, key, Axis::Valid, AsOf::current().sys, bug);
+    for &valid in grid {
+        let at = AsOf {
+            valid,
+            sys: AsOf::current().sys,
+        };
+        let direct = resolve(history, key, at);
+        let via = ivs
+            .iter()
+            .find(|iv| iv.start <= valid && valid < iv.end)
+            .map(|iv| iv.tuple.clone());
+        if direct != via {
+            return true;
+        }
+    }
+    false
 }
 
 fn gen_temporal_history_nonneg(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Vec<Event> {
@@ -711,120 +749,38 @@ fn gen_temporal_history_nonneg(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams
 }
 
 fn abs_sort_bug_manifests(history: &[Event], key: &Tuple) -> bool {
-    let ivs = derive_intervals_abs_sort_bug(history, key, Axis::Valid, AsOf::current().sys);
-    for &valid in &program_grid(history, Axis::Valid) {
-        let at = AsOf {
-            valid,
-            sys: AsOf::current().sys,
-        };
-        let direct = resolve(history, key, at);
-        let via = ivs
-            .iter()
-            .find(|iv| iv.start <= valid && valid < iv.end)
-            .map(|iv| iv.tuple.clone());
-        if direct != via {
-            return true;
-        }
-    }
-    false
+    interval_bug_manifests(
+        history,
+        key,
+        &program_grid(history, Axis::Valid),
+        IntervalBug::AbsSort,
+    )
 }
 
 #[test]
 fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
     let seeds = 300u64;
     let key: Tuple = Tuple::from_vec(vec![v(0)]);
+    let mix = 0xA65_5169_u64;
 
-    let mut caught_nonneg_only = false;
-    for seed in 0..seeds {
-        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xA65_5169_u64 ^ mix_seed(seed));
-        let params = gen_temporal_params(&mut rng);
-        let history = gen_temporal_history_nonneg(&mut rng, &key, &params);
-        caught_nonneg_only |= abs_sort_bug_manifests(&history, &key);
-    }
-    assert!(!caught_nonneg_only);
-
-    let mut caught_with_negatives = false;
-    for seed in 0..seeds {
-        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xA65_5169_u64 ^ mix_seed(seed));
-        let params = gen_temporal_params(&mut rng);
-        let history = gen_temporal_history(&mut rng, &key, &params);
-        caught_with_negatives |= abs_sort_bug_manifests(&history, &key);
-    }
-    assert!(caught_with_negatives);
-}
-
-fn derive_intervals_short_end_bug(
-    history: &[Event],
-    key: &Tuple,
-    axis: Axis,
-    fixed: i64,
-) -> Vec<Interval> {
-    let mut breaks: Vec<i64> = history
-        .iter()
-        .filter(|e| e.key() == key)
-        .map(|e| match axis {
-            Axis::Valid => e.valid(),
-            Axis::Sys => e.sys(),
-        })
-        .collect();
-    breaks.sort_unstable();
-    breaks.dedup();
-    let coordinate = |pt: i64| -> AsOf {
-        match axis {
-            Axis::Valid => AsOf {
-                valid: pt,
-                sys: fixed,
-            },
-            Axis::Sys => AsOf {
-                valid: fixed,
-                sys: pt,
-            },
-        }
-    };
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < breaks.len() {
-        let start = breaks[i];
-        let Some(tuple) = resolve(history, key, coordinate(start)) else {
-            i += 1;
-            continue;
-        };
-        let mut j = i;
-        while j + 1 < breaks.len()
-            && resolve(history, key, coordinate(breaks[j + 1])) == Some(tuple.clone())
-        {
-            j += 1;
-        }
-        let end = if j + 1 < breaks.len() {
-            breaks[j + 1] - 1
-        } else {
-            OPEN_END
-        };
-        out.push(Interval { start, end, tuple });
-        i = j + 1;
-    }
-    out
+    assert!(!campaign_catches_bug(
+        mix,
+        seeds,
+        &key,
+        gen_temporal_history_nonneg,
+        abs_sort_bug_manifests,
+    ));
+    assert!(campaign_catches_bug(
+        mix,
+        seeds,
+        &key,
+        gen_temporal_history,
+        abs_sort_bug_manifests,
+    ));
 }
 
 fn short_end_bug_manifests(history: &[Event], key: &Tuple, grid: &[i64]) -> bool {
-    let ivs = derive_intervals_short_end_bug(history, key, Axis::Valid, AsOf::current().sys);
-    for &valid in grid {
-        let at = AsOf {
-            valid,
-            sys: AsOf::current().sys,
-        };
-        let direct = resolve(history, key, at);
-        let via = ivs
-            .iter()
-            .find(|iv| iv.start <= valid && valid < iv.end)
-            .map(|iv| iv.tuple.clone());
-        if direct != via {
-            return true;
-        }
-    }
-    false
+    interval_bug_manifests(history, key, grid, IntervalBug::ShortEnd)
 }
 
 #[test]

@@ -1297,38 +1297,18 @@ fn check_refusal(
 }
 
 fn seed_count() -> u64 {
-    match std::env::var("KYZO_TRIALS_SEEDS") {
-        Ok(s) => match s.parse() {
-            Ok(n) => n,
-            Err(_) => 24,
-        },
-        Err(_) => 24,
-    }
+    crate::campaign::env_u64("KYZO_TRIALS_SEEDS", 24)
 }
 
 fn seed_base() -> u64 {
-    match std::env::var("KYZO_TRIALS_BASE") {
-        Ok(s) => match s.parse() {
-            Ok(n) => n,
-            Err(_) => 0,
-        },
-        Err(_) => 0,
-    }
+    crate::campaign::env_u64("KYZO_TRIALS_BASE", 0)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn determinism_campaign() {
-    let base = seed_base();
     let count = seed_count();
-    let mut failures: Vec<(u64, String)> = Vec::new();
-    for i in 0..count {
-        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let seed = Rng::new(base ^ u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
-        if let Err(f) = run_seed(seed) {
-            failures.push((seed, format!("{f:?}")));
-        }
-    }
+    let failures = crate::campaign::run_seed_campaign(seed_base(), count, run_seed);
     assert!(
         failures.is_empty(),
         "determinism campaign FINDINGS ({} of {count}): {failures:?}",

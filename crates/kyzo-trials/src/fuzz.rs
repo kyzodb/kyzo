@@ -18,8 +18,8 @@
 #![cfg(test)]
 
 use kyzo_model::SourceSpan;
+use kyzo_model::program::InputRelationHandle;
 use kyzo_model::value::DataValue;
-use kyzo_core::data::program::InputRelationHandle;
 use kyzo_core::data::relation::{ColType, StoredRelationMetadata};
 use kyzo_core::project::gazetteer::{GazetteerConfig, compile_dictionary, gazetteer_dict_metadata};
 use kyzo_core::session::catalog::{KeyspaceKind, create_relation};
@@ -47,28 +47,6 @@ fn must_some<T>(o: Option<T>, ctx: &str) -> T {
     }
 }
 
-
-fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHandle {
-    use kyzo_model::program::symbol::Symbol;
-    let key_bindings = metadata
-        .keys
-        .iter()
-        .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-        .collect();
-    let dep_bindings = metadata
-        .non_keys
-        .iter()
-        .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
-        .collect();
-    InputRelationHandle {
-        name: Symbol::new(name, SourceSpan(0, 0)),
-        metadata,
-        key_bindings,
-        dep_bindings,
-        span: SourceSpan(0, 0),
-    }
-}
-
 /// Law 5 sweep: corrupt dictionaries — nested-list surface, enormous (~2 MiB)
 /// surface — none may panic; each is a typed error or a clean build.
 /// Re-laned from an #[ignore]d unit test into the fuzz/trials lane.
@@ -83,7 +61,7 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
         let meta = gazetteer_dict_metadata(ColType::Int);
         let mut tx = must_ok(db.write_tx(), "write_tx");
         let dict =
-            must_ok(create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts), "create_relation");
+            must_ok(create_relation(&mut tx, InputRelationHandle::from_metadata("dict", meta), KeyspaceKind::Facts), "create_relation");
         let bad = vec![
             DataValue::from(1i64),
             DataValue::List(vec![DataValue::List(vec![DataValue::from("x")])]),
@@ -114,7 +92,7 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
             let meta = gazetteer_dict_metadata(ColType::Int);
             let mut tx = must_ok(db.write_tx(), "write_tx");
             let dict =
-                must_ok(create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts), "create_relation");
+                must_ok(create_relation(&mut tx, InputRelationHandle::from_metadata("dict", meta), KeyspaceKind::Facts), "create_relation");
             for (entity, surfaces) in rows {
                 let sl = DataValue::List(surfaces.iter().map(|s| DataValue::from(*s)).collect());
                 let row = vec![DataValue::from(*entity), sl];

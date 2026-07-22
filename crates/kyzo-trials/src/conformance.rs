@@ -316,50 +316,7 @@ pub fn law_concurrent_writers_across_threads<S: Storage>(db: &S) -> Result<()> {
     std::thread::scope(|s| {
         for t in 0..THREADS {
             let db = db.clone();
-            s.spawn(move || {
-                for i in 0..OPS {
-                    let mut tx = admit(db.write_tx().map_err(|e| miette!("{e}")), "disjoint write_tx");
-                    admit(
-                        tx.put(format!("t{t}-k{i}").as_bytes(), b"x")
-                            .map_err(|e| miette!("{e}")),
-                        "disjoint put",
-                    );
-                    admit(
-                        tx.commit().map_err(|e| miette!("disjoint writers must not conflict: {e}")),
-                        "disjoint commit",
-                    );
-                }
-                for _ in 0..OPS {
-                    loop {
-                        let mut tx =
-                            admit(db.write_tx().map_err(|e| miette!("{e}")), "rmw write_tx");
-                        let raw = admit(
-                            tx.get(b"counter").map_err(|e| miette!("{e}")),
-                            "rmw get",
-                        );
-                        let bytes = match raw {
-                            Some(b) => b,
-                            None => loop {
-                                assert!(false, "counter must be present for RMW");
-                            },
-                        };
-                        let cur: u64 = admit(
-                            std::str::from_utf8(&bytes)
-                                .map_err(|e| miette!("{e}"))
-                                .and_then(|s| s.parse().map_err(|e| miette!("{e}"))),
-                            "rmw parse",
-                        );
-                        admit(
-                            tx.put(b"counter", (cur + 1).to_string().as_bytes())
-                                .map_err(|e| miette!("{e}")),
-                            "rmw put",
-                        );
-                        if tx.commit().is_ok() {
-                            break;
-                        }
-                    }
-                }
-            });
+            s.spawn(move || concurrent_writer_worker(db, t, OPS));
         }
     });
 
@@ -385,6 +342,48 @@ pub fn law_concurrent_writers_across_threads<S: Storage>(db: &S) -> Result<()> {
         "all disjoint writes must be present"
     );
     Ok(())
+}
+
+fn concurrent_writer_worker<S: Storage>(db: S, t: usize, ops: usize) {
+    for i in 0..ops {
+        let mut tx = admit(db.write_tx().map_err(|e| miette!("{e}")), "disjoint write_tx");
+        admit(
+            tx.put(format!("t{t}-k{i}").as_bytes(), b"x")
+                .map_err(|e| miette!("{e}")),
+            "disjoint put",
+        );
+        admit(
+            tx.commit()
+                .map_err(|e| miette!("disjoint writers must not conflict: {e}")),
+            "disjoint commit",
+        );
+    }
+    for _ in 0..ops {
+        loop {
+            let mut tx = admit(db.write_tx().map_err(|e| miette!("{e}")), "rmw write_tx");
+            let raw = admit(tx.get(b"counter").map_err(|e| miette!("{e}")), "rmw get");
+            let bytes = match raw {
+                Some(b) => b,
+                None => loop {
+                    assert!(false, "counter must be present for RMW");
+                },
+            };
+            let cur: u64 = admit(
+                std::str::from_utf8(&bytes)
+                    .map_err(|e| miette!("{e}"))
+                    .and_then(|s| s.parse().map_err(|e| miette!("{e}"))),
+                "rmw parse",
+            );
+            admit(
+                tx.put(b"counter", (cur + 1).to_string().as_bytes())
+                    .map_err(|e| miette!("{e}")),
+                "rmw put",
+            );
+            if tx.commit().is_ok() {
+                break;
+            }
+        }
+    }
 }
 
 /// Law: `del_range`'s deletion must be exact at a chunked implementation's

@@ -468,42 +468,46 @@ fn probe_instants(events: &[Event]) -> Vec<i64> {
     out
 }
 
-/// Run the as-of query for `rel_name` at `at` through `Db::run_script` —
-/// real KyzoScript text, the real parser, the real compiler and evaluator —
-/// and return the rows as `(k0, val)` pairs, sorted.
-fn engine_asof(db: &Engine<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(i64, String)> {
-    let script = format!("?[k0, val] := *{rel_name}{{k0, val @ {at}}}");
-    let rows = must_ok(db
-        .run_script(&script, no_params()), "as-of script runs");
-    rows.into_rows()
+/// Run a KyzoScript read through `Db::run_script` and collect `(k0, val)` rows.
+fn engine_script_rows(
+    db: &Engine<FjallStorage>,
+    script: &str,
+    ctx: &str,
+) -> BTreeSet<(i64, String)> {
+    must_ok(db.run_script(script, no_params()), ctx)
+        .into_rows()
         .into_iter()
         .map(|r| {
             let k0 = r[0].must_some(get_int(), "k0 is an int");
             let val = match &r[1] {
                 DataValue::Str(s) => s.to_string(),
-                other => loop { assert!(false, "expected a string value, got {other:?}"); },
+                other => loop {
+                    assert!(false, "expected a string value, got {other:?}");
+                },
             };
             (k0, val)
         })
         .collect()
 }
 
+/// Run the as-of query for `rel_name` at `at` through `Db::run_script` —
+/// real KyzoScript text, the real parser, the real compiler and evaluator —
+/// and return the rows as `(k0, val)` pairs, sorted.
+fn engine_asof(db: &Engine<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(i64, String)> {
+    engine_script_rows(
+        db,
+        &format!("?[k0, val] := *{rel_name}{{k0, val @ {at}}}"),
+        "as-of script runs",
+    )
+}
+
 /// Run the CURRENT (no `@` clause) read through `Db::run_script`.
 fn engine_current(db: &Engine<FjallStorage>, rel_name: &str) -> BTreeSet<(i64, String)> {
-    let script = format!("?[k0, val] := *{rel_name}{{k0, val}}");
-    let rows = must_ok(db
-        .run_script(&script, no_params()), "plain script runs");
-    rows.into_rows()
-        .into_iter()
-        .map(|r| {
-            let k0 = r[0].must_some(get_int(), "k0 is an int");
-            let val = match &r[1] {
-                DataValue::Str(s) => s.to_string(),
-                other => loop { assert!(false, "expected a string value, got {other:?}"); },
-            };
-            (k0, val)
-        })
-        .collect()
+    engine_script_rows(
+        db,
+        &format!("?[k0, val] := *{rel_name}{{k0, val}}"),
+        "plain script runs",
+    )
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -649,19 +653,11 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
     assert!(s2 > s1, "system stamps strictly increase across commits");
 
     let read_at = |sys: i64, valid: i64| -> BTreeSet<(i64, String)> {
-        let script = format!("?[k0, val] := *corr{{k0, val @ {sys}, {valid}}}");
-        must_ok(db.run_script(&script, no_params()), "two-coordinate as-of script runs")
-            .into_rows()
-            .into_iter()
-            .map(|r| {
-                let k0 = r[0].must_some(get_int(), "int");
-                let val = match &r[1] {
-                    DataValue::Str(s) => s.to_string(),
-                    other => loop { assert!(false, "expected string, got {other:?}"); },
-                };
-                (k0, val)
-            })
-            .collect()
+        engine_script_rows(
+            &db,
+            &format!("?[k0, val] := *corr{{k0, val @ {sys}, {valid}}}"),
+            "two-coordinate as-of script runs",
+        )
     };
 
     assert_eq!(

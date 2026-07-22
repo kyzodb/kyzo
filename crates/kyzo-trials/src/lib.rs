@@ -24,6 +24,9 @@
 
 #![forbid(unsafe_code)]
 
+/// Shared seed-sweep campaign door (gauntlet / serializability).
+#[cfg(test)]
+mod campaign;
 /// Storage-contract conformance kit — `pub` surface for out-of-crate backends.
 pub mod conformance;
 pub mod determinism;

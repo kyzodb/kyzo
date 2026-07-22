@@ -740,14 +740,7 @@ fn single_node_serializability_campaign_under_synthetic_cpu_pressure() {
 
         let base = seed_base();
         let count = seed_count();
-        let mut failures: Vec<(u64, String)> = Vec::new();
-        for i in 0..count {
-            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-            let seed = Rng::new(base ^ u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
-            if let Err(f) = run_seed(seed) {
-                failures.push((seed, f));
-            }
-        }
+        let failures = crate::campaign::run_seed_campaign(base, count, run_seed);
 
         stop.store(true, Ordering::Relaxed);
         for s in stressors {
@@ -765,37 +758,17 @@ fn single_node_serializability_campaign_under_synthetic_cpu_pressure() {
 /// scales it up via the environment (the `KYZO_TRIALS_SEEDS` pattern of
 /// `query/trials.rs`).
 fn seed_count() -> u64 {
-    match std::env::var("KYZO_JEPSEN_SEEDS") {
-        Ok(s) => match s.parse() {
-            Ok(n) => n,
-            Err(_) => 6,
-        },
-        Err(_) => 6,
-    }
+    crate::campaign::env_u64("KYZO_JEPSEN_SEEDS", 6)
 }
 
 fn seed_base() -> u64 {
-    match std::env::var("KYZO_JEPSEN_BASE") {
-        Ok(s) => match s.parse() {
-            Ok(n) => n,
-            Err(_) => 0,
-        },
-        Err(_) => 0,
-    }
+    crate::campaign::env_u64("KYZO_JEPSEN_BASE", 0)
 }
 
 #[test]
 fn single_node_serializability_campaign() {
-    let base = seed_base();
     let count = seed_count();
-    let mut failures: Vec<(u64, String)> = Vec::new();
-    for i in 0..count {
-        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let seed = Rng::new(base ^ u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
-        if let Err(f) = run_seed(seed) {
-            failures.push((seed, f));
-        }
-    }
+    let failures = crate::campaign::run_seed_campaign(seed_base(), count, run_seed);
     assert!(
         failures.is_empty(),
         "Jepsen single-node campaign FINDINGS ({} of {count}): {failures:?}",
@@ -859,53 +832,44 @@ fn elle_anomaly_detection_flags_g0_ww_only_cycle() {
     );
 }
 
-/// #376 T6: G1 — wr-only cycle (Adya G1c). Two committed writers each read
-/// the other's write: a cycle with only wr-edges, no rw.
-#[test]
-fn elle_anomaly_detection_flags_g1_wr_cycle_in_hand_built_history() {
-    const REG_A: u32 = 0;
-    const REG_B: u32 = 1;
-    let history = ElleHistory::record(vec![
-        CommittedTxn {
-            // T0: writes A, reads B observing T1's write.
-            ops: vec![
-                ExecutedOp::Write {
-                    reg: REG_A,
-                    write_id: 100,
-                },
-                ExecutedOp::Read {
-                    reg: REG_B,
-                    write_id: 200,
-                },
-            ],
-            stamp: 10,
-        },
-        CommittedTxn {
-            // T1: writes B, reads A observing T0's write.
-            ops: vec![
-                ExecutedOp::Write {
-                    reg: REG_B,
-                    write_id: 200,
-                },
-                ExecutedOp::Read {
-                    reg: REG_A,
-                    write_id: 100,
-                },
-            ],
-            stamp: 20,
-        },
-    ]);
+/// Assert `history` is integrity-clean and carries exactly `expect`.
+fn assert_elle_anomaly(history: ElleHistory, expect: Anomaly, claim: &str) -> Vec<(usize, usize, EdgeKind)> {
     let check = history.check();
     assert!(
         check.integrity_findings.is_empty(),
         "no integrity findings expected: {:?}",
         check.integrity_findings
     );
-    let (anomaly, cycle) = require_some(check.cycle, "wr cycle (each reads the other's write) must be flagged as G1");
-    assert_eq!(
-        anomaly,
+    let (anomaly, cycle) = require_some(check.cycle, claim);
+    assert_eq!(anomaly, expect, "{claim}, got {anomaly:?}: {cycle:?}");
+    cycle
+}
+
+/// Two-txn hand-built history at stamps 10/20 — the G1/G2 anomaly corpus shape.
+fn two_txn_history(t0: Vec<ExecutedOp>, t1: Vec<ExecutedOp>) -> ElleHistory {
+    ElleHistory::record(vec![
+        CommittedTxn { ops: t0, stamp: 10 },
+        CommittedTxn { ops: t1, stamp: 20 },
+    ])
+}
+
+/// #376 T6: G1 — wr-only cycle (Adya G1c). Two committed writers each read
+/// the other's write: a cycle with only wr-edges, no rw.
+#[test]
+fn elle_anomaly_detection_flags_g1_wr_cycle_in_hand_built_history() {
+    assert_elle_anomaly(
+        two_txn_history(
+            vec![
+                ExecutedOp::Write { reg: 0, write_id: 100 },
+                ExecutedOp::Read { reg: 1, write_id: 200 },
+            ],
+            vec![
+                ExecutedOp::Write { reg: 1, write_id: 200 },
+                ExecutedOp::Read { reg: 0, write_id: 100 },
+            ],
+        ),
         Anomaly::G1,
-        "wr-only cycle is Elle G1 (Adya G1c), got {anomaly:?}: {cycle:?}"
+        "wr cycle (each reads the other's write) must be flagged as G1",
     );
 }
 
@@ -918,50 +882,26 @@ fn elle_anomaly_detection_flags_g1_wr_cycle_in_hand_built_history() {
 /// (`Rw`) edges forming a 2-cycle: the canonical G2.
 #[test]
 fn elle_anomaly_detection_flags_g2_write_skew_cycle_in_serializability_history() {
-    const REG_A: u32 = 0;
-    const REG_B: u32 = 1;
-    let history = ElleHistory::record(vec![
-        CommittedTxn {
-            // T0: reads B at its genesis value, writes A.
-            ops: vec![
+    assert_elle_anomaly(
+        two_txn_history(
+            vec![
                 ExecutedOp::Read {
-                    reg: REG_B,
+                    reg: 1,
                     write_id: GENESIS_WRITE_ID,
                 },
-                ExecutedOp::Write {
-                    reg: REG_A,
-                    write_id: 100,
-                },
+                ExecutedOp::Write { reg: 0, write_id: 100 },
             ],
-            stamp: 10,
-        },
-        CommittedTxn {
-            // T1: reads A at its genesis value, writes B.
-            ops: vec![
+            vec![
                 ExecutedOp::Read {
-                    reg: REG_A,
+                    reg: 0,
                     write_id: GENESIS_WRITE_ID,
                 },
-                ExecutedOp::Write {
-                    reg: REG_B,
-                    write_id: 200,
-                },
+                ExecutedOp::Write { reg: 1, write_id: 200 },
             ],
-            stamp: 20,
-        },
-    ]);
-    let check = history.check();
-    assert!(
-        check.integrity_findings.is_empty(),
-        "no integrity findings expected in this hand-built history: {:?}",
-        check.integrity_findings
-    );
-    let (anomaly, cycle) = require_some(check.cycle, "a genuine write-skew history must be flagged, never silently accepted");
-    assert_eq!(
-        anomaly,
+        ),
         Anomaly::G2,
         "two independent anti-dependency edges (each txn reads the other's stale value) \
-         is the canonical G2 shape, got {anomaly:?}: {cycle:?}"
+         is the canonical G2 shape",
     );
 }
 
@@ -970,49 +910,27 @@ fn elle_anomaly_detection_flags_g2_write_skew_cycle_in_serializability_history()
 /// predicate rw-edges, unreachable before `RangeRead` existed in the model.
 #[test]
 fn elle_anomaly_detection_flags_g2_predicate_rw_via_range_read() {
-    let history = ElleHistory::record(vec![
-        CommittedTxn {
-            // T0: range [0,2) observes nothing; writes reg 2 (into T1's span).
-            ops: vec![
+    let cycle = assert_elle_anomaly(
+        two_txn_history(
+            vec![
                 ExecutedOp::RangeRead {
                     lo: 0,
                     hi: 2,
                     observed: vec![],
                 },
-                ExecutedOp::Write {
-                    reg: 2,
-                    write_id: 100,
-                },
+                ExecutedOp::Write { reg: 2, write_id: 100 },
             ],
-            stamp: 10,
-        },
-        CommittedTxn {
-            // T1: range [2,4) observes nothing; writes reg 0 (into T0's span).
-            ops: vec![
+            vec![
                 ExecutedOp::RangeRead {
                     lo: 2,
                     hi: 4,
                     observed: vec![],
                 },
-                ExecutedOp::Write {
-                    reg: 0,
-                    write_id: 200,
-                },
+                ExecutedOp::Write { reg: 0, write_id: 200 },
             ],
-            stamp: 20,
-        },
-    ]);
-    let check = history.check();
-    assert!(
-        check.integrity_findings.is_empty(),
-        "no integrity findings expected: {:?}",
-        check.integrity_findings
-    );
-    let (anomaly, cycle) = require_some(check.cycle, "mutual phantom inserts into each other's empty range reads must form a G2 cycle");
-    assert_eq!(
-        anomaly,
+        ),
         Anomaly::G2,
-        "two predicate/phantom rw-edges is G2, got {anomaly:?}: {cycle:?}"
+        "mutual phantom inserts into each other's empty range reads must form a G2 cycle",
     );
     let rw = cycle.iter().filter(|(_, _, k)| *k == EdgeKind::Rw).count();
     assert!(
@@ -1027,49 +945,28 @@ fn elle_anomaly_detection_flags_g2_predicate_rw_via_range_read() {
 /// write skew, but the read half is a single RangeRead.
 #[test]
 fn elle_anomaly_detection_flags_g2_write_skew_via_range_read() {
-    const LO: u32 = 0;
-    const HI: u32 = 2;
-    let history = ElleHistory::record(vec![
-        CommittedTxn {
-            ops: vec![
+    let genesis_span = vec![(0, GENESIS_WRITE_ID), (1, GENESIS_WRITE_ID)];
+    assert_elle_anomaly(
+        two_txn_history(
+            vec![
                 ExecutedOp::RangeRead {
-                    lo: LO,
-                    hi: HI,
-                    observed: vec![(0, GENESIS_WRITE_ID), (1, GENESIS_WRITE_ID)],
+                    lo: 0,
+                    hi: 2,
+                    observed: genesis_span.clone(),
                 },
-                ExecutedOp::Write {
-                    reg: 0,
-                    write_id: 100,
-                },
+                ExecutedOp::Write { reg: 0, write_id: 100 },
             ],
-            stamp: 10,
-        },
-        CommittedTxn {
-            ops: vec![
+            vec![
                 ExecutedOp::RangeRead {
-                    lo: LO,
-                    hi: HI,
-                    observed: vec![(0, GENESIS_WRITE_ID), (1, GENESIS_WRITE_ID)],
+                    lo: 0,
+                    hi: 2,
+                    observed: genesis_span,
                 },
-                ExecutedOp::Write {
-                    reg: 1,
-                    write_id: 200,
-                },
+                ExecutedOp::Write { reg: 1, write_id: 200 },
             ],
-            stamp: 20,
-        },
-    ]);
-    let check = history.check();
-    assert!(
-        check.integrity_findings.is_empty(),
-        "no integrity findings expected: {:?}",
-        check.integrity_findings
-    );
-    let (anomaly, cycle) = require_some(check.cycle, "range-read write skew must be flagged as G2");
-    assert_eq!(
-        anomaly,
+        ),
         Anomaly::G2,
-        "range-read write skew is G2, got {anomaly:?}: {cycle:?}"
+        "range-read write skew must be flagged as G2",
     );
 }
 
@@ -1078,26 +975,23 @@ fn elle_anomaly_detection_flags_g2_write_skew_via_range_read() {
 /// oracle that could share SSI's blind spots).
 #[test]
 fn external_elle_isolation_tier_against_serializability_campaign() {
-    let base = seed_base();
     let count = seed_count();
-    let mut failures: Vec<(u64, String)> = Vec::new();
-    for i in 0..count {
-        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let seed = Rng::new(base ^ u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
+    let failures = crate::campaign::run_seed_campaign(seed_base(), count, |seed| {
         let history = ElleHistory::record(run_campaign(seed));
         let check = history.check();
         if !check.integrity_findings.is_empty() {
-            failures.push((
-                seed,
-                format!("integrity violation(s): {:?}", check.integrity_findings),
-            ));
-        } else if let Some((anomaly, cycle)) = check.cycle {
-            failures.push((
-                seed,
-                format!("{anomaly:?} serializability violation: cycle {cycle:?}"),
+            return Err(format!(
+                "integrity violation(s): {:?}",
+                check.integrity_findings
             ));
         }
-    }
+        if let Some((anomaly, cycle)) = check.cycle {
+            return Err(format!(
+                "{anomaly:?} serializability violation: cycle {cycle:?}"
+            ));
+        }
+        Ok(())
+    });
     assert!(
         failures.is_empty(),
         "Elle external isolation tier FINDINGS against serializability campaign \

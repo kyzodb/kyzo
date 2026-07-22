@@ -98,7 +98,6 @@ use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::store::sim::{FaultConfig, SimRng, SimStorage, SimWriteTx, for_each_seed};
 use crate::store::{Storage, WriteTx};
 
-
 // ═════════════════════════════════════════════════════════════════════════
 // Loud harness doors (bs_detector: no unwrap/expect/panic costumes).
 // ═════════════════════════════════════════════════════════════════════════
@@ -288,7 +287,6 @@ fn fit_u32_i64(n: i64) -> u32 {
     }
 }
 
-
 // ═════════════════════════════════════════════════════════════════════════
 // Program-builder plumbing (rebuilt over the pub(crate) pipeline).
 // ═════════════════════════════════════════════════════════════════════════
@@ -316,7 +314,8 @@ fn entry_symbol() -> MagicSymbol {
 /// `LimitExceeded` instead of an allocation abort. Both are orders of
 /// magnitude above these corpora, so a real run is never refused.
 fn generous_budget() -> Budget {
-    Budget::new(NonZeroU32::new(10_000).must("INVARIANT/harness: nonzero")).with_derived_tuple_ceiling(1_000_000)
+    Budget::new(NonZeroU32::new(10_000).must("INVARIANT/harness: nonzero"))
+        .with_derived_tuple_ceiling(1_000_000)
 }
 
 fn col(name: &str) -> ColumnDef {
@@ -385,7 +384,8 @@ fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> Stratifi
             prog
         })
         .collect();
-    StratifiedMagicProgram::from_execution_order(strata).must("INVARIANT/harness: entry in final stratum")
+    StratifiedMagicProgram::from_execution_order(strata)
+        .must("INVARIANT/harness: entry in final stratum")
 }
 
 fn immortal_lifetimes(compiled: &[CompiledProgram]) -> StoreLifetimes {
@@ -450,6 +450,36 @@ fn stored_relation<S: Storage>(db: &S, name: &str, arity: usize, rows: &[Tuple])
     })
 }
 
+/// Binary edge/cost populate — one door for the arity-2 fixture seeds.
+fn stored_pairs(db: &SimStorage, name: &str, pairs: &[(i64, i64)]) -> Result<()> {
+    let rows: Vec<Tuple> = pairs
+        .iter()
+        .map(|&(a, b)| Tuple::from_vec(vec![v(a), v(b)]))
+        .collect();
+    stored_relation(db, name, 2, &rows)
+}
+
+/// Reachability (edge ∪ edge∘head) rules — one door for TC / negation / multihead.
+fn reachability_rules(edge: &str, head: &str) -> (MagicSymbol, Vec<MagicInlineRule>) {
+    let (x, y, z) = (sym("x"), sym("y"), sym("z"));
+    (
+        muggle(head),
+        vec![
+            plain_rule(
+                &[x.clone(), y.clone()],
+                vec![rel_atom(edge, &[x.clone(), y.clone()])],
+            ),
+            plain_rule(
+                &[x.clone(), y.clone()],
+                vec![
+                    rel_atom(edge, &[x.clone(), z.clone()]),
+                    rule_atom(head, &[z.clone(), y.clone()]),
+                ],
+            ),
+        ],
+    )
+}
+
 /// Compile a program against a read snapshot and evaluate it to the entry
 /// rows — the **fallible** twin of the compile tier's `compile_and_run`.
 /// Every pipeline stage is `?`, so an injected storage fault at open, during
@@ -496,45 +526,10 @@ struct Fixture {
 // ── recursion: transitive closure over a cyclic edge relation ────────────
 
 fn tc_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(
-        db,
-        "edge",
-        2,
-        &[
-            Tuple::from_vec(vec![v(1), v(2)]),
-            Tuple::from_vec(vec![v(2), v(3)]),
-            Tuple::from_vec(vec![v(3), v(4)]),
-            Tuple::from_vec(vec![v(4), v(2)]),
-        ],
-    )
+    stored_pairs(db, "edge", &[(1, 2), (2, 3), (3, 4), (4, 2)])
 }
 fn tc_program() -> StratifiedMagicProgram {
-    let (x, y, z) = (sym("x"), sym("y"), sym("z"));
-    program_of(vec![
-        vec![(
-            muggle("path"),
-            vec![
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![rel_atom("edge", &[x.clone(), y.clone()])],
-                ),
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![
-                        rel_atom("edge", &[x.clone(), z.clone()]),
-                        rule_atom("path", &[z.clone(), y.clone()]),
-                    ],
-                ),
-            ],
-        )],
-        vec![(
-            entry_symbol(),
-            vec![plain_rule(
-                &[x.clone(), y.clone()],
-                vec![rule_atom("path", &[x, y])],
-            )],
-        )],
-    ])
+    tc_program_named("edge")
 }
 fn tc_expected() -> BTreeSet<Tuple> {
     rows(&[
@@ -556,17 +551,7 @@ fn tc_expected() -> BTreeSet<Tuple> {
 // ── join: two-hop paths (edge ⋈ edge) ────────────────────────────────────
 
 fn join_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(
-        db,
-        "edge",
-        2,
-        &[
-            Tuple::from_vec(vec![v(1), v(2)]),
-            Tuple::from_vec(vec![v(2), v(3)]),
-            Tuple::from_vec(vec![v(3), v(4)]),
-            Tuple::from_vec(vec![v(2), v(5)]),
-        ],
-    )
+    stored_pairs(db, "edge", &[(1, 2), (2, 3), (3, 4), (2, 5)])
 }
 fn join_program() -> StratifiedMagicProgram {
     let (x, y, z) = (sym("x"), sym("y"), sym("z"));
@@ -589,18 +574,7 @@ fn join_expected() -> BTreeSet<Tuple> {
 // ── aggregation: grouped min over a cost relation ────────────────────────
 
 fn aggr_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(
-        db,
-        "cost",
-        2,
-        &[
-            Tuple::from_vec(vec![v(1), v(5)]),
-            Tuple::from_vec(vec![v(1), v(3)]),
-            Tuple::from_vec(vec![v(1), v(8)]),
-            Tuple::from_vec(vec![v(2), v(7)]),
-            Tuple::from_vec(vec![v(2), v(2)]),
-        ],
-    )
+    stored_pairs(db, "cost", &[(1, 5), (1, 3), (1, 8), (2, 7), (2, 2)])
 }
 fn aggr_program() -> StratifiedMagicProgram {
     let (x, y, m) = (sym("x"), sym("y"), sym("m"));
@@ -649,27 +623,12 @@ fn neg_populate(db: &SimStorage) -> Result<()> {
         ],
     )?;
     // 1->2 only: 3 is isolated, and nothing reaches 1.
-    stored_relation(db, "edge", 2, &[Tuple::from_vec(vec![v(1), v(2)])])
+    stored_pairs(db, "edge", &[(1, 2)])
 }
 fn neg_program() -> StratifiedMagicProgram {
-    let (x, y, z) = (sym("x"), sym("y"), sym("z"));
+    let (x, y) = (sym("x"), sym("y"));
     program_of(vec![
-        vec![(
-            muggle("reach"),
-            vec![
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![rel_atom("edge", &[x.clone(), y.clone()])],
-                ),
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![
-                        rel_atom("edge", &[x.clone(), z.clone()]),
-                        rule_atom("reach", &[z.clone(), y.clone()]),
-                    ],
-                ),
-            ],
-        )],
+        vec![reachability_rules("edge", "reach")],
         vec![(
             entry_symbol(),
             vec![plain_rule(
@@ -731,49 +690,18 @@ const SINGLE_HEAD_FIXTURES: &[Fixture] = &[
 // ── a multi-head stratum, for the parallelism / determinism probe ────────
 
 fn multihead_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(
-        db,
-        "ea",
-        2,
-        &[
-            Tuple::from_vec(vec![v(1), v(2)]),
-            Tuple::from_vec(vec![v(2), v(3)]),
-        ],
-    )?;
-    stored_relation(
-        db,
-        "eb",
-        2,
-        &[
-            Tuple::from_vec(vec![v(10), v(20)]),
-            Tuple::from_vec(vec![v(20), v(30)]),
-        ],
-    )
+    stored_pairs(db, "ea", &[(1, 2), (2, 3)])?;
+    stored_pairs(db, "eb", &[(10, 20), (20, 30)])
 }
 fn multihead_program() -> StratifiedMagicProgram {
     // pa and pb are independent recursive closures in ONE stratum: eval's
     // par_iter dispatches both heads across rayon workers.
-    let (x, y, z) = (sym("x"), sym("y"), sym("z"));
-    let closure = |edge: &str, head: &str| -> (MagicSymbol, Vec<MagicInlineRule>) {
-        (
-            muggle(head),
-            vec![
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![rel_atom(edge, &[x.clone(), y.clone()])],
-                ),
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![
-                        rel_atom(edge, &[x.clone(), z.clone()]),
-                        rule_atom(head, &[z.clone(), y.clone()]),
-                    ],
-                ),
-            ],
-        )
-    };
+    let (x, y) = (sym("x"), sym("y"));
     program_of(vec![
-        vec![closure("ea", "pa"), closure("eb", "pb")],
+        vec![
+            reachability_rules("ea", "pa"),
+            reachability_rules("eb", "pb"),
+        ],
         vec![(
             entry_symbol(),
             vec![
@@ -960,7 +888,8 @@ fn crash_consistency_is_query_visible() {
         .must("INVARIANT/harness: present");
         let put = |tx: &mut SimWriteTx, a: i64, b: i64| {
             let row = vec![v(a), v(b)];
-            h.put_fact(tx, &row, ValidityTs::of_micros(0), sp()).must("INVARIANT/harness: present");
+            h.put_fact(tx, &row, ValidityTs::of_micros(0), sp())
+                .must("INVARIANT/harness: present");
         };
         put(&mut tx, 1, 2);
         put(&mut tx, 2, 3);
@@ -1000,24 +929,9 @@ fn crash_consistency_is_query_visible() {
 
 /// The transitive-closure program over an arbitrarily-named edge relation.
 fn tc_program_named(edge: &str) -> StratifiedMagicProgram {
-    let (x, y, z) = (sym("x"), sym("y"), sym("z"));
+    let (x, y) = (sym("x"), sym("y"));
     program_of(vec![
-        vec![(
-            muggle("path"),
-            vec![
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![rel_atom(edge, &[x.clone(), y.clone()])],
-                ),
-                plain_rule(
-                    &[x.clone(), y.clone()],
-                    vec![
-                        rel_atom(edge, &[x.clone(), z.clone()]),
-                        rule_atom("path", &[z.clone(), y.clone()]),
-                    ],
-                ),
-            ],
-        )],
+        vec![reachability_rules(edge, "path")],
         vec![(
             entry_symbol(),
             vec![plain_rule(
@@ -1276,6 +1190,39 @@ fn snapshot_isolation_holds_at_answer_level() {
 // Capability 4 — time travel under faults.
 // ═════════════════════════════════════════════════════════════════════════
 
+/// Validity history for the time-travel-under-faults campaign.
+fn populate_hist_versions(db: &SimStorage) -> Result<()> {
+    write_then_commit(db, |tx| {
+        let h = create_relation(
+            tx,
+            InputRelationHandle {
+                name: sym("hist"),
+                metadata: StoredRelationMetadata {
+                    keys: vec![col("id")],
+                    non_keys: vec![col("state")],
+                },
+                key_bindings: vec![sym("id")],
+                dep_bindings: vec![sym("state")],
+                span: sp(),
+            },
+            KeyspaceKind::Facts,
+        )?;
+        for (id, at, assertive, state) in [
+            (1i64, 10i64, true, "a"),
+            (1, 20, false, ""),
+            (1, 30, true, "c"),
+        ] {
+            if assertive {
+                let row = vec![v(id), DataValue::Str((*state).to_string())];
+                h.put_fact(tx, &row, ValidityTs::of_micros(at), sp())?;
+            } else {
+                h.retract_fact(tx, &[v(id)], ValidityTs::of_micros(at), sp())?;
+            }
+        }
+        Ok(())
+    })
+}
+
 /// An as-of query mid fault-plan answers correctly or errors typed — never a
 /// torn history read. The relation carries a validity stamp in its last key
 /// slot; the query asks for the state as of a fixed time while read faults
@@ -1288,38 +1235,6 @@ fn time_travel_under_faults_answers_or_errors() {
     // id 1: asserted "a" @10, retracted @20, asserted "c" @30.
     // As of 25, id 1 is retracted (absent); as of 35, it is "c"; as of 15,
     // it is "a".
-    let populate = |db: &SimStorage| -> Result<()> {
-        write_then_commit(db, |tx| {
-            let h = create_relation(
-                tx,
-                InputRelationHandle {
-                    name: sym("hist"),
-                    metadata: StoredRelationMetadata {
-                        keys: vec![col("id")],
-                        non_keys: vec![col("state")],
-                    },
-                    key_bindings: vec![sym("id")],
-                    dep_bindings: vec![sym("state")],
-                    span: sp(),
-                },
-                KeyspaceKind::Facts,
-            )?;
-            for (id, at, assertive, state) in [
-                (1i64, 10i64, true, "a"),
-                (1, 20, false, ""),
-                (1, 30, true, "c"),
-            ] {
-                if assertive {
-                    let row = vec![v(id), DataValue::Str((*state).to_string())];
-                    h.put_fact(tx, &row, ValidityTs::of_micros(at), sp())?;
-                } else {
-                    h.retract_fact(tx, &[v(id)], ValidityTs::of_micros(at), sp())?;
-                }
-            }
-            Ok(())
-        })
-    };
-
     let asof_program = |at: i64| -> StratifiedMagicProgram {
         let (id, state) = (sym("id"), sym("state"));
         // The time slots are infrastructure: the atom binds user columns
@@ -1340,7 +1255,7 @@ fn time_travel_under_faults_answers_or_errors() {
     // Clean-store anchors.
     {
         let db = SimStorage::new(0xA50F);
-        populate_retrying(&db, |d| populate(d)).must("INVARIANT/harness: clean setup");
+        populate_retrying(&db, populate_hist_versions).must("INVARIANT/harness: clean setup");
         assert_eq!(
             try_run(&db, asof_program(15)).must("INVARIANT/harness: asof 15"),
             rows_str(&[(1, "a")]),
@@ -1370,12 +1285,12 @@ fn time_travel_under_faults_answers_or_errors() {
     for at in [15i64, 25, 35] {
         let expected = {
             let db = SimStorage::new(0xA50F);
-            populate_retrying(&db, |d| populate(d)).must("INVARIANT/harness: present");
+            populate_retrying(&db, populate_hist_versions).must("INVARIANT/harness: present");
             try_run(&db, asof_program(at)).must("INVARIANT/harness: present")
         };
         for_each_seed(0..n, |seed| {
             let db = SimStorage::with_faults(seed, faults);
-            if populate_retrying(&db, |d| populate(d)).is_err() {
+            if populate_retrying(&db, populate_hist_versions).is_err() {
                 errs.set(errs.get() + 1);
                 return;
             }
@@ -1451,9 +1366,7 @@ fn determinism_multihead_parallel_is_measured() {
         .num_threads(4)
         .build_global()
         .is_err()
-    {
-        /* pool already global — pinning is best-effort */
-    }
+    { /* pool already global — pinning is best-effort */ }
     // 4%: recalibrated for the one-machine executor's denser read pattern
     // (see read_fault_campaign_correct_or_typed_never_wrong) — the assert
     // below demands BOTH observables, which keeps this rate honest.
@@ -1528,7 +1441,8 @@ fn antivacuity_no_faults_means_no_errors() {
                     "fixture '{}': fault-free run must be correct",
                     fx.name
                 ),
-                Observed::TypedError => assert!(false, 
+                Observed::TypedError => assert!(
+                    false,
                     "fixture '{}' seed {seed}: a run errored with NO faults injected — \
                      the error arm is not measuring injected faults",
                     fx.name
@@ -1569,7 +1483,12 @@ fn antivacuity_corrupt_reference_is_caught() {
     populate_retrying(&db, tc_populate).must("INVARIANT/harness: present");
     let real = try_run(&db, tc_program()).must("INVARIANT/harness: present");
     let mut corrupted = real.clone();
-    corrupted.insert(rows(&[&[99, 99]]).into_iter().next().must("INVARIANT/harness: present"));
+    corrupted.insert(
+        rows(&[&[99, 99]])
+            .into_iter()
+            .next()
+            .must("INVARIANT/harness: present"),
+    );
     assert_ne!(
         real, corrupted,
         "a corrupted reference must differ from the true answer — otherwise the \
@@ -1643,7 +1562,8 @@ fn open_live_door(
     let cap = StableCommitCap::NativeFsyncProof {
         snapshot_fork: SnapshotFork::No,
     };
-    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap).must("INVARIANT/harness: live SweepDoor");
+    let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
+        .must("INVARIANT/harness: live SweepDoor");
     (door, incarnation, session)
 }
 
@@ -1689,7 +1609,11 @@ fn measure_structural_recovery_work(unflushed: &WalSegment) -> u64 {
     let mut work = 0u64;
     for record in unflushed.records() {
         work = checked_add_u64(work, STRUCTURAL_PER_RECORD_WORK, "structural work fits u64");
-        work = checked_add_u64(work, payload_body_len(record.payload()), "payload work fits u64");
+        work = checked_add_u64(
+            work,
+            payload_body_len(record.payload()),
+            "payload work fits u64",
+        );
     }
     work
 }
@@ -1808,14 +1732,17 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                     commit_ordinal: ord,
                     body: commit_body(seed, ord.get(), body_len + ci * 8),
                 };
-                let record = WalRecord::seal(pred, payload).must("INVARIANT/harness: wal seal flushed");
+                let record =
+                    WalRecord::seal(pred, payload).must("INVARIANT/harness: wal seal flushed");
                 pred = record.record_hash();
                 if j == 0 {
                     segment
                         .append_continuing_head(record)
                         .must("INVARIANT/harness: flushed WAL continuing head");
                 } else {
-                    segment.append(record).must("INVARIANT/harness: flushed WAL append");
+                    segment
+                        .append(record)
+                        .must("INVARIANT/harness: flushed WAL append");
                 }
                 ci += 1;
             }
@@ -1835,11 +1762,7 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
     let mut intact_pred = unflushed_pred;
     let mut crash_pred = unflushed_pred;
     for (i, ord) in unflushed_ordinals.iter().enumerate() {
-        let body = commit_body(
-            seed,
-            ord.get(),
-            body_len + (n_flushed_commits + i) * 8,
-        );
+        let body = commit_body(seed, ord.get(), body_len + (n_flushed_commits + i) * 8);
         let intact = WalRecord::seal(
             intact_pred,
             WalPayload::Commit {
@@ -1873,7 +1796,10 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
             let full_len = match crash_rec.payload() {
                 WalPayload::Commit { body, .. } => body.len(),
                 WalPayload::NonceFloor { .. } | WalPayload::IncarnationSealed { .. } => {
-                    assert!(false, "INVARIANT/harness: seed {seed}: expected Commit payload");
+                    assert!(
+                        false,
+                        "INVARIANT/harness: seed {seed}: expected Commit payload"
+                    );
                     loop {}
                 }
             };
@@ -1945,7 +1871,8 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                 !torn_tail,
                 "seed {seed}: torn tail must not silently succeed with a history"
             );
-            let again = replay(store_id, &segments).must("INVARIANT/harness: crash-during-recovery converges");
+            let again = replay(store_id, &segments)
+                .must("INVARIANT/harness: crash-during-recovery converges");
             assert_eq!(
                 recovered, again,
                 "seed {seed}: crash-during-recovery must be idempotent"
@@ -1972,7 +1899,8 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                 WalRefuse::RecordHashMismatch,
                 "seed {seed}: torn tail must typed-refuse RecordHashMismatch, got {refuse:?}"
             );
-            let prefix_state = replay(store_id, &clean_prefix).must("INVARIANT/harness: clean prefix must replay");
+            let prefix_state =
+                replay(store_id, &clean_prefix).must("INVARIANT/harness: clean prefix must replay");
             let prefix_ordinals: Vec<CommitOrdinal> =
                 prefix_state.commit_bodies.iter().map(|(o, _)| *o).collect();
             assert_eq!(
@@ -2001,7 +1929,8 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
                 snapshot_fork: SnapshotFork::No,
             },
         });
-        open_with_capability(sealed.store_open()).must("INVARIANT/harness: open must succeed when recoverable");
+        open_with_capability(sealed.store_open())
+            .must("INVARIANT/harness: open must succeed when recoverable");
     }
 
     CrashInstantSample {
@@ -2028,7 +1957,11 @@ const MAX_COMMITS_PER_SAMPLE: u64 = 8;
 
 fn structural_work_ceiling(bytes_since_last_flush: u64) -> u64 {
     bytes_since_last_flush
-        + checked_mul_u64(STRUCTURAL_PER_RECORD_WORK, MAX_COMMITS_PER_SAMPLE, "sla work fits")
+        + checked_mul_u64(
+            STRUCTURAL_PER_RECORD_WORK,
+            MAX_COMMITS_PER_SAMPLE,
+            "sla work fits",
+        )
 }
 
 /// §29/§28/§86 — durable license + recovery correctness at the adversarial
@@ -2126,7 +2059,11 @@ fn power_cut_at_commit_door_dst() {
     assert_eq!(ok.bytes_since_last_flush, bytes_since_last_flush);
     assert_eq!(ok.bound_ns, bound);
     assert!(
-        emit_recovery_sla_claim(checked_add_u64(bound, 1, "sla bound+1"), bytes_since_last_flush).is_err(),
+        emit_recovery_sla_claim(
+            checked_add_u64(bound, 1, "sla bound+1"),
+            bytes_since_last_flush
+        )
+        .is_err(),
         "claim above f(bytes_since_last_flush) must refuse the SLA badge — not Store open"
     );
     // Sealed f at worst_bytes remains the claim ceiling for the corpus tip.
@@ -2187,8 +2124,12 @@ fn operation_key_production_commit_write_dedupes_same_process() {
         ..ScriptOptions::new()
     };
 
-    let tx1 = SessionTx::new_write(db.store.write_tx().must("INVARIANT/harness: write tx 1"), opts.clone());
-    tx1.commit_write().must("INVARIANT/harness: first production commit_write");
+    let tx1 = SessionTx::new_write(
+        db.store.write_tx().must("INVARIANT/harness: write tx 1"),
+        opts.clone(),
+    );
+    tx1.commit_write()
+        .must("INVARIANT/harness: first production commit_write");
     let commits_after_first = db
         .sweep
         .with_mut(|door, _, _| door.highest_commit_ordinal().get());
@@ -2197,7 +2138,10 @@ fn operation_key_production_commit_write_dedupes_same_process() {
         "first commit_write must seal via SweepDoor"
     );
 
-    let tx2 = SessionTx::new_write(db.store.write_tx().must("INVARIANT/harness: write tx 2"), opts);
+    let tx2 = SessionTx::new_write(
+        db.store.write_tx().must("INVARIANT/harness: write tx 2"),
+        opts,
+    );
     tx2.commit_write()
         .must("INVARIANT/harness: retry commit_write with same operation identity");
     let (commits, wal_len, store_id, segment) = db.sweep.with_mut(|door, _, _| {
@@ -2216,7 +2160,8 @@ fn operation_key_production_commit_write_dedupes_same_process() {
         wal_len, 1,
         "exactly one WAL Commit after two production acks"
     );
-    let recovered = replay(store_id, std::slice::from_ref(&segment)).must("INVARIANT/harness: replay");
+    let recovered =
+        replay(store_id, std::slice::from_ref(&segment)).must("INVARIANT/harness: replay");
     assert_eq!(recovered.commit_bodies.len(), 1);
 }
 
@@ -2244,9 +2189,12 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
         ..ScriptOptions::new()
     };
 
-    SessionTx::new_write(db.store.write_tx().must("INVARIANT/harness: write tx"), opts.clone())
-        .commit_write()
-        .must("INVARIANT/harness: production commit_write before crash");
+    SessionTx::new_write(
+        db.store.write_tx().must("INVARIANT/harness: write tx"),
+        opts.clone(),
+    )
+    .commit_write()
+    .must("INVARIANT/harness: production commit_write before crash");
 
     let (store_id, segment, fence) = db.sweep.with_mut(|door, session, _| {
         (
@@ -2255,10 +2203,11 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
             session.fence_epoch(),
         )
     });
-    let recovered = replay(store_id, std::slice::from_ref(&segment)).must("INVARIANT/harness: WAL replay");
+    let recovered =
+        replay(store_id, std::slice::from_ref(&segment)).must("INVARIANT/harness: WAL replay");
     assert_eq!(recovered.commit_bodies.len(), 1);
-    let decoded =
-        decode_commit_body(&recovered.commit_bodies[0].1).must("INVARIANT/harness: OperationKey commit body");
+    let decoded = decode_commit_body(&recovered.commit_bodies[0].1)
+        .must("INVARIANT/harness: OperationKey commit body");
     assert!(
         decoded.preimage.is_some(),
         "production path must WAL-carry OperationKey preimage"
@@ -2274,7 +2223,8 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
     let cap = StableCommitCap::NativeFsyncProof {
         snapshot_fork: SnapshotFork::No,
     };
-    let mut reopened = SweepDoor::open(store_id, fence, session, auth, cap).must("INVARIANT/harness: reopen");
+    let mut reopened =
+        SweepDoor::open(store_id, fence, session, auth, cap).must("INVARIANT/harness: reopen");
     reopened
         .restore_from_wal_replay(&recovered)
         .must("INVARIANT/harness: restore memo from WAL");
@@ -2295,9 +2245,14 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
         sweep: Some(restored_handle.clone()),
         ..ScriptOptions::new()
     };
-    SessionTx::new_write(db.store.write_tx().must("INVARIANT/harness: retry write tx"), retry_opts)
-        .commit_write()
-        .must("INVARIANT/harness: post-crash production commit_write retry");
+    SessionTx::new_write(
+        db.store
+            .write_tx()
+            .must("INVARIANT/harness: retry write tx"),
+        retry_opts,
+    )
+    .commit_write()
+    .must("INVARIANT/harness: post-crash production commit_write retry");
 
     let (commits, wal_len) = restored_handle.with_mut(|door, _, _| {
         (
@@ -2366,8 +2321,8 @@ pub mod storage_campaign_lanes {
     use kyzo_model::value::{DataValue, Geometry, Tuple, Vector, decode, encode_owned};
 
     use super::{
-        Must, fit_i64, fit_u16, fit_u32_i64, fit_u64, fit_u8, fit_usz_i64, fit_usize, u32_lo, u8_at,
-        u8_lo, wrap_add_u32, wrap_add_u8, wrap_mul_add, wrap_mul_add_u32, wrap_mul_add_usize,
+        Must, fit_i64, fit_u8, fit_u16, fit_u32_i64, fit_u64, fit_usize, fit_usz_i64, u8_at, u8_lo,
+        u32_lo, wrap_add_u8, wrap_add_u32, wrap_mul_add, wrap_mul_add_u32, wrap_mul_add_usize,
         wrap_mul_u8,
     };
 
@@ -2444,8 +2399,8 @@ pub mod storage_campaign_lanes {
             &commitment,
         );
         let (matrix, aggregate) = frost_sign_recovery_quorum(dealer_seed, &payload);
-        let proof =
-            RecoveryQuorumProof::verify(&matrix, &payload, &aggregate).must("INVARIANT/harness: quorum proof");
+        let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)
+            .must("INVARIANT/harness: quorum proof");
         let grant = RecoveryGrant::new(
             grant_id,
             store_id,
@@ -2464,8 +2419,7 @@ pub mod storage_campaign_lanes {
         predecessor: StoreId,
         consent_seed: [u8; 32],
     ) {
-        let (vk, _) =
-            sign_fork_consent(consent_seed, predecessor, &Digest::admit([0u8; 32]));
+        let (vk, _) = sign_fork_consent(consent_seed, predecessor, &Digest::admit([0u8; 32]));
         table
             .insert(predecessor, vk)
             .must("INVARIANT/harness: register predecessor consent key");
@@ -2535,7 +2489,8 @@ pub mod storage_campaign_lanes {
             operation_key: None,
             signature: Signature::admit([0u8; 64]),
         };
-        parts.signature = sign_admission_parts(&parts, key).must("INVARIANT/harness: sign admission parts");
+        parts.signature =
+            sign_admission_parts(&parts, key).must("INVARIANT/harness: sign admission parts");
         mint_admission_certificate(parts).must("INVARIANT/harness: mint admission certificate")
     }
 
@@ -2569,8 +2524,8 @@ pub mod storage_campaign_lanes {
             .mint(Entropy::admit(entropy))
             .must("INVARIANT/harness: incarnation mint");
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
-        let door =
-            SweepDoor::open(store_id, fence_epoch, session, auth, cap).must("INVARIANT/harness: live SweepDoor");
+        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)
+            .must("INVARIANT/harness: live SweepDoor");
         (door, incarnation, session)
     }
 
@@ -2648,7 +2603,9 @@ pub mod storage_campaign_lanes {
                     n_a, n_b,
                     "seed {seed}: cross-clone (key,nonce) collision at DomainCounter step {step}"
                 );
-                counter = counter.successor().must("INVARIANT/harness: domain counter space");
+                counter = counter
+                    .successor()
+                    .must("INVARIANT/harness: domain counter space");
             }
         }
         assert!(
@@ -2901,7 +2858,8 @@ pub mod storage_campaign_lanes {
                 let mut tx = db.write_tx().must("INVARIANT/harness: sim write_tx");
                 let k = format!("pipeline.committed.{seed}.{i}");
                 let v = format!("survives-power-cut-{seed}-{i}");
-                tx.put(k.as_bytes(), v.as_bytes()).must("INVARIANT/harness: put under seal");
+                tx.put(k.as_bytes(), v.as_bytes())
+                    .must("INVARIANT/harness: put under seal");
                 let committed = door
                     .seal_durable(
                         intent,
@@ -2920,11 +2878,15 @@ pub mod storage_campaign_lanes {
             assert_eq!(door.highest_commit_ordinal().get(), fit_u64(seal_n));
 
             let after_cut = db.sim_powercut();
-            let read = after_cut.read_tx().must("INVARIANT/harness: post-cut read_tx");
+            let read = after_cut
+                .read_tx()
+                .must("INVARIANT/harness: post-cut read_tx");
             for i in 0..seal_n {
                 let k = format!("pipeline.committed.{seed}.{i}");
                 let v = format!("survives-power-cut-{seed}-{i}");
-                let got = read.get(k.as_bytes()).must("INVARIANT/harness: post-cut get");
+                let got = read
+                    .get(k.as_bytes())
+                    .must("INVARIANT/harness: post-cut get");
                 assert_eq!(
                     got,
                     Some(crate::store::Slice::from(v.as_bytes())),
@@ -2989,7 +2951,9 @@ pub mod storage_campaign_lanes {
         // Pipeline boundary: door open with mismatched session epoch.
         let sealed3 = genesis(genesis_params([0xD4; 32], SnapshotFork::No));
         let (_view3, auth3) = sealed3.take_write_authority();
-        let next_epoch = fence_epoch.successor().must("INVARIANT/harness: epoch space");
+        let next_epoch = fence_epoch
+            .successor()
+            .must("INVARIANT/harness: epoch space");
         let stale_session = SweepSession::new(store_id, next_epoch, live);
         assert!(
             matches!(
@@ -3048,7 +3012,10 @@ pub mod storage_campaign_lanes {
             | FailureLattice::Quarantined { .. }
             | FailureLattice::Poisoned {
                 quarantine_retained: None,
-            }) => assert!(false, "chain-meet must poison with retained quarantine, got {other:?}"),
+            }) => assert!(
+                false,
+                "chain-meet must poison with retained quarantine, got {other:?}"
+            ),
         }
 
         // RecoveryGrant materialize advances domain; orphan write after observed
@@ -3268,7 +3235,8 @@ pub mod storage_campaign_lanes {
             // Reclaim always lawful idle — matching certificate.
             let reclaim =
                 ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
-            reclaim_candidate(candidate, &reclaim).must("INVARIANT/harness: idle reclaim must be lawful");
+            reclaim_candidate(candidate, &reclaim)
+                .must("INVARIANT/harness: idle reclaim must be lawful");
         }
         assert!(
             admit_counts.len() > 1,
@@ -3380,8 +3348,8 @@ pub mod storage_campaign_lanes {
             "seat 22: incomparable Repair is typed refuse carrying both classes — never panic"
         );
 
-        let upgraded =
-            PermanenceWitness::repair(&witness, hash, dominating, None).must("INVARIANT/harness: dominating Repair");
+        let upgraded = PermanenceWitness::repair(&witness, hash, dominating, None)
+            .must("INVARIANT/harness: dominating Repair");
         assert_eq!(upgraded.class(), dominating);
         assert_eq!(upgraded.prior_class(), base);
 
@@ -3471,7 +3439,8 @@ pub mod storage_campaign_lanes {
             );
             let ok_cert =
                 ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
-            reclaim_candidate(candidate, &ok_cert).must("INVARIANT/harness: matching reclaim after stall");
+            reclaim_candidate(candidate, &ok_cert)
+                .must("INVARIANT/harness: matching reclaim after stall");
         }
         assert!(
             ttl_values.len() > 1,
@@ -3516,7 +3485,8 @@ pub mod storage_campaign_lanes {
                 retention_certificate_digest: SealDigest::from_digest(seed_bytes(0x07, seed)),
             };
 
-            let seal = CheckpointSeal::mint(intact.clone()).must("INVARIANT/harness: mint intact seal");
+            let seal =
+                CheckpointSeal::mint(intact.clone()).must("INVARIANT/harness: mint intact seal");
             assert!(
                 seal.verify(&intact).is_ok(),
                 "seed {seed}: intact parts must verify"
@@ -3641,15 +3611,17 @@ pub mod storage_campaign_lanes {
         ];
 
         for &(kind, golden_file) in GOLDENS {
-            let expected = parse_golden_hex(golden_file).must("INVARIANT/harness: golden vector parses");
-            let encoded = encode_normative_production_transcript(kind).must("INVARIANT/harness: production encodes");
+            let expected =
+                parse_golden_hex(golden_file).must("INVARIANT/harness: golden vector parses");
+            let encoded = encode_normative_production_transcript(kind)
+                .must("INVARIANT/harness: production encodes");
             assert_eq!(
                 encoded.as_bytes(),
                 expected.as_slice(),
                 "implementation must match golden vector for {kind:?} — vectors are authority"
             );
-            let parsed =
-                CanonicalTranscript::parse(&expected).must("INVARIANT/harness: golden sealed bytes must parse");
+            let parsed = CanonicalTranscript::parse(&expected)
+                .must("INVARIANT/harness: golden sealed bytes must parse");
             assert_eq!(
                 parsed.as_bytes(),
                 expected.as_slice(),
@@ -3803,7 +3775,10 @@ pub mod storage_campaign_lanes {
                         assert_eq!(*held_commit, local_commit);
                     }
                     ReplicaCustody::PendingAnchor { .. } => {
-                        assert!(false, "seed {seed} delivery {delivery}: continuity must seal Queryable")
+                        assert!(
+                            false,
+                            "seed {seed} delivery {delivery}: continuity must seal Queryable"
+                        )
                     }
                 }
                 match &first {
@@ -4227,7 +4202,10 @@ pub mod storage_campaign_lanes {
             arities.insert(fit_u8(fit_u64(n)));
             let inputs: Vec<_> = (0..n)
                 .map(|i| {
-                    PacketContentHash::from_digest(seed_bytes(wrap_add_u8(0x01, i.to_le_bytes()[0]), seed))
+                    PacketContentHash::from_digest(seed_bytes(
+                        wrap_add_u8(0x01, i.to_le_bytes()[0]),
+                        seed,
+                    ))
                 })
                 .collect();
             let parts = MergeProofParts {
@@ -4237,8 +4215,10 @@ pub mod storage_campaign_lanes {
                 compact_counter: DomainCounter::ZERO,
                 output_content_hash: PacketContentHash::from_digest(seed_bytes(0x33, seed)),
             };
-            let (proof_a, packet_a) = MergeProof::mint(parts.clone()).must("INVARIANT/harness: mint a");
-            let (proof_b, packet_b) = MergeProof::mint(parts.clone()).must("INVARIANT/harness: mint b replay");
+            let (proof_a, packet_a) =
+                MergeProof::mint(parts.clone()).must("INVARIANT/harness: mint a");
+            let (proof_b, packet_b) =
+                MergeProof::mint(parts.clone()).must("INVARIANT/harness: mint b replay");
             assert_eq!(
                 proof_a.sealed_identity(),
                 proof_b.sealed_identity(),
@@ -4293,7 +4273,8 @@ pub mod storage_campaign_lanes {
             .must("INVARIANT/harness: wrap B");
 
         let mut ledger = ShredLedger::new();
-        let opened_b = unwrap_shred_salt(&cap, &wrap_b, &ledger).must("INVARIANT/harness: neighbor decrypt");
+        let opened_b =
+            unwrap_shred_salt(&cap, &wrap_b, &ledger).must("INVARIANT/harness: neighbor decrypt");
         let _dek = derive_dek(&cap, domain, seg_b, &opened_b);
 
         let stale_a = wrap_a.clone();
@@ -4306,7 +4287,8 @@ pub mod storage_campaign_lanes {
             ),
             "shredded wrap must refuse Shredded"
         );
-        unwrap_shred_salt(&cap, &wrap_b, &ledger).must("INVARIANT/harness: neighbor still decrypts after shred");
+        unwrap_shred_salt(&cap, &wrap_b, &ledger)
+            .must("INVARIANT/harness: neighbor still decrypts after shred");
 
         let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
             .mint(Entropy::admit([0x77; 32]))
@@ -4416,7 +4398,9 @@ pub mod storage_campaign_lanes {
             fact_arities.insert(fit_u8(fit_u64(n)));
             let store_id = StoreId::from_digest(seed_bytes(0x58, seed));
             let fence = FenceEpoch::genesis(store_id);
-            let cut = CommitOrdinal::ZERO.successor().must("INVARIANT/harness: ordinal");
+            let cut = CommitOrdinal::ZERO
+                .successor()
+                .must("INVARIANT/harness: ordinal");
 
             let facts: Vec<(Vec<u8>, Vec<u8>)> = (0..n)
                 .map(|i| {
