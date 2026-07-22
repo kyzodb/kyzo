@@ -23,7 +23,7 @@ use kyzo_model::schema::VecElementType;
 
 /// Truncate a float toward zero into an `i64`, refusing non-finite and
 /// values outside the exact i64 range (typed — never saturating `as`).
-fn f64_trunc_to_i64(f: f64) -> Result<i64> {
+pub(crate) fn f64_trunc_to_i64(f: f64) -> Result<i64> {
     if !f.is_finite() {
         bail!("'to_int' refuses non-finite float");
     }

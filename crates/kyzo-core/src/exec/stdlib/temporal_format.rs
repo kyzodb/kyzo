@@ -13,9 +13,9 @@ use jiff::tz::{Offset, TimeZone};
 use miette::{Result, miette};
 
 use kyzo_model::data_value_any;
-use kyzo_model::value::{DataValue, Num};
+use kyzo_model::value::DataValue;
 
-use crate::exec::stdlib::convert::i128_approx_f64;
+use crate::exec::stdlib::convert::{f64_trunc_to_i64, i128_approx_f64};
 use crate::exec::stdlib::errors::TimestampFormatRefused;
 
 pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
@@ -25,9 +25,10 @@ pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
             let f = v
                 .get_float()
                 .ok_or_else(|| miette!("'format_timestamp' expects a number"))?;
-            Num::float(f * 1000.)
-                .to_int_coerced()
-                .ok_or_else(|| miette!("'format_timestamp' millis out of i64 range"))?
+            // Law: seconds→millis truncates toward zero (former `as i64`), then
+            // keeps whole milliseconds. Exact-only coerce refuses 0.0005→0.5.
+            f64_trunc_to_i64(f * 1000.)
+                .map_err(|_| miette!("'format_timestamp' millis out of i64 range"))?
         }
     };
     let ts =
