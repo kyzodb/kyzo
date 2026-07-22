@@ -702,7 +702,9 @@ mod tests {
             let filter = cfg("RemoveLong", vec![DataValue::from(bad)])?;
             let err = match filter.construct_token_filter() {
                 Err(e) => e,
-                Ok(_) => panic!("RemoveLong({bad}) must not construct"),
+                Ok(_) => {
+                    return Err(miette!("RemoveLong({bad}) must not construct"));
+                }
             };
             assert!(
                 err.downcast_ref::<NonPositiveRemoveLong>().is_some(),

@@ -412,13 +412,13 @@ fn vld_micros(s: &str) -> Result<i64, String> {
 // Validity coercion path (`data/relation.rs`) -> (micros, is_assert).
 fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
     let typing = NullableColType::required(ColType::Validity);
-    typing
+    let v = typing
         .coerce(DataValue::Str(s.into()), ValidityTs::of_micros(999))
-        .map(|v| match v {
-            DataValue::Validity(vld) => (vld.timestamp().raw(), vld.is_assert()),
-            other @ (data_value_any!()) => panic!("expected Validity, got {other:?}"),
-        })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    match v {
+        DataValue::Validity(vld) => Ok((vld.timestamp().raw(), vld.is_assert())),
+        other @ (data_value_any!()) => Err(format!("expected Validity, got {other:?}")),
+    }
 }
 
 #[test]

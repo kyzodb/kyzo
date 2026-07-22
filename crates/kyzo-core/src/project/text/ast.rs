@@ -142,7 +142,9 @@ mod tests {
             other @ FtsExpr::Literal(_)
             | other @ FtsExpr::Near(_)
             | other @ FtsExpr::Or(_)
-            | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
+            | other @ FtsExpr::Not(..) => {
+                return Err(miette!("expected And, got {other:?}"));
+            }
         }
         assert_eq!(lit("Running")?.tokenize(&an), lit("run")?);
         let stop = analyzer("Simple", &[("Stopwords", vec![DataValue::from("en")])])?;
@@ -161,7 +163,9 @@ mod tests {
             other @ FtsExpr::Literal(_)
             | other @ FtsExpr::Near(_)
             | other @ FtsExpr::Or(_)
-            | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
+            | other @ FtsExpr::Not(..) => {
+                return Err(miette!("expected And, got {other:?}"));
+            }
         }
         let p = FtsExpr::Literal(
             FtsLiteral::new("Runni".into(), true, 2.0).ok_or_else(|| miette!("literal"))?,
@@ -185,7 +189,9 @@ mod tests {
             other @ FtsExpr::Literal(_)
             | other @ FtsExpr::And(_)
             | other @ FtsExpr::Or(_)
-            | other @ FtsExpr::Not(..) => panic!("expected Near, got {other:?}"),
+            | other @ FtsExpr::Not(..) => {
+                return Err(miette!("expected Near, got {other:?}"));
+            }
         }
         Ok(())
     }

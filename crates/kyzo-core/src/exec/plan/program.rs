@@ -896,7 +896,9 @@ mod tests {
                     | other @ Expr::Apply { .. }
                     | other @ Expr::UnboundApply { .. }
                     | other @ Expr::Cond { .. }
-                    | other @ Expr::Lazy { .. } => panic!("expected a binding, got {other:?}"),
+                    | other @ Expr::Lazy { .. } => {
+                        return Err(miette!("expected a binding, got {other:?}"));
+                    }
                 }
             }
             other @ NormalFormAtom::Rule(_)
@@ -904,7 +906,9 @@ mod tests {
             | other @ NormalFormAtom::NegatedRule(_)
             | other @ NormalFormAtom::NegatedRelation(_)
             | other @ NormalFormAtom::Predicate(_)
-            | other @ NormalFormAtom::Search(_) => panic!("expected a unification, got {other:?}"),
+            | other @ NormalFormAtom::Search(_) => {
+                return Err(miette!("expected a unification, got {other:?}"));
+            }
         }
         Ok(())
     }
@@ -1139,7 +1143,7 @@ mod tests {
                 _out: &mut crate::rules::contract::FixedRuleOutput,
                 _cancel: crate::rules::contract::CancelFlag,
             ) -> Result<()> {
-                unreachable!("test stub: never run")
+                Err(miette!("test stub: never run"))
             }
         }
         let apply = MagicFixedRuleApply {

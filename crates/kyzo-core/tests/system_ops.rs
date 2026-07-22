@@ -18,7 +18,7 @@ use common::*;
 /// `::relations` lists every stored relation with its name and arity;
 /// `::columns <rel>` lists one relation's columns and which are keys.
 #[test]
-fn relations_and_columns_listing() {
+fn relations_and_columns_listing() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let db = fresh_db();
     db.run_script(
         "?[id, name, age] <- [[1, 'Ada', 36]] :create person {id => name, age}",
@@ -45,7 +45,9 @@ fn relations_and_columns_listing() {
         match name {
             "person" => assert_eq!(arity, 3, "id, name, age"),
             "edge" => assert_eq!(arity, 2, "a, b"),
-            other => panic!("unexpected relation {other}"),
+            other => {
+                return Err(format!("unexpected relation {other}").into());
+            }
         }
     }
 
@@ -72,6 +74,7 @@ fn relations_and_columns_listing() {
             ("name".to_string(), false),
         ]
     );
+    Ok(())
 }
 
 /// `::index create` builds a plain secondary index over a non-key

@@ -178,7 +178,9 @@ fn test_vec_rejects_trailing_bytes() -> Result<()>  {
     let ok = STANDARD.encode([0u8, 0, 128, 63]);
     match op_vec(&[DataValue::Str(ok)])? {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other @ (data_value_any!()) => panic!("expected vector, got {other:?}"),
+        other @ (data_value_any!()) => {
+            return Err(miette!("expected vector, got {other:?}"));
+        }
     }
     // The F64 path is equally strict: 9 bytes is one f64 plus trailing.
     let bad64 = STANDARD.encode([0u8; 9]);
@@ -186,7 +188,9 @@ fn test_vec_rejects_trailing_bytes() -> Result<()>  {
     let ok64 = STANDARD.encode([0u8; 8]);
     match op_vec(&[DataValue::Str(ok64), DataValue::Str("F64".into())])? {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other @ (data_value_any!()) => panic!("expected vector, got {other:?}"),
+        other @ (data_value_any!()) => {
+            return Err(miette!("expected vector, got {other:?}"));
+        }
     }
     Ok(())
 }

@@ -2195,7 +2195,9 @@ mod tests {
                 );
             }
             other @ (data_value_any!()) => {
-                panic!("expected float after i128 overflow, got {other:?}")
+                return Err(miette!(
+                    "expected float after i128 overflow, got {other:?}"
+                ));
             }
         }
         Ok(())

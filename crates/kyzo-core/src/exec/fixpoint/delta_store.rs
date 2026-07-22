@@ -2756,7 +2756,9 @@ mod tests {
     fn rev_assert_scan_from_groups(store: &EpochStore) -> Result<()> {
         let LevelKind::Meet { spec, levels } = &store.kind else {
             // #[cfg(test)] helper — wrong kind is a test bug, not a product path.
-            panic!("rev_assert_scan_from_groups: expected meet EpochStore");
+            return Err(miette!(
+                "rev_assert_scan_from_groups: expected meet EpochStore"
+            ));
         };
         let mut by_group: BTreeMap<Box<OwnBareKey>, Tuple> = BTreeMap::new();
         for level in levels.iter() {

@@ -351,16 +351,15 @@ mod tests {
     /// F7: the row-offset boundary arithmetic, isolated from the ~4.3
     /// billion-value relation it would otherwise take to reach.
     #[test]
-    fn checked_row_end_boundary() {
+    fn checked_row_end_boundary() -> Result<()> {
         assert_eq!(checked_row_end(0), Some(0));
         assert_eq!(checked_row_end(1), Some(1));
-        let u32_max_usize = match usize::try_from(u32::MAX) {
-            Ok(v) => v,
-            Err(_gt_usize) => panic!("u32::MAX must fit usize"),
-        };
+        let u32_max_usize = usize::try_from(u32::MAX)
+            .map_err(|_| miette!("u32::MAX must fit usize"))?;
         assert_eq!(checked_row_end(u32_max_usize), Some(u32::MAX));
         assert_eq!(checked_row_end(u32_max_usize + 1), None);
         assert_eq!(checked_row_end(usize::MAX), None);
+        Ok(())
     }
 
     #[test]

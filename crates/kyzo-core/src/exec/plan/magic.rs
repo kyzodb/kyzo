@@ -1162,7 +1162,7 @@ fn magic_rewrite_ruleset(
 #[cfg(test)]
 mod tests {
 
-    use miette::miette;
+    use miette::{Result, miette};
     use smartstring::SmartString;
 
     use super::*;
@@ -1812,7 +1812,9 @@ mod tests {
                 let names: Vec<_> = bindings.iter().map(|s| s.name.as_str()).collect();
                 assert_eq!(names, vec!["0", "x", "y"]);
             }
-            other => panic!("expected a stored arg, got {other:?}"),
+            other => {
+                return Err(miette!("expected a stored arg, got {other:?}"));
+            }
         }
 
         let err = adorn_fixed_rule_apply(&apply(&[("nope", "x")]), &schema)

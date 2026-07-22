@@ -557,11 +557,11 @@ mod tests {
 
     impl BodyNormalizer for PassThrough {
         fn disjunctive_normal_form(&mut self, body: InputAtom) -> Result<Vec<Vec<NormalFormAtom>>> {
-            fn flatten(atom: InputAtom, out: &mut Vec<NormalFormAtom>) {
+            fn flatten(atom: InputAtom, out: &mut Vec<NormalFormAtom>) -> Result<()> {
                 match atom {
                     InputAtom::Conjunction { inner, .. } => {
                         for a in inner {
-                            flatten(a, out);
+                            flatten(a, out)?;
                         }
                     }
                     InputAtom::Rule { inner } => {
@@ -586,18 +586,23 @@ mod tests {
                         | InputAtom::Conjunction { .. }
                         | InputAtom::Disjunction { .. }
                         | InputAtom::Unification { .. }
-                        | InputAtom::Search { .. } => panic!("test bodies negate rule reads only"),
+                        | InputAtom::Search { .. } => {
+                            return Err(miette!("test bodies negate rule reads only"));
+                        }
                     },
                     InputAtom::NamedFieldRelation { .. }
                     | InputAtom::Relation { .. }
                     | InputAtom::Predicate { .. }
                     | InputAtom::Disjunction { .. }
                     | InputAtom::Unification { .. }
-                    | InputAtom::Search { .. } => panic!("test bodies contain rule reads only"),
+                    | InputAtom::Search { .. } => {
+                        return Err(miette!("test bodies contain rule reads only"));
+                    }
                 }
+                Ok(())
             }
             let mut out = vec![];
-            flatten(body, &mut out);
+            flatten(body, &mut out)?;
             Ok(vec![out])
         }
 
@@ -656,7 +661,10 @@ mod tests {
             {
                 InputInlineRulesOrFixed::Rules { rules } => rules.push(rule),
                 InputInlineRulesOrFixed::Fixed { .. } => {
-                    panic!("test program defines {head} as both rules and fixed")
+                    assert!(
+                        false,
+                        "test program defines {head} as both rules and fixed"
+                    );
                 }
             }
             self

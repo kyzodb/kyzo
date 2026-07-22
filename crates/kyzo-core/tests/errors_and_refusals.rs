@@ -43,7 +43,7 @@ fn unstratifiable_negation_cycle_is_refused() {
 /// runtime deltas — a genuinely recursive program (transitive closure)
 /// is refused at registration time, typed, not silently wrong or a hang.
 #[test]
-fn recursive_standing_query_is_refused() {
+fn recursive_standing_query_is_refused() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let db = fresh_db();
     db.run_script(":create edge {a: Int, b: Int =>}", no_params())
         .expect("create edge");
@@ -53,7 +53,11 @@ fn recursive_standing_query_is_refused() {
                  ?[a, b] := path[a, b]";
     let err = match db.register_standing(query, no_params()) {
         Err(e) => e,
-        Ok(_) => panic!("a recursive standing query must be refused, got a live registration"),
+        Ok(_) => {
+            return Err(
+                "a recursive standing query must be refused, got a live registration".into(),
+            );
+        }
     };
     assert!(
         err.to_string().to_lowercase().contains("recursive"),
@@ -75,6 +79,7 @@ fn recursive_standing_query_is_refused() {
         .collect();
     got.sort_unstable();
     assert_eq!(got, vec![(1, 2), (1, 3), (2, 3)]);
+    Ok(())
 }
 
 /// A column's declared type is a contract: a `String` value can't coerce

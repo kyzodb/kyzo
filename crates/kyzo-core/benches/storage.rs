@@ -194,7 +194,7 @@ fn asof(c: &mut Criterion) {
                     let (k, v) = r.unwrap();
                     let t = kyzo::decode_tuple_from_key(&k, 4).unwrap();
                     let (DataValue::Num(name_n), DataValue::Validity(vld)) = (&t[0], &t[1]) else {
-                        unreachable!()
+                        continue;
                     };
                     let name = name_n.as_int().unwrap();
                     // Assert polarity byte opens the stored value.

@@ -318,10 +318,7 @@ mod tests {
         let graph = {
             let mut edges = Vec::new();
             for (fr, tos) in graph.into_iter().enumerate() {
-                let fr_u = match u32::try_from(fr) {
-                    Ok(u) => u,
-                    Err(_) => panic!("test fixture fr fits u32"),
-                };
+                let fr_u = u32::try_from(fr).map_err(|_| miette!("test fixture fr fits u32"))?;
                 for to in tos {
                     edges.push((fr_u, to, 1.));
                 }

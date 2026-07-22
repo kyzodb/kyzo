@@ -46,7 +46,10 @@ pub fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
         .map(|r| {
             r[col]
                 .get_int()
-                .unwrap_or_else(|| panic!("row {r:?} col {col} not an int"))
+                .unwrap_or_else(|| {
+                    assert!(false, "row {r:?} col {col} not an int");
+                    0
+                })
         })
         .collect()
 }
@@ -57,7 +60,10 @@ pub fn floats(rows: &NamedRows, col: usize) -> Vec<f64> {
         .map(|r| {
             r[col]
                 .get_float()
-                .unwrap_or_else(|| panic!("row {r:?} col {col} not a float"))
+                .unwrap_or_else(|| {
+                    assert!(false, "row {r:?} col {col} not a float");
+                    0.0
+                })
         })
         .collect()
 }
@@ -68,7 +74,10 @@ pub fn strs(rows: &NamedRows, col: usize) -> Vec<String> {
         .map(|r| {
             r[col]
                 .get_str()
-                .unwrap_or_else(|| panic!("row {r:?} col {col} not a string"))
+                .unwrap_or_else(|| {
+                    assert!(false, "row {r:?} col {col} not a string");
+                    ""
+                })
                 .to_string()
         })
         .collect()
@@ -80,7 +89,10 @@ pub fn bools(rows: &NamedRows, col: usize) -> Vec<bool> {
         .map(|r| {
             r[col]
                 .get_bool()
-                .unwrap_or_else(|| panic!("row {r:?} col {col} not a bool"))
+                .unwrap_or_else(|| {
+                    assert!(false, "row {r:?} col {col} not a bool");
+                    false
+                })
         })
         .collect()
 }

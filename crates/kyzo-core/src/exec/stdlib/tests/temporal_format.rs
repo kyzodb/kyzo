@@ -37,7 +37,9 @@ fn test_pre_epoch_timestamps() -> Result<()>  {
         ?;
     match coerced {
         DataValue::Validity(vld) => assert!(vld.timestamp().raw() < 0),
-        v @ (data_value_any!()) => panic!("expected a validity, got {v:?}"),
+        v @ (data_value_any!()) => {
+            return Err(miette!("expected a validity, got {v:?}"));
+        }
     }
     Ok(())
 }
