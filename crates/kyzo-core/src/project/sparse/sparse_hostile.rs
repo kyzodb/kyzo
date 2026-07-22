@@ -29,6 +29,7 @@ use kyzo_model::program::InputRelationHandle;
 use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
+use miette::{IntoDiagnostic, Result, miette};
 use smartstring::SmartString;
 
 fn col(name: &str, coltype: ColType) -> ColumnDef {
@@ -57,21 +58,19 @@ struct Fixture {
 
 type Doc<'a> = (i64, &'a str, &'a [(u32, f32)]);
 
-fn setup(db: &impl Storage, docs: &[Doc]) -> Fixture {
+fn setup(db: &impl Storage, docs: &[Doc]) -> Result<Fixture> {
     let meta = base_meta();
-    let mut tx = db.write_tx().unwrap();
+    let mut tx = db.write_tx()?;
     let base = create_relation(
         &mut tx,
         input_handle("docs", meta.clone()),
         KeyspaceKind::Facts,
-    )
-    .unwrap();
+    )?;
     let idx = create_relation(
         &mut tx,
         input_handle("docs:sparse", sparse_index_metadata(&meta)),
         KeyspaceKind::AlgorithmState,
-    )
-    .unwrap();
+    )?;
     for (k, tag, vector) in docs {
         let row = vec![DataValue::from(*k), DataValue::from(*tag)];
         base.put_fact(
@@ -79,12 +78,11 @@ fn setup(db: &impl Storage, docs: &[Doc]) -> Fixture {
             &row,
             kyzo_model::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
-        )
-        .unwrap();
-        sparse_put(&mut tx, &row, vector, &base, &idx).unwrap();
+        )?;
+        sparse_put(&mut tx, &row, vector, &base, &idx)?;
     }
-    tx.commit().unwrap();
-    Fixture { base, idx }
+    tx.commit().map_err(|e| miette!("{e}"))?;
+    Ok(Fixture { base, idx })
 }
 
 fn params(k: usize) -> SparseSearchParams {
@@ -95,19 +93,26 @@ fn params(k: usize) -> SparseSearchParams {
 }
 
 /// Run and project (key, score-bits) so we can compare EXACT f32 bit patterns.
-fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, u32)> {
-    let rtx = db.read_tx().unwrap();
-    let hits =
-        search_rows(Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap())
-            .unwrap();
-    hits.iter()
-        .map(|t| {
-            (
-                t[0].get_int().unwrap(),
-                super::sparse::f64_to_f32(t.last().unwrap().get_float().unwrap()).to_bits(),
-            )
-        })
-        .collect()
+fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Result<Vec<(i64, u32)>> {
+    let rtx = db.read_tx()?;
+    let hits = search_rows(Sparse::search_index(
+        &rtx,
+        query,
+        &f.base,
+        &f.idx,
+        &params(k),
+        &None,
+    )?)?;
+    let mut out = Vec::with_capacity(hits.len());
+    for t in &hits {
+        let key = t[0].get_int().ok_or_else(|| miette!("expected int key"))?;
+        let score_dv = t.last().ok_or_else(|| miette!("expected score column"))?;
+        let score = score_dv
+            .get_float()
+            .ok_or_else(|| miette!("expected float score"))?;
+        out.push((key, super::sparse::f64_to_f32(score).to_bits()));
+    }
+    Ok(out)
 }
 
 /// The score determinism law says a document's score is byte-identical
@@ -117,21 +122,21 @@ fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> V
 /// `summation_order_is_pinned` feeds an already-ascending query, so it does NOT
 /// exercise the engine's sort; this does.
 #[test]
-fn query_argument_order_is_irrelevant_to_score_bits() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
+fn query_argument_order_is_irrelevant_to_score_bits() -> Result<()> {
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
     // The order-sensitive f32 construction from the module's own test.
     let big = 16_777_216.0f32; // 2^24
     let docs: &[Doc] = &[(1, "x", &[(1, 1.0), (2, 1.0), (3, big)])];
-    let f = setup(&db, docs);
+    let f = setup(&db, docs)?;
 
     let ascending = &[(1, 1.0f32), (2, 1.0f32), (3, 1.0f32)];
     let descending = &[(3, 1.0f32), (2, 1.0f32), (1, 1.0f32)];
     let shuffled = &[(2, 1.0f32), (3, 1.0f32), (1, 1.0f32)];
 
-    let a = run_bits(&db, &f, ascending, 1);
-    let d = run_bits(&db, &f, descending, 1);
-    let s = run_bits(&db, &f, shuffled, 1);
+    let a = run_bits(&db, &f, ascending, 1)?;
+    let d = run_bits(&db, &f, descending, 1)?;
+    let s = run_bits(&db, &f, shuffled, 1)?;
     assert_eq!(a, d, "descending query must produce identical score bits");
     assert_eq!(a, s, "shuffled query must produce identical score bits");
     // And it is the ascending-order f32 sum (2^24 + 2), not the descending one.
@@ -140,13 +145,14 @@ fn query_argument_order_is_irrelevant_to_score_bits() {
         16_777_218.0f32.to_bits(),
         "score is the ascending-order sum"
     );
+    Ok(())
 }
 
 /// Byte-identity of scores regardless of the order documents were INSERTED —
 /// postings are stored in memcmp key order, so scan order (hence summation) is
 /// insertion-independent.
 #[test]
-fn insertion_order_is_irrelevant_to_score_bits() {
+fn insertion_order_is_irrelevant_to_score_bits() -> Result<()> {
     let query = &[(1, 1.0f32), (2, 1.0f32), (3, 1.0f32)];
     let big = 16_777_216.0f32;
     let forward: &[Doc] = &[
@@ -157,17 +163,18 @@ fn insertion_order_is_irrelevant_to_score_bits() {
         (2, "y", &[(3, 4.0), (1, 2.0)]),
         (1, "x", &[(3, big), (2, 1.0), (1, 1.0)]),
     ];
-    let build = |docs: &[Doc]| {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, docs);
+    let build = |docs: &[Doc]| -> Result<Vec<(i64, u32)>> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, docs)?;
         run_bits(&db, &f, query, 10)
     };
     assert_eq!(
-        build(forward),
-        build(reversed),
+        build(forward)?,
+        build(reversed)?,
         "insertion order changed scores"
     );
+    Ok(())
 }
 
 /// Independent correctness reference computed in f64 (higher precision). For
@@ -194,9 +201,9 @@ fn naive_dot_f64(docs: &[Doc], query: &[(u32, f32)]) -> Vec<(i64, f64)> {
 }
 
 #[test]
-fn matches_independent_f64_reference_on_exact_weights() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
+fn matches_independent_f64_reference_on_exact_weights() -> Result<()> {
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
     // Exact binary fractions and small ints: f32 == f64 dot product exactly.
     let docs: &[Doc] = &[
         (1, "a", &[(0, 0.5), (2, 0.25), (5, 2.0)]),
@@ -204,36 +211,41 @@ fn matches_independent_f64_reference_on_exact_weights() {
         (3, "c", &[(2, 1.5), (5, 0.75), (9, 8.0)]),
         (4, "d", &[(7, 1.0)]),
     ];
-    let f = setup(&db, docs);
+    let f = setup(&db, docs)?;
     let query = &[(0, 2.0f32), (2, 4.0f32), (5, 0.5f32), (9, 0.25f32)];
-    let rtx = db.read_tx().unwrap();
-    let hits = search_rows(
-        Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap(),
-    )
-    .unwrap();
-    let got: Vec<(i64, f64)> = hits
-        .iter()
-        .map(|t| {
-            (
-                t[0].get_int().unwrap(),
-                t.last().unwrap().get_float().unwrap(),
-            )
-        })
-        .collect();
+    let rtx = db.read_tx()?;
+    let hits = search_rows(Sparse::search_index(
+        &rtx,
+        query,
+        &f.base,
+        &f.idx,
+        &params(10),
+        &None,
+    )?)?;
+    let mut got = Vec::with_capacity(hits.len());
+    for t in &hits {
+        let key = t[0].get_int().ok_or_else(|| miette!("expected int key"))?;
+        let score_dv = t.last().ok_or_else(|| miette!("expected score column"))?;
+        let score = score_dv
+            .get_float()
+            .ok_or_else(|| miette!("expected float score"))?;
+        got.push((key, score));
+    }
     let want = naive_dot_f64(docs, query);
     assert_eq!(got.len(), want.len());
     for (g, w) in got.iter().zip(want.iter()) {
         assert_eq!(g.0, w.0, "key order matches f64 reference");
         assert_eq!(g.1, w.1, "exact-weight score equals f64 dot product");
     }
+    Ok(())
 }
 
 /// k+2 candidates all tied at the SAME score; pin the surviving keys and the
 /// truncation to k (the k lowest keys by memcmp order).
 #[test]
-fn large_tie_set_topk_survivors_pinned() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
+fn large_tie_set_topk_survivors_pinned() -> Result<()> {
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
     let docs: &[Doc] = &[
         (50, "e", &[(0, 1.0)]),
         (10, "a", &[(0, 1.0)]),
@@ -241,9 +253,9 @@ fn large_tie_set_topk_survivors_pinned() {
         (20, "b", &[(0, 1.0)]),
         (30, "c", &[(0, 1.0)]),
     ];
-    let f = setup(&db, docs);
+    let f = setup(&db, docs)?;
     let query = &[(0, 1.0f32)];
-    let all = run_bits(&db, &f, query, 10);
+    let all = run_bits(&db, &f, query, 10)?;
     assert_eq!(
         all.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
         vec![10, 20, 30, 40, 50],
@@ -253,68 +265,74 @@ fn large_tie_set_topk_survivors_pinned() {
     let s0 = all[0].1;
     assert!(all.iter().all(|(_, s)| *s == s0));
     // Truncate to k=3 -> three lowest keys.
-    let k3 = run_bits(&db, &f, query, 3);
+    let k3 = run_bits(&db, &f, query, 3)?;
     assert_eq!(
         k3.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
         vec![10, 20, 30]
     );
+    Ok(())
 }
 
 /// Denormal and very-large finite weights: admitted (finite, non-negative),
 /// deterministic, and never a NaN. A product overflowing to +inf is a valid
 /// (non-NaN) score.
 #[test]
-fn denormal_and_huge_weights_are_finite_deterministic() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
+fn denormal_and_huge_weights_are_finite_deterministic() -> Result<()> {
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
     let tiny = f32::from_bits(1); // smallest positive subnormal
     let huge = f32::MAX;
     let docs: &[Doc] = &[
         (1, "a", &[(0, tiny), (1, 1.0)]),
         (2, "b", &[(0, huge), (1, huge)]),
     ];
-    let f = setup(&db, docs);
+    let f = setup(&db, docs)?;
     // Query with tiny and huge weights; run twice, demand identical bits.
     let query = &[(0, huge), (1, tiny)];
-    let a = run_bits(&db, &f, query, 10);
-    let b = run_bits(&db, &f, query, 10);
+    let a = run_bits(&db, &f, query, 10)?;
+    let b = run_bits(&db, &f, query, 10)?;
     assert_eq!(a, b, "huge/denormal weights are deterministic");
     for (_, bits) in &a {
         let v = f32::from_bits(*bits);
         assert!(!v.is_nan(), "score is never NaN (got bits {bits:#x})");
     }
     // Doc 2: huge*huge overflows to +inf — a hit, and +inf, not NaN.
-    let doc2 = a.iter().find(|(k, _)| *k == 2).unwrap();
+    let doc2 = a
+        .iter()
+        .find(|(k, _)| *k == 2)
+        .ok_or_else(|| miette!("expected doc 2 in hits"))?;
     assert_eq!(
         f32::from_bits(doc2.1),
         f32::INFINITY,
         "huge*huge overflows to +inf"
     );
+    Ok(())
 }
 
 /// REVIEWER ADDITION: `sparse_total_docs` had ZERO coverage in either suite
 /// (module or hostile). It counts base-relation rows via a [prefix, Bot) range;
 /// pin that it counts rows (not postings) and that an empty base counts 0.
 #[test]
-fn total_docs_counts_base_rows_not_postings() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
+fn total_docs_counts_base_rows_not_postings() -> Result<()> {
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
     // 3 docs, 6 postings total — the count must be 3.
     let docs: &[Doc] = &[
         (1, "a", &[(0, 1.0), (1, 1.0), (2, 1.0)]),
         (2, "b", &[(0, 1.0), (5, 1.0)]),
         (3, "c", &[(9, 1.0)]),
     ];
-    let f = setup(&db, docs);
-    let rtx = db.read_tx().unwrap();
-    assert_eq!(sparse_total_docs(&rtx, &f.base).unwrap(), 3);
+    let f = setup(&db, docs)?;
+    let rtx = db.read_tx()?;
+    assert_eq!(sparse_total_docs(&rtx, &f.base)?, 3);
     drop(rtx);
 
-    let dir2 = tempfile::tempdir().unwrap();
-    let db2 = new_fjall_storage(dir2.path()).unwrap();
-    let empty = setup(&db2, &[]);
-    let rtx2 = db2.read_tx().unwrap();
-    assert_eq!(sparse_total_docs(&rtx2, &empty.base).unwrap(), 0);
+    let dir2 = tempfile::tempdir().into_diagnostic()?;
+    let db2 = new_fjall_storage(dir2.path())?;
+    let empty = setup(&db2, &[])?;
+    let rtx2 = db2.read_tx()?;
+    assert_eq!(sparse_total_docs(&rtx2, &empty.base)?, 0);
+    Ok(())
 }
 
 /// `k == 0` must bound the filtered path exactly like the unfiltered one:
@@ -325,12 +343,12 @@ fn total_docs_counts_base_rows_not_postings() {
 /// before pushing, in both this engine and the identical shape in FTS
 /// (`project/text/fts.rs::fts_search`).
 #[test]
-fn k_zero_filter_path_returns_zero_rows() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
+fn k_zero_filter_path_returns_zero_rows() -> Result<()> {
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
     let docs: &[Doc] = &[(1, "a", &[(0, 1.0)])];
-    let f = setup(&db, docs);
-    let rtx = db.read_tx().unwrap();
+    let f = setup(&db, docs)?;
+    let rtx = db.read_tx()?;
     // Always-true filter: the constant `true`.
     let filter = Expr::Const {
         val: DataValue::from(true),
@@ -340,31 +358,37 @@ fn k_zero_filter_path_returns_zero_rows() {
         k: 0,
         bind_score: crate::project::sparse::sparse::SparseBindScore::Omit,
     };
-    let with_filter = search_rows(
-        Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap(),
-    )
-    .unwrap();
+    let with_filter = search_rows(Sparse::search_index(
+        &rtx,
+        &[(0, 1.0)],
+        &f.base,
+        &f.idx,
+        &p,
+        &Some(filter),
+    )?)?;
     assert!(
         with_filter.is_empty(),
         "k=0 + filter must return 0 rows, got {}",
         with_filter.len()
     );
-    let without = Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &None).unwrap();
+    let without = Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &None)?;
     assert!(without.is_empty(), "k=0 without filter returns 0 rows");
+    Ok(())
 }
 
 /// -0.0 is admitted (it is not < 0.0) and never becomes a hit.
 #[test]
-fn negative_zero_weight_admitted_and_never_hits() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
+fn negative_zero_weight_admitted_and_never_hits() -> Result<()> {
+    let dir = tempfile::tempdir().into_diagnostic()?;
+    let db = new_fjall_storage(dir.path())?;
     let docs: &[Doc] = &[(1, "a", &[(0, -0.0f32), (1, 1.0)])];
-    let f = setup(&db, docs);
+    let f = setup(&db, docs)?;
     // Query dim 0 alone: contribution is q*(-0.0) = 0 -> not a hit.
     assert!(
-        run_bits(&db, &f, &[(0, 5.0)], 10).is_empty(),
+        run_bits(&db, &f, &[(0, 5.0)], 10)?.is_empty(),
         "-0.0 weight never hits"
     );
     // Query dim 1: real hit.
-    assert_eq!(run_bits(&db, &f, &[(1, 1.0)], 10).len(), 1);
+    assert_eq!(run_bits(&db, &f, &[(1, 1.0)], 10)?.len(), 1);
+    Ok(())
 }
