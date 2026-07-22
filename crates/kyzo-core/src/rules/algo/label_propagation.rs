@@ -9,9 +9,9 @@
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): the external `graph` crate's CSR type is replaced by the
  * inline one in `fixed_rule/graph.rs`; `rand` 0.8 APIs updated to 0.9
- * (`thread_rng` → `rng`, trait re-homes); the tie-break `choose(..)
- * .unwrap()` is annotated as structural (the candidate list is non-empty
- * by construction); output rows flow through the arity-checked writer.
+ * (`thread_rng` → `rng`, trait re-homes); the tie-break `choose(..)` on a
+ * list proven non-empty by construction is treated as structural; output
+ * rows flow through the arity-checked writer.
  * DETERMINISM FIX (deliberate, pinned vs upstream): the original seeded
  * `rand` from the OS entropy pool (`rand::rng()`), so the shuffled scan
  * order and the random tie-break made the SAME facts + query answer
@@ -136,6 +136,7 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -152,7 +153,7 @@ mod tests {
         vec![TestInput::new(vec!["fr", "to"], edges)]
     }
 
-    fn undirected_opt() -> FixedRuleOptions {
+    fn undirected_opt() -> Result<FixedRuleOptions> {
         opts_map(BTreeMap::from([(
             SmartString::from("undirected"),
             Expr::Const {
@@ -162,17 +163,16 @@ mod tests {
         )]))
     }
 
-    fn seed_opt(seed: i64) -> FixedRuleOptions {
-        let mut o = undirected_opt();
+    fn seed_opt(seed: i64) -> Result<FixedRuleOptions> {
+        let mut o = undirected_opt()?;
         o.insert(
             Symbol::new("seed", SourceSpan::default()),
             Expr::Const {
                 val: DataValue::from(seed),
                 span: SourceSpan::default(),
             },
-        )
-        .expect("seed is a known fixed-rule option");
-        o
+        )?;
+        Ok(o)
     }
 
     /// DETERMINISM: with the fixed default seed, the ring — where ties and
@@ -180,24 +180,25 @@ mod tests {
     /// across repeated runs. This is the test that a mutation back to
     /// `rand::rng()` (OS entropy) fails.
     #[test]
-    fn run_twice_default_seed_is_byte_identical() {
+    fn run_twice_default_seed_is_byte_identical() -> Result<()> {
         let first = run_fixed_rule(
             &LabelPropagation,
             ring_inputs(),
-            undirected_opt(),
+            undirected_opt()?,
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         for _ in 0..8 {
             let again = run_fixed_rule(
                 &LabelPropagation,
                 ring_inputs(),
-                undirected_opt(),
+                undirected_opt()?,
                 CancelFlag::inert(),
             )
-            .unwrap();
+            ?;
             assert_eq!(first, again);
         }
+        Ok(())
     }
 
     /// DETERMINISM: an explicit `seed` is honored and reproducible; two
@@ -205,26 +206,26 @@ mod tests {
     /// symmetric ring they need not agree — proving the seed actually
     /// steers the randomness (not a constant that ignores it).
     #[test]
-    fn explicit_seed_is_reproducible_and_load_bearing() {
-        let run = |seed: i64| {
+    fn explicit_seed_is_reproducible_and_load_bearing() -> Result<()> {
+        let run = |seed: i64| -> Result<_> {
             run_fixed_rule(
                 &LabelPropagation,
                 ring_inputs(),
-                seed_opt(seed),
+                seed_opt(seed)?,
                 CancelFlag::inert(),
             )
-            .unwrap()
         };
-        assert_eq!(run(1), run(1));
-        assert_eq!(run(999), run(999));
+        assert_eq!(run(1)?, run(1)?);
+        assert_eq!(run(999)?, run(999)?);
         // Across many seed pairs at least one disagreement proves the seed
         // reaches the tie-break; a constant-ignoring-seed mutant makes every
         // seed agree and fails this.
-        let base = run(1);
+        let base = run(1)?;
         assert!(
-            (2..40).any(|seed| run(seed) != base),
+            (2..40).any(|seed| run(seed).ok() != Some(base.clone())),
             "seed does not steer the tie-break"
         );
+        Ok(())
     }
 
     /// VALUE ORACLE on the only deterministic ground label propagation
@@ -247,7 +248,7 @@ mod tests {
     /// reversed-CSR mutant is killed by the CSR's own test, `top_sort`,
     /// and `louvain::adjacency_tie_break_pinned` instead.
     #[test]
-    fn star_hubs_labels_are_canonical() {
+    fn star_hubs_labels_are_canonical() -> Result<()> {
         let got = run_fixed_rule(
             &LabelPropagation,
             vec![TestInput::new(
@@ -262,7 +263,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let one = DataValue::from(1i64);
         let four = DataValue::from(4i64);
         let want: Vec<Tuple> = vec![
@@ -274,5 +275,6 @@ mod tests {
             Tuple::from_vec(vec![four, s("z")]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
