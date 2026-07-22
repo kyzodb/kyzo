@@ -94,6 +94,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use kyzo::{ReadTx, Storage, WriteTx, new_fjall_storage};
 
+fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{msg}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+fn require_some<T>(o: Option<T>, msg: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{msg}");
+            loop {}
+        }
+    }
+}
+
+
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — the splitmix64 of `storage/sim.rs`, transcribed exactly as
 // `query/trials.rs` and `query/time_travel_trials.rs` already do (each
@@ -110,19 +131,20 @@ impl Rng {
     }
     fn next_u64(&mut self) -> u64 {
         // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+        z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
     fn below(&mut self, n: u64) -> u64 {
-        debug_assert!(n > 0);
+        assert!(n > 0);
         self.next_u64() % n
     }
     fn range(&mut self, lo: i64, hi: i64) -> i64 {
-        debug_assert!(hi > lo);
-        lo + self.below((hi - lo) as u64) as i64
+        assert!(hi > lo);
+        let width = require(u64::try_from(hi - lo), "range width fits u64");
+        lo + require(i64::try_from(self.below(width)), "range offset fits i64")
     }
     fn chance(&mut self, num: u64, den: u64) -> bool {
         self.below(den) < num
@@ -155,11 +177,10 @@ fn encode_write_id(id: u64) -> [u8; 8] {
     id.to_be_bytes()
 }
 fn decode_write_id(bytes: &[u8]) -> u64 {
-    u64::from_be_bytes(
-        bytes
-            .try_into()
-            .expect("register value is an 8-byte write-id"),
-    )
+    u64::from_be_bytes(require(
+        <[u8; 8]>::try_from(bytes),
+        "register value is an 8-byte write-id",
+    ))
 }
 
 /// One planned micro-op. `RangeRead` claims every register in `[lo, hi)` —
@@ -185,12 +206,13 @@ enum PlannedOp {
 /// G1b argument). Ops are point reads, point writes, or range reads over a
 /// contiguous free span.
 fn plan_txn(rng: &mut Rng) -> Vec<PlannedOp> {
-    let n_ops = rng.range(2, 5) as usize;
-    let mut available = [true; NUM_REGISTERS as usize];
+    let n_ops = require(usize::try_from(rng.range(2, 5)), "n_ops fits usize");
+    let n_regs = require(usize::try_from(NUM_REGISTERS), "NUM_REGISTERS fits usize");
+    let mut available = vec![true; n_regs];
     let mut ops = Vec::with_capacity(n_ops);
     for _ in 0..n_ops {
         let free: Vec<u32> = (0..NUM_REGISTERS)
-            .filter(|&r| available[r as usize])
+            .filter(|&r| available[require(usize::try_from(r), "reg fits usize")])
             .collect();
         if free.is_empty() {
             break;
@@ -198,23 +220,32 @@ fn plan_txn(rng: &mut Rng) -> Vec<PlannedOp> {
         // Prefer some range reads so predicate/phantom rw-edges are reachable
         // in live campaign histories, not only in hand-built checker seals.
         if free.len() >= 2 && rng.chance(1, 3) {
-            let start_idx = rng.below(free.len() as u64) as usize;
+            let start_idx = require(
+                usize::try_from(rng.below(require(u64::try_from(free.len()), "free.len fits u64"))),
+                "start_idx fits usize",
+            );
             let lo = free[start_idx];
             let mut max_hi = lo + 1;
-            while max_hi < NUM_REGISTERS && available[max_hi as usize] {
+            while max_hi < NUM_REGISTERS && available[require(usize::try_from(max_hi), "max_hi fits usize")] {
                 max_hi += 1;
             }
             let width = max_hi - lo;
-            let take = 1 + rng.below(width as u64) as u32;
+            let take = 1 + require(
+                u32::try_from(rng.below(require(u64::try_from(width), "width fits u64"))),
+                "take fits u32",
+            );
             let hi = lo + take;
             for r in lo..hi {
-                available[r as usize] = false;
+                available[require(usize::try_from(r), "reg fits usize")] = false;
             }
             ops.push(PlannedOp::RangeRead { lo, hi });
         } else {
-            let idx = rng.below(free.len() as u64) as usize;
+            let idx = require(
+                usize::try_from(rng.below(require(u64::try_from(free.len()), "free.len fits u64"))),
+                "idx fits usize",
+            );
             let reg = free[idx];
-            available[reg as usize] = false;
+            available[require(usize::try_from(reg), "reg fits usize")] = false;
             if rng.chance(1, 2) {
                 ops.push(PlannedOp::Write { reg });
             } else {
@@ -297,12 +328,14 @@ impl ElleHistory {
 }
 
 fn seed_registers<S: Storage>(storage: &S) {
-    let mut tx = storage.write_tx().expect("open genesis write_tx");
+    let mut tx = require(storage.write_tx(), "open genesis write_tx");
     for reg in 0..NUM_REGISTERS {
-        tx.put(&reg_key(reg), &encode_write_id(GENESIS_WRITE_ID))
-            .expect("seed register");
+        require(
+            tx.put(&reg_key(reg), &encode_write_id(GENESIS_WRITE_ID)),
+            "seed register",
+        );
     }
-    tx.commit().expect("genesis commit (uncontended)");
+    require(tx.commit(), "genesis commit (uncontended)");
 }
 
 /// Run one planned transaction to commit, retrying on `ConflictError` exactly
@@ -311,7 +344,7 @@ fn seed_registers<S: Storage>(storage: &S) {
 /// write-ids (the discarded attempt's ids simply never appear in history).
 fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64) -> CommittedTxn {
     loop {
-        let mut tx = storage.write_tx().expect("open write_tx");
+        let mut tx = require(storage.write_tx(), "open write_tx");
         // Captured now, at open time (snapshot-then-mint) — a VALUE, not a
         // side effect racing anything after `commit()` returns (see
         // `CommittedTxn`'s doc for why that distinction is the whole fix).
@@ -320,10 +353,10 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
         for p in plan {
             match *p {
                 PlannedOp::Read { reg } => {
-                    let bytes = tx
-                        .get(&reg_key(reg))
-                        .expect("read op")
-                        .expect("every register is seeded before the campaign starts");
+                    let bytes = require_some(
+                        require(tx.get(&reg_key(reg)), "read op"),
+                        "every register is seeded before the campaign starts",
+                    );
                     ops.push(ExecutedOp::Read {
                         reg,
                         write_id: decode_write_id(&bytes),
@@ -331,8 +364,10 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
                 }
                 PlannedOp::Write { reg } => {
                     let id = write_id_ctr.fetch_add(1, Ordering::SeqCst);
-                    tx.put(&reg_key(reg), &encode_write_id(id))
-                        .expect("write op");
+                    require(
+                        tx.put(&reg_key(reg), &encode_write_id(id)),
+                        "write op",
+                    );
                     ops.push(ExecutedOp::Write { reg, write_id: id });
                 }
                 PlannedOp::RangeRead { lo, hi } => {
@@ -341,10 +376,11 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
                     // footprint SSI conflict-tracks for phantom protection.
                     let mut observed = Vec::new();
                     for item in tx.range_scan(&reg_key(lo), &reg_key(hi)) {
-                        let (k, v) = item.expect("range_scan item");
-                        let reg = u32::from_be_bytes(
-                            k.as_ref().try_into().expect("register key is 4 bytes"),
-                        );
+                        let (k, v) = require(item, "range_scan item");
+                        let reg = u32::from_be_bytes(require(
+                            <[u8; 4]>::try_from(k.as_ref()),
+                            "register key is 4 bytes",
+                        ));
                         observed.push((reg, decode_write_id(v.as_ref())));
                     }
                     ops.push(ExecutedOp::RangeRead { lo, hi, observed });
@@ -354,7 +390,10 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
         match tx.commit() {
             Ok(_committed) => return CommittedTxn { ops, stamp },
             Err(e) if e.is_conflict() => continue,
-            Err(e) => panic!("unexpected commit error (not a SSI conflict): {e:?}"),
+            Err(e) => {
+                assert!(false, "unexpected commit error (not a SSI conflict): {e:?}");
+                loop {}
+            }
         }
     }
 }
@@ -364,8 +403,8 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
 /// `THREAD_COUNT` worker threads sharing one `FjallStorage`.
 fn run_campaign(seed: u64) -> Vec<CommittedTxn> {
     let mut rng = Rng::new(seed);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = new_fjall_storage(dir.path()).expect("open fjall storage");
+    let dir = require(tempfile::tempdir(), "tempdir");
+    let storage = require(new_fjall_storage(dir.path()), "open fjall storage");
     seed_registers(&storage);
 
     let write_id_ctr = AtomicU64::new(1); // 0 is GENESIS_WRITE_ID, never reissued.
@@ -390,7 +429,7 @@ fn run_campaign(seed: u64) -> Vec<CommittedTxn> {
             .collect();
         handles
             .into_iter()
-            .flat_map(|h| h.join().expect("worker thread panicked"))
+            .flat_map(|h| require(h.join(), "worker thread panicked"))
             .collect()
     })
 }
@@ -431,7 +470,7 @@ impl Anomaly {
             0 if cycle.iter().all(|(_, _, k)| *k == EdgeKind::Ww) => Anomaly::G0,
             0 => Anomaly::G1,
             1 => Anomaly::GSingle,
-            _ => Anomaly::G2,
+            2.. => Anomaly::G2,
         }
     }
 }
@@ -459,9 +498,7 @@ fn version_chains(txns: &[CommittedTxn]) -> BTreeMap<u32, Vec<(Option<usize>, u6
     }
     for (reg, mut writes) in real_writes {
         writes.sort_by_key(|(seq, _, _)| *seq);
-        chains
-            .get_mut(&reg)
-            .expect("every register pre-seeded")
+        require_some(chains.get_mut(&reg), "every register pre-seeded")
             .extend(writes.into_iter().map(|(_, idx, wid)| (Some(idx), wid)));
     }
     chains
@@ -618,7 +655,7 @@ fn find_cycle(
                     let mut cyc = Vec::new();
                     let mut cur = u;
                     while cur != v {
-                        let (p, k) = parent_edge[cur].expect("on-path node has a parent edge");
+                        let (p, k) = require_some(parent_edge[cur], "on-path node has a parent edge");
                         cyc.push((p, cur, k));
                         cur = p;
                     }
@@ -669,9 +706,10 @@ fn run_seed(seed: u64) -> Result<(), String> {
 /// spawns: a hint at real parallelism, so the pressure scales with the
 /// machine instead of a fixed guess.
 fn stressor_thread_count() -> usize {
-    std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4)
+    match std::thread::available_parallelism() {
+        Ok(n) => n.get(),
+        Err(_) => 4,
+    }
 }
 
 /// Regression pin for kyzodb/kyzo#95. The original finding surfaced ONLY
@@ -705,7 +743,7 @@ fn single_node_serializability_campaign_under_synthetic_cpu_pressure() {
         let mut failures: Vec<(u64, String)> = Vec::new();
         for i in 0..count {
             // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-            let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+            let seed = Rng::new(base ^ u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
             if let Err(f) = run_seed(seed) {
                 failures.push((seed, f));
             }
@@ -713,7 +751,7 @@ fn single_node_serializability_campaign_under_synthetic_cpu_pressure() {
 
         stop.store(true, Ordering::Relaxed);
         for s in stressors {
-            s.join().expect("stressor thread panicked");
+            require(s.join(), "stressor thread panicked");
         }
         assert!(
             failures.is_empty(),
@@ -727,17 +765,23 @@ fn single_node_serializability_campaign_under_synthetic_cpu_pressure() {
 /// scales it up via the environment (the `KYZO_TRIALS_SEEDS` pattern of
 /// `query/trials.rs`).
 fn seed_count() -> u64 {
-    std::env::var("KYZO_JEPSEN_SEEDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(6)
+    match std::env::var("KYZO_JEPSEN_SEEDS") {
+        Ok(s) => match s.parse() {
+            Ok(n) => n,
+            Err(_) => 6,
+        },
+        Err(_) => 6,
+    }
 }
 
 fn seed_base() -> u64 {
-    std::env::var("KYZO_JEPSEN_BASE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0)
+    match std::env::var("KYZO_JEPSEN_BASE") {
+        Ok(s) => match s.parse() {
+            Ok(n) => n,
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    }
 }
 
 #[test]
@@ -747,7 +791,7 @@ fn single_node_serializability_campaign() {
     let mut failures: Vec<(u64, String)> = Vec::new();
     for i in 0..count {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+        let seed = Rng::new(base ^ u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
         if let Err(f) = run_seed(seed) {
             failures.push((seed, f));
         }
@@ -807,7 +851,7 @@ fn elle_anomaly_detection_flags_g0_ww_only_cycle() {
         (1, 2, EdgeKind::Ww),
         (2, 0, EdgeKind::Ww),
     ];
-    let cycle = find_cycle(3, &edges).expect("ww-only triangle must be a cycle");
+    let cycle = require_some(find_cycle(3, &edges), "ww-only triangle must be a cycle");
     assert_eq!(
         Anomaly::classify(&cycle),
         Anomaly::G0,
@@ -857,9 +901,7 @@ fn elle_anomaly_detection_flags_g1_wr_cycle_in_hand_built_history() {
         "no integrity findings expected: {:?}",
         check.integrity_findings
     );
-    let (anomaly, cycle) = check
-        .cycle
-        .expect("wr cycle (each reads the other's write) must be flagged as G1");
+    let (anomaly, cycle) = require_some(check.cycle, "wr cycle (each reads the other's write) must be flagged as G1");
     assert_eq!(
         anomaly,
         Anomaly::G1,
@@ -914,9 +956,7 @@ fn elle_anomaly_detection_flags_g2_write_skew_cycle_in_serializability_history()
         "no integrity findings expected in this hand-built history: {:?}",
         check.integrity_findings
     );
-    let (anomaly, cycle) = check
-        .cycle
-        .expect("a genuine write-skew history must be flagged, never silently accepted");
+    let (anomaly, cycle) = require_some(check.cycle, "a genuine write-skew history must be flagged, never silently accepted");
     assert_eq!(
         anomaly,
         Anomaly::G2,
@@ -968,9 +1008,7 @@ fn elle_anomaly_detection_flags_g2_predicate_rw_via_range_read() {
         "no integrity findings expected: {:?}",
         check.integrity_findings
     );
-    let (anomaly, cycle) = check
-        .cycle
-        .expect("mutual phantom inserts into each other's empty range reads must form a G2 cycle");
+    let (anomaly, cycle) = require_some(check.cycle, "mutual phantom inserts into each other's empty range reads must form a G2 cycle");
     assert_eq!(
         anomaly,
         Anomaly::G2,
@@ -1027,9 +1065,7 @@ fn elle_anomaly_detection_flags_g2_write_skew_via_range_read() {
         "no integrity findings expected: {:?}",
         check.integrity_findings
     );
-    let (anomaly, cycle) = check
-        .cycle
-        .expect("range-read write skew must be flagged as G2");
+    let (anomaly, cycle) = require_some(check.cycle, "range-read write skew must be flagged as G2");
     assert_eq!(
         anomaly,
         Anomaly::G2,
@@ -1047,7 +1083,7 @@ fn external_elle_isolation_tier_against_serializability_campaign() {
     let mut failures: Vec<(u64, String)> = Vec::new();
     for i in 0..count {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+        let seed = Rng::new(base ^ u64::wrapping_mul(i, 0x9E37_79B9_7F4A_7C15)).next_u64();
         let history = ElleHistory::record(run_campaign(seed));
         let check = history.check();
         if !check.integrity_findings.is_empty() {

@@ -374,7 +374,7 @@ pub struct StoreLifetimes(BTreeMap<MagicSymbol, usize>);
 
 impl StoreLifetimes {
     /// No recorded uses yet.
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         Self(BTreeMap::new())
     }
 

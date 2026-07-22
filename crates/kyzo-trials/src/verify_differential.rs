@@ -29,31 +29,53 @@ use kyzo::{Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{HeadAggr, Literal, Program, Rel, Rule, Term};
 
+fn require<T, E: core::fmt::Debug>(r: Result<T, E>, msg: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "{msg}: {e:?}");
+            loop {}
+        }
+    }
+}
+
+fn require_some<T>(o: Option<T>, msg: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => {
+            assert!(false, "{msg}");
+            loop {}
+        }
+    }
+}
+
+
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
 fn open_engine<S: Storage>(store: S) -> Engine<S> {
-    Engine::compose(store, Catalog::new()).expect("compose engine")
+    require(Engine::compose(store, Catalog::new()), "compose engine")
 }
 
 fn seeded_db() -> Engine<kyzo::FjallStorage> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = new_fjall_storage(dir.path()).expect("open fjall storage");
+    let dir = require(tempfile::tempdir(), "tempdir");
+    let storage = require(new_fjall_storage(dir.path()), "open fjall storage");
     std::mem::forget(dir);
     let db = open_engine(storage);
-    db.run_script(":create edge {a: Int, b: Int}", no_params())
-        .expect("create edge schema");
+    require(db.run_script(":create edge {a: Int, b: Int}", no_params()), "create edge schema");
     let rows = DataValue::List(vec![
         DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
         DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
         DataValue::List(vec![DataValue::from(3i64), DataValue::from(4i64)]),
     ]);
-    db.run_script(
-        "?[a, b] <- $rows :put edge {a, b}",
-        BTreeMap::from([("rows".into(), rows)]),
-    )
-    .expect("seed edge");
+    require(
+        db.run_script(
+                "?[a, b] <- $rows :put edge {a, b}",
+                BTreeMap::from([("rows".into(), rows)]),
+            ),
+        "seed edge",
+    );
     db
 }
 
@@ -68,36 +90,45 @@ fn wrap_verify(payload: &str) -> String {
 fn status_of(rows: &NamedRows) -> &str {
     match rows.rows().first().and_then(|r| r.first()) {
         Some(DataValue::Str(s)) => s.as_ref(),
-        other => panic!("expected status Str in verify NamedRows, got {other:?}"),
+        other => {
+            assert!(false, "expected status Str in verify NamedRows, got {other:?}");
+            ""
+        }
     }
 }
 
 fn summary_of(rows: &NamedRows) -> &str {
     match rows.rows().first().and_then(|r| r.get(1)) {
         Some(DataValue::Str(s)) => s.as_ref(),
-        other => panic!("expected summary Str in verify NamedRows, got {other:?}"),
+        other => {
+            assert!(false, "expected summary Str in verify NamedRows, got {other:?}");
+            ""
+        }
     }
 }
 
 fn match_row_count(rows: &NamedRows) -> usize {
     assert_eq!(status_of(rows), "match", "summary={}", summary_of(rows));
     let summary = summary_of(rows);
-    let n: usize = summary
-        .split_whitespace()
-        .next()
-        .expect("row-count token")
-        .parse()
-        .unwrap_or_else(|_| panic!("expected '<n> row(s) agree', got {summary}"));
-    n
+    let token = require_some(summary.split_whitespace().next(), "row-count token");
+    match token.parse() {
+        Ok(n) => n,
+        Err(_) => {
+            assert!(false, "expected '<n> row(s) agree', got {summary}");
+            0
+        }
+    }
 }
 
 /// Plain eval answer cardinality — independent of `::verify`. A verify
 /// Match whose row count disagrees with this is a silent wrong answer.
 fn eval_answer_count<S: Storage>(db: &Engine<S>, payload: &str) -> usize {
-    db.run_script(payload, no_params())
-        .unwrap_or_else(|e| panic!("plain eval of `{payload}` failed: {e}"))
-        .rows()
-        .len()
+    require(
+        db.run_script(payload, no_params()),
+        &format!("plain eval of `{payload}` failed"),
+    )
+    .rows()
+    .len()
 }
 
 /// Verify Match must agree with plain eval on cardinality — checker vs
@@ -105,7 +136,7 @@ fn eval_answer_count<S: Storage>(db: &Engine<S>, payload: &str) -> usize {
 /// ghosted or truncated certificate that still says match.
 fn assert_verify_matches_eval<S: Storage>(db: &Engine<S>, payload: &str, options: ScriptOptions) {
     let expected = eval_answer_count(db, payload);
-    let rows = run_verify(db, payload, options).expect("::verify runs");
+    let rows = require(run_verify(db, payload, options), "::verify runs");
     assert_eq!(
         match_row_count(&rows),
         expected,
@@ -141,19 +172,20 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        self.state = u64::wrapping_add(self.state, 0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9);
+        z = u64::wrapping_mul(z ^ (z >> 27), 0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
     fn below(&mut self, n: u64) -> u64 {
-        debug_assert!(n > 0);
+        assert!(n > 0);
         self.next_u64() % n
     }
     fn range(&mut self, lo: i64, hi: i64) -> i64 {
-        debug_assert!(hi > lo);
-        lo + self.below((hi - lo) as u64) as i64
+        assert!(hi > lo);
+        let width = require(u64::try_from(hi - lo), "range width fits u64");
+        lo + require(i64::try_from(self.below(width)), "range offset fits i64")
     }
     fn chance(&mut self, num: u64, den: u64) -> bool {
         self.below(den) < num
@@ -168,9 +200,7 @@ fn var(i: usize) -> &'static str {
 fn term_text(t: &Term) -> String {
     match t {
         Term::Var(v) => v.as_str().to_string(),
-        Term::Const(dv) => dv
-            .get_int()
-            .expect("corpus only mints int constants")
+        Term::Const(dv) => require_some(dv.get_int(), "corpus only mints int constants")
             .to_string(),
     }
 }
@@ -281,7 +311,10 @@ fn gen_program(rng: &mut Rng) -> (Program, Vec<(Rel, usize)>) {
     // EDB a strict DAG of forward edges and use edge-step recursion only —
     // never path⋈path — so honest programs stay Match-able.
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    let n_edges = rng.below((n * 3) as u64) as i64 + 1;
+    let n_edges = require(
+        i64::try_from(rng.below(require(u64::try_from(n * 3), "n*3 fits u64"))),
+        "edge count fits i64",
+    ) + 1;
     let edges: BTreeSet<Tuple> = (0..n_edges)
         .filter_map(|_| {
             if n < 2 {
@@ -339,12 +372,14 @@ fn gen_program(rng: &mut Rng) -> (Program, Vec<(Rel, usize)>) {
 /// Dense multi-path graph: eval completes under a modest derived-tuple
 /// ceiling while provenance enumeration exceeds it → NamedRows `refused`.
 fn dense_path_db() -> Engine<kyzo::FjallStorage> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = new_fjall_storage(dir.path()).expect("open fjall");
+    let dir = require(tempfile::tempdir(), "tempdir");
+    let storage = require(new_fjall_storage(dir.path()), "open fjall");
     std::mem::forget(dir);
     let db = open_engine(storage);
-    db.run_script(":create edge {a: Int, b: Int}", no_params())
-        .expect("create edge");
+    require(
+        db.run_script(":create edge {a: Int, b: Int}", no_params()),
+        "create edge",
+    );
     let mut pairs = Vec::new();
     let layers = [0i64, 4, 8, 12, 16];
     for w in layers.windows(2) {
@@ -368,11 +403,13 @@ fn dense_path_db() -> Engine<kyzo::FjallStorage> {
             ]));
         }
     }
-    db.run_script(
-        "?[a, b] <- $rows :put edge {a, b}",
-        BTreeMap::from([("rows".into(), DataValue::List(pairs))]),
-    )
-    .expect("seed dense edge");
+    require(
+        db.run_script(
+            "?[a, b] <- $rows :put edge {a, b}",
+            BTreeMap::from([("rows".into(), DataValue::List(pairs))]),
+        ),
+        "seed dense edge",
+    );
     db
 }
 
@@ -400,33 +437,33 @@ fn verify_matches_on_a_real_recursive_query() {
 #[test]
 fn verify_catches_a_deliberately_sabotaged_oracle_fact() {
     let db = seeded_db();
-    let before = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new())
-        .expect("::verify before sabotage");
+    let before = require(run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new()), "::verify before sabotage");
     assert_eq!(match_row_count(&before), SEEDED_TC_ROWS);
     assert_eq!(
         match_row_count(&before),
         eval_answer_count(&db, TRANSITIVE_CLOSURE)
     );
 
-    db.run_script(
-        "?[a, b] <- $rows :rm edge {a, b}",
-        BTreeMap::from([(
-            "rows".into(),
-            DataValue::List(vec![DataValue::List(vec![
-                DataValue::from(3i64),
-                DataValue::from(4i64),
-            ])]),
-        )]),
-    )
-    .expect("retract sabotaged edge");
+    require(
+        db.run_script(
+                "?[a, b] <- $rows :rm edge {a, b}",
+                BTreeMap::from([(
+                    "rows".into(),
+                    DataValue::List(vec![DataValue::List(vec![
+                        DataValue::from(3i64),
+                        DataValue::from(4i64),
+                    ])]),
+                )]),
+            ),
+        "retract sabotaged edge",
+    );
 
     let reduced_eval = eval_answer_count(&db, TRANSITIVE_CLOSURE);
     assert_eq!(
         reduced_eval, REDUCED_TC_ROWS,
         "retract (3,4) must leave exactly the 1→2→3 closure"
     );
-    let after = run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new())
-        .expect("::verify after store sabotage");
+    let after = require(run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new()), "::verify after store sabotage");
     assert_eq!(
         match_row_count(&after),
         REDUCED_TC_ROWS,
@@ -473,7 +510,10 @@ fn verify_mismatch_under_certificate_mutation_injector() -> miette::Result<()> {
         );
         let detail: &str = match rows.rows().first().and_then(|r| r.get(2)) {
             Some(DataValue::Str(s)) => s.as_ref(),
-            other => panic!("expected detail Str, got {other:?}"),
+            other => {
+                assert!(false, "expected detail Str, got {other:?}");
+                ""
+            }
         };
         assert!(
             detail.contains("verify_proof")
@@ -513,15 +553,17 @@ fn verify_matches_filtered_edges_against_eval_count() {
 fn verify_directive_runs_through_run_script() {
     let db = seeded_db();
     let via_wrap =
-        run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new()).expect("wrap ::verify");
-    let via_directive = db
-        .run_script(
-            "::verify { path[x, y] := *edge[x, y]
-         path[x, z] := path[x, y], *edge[y, z]
-         ?[x, y] := path[x, y] }",
-            no_params(),
-        )
-        .expect("production ::verify runs");
+        require(run_verify(&db, TRANSITIVE_CLOSURE, ScriptOptions::new()), "wrap ::verify");
+    let via_directive = require(
+        db
+                .run_script(
+                    "::verify { path[x, y] := *edge[x, y]
+                 path[x, z] := path[x, y], *edge[y, z]
+                 ?[x, y] := path[x, y] }",
+                    no_params(),
+                ),
+        "production ::verify runs",
+    );
     assert_eq!(via_directive.headers(), &["status", "summary", "detail"]);
     assert_eq!(status_of(&via_directive), status_of(&via_wrap));
     assert_eq!(match_row_count(&via_directive), match_row_count(&via_wrap));
@@ -541,9 +583,11 @@ fn verify_directive_names_unsupported_constructs() {
     let honest = "?[x, y] := *edge[x, y]";
     assert_verify_matches_eval(&db, honest, ScriptOptions::new());
 
-    let rows = db
-        .run_script("::verify { ?[x, y] := *edge[x, y] :order x }", no_params())
-        .expect("::verify returns NamedRows for unsupported");
+    let rows = require(
+        db
+                .run_script("::verify { ?[x, y] := *edge[x, y] :order x }", no_params()),
+        "::verify returns NamedRows for unsupported",
+    );
     assert_eq!(status_of(&rows), "unsupported");
     assert_ne!(status_of(&rows), "match");
     assert!(
@@ -563,20 +607,27 @@ fn verify_matches_across_a_generated_corpus() {
     for seed in 0..SEEDS {
         let mut rng = Rng::new(seed);
         let (program, entries) = gen_program(&mut rng);
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = new_fjall_storage(dir.path()).expect("open fjall");
+        let dir = require(tempfile::tempdir(), "tempdir");
+        let storage = require(new_fjall_storage(dir.path()), "open fjall");
         std::mem::forget(dir);
         let db = open_engine(storage);
         for (rel, rows) in &program.facts {
-            let arity = rows.iter().next().map(|t| t.len()).unwrap_or(0);
-            db.run_script(&facts_create_schema(rel, arity), no_params())
-                .unwrap_or_else(|e| panic!("seed {seed}: create {rel}: {e}"));
+            let arity = match rows.iter().next() {
+                Some(t) => t.len(),
+                None => 0,
+            };
+            require(
+                db.run_script(&facts_create_schema(rel, arity), no_params()),
+                &format!("seed {seed}: create {rel}"),
+            );
             if !rows.is_empty() {
-                db.run_script(
-                    &facts_put_script(rel, arity),
-                    BTreeMap::from([("rows".into(), facts_rows_param(rows))]),
-                )
-                .unwrap_or_else(|e| panic!("seed {seed}: fact load for {rel}: {e}"));
+                require(
+                    db.run_script(
+                        &facts_put_script(rel, arity),
+                        BTreeMap::from([("rows".into(), facts_rows_param(rows))]),
+                    ),
+                    &format!("seed {seed}: fact load for {rel}"),
+                );
             }
         }
         let rules_text = rules_script(&program);
@@ -644,22 +695,26 @@ fn verify_never_matches_the_unstratifiable_corpus() {
         if !program.fixed.is_empty() {
             continue;
         }
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = new_fjall_storage(dir.path()).expect("open fjall");
+        let dir = require(tempfile::tempdir(), "tempdir");
+        let storage = require(new_fjall_storage(dir.path()), "open fjall");
         std::mem::forget(dir);
         let db = open_engine(storage);
         for (rel, arity) in edb_relations(&program) {
-            db.run_script(&facts_create_schema(&rel, arity), no_params())
-                .unwrap_or_else(|e| panic!("{name}: create EDB {rel}: {e}"));
+            require(
+                db.run_script(&facts_create_schema(&rel, arity), no_params()),
+                &format!("{name}: create EDB {rel}"),
+            );
         }
         let rules_text = rules_script(&program);
         let heads: BTreeSet<Rel> = program.rules.iter().map(|r| r.head_rel.clone()).collect();
         for rel in heads {
-            let arity = program
-                .rules
-                .iter()
-                .find(|r| r.head_rel == rel)
-                .expect("rel came from this program's own heads")
+            let arity = require_some(
+                program
+                                .rules
+                                .iter()
+                                .find(|r| r.head_rel == rel),
+                "rel came from this program's own heads",
+            )
                 .head_args
                 .len();
             let line = entry_line(&rel, &vec![None; arity]);
@@ -690,34 +745,37 @@ fn verify_never_matches_the_unstratifiable_corpus() {
 /// that ignored validity would ghost the later put into @50.
 #[test]
 fn verify_matches_a_point_in_time_historical_read() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = new_fjall_storage(dir.path()).unwrap();
+    let dir = require(tempfile::tempdir(), "tempdir");
+    let storage = require(new_fjall_storage(dir.path()), "open fjall");
     std::mem::forget(dir);
     let db = open_engine(storage);
-    db.run_script(":create hist {k: Int => v: Any}", no_params())
-        .expect("create hist schema");
-    db.run_script(
-        "?[k, v] <- $rows :put hist {k => v} @ 100",
-        BTreeMap::from([(
-            "rows".into(),
-            DataValue::List(vec![DataValue::List(vec![
-                DataValue::from(1i64),
-                DataValue::from("a"),
-            ])]),
-        )]),
-    )
-    .expect("put hist @100");
-    db.run_script(
-        "?[k, v] <- $rows :put hist {k => v} @ 200",
-        BTreeMap::from([(
-            "rows".into(),
-            DataValue::List(vec![DataValue::List(vec![
-                DataValue::from(1i64),
-                DataValue::from("b"),
-            ])]),
-        )]),
-    )
-    .expect("put hist @200");
+    require(db.run_script(":create hist {k: Int => v: Any}", no_params()), "create hist schema");
+    require(
+        db.run_script(
+                "?[k, v] <- $rows :put hist {k => v} @ 100",
+                BTreeMap::from([(
+                    "rows".into(),
+                    DataValue::List(vec![DataValue::List(vec![
+                        DataValue::from(1i64),
+                        DataValue::from("a"),
+                    ])]),
+                )]),
+            ),
+        "put hist @100",
+    );
+    require(
+        db.run_script(
+                "?[k, v] <- $rows :put hist {k => v} @ 200",
+                BTreeMap::from([(
+                    "rows".into(),
+                    DataValue::List(vec![DataValue::List(vec![
+                        DataValue::from(1i64),
+                        DataValue::from("b"),
+                    ])]),
+                )]),
+            ),
+        "put hist @200",
+    );
 
     for (q, expect) in [
         ("?[k, v] := *hist[k, v @ 100]", 1usize),
@@ -726,7 +784,7 @@ fn verify_matches_a_point_in_time_historical_read() {
         ("?[k, v] := *hist[k, v @ 50]", 0),
     ] {
         assert_eq!(eval_answer_count(&db, q), expect, "plain eval drift at {q}");
-        let rows = run_verify(&db, q, ScriptOptions::new()).expect("::verify historical");
+        let rows = require(run_verify(&db, q, ScriptOptions::new()), "::verify historical");
         assert_eq!(match_row_count(&rows), expect, "query {q}");
     }
     // Ghost-future check: @50 must stay empty even though @200 exists.
@@ -738,36 +796,38 @@ fn verify_matches_a_point_in_time_historical_read() {
 /// shrink — soft count-only on the empty-hist arm alone cannot catch that.
 #[test]
 fn verify_matches_a_negated_historical_read() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = new_fjall_storage(dir.path()).unwrap();
+    let dir = require(tempfile::tempdir(), "tempdir");
+    let storage = require(new_fjall_storage(dir.path()), "open fjall");
     std::mem::forget(dir);
     let db = open_engine(storage);
-    db.run_script(":create hist {k: Int => v: Any}", no_params())
-        .expect("create hist schema");
-    db.run_script(
-        "?[k, v] <- $rows :put hist {k => v} @ 100",
-        BTreeMap::from([(
-            "rows".into(),
-            DataValue::List(vec![DataValue::List(vec![
-                DataValue::from(1i64),
-                DataValue::from("a"),
-            ])]),
-        )]),
-    )
-    .expect("put hist @100");
-    db.run_script(":create probe {k: Int => v: Any}", no_params())
-        .expect("create probe schema");
-    db.run_script(
-        "?[k, v] <- $rows :put probe {k => v}",
-        BTreeMap::from([(
-            "rows".into(),
-            DataValue::List(vec![
-                DataValue::List(vec![DataValue::from(1i64), DataValue::from("a")]),
-                DataValue::List(vec![DataValue::from(2i64), DataValue::from("z")]),
-            ]),
-        )]),
-    )
-    .expect("seed probe");
+    require(db.run_script(":create hist {k: Int => v: Any}", no_params()), "create hist schema");
+    require(
+        db.run_script(
+                "?[k, v] <- $rows :put hist {k => v} @ 100",
+                BTreeMap::from([(
+                    "rows".into(),
+                    DataValue::List(vec![DataValue::List(vec![
+                        DataValue::from(1i64),
+                        DataValue::from("a"),
+                    ])]),
+                )]),
+            ),
+        "put hist @100",
+    );
+    require(db.run_script(":create probe {k: Int => v: Any}", no_params()), "create probe schema");
+    require(
+        db.run_script(
+                "?[k, v] <- $rows :put probe {k => v}",
+                BTreeMap::from([(
+                    "rows".into(),
+                    DataValue::List(vec![
+                        DataValue::List(vec![DataValue::from(1i64), DataValue::from("a")]),
+                        DataValue::List(vec![DataValue::from(2i64), DataValue::from("z")]),
+                    ]),
+                )]),
+            ),
+        "seed probe",
+    );
 
     let empty_hist = "?[k, v] := *probe[k, v], not *hist[k, v @ 50]";
     let live_hist = "?[k, v] := *probe[k, v], not *hist[k, v @ 100]";
@@ -788,15 +848,16 @@ fn verify_matches_a_negated_historical_read() {
 #[test]
 fn verify_refuses_a_spans_read_by_name() {
     let db = seeded_db();
-    db.run_script(":create hist {k: Int => v: Any}", no_params())
-        .expect("create hist");
+    require(db.run_script(":create hist {k: Int => v: Any}", no_params()), "create hist");
 
-    let spans = db
-        .run_script(
-            "::verify { ?[k, v, iv] := *hist[k, v @spans iv] }",
-            no_params(),
-        )
-        .expect("::verify returns NamedRows for @spans");
+    let spans = require(
+        db
+                .run_script(
+                    "::verify { ?[k, v, iv] := *hist[k, v @spans iv] }",
+                    no_params(),
+                ),
+        "::verify returns NamedRows for @spans",
+    );
     assert_eq!(status_of(&spans), "unsupported");
     assert_ne!(status_of(&spans), "match");
     let spans_summary = summary_of(&spans);
@@ -809,12 +870,14 @@ fn verify_refuses_a_spans_read_by_name() {
     let unlimited = "?[x, y] := *edge[x, y]";
     assert_verify_matches_eval(&db, unlimited, ScriptOptions::new());
 
-    let rows = run_verify(
-        &db,
-        "?[x, y] := *edge[x, y] :limit 1",
-        ScriptOptions::new(),
-    )
-    .expect("::verify returns NamedRows for :limit");
+    let rows = require(
+        run_verify(
+                &db,
+                "?[x, y] := *edge[x, y] :limit 1",
+                ScriptOptions::new(),
+            ),
+        "::verify returns NamedRows for :limit",
+    );
     assert_eq!(status_of(&rows), "unsupported");
     assert_ne!(status_of(&rows), "match");
     assert!(
@@ -842,8 +905,7 @@ fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
         ..ScriptOptions::new()
     };
 
-    let refused = run_verify(&db, DENSE_SELF_JOIN_PATH, starved)
-        .expect("starved provenance ceiling returns NamedRows, not Err");
+    let refused = require(run_verify(&db, DENSE_SELF_JOIN_PATH, starved), "starved provenance ceiling returns NamedRows, not Err");
     assert_eq!(
         status_of(&refused),
         "refused",
@@ -863,7 +925,7 @@ fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
     match db.run_script_with(DENSE_SELF_JOIN_PATH, no_params(), generous.clone()) {
         Ok(eval_rows) => {
             let verified =
-                run_verify(&db, DENSE_SELF_JOIN_PATH, generous).expect("generous verify");
+                require(run_verify(&db, DENSE_SELF_JOIN_PATH, generous), "generous verify");
             assert_eq!(
                 status_of(&verified),
                 "match",
@@ -915,16 +977,18 @@ fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
     assert_verify_matches_eval(&db, TRANSITIVE_CLOSURE, ScriptOptions::new());
 
     let dense = dense_path_db();
-    let refused = run_verify(
-        &dense,
-        DENSE_SELF_JOIN_PATH,
-        ScriptOptions {
-            derived_tuple_ceiling: Some(500),
-            epoch_ceiling: Some(1_000_000),
-            ..ScriptOptions::new()
-        },
-    )
-    .expect("override ceiling returns NamedRows");
+    let refused = require(
+        run_verify(
+                &dense,
+                DENSE_SELF_JOIN_PATH,
+                ScriptOptions {
+                    derived_tuple_ceiling: Some(500),
+                    epoch_ceiling: Some(1_000_000),
+                    ..ScriptOptions::new()
+                },
+            ),
+        "override ceiling returns NamedRows",
+    );
     assert_eq!(status_of(&refused), "refused");
     assert_ne!(status_of(&refused), "match");
 }

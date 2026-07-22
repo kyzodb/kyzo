@@ -203,3 +203,9 @@ pattern = "process_exit"
 file = "crates/kyzo-trials/src/crash.rs"
 line = 921
 why_not_sabotage = "KEEP: crash_consistency_process_abort child deliberately aborts after staging an uncommitted write — the test subject is process-crash recovery. abort is the simulated crash, not an error swallow; the parent asserts the child did not exit cleanly and checks reopen contents."
+
+[[bs_detector]]
+pattern = "ignore_test"
+file = "crates/kyzo-trials/src/gauntlet.rs"
+line = 1462
+why_not_sabotage = "KEEP: disclosed open seat `demand-rewriter-generative-gap`. Cap1's RuleBody seam is post-stratification and cannot exercise magic-set demand rewriting; the ignored test names the missing public door (`stratified_magic_compile` / Engine generative magic-vs-bypass) and fails loud if un-ignored before that door exists. Not a soft-green skip — the reason string is the standing obligation."
