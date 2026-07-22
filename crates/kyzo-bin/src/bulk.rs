@@ -68,13 +68,15 @@ fn columns_of(db: &Engine<FjallStorage>, relation: &str) -> Result<Vec<String>> 
     out.into_rows()
         .into_iter()
         .map(|row| {
-            row.into_iter()
-                .next()
-                .and_then(|v| match v {
-                    DataValue::Str(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .ok_or_else(|| miette!("'::columns {relation}' returned a malformed row"))
+            let Some(v) = row.into_iter().next() else {
+                bail!("'::columns {relation}' returned an empty row");
+            };
+            match v {
+                DataValue::Str(s) => Ok(s.to_string()),
+                other => bail!(
+                    "'::columns {relation}' returned a non-string column name: {other:?}"
+                ),
+            }
         })
         .collect()
 }

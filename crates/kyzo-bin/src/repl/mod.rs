@@ -151,9 +151,10 @@ fn process_line(
 
     if let Some(remaining) = line.strip_prefix('%') {
         let remaining = remaining.trim();
-        let (op, payload) = remaining
-            .split_once(|c: char| c.is_whitespace())
-            .unwrap_or((remaining, ""));
+        let (op, payload) = match remaining.split_once(|c: char| c.is_whitespace()) {
+            Some((op, payload)) => (op, payload),
+            None => (remaining, ""),
+        };
         if let Some(rows) = commands::dispatch(op, payload, db, storage, params, save_next)? {
             render::render(rows, save_next)?;
         }

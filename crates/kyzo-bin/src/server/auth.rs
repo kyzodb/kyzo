@@ -88,7 +88,11 @@ impl AsyncAuthorizeRequest<Body> for MyAuth {
                 true
             } else {
                 match request.headers().get("x-kyzo-auth") {
-                    Some(v) => v.to_str().map(|s| s == auth_guard).unwrap_or(false),
+                    Some(v) => match v.to_str() {
+                        Ok(s) => s == auth_guard,
+                        // Non-UTF8 header cannot equal the guard — refuse closed.
+                        Err(_) => false,
+                    },
                     None => {
                         let via_query = request
                             .uri()
@@ -101,12 +105,18 @@ impl AsyncAuthorizeRequest<Body> for MyAuth {
                             true
                         } else {
                             match (&token_table, request.headers().get("Authorization")) {
-                                (Some(tt), Some(auth_header)) => auth_header
-                                    .to_str()
-                                    .ok()
-                                    .and_then(|s| s.strip_prefix("Bearer "))
-                                    .is_some_and(|token| MyAuth::token_table_authorizes(tt, token)),
-                                _ => false,
+                                (Some(tt), Some(auth_header)) => match auth_header.to_str() {
+                                    Ok(s) => match s.strip_prefix("Bearer ") {
+                                        Some(token) => {
+                                            MyAuth::token_table_authorizes(tt, token)
+                                        }
+                                        // Present Authorization that is not Bearer — refuse.
+                                        None => false,
+                                    },
+                                    // Non-UTF8 Authorization — refuse closed.
+                                    Err(_) => false,
+                                },
+                                (None, Some(_)) | (Some(_), None) | (None, None) => false,
                             }
                         }
                     }

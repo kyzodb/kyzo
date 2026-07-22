@@ -61,7 +61,12 @@ pub(super) async fn post_rule_result(
                 return lock_poisoned();
             };
             if let Some(ch) = senders.remove(&id) {
-                let _ = ch.send(Err(miette!("downstream posted malformed result")));
+                match ch.send(Err(miette!("downstream posted malformed result"))) {
+                    Ok(()) => {}
+                    Err(err) => error!(
+                        "rule reply channel closed while refusing malformed result id={id}: {err}"
+                    ),
+                }
             }
             return (
                 StatusCode::BAD_REQUEST,
@@ -130,7 +135,12 @@ pub(super) async fn register_rule(
                 {
                     Ok(v) => JsonValue::Array(v),
                     Err(err) => {
-                        let _ = sender.send(Err(miette!("{err}")));
+                        match sender.send(Err(miette!("{err}"))) {
+                            Ok(()) => {}
+                            Err(send_err) => error!(
+                                "cannot deliver inputs-encode refusal to rule waiter: {send_err}"
+                            ),
+                        }
                         continue;
                     }
                 };
@@ -141,21 +151,36 @@ pub(super) async fn register_rule(
                 {
                     Ok(m) => JsonValue::Object(m),
                     Err(err) => {
-                        let _ = sender.send(Err(miette!("{err}")));
+                        match sender.send(Err(miette!("{err}"))) {
+                            Ok(()) => {}
+                            Err(send_err) => error!(
+                                "cannot deliver options-encode refusal to rule waiter: {send_err}"
+                            ),
+                        }
                         continue;
                     }
                 };
                 if down_sender.blocking_send((id, inputs, options)).is_err() {
-                    let _ = sender.send(Err(miette!("cannot send request to downstream")));
+                    match sender.send(Err(miette!("cannot send request to downstream"))) {
+                        Ok(()) => {}
+                        Err(send_err) => error!(
+                            "cannot deliver downstream-send refusal to rule waiter: {send_err}"
+                        ),
+                    }
                 } else {
                     match rule_senders.lock() {
                         Ok(mut map) => {
                             map.insert(id, sender);
                         }
                         Err(_) => {
-                            let _ = sender.send(Err(miette!(
+                            match sender.send(Err(miette!(
                                 "rule sender map lock poisoned; cannot register reply channel"
-                            )));
+                            ))) {
+                                Ok(()) => {}
+                                Err(send_err) => error!(
+                                    "cannot deliver lock-poison refusal to rule waiter: {send_err}"
+                                ),
+                            }
                         }
                     }
                 }

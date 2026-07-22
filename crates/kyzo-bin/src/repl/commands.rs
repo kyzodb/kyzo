@@ -146,7 +146,10 @@ fn import(payload: &str, db: &Engine<FjallStorage>) -> Result<()> {
     let content = if url.starts_with("http://") || url.starts_with("https://") {
         crate::repl::fetch::get(url)?
     } else {
-        let file_path = url.strip_prefix("file://").unwrap_or(url);
+        let file_path = match url.strip_prefix("file://") {
+            Some(path) => path,
+            None => url,
+        };
         fs::read_to_string(file_path).into_diagnostic()?
     };
     let json_data: Value = serde_json::from_str(&content).into_diagnostic()?;

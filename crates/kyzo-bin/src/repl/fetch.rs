@@ -263,7 +263,9 @@ fn read_chunked_body(reader: &mut impl BufRead) -> Result<Vec<u8>> {
     loop {
         let mut size_line = String::new();
         reader.read_line(&mut size_line).into_diagnostic()?;
-        let size_hex = size_line.trim().split(';').next().unwrap_or("").trim();
+        let Some(size_hex) = size_line.trim().split(';').next().map(str::trim) else {
+            bail!("missing chunk size in chunked transfer encoding");
+        };
         let size = usize::from_str_radix(size_hex, 16)
             .into_diagnostic()
             .map_err(|e| miette!("bad chunk size {size_hex:?}: {e}"))?;
