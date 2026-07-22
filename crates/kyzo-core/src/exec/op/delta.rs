@@ -120,7 +120,6 @@ impl TempStoreRA {
     /// here; the row-at-a-time path recomputed it on every row that took
     /// the bounded branch (same result, redundant work).
     #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
-    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
     pub(crate) fn prefix_join_batched<'a>(
         &'a self,
         left: BatchIter<'a>,

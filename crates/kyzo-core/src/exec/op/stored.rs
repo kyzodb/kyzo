@@ -162,7 +162,6 @@ impl StoredRA {
     /// [`StoredWithValidityRA::prefix_join_batched`] has its own probe with
     /// no segment argument at all.
     #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
-    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
     pub(crate) fn prefix_join_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,

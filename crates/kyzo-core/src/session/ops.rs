@@ -558,17 +558,19 @@ impl<T: WriteTx> SessionTx<T> {
         // Admit-only mint: private fields, MNeighbours (m >= 2), derived
         // m_max / m_max0 / level_multiplier — illegal descriptions refuse here.
         let manifest = crate::project::vector::hnsw::HnswIndexManifest::admit(
-            cfg.base_relation.clone(),
-            cfg.index_name.clone(),
-            cfg.vec_dim,
-            cfg.dtype,
-            vec_fields,
-            cfg.distance,
-            cfg.ef_construction,
-            cfg.m_neighbours,
-            cfg.index_filter.clone(),
-            cfg.extend_candidates,
-            cfg.keep_pruned_connections,
+            crate::project::vector::hnsw::HnswAdmitSpec {
+                base_relation: cfg.base_relation.clone(),
+                index_name: cfg.index_name.clone(),
+                vec_dim: cfg.vec_dim,
+                dtype: cfg.dtype,
+                vec_fields,
+                distance: cfg.distance,
+                ef_construction: cfg.ef_construction,
+                m_neighbours: cfg.m_neighbours,
+                index_filter: cfg.index_filter.clone(),
+                extend_candidates: cfg.extend_candidates,
+                keep_pruned_connections: cfg.keep_pruned_connections,
+            },
         )?;
         let idx_meta = crate::project::vector::hnsw::hnsw_index_metadata(&base.metadata);
         let idx_ref = IndexRef {

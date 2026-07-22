@@ -409,11 +409,11 @@ const HNSW_LEVEL_SEED: u64 = 0x484e_5357_5f4c_564c; // "HNSW_LVL"
 #[inline]
 fn splitmix64(state: &mut u64) -> u64 {
     // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
+    *state = (std::num::Wrapping(*state) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
+    let mut z = std::num::Wrapping(*state);
+    z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
+    (z ^ (z >> 31)).0
 }
 
 /// Graph-build seed free from the existing content-addressing law: fold a
@@ -457,19 +457,19 @@ struct HnswIndexManifestDe {
 impl<'de> Deserialize<'de> for HnswIndexManifest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let de = HnswIndexManifestDe::deserialize(deserializer)?;
-        let admitted = Self::admit(
-            de.base_relation,
-            de.index_name,
-            de.vec_dim,
-            de.dtype,
-            de.vec_fields,
-            de.distance,
-            de.ef_construction,
-            de.m_neighbours,
-            de.index_filter,
-            de.extend_candidates,
-            de.keep_pruned_connections,
-        )
+        let admitted = Self::admit(HnswAdmitSpec {
+            base_relation: de.base_relation,
+            index_name: de.index_name,
+            vec_dim: de.vec_dim,
+            dtype: de.dtype,
+            vec_fields: de.vec_fields,
+            distance: de.distance,
+            ef_construction: de.ef_construction,
+            m_neighbours: de.m_neighbours,
+            index_filter: de.index_filter,
+            extend_candidates: de.extend_candidates,
+            keep_pruned_connections: de.keep_pruned_connections,
+        })
         .map_err(serde::de::Error::custom)?;
         if de.m_max != admitted.m_max
             || de.m_max0 != admitted.m_max0
@@ -483,26 +483,40 @@ impl<'de> Deserialize<'de> for HnswIndexManifest {
     }
 }
 
+/// Inputs for [`HnswIndexManifest::admit`].
+pub(crate) struct HnswAdmitSpec {
+    pub(crate) base_relation: SmartString<LazyCompact>,
+    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) vec_dim: usize,
+    pub(crate) dtype: VecElementType,
+    pub(crate) vec_fields: Vec<usize>,
+    pub(crate) distance: HnswDistance,
+    pub(crate) ef_construction: usize,
+    pub(crate) m_neighbours: usize,
+    pub(crate) index_filter: Option<Expr>,
+    pub(crate) extend_candidates: bool,
+    pub(crate) keep_pruned_connections: bool,
+}
+
 impl HnswIndexManifest {
     /// Sole mint for an HNSW index description. Refuses `vec_dim = 0`, empty
     /// `base_relation` / `index_name` / `vec_fields`, non-positive
     /// `ef_construction`, and `m_neighbours < 2` (via [`MNeighbours`]).
     /// Derives `m_max`, `m_max0`, and `level_multiplier` from the proven `m`.
-    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
-    #[allow(clippy::too_many_arguments)] // sealed admit/join/digest doors carry explicit domain params
-    pub(crate) fn admit(
-        base_relation: SmartString<LazyCompact>,
-        index_name: SmartString<LazyCompact>,
-        vec_dim: usize,
-        dtype: VecElementType,
-        vec_fields: Vec<usize>,
-        distance: HnswDistance,
-        ef_construction: usize,
-        m_neighbours: usize,
-        index_filter: Option<Expr>,
-        extend_candidates: bool,
-        keep_pruned_connections: bool,
-    ) -> Result<Self> {
+    pub(crate) fn admit(spec: HnswAdmitSpec) -> Result<Self> {
+        let HnswAdmitSpec {
+            base_relation,
+            index_name,
+            vec_dim,
+            dtype,
+            vec_fields,
+            distance,
+            ef_construction,
+            m_neighbours,
+            index_filter,
+            extend_candidates,
+            keep_pruned_connections,
+        } = spec;
         if base_relation.is_empty() {
             bail!(HnswManifestRefused::EmptyBaseRelation);
         }
@@ -3692,19 +3706,19 @@ mod tests {
     }
 
     fn manifest(distance: HnswDistance) -> Result<HnswIndexManifest> {
-        HnswIndexManifest::admit(
-            SmartString::from("vecs"),
-            SmartString::from("by_v"),
-            2,
-            VecElementType::F32,
-            vec![1],
-            distance,
-            16,
-            8,
-            None,
-            false,
-            false,
-        )
+        HnswIndexManifest::admit(HnswAdmitSpec {
+            base_relation: SmartString::from("vecs"),
+            index_name: SmartString::from("by_v"),
+            vec_dim: 2,
+            dtype: VecElementType::F32,
+            vec_fields: vec![1],
+            distance: distance,
+            ef_construction: 16,
+            m_neighbours: 8,
+            index_filter: None,
+            extend_candidates: false,
+            keep_pruned_connections: false,
+        })
     }
 
     fn vec2(x: f64, y: f64) -> Result<DataValue> {
@@ -4872,19 +4886,19 @@ mod tests {
         distance: HnswDistance,
         rows: &[Tuple],
     ) -> Result<(RelationHandle, RelationHandle, HnswIndexManifest)> {
-        let m = HnswIndexManifest::admit(
-            SmartString::from("vecs"),
-            SmartString::from("by_v"),
-            2,
-            VecElementType::F32,
-            vec![1],
-            distance,
-            16,
-            8,
-            None,
-            false,
-            false,
-        )?;
+        let m = HnswIndexManifest::admit(HnswAdmitSpec {
+            base_relation: SmartString::from("vecs"),
+            index_name: SmartString::from("by_v"),
+            vec_dim: 2,
+            dtype: VecElementType::F32,
+            vec_fields: vec![1],
+            distance: distance,
+            ef_construction: 16,
+            m_neighbours: 8,
+            index_filter: None,
+            extend_candidates: false,
+            keep_pruned_connections: false,
+        })?;
         let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
@@ -4934,19 +4948,19 @@ mod tests {
     /// bottom-heavy with the expected `P(level == 0)`.
     #[test]
     fn hnsw_level_is_deterministic_and_geometric() -> Result<()> {
-        let m = HnswIndexManifest::admit(
-            SmartString::from("vecs"),
-            SmartString::from("by_v"),
-            2,
-            VecElementType::F32,
-            vec![1],
-            HnswDistance::L2,
-            16,
-            8,
-            None,
-            false,
-            false,
-        )?;
+        let m = HnswIndexManifest::admit(HnswAdmitSpec {
+            base_relation: SmartString::from("vecs"),
+            index_name: SmartString::from("by_v"),
+            vec_dim: 2,
+            dtype: VecElementType::F32,
+            vec_fields: vec![1],
+            distance: HnswDistance::L2,
+            ef_construction: 16,
+            m_neighbours: 8,
+            index_filter: None,
+            extend_candidates: false,
+            keep_pruned_connections: false,
+        })?;
         let hash_of = |k: i64| -> Result<VecContentHash> {
             let (x, y) = fixture_xy(k);
             let v = Vector::try_new(vec![x, y]).ok_or_else(|| miette!("fixture vector"))?;
@@ -4979,19 +4993,19 @@ mod tests {
     /// 3. Same content put twice → deterministic dedup (node count unchanged)
     #[test]
     fn content_addressed_vector_build_is_byte_equal_and_diverges() -> Result<()> {
-        let m = HnswIndexManifest::admit(
-            SmartString::from("vecs"),
-            SmartString::from("by_v"),
-            2,
-            VecElementType::F32,
-            vec![1],
-            HnswDistance::L2,
-            16,
-            8,
-            None,
-            false,
-            false,
-        )?;
+        let m = HnswIndexManifest::admit(HnswAdmitSpec {
+            base_relation: SmartString::from("vecs"),
+            index_name: SmartString::from("by_v"),
+            vec_dim: 2,
+            dtype: VecElementType::F32,
+            vec_fields: vec![1],
+            distance: HnswDistance::L2,
+            ef_construction: 16,
+            m_neighbours: 8,
+            index_filter: None,
+            extend_candidates: false,
+            keep_pruned_connections: false,
+        })?;
         let hash = |x: f64, y: f64| -> Result<VecContentHash> {
             let v = Vector::try_new(vec![x, y]).ok_or_else(|| miette!("hash vector"))?;
             Ok(IndexVec::admit(&v, &m)?.content_hash())
@@ -5084,10 +5098,19 @@ mod tests {
     fn vamana_adversary_connectivity_degree_bound_fjall_only() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = new_fjall_storage(dir.path())?;
-        let m = HnswIndexManifest::admit(
-            SmartString::from("vecs"), SmartString::from("by_v"), 2,
-            VecElementType::F32, vec![1], HnswDistance::L2, 16, 8, None, false, false,
-        )?;
+        let m = HnswIndexManifest::admit(HnswAdmitSpec {
+            base_relation: SmartString::from("vecs"),
+            index_name: SmartString::from("by_v"),
+            vec_dim: 2,
+            dtype: VecElementType::F32,
+            vec_fields: vec![1],
+            distance: HnswDistance::L2,
+            ef_construction: 16,
+            m_neighbours: 8,
+            index_filter: None,
+            extend_candidates: false,
+            keep_pruned_connections: false,
+        })?;
         let r_cap = m.vamana_build_params()?.r();
         let mut rows: Vec<Tuple> = Vec::new();
         let mut k: i64 = 0;
