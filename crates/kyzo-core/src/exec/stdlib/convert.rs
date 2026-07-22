@@ -88,6 +88,9 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
         };
         // ties-to-even
         if round_bit == 1 && (sticky == 1 || m32 & 1 == 1) {
+            // INVARIANT(F64ToF32RoundTieEven): mantissa+1 on round-up; wrap to 0
+            // is the IEEE overflow into the exponent bump path (subnormal lane
+            // returns immediately — no exponent field here).
             m32 = m32.wrapping_add(1);
         }
         return sign | m32;
@@ -103,6 +106,8 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
         Err(_) => 0,
     };
     if round_bit == 1 && (sticky == 1 || m32 & 1 == 1) {
+        // INVARIANT(F64ToF32RoundTieEven): mantissa+1 on round-up; wrap to 0
+        // with m32==0x0080_0000 is handled next line (bump exp / clamp inf).
         m32 = m32.wrapping_add(1);
         if m32 == 0x0080_0000 {
             // mantissa overflow → bump exponent

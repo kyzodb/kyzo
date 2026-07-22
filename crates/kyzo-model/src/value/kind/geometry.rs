@@ -264,6 +264,8 @@ mod tests {
                 Ok(v) => v,
                 Err(_) => 0,
             }
+            // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
+            // test corpus; wrap is the intended u32 scatter, not a size proof.
             .wrapping_mul(0x85EB_CA6B);
             corpus.push(Geometry::from_cells(lat, lon));
         }
