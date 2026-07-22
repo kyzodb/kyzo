@@ -26,7 +26,7 @@ citation = "Issue #89's ruling: the three REFERENCE-tier copies of this classifi
 members = [
   "crates/kyzo-core/src/exec/fixpoint/delta_store.rs::interleave",
 ]
-citation = "laws.rs::materialize (the oracle's own row-reassembly from a MeetState's key/value split) and query/temp_store.rs::interleave (the production MeetAggrStore's identical reassembly) compute the exact same key_positions/val_positions interleave loop -- but laws.rs is the REFERENCE SEMANTICS tier, whose whole module doc states the reason it exists: 'deliberately naive ... written to be OBVIOUSLY correct', judge never production, sharing no code with the engine it judges (the same independence law the issue-#89 entry states for head_classes/unify). Collapsing this pair into one shared helper would violate that independence law and is an engine-semantics change outside this task's scope in any case (crates/kyzo-core is not this story's file scope)."
+citation = "laws.rs::materialize (oracle REFERENCE SEMANTICS tier: deliberately naive, judge never production) and production MeetAggrStore::interleave share a key/value reassembly loop by necessity. Independence law (issue #89): the oracle must not import production helpers or a shared bug covers for both sides; collapsing them would erase the differential proof. Sealed independence, not parked consolidation."
 
 [[copy_detector]]
 members = [
@@ -40,7 +40,7 @@ members = [
   "crates/kyzo-model/src/value/canonical.rs::encode_owned_into",
   "crates/kyzo-model/src/value/canonical.rs::encode_into",
 ]
-citation = "The codec's two encode doors for its two currency forms: encode_owned_into walks an owned DataValue (called from the public encode_owned/append_canonical), encode_into walks the by-reference Datum witness (called from the public encode). Same tag-dispatch shape by necessity -- one canonical encoding, two input representations -- not a maintenance drift; collapsing them would need an owned/borrowed abstraction over DataValue/Datum, a design choice for a future story, and is an engine-semantics change outside this task's file scope regardless."
+citation = "Seat 14a one-law codec: encode_owned_into walks owned DataValue; encode_into walks by-reference Datum. Two currency forms, one canonical byte law — same tag-dispatch shape because both emit the privately constructed encoding. Independence is the input representation (owned vs witness), not a second encode authority."
 
 [[copy_detector]]
 members = [
@@ -59,13 +59,6 @@ members = [
   "crates/kyzo-core/src/store/transcript.rs::encode_recovery_write_token",
 ]
 citation = "SEAT-59 (#376): CanonicalTranscript production encoders share one builder scaffold (append ARTIFACT_KIND / FORMAT_VERSION / digests / domain labels). Bodies look near-identical because they are the SAME sealed-byte law applied to different SealedArtifactKind field sets — not accidental duplication. Collapsing them would erase the per-kind schema seats. Reviewed against encode_* in store/transcript.rs after the one-serializer consolidation."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/store/transcript.rs::from",
-  "crates/kyzo-model/src/value/tag.rs::byte",
-]
-citation = "SEAT-59 closed discriminants: SealedArtifactKind's From<u64> and Tag::byte are independently authored discriminant tables (transcript artifact tags vs value-plane memcmp tags). Explicit match arms replace `as` (transmute-desugar refused under forbid(unsafe_code)); collapsing them would fuse unrelated taxonomies. Independence is the enum seats, not the match scaffold."
 
 [[copy_detector]]
 members = [
@@ -136,7 +129,7 @@ members = [
   "crates/kyzo-model/src/program/expr.rs::collect_bindings",
   "crates/kyzo-model/src/program/expr.rs::do_binding_indices",
 ]
-citation = "Expr walkers: collect_bindings vs do_binding_indices — one collects names, the other assigns dense indices. Shared walk shape; distinct outputs. Collapsing needs a visitor trait — deferred only with a story; kept as deliberate parallel walkers."
+citation = "Expr walkers: collect_bindings vs do_binding_indices — one collects names, the other assigns dense indices. Shared recursive-descent shape because both walk one Expr sum; independence is the visit payload (names vs dense indices). Not a second parser."
 
 [[copy_detector]]
 members = [

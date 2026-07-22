@@ -1143,8 +1143,22 @@ impl CrossingKind {
 
 impl From<CrossingKind> for u8 {
     fn from(kind: CrossingKind) -> u8 {
-        // INVARIANT: CrossingKind is #[repr(u8)] with closed discriminants 0..=11.
-        kind as ::core::primitive::u8
+        // Explicit arms: `as u8` desugars to transmute and is refused under
+        // `forbid(unsafe_code)`. Discriminants are the sealed seat-59 tags.
+        match kind {
+            CrossingKind::Entity => 0,
+            CrossingKind::Event => 1,
+            CrossingKind::State => 2,
+            CrossingKind::Role => 3,
+            CrossingKind::Relation => 4,
+            CrossingKind::Claim => 5,
+            CrossingKind::Evidence => 6,
+            CrossingKind::Context => 7,
+            CrossingKind::Concept => 8,
+            CrossingKind::Rule => 9,
+            CrossingKind::Derivation => 10,
+            CrossingKind::Invalidation => 11,
+        }
     }
 }
 
