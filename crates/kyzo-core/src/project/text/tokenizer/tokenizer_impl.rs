@@ -347,11 +347,15 @@ pub(crate) fn advance_char_indices_token<'a>(
     token.position = token.position.wrapping_add(1);
     while let Some((offset_from, c)) = chars.next() {
         if is_token_char(c) {
-            let offset_to = chars
+            let offset_to = match chars
                 .by_ref()
                 .find(|(_, ch)| !is_token_char(*ch))
                 .map(|(offset, _)| offset)
-match                  { Some(v) => v, None => text.len() };
+            {
+                Some(v) => v,
+                // No further non-token char: the token runs to end of text.
+                None => text.len(),
+            };
             match token.set_offsets(offset_from, offset_to) {
                 token_ref => core::mem::drop(token_ref),
             }
