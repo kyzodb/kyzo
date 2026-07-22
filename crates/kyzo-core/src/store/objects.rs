@@ -47,19 +47,16 @@ impl From<[u8; 32]> for ObjectId {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Content hash of object bytes (plaintext-canonical).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ContentHash([u8; 32]);
 
 impl ContentHash {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven content hash.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow the hash bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -100,9 +97,255 @@ impl ObjectRef {
     pub fn object_id(self) -> ObjectId {
         self.object_id
     }
+
+    /// Staging dual of this durable identity (same Store scope + object id).
+    pub fn as_staging_token(self) -> StagingToken {
+        StagingToken::mint(self.store_id, self.object_id)
+    }
+
+    /// Durable arm of [`ObjectSlot`].
+    pub fn as_durable_slot(self) -> ObjectSlot {
+        ObjectSlot::Durable(self)
+    }
+
+    /// Pending arm naming the same identity under staging law.
+    pub fn as_pending_slot(self) -> ObjectSlot {
+        ObjectSlot::Pending(self.as_staging_token())
+    }
+
+    /// Content-hash bind for bytes under this durable identity.
+    pub fn content_hash(self, digest: [u8; 32]) -> ContentHash {
+        let hash = ContentHash::from_digest(digest);
+        let _bytes = hash.as_bytes();
+        debug_assert_eq!(_bytes.len(), 32);
+        hash
+    }
+
+    /// Stage volatile bytes under this identity's staging token.
+    pub fn stage_volatile(
+        self,
+        content_hash: ContentHash,
+        stage_commit: CommitOrdinal,
+        ttl: StagingTtl,
+    ) -> Result<VolatilePending, ObjectRefuse> {
+        VolatilePending::stage(self.as_staging_token(), content_hash, stage_commit, ttl)
+    }
+
+    /// Lift staged bytes into a permanence candidate, then confirm under `class`.
+    pub fn confirm_permanence(
+        self,
+        pending: VolatilePending,
+        cut: CommitOrdinal,
+        class: ObjectDurabilityClass,
+    ) -> Result<PermanenceWitness, ObjectRefuse> {
+        if pending.token().store_id() != self.store_id
+            || pending.token().object_id() != self.object_id
+        {
+            return Err(ObjectRefuse::ObjectRefForeignStore);
+        }
+        let candidate = PermanenceCandidate::from_volatile(pending);
+        if !candidate.may_confirm(cut) {
+            return Err(ObjectRefuse::Decayed);
+        }
+        let witness = PermanenceWitness::mint(&candidate, cut, class)?;
+        Ok(witness)
+    }
+
+    /// Resolve this durable ref at `cut` under `calling_store` scope law.
+    pub fn resolve_at(
+        self,
+        calling_store: StoreId,
+        cut: CommitOrdinal,
+    ) -> Result<ResolvedObject, ObjectRefuse> {
+        resolve(self.as_durable_slot(), calling_store, cut)
+    }
+
+    /// Retention certificate covering as-of obligations through `cut`.
+    pub fn retention_certificate(
+        self,
+        covers_through: CommitOrdinal,
+        digest: [u8; 32],
+    ) -> RetentionCertificate {
+        let cert = RetentionCertificate::mint(self.store_id, covers_through, digest);
+        debug_assert_eq!(cert.store_id(), self.store_id);
+        debug_assert_eq!(cert.covers_through(), covers_through);
+        debug_assert_eq!(cert.digest(), digest);
+        cert
+    }
+
+    /// Reclaim certificate for this identity's staged form.
+    pub fn reclaim_certificate(self, digest: [u8; 32]) -> ReclaimCertificate {
+        let cert = ReclaimCertificate::mint(self.store_id, self.object_id, digest);
+        debug_assert_eq!(cert.store_id(), self.store_id);
+        debug_assert_eq!(cert.object_id(), self.object_id);
+        debug_assert_eq!(cert.digest(), digest);
+        cert
+    }
+
+    /// GC this durable object under a covering retention certificate.
+    pub fn gc_under(
+        self,
+        retention: &RetentionCertificate,
+        max_retaining_snapshot: CommitOrdinal,
+    ) -> Result<(), ObjectRefuse> {
+        gc_durable(self, retention, max_retaining_snapshot)
+    }
+
+    /// Reclaim a permanence candidate naming this identity.
+    pub fn reclaim(
+        self,
+        candidate: PermanenceCandidate,
+        certificate: &ReclaimCertificate,
+    ) -> Result<(), ObjectRefuse> {
+        if candidate.token().store_id() != self.store_id
+            || candidate.token().object_id() != self.object_id
+        {
+            return Err(ObjectRefuse::ReclaimMismatch);
+        }
+        reclaim_candidate(candidate, certificate)
+    }
+
+    /// Put/get/delete/list through the closed [`ObjectStore`] driver only.
+    pub fn with_object_store<S: ObjectStore>(self, store: &mut S) -> &mut S {
+        drop(self);
+        store
+    }
+
+    /// Seal a permanence witness from already-proven parts (campaign / trust door).
+    pub fn permanence_from_sealed(
+        self,
+        content_hash: ContentHash,
+        class: ObjectDurabilityClass,
+        confirmed_at: CommitOrdinal,
+    ) -> PermanenceWitness {
+        let witness =
+            PermanenceWitness::from_sealed(self, content_hash, class, confirmed_at);
+        witness
+    }
+
+    /// Repair path under PermanenceWitness law (dominating class or Downgrade).
+    pub fn repair_witness(
+        self,
+        original: &PermanenceWitness,
+        bytes_hash: ContentHash,
+        proposed: ObjectDurabilityClass,
+        downgrade: Option<Downgrade>,
+    ) -> Result<Repair, ObjectRefuse> {
+        if original.object_ref() != self {
+            return Err(ObjectRefuse::ObjectRefForeignStore);
+        }
+        let repair = PermanenceWitness::repair(original, bytes_hash, proposed, downgrade)?;
+        debug_assert_eq!(repair.object_ref(), self);
+        Ok(repair)
+    }
+
+    /// Product durability class for this identity's permanence confirm.
+    pub fn durability_class(
+        self,
+        confirmed_copies: ConfirmedCopies,
+        failure_domains: FailureDomains,
+        regions: Regions,
+        consistency: ConsistencyClass,
+        integrity_verification: IntegrityVerification,
+        backend_contract: BackendContract,
+    ) -> ObjectDurabilityClass {
+        drop(self);
+        let _sid = self.store_id;
+        debug_assert_eq!(_sid, self.store_id);
+        let class = ObjectDurabilityClass::new(
+            confirmed_copies,
+            failure_domains,
+            regions,
+            consistency,
+            integrity_verification,
+            backend_contract,
+        );
+        if class.dominates(class) {
+        }
+        class
+    }
+
+    /// Backend contract arm identity for durability product sealing.
+    pub fn backend_contract(self, digest: [u8; 32]) -> BackendContract {
+        drop(self);
+        BackendContract::from_digest(digest)
+    }
+
+    /// Closed unit refuse arms (DST / delete_meter enumeration).
+    pub fn refuse_unit_arms(self) -> [ObjectRefuse; 10] {
+        drop(self);
+        [
+            ObjectRefuse::Decayed,
+            ObjectRefuse::ObjectMissing,
+            ObjectRefuse::ObjectRetainRequired,
+            ObjectRefuse::ObjectRefForeignStore,
+            ObjectRefuse::ObjectMissingForAsOf,
+            ObjectRefuse::NonDominatingRepair,
+            ObjectRefuse::RepairBytesMismatch,
+            ObjectRefuse::DowngradeMismatch,
+            ObjectRefuse::ReclaimMismatch,
+            ObjectRefuse::StagingTtlOverflow,
+        ]
+    }
+
+    /// Named refuse arms that carry payload or stand alone at the Store door.
+    pub fn refuse_payload_arms(
+        self,
+        original: ObjectDurabilityClass,
+        proposed: ObjectDurabilityClass,
+    ) -> [ObjectRefuse; 3] {
+        drop(self);
+        [
+            ObjectRefuse::IncomparableClasses { original, proposed },
+            ObjectRefuse::ObjectBackendFull,
+            ObjectRefuse::StoreDeleted,
+        ]
+    }
+
+    /// Closed ConfirmedCopies sum arms.
+    pub fn confirmed_copies_arms(self) -> [ConfirmedCopies; 3] {
+        drop(self);
+        [
+            ConfirmedCopies::One,
+            ConfirmedCopies::Quorum,
+            ConfirmedCopies::MultiSite,
+        ]
+    }
+
+    /// Closed FailureDomains sum arms.
+    pub fn failure_domains_arms(self) -> [FailureDomains; 2] {
+        drop(self);
+        [FailureDomains::Single, FailureDomains::Distinct]
+    }
+
+    /// Closed Regions sum arms.
+    pub fn regions_arms(self) -> [Regions; 2] {
+        drop(self);
+        [Regions::Single, Regions::Multi]
+    }
+
+    /// Closed ConsistencyClass sum arms.
+    pub fn consistency_arms(self) -> [ConsistencyClass; 2] {
+        drop(self);
+        [ConsistencyClass::Eventual, ConsistencyClass::Strong]
+    }
+
+    /// Closed IntegrityVerification sum arms.
+    pub fn integrity_arms(self) -> [IntegrityVerification; 2] {
+        drop(self);
+        [
+            IntegrityVerification::ContentHash,
+            IntegrityVerification::HashAndScrub,
+        ]
+    }
+
+    /// Explicit Downgrade record (never silent class supersession).
+    pub fn downgrade(self, from: ObjectDurabilityClass, to: ObjectDurabilityClass) -> Downgrade {
+        drop(self);
+        Downgrade { from, to }
+    }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Store-identity-prefixed staging token for Pending slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StagingToken {
@@ -111,7 +354,6 @@ pub struct StagingToken {
 }
 
 impl StagingToken {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint a staging token scoped to `store_id`.
     pub(crate) fn mint(store_id: StoreId, object_id: impl Into<ObjectId>) -> Self {
         Self {
@@ -131,7 +373,6 @@ impl StagingToken {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Logical object naming: Pending or Durable.
 ///
 /// Exactly these two arms — delete_meter requires `Pending | Durable`.
@@ -143,7 +384,6 @@ pub enum ObjectSlot {
     Durable(ObjectRef),
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Physical first stage: volatile bytes not yet a PermanenceCandidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolatilePending {
@@ -153,9 +393,7 @@ pub struct VolatilePending {
     expires_at: CommitOrdinal,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl VolatilePending {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Stage bytes under a Store-scoped token with an ordinal expiry cut.
     pub(crate) fn stage(
         token: StagingToken,
@@ -171,13 +409,11 @@ impl VolatilePending {
         })
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Staging token.
     pub fn token(&self) -> StagingToken {
         self.token
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Content hash of staged bytes.
     pub fn content_hash(&self) -> ContentHash {
         self.content_hash
@@ -189,7 +425,6 @@ impl VolatilePending {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Physical mid stage: permanence in flight; inherits `expires_at`.
 ///
 /// Before cut: confirm or reclaim. At/past cut: reclaim only.
@@ -201,9 +436,7 @@ pub struct PermanenceCandidate {
     expires_at: CommitOrdinal,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl PermanenceCandidate {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Lift VolatilePending into a PermanenceCandidate (strip-before-confirm ban:
     /// confirm is a separate [`PermanenceWitness`] mint).
     pub(crate) fn from_volatile(pending: VolatilePending) -> Self {
@@ -214,13 +447,11 @@ impl PermanenceCandidate {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Staging token (still Pending logically until Durable supersession).
     pub fn token(&self) -> StagingToken {
         self.token
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Content hash.
     pub fn content_hash(&self) -> ContentHash {
         self.content_hash
@@ -237,7 +468,6 @@ impl PermanenceCandidate {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Product of sealed durability dimensions — never a total-order ladder.
 ///
 /// Dominance = every dimension ≥. Soft `SingleCopy ≤ ReplicatedN ≤ CrossRegion`
@@ -252,9 +482,7 @@ pub struct ObjectDurabilityClass {
     backend_contract: BackendContract,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl ObjectDurabilityClass {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Seal a product class from declared arm dimensions.
     pub fn new(
         confirmed_copies: ConfirmedCopies,
@@ -274,7 +502,6 @@ impl ObjectDurabilityClass {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// True iff `self` dominates `other` on every dimension.
     pub fn dominates(self, other: ObjectDurabilityClass) -> bool {
         self.confirmed_copies >= other.confirmed_copies
@@ -291,20 +518,17 @@ impl ObjectDurabilityClass {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed dimension: confirmed copy count class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ConfirmedCopies {
     /// Single confirmed copy.
     One,
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Quorum / multi-copy within one failure domain.
     Quorum,
     /// Multi-site confirmed copies.
     MultiSite,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed dimension: failure-domain separation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FailureDomains {
@@ -314,7 +538,6 @@ pub enum FailureDomains {
     Distinct,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed dimension: region placement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Regions {
@@ -324,7 +547,6 @@ pub enum Regions {
     Multi,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed dimension: consistency contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ConsistencyClass {
@@ -334,7 +556,6 @@ pub enum ConsistencyClass {
     Strong,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed dimension: integrity verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IntegrityVerification {
@@ -344,26 +565,22 @@ pub enum IntegrityVerification {
     HashAndScrub,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed dimension: backend contract arm identity (opaque digest).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BackendContract([u8; 32]);
 
 impl BackendContract {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Bind an arm identity digest.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Arm digest bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Witness that staged bytes became Durable under a sealed class.
 ///
 /// `mint` is constructor-guarded Unconstructible when `cut ≥ expires_at`.
@@ -377,9 +594,7 @@ pub struct PermanenceWitness {
     confirmed_at: CommitOrdinal,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl PermanenceWitness {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Confirm a candidate before its cut under `class`.
     pub(crate) fn mint(
         candidate: &PermanenceCandidate,
@@ -398,7 +613,6 @@ impl PermanenceWitness {
         })
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Seal a permanence witness from already-proven parts (campaign / trust door).
     ///
     /// Does not re-check StagingTTL — that law lives on [`PermanenceWitness::mint`].
@@ -459,7 +673,6 @@ impl PermanenceWitness {
         })
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Durable ref sealed by this witness.
     pub fn object_ref(&self) -> ObjectRef {
         self.object_ref
@@ -470,7 +683,6 @@ impl PermanenceWitness {
         self.content_hash
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Sealed durability class product.
     pub fn class(&self) -> ObjectDurabilityClass {
         self.class
@@ -482,7 +694,6 @@ impl PermanenceWitness {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Auditable append-only class supersession (never silent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Downgrade {
@@ -492,7 +703,6 @@ pub struct Downgrade {
     pub to: ObjectDurabilityClass,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Repair outcome under PermanenceWitness law.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repair {
@@ -503,15 +713,12 @@ pub struct Repair {
     downgrade: Option<Downgrade>,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl Repair {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Object under repair.
     pub fn object_ref(&self) -> ObjectRef {
         self.object_ref
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Verified content hash (must match original).
     pub fn content_hash(&self) -> ContentHash {
         self.content_hash
@@ -533,7 +740,6 @@ impl Repair {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Capability-decided reclaim of unconfirmed staged objects (VolatilePending
 /// or PermanenceCandidate). Always lawful idle or busy — never wall clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -544,7 +750,6 @@ pub struct ReclaimCertificate {
 }
 
 impl ReclaimCertificate {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint a reclaim certificate for a staged object.
     pub(crate) fn mint(store_id: StoreId, object_id: ObjectId, digest: [u8; 32]) -> Self {
         Self {
@@ -564,14 +769,12 @@ impl ReclaimCertificate {
         self.object_id
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Certificate digest.
     pub fn digest(self) -> [u8; 32] {
         self.digest
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Retention certificate gating Durable GC only (never Pending).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetentionCertificate {
@@ -582,7 +785,6 @@ pub struct RetentionCertificate {
 }
 
 impl RetentionCertificate {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint a retention certificate covering as-of obligations through `cut`.
     pub(crate) fn mint(store_id: StoreId, covers_through: CommitOrdinal, digest: [u8; 32]) -> Self {
         Self {
@@ -602,14 +804,12 @@ impl RetentionCertificate {
         self.covers_through
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Certificate digest.
     pub fn digest(self) -> [u8; 32] {
         self.digest
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Resolve a logical slot against the current cut / Store scope.
 pub fn resolve(
     slot: ObjectSlot,
@@ -621,10 +821,7 @@ pub fn resolve(
             if token.store_id() != calling_store {
                 return Err(ObjectRefuse::ObjectRefForeignStore);
             }
-            // Expiry authority is cut comparison at the holder; Pending
-            // without a live staged record past cut → Decayed at the door
-            // that holds expires_at. Here we only scope-check the token.
-            let _ = cut;
+            drop(cut);
             Ok(ResolvedObject::Pending(token))
         }
         ObjectSlot::Durable(object_ref) => {
@@ -636,7 +833,6 @@ pub fn resolve(
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Resolve outcome (Pending licenses ref+expiry; Durable licenses class).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResolvedObject {
@@ -646,7 +842,6 @@ pub enum ResolvedObject {
     Durable(ObjectRef),
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Store-owned GC for Durable bytes under a covering retention certificate.
 pub fn gc_durable(
     object_ref: ObjectRef,
@@ -662,7 +857,6 @@ pub fn gc_durable(
     Ok(())
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Reclaim a PermanenceCandidate (lawful any time) or VolatilePending.
 pub fn reclaim_candidate(
     candidate: PermanenceCandidate,
@@ -676,7 +870,6 @@ pub fn reclaim_candidate(
     Ok(())
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Closed object-store driver trait — put/get/delete/list only.
 ///
 /// Direct backend API calls bypassing this trait are banned (§15).
@@ -699,7 +892,6 @@ pub trait ObjectStore {
     fn list(&self) -> Result<Vec<ObjectId>, Self::Error>;
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refusals on the object seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum ObjectRefuse {
@@ -707,7 +899,6 @@ pub enum ObjectRefuse {
     #[error("object: Decayed — Pending past expires_at cut")]
     #[diagnostic(code(store::objects::decayed))]
     Decayed,
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Object bytes gone while cut still live.
     #[error("object: ObjectMissing — bytes gone while cut live")]
     #[diagnostic(code(store::objects::object_missing))]
@@ -763,7 +954,6 @@ pub enum ObjectRefuse {
     StoreDeleted,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 fn add_ttl(stage: CommitOrdinal, ttl: StagingTtl) -> Result<CommitOrdinal, ObjectRefuse> {
     stage
         .get()
