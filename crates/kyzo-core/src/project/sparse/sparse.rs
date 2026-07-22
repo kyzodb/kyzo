@@ -589,13 +589,12 @@ mod tests {
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
+    use miette::{IntoDiagnostic, Result, miette};
 
     macro_rules! sparse_rows {
-        ($($arg:expr),* $(,)?) => {
-            crate::project::contract::search_rows(
-                Sparse::search_index($($arg),*).unwrap()
-            ).unwrap()
-        };
+        ($($arg:expr),* $(,)?) => {{
+            crate::project::contract::search_rows(Sparse::search_index($($arg),*)?)?
+        }};
     }
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
@@ -643,21 +642,19 @@ mod tests {
     /// A document: base key, a tag payload, and its sparse vector.
     type Doc<'a> = (i64, &'a str, &'a [(u32, f32)]);
 
-    fn setup(db: &impl Storage, docs: &[Doc]) -> Fixture {
+    fn setup(db: &impl Storage, docs: &[Doc]) -> Result<Fixture> {
         let meta = base_meta();
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("docs", meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("docs:sparse", sparse_index_metadata(&meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         for (k, tag, vector) in docs {
             let row = vec![DataValue::from(*k), DataValue::from(*tag)];
             base.put_fact(
@@ -665,12 +662,11 @@ mod tests {
                 &row,
                 kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            sparse_put(&mut tx, &row, vector, &base, &idx).unwrap();
+            )?;
+            sparse_put(&mut tx, &row, vector, &base, &idx)?;
         }
-        tx.commit().unwrap();
-        Fixture { base, idx }
+        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok(Fixture { base, idx })
     }
 
     fn params(k: usize) -> SparseSearchParams {
@@ -681,17 +677,19 @@ mod tests {
     }
 
     /// Run a search and project `(key, score)`.
-    fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, f32)> {
-        let rtx = db.read_tx().unwrap();
+    fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Result<Vec<(i64, f32)>> {
+        let rtx = db.read_tx()?;
         let hits = sparse_rows!(&rtx, query, &f.base, &f.idx, &params(k), &None);
-        hits.iter()
-            .map(|t| {
-                (
-                    t[0].get_int().unwrap(),
-                    f64_to_f32(t.last().unwrap().get_float().unwrap()),
-                )
-            })
-            .collect()
+        let mut out = Vec::with_capacity(hits.len());
+        for t in &hits {
+            let key = t[0].get_int().ok_or_else(|| miette!("expected int key"))?;
+            let score_dv = t.last().ok_or_else(|| miette!("expected score"))?;
+            let score = score_dv
+                .get_float()
+                .ok_or_else(|| miette!("expected float score"))?;
+            out.push((key, f64_to_f32(score)));
+        }
+        Ok(out)
     }
 
     /// Naive reference: for every document, dot-product its stored sparse vector
@@ -719,9 +717,9 @@ mod tests {
     }
 
     #[test]
-    fn dot_scoring_matches_naive_reference() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn dot_scoring_matches_naive_reference() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // A spread of overlaps: shared dims, disjoint dims, differing weights.
         let docs: &[Doc] = &[
             (1, "a", &[(0, 1.0), (2, 2.0), (5, 0.5)]),
@@ -729,17 +727,18 @@ mod tests {
             (3, "c", &[(2, 1.0), (5, 4.0), (9, 2.0)]),
             (4, "d", &[(7, 1.0), (8, 1.0)]), // disjoint from the query below
         ];
-        let f = setup(&db, docs);
+        let f = setup(&db, docs)?;
 
         let query = &[(0, 2.0f32), (2, 1.0f32), (5, 1.0f32)];
-        let got = run(&db, &f, query, 10);
+        let got = run(&db, &f, query, 10)?;
         let want = naive_dot(docs, query);
         assert_eq!(got, want, "engine must match the naive full-scan reference");
         // Doc 4 shares no dimension with the query: never a hit.
         assert!(!got.iter().any(|(k, _)| *k == 4));
 
         // A dimension nobody carries contributes nothing, not an error.
-        assert!(run(&db, &f, &[(100, 5.0)], 10).is_empty());
+        assert!(run(&db, &f, &[(100, 5.0)], 10)?.is_empty());
+        Ok(())
     }
 
     /// The summation order is PINNED: a document whose shared dimensions carry
@@ -747,16 +746,16 @@ mod tests {
     /// dimension result exactly. If the accumulation order were reversed, the
     /// score would round differently and this assertion would bite.
     #[test]
-    fn summation_order_is_pinned() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn summation_order_is_pinned() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // dims 1,2 -> 1.0 ; dim 3 -> 2^24. Query weights all 1.0.
         // Ascending: (1 + 1) + 2^24 = 2^24 + 2 = 16777218 (exact at ULP 2).
         // Descending: ((2^24 + 1) + 1) = 2^24 = 16777216 (the 1s fall below ULP).
         let big = 16_777_216.0f32; // 2^24
         let docs: &[Doc] = &[(1, "x", &[(1, 1.0), (2, 1.0), (3, big)])];
-        let f = setup(&db, docs);
-        let got = run(&db, &f, &[(1, 1.0), (2, 1.0), (3, 1.0)], 1);
+        let f = setup(&db, docs)?;
+        let got = run(&db, &f, &[(1, 1.0), (2, 1.0), (3, 1.0)], 1)?;
         assert_eq!(got.len(), 1);
         // 16777218 vs the reversed-order 16777216 differ by 2; a tolerance < 1
         // distinguishes them while staying clippy-clean.
@@ -767,23 +766,24 @@ mod tests {
         );
         // The reference agrees.
         assert_eq!(got, naive_dot(docs, &[(1, 1.0), (2, 1.0), (3, 1.0)]));
+        Ok(())
     }
 
     #[test]
-    fn topk_tie_determinism_and_truncation() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn topk_tie_determinism_and_truncation() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // Three docs with IDENTICAL scores against the query (dim 0, weight 1).
         let docs: &[Doc] = &[
             (30, "c", &[(0, 1.0)]),
             (10, "a", &[(0, 1.0)]),
             (20, "b", &[(0, 1.0)]),
         ];
-        let f = setup(&db, docs);
+        let f = setup(&db, docs)?;
         let query = &[(0, 1.0f32)];
 
         // All tie at score 1.0; the tie-break is ascending document key.
-        let got = run(&db, &f, query, 10);
+        let got = run(&db, &f, query, 10)?;
         assert_eq!(
             got.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![10, 20, 30],
@@ -794,47 +794,49 @@ mod tests {
         }
 
         // Truncation to k keeps the k lowest keys among the tied set.
-        let got = run(&db, &f, query, 2);
+        let got = run(&db, &f, query, 2)?;
         assert_eq!(
             got.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![10, 20]
         );
+        Ok(())
     }
 
     #[test]
-    fn put_del_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn put_del_round_trip() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let vec1: &[(u32, f32)] = &[(0, 1.0), (1, 2.0)];
         let vec2: &[(u32, f32)] = &[(0, 1.0), (2, 3.0)];
         let docs: &[Doc] = &[(1, "a", vec1), (2, "b", vec2)];
-        let f = setup(&db, docs);
+        let f = setup(&db, docs)?;
 
         // Both carry dim 0.
-        assert_eq!(run(&db, &f, &[(0, 1.0)], 10).len(), 2);
+        assert_eq!(run(&db, &f, &[(0, 1.0)], 10)?.len(), 2);
 
         // Delete doc 1's postings.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let row1 = vec![DataValue::from(1), DataValue::from("a")];
-        sparse_del(&mut tx, &row1, vec1, &f.base, &f.idx).unwrap();
-        tx.commit().unwrap();
+        sparse_del(&mut tx, &row1, vec1, &f.base, &f.idx)?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
         // Doc 1 is gone from every dimension it contributed.
-        let got = run(&db, &f, &[(0, 1.0)], 10);
+        let got = run(&db, &f, &[(0, 1.0)], 10)?;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, 2);
         assert!(
-            run(&db, &f, &[(1, 1.0)], 10).is_empty(),
+            run(&db, &f, &[(1, 1.0)], 10)?.is_empty(),
             "doc 1's dim 1 withdrawn"
         );
         // Doc 2 untouched.
-        assert_eq!(run(&db, &f, &[(2, 1.0)], 10)[0].0, 2);
+        assert_eq!(run(&db, &f, &[(2, 1.0)], 10)?[0].0, 2);
+        Ok(())
     }
 
     /// Two fresh builds of the same documents produce byte-identical search
     /// results — the full result tuples AND the score bit patterns.
     #[test]
-    fn byte_identical_across_two_fresh_builds() {
+    fn byte_identical_across_two_fresh_builds() -> Result<()> {
         let docs: &[Doc] = &[
             (1, "a", &[(0, 0.25), (3, 1.5), (7, 0.75)]),
             (2, "b", &[(0, 0.5), (3, 0.5), (9, 2.0)]),
@@ -842,59 +844,73 @@ mod tests {
         ];
         let query = &[(0, 1.0f32), (3, 2.0f32), (7, 0.5f32), (9, 1.0f32)];
 
-        let build_and_search = || {
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
-            let f = setup(&db, docs);
-            let rtx = db.read_tx().unwrap();
-            sparse_rows!(&rtx, query, &f.base, &f.idx, &params(10), &None)
+        let build_and_search = || -> Result<_> {
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let db = new_fjall_storage(dir.path())?;
+            let f = setup(&db, docs)?;
+            let rtx = db.read_tx()?;
+            Ok(sparse_rows!(&rtx, query, &f.base, &f.idx, &params(10), &None))
         };
 
-        let a = build_and_search();
-        let b = build_and_search();
+        let a = build_and_search()?;
+        let b = build_and_search()?;
         assert_eq!(a, b, "two fresh builds must yield identical result tuples");
         // Strict: the score column's bit pattern is identical, not merely equal.
-        let bits = |t: &[DataValue]| t.last().unwrap().get_float().unwrap().to_bits();
-        let a_bits: Vec<u64> = a.iter().map(|t| bits(t.as_slice())).collect();
-        let b_bits: Vec<u64> = b.iter().map(|t| bits(t.as_slice())).collect();
+        let bits = |t: &[DataValue]| -> Result<u64> {
+            let score = t
+                .last()
+                .ok_or_else(|| miette!("expected score"))?
+                .get_float()
+                .ok_or_else(|| miette!("expected float"))?;
+            Ok(score.to_bits())
+        };
+        let mut a_bits = Vec::new();
+        for t in &a {
+            a_bits.push(bits(t.as_slice())?);
+        }
+        let mut b_bits = Vec::new();
+        for t in &b {
+            b_bits.push(bits(t.as_slice())?);
+        }
         assert_eq!(a_bits, b_bits, "score bit patterns are byte-identical");
         assert!(!a.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn corrupt_posting_is_typed_error_not_panic() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, &[(1, "a", &[(0, 1.0)])]);
+    fn corrupt_posting_is_typed_error_not_panic() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, &[(1, "a", &[(0, 1.0)])])?;
 
-        let idx_keys = || -> Vec<(fjall::Slice, fjall::Slice)> {
-            let rtx = db.read_tx().unwrap();
+        let idx_keys = || -> Result<Vec<(fjall::Slice, fjall::Slice)>> {
+            let rtx = db.read_tx()?;
             let lower = kyzo_model::value::encode_key_with_suffix(f.idx.id, &[], &[]);
             let upper = (f.idx.id.raw() + 1).to_be_bytes();
             rtx.range_scan(lower.as_bytes(), &upper)
-                .collect::<Result<Vec<_>>>()
-                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
         };
-        let search_err = || -> miette::Report {
-            let rtx = db.read_tx().unwrap();
+        let search_err = || -> Result<miette::Report> {
+            let rtx = db.read_tx()?;
             Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &params(1), &None)
-                .expect_err("corrupt posting must error, not panic")
+                .err()
+                .ok_or_else(|| miette!("corrupt posting must error, not panic"))
         };
 
         // (a) Garbage msgpack value: the scan's decode fails, still not a panic.
-        let kvs = idx_keys();
+        let kvs = idx_keys()?;
         assert!(!kvs.is_empty());
         {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             for (k, _) in &kvs {
                 let mut garbage = vec![0u8; 8];
                 garbage.push(0xc1); // reserved, never-valid msgpack byte
-                tx.put(k, &garbage).unwrap();
+                tx.put(k, &garbage)?;
             }
-            tx.commit().unwrap();
+            tx.commit().map_err(|e| miette!("{e}"))?;
         }
         assert!(
-            search_err()
+            search_err()?
                 .downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "garbage value must surface as the typed IndexRowCorrupt"
@@ -903,21 +919,18 @@ mod tests {
         // (b) A VALID tuple whose weight column is the wrong type: our own
         // decode_posting raises the typed IndexRowCorrupt.
         {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             for (k, _) in &kvs {
-                let bad = f
-                    .idx
-                    .encode_val_only_for_store(
-                        &[DataValue::from("not a float")],
-                        SourceSpan::default(),
-                    )
-                    .unwrap();
-                tx.put(k, &bad).unwrap();
+                let bad = f.idx.encode_val_only_for_store(
+                    &[DataValue::from("not a float")],
+                    SourceSpan::default(),
+                )?;
+                tx.put(k, &bad)?;
             }
-            tx.commit().unwrap();
+            tx.commit().map_err(|e| miette!("{e}"))?;
         }
         assert!(
-            search_err()
+            search_err()?
                 .downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "wrong-typed weight must surface as the typed IndexRowCorrupt"
@@ -926,97 +939,96 @@ mod tests {
         // (c) A finite-but-negative stored weight violates the admission
         // invariant on read — rejected typed so no NaN/negative reaches a score.
         {
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = db.write_tx()?;
             for (k, _) in &kvs {
                 let neg = f
                     .idx
-                    .encode_val_only_for_store(&[DataValue::from(-1.0f64)], SourceSpan::default())
-                    .unwrap();
-                tx.put(k, &neg).unwrap();
+                    .encode_val_only_for_store(&[DataValue::from(-1.0f64)], SourceSpan::default())?;
+                tx.put(k, &neg)?;
             }
-            tx.commit().unwrap();
+            tx.commit().map_err(|e| miette!("{e}"))?;
         }
         assert!(
-            search_err()
+            search_err()?
                 .downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "negative stored weight must surface as the typed IndexRowCorrupt"
         );
+        Ok(())
     }
 
     #[test]
-    fn edges_empty_query_empty_index_all_zero() {
+    fn edges_empty_query_empty_index_all_zero() -> Result<()> {
         // Each sub-case uses its own store so the relation name does not
         // collide (a store holds one `docs`).
-        let fresh = || {
-            let dir = tempfile::tempdir().unwrap();
-            let db = new_fjall_storage(dir.path()).unwrap();
-            (dir, db)
+        let fresh = || -> Result<_> {
+            let dir = tempfile::tempdir().into_diagnostic()?;
+            let db = new_fjall_storage(dir.path())?;
+            Ok((dir, db))
         };
 
         // Empty index: any query yields nothing.
-        let (_d0, db0) = fresh();
-        let empty = setup(&db0, &[]);
-        assert!(run(&db0, &empty, &[(0, 1.0)], 10).is_empty(), "empty index");
+        let (_d0, db0) = fresh()?;
+        let empty = setup(&db0, &[])?;
+        assert!(run(&db0, &empty, &[(0, 1.0)], 10)?.is_empty(), "empty index");
 
         // Empty query against a populated index: nothing.
-        let (_d1, db1) = fresh();
-        let f = setup(&db1, &[(1, "a", &[(0, 1.0), (1, 2.0)])]);
-        assert!(run(&db1, &f, &[], 10).is_empty(), "empty query");
+        let (_d1, db1) = fresh()?;
+        let f = setup(&db1, &[(1, "a", &[(0, 1.0), (1, 2.0)])])?;
+        assert!(run(&db1, &f, &[], 10)?.is_empty(), "empty query");
         // All-zero query against a populated index: zero dot product, no hit.
         assert!(
-            run(&db1, &f, &[(0, 0.0), (1, 0.0)], 10).is_empty(),
+            run(&db1, &f, &[(0, 0.0), (1, 0.0)], 10)?.is_empty(),
             "all-zero query"
         );
 
         // All-zero weights in a DOCUMENT: storing zero weights is allowed; they
         // simply never score (positive-score contract).
-        let (_d2, db2) = fresh();
-        let z = setup(&db2, &[(1, "a", &[(0, 0.0), (1, 0.0)])]);
+        let (_d2, db2) = fresh()?;
+        let z = setup(&db2, &[(1, "a", &[(0, 0.0), (1, 0.0)])])?;
         assert!(
-            run(&db2, &z, &[(0, 1.0), (1, 1.0)], 10).is_empty(),
+            run(&db2, &z, &[(0, 1.0), (1, 1.0)], 10)?.is_empty(),
             "all-zero doc"
         );
+        Ok(())
     }
 
     #[test]
-    fn admission_refuses_nan_infinite_negative_and_duplicate() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn admission_refuses_nan_infinite_negative_and_duplicate() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let meta = base_meta();
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("docs", meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("docs:sparse", sparse_index_metadata(&meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         let row = vec![DataValue::from(1), DataValue::from("a")];
 
         let put = |tx: &mut _, v: &[(u32, f32)]| sparse_put(tx, &row, v, &base, &idx);
 
-        let e = put(&mut tx, &[(0, f32::NAN)]).unwrap_err();
+        let e = put(&mut tx, &[(0, f32::NAN)]).err().ok_or_else(|| miette!("NaN must refuse"))?;
         assert!(
             e.downcast_ref::<SparseWeightInvalid>().is_some(),
             "NaN refused: {e:?}"
         );
-        let e = put(&mut tx, &[(0, f32::INFINITY)]).unwrap_err();
+        let e = put(&mut tx, &[(0, f32::INFINITY)]).err().ok_or_else(|| miette!("inf must refuse"))?;
         assert!(
             e.downcast_ref::<SparseWeightInvalid>().is_some(),
             "inf refused: {e:?}"
         );
-        let e = put(&mut tx, &[(0, -0.5)]).unwrap_err();
+        let e = put(&mut tx, &[(0, -0.5)]).err().ok_or_else(|| miette!("negative must refuse"))?;
         assert!(
             e.downcast_ref::<SparseWeightInvalid>().is_some(),
             "negative refused: {e:?}"
         );
-        let e = put(&mut tx, &[(3, 1.0), (3, 2.0)]).unwrap_err();
+        let e = put(&mut tx, &[(3, 1.0), (3, 2.0)]).err().ok_or_else(|| miette!("duplicate must refuse"))?;
         assert!(
             e.downcast_ref::<SparseDuplicateDimension>().is_some(),
             "duplicate dimension refused: {e:?}"
@@ -1026,20 +1038,21 @@ mod tests {
         match tx.abort() {
             crate::store::tx::Aborted => {}
         }
+        Ok(())
     }
 
     /// A filter runs AFTER scoring and `k` counts matching rows (mirrors the
     /// FTS engine's post-filter semantics).
     #[test]
-    fn filter_counts_matching_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn filter_counts_matching_rows() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let docs: &[Doc] = &[
             (1, "keep", &[(0, 3.0)]),
             (2, "drop", &[(0, 2.0)]),
             (3, "keep", &[(0, 1.0)]),
         ];
-        let f = setup(&db, docs);
+        let f = setup(&db, docs)?;
         // Filter: tag == "keep". Column layout of the candidate: [k, tag, score].
         let filter = Expr::Apply {
             op: kyzo_model::program::op::OP_EQ,
@@ -1055,17 +1068,21 @@ mod tests {
             ]),
             span: SourceSpan(0, 0),
         };
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx()?;
         let p = SparseSearchParams {
             k: 10,
             bind_score: SparseBindScore::Append,
         };
         let hits = sparse_rows!(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter));
-        let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
+        let mut keys = Vec::with_capacity(hits.len());
+        for t in &hits {
+            keys.push(t[0].get_int().ok_or_else(|| miette!("expected int key"))?);
+        }
         assert_eq!(
             keys,
             vec![1, 3],
             "only the 'keep' rows survive, score order"
         );
+        Ok(())
     }
 }
