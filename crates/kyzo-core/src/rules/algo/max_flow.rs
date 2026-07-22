@@ -130,8 +130,8 @@ impl FixedRule for MaxFlow {
 
         for (from, to, flow) in net.min_cut_edges(source) {
             out.put(Tuple::from_vec(vec![
-                indices[from as usize].clone(),
-                indices[to as usize].clone(),
+                indices[crate::rules::convert::usize_from_u32(from)].clone(),
+                indices[crate::rules::convert::usize_from_u32(to)].clone(),
                 DataValue::from(flow),
             ]))?;
         }
@@ -191,8 +191,8 @@ struct ResidualNet {
 }
 
 impl ResidualNet {
-    fn from_graph(graph: &DirectedCsrGraph<f32>, span: SourceSpan) -> Result<Self> {
-        let n = graph.node_count() as usize;
+    fn from_graph(graph: &DirectedCsrGraph<f64>, span: SourceSpan) -> Result<Self> {
+        let n = crate::rules::convert::usize_from_u32(graph.node_count());
         // Aggregate parallel arcs by SUM of capacity (see module docs). The
         // BTreeMap fixes a sorted `(from, to)` construction order, which the
         // determinism argument relies on.
@@ -202,7 +202,7 @@ impl ResidualNet {
                 if u == target.target {
                     continue; // self-loop: carries no s–t flow
                 }
-                *agg.entry((u, target.target)).or_default() += target.value as f64;
+                *agg.entry((u, target.target)).or_default() += target.value;
             }
         }
         let mut adj: Vec<Vec<ResidualArc>> = vec![Vec::new(); n];
@@ -216,15 +216,15 @@ impl ResidualNet {
             }
         }
         for ((u, v), cap) in agg {
-            let fwd_idx = adj[u as usize].len();
-            let rev_idx = adj[v as usize].len();
-            adj[u as usize].push(ResidualArc {
+            let fwd_idx = adj[crate::rules::convert::usize_from_u32(u)].len();
+            let rev_idx = adj[crate::rules::convert::usize_from_u32(v)].len();
+            adj[crate::rules::convert::usize_from_u32(u)].push(ResidualArc {
                 to: v,
                 cap,
                 flow: 0.0,
                 rev: rev_idx,
             });
-            adj[v as usize].push(ResidualArc {
+            adj[crate::rules::convert::usize_from_u32(v)].push(ResidualArc {
                 to: u,
                 cap: 0.0,
                 flow: 0.0,
@@ -246,7 +246,7 @@ impl ResidualNet {
             // the tree edge reaching v.
             let mut prev: Vec<Option<(u32, usize)>> = vec![None; n];
             let mut seen = vec![false; n];
-            seen[source as usize] = true;
+            seen[crate::rules::convert::usize_from_u32(source)] = true;
             let mut queue = VecDeque::new();
             queue.push_back(source);
             while let Some(u) = queue.pop_front() {
@@ -255,15 +255,15 @@ impl ResidualNet {
                 if u == sink {
                     break;
                 }
-                for (ai, arc) in self.adj[u as usize].iter().enumerate() {
-                    if arc.cap - arc.flow > EPS && !seen[arc.to as usize] {
-                        seen[arc.to as usize] = true;
-                        prev[arc.to as usize] = Some((u, ai));
+                for (ai, arc) in self.adj[crate::rules::convert::usize_from_u32(u)].iter().enumerate() {
+                    if arc.cap - arc.flow > EPS && !seen[crate::rules::convert::usize_from_u32(arc.to)] {
+                        seen[crate::rules::convert::usize_from_u32(arc.to)] = true;
+                        prev[crate::rules::convert::usize_from_u32(arc.to)] = Some((u, ai));
                         queue.push_back(arc.to);
                     }
                 }
             }
-            if !seen[sink as usize] {
+            if !seen[crate::rules::convert::usize_from_u32(sink)] {
                 break; // no augmenting path: flow is maximum
             }
 
@@ -273,7 +273,7 @@ impl ResidualNet {
             while v != source {
                 // INVARIANT(ek_prev): BFS set `prev` for every reached node but source.
                 let (u, ai) = ek_bfs_parent(&prev, v, "ek_prev")?;
-                let arc = &self.adj[u as usize][ai];
+                let arc = &self.adj[crate::rules::convert::usize_from_u32(u)][ai];
                 bottleneck = bottleneck.min(arc.cap - arc.flow);
                 v = u;
             }
@@ -282,9 +282,9 @@ impl ResidualNet {
             let mut v = sink;
             while v != source {
                 let (u, ai) = ek_bfs_parent(&prev, v, "ek_prev")?;
-                let rev = self.adj[u as usize][ai].rev;
-                self.adj[u as usize][ai].flow += bottleneck;
-                self.adj[v as usize][rev].flow -= bottleneck;
+                let rev = self.adj[crate::rules::convert::usize_from_u32(u)][ai].rev;
+                self.adj[crate::rules::convert::usize_from_u32(u)][ai].flow += bottleneck;
+                self.adj[crate::rules::convert::usize_from_u32(v)][rev].flow -= bottleneck;
                 v = u;
             }
             total += bottleneck;
@@ -299,21 +299,21 @@ impl ResidualNet {
     fn min_cut_edges(&self, source: u32) -> Vec<(u32, u32, f64)> {
         let n = self.adj.len();
         let mut side = vec![false; n];
-        side[source as usize] = true;
+        side[crate::rules::convert::usize_from_u32(source)] = true;
         let mut queue = VecDeque::new();
         queue.push_back(source);
         while let Some(u) = queue.pop_front() {
-            for arc in &self.adj[u as usize] {
-                if arc.cap - arc.flow > EPS && !side[arc.to as usize] {
-                    side[arc.to as usize] = true;
+            for arc in &self.adj[crate::rules::convert::usize_from_u32(u)] {
+                if arc.cap - arc.flow > EPS && !side[crate::rules::convert::usize_from_u32(arc.to)] {
+                    side[crate::rules::convert::usize_from_u32(arc.to)] = true;
                     queue.push_back(arc.to);
                 }
             }
         }
         let mut cut = Vec::new();
         for &(from, idx) in &self.orig {
-            let arc = &self.adj[from as usize][idx];
-            if side[from as usize] && !side[arc.to as usize] {
+            let arc = &self.adj[crate::rules::convert::usize_from_u32(from)][idx];
+            if side[crate::rules::convert::usize_from_u32(from)] && !side[crate::rules::convert::usize_from_u32(arc.to)] {
                 cut.push((from, arc.to, arc.flow));
             }
         }
@@ -474,9 +474,9 @@ mod tests {
         let mut caps: BTreeMap<(usize, usize), f64> = BTreeMap::new();
         let m = 3 * n;
         for _ in 0..m {
-            let u = (next() >> 33) as usize % n;
-            let v = (next() >> 33) as usize % n;
-            let c = 1.0 + ((next() >> 40) % 9) as f64;
+            let u = crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33)) % n;
+            let v = crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33)) % n;
+            let c = 1.0 + f64::from((next() >> 40) % 9);
             if u != v {
                 *caps.entry((u, v)).or_default() += c;
             }

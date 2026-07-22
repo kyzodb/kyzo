@@ -46,7 +46,10 @@ impl FixedRule for TopSort {
             // INVARIANT(top_sort_index): `kahn_g` only emits graph node ids,
             // and `indices` has an entry per node.
             let val = graph_node_value(&indices, *val_id)?.clone();
-            let tuple = Tuple::from_vec(vec![DataValue::from(idx as i64), val.clone()]);
+            let tuple = Tuple::from_vec(vec![
+                DataValue::from(crate::rules::convert::i64_from_usize(idx)?),
+                val.clone(),
+            ]);
             out.put(tuple)?;
         }
 
@@ -65,26 +68,26 @@ impl FixedRule for TopSort {
 
 pub(crate) fn kahn_g(graph: &DirectedCsrGraph, cancel: CancelFlag) -> Result<Vec<u32>> {
     let graph_size = graph.node_count();
-    let mut in_degree = vec![0; graph_size as usize];
+    let mut in_degree = vec![0; crate::rules::convert::usize_from_u32(graph_size)];
     for tos in 0..graph_size {
         for to in graph.out_neighbors(tos) {
-            in_degree[to as usize] += 1;
+            in_degree[crate::rules::convert::usize_from_u32(to)] += 1;
         }
     }
-    let mut sorted = Vec::with_capacity(graph_size as usize);
+    let mut sorted = Vec::with_capacity(crate::rules::convert::usize_from_u32(graph_size));
     let mut pending = vec![];
 
     for (node, degree) in in_degree.iter().enumerate() {
         if *degree == 0 {
-            pending.push(node as u32);
+            pending.push(u32::try_from(node).map_err(|_| crate::rules::graph_view::GraphTooLargeError)?);
         }
     }
 
     while let Some(removed) = pending.pop() {
         sorted.push(removed);
         for nxt in graph.out_neighbors(removed) {
-            in_degree[nxt as usize] -= 1;
-            if in_degree[nxt as usize] == 0 {
+            in_degree[crate::rules::convert::usize_from_u32(nxt)] -= 1;
+            if in_degree[crate::rules::convert::usize_from_u32(nxt)] == 0 {
                 pending.push(nxt);
             }
         }

@@ -73,12 +73,15 @@ impl FixedRule for StronglyConnectedComponent {
                 // INVARIANT(scc_index): Tarjan only emits node ids the graph
                 // handed it, and `indices` has an entry per graph node.
                 let val = graph_node_value(&indices, *idx)?.clone();
-                let tuple = vec![val.clone(), DataValue::from(grp_id as i64)];
+                let tuple = vec![
+                    val.clone(),
+                    DataValue::from(crate::rules::convert::i64_from_usize(grp_id)?),
+                ];
                 out.put(Tuple::from_vec(tuple))?;
             }
         }
 
-        let mut counter = tarjan.len() as i64;
+        let mut counter = crate::rules::convert::i64_from_usize(tarjan.len())?;
 
         if let Ok(nodes) = payload.get_input(1) {
             // A missing (unbound) nodes relation is the "not provided" case
@@ -127,22 +130,22 @@ impl TarjanSccG {
         Self {
             graph,
             id: 0,
-            ids: vec![None; graph_size as usize],
-            low: vec![0; graph_size as usize],
-            on_stack: vec![false; graph_size as usize],
+            ids: vec![None; crate::rules::convert::usize_from_u32(graph_size)],
+            low: vec![0; crate::rules::convert::usize_from_u32(graph_size)],
+            on_stack: vec![false; crate::rules::convert::usize_from_u32(graph_size)],
             stack: vec![],
         }
     }
     pub(crate) fn run(mut self, cancel: CancelFlag) -> Result<Vec<Vec<u32>>> {
         for i in 0..self.graph.node_count() {
-            if self.ids[i as usize].is_none() {
+            if self.ids[crate::rules::convert::usize_from_u32(i)].is_none() {
                 self.dfs(i, &cancel)?;
             }
         }
 
         let mut low_map: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for (idx, grp) in self.low.into_iter().enumerate() {
-            low_map.entry(grp).or_default().push(idx as u32);
+            low_map.entry(grp).or_default().push(crate::rules::convert::u32_from_usize(idx)?);
         }
 
         Ok(low_map.into_values().collect_vec())
@@ -151,10 +154,10 @@ impl TarjanSccG {
     /// Assign `at` its discovery id and put it on the component stack.
     fn open(&mut self, at: u32) {
         self.stack.push(at);
-        self.on_stack[at as usize] = true;
+        self.on_stack[crate::rules::convert::usize_from_u32(at)] = true;
         self.id += 1;
-        self.ids[at as usize] = Some(self.id);
-        self.low[at as usize] = self.id;
+        self.ids[crate::rules::convert::usize_from_u32(at)] = Some(self.id);
+        self.low[crate::rules::convert::usize_from_u32(at)] = self.id;
     }
 
     /// One DFS from `root`, on an explicit `(node, cursor)` frame stack —
@@ -178,21 +181,21 @@ impl TarjanSccG {
                         .last_mut()
                         .ok_or_else(|| GraphAlgorithmInvariantError::refuse("scc_frame"))?;
                     frame.1 += 1;
-                    if self.ids[to as usize].is_none() {
+                    if self.ids[crate::rules::convert::usize_from_u32(to)].is_none() {
                         self.open(to);
                         frames.push((to, 0));
-                    } else if self.on_stack[to as usize] {
-                        self.low[at as usize] = min(self.low[at as usize], self.low[to as usize]);
+                    } else if self.on_stack[crate::rules::convert::usize_from_u32(to)] {
+                        self.low[crate::rules::convert::usize_from_u32(at)] = min(self.low[crate::rules::convert::usize_from_u32(at)], self.low[crate::rules::convert::usize_from_u32(to)]);
                     }
                 }
                 None => {
                     frames.pop();
                     // INVARIANT(scc_ids_open): `ids[at]` was set to `Some` by `open`.
-                    if self.ids[at as usize] == Some(self.low[at as usize]) {
-                        let label = self.low[at as usize];
+                    if self.ids[crate::rules::convert::usize_from_u32(at)] == Some(self.low[crate::rules::convert::usize_from_u32(at)]) {
+                        let label = self.low[crate::rules::convert::usize_from_u32(at)];
                         while let Some(node) = self.stack.pop() {
-                            self.on_stack[node as usize] = false;
-                            self.low[node as usize] = label;
+                            self.on_stack[crate::rules::convert::usize_from_u32(node)] = false;
+                            self.low[crate::rules::convert::usize_from_u32(node)] = label;
                             if node == at {
                                 break;
                             }
@@ -202,10 +205,10 @@ impl TarjanSccG {
                     // closed child is still on the component stack, its
                     // low-link constrains the parent's.
                     if let Some(&(parent, _)) = frames.last()
-                        && self.on_stack[at as usize]
+                        && self.on_stack[crate::rules::convert::usize_from_u32(at)]
                     {
-                        self.low[parent as usize] =
-                            min(self.low[parent as usize], self.low[at as usize]);
+                        self.low[crate::rules::convert::usize_from_u32(parent)] =
+                            min(self.low[crate::rules::convert::usize_from_u32(parent)], self.low[crate::rules::convert::usize_from_u32(at)]);
                     }
                 }
             }
@@ -270,7 +273,7 @@ mod tests {
         let graph = DirectedCsrGraph::from_edges(edges).unwrap();
         let sccs = TarjanSccG::new(graph).run(CancelFlag::default()).unwrap();
         assert_eq!(sccs.len(), 1);
-        assert_eq!(sccs[0].len(), n as usize);
+        assert_eq!(sccs[0].len(), crate::rules::convert::usize_from_u32(n));
     }
 
     /// CANCELLATION: `run` no longer polls outside the DFS (the recursive

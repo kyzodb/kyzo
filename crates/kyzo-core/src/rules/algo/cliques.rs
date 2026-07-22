@@ -158,7 +158,7 @@ impl FixedRule for MaximalCliques {
             .map(|clique| {
                 let mut members: Vec<DataValue> = clique
                     .into_iter()
-                    .map(|id| indices[id as usize].clone())
+                    .map(|id| indices[crate::rules::convert::usize_from_u32(id)].clone())
                     .collect();
                 members.sort();
                 members
@@ -169,7 +169,7 @@ impl FixedRule for MaximalCliques {
         for (clique_id, members) in keyed.into_iter().enumerate() {
             for member in members {
                 out.put(Tuple::from_vec(vec![
-                    DataValue::from(clique_id as i64),
+                    DataValue::from(crate::rules::convert::i64_from_usize(clique_id)?),
                     member,
                 ]))?;
             }
@@ -192,9 +192,10 @@ impl FixedRule for MaximalCliques {
 /// spirit to `k_core::simple_adjacency`; kept local so this file is a
 /// self-contained deliverable.
 fn simple_adjacency(graph: &DirectedCsrGraph) -> Vec<Vec<u32>> {
-    let n = graph.node_count() as usize;
+    let n_u32 = graph.node_count();
+    let n = crate::rules::convert::usize_from_u32(n_u32);
     let mut adj = Vec::with_capacity(n);
-    for v in 0..n as u32 {
+    for v in 0..n_u32 {
         let mut nbrs: Vec<u32> = graph.out_neighbors(v).filter(|&u| u != v).collect();
         nbrs.dedup();
         adj.push(nbrs);
@@ -217,7 +218,7 @@ fn degeneracy_order(adj: &[Vec<u32>], cancel: &CancelFlag) -> Result<Vec<u32>> {
     };
     let mut buckets: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); max_deg + 1];
     for (v, &d) in deg.iter().enumerate() {
-        buckets[d].insert(v as u32);
+        buckets[d].insert(crate::rules::convert::u32_from_usize(v)?);
     }
     let mut order = Vec::with_capacity(n);
     let mut removed = vec![false; n];
@@ -234,13 +235,13 @@ fn degeneracy_order(adj: &[Vec<u32>], cancel: &CancelFlag) -> Result<Vec<u32>> {
             .next()
             .ok_or_else(|| GraphAlgorithmInvariantError::refuse("degen_bucket_nonempty"))?;
         buckets[d].remove(&v);
-        removed[v as usize] = true;
+        removed[crate::rules::convert::usize_from_u32(v)] = true;
         order.push(v);
-        for &u in &adj[v as usize] {
-            if !removed[u as usize] {
-                buckets[deg[u as usize]].remove(&u);
-                deg[u as usize] -= 1;
-                buckets[deg[u as usize]].insert(u);
+        for &u in &adj[crate::rules::convert::usize_from_u32(v)] {
+            if !removed[crate::rules::convert::usize_from_u32(u)] {
+                buckets[deg[crate::rules::convert::usize_from_u32(u)]].remove(&u);
+                deg[crate::rules::convert::usize_from_u32(u)] -= 1;
+                buckets[deg[crate::rules::convert::usize_from_u32(u)]].insert(u);
             }
         }
     }
@@ -284,7 +285,7 @@ fn enumerate_cliques(
     let n = adj.len();
     let mut pos = vec![0usize; n];
     for (i, &v) in order.iter().enumerate() {
-        pos[v as usize] = i;
+        pos[crate::rules::convert::usize_from_u32(v)] = i;
     }
 
     let mut ctx = Enumeration {
@@ -296,15 +297,15 @@ fn enumerate_cliques(
     for &v in &order {
         // Later-neighbors → candidates; earlier-neighbors → excluded. Both
         // inherit `adj[v]`'s sorted order.
-        let p: Vec<u32> = adj[v as usize]
+        let p: Vec<u32> = adj[crate::rules::convert::usize_from_u32(v)]
             .iter()
             .copied()
-            .filter(|&u| pos[u as usize] > pos[v as usize])
+            .filter(|&u| pos[crate::rules::convert::usize_from_u32(u)] > pos[crate::rules::convert::usize_from_u32(v)])
             .collect();
-        let x: Vec<u32> = adj[v as usize]
+        let x: Vec<u32> = adj[crate::rules::convert::usize_from_u32(v)]
             .iter()
             .copied()
-            .filter(|&u| pos[u as usize] < pos[v as usize])
+            .filter(|&u| pos[crate::rules::convert::usize_from_u32(u)] < pos[crate::rules::convert::usize_from_u32(v)])
             .collect();
         ctx.bron_kerbosch(vec![v], p, x, cancel)?;
     }
@@ -342,8 +343,8 @@ impl Enumeration<'_> {
                 cr.push(v);
                 (
                     cr,
-                    intersect(&f.p, &self.adj[v as usize]),
-                    intersect(&f.x, &self.adj[v as usize]),
+                    intersect(&f.p, &self.adj[crate::rules::convert::usize_from_u32(v)]),
+                    intersect(&f.x, &self.adj[crate::rules::convert::usize_from_u32(v)]),
                 )
             };
 
@@ -390,7 +391,7 @@ impl Enumeration<'_> {
             });
         }
         let pivot = choose_pivot(&p, &x, self.adj)?;
-        let pivot_nbrs = &self.adj[pivot as usize];
+        let pivot_nbrs = &self.adj[crate::rules::convert::usize_from_u32(pivot)];
         let cands: Vec<u32> = p
             .iter()
             .copied()
@@ -413,7 +414,7 @@ impl Enumeration<'_> {
 fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> Result<u32> {
     let mut best: Option<(usize, u32)> = None; // (coverage, id)
     for &u in p.iter().chain(x.iter()) {
-        let coverage = count_intersection(p, &adj[u as usize]);
+        let coverage = count_intersection(p, &adj[crate::rules::convert::usize_from_u32(u)]);
         match best {
             None => best = Some((coverage, u)),
             Some((bc, bu)) => {
@@ -793,7 +794,7 @@ mod tests {
         )
         .unwrap();
         // One clique (id 0) containing all m nodes ⇒ m membership rows.
-        assert_eq!(got.len(), m as usize);
+        assert_eq!(got.len(), crate::rules::convert::usize_from_u32(m));
         assert!(got.iter().all(|r| r[0].get_int().unwrap() == 0));
     }
 

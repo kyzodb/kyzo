@@ -327,7 +327,7 @@ impl<'a> FixedRuleInputRelation<'a> {
         undirected: bool,
         allow_negative_weights: bool,
     ) -> Result<(
-        DirectedCsrGraph<f32>,
+        DirectedCsrGraph<f64>,
         Vec<DataValue>,
         BTreeMap<DataValue, u32>,
     )> {
@@ -492,7 +492,11 @@ impl<'a> FixedRulePayload<'a> {
         bound_help: WrongFixedRuleOptionHelp,
         fits_help: WrongFixedRuleOptionHelp,
     ) -> Result<usize> {
-        let i = self.integer_option(name, default.map(|i| i as i64))?;
+        let default_i64 = match default {
+            None => None,
+            Some(d) => Some(crate::rules::convert::i64_from_usize(d)?),
+        };
+        let i = self.integer_option(name, default_i64)?;
         ensure!(
             bound_ok(i),
             WrongFixedRuleOptionError {
@@ -693,7 +697,7 @@ impl FixedRuleOutput {
         if let Some(guard) = self.guard.as_mut()
             && guard.stride_left.tick()
         {
-            let spent = guard.baseline.saturating_add(self.store.len() as u64);
+            let spent = guard.baseline.saturating_add(crate::rules::convert::u64_from_usize(self.store.len())?);
             if spent > guard.ceiling {
                 return Err(LimitExceeded {
                     dimension: BudgetDimension::InFlightDerivations,
@@ -739,7 +743,7 @@ mod fixed_rule_output_budget_tests {
         assert_eq!(refusal.dimension, BudgetDimension::InFlightDerivations);
         assert_eq!(refusal.ceiling, 10);
         assert!(refusal.spent > 10);
-        assert!(refusal.spent <= 10 + OUTPUT_STRIDE as u64);
+        assert!(refusal.spent <= 10 + u64::from(OUTPUT_STRIDE));
         assert_eq!(refusal.span, Some(SourceSpan(3, 5)));
     }
 
@@ -1191,7 +1195,7 @@ pub(crate) fn tuple_into_first_column(tuple: Tuple) -> Result<DataValue> {
 /// Dense node id → interned value; `indices` has one entry per graph node.
 pub(crate) fn graph_node_value(indices: &[DataValue], node: u32) -> Result<&DataValue> {
     indices
-        .get(node as usize)
+        .get(crate::rules::convert::usize_from_u32(node))
         .ok_or_else(|| GraphAlgorithmInvariantError::refuse("graph_node_index"))
 }
 
@@ -1213,7 +1217,7 @@ pub(crate) fn path_predecessor(
     current: u32,
     invariant: &'static str,
 ) -> Result<u32> {
-    back_pointers[current as usize].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+    back_pointers[crate::rules::convert::usize_from_u32(current)].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
 }
 
 /// Edmonds–Karp BFS parent on the augmenting path.
@@ -1222,7 +1226,7 @@ pub(crate) fn ek_bfs_parent(
     node: u32,
     invariant: &'static str,
 ) -> Result<(u32, usize)> {
-    prev[node as usize].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+    prev[crate::rules::convert::usize_from_u32(node)].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
 }
 
 /// The sole element of a set whose length is already known to be 1.

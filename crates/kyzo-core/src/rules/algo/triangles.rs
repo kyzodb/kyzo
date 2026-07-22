@@ -47,8 +47,8 @@ impl FixedRule for ClusteringCoefficients {
             out.put(Tuple::from_vec(vec![
                 indices[idx].clone(),
                 DataValue::from(cc),
-                DataValue::from(n_triangles as i64),
-                DataValue::from(degree as i64),
+                DataValue::from(crate::rules::convert::i64_from_usize(n_triangles)?),
+                DataValue::from(crate::rules::convert::i64_from_usize(degree)?),
             ]))?;
         }
 
@@ -102,7 +102,9 @@ fn clustering_coefficients(
                             .count()
                     })
                     .sum();
-                let cc = 2. * n_triangles as f64 / ((degree as f64) * ((degree as f64) - 1.));
+                let deg_f = f64::from(crate::rules::convert::u32_from_usize(degree)?);
+                let tri_f = f64::from(crate::rules::convert::u32_from_usize(n_triangles)?);
+                let cc = 2. * tri_f / (deg_f * (deg_f - 1.));
                 cancel.check()?;
                 Ok((cc, n_triangles, degree))
             }
@@ -130,7 +132,7 @@ mod tests {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            ((state >> 33) as u32) % n
+            crate::rules::convert::u32_low(state >> 33) % n
         };
         let mut edges = vec![];
         for _ in 0..3000 {

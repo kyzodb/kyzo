@@ -68,7 +68,7 @@ impl FixedRule for RandomWalk {
         // Determinism: each step's neighbor pick is seeded from this option
         // (fixed default), never from OS entropy.
         let seed = SeededRng::seed_from_i64(
-            payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))?,
+            payload.integer_option("seed", Some(crate::rules::convert::i64_bits_from_u64(SeededRng::DEFAULT_SEED)))?,
         );
 
         let mut maybe_weight = match payload.manifest.options.get("weight") {

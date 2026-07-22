@@ -67,8 +67,8 @@ impl FixedRule for PageRank {
     ) -> Result<()> {
         let edges = payload.get_input(0)?;
         let undirected = payload.bool_option("undirected", Some(false))?;
-        let theta = payload.unit_interval_option("theta", Some(0.85))? as f32;
-        let epsilon = payload.unit_interval_option("epsilon", Some(0.0001))? as f32;
+        let theta = payload.unit_interval_option("theta", Some(0.85))?;
+        let epsilon = payload.unit_interval_option("epsilon", Some(0.0001))?;
         let iterations = payload.pos_integer_option("iterations", Some(10))?;
 
         let (graph, indices, _) = edges.as_directed_graph(undirected)?;
@@ -77,12 +77,12 @@ impl FixedRule for PageRank {
             return Ok(());
         }
 
-        let ranks = page_rank(&graph, theta, epsilon as f64, iterations, cancel)?;
+        let ranks = page_rank(&graph, theta, epsilon, iterations, cancel)?;
 
         for (idx, score) in ranks.iter().enumerate() {
             out.put(Tuple::from_vec(vec![
                 indices[idx].clone(),
-                DataValue::from(*score as f64),
+                DataValue::from(*score),
             ]))?;
         }
         Ok(())
@@ -115,14 +115,16 @@ impl FixedRule for PageRank {
 /// node-index-ordered `Vec`, never by a parallel reduction.
 fn page_rank(
     graph: &DirectedCsrGraph,
-    damping_factor: f32,
+    damping_factor: f64,
     tolerance: f64,
     max_iterations: usize,
     cancel: CancelFlag,
-) -> Result<Vec<f32>> {
-    let node_count = graph.node_count() as usize;
-    let init_score = 1_f32 / node_count as f32;
-    let base_score = (1.0_f32 - damping_factor) / node_count as f32;
+) -> Result<Vec<f64>> {
+    let n_u32 = graph.node_count();
+    let node_count = crate::rules::convert::usize_from_u32(n_u32);
+    let n_f = f64::from(n_u32);
+    let init_score = 1_f64 / n_f;
+    let base_score = (1.0_f64 - damping_factor) / n_f;
 
     let mut prev = vec![init_score; node_count];
 
@@ -133,25 +135,28 @@ fn page_rank(
         // `prev`. A sink node (out-degree 0) divides by zero into `inf`
         // here, exactly as the original did — the value is never read,
         // because a sink is nobody's in-neighbor.
-        let out_scores: Vec<f32> = (0..node_count)
-            .map(|node| prev[node] / graph.out_degree(node as u32) as f32)
-            .collect();
+        let mut out_scores = Vec::with_capacity(node_count);
+        for node in 0..n_u32 {
+            let deg = crate::rules::convert::u32_from_usize(graph.out_degree(node))?;
+            out_scores.push(prev[crate::rules::convert::usize_from_u32(node)] / f64::from(deg));
+        }
 
         // Per-node Jacobi update, parallelized order-preservingly. Each node
         // reads only `out_scores`/`prev` (the frozen previous iteration) and
         // the shared CSR; nodes are independent within the iteration. The
-        // in-neighbor sum is a sequential f32 fold in fixed CSR order, so the
+        // in-neighbor sum is a sequential f64 fold in fixed CSR order, so the
         // whole map is byte-identical at any thread count. `cancel.check()`
         // is polled once per node.
         let updated = par_try_map(
-            (0..node_count).collect::<Vec<_>>(),
-            |u| -> Result<(f32, f64)> {
+            (0..n_u32).collect::<Vec<_>>(),
+            |u| -> Result<(f64, f64)> {
                 let incoming_total = graph
-                    .in_neighbors(u as u32)
-                    .map(|v| out_scores[v as usize])
-                    .sum::<f32>();
+                    .in_neighbors(u)
+                    .map(|v| out_scores[crate::rules::convert::usize_from_u32(v)])
+                    .sum::<f64>();
+                let ui = crate::rules::convert::usize_from_u32(u);
                 let new_score = base_score + damping_factor * incoming_total;
-                let delta = f64::abs((new_score - prev[u]) as f64);
+                let delta = f64::abs(new_score - prev[ui]);
                 cancel.check()?;
                 Ok((new_score, delta))
             },
@@ -199,16 +204,16 @@ mod tests {
     fn naive_jacobi(
         node_count: usize,
         edges: &[(u32, u32)],
-        damping: f32,
+        damping: f64,
         tolerance: f64,
         max_iterations: usize,
         term: Term,
-    ) -> Vec<f32> {
+    ) -> Vec<f64> {
         let mut in_adj: Vec<Vec<u32>> = vec![vec![]; node_count];
         let mut out_degree: Vec<u32> = vec![0; node_count];
         for &(f, t) in edges {
-            in_adj[t as usize].push(f);
-            out_degree[f as usize] += 1;
+            in_adj[crate::rules::convert::usize_from_u32(t)].push(f);
+            out_degree[crate::rules::convert::usize_from_u32(f)] += 1;
         }
         // Fixed summation order: ascending source id, as the CSR keeps its
         // in-segments.
@@ -216,20 +221,24 @@ mod tests {
             adj.sort_unstable();
         }
 
-        let init = 1_f32 / node_count as f32;
-        let base = (1.0_f32 - damping) / node_count as f32;
+        let n_f = f64::from(match u32::try_from(node_count) {
+            Ok(n) => n,
+            Err(_) => panic!("test fixture node_count fits u32"),
+        });
+        let init = 1_f64 / n_f;
+        let base = (1.0_f64 - damping) / n_f;
         let mut prev = vec![init; node_count];
         for _ in 0..max_iterations {
-            let out_share: Vec<f32> = (0..node_count)
-                .map(|v| prev[v] / out_degree[v] as f32)
+            let out_share: Vec<f64> = (0..node_count)
+                .map(|v| prev[v] / f64::from(out_degree[v]))
                 .collect();
-            let mut next = vec![0_f32; node_count];
+            let mut next = vec![0_f64; node_count];
             let mut sum_delta = 0_f64;
             let mut max_delta = 0_f64;
             for u in 0..node_count {
-                let sum: f32 = in_adj[u].iter().map(|&v| out_share[v as usize]).sum();
+                let sum: f64 = in_adj[u].iter().map(|&v| out_share[crate::rules::convert::usize_from_u32(v)]).sum();
                 next[u] = base + damping * sum;
-                let d = f64::abs((next[u] - prev[u]) as f64);
+                let d = f64::abs(next[u] - prev[u]);
                 sum_delta += d;
                 max_delta = max_delta.max(d);
             }
@@ -252,34 +261,38 @@ mod tests {
     fn naive_gauss_seidel(
         node_count: usize,
         edges: &[(u32, u32)],
-        damping: f32,
+        damping: f64,
         tolerance: f64,
         max_iterations: usize,
-    ) -> Vec<f32> {
+    ) -> Vec<f64> {
         let mut in_adj: Vec<Vec<u32>> = vec![vec![]; node_count];
         let mut out_degree: Vec<u32> = vec![0; node_count];
         for &(f, t) in edges {
-            in_adj[t as usize].push(f);
-            out_degree[f as usize] += 1;
+            in_adj[crate::rules::convert::usize_from_u32(t)].push(f);
+            out_degree[crate::rules::convert::usize_from_u32(f)] += 1;
         }
         for adj in &mut in_adj {
             adj.sort_unstable();
         }
-        let init = 1_f32 / node_count as f32;
-        let base = (1.0_f32 - damping) / node_count as f32;
+        let n_f = f64::from(match u32::try_from(node_count) {
+            Ok(n) => n,
+            Err(_) => panic!("test fixture node_count fits u32"),
+        });
+        let init = 1_f64 / n_f;
+        let base = (1.0_f64 - damping) / n_f;
         let mut scores = vec![init; node_count];
-        let mut out_scores: Vec<f32> = (0..node_count)
-            .map(|v| init / out_degree[v] as f32)
+        let mut out_scores: Vec<f64> = (0..node_count)
+            .map(|v| init / f64::from(out_degree[v]))
             .collect();
         for _ in 0..max_iterations {
             let mut error = 0_f64;
             for u in 0..node_count {
-                let sum: f32 = in_adj[u].iter().map(|&v| out_scores[v as usize]).sum();
+                let sum: f64 = in_adj[u].iter().map(|&v| out_scores[crate::rules::convert::usize_from_u32(v)]).sum();
                 let old = scores[u];
                 let new = base + damping * sum;
                 scores[u] = new;
-                error += f64::abs((new - old) as f64);
-                out_scores[u] = new / out_degree[u] as f32;
+                error += f64::abs(new - old);
+                out_scores[u] = new / f64::from(out_degree[u]);
             }
             if error < tolerance {
                 break;
@@ -297,7 +310,7 @@ mod tests {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            ((state >> 33) as u32) % n
+            crate::rules::convert::u32_low(state >> 33) % n
         };
         let mut edges = vec![];
         for _ in 0..m {
@@ -342,7 +355,7 @@ mod tests {
         // iterates are still distinct — see the divergence test below).
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         let graph = graph_of(&edges);
-        let n = graph.node_count() as usize;
+        let n = crate::rules::convert::usize_from_u32(graph.node_count());
         for &iters in &[1usize, 2, 5, 10] {
             let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::default()).unwrap();
             let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum);
@@ -378,7 +391,7 @@ mod tests {
             }
         }
         let graph = graph_of(&edges);
-        let n = graph.node_count() as usize;
+        let n = crate::rules::convert::usize_from_u32(graph.node_count());
         assert_eq!(n, 302, "hub graph should span nodes 0..=301");
         for &iters in &[1usize, 2, 3] {
             let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::default()).unwrap();
@@ -403,7 +416,7 @@ mod tests {
     fn termination_metric_is_sum_not_max() {
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         let graph = graph_of(&edges);
-        let n = graph.node_count() as usize;
+        let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 0.1;
         let got = page_rank(&graph, 0.85, tol, 50, CancelFlag::default()).unwrap();
         let want_sum = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Sum);
@@ -453,7 +466,7 @@ mod tests {
         let want: Vec<Tuple> = ["a", "b", "c", "d"]
             .iter()
             .zip(want_scores.iter())
-            .map(|(name, score)| Tuple::from_vec(vec![s(name), DataValue::from(*score as f64)]))
+            .map(|(name, score)| Tuple::from_vec(vec![s(name), DataValue::from(*score)]))
             .collect();
         assert_eq!(got, want);
     }
@@ -507,7 +520,7 @@ mod tests {
         // 3→{0}; every node both reaches and is reached from 0.
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         let graph = graph_of(&edges);
-        let n = graph.node_count() as usize;
+        let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 1e-9;
         let jac = page_rank(&graph, 0.85, tol, 100_000, CancelFlag::default()).unwrap();
         let gs = naive_gauss_seidel(n, &edges, 0.85, tol, 100_000);

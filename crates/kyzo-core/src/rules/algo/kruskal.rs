@@ -56,9 +56,9 @@ impl FixedRule for MinimumSpanningForestKruskal {
         let msp = kruskal(&graph, cancel)?;
         for (src, dst, cost) in msp {
             out.put(Tuple::from_vec(vec![
-                indices[src as usize].clone(),
-                indices[dst as usize].clone(),
-                DataValue::from(cost as f64),
+                indices[crate::rules::convert::usize_from_u32(src)].clone(),
+                indices[crate::rules::convert::usize_from_u32(dst)].clone(),
+                DataValue::from(cost),
             ]))?;
         }
 
@@ -75,10 +75,10 @@ impl FixedRule for MinimumSpanningForestKruskal {
     }
 }
 
-fn kruskal(edges: &DirectedCsrGraph<f32>, cancel: CancelFlag) -> Result<Vec<(u32, u32, f32)>> {
+fn kruskal(edges: &DirectedCsrGraph<f64>, cancel: CancelFlag) -> Result<Vec<(u32, u32, f64)>> {
     let mut pq = PriorityQueue::new();
     let mut uf = UnionFind::new(edges.node_count());
-    let mut mst = Vec::with_capacity((edges.node_count() - 1) as usize);
+    let mut mst = Vec::with_capacity(match edges.node_count() { 0 => 0, n => crate::rules::convert::usize_from_u32(n - 1) });
     for from in 0..edges.node_count() {
         for target in edges.out_neighbors_with_values(from) {
             let to = target.target;
@@ -115,30 +115,30 @@ impl UnionFind {
     fn new(n: u32) -> Self {
         Self {
             ids: (0..n).collect_vec(),
-            szs: vec![1; n as usize],
+            szs: vec![1; crate::rules::convert::usize_from_u32(n)],
         }
     }
     fn union(&mut self, p: u32, q: u32) {
         let root1 = self.find(p);
         let root2 = self.find(q);
         if root1 != root2 {
-            if self.szs[root1 as usize] < self.szs[root2 as usize] {
-                self.szs[root2 as usize] += self.szs[root1 as usize];
-                self.ids[root1 as usize] = root2;
+            if self.szs[crate::rules::convert::usize_from_u32(root1)] < self.szs[crate::rules::convert::usize_from_u32(root2)] {
+                self.szs[crate::rules::convert::usize_from_u32(root2)] += self.szs[crate::rules::convert::usize_from_u32(root1)];
+                self.ids[crate::rules::convert::usize_from_u32(root1)] = root2;
             } else {
-                self.szs[root1 as usize] += self.szs[root2 as usize];
-                self.ids[root2 as usize] = root1;
+                self.szs[crate::rules::convert::usize_from_u32(root1)] += self.szs[crate::rules::convert::usize_from_u32(root2)];
+                self.ids[crate::rules::convert::usize_from_u32(root2)] = root1;
             }
         }
     }
     fn find(&mut self, mut p: u32) -> u32 {
         let mut root = p;
-        while root != self.ids[root as usize] {
-            root = self.ids[root as usize];
+        while root != self.ids[crate::rules::convert::usize_from_u32(root)] {
+            root = self.ids[crate::rules::convert::usize_from_u32(root)];
         }
         while p != root {
-            let next = self.ids[p as usize];
-            self.ids[p as usize] = root;
+            let next = self.ids[crate::rules::convert::usize_from_u32(p)];
+            self.ids[crate::rules::convert::usize_from_u32(p)] = root;
             p = next;
         }
         root

@@ -90,7 +90,7 @@ impl FixedRule for KCoreDecomposition {
         for (i, c) in core.into_iter().enumerate() {
             out.put(Tuple::from_vec(vec![
                 indices[i].clone(),
-                DataValue::from(c as i64),
+                DataValue::from(i64::from(c)),
             ]))?;
         }
         Ok(())
@@ -110,15 +110,16 @@ impl FixedRule for KCoreDecomposition {
 /// (parallel edges collapsed) with self-loops dropped. Built from the
 /// undirected CSR, whose out-adjacency is already target-sorted, so a single
 /// `dedup` after the self-filter suffices.
-fn simple_adjacency(graph: &DirectedCsrGraph) -> Vec<Vec<u32>> {
-    let n = graph.node_count() as usize;
+fn simple_adjacency(graph: &DirectedCsrGraph) -> Result<Vec<Vec<u32>>> {
+    let n_u32 = graph.node_count();
+    let n = crate::rules::convert::usize_from_u32(n_u32);
     let mut adj = Vec::with_capacity(n);
-    for v in 0..n as u32 {
+    for v in 0..n_u32 {
         let mut nbrs: Vec<u32> = graph.out_neighbors(v).filter(|&u| u != v).collect();
         nbrs.dedup(); // already sorted by the CSR; collapse parallel edges
         adj.push(nbrs);
     }
-    adj
+    Ok(adj)
 }
 
 /// Batagelj–Zaverznik core decomposition (`O(V + E)`): bucket vertices by
@@ -132,9 +133,15 @@ fn simple_adjacency(graph: &DirectedCsrGraph) -> Vec<Vec<u32>> {
 /// is wrong wherever coreness differs from degree (pinned by
 /// `coreness_differs_from_degree`).
 fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32>> {
-    let n = graph.node_count() as usize;
-    let adj = simple_adjacency(graph);
-    let mut deg: Vec<u32> = adj.iter().map(|a| a.len() as u32).collect();
+    let n = crate::rules::convert::usize_from_u32(graph.node_count());
+    let adj = simple_adjacency(graph)?;
+    let mut deg: Vec<u32> = {
+        let mut out = Vec::with_capacity(adj.len());
+        for a in &adj {
+            out.push(crate::rules::convert::u32_from_usize(a.len())?);
+        }
+        out
+    };
     let max_deg = match deg.iter().copied().max() {
         Some(m) => match usize::try_from(m) {
             Ok(v) => v,
@@ -147,7 +154,7 @@ fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32
     // start offset of the degree-`d` block within `vert`.
     let mut bin = vec![0usize; max_deg + 1];
     for &d in &deg {
-        bin[d as usize] += 1;
+        bin[crate::rules::convert::usize_from_u32(d)] += 1;
     }
     let mut start = 0usize;
     for slot in bin.iter_mut() {
@@ -161,9 +168,9 @@ fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32
     let mut pos = vec![0usize; n];
     let mut vert = vec![0u32; n];
     for v in 0..n {
-        pos[v] = bin[deg[v] as usize];
-        vert[pos[v]] = v as u32;
-        bin[deg[v] as usize] += 1;
+        pos[v] = bin[crate::rules::convert::usize_from_u32(deg[v])];
+        vert[pos[v]] = crate::rules::convert::u32_from_usize(v)?;
+        bin[crate::rules::convert::usize_from_u32(deg[v])] += 1;
     }
     // Filling shifted every offset up by its block size; slide them back so
     // `bin[d]` again points at the start of the degree-`d` block.
@@ -181,20 +188,20 @@ fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32
         cancel.check()?;
         // The loop mutates `vert`/`pos`/`deg`/`bin` but never `adj`, so
         // iterating `v`'s neighbor slice by reference is sound.
-        for &u in &adj[v as usize] {
-            if deg[u as usize] > deg[v as usize] {
-                let du = deg[u as usize] as usize;
-                let pu = pos[u as usize];
+        for &u in &adj[crate::rules::convert::usize_from_u32(v)] {
+            if deg[crate::rules::convert::usize_from_u32(u)] > deg[crate::rules::convert::usize_from_u32(v)] {
+                let du = crate::rules::convert::usize_from_u32(deg[crate::rules::convert::usize_from_u32(u)]);
+                let pu = pos[crate::rules::convert::usize_from_u32(u)];
                 let pw = bin[du];
                 let w = vert[pw];
                 if u != w {
                     vert[pu] = w;
-                    pos[w as usize] = pu;
+                    pos[crate::rules::convert::usize_from_u32(w)] = pu;
                     vert[pw] = u;
-                    pos[u as usize] = pw;
+                    pos[crate::rules::convert::usize_from_u32(u)] = pw;
                 }
                 bin[du] += 1;
-                deg[u as usize] -= 1;
+                deg[crate::rules::convert::usize_from_u32(u)] -= 1;
             }
         }
     }
@@ -226,8 +233,16 @@ mod tests {
 
         let mut deg: BTreeMap<String, i64> = nodes
             .iter()
-            .map(|v| (v.clone(), adj.get(v).map_or(0, |a| a.len() as i64)))
-            .collect();
+            .map(|v| -> Result<_> {
+                Ok((
+                    v.clone(),
+                    match adj.get(v) {
+                        None => 0,
+                        Some(a) => crate::rules::convert::i64_from_usize(a.len())?,
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let mut removed: BTreeSet<String> = BTreeSet::new();
         let mut core: BTreeMap<String, u32> = BTreeMap::new();
         let mut k = 0u32;
@@ -238,7 +253,14 @@ mod tests {
                 .min_by_key(|v| (deg[*v], (*v).clone()))
                 .ok_or_else(|| GraphAlgorithmInvariantError::refuse("k_core_remaining"))?
                 .clone();
-            k = k.max(deg[&v].max(0) as u32);
+            let dv = deg[&v].max(0);
+            let dv_u32 = match u32::try_from(dv) {
+                Ok(x) => x,
+                Err(_) => {
+                    return Err(GraphAlgorithmInvariantError::refuse("k_core_deg_u32").into());
+                }
+            };
+            k = k.max(dv_u32);
             core.insert(v.clone(), k);
             removed.insert(v.clone());
             if let Some(nbrs) = adj.get(&v) {
@@ -288,7 +310,13 @@ mod tests {
             .map(|r| {
                 (
                     r[0].get_str().unwrap().to_string(),
-                    r[1].get_int().unwrap() as u32,
+                    match r[1].get_int() {
+                        Some(i) => match u32::try_from(i) {
+                            Ok(u) => u,
+                            Err(_) => panic!("test core number fits u32"),
+                        },
+                        None => panic!("test core column must be int"),
+                    },
                 )
             })
             .collect()
@@ -396,7 +424,13 @@ mod tests {
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect();
         let got = run(&edges);
-        assert_eq!(got.len() as u32, n);
+        assert_eq!(
+            match u32::try_from(got.len()) {
+                Ok(u) => u,
+                Err(_) => panic!("test got.len fits u32"),
+            },
+            n
+        );
         assert!(got.values().all(|&c| c == 2));
     }
 

@@ -60,14 +60,14 @@ impl FixedRule for BetweennessCentrality {
         // stays a sequential fold over the ordered segments, fixing the float
         // summation order — parallel and sequential runs are byte-identical.
         let centrality_segs: Vec<_> =
-            par_try_map((0..n).collect(), |start| -> Result<BTreeMap<u32, f32>> {
+            par_try_map((0..n).collect(), |start| -> Result<BTreeMap<u32, f64>> {
                 let res_for_start =
                     dijkstra_keep_ties(&graph, start, &(), &(), &(), cancel.clone())?;
-                let mut ret: BTreeMap<u32, f32> = Default::default();
+                let mut ret: BTreeMap<u32, f64> = Default::default();
                 let grouped = res_for_start.into_iter().chunk_by(|(n, _, _)| *n);
                 for (_, grp) in grouped.into_iter() {
                     let grp = grp.collect_vec();
-                    let l = grp.len() as f32;
+                    let l = f64::from(crate::rules::convert::u32_from_usize(grp.len())?);
                     for (_, _, path) in grp {
                         if path.len() < 3 {
                             continue;
@@ -80,16 +80,16 @@ impl FixedRule for BetweennessCentrality {
                 }
                 Ok(ret)
             })?;
-        let mut centrality: Vec<f32> = vec![0.; n as usize];
+        let mut centrality: Vec<f64> = vec![0.; crate::rules::convert::usize_from_u32(n)];
         for m in centrality_segs {
             for (k, v) in m {
-                centrality[k as usize] += v;
+                centrality[crate::rules::convert::usize_from_u32(k)] += v;
             }
         }
 
         for (i, s) in centrality.into_iter().enumerate() {
             let node = indices[i].clone();
-            out.put(Tuple::from_vec(vec![node, (s as f64).into()]))?;
+            out.put(Tuple::from_vec(vec![node, (s).into()]))?;
         }
 
         Ok(())
@@ -129,16 +129,18 @@ impl FixedRule for ClosenessCentrality {
         // runs on `rayon` via the order-preserving `par_try_map`. There is no
         // cross-start reduction, so the output is byte-identical to the
         // sequential map.
-        let res: Vec<_> = par_try_map((0..n).collect(), |start| -> Result<f32> {
+        let res: Vec<_> = par_try_map((0..n).collect(), |start| -> Result<f64> {
             let distances = dijkstra_cost_only(&graph, start, cancel.clone())?;
-            let total_dist: f32 = distances.iter().filter(|d| d.is_finite()).cloned().sum();
-            let nc: f32 = distances.iter().filter(|d| d.is_finite()).count() as f32;
-            Ok(nc * nc / total_dist / (n - 1) as f32)
+            let total_dist: f64 = distances.iter().filter(|d| d.is_finite()).cloned().sum();
+            let nc_usize = distances.iter().filter(|d| d.is_finite()).count();
+            let nc = f64::from(crate::rules::convert::u32_from_usize(nc_usize)?);
+            let denom = f64::from(n - 1);
+            Ok(nc * nc / total_dist / denom)
         })?;
         for (idx, centrality) in res.into_iter().enumerate() {
             out.put(Tuple::from_vec(vec![
                 indices[idx].clone(),
-                DataValue::from(centrality as f64),
+                DataValue::from(centrality),
             ]))?;
             cancel.check()?;
         }
@@ -156,23 +158,23 @@ impl FixedRule for ClosenessCentrality {
 }
 
 pub(crate) fn dijkstra_cost_only(
-    edges: &DirectedCsrGraph<f32>,
+    edges: &DirectedCsrGraph<f64>,
     start: u32,
     cancel: CancelFlag,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<f64>> {
     use std::cmp::Reverse;
 
     use ordered_float::OrderedFloat;
     use priority_queue::PriorityQueue;
 
-    let mut distance = vec![f32::INFINITY; edges.node_count() as usize];
+    let mut distance = vec![f64::INFINITY; crate::rules::convert::usize_from_u32(edges.node_count())];
     let mut pq = PriorityQueue::new();
-    distance[start as usize] = 0.;
+    distance[crate::rules::convert::usize_from_u32(start)] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
 
     // Cost-only Dijkstra: no predecessor table (P078 — no `u32::MAX` sentinel).
     while let Some((node, Reverse(OrderedFloat(cost)))) = pq.pop() {
-        if cost > distance[node as usize] {
+        if cost > distance[crate::rules::convert::usize_from_u32(node)] {
             continue;
         }
 
@@ -181,9 +183,9 @@ pub(crate) fn dijkstra_cost_only(
             let path_weight = target.value;
 
             let nxt_cost = cost + path_weight;
-            if nxt_cost < distance[nxt_node as usize] {
+            if nxt_cost < distance[crate::rules::convert::usize_from_u32(nxt_node)] {
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
-                distance[nxt_node as usize] = nxt_cost;
+                distance[crate::rules::convert::usize_from_u32(nxt_node)] = nxt_cost;
             }
         }
         cancel.check()?;
@@ -214,9 +216,9 @@ mod tests {
         };
         let mut rows: Vec<Tuple> = vec![];
         for _ in 0..6000 {
-            let a = (next() >> 33) as u32 % n;
-            let b = (next() >> 33) as u32 % n;
-            let w = 1.0 + ((next() >> 40) as u32 % 97) as f64;
+            let a = crate::rules::convert::u32_low(next() >> 33) % n;
+            let b = crate::rules::convert::u32_low(next() >> 33) % n;
+            let w = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 97);
             if a != b {
                 rows.push(Tuple::from_vec(vec![
                     DataValue::from(format!("n{a}").as_str()),
@@ -305,9 +307,9 @@ mod tests {
         };
         let mut rows: Vec<Tuple> = vec![];
         for _ in 0..400 {
-            let a = (next() >> 33) as u32 % n;
-            let b = (next() >> 33) as u32 % n;
-            let w = 1.0 + ((next() >> 40) as u32 % 97) as f64;
+            let a = crate::rules::convert::u32_low(next() >> 33) % n;
+            let b = crate::rules::convert::u32_low(next() >> 33) % n;
+            let w = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 97);
             if a != b {
                 rows.push(Tuple::from_vec(vec![
                     s(&format!("n{a}")),

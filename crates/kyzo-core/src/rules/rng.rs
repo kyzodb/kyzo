@@ -72,7 +72,7 @@ impl RngCore for SeededRng {
     fn next_u32(&mut self) -> u32 {
         // High bits of a splitmix64 word; the finalizer already diffuses the
         // whole word, so either half is equidistributed.
-        (self.step() >> 32) as u32
+        crate::rules::convert::u32_hi(self.step())
     }
 
     fn next_u64(&mut self) -> u64 {

@@ -69,9 +69,9 @@ impl FixedRule for MinimumSpanningTreePrim {
         let msp = prim(&graph, starting, cancel)?;
         for (src, dst, cost) in msp {
             out.put(Tuple::from_vec(vec![
-                indices[src as usize].clone(),
-                indices[dst as usize].clone(),
-                DataValue::from(cost as f64),
+                indices[crate::rules::convert::usize_from_u32(src)].clone(),
+                indices[crate::rules::convert::usize_from_u32(dst)].clone(),
+                DataValue::from(cost),
             ]))?;
         }
         Ok(())
@@ -88,20 +88,20 @@ impl FixedRule for MinimumSpanningTreePrim {
 }
 
 fn prim(
-    graph: &DirectedCsrGraph<f32>,
+    graph: &DirectedCsrGraph<f64>,
     starting: u32,
     cancel: CancelFlag,
-) -> Result<Vec<(u32, u32, f32)>> {
-    let mut visited = vec![false; graph.node_count() as usize];
-    let mut mst_edges = Vec::with_capacity((graph.node_count() - 1) as usize);
+) -> Result<Vec<(u32, u32, f64)>> {
+    let mut visited = vec![false; crate::rules::convert::usize_from_u32(graph.node_count())];
+    let mut mst_edges = Vec::with_capacity(match graph.node_count() { 0 => 0, n => crate::rules::convert::usize_from_u32(n - 1) });
     let mut pq = PriorityQueue::new();
 
     let mut relax_edges_at_node = |node: u32, pq: &mut PriorityQueue<_, _>| {
-        visited[node as usize] = true;
+        visited[crate::rules::convert::usize_from_u32(node)] = true;
         for target in graph.out_neighbors_with_values(node) {
             let to_node = target.target;
             let cost = target.value;
-            if visited[to_node as usize] {
+            if visited[crate::rules::convert::usize_from_u32(to_node)] {
                 continue;
             }
             pq.push_increase(to_node, (Reverse(OrderedFloat(cost)), node));
@@ -111,7 +111,7 @@ fn prim(
     relax_edges_at_node(starting, &mut pq);
 
     while let Some((to_node, (Reverse(OrderedFloat(cost)), from_node))) = pq.pop() {
-        if mst_edges.len() == (graph.node_count() - 1) as usize {
+        if mst_edges.len() == match graph.node_count() { 0 => 0, n => crate::rules::convert::usize_from_u32(n - 1) } {
             break;
         }
         mst_edges.push((from_node, to_node, cost));

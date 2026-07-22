@@ -110,14 +110,14 @@ impl<W: Copy> DirectedCsrGraph<W> {
     pub(crate) fn from_edges(edges: impl IntoIterator<Item = (u32, u32, W)>) -> Result<Self> {
         let edges: Vec<(u32, u32, W)> = edges.into_iter().collect();
         let node_count = checked_node_count(edges.iter().map(|(f, t, _)| (*f).max(*t)).max())?;
-        let n = node_count as usize;
+        let n = crate::rules::convert::usize_from_u32(node_count);
 
         // Counting sort into CSR: degree pass, prefix sums, then placement.
         let mut out_offsets = vec![0usize; n + 1];
         let mut in_offsets = vec![0usize; n + 1];
         for (f, t, _) in &edges {
-            out_offsets[*f as usize + 1] += 1;
-            in_offsets[*t as usize + 1] += 1;
+            out_offsets[crate::rules::convert::usize_from_u32(*f) + 1] += 1;
+            in_offsets[crate::rules::convert::usize_from_u32(*t) + 1] += 1;
         }
         for i in 0..n {
             out_offsets[i + 1] += out_offsets[i];
@@ -129,10 +129,10 @@ impl<W: Copy> DirectedCsrGraph<W> {
         let mut out_cursor = out_offsets.clone();
         let mut in_cursor = in_offsets.clone();
         for (f, t, w) in &edges {
-            out_edges[out_cursor[*f as usize]] = Some((*t, *w));
-            out_cursor[*f as usize] += 1;
-            in_edges[in_cursor[*t as usize]] = *f;
-            in_cursor[*t as usize] += 1;
+            out_edges[out_cursor[crate::rules::convert::usize_from_u32(*f)]] = Some((*t, *w));
+            out_cursor[crate::rules::convert::usize_from_u32(*f)] += 1;
+            in_edges[in_cursor[crate::rules::convert::usize_from_u32(*t)]] = *f;
+            in_cursor[crate::rules::convert::usize_from_u32(*t)] += 1;
         }
         // Placement fills every slot exactly once (cursors advance one per
         // edge within disjoint segments) — the `None`s cannot survive.
@@ -158,12 +158,14 @@ impl<W: Copy> DirectedCsrGraph<W> {
         self.node_count
     }
 
-    pub(crate) fn out_degree(&self, node: u32) -> u32 {
-        (self.out_offsets[node as usize + 1] - self.out_offsets[node as usize]) as u32
+    pub(crate) fn out_degree(&self, node: u32) -> usize {
+        let lo = self.out_offsets[crate::rules::convert::usize_from_u32(node)];
+        let hi = self.out_offsets[crate::rules::convert::usize_from_u32(node) + 1];
+        hi - lo
     }
 
     pub(crate) fn out_neighbors(&self, node: u32) -> impl Iterator<Item = u32> + '_ {
-        self.out_edges[self.out_offsets[node as usize]..self.out_offsets[node as usize + 1]]
+        self.out_edges[self.out_offsets[crate::rules::convert::usize_from_u32(node)]..self.out_offsets[crate::rules::convert::usize_from_u32(node) + 1]]
             .iter()
             .map(|(t, _)| *t)
     }
@@ -174,8 +176,8 @@ impl<W: Copy> DirectedCsrGraph<W> {
     /// Tarjan in `algos/strongly_connected_components.rs`), where repeatedly
     /// re-scanning the adjacency with `nth` would be quadratic in degree.
     pub(crate) fn out_neighbor(&self, node: u32, idx: u32) -> Option<u32> {
-        self.out_edges[self.out_offsets[node as usize]..self.out_offsets[node as usize + 1]]
-            .get(idx as usize)
+        self.out_edges[self.out_offsets[crate::rules::convert::usize_from_u32(node)]..self.out_offsets[crate::rules::convert::usize_from_u32(node) + 1]]
+            .get(crate::rules::convert::usize_from_u32(idx))
             .map(|(t, _)| *t)
     }
 
@@ -183,7 +185,7 @@ impl<W: Copy> DirectedCsrGraph<W> {
         &self,
         node: u32,
     ) -> impl Iterator<Item = Target<W>> + '_ {
-        self.out_edges[self.out_offsets[node as usize]..self.out_offsets[node as usize + 1]]
+        self.out_edges[self.out_offsets[crate::rules::convert::usize_from_u32(node)]..self.out_offsets[crate::rules::convert::usize_from_u32(node) + 1]]
             .iter()
             .map(|(t, w)| Target {
                 target: *t,
@@ -192,7 +194,7 @@ impl<W: Copy> DirectedCsrGraph<W> {
     }
 
     pub(crate) fn in_neighbors(&self, node: u32) -> impl Iterator<Item = u32> + '_ {
-        self.in_edges[self.in_offsets[node as usize]..self.in_offsets[node as usize + 1]]
+        self.in_edges[self.in_offsets[crate::rules::convert::usize_from_u32(node)]..self.in_offsets[crate::rules::convert::usize_from_u32(node) + 1]]
             .iter()
             .copied()
     }
@@ -226,7 +228,7 @@ struct BadEdgeWeightError(DataValue, #[label] SourceSpan);
 /// can pin the boundary arithmetic without the allocation. See the
 /// honesty note on [`GraphTooLargeError`].
 pub(crate) fn checked_node_id(interned_so_far: usize) -> Result<u32> {
-    ensure!(interned_so_far < u32::MAX as usize, GraphTooLargeError);
+    ensure!(interned_so_far < crate::rules::convert::usize_from_u32(u32::MAX), GraphTooLargeError);
     u32::try_from(interned_so_far).map_err(|_| GraphTooLargeError.into())
 }
 
@@ -289,13 +291,13 @@ pub(crate) fn as_directed_weighted_graph(
     allow_negative_weights: bool,
     weight_span: SourceSpan,
 ) -> Result<(
-    DirectedCsrGraph<f32>,
+    DirectedCsrGraph<f64>,
     Vec<DataValue>,
     BTreeMap<DataValue, u32>,
 )> {
     let (edges, indices, inv_indices) = intern_edges(
         rel,
-        |d| -> Result<f32> {
+        |d| -> Result<f64> {
             let d = match d {
                 None => return Ok(1.0),
                 Some(d) => d,
@@ -306,7 +308,7 @@ pub(crate) fn as_directed_weighted_graph(
             if !f.is_finite() || (f < 0. && !allow_negative_weights) {
                 bail!(BadEdgeWeightError(d.clone(), weight_span));
             }
-            Ok(f as f32)
+            Ok(f)
         },
         undirected,
     )?;
@@ -320,7 +322,7 @@ mod tests {
     #[test]
     fn csr_shape_and_iteration() {
         // 0→1, 0→2 (parallel ×2), 2→0; node 1 is a sink.
-        let g: DirectedCsrGraph<f32> =
+        let g: DirectedCsrGraph<f64> =
             DirectedCsrGraph::from_edges([(0, 2, 1.0), (0, 1, 2.0), (2, 0, 3.0), (0, 2, 4.0)])
                 .unwrap();
         assert_eq!(g.node_count(), 3);
@@ -376,10 +378,10 @@ mod tests {
     fn intern_site_refuses_at_u32_bound() {
         assert_eq!(checked_node_id(0).unwrap(), 0);
         assert_eq!(
-            checked_node_id((u32::MAX - 1) as usize).unwrap(),
+            checked_node_id(crate::rules::convert::usize_from_u32(u32::MAX - 1)).unwrap(),
             u32::MAX - 1
         );
-        let err = checked_node_id(u32::MAX as usize).unwrap_err();
+        let err = checked_node_id(crate::rules::convert::usize_from_u32(u32::MAX)).unwrap_err();
         assert!(
             err.downcast_ref::<GraphTooLargeError>().is_some(),
             "expected the typed GraphTooLargeError, got: {err}"

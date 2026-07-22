@@ -105,12 +105,12 @@ impl FixedRule for KShortestPathYen {
                 .into_iter()
                 .map(|(cost, path)| {
                     Tuple::from_vec(vec![
-                        indices[start as usize].clone(),
-                        indices[goal as usize].clone(),
-                        DataValue::from(cost as f64),
+                        indices[crate::rules::convert::usize_from_u32(start)].clone(),
+                        indices[crate::rules::convert::usize_from_u32(goal)].clone(),
+                        DataValue::from(cost),
                         DataValue::List(
                             path.into_iter()
-                                .map(|u| indices[u as usize].clone())
+                                .map(|u| indices[crate::rules::convert::usize_from_u32(u)].clone())
                                 .collect_vec(),
                         ),
                     ])
@@ -137,17 +137,17 @@ impl FixedRule for KShortestPathYen {
 
 fn k_shortest_path_yen(
     k: usize,
-    edges: &DirectedCsrGraph<f32>,
+    edges: &DirectedCsrGraph<f64>,
     start: u32,
     goal: u32,
     cancel: CancelFlag,
-) -> Result<Vec<(f32, Vec<u32>)>> {
+) -> Result<Vec<(f64, Vec<u32>)>> {
     // `k` is a caller-supplied option with no upper bound: reserving from it
     // directly would let an absurd `k` abort the allocator before a single
     // path is found. Grow amortized instead — the final length is the same
     // either way.
-    let mut k_shortest: Vec<(f32, Vec<u32>)> = Vec::new();
-    let mut candidates: Vec<(f32, Vec<u32>)> = vec![];
+    let mut k_shortest: Vec<(f64, Vec<u32>)> = Vec::new();
+    let mut candidates: Vec<(f64, Vec<u32>)> = vec![];
 
     match dijkstra(edges, start, &Some(goal), &(), &(), cancel.clone())?
         .into_iter()
@@ -208,10 +208,10 @@ fn k_shortest_path_yen(
                     // weight — taking the first neighbor (as before) would
                     // charge an arbitrary parallel edge and mis-rank
                     // candidates on a multigraph.
-                    let mut best: Option<f32> = None;
+                    let mut best: Option<f64> = None;
                     for target in edges.out_neighbors_with_values(seg_from) {
                         if target.target == seg_to {
-                            best = Some(best.map_or(target.value, |b: f32| b.min(target.value)));
+                            best = Some(best.map_or(target.value, |b: f64| b.min(target.value)));
                         }
                     }
                     // INVARIANT(yen_root_edge): (seg_from, seg_to) is a
@@ -281,9 +281,9 @@ mod tests {
         };
         let mut edges: Vec<Tuple> = vec![];
         for _ in 0..300 {
-            let a = (next() >> 33) as u32 % n;
-            let b = (next() >> 33) as u32 % n;
-            let w = 1.0 + ((next() >> 40) as u32 % 97) as f64;
+            let a = crate::rules::convert::u32_low(next() >> 33) % n;
+            let b = crate::rules::convert::u32_low(next() >> 33) % n;
+            let w = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 97);
             if a != b {
                 edges.push(e(&format!("n{a}"), &format!("n{b}"), w));
             }
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn parallel_root_edge_uses_min_weight() {
         let graph = DirectedCsrGraph::from_edges([
-            (0u32, 1u32, 10.0f32), // parallel, expensive — listed first
+            (0u32, 1u32, 10.0f64), // parallel, expensive — listed first
             (0, 1, 1.0),           // parallel, cheap — the one Dijkstra uses
             (1, 3, 1.0),
             (1, 2, 1.0),
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn spur_search_honors_cancel() {
         let graph = DirectedCsrGraph::from_edges([
-            (0u32, 1u32, 1.0f32),
+            (0u32, 1u32, 1.0f64),
             (1, 2, 1.0),
             (2, 3, 1.0),
             (0, 2, 3.0),
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn k_shortest_order_is_cheapest_first() {
         let graph = DirectedCsrGraph::from_edges([
-            (0u32, 1u32, 1.0f32),
+            (0u32, 1u32, 1.0f64),
             (1, 3, 1.0),
             (0, 2, 2.0),
             (2, 3, 2.0),

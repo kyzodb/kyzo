@@ -44,7 +44,7 @@ impl FixedRule for CommunityDetectionLouvain {
         let edges = payload.get_input(0)?;
         let undirected = payload.bool_option("undirected", Some(false))?;
         let max_iter = payload.pos_integer_option("max_iter", Some(10))?;
-        let delta = payload.unit_interval_option("delta", Some(0.0001))? as f32;
+        let delta = payload.unit_interval_option("delta", Some(0.0001))?;
         let keep_depth = match payload.manifest.options.get("keep_depth") {
             None => None,
             Some(_) => Some(payload.non_neg_integer_option("keep_depth", None)?),
@@ -54,10 +54,10 @@ impl FixedRule for CommunityDetectionLouvain {
         let result = louvain(&graph, delta, max_iter, cancel)?;
         for (idx, node) in indices.into_iter().enumerate() {
             let mut labels = vec![];
-            let mut cur_idx = idx as u32;
+            let mut cur_idx = crate::rules::convert::u32_from_usize(idx)?;
             for hierarchy in &result {
-                let nxt_idx = hierarchy[cur_idx as usize];
-                labels.push(DataValue::from(nxt_idx as i64));
+                let nxt_idx = hierarchy[crate::rules::convert::usize_from_u32(cur_idx)];
+                labels.push(DataValue::from(i64::from(nxt_idx)));
                 cur_idx = nxt_idx;
             }
             labels.reverse();
@@ -81,8 +81,8 @@ impl FixedRule for CommunityDetectionLouvain {
 }
 
 fn louvain(
-    graph: &DirectedCsrGraph<f32>,
-    delta: f32,
+    graph: &DirectedCsrGraph<f64>,
+    delta: f64,
     max_iter: usize,
     cancel: CancelFlag,
 ) -> Result<Vec<Vec<u32>>> {
@@ -103,22 +103,22 @@ fn louvain(
 fn calculate_delta(
     node: u32,
     target_community: u32,
-    graph: &DirectedCsrGraph<f32>,
+    graph: &DirectedCsrGraph<f64>,
     comm2nodes: &[BTreeSet<u32>],
-    out_weights: &[f32],
-    in_weights: &[f32],
-    total_weight: f32,
-) -> f32 {
+    out_weights: &[f64],
+    in_weights: &[f64],
+    total_weight: f64,
+) -> f64 {
     let mut sigma_out_total = 0.;
     let mut sigma_in_total = 0.;
     let mut d2comm = 0.;
-    let target_community_members = &comm2nodes[target_community as usize];
+    let target_community_members = &comm2nodes[crate::rules::convert::usize_from_u32(target_community)];
     for member in target_community_members.iter() {
         if *member == node {
             continue;
         }
-        sigma_out_total += out_weights[*member as usize];
-        sigma_in_total += in_weights[*member as usize];
+        sigma_out_total += out_weights[crate::rules::convert::usize_from_u32(*member)];
+        sigma_in_total += in_weights[crate::rules::convert::usize_from_u32(*member)];
         for target in graph.out_neighbors_with_values(node) {
             if target.target == *member {
                 d2comm += target.value;
@@ -133,21 +133,21 @@ fn calculate_delta(
         }
     }
     d2comm
-        - (sigma_out_total * in_weights[node as usize]
-            + sigma_in_total * out_weights[node as usize])
+        - (sigma_out_total * in_weights[crate::rules::convert::usize_from_u32(node)]
+            + sigma_in_total * out_weights[crate::rules::convert::usize_from_u32(node)])
             / total_weight
 }
 
 fn louvain_step(
-    graph: &DirectedCsrGraph<f32>,
-    delta: f32,
+    graph: &DirectedCsrGraph<f64>,
+    delta: f64,
     max_iter: usize,
     cancel: CancelFlag,
-) -> Result<(Vec<u32>, DirectedCsrGraph<f32>)> {
+) -> Result<(Vec<u32>, DirectedCsrGraph<f64>)> {
     let n_nodes = graph.node_count();
     let mut total_weight = 0.;
-    let mut out_weights = vec![0.; n_nodes as usize];
-    let mut in_weights = vec![0.; n_nodes as usize];
+    let mut out_weights = vec![0.; crate::rules::convert::usize_from_u32(n_nodes)];
+    let mut in_weights = vec![0.; crate::rules::convert::usize_from_u32(n_nodes)];
 
     for from in 0..n_nodes {
         for target in graph.out_neighbors_with_values(from) {
@@ -155,28 +155,28 @@ fn louvain_step(
             let weight = target.value;
 
             total_weight += weight;
-            out_weights[from as usize] += weight;
-            in_weights[to as usize] += weight;
+            out_weights[crate::rules::convert::usize_from_u32(from)] += weight;
+            in_weights[crate::rules::convert::usize_from_u32(to)] += weight;
         }
     }
 
     let mut node2comm = (0..n_nodes).collect_vec();
     let mut comm2nodes = (0..n_nodes).map(|i| BTreeSet::from([i])).collect_vec();
 
-    let mut last_modurality = f32::NEG_INFINITY;
+    let mut last_modurality = f64::NEG_INFINITY;
 
     for _ in 0..max_iter {
         let modularity = {
             let mut modularity = 0.;
             for from in 0..n_nodes {
-                for to in &comm2nodes[node2comm[from as usize] as usize] {
+                for to in &comm2nodes[crate::rules::convert::usize_from_u32(node2comm[crate::rules::convert::usize_from_u32(from)])] {
                     for target in graph.out_neighbors_with_values(from) {
                         if target.target == *to {
                             modularity += target.value;
                         }
                     }
                     modularity -=
-                        in_weights[from as usize] * out_weights[*to as usize] / total_weight;
+                        in_weights[crate::rules::convert::usize_from_u32(from)] * out_weights[crate::rules::convert::usize_from_u32(*to)] / total_weight;
                 }
             }
             modularity /= total_weight;
@@ -195,7 +195,7 @@ fn louvain_step(
             // `calculate_delta` per neighboring community), so a raised
             // flag refuses before the node's scan, not after it.
             cancel.check()?;
-            let community_for_node = node2comm[node as usize];
+            let community_for_node = node2comm[crate::rules::convert::usize_from_u32(node)];
 
             let original_delta_q = calculate_delta(
                 node,
@@ -213,7 +213,7 @@ fn louvain_step(
             for target in graph.out_neighbors_with_values(node) {
                 let to_node = target.target;
 
-                let target_community = node2comm[to_node as usize];
+                let target_community = node2comm[crate::rules::convert::usize_from_u32(to_node)];
                 if target_community == community_for_node
                     || considered_communities.contains(&target_community)
                 {
@@ -237,9 +237,9 @@ fn louvain_step(
             }
             if best_improvement > 0. {
                 moved = true;
-                node2comm[node as usize] = candidate_community;
-                comm2nodes[community_for_node as usize].remove(&node);
-                comm2nodes[candidate_community as usize].insert(node);
+                node2comm[crate::rules::convert::usize_from_u32(node)] = candidate_community;
+                comm2nodes[crate::rules::convert::usize_from_u32(community_for_node)].remove(&node);
+                comm2nodes[crate::rules::convert::usize_from_u32(candidate_community)].insert(node);
             }
         }
         if !moved {
@@ -259,25 +259,28 @@ fn louvain_step(
         }
     }
 
-    let mut new_graph_list: Vec<BTreeMap<u32, f32>> =
-        vec![BTreeMap::new(); new_comm_count as usize];
+    let mut new_graph_list: Vec<BTreeMap<u32, f64>> =
+        vec![BTreeMap::new(); crate::rules::convert::usize_from_u32(new_comm_count)];
     for (node, comm) in node2comm.iter().enumerate() {
-        let target = &mut new_graph_list[*comm as usize];
-        for t in graph.out_neighbors_with_values(node as u32) {
+        let target = &mut new_graph_list[crate::rules::convert::usize_from_u32(*comm)];
+        for t in graph.out_neighbors_with_values(u32::try_from(node).map_err(|_| crate::rules::graph_view::GraphTooLargeError)?) {
             let to_node = t.target;
             let weight = t.value;
-            let to_comm = node2comm[to_node as usize];
+            let to_comm = node2comm[crate::rules::convert::usize_from_u32(to_node)];
             *target.entry(to_comm).or_default() += weight;
         }
     }
 
-    let new_graph: DirectedCsrGraph<f32> =
-        DirectedCsrGraph::from_edges(new_graph_list.into_iter().enumerate().flat_map(
-            move |(fr, nds)| {
-                nds.into_iter()
-                    .map(move |(to, weight)| (fr as u32, to, weight))
-            },
-        ))?;
+    let new_graph: DirectedCsrGraph<f64> = {
+        let mut edges = Vec::new();
+        for (fr, nds) in new_graph_list.into_iter().enumerate() {
+            let fr_u = crate::rules::convert::u32_from_usize(fr)?;
+            for (to, weight) in nds {
+                edges.push((fr_u, to, weight));
+            }
+        }
+        DirectedCsrGraph::from_edges(edges)?
+    };
 
     Ok((node2comm, new_graph))
 }
@@ -311,13 +314,19 @@ mod tests {
             vec![8, 9, 10],          // 14
             vec![8],                 // 15
         ];
-        let graph = DirectedCsrGraph::from_edges(
-            graph
-                .into_iter()
-                .enumerate()
-                .flat_map(|(fr, tos)| tos.into_iter().map(move |to| (fr as u32, to, 1.))),
-        )
-        .unwrap();
+        let graph = {
+            let mut edges = Vec::new();
+            for (fr, tos) in graph.into_iter().enumerate() {
+                let fr_u = match u32::try_from(fr) {
+                    Ok(u) => u,
+                    Err(_) => panic!("test fixture fr fits u32"),
+                };
+                for to in tos {
+                    edges.push((fr_u, to, 1.));
+                }
+            }
+            DirectedCsrGraph::from_edges(edges).unwrap()
+        };
         louvain(&graph, 0., 100, CancelFlag::default()).unwrap();
     }
 

@@ -60,13 +60,13 @@ impl FixedRule for LabelPropagation {
         // Determinism: the shuffled scan order and random tie-break are
         // seeded from this option (fixed default), never from OS entropy.
         let seed = SeededRng::seed_from_i64(
-            payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))?,
+            payload.integer_option("seed", Some(crate::rules::convert::i64_bits_from_u64(SeededRng::DEFAULT_SEED)))?,
         );
         let (graph, indices, _inv_indices) = edges.as_directed_weighted_graph(undirected, true)?;
         let labels = label_propagation(&graph, max_iter, seed, cancel)?;
         for (idx, label) in labels.into_iter().enumerate() {
             let node = indices[idx].clone();
-            out.put(Tuple::from_vec(vec![DataValue::from(label as i64), node]))?;
+            out.put(Tuple::from_vec(vec![DataValue::from(i64::from(label)), node]))?;
         }
         Ok(())
     }
@@ -82,7 +82,7 @@ impl FixedRule for LabelPropagation {
 }
 
 fn label_propagation(
-    graph: &DirectedCsrGraph<f32>,
+    graph: &DirectedCsrGraph<f64>,
     max_iter: usize,
     seed: u64,
     cancel: CancelFlag,
@@ -95,9 +95,9 @@ fn label_propagation(
         iter_order.shuffle(&mut rng);
         let mut changed = false;
         for node in &iter_order {
-            let mut labels_for_node: BTreeMap<u32, f32> = BTreeMap::new();
+            let mut labels_for_node: BTreeMap<u32, f64> = BTreeMap::new();
             for edge in graph.out_neighbors_with_values(*node) {
-                let label = labels[edge.target as usize];
+                let label = labels[crate::rules::convert::usize_from_u32(edge.target)];
                 *labels_for_node.entry(label).or_default() += edge.value;
             }
             if labels_for_node.is_empty() {
@@ -116,9 +116,9 @@ fn label_propagation(
             let new_label = *candidate_labels
                 .choose(&mut rng)
                 .ok_or_else(|| GraphAlgorithmInvariantError::refuse("label_candidates"))?;
-            if new_label != labels[*node as usize] {
+            if new_label != labels[crate::rules::convert::usize_from_u32(*node)] {
                 changed = true;
-                labels[*node as usize] = new_label;
+                labels[crate::rules::convert::usize_from_u32(*node)] = new_label;
             }
             cancel.check()?;
         }

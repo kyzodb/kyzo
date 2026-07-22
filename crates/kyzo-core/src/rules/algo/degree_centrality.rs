@@ -67,9 +67,9 @@ impl FixedRule for DegreeCentrality {
         for (k, (total_d, out_d, in_d)) in counter.into_iter() {
             let tuple = vec![
                 k,
-                DataValue::from(total_d as i64),
-                DataValue::from(out_d as i64),
-                DataValue::from(in_d as i64),
+                DataValue::from(crate::rules::convert::i64_from_usize(total_d)?),
+                DataValue::from(crate::rules::convert::i64_from_usize(out_d)?),
+                DataValue::from(crate::rules::convert::i64_from_usize(in_d)?),
             ];
             out.put(Tuple::from_vec(tuple))?;
         }

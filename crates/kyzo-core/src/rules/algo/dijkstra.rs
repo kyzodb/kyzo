@@ -139,12 +139,12 @@ impl FixedRule for ShortestPathDijkstra {
                 .into_iter()
                 .map(|(target, cost, path)| {
                     Tuple::from_vec(vec![
-                        indices[start as usize].clone(),
-                        indices[target as usize].clone(),
-                        DataValue::from(cost as f64),
+                        indices[crate::rules::convert::usize_from_u32(start)].clone(),
+                        indices[crate::rules::convert::usize_from_u32(target)].clone(),
+                        DataValue::from(cost),
                         DataValue::List(
                             path.into_iter()
-                                .map(|u| indices[u as usize].clone())
+                                .map(|u| indices[crate::rules::convert::usize_from_u32(u)].clone())
                                 .collect_vec(),
                         ),
                     ])
@@ -258,19 +258,19 @@ impl Goal for BTreeSet<u32> {
 }
 
 pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
-    edges: &DirectedCsrGraph<f32>,
+    edges: &DirectedCsrGraph<f64>,
     start: u32,
     goals: &G,
     forbidden_edges: &FE,
     forbidden_nodes: &FN,
     cancel: CancelFlag,
-) -> Result<Vec<(u32, f32, Vec<u32>)>> {
+) -> Result<Vec<(u32, f64, Vec<u32>)>> {
     let graph_size = edges.node_count();
-    let mut distance = vec![f32::INFINITY; graph_size as usize];
+    let mut distance = vec![f64::INFINITY; crate::rules::convert::usize_from_u32(graph_size)];
     let mut pq = PriorityQueue::new();
     // Absence is `None` — never a reserved node id (P078).
-    let mut back_pointers: Vec<Option<u32>> = vec![None; graph_size as usize];
-    distance[start as usize] = 0.;
+    let mut back_pointers: Vec<Option<u32>> = vec![None; crate::rules::convert::usize_from_u32(graph_size)];
+    distance[crate::rules::convert::usize_from_u32(start)] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
     let mut goals_remaining = goals.clone();
 
@@ -280,7 +280,7 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
         // `check` only reads the flag, so an unset flag never changes the
         // result: the plain and Yen-spur searches stay byte-identical.
         cancel.check()?;
-        if cost > distance[node as usize] {
+        if cost > distance[crate::rules::convert::usize_from_u32(node)] {
             continue;
         }
 
@@ -295,10 +295,10 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
                 continue;
             }
             let nxt_cost = cost + path_weight;
-            if nxt_cost < distance[nxt_node as usize] {
+            if nxt_cost < distance[crate::rules::convert::usize_from_u32(nxt_node)] {
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
-                distance[nxt_node as usize] = nxt_cost;
-                back_pointers[nxt_node as usize] = Some(node);
+                distance[crate::rules::convert::usize_from_u32(nxt_node)] = nxt_cost;
+                back_pointers[crate::rules::convert::usize_from_u32(nxt_node)] = Some(node);
             }
         }
 
@@ -310,7 +310,7 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
 
     let mut results = Vec::new();
     for target in goals.iter(edges.node_count()) {
-        let cost = distance[target as usize];
+        let cost = distance[crate::rules::convert::usize_from_u32(target)];
         if !cost.is_finite() {
             results.push((target, cost, vec![]));
         } else {
@@ -329,17 +329,17 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
 }
 
 pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
-    edges: &DirectedCsrGraph<f32>,
+    edges: &DirectedCsrGraph<f64>,
     start: u32,
     goals: &G,
     forbidden_edges: &FE,
     forbidden_nodes: &FN,
     cancel: CancelFlag,
-) -> Result<Vec<(u32, f32, Vec<u32>)>> {
-    let mut distance = vec![f32::INFINITY; edges.node_count() as usize];
+) -> Result<Vec<(u32, f64, Vec<u32>)>> {
+    let mut distance = vec![f64::INFINITY; crate::rules::convert::usize_from_u32(edges.node_count())];
     let mut pq = PriorityQueue::new();
-    let mut back_pointers: Vec<Vec<u32>> = vec![vec![]; edges.node_count() as usize];
-    distance[start as usize] = 0.;
+    let mut back_pointers: Vec<Vec<u32>> = vec![vec![]; crate::rules::convert::usize_from_u32(edges.node_count())];
+    distance[crate::rules::convert::usize_from_u32(start)] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
     let mut goals_remaining = goals.clone();
 
@@ -348,7 +348,7 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
         // whose every out-edge is forbidden (or a sink) never enters the
         // scan body; polling only there left those pops uninterruptible.
         cancel.check()?;
-        if cost > distance[node as usize] {
+        if cost > distance[crate::rules::convert::usize_from_u32(node)] {
             continue;
         }
 
@@ -363,14 +363,14 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
                 continue;
             }
             let nxt_cost = cost + path_weight;
-            if nxt_cost < distance[nxt_node as usize] {
+            if nxt_cost < distance[crate::rules::convert::usize_from_u32(nxt_node)] {
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
-                distance[nxt_node as usize] = nxt_cost;
-                back_pointers[nxt_node as usize].clear();
-                back_pointers[nxt_node as usize].push(node);
-            } else if nxt_cost == distance[nxt_node as usize] {
+                distance[crate::rules::convert::usize_from_u32(nxt_node)] = nxt_cost;
+                back_pointers[crate::rules::convert::usize_from_u32(nxt_node)].clear();
+                back_pointers[crate::rules::convert::usize_from_u32(nxt_node)].push(node);
+            } else if nxt_cost == distance[crate::rules::convert::usize_from_u32(nxt_node)] {
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
-                back_pointers[nxt_node as usize].push(node);
+                back_pointers[crate::rules::convert::usize_from_u32(nxt_node)].push(node);
             }
         }
 
@@ -382,12 +382,12 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
 
     let mut ret = Vec::new();
     for target in goals.iter(edges.node_count()) {
-        let cost = distance[target as usize];
+        let cost = distance[crate::rules::convert::usize_from_u32(target)];
         if !cost.is_finite() {
             ret.push((target, cost, vec![]));
         } else {
             struct CollectPath {
-                collected: Vec<(u32, f32, Vec<u32>)>,
+                collected: Vec<(u32, f64, Vec<u32>)>,
             }
 
             impl CollectPath {
@@ -396,14 +396,14 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
                     chain: &[u32],
                     start: u32,
                     target: u32,
-                    cost: f32,
+                    cost: f64,
                     back_pointers: &[Vec<u32>],
                 ) -> Result<()> {
                     let last = chain
                         .last()
                         .copied()
                         .ok_or_else(|| GraphAlgorithmInvariantError::refuse("keep_ties_chain"))?;
-                    let prevs = &back_pointers[last as usize];
+                    let prevs = &back_pointers[crate::rules::convert::usize_from_u32(last)];
                     for &nxt in prevs {
                         let mut ret = chain.to_vec();
                         ret.push(nxt);
@@ -453,9 +453,9 @@ mod tests {
         };
         let mut edges: Vec<Tuple> = vec![];
         for _ in 0..400 {
-            let a = (next() >> 33) as u32 % n;
-            let b = (next() >> 33) as u32 % n;
-            let w = 1.0 + ((next() >> 40) as u32 % 97) as f64;
+            let a = crate::rules::convert::u32_low(next() >> 33) % n;
+            let b = crate::rules::convert::u32_low(next() >> 33) % n;
+            let w = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 97);
             if a != b {
                 edges.push(e(&format!("n{a}"), &format!("n{b}"), w));
             }
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn plain_dijkstra_honors_cancel() {
         let graph =
-            DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f32), (1, 2, 1.0), (2, 3, 1.0)]).unwrap();
+            DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64), (1, 2, 1.0), (2, 3, 1.0)]).unwrap();
         // Unset flag: the search completes, path 0→3 costs 3.
         let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::default()).unwrap();
         assert_eq!(ok, vec![(3, 3.0, vec![0, 1, 2, 3])]);
@@ -693,7 +693,7 @@ mod tests {
     /// returns Ok (unreachable goal); under the fix the first pop refuses.
     #[test]
     fn keep_ties_honors_cancel_on_all_forbidden_hub() {
-        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f32)]).unwrap();
+        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64)]).unwrap();
         let forbidden: BTreeSet<(u32, u32)> = BTreeSet::from([(0, 1)]);
         // Unset flag: hub is a dead end; goal 1 stays unreachable.
         let ok = dijkstra_keep_ties(
