@@ -200,10 +200,7 @@ impl DataValue {
         let DataValue::Num(n) = self else {
             return None;
         };
-        Some(match n.as_float() {
-            Some(f) => f,
-            None => n.as_int().expect("Num is int or float") as f64,
-        })
+        Some(n.to_f64())
     }
 
     pub fn get_str(&self) -> Option<&str> {
@@ -900,7 +897,14 @@ mod facade_tests {
         }
 
         fn below(&mut self, n: usize) -> usize {
-            (self.next() % n as u64) as usize
+            let n_u = match u64::try_from(n) {
+                Ok(v) => v,
+                Err(_) => return 0,
+            };
+            match usize::try_from(self.next() % n_u) {
+                Ok(v) => v,
+                Err(_) => 0,
+            }
         }
     }
 
@@ -910,7 +914,7 @@ mod facade_tests {
             0 => DataValue::Null,
             1 => DataValue::Bool(rng.next().is_multiple_of(2)),
             2 => DataValue::Num(if rng.next().is_multiple_of(2) {
-                Num::int(rng.next() as i64)
+                Num::int(rng.next().cast_signed())
             } else {
                 Num::float(f64::from_bits(rng.next()))
             }),
@@ -928,7 +932,10 @@ mod facade_tests {
             ),
             7 => DataValue::uuid(uuid::Uuid::from_bytes({
                 let mut b = [0u8; 16];
-                b[0] = rng.next() as u8;
+                b[0] = match u8::try_from(rng.next() & 0xFF) {
+                    Ok(b) => b,
+                    Err(_) => 0,
+                };
                 b
             })),
             8 => DataValue::Regex(
@@ -944,16 +951,28 @@ mod facade_tests {
                 .unwrap(),
             ),
             10 => {
-                let ts = ValidityTs::from_raw(rng.next() as i64);
+                let ts = ValidityTs::from_raw(rng.next().cast_signed());
                 let is_assert = rng.next().is_multiple_of(2);
                 DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
             }
             11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
                 Interval::EMPTY
             } else {
-                Interval::new(Bound::Closed(rng.next() as i64 % 1000), Bound::Unbounded)
+                Interval::new(
+                    Bound::Closed(rng.next().cast_signed() % 1000),
+                    Bound::Unbounded,
+                )
             }),
-            12 => DataValue::Geometry(Geometry::from_cells(rng.next() as u32, rng.next() as u32)),
+            12 => DataValue::Geometry(Geometry::from_cells(
+                match u32::try_from(rng.next() & 0xFFFF_FFFF) {
+                    Ok(v) => v,
+                    Err(_) => 0,
+                },
+                match u32::try_from(rng.next() & 0xFFFF_FFFF) {
+                    Ok(v) => v,
+                    Err(_) => 0,
+                },
+            )),
             _other => DataValue::Json(if rng.next().is_multiple_of(2) {
                 Json::Null
             } else {
