@@ -634,31 +634,32 @@ pub(crate) fn lift(script: SysScript) -> Result<SysOp> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result};
+
     use super::*;
 
     /// The staged builder yields a fully-set HNSW config; `build()` is
     /// reachable only because dim, ef, and m are all supplied.
     #[test]
-    fn hnsw_staged_builder_yields_a_complete_config() {
+    fn hnsw_staged_builder_yields_a_complete_config() -> Result<()> {
         let cfg = HnswConfigBuilder::new("docs".into(), "by_vec".into())
             .dtype(VecElementType::F64)
             .distance(HnswDistance::Cosine)
-            .dim(128)
-            .unwrap()
+            .dim(128)?
             .ef(64)
-            .m(16)
-            .unwrap()
+            .m(16)?
             .build();
         assert_eq!(cfg.vec_dim, 128);
         assert_eq!(cfg.ef_construction, 64);
         assert_eq!(cfg.m_neighbours, 16);
         assert_eq!(cfg.dtype, VecElementType::F64);
         assert_eq!(cfg.distance, HnswDistance::Cosine);
+        Ok(())
     }
 
     /// Builder setters enforce the same dim/m laws as `::hnsw` parse (P092).
     #[test]
-    fn hnsw_builder_refuses_illegal_dim_and_m() {
+    fn hnsw_builder_refuses_illegal_dim_and_m() -> Result<()> {
         assert!(
             HnswConfigBuilder::new("docs".into(), "by_vec".into())
                 .dim(0)
@@ -666,20 +667,21 @@ mod tests {
         );
         assert!(
             HnswConfigBuilder::new("docs".into(), "by_vec".into())
-                .dim(1)
-                .unwrap()
+                .dim(1)?
                 .ef(8)
                 .m(1)
                 .is_err()
         );
+        Ok(())
     }
 
     /// Negative process ids are unconstructible (P081).
     #[test]
-    fn process_id_refuses_negatives() {
+    fn process_id_refuses_negatives() -> Result<()> {
         assert!(ProcessId::try_from_i64(-1).is_err());
-        assert_eq!(ProcessId::try_from_i64(0).unwrap().get(), 0);
-        assert_eq!(ProcessId::try_from_i64(42).unwrap().get(), 42);
+        assert_eq!(ProcessId::try_from_i64(0)?.get(), 0);
+        assert_eq!(ProcessId::try_from_i64(42)?.get(), 42);
+        Ok(())
     }
 
     /// The FTS and LSH staged builders carry their required extractor through
@@ -707,7 +709,7 @@ mod tests {
     /// module's type by path; a second definition must not exist anywhere
     /// under this crate's `src/`.
     #[test]
-    fn fts_index_config_is_the_sole_spelling() {
+    fn fts_index_config_is_the_sole_spelling() -> Result<()> {
         fn session_tier_consumes(cfg: &crate::parse::sys::FtsIndexConfig) {
             fn takes_local(_: &FtsIndexConfig) {}
             takes_local(cfg);
@@ -718,28 +720,30 @@ mod tests {
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut defs = Vec::new();
-        fn walk(dir: &std::path::Path, defs: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).expect("read src tree") {
-                let entry = entry.expect("dir entry");
+        fn walk(dir: &std::path::Path, defs: &mut Vec<std::path::PathBuf>) -> Result<()> {
+            for entry in std::fs::read_dir(dir).into_diagnostic()? {
+                let entry = entry.into_diagnostic()?;
                 let path = entry.path();
                 if path.is_dir() {
-                    walk(&path, defs);
+                    walk(&path, defs)?;
                     continue;
                 }
                 if path.extension().and_then(|e| e.to_str()) != Some("rs") {
                     continue;
                 }
-                let src = std::fs::read_to_string(&path).expect("read .rs");
+                let src = std::fs::read_to_string(&path).into_diagnostic()?;
                 if src.contains("struct FtsIndexConfig") {
                     defs.push(path);
                 }
             }
+            Ok(())
         }
-        walk(&root, &mut defs);
+        walk(&root, &mut defs)?;
         assert_eq!(
             defs,
             [root.join("parse/sys.rs")],
             "exactly one `struct FtsIndexConfig` — parse/sys.rs owns the sole spelling"
         );
+        Ok(())
     }
 }
