@@ -227,6 +227,8 @@ impl<K> Stale<K> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
+
     use super::*;
     use crate::session::generation::{CatalogGeneration, RelationGeneration};
 
@@ -259,30 +261,33 @@ mod tests {
     }
 
     #[test]
-    fn classify_keeps_matching_generation() {
+    fn classify_keeps_matching_generation() -> Result<()> {
         let sealed = ProjectionBuilder::new(DemoKind { hits: 1 }).seal(stamp(4));
         let current = stamp(4)
             .classify(sealed)
-            .expect("matching generation stays Sealed");
+            .map_err(|_| miette!("matching generation stays Sealed"))?;
         assert_eq!(current.query(&0), 1);
+        Ok(())
     }
 
     #[test]
-    fn classify_mismatch_yields_stale() {
+    fn classify_mismatch_yields_stale() -> Result<()> {
         let sealed = ProjectionBuilder::new(DemoKind { hits: 1 }).seal(stamp(4));
         let stale = stamp(9)
             .classify(sealed)
-            .expect_err("mismatched generation is Stale");
+            .err()
+            .ok_or_else(|| miette!("mismatched generation is Stale"))?;
         assert_eq!(stale.generation(), stamp(4));
         assert_eq!(stale.expected(), stamp(9));
         assert_eq!(stale.kind(), &DemoKind { hits: 1 });
+        Ok(())
     }
 
     /// Closure test (story #305): one machine typechecks build→seal→classify
     /// for all five engine kinds — search is [`RelationIndexSearch`] with a
     /// real `search_relation` door, not a ProjectionKind façade (P103).
     #[test]
-    fn five_engine_kinds_share_one_machine() {
+    fn five_engine_kinds_share_one_machine() -> Result<()> {
         use crate::project::dedup::lsh::Lsh;
         use crate::project::sparse::sparse::Sparse;
         use crate::project::spatial::spatial::Spatial;
@@ -307,7 +312,11 @@ mod tests {
         let sealed = ProjectionBuilder::new(Hnsw).seal(stamp(2));
         assert!(stamp(2).classify(sealed).is_ok());
         let sealed = ProjectionBuilder::new(Fts).seal(stamp(2));
-        let stale = stamp(3).classify(sealed).expect_err("stale");
+        let stale = stamp(3)
+            .classify(sealed)
+            .err()
+            .ok_or_else(|| miette!("stale"))?;
         assert_eq!(stale.expected(), stamp(3));
+        Ok(())
     }
 }
