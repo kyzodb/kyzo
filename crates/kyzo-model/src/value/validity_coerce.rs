@@ -74,37 +74,37 @@ mod tests {
     use crate::value::{DataValue, ValidityTs};
 
     #[test]
-    fn i64_max_numeric_passthrough_is_end_coordinate() {
+    fn i64_max_numeric_passthrough_is_end_coordinate() -> Result<()> {
         // Coerce is not the write-assertion door: i64::MAX is a lawful
         // seek/spec coordinate (same as "END"). Refusal of assert+MAX lives
         // on ValidityTs::for_assertion / Validity::new — pinned here so a
         // future "tighten coerce" PR cannot silently shrink the law.
         let span = SourceSpan(0, 0);
         let cur = ValidityTs::from_raw(1);
-        let got = data_value_to_vld_spec(DataValue::from(i64::MAX), span, cur).unwrap();
+        let got = data_value_to_vld_spec(DataValue::from(i64::MAX), span, cur)?;
         assert_eq!(got, MAX_VALIDITY_TS);
         assert_eq!(got.raw(), i64::MAX);
         // The write door still refuses the reserved terminal tick.
         assert!(ValidityTs::for_assertion(i64::MAX).is_none());
+        Ok(())
     }
 
     #[test]
-    fn now_and_end_strings_and_finite_micros() {
+    fn now_and_end_strings_and_finite_micros() -> Result<()> {
         let span = SourceSpan(0, 0);
         let cur = ValidityTs::from_raw(42);
         assert_eq!(
-            data_value_to_vld_spec(DataValue::from("NOW"), span, cur).unwrap(),
+            data_value_to_vld_spec(DataValue::from("NOW"), span, cur)?,
             cur
         );
         assert_eq!(
-            data_value_to_vld_spec(DataValue::from("END"), span, cur).unwrap(),
+            data_value_to_vld_spec(DataValue::from("END"), span, cur)?,
             MAX_VALIDITY_TS
         );
         assert_eq!(
-            data_value_to_vld_spec(DataValue::from(99_i64), span, cur)
-                .unwrap()
-                .raw(),
+            data_value_to_vld_spec(DataValue::from(99_i64), span, cur)?.raw(),
             99
         );
+        Ok(())
     }
 }
