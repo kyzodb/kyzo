@@ -1115,4 +1115,52 @@ mod tests {
         far.push(0x01);
         assert_eq!(Num::decode_key(&far), Err(NumDecodeError::FloatRange));
     }
+
+    /// Adversary, staged ahead of Wave 3's `as_cast` sweep on this file:
+    /// `to_int_coerced` has NO other test anywhere in the tree (checked:
+    /// only two non-test call sites exist). Its own doc comment names the
+    /// exact bug a naive "just satisfy the meter" rewrite would reintroduce
+    /// — using `i64::MAX as f64` (which rounds UP to 2^63) as the bound
+    /// instead of the exact power-of-two `I64_MAX_BOUND_EXCLUSIVE` — which
+    /// would wrongly ADMIT `2^63` as `Some(i64::MAX)` (silent index-key
+    /// fabrication) instead of refusing it. Pinned at the exact boundary in
+    /// both directions so a regression here is a coerced-value mismatch,
+    /// not a vague "changed behavior": nothing about this test can pass by
+    /// construction — it must observe the real return value at the exact
+    /// ULP either side of 2^63.
+    #[test]
+    fn to_int_coerced_refuses_two_pow_63_and_admits_the_float_just_below_it() {
+        let two_pow_63 = 9223372036854775808.0_f64; // exactly i64::MAX + 1
+        assert_eq!(
+            Num::float(two_pow_63).to_int_coerced(),
+            None,
+            "2^63 is one past i64::MAX and must be refused, not saturated to Some(i64::MAX)"
+        );
+
+        // The largest f64 strictly below 2^63 — an exact integer at this
+        // magnitude (ULP is 2^11 here), so round() == itself and the value
+        // legitimately fits i64.
+        let just_below = f64::from_bits(two_pow_63.to_bits() - 1);
+        assert!(just_below < two_pow_63);
+        let coerced = Num::float(just_below).to_int_coerced();
+        assert_eq!(
+            coerced,
+            Some(just_below as i64),
+            "the largest representable f64 strictly below 2^63 must coerce, not refuse"
+        );
+        assert!(
+            coerced.expect("asserted Some above") > 0,
+            "must not have wrapped/saturated to a negative or zero garbage value"
+        );
+
+        // -2^63 == i64::MIN is the exact opposite boundary and must be admitted.
+        assert_eq!(
+            Num::float(-9223372036854775808.0).to_int_coerced(),
+            Some(i64::MIN),
+            "-2^63 is exactly i64::MIN and must coerce, not refuse"
+        );
+
+        // A non-integral float must never coerce, at any magnitude.
+        assert_eq!(Num::float(3.5).to_int_coerced(), None);
+    }
 }
