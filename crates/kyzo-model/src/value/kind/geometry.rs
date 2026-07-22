@@ -157,7 +157,7 @@ fn hilbert_encode(mut lat: u32, mut lon: u32) -> u64 {
     loop {
         let rx = u32::from((lat & s) != 0);
         let ry = u32::from((lon & s) != 0);
-        d += (s as u64) * (s as u64) * (((3 * rx) ^ ry) as u64);
+        d += u64::from(s) * u64::from(s) * u64::from((3 * rx) ^ ry);
         // Full-grid rotate: side 2^32.
         hilbert_rot(None, &mut lat, &mut lon, rx, ry);
         if s == 1 {
@@ -175,8 +175,14 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
     let mut lon = 0u32;
     let mut s = 1u32;
     loop {
-        let rx = ((d >> 1) & 1) as u32;
-        let ry = ((d ^ u64::from(rx)) & 1) as u32;
+        let rx = match (d >> 1) & 1 {
+            0 => 0u32,
+            _ => 1u32,
+        };
+        let ry = match (d ^ u64::from(rx)) & 1 {
+            0 => 0u32,
+            _ => 1u32,
+        };
         hilbert_rot(Some(s), &mut lat, &mut lon, rx, ry);
         // INVARIANT(HilbertDecodeStep): s is a power of two on the 32-bit
         // Hilbert walk; wrap places the bit into lat/lon without overflow checks.
@@ -249,8 +255,16 @@ mod tests {
             s ^= s << 17;
             // INVARIANT(HilbertCorpusMix): xorshift mix for a deterministic
             // test corpus; wrap is the intended u32 scatter, not a size proof.
-            let lat = (s as u32).wrapping_mul(0x9E37_79B9);
-            let lon = ((s >> 32) as u32).wrapping_mul(0x85EB_CA6B);
+            let lat = match u32::try_from(s & 0xFFFF_FFFF) {
+                Ok(v) => v,
+                Err(_) => 0,
+            }
+            .wrapping_mul(0x9E37_79B9);
+            let lon = match u32::try_from(s >> 32) {
+                Ok(v) => v,
+                Err(_) => 0,
+            }
+            .wrapping_mul(0x85EB_CA6B);
             corpus.push(Geometry::from_cells(lat, lon));
         }
         let values: Vec<DataValue> = corpus.iter().copied().map(DataValue::Geometry).collect();
