@@ -543,18 +543,20 @@ impl Column {
 
 #[cfg(test)]
 mod tests {
+    use miette::{IntoDiagnostic, Result, miette};
+
     use super::super::admission::Denial;
     use super::super::arena::Arena;
     use super::super::canonical::{Datum, encode};
     use super::super::number::Num;
     use super::*;
 
-    fn intern_num(arena: &mut Arena, n: i64) -> StampedCode {
+    fn intern_num(arena: &mut Arena, n: i64) -> Result<StampedCode> {
         let cb = encode(Datum::Num(Num::int(n)));
-        match Value::mint(&cb, arena).expect("mint").stamp() {
-            None => arena_intern_direct(arena, &cb),
+        Ok(match Value::mint(&cb, arena).into_diagnostic()?.stamp() {
+            None => arena_intern_direct(arena, &cb)?,
             Some(stamp) => stamp,
-        }
+        })
     }
 
     /// Numbers are always inline as words, but columns of CODES intern
@@ -563,14 +565,14 @@ mod tests {
     fn arena_intern_direct(
         arena: &mut Arena,
         cb: &super::super::canonical::CanonicalBytes,
-    ) -> StampedCode {
-        arena.intern(cb.as_bytes()).expect("intern")
+    ) -> Result<StampedCode> {
+        Ok(arena.intern(cb.as_bytes()).into_diagnostic()?)
     }
 
-    fn str_datum_stamp(arena: &mut Arena, s: &str) -> StampedCode {
-        arena
+    fn str_datum_stamp(arena: &mut Arena, s: &str) -> Result<StampedCode> {
+        Ok(arena
             .intern(encode(Datum::Str(s)).as_bytes())
-            .expect("intern")
+            .into_diagnostic()?)
     }
 
     // ------------------------------------------------------------------
@@ -578,30 +580,32 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn write_door_refuses_stale_stamps() {
+    fn write_door_refuses_stale_stamps() -> Result<()> {
         let mut arena = Arena::new();
-        let sc = intern_num(&mut arena, 1);
-        arena.seal().expect("lawful seal");
+        let sc = intern_num(&mut arena, 1)?;
+        arena.seal().into_diagnostic()?;
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         assert!(
             matches!(col.push(sc), Err(Denial::EpochMismatch { .. })),
             "epoch 0 stamp into an epoch 1 column must refuse typed"
         );
+        Ok(())
     }
 
     #[test]
-    fn write_door_refuses_foreign_stamps() {
+    fn write_door_refuses_foreign_stamps() -> Result<()> {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        let sa = intern_num(&mut a, 1);
-        b.intern(b"x").expect("intern");
+        let sa = intern_num(&mut a, 1)?;
+        b.intern(b"x").into_diagnostic()?;
         let fb = b.frame();
         let mut col = CodeColumn::new_in(&fb);
         assert!(
             matches!(col.push(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp must refuse typed"
         );
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -610,51 +614,57 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn admission_refuses_stale_containers() {
+    fn admission_refuses_stale_containers() -> Result<()> {
         let mut arena = Arena::new();
-        let sc = intern_num(&mut arena, 1);
+        let sc = intern_num(&mut arena, 1)?;
         let col = {
             let f = arena.frame();
             let mut c = CodeColumn::new_in(&f);
-            c.push(sc).expect("lawful push");
+            c.push(sc).into_diagnostic()?;
             c
         };
-        arena.seal().expect("lawful seal");
+        arena.seal().into_diagnostic()?;
         let f = arena.frame();
         assert!(
             matches!(col.admit(&f), Err(Denial::EpochMismatch { .. })),
             "stale container must refuse typed — gather first"
         );
+        Ok(())
     }
 
     #[test]
-    fn admission_refuses_contents_beyond_a_snapshot_cut() {
+    fn admission_refuses_contents_beyond_a_snapshot_cut() -> Result<()> {
         let mut arena = Arena::new();
-        intern_num(&mut arena, 1);
+        intern_num(&mut arena, 1)?;
         let early = arena.snapshot();
         // Same epoch, but this code was minted after the cut.
-        let late = intern_num(&mut arena, 2);
+        let late = intern_num(&mut arena, 2)?;
         let mut col = CodeColumn::new_in(&arena.frame());
-        col.push(late).expect("lawful push");
+        col.push(late).into_diagnostic()?;
         assert!(
             matches!(col.admit(&early), Err(Denial::VisibilityOverflow { .. })),
             "contents beyond the observer cut must refuse typed"
         );
+        Ok(())
     }
 
     #[test]
-    fn admission_is_one_check_then_free_spends() {
+    fn admission_is_one_check_then_free_spends() -> Result<()> {
         let mut arena = Arena::new();
-        let stamps: Vec<StampedCode> = (0..100).map(|i| intern_num(&mut arena, i)).collect();
+        let mut stamps = Vec::with_capacity(100);
+        for i in 0..100 {
+            stamps.push(intern_num(&mut arena, i)?);
+        }
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         for sc in stamps {
-            col.push(sc).expect("lawful push");
+            col.push(sc).into_diagnostic()?;
         }
-        let adm = col.admit(&f).expect("lawful admit");
+        let adm = col.admit(&f).into_diagnostic()?;
         for i in 0..adm.len() {
-            assert!(!adm.resolve(i).expect("lawful").is_empty());
+            assert!(!adm.resolve(i).into_diagnostic()?.is_empty());
         }
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -663,76 +673,105 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn sealed_fast_lane_agrees_with_byte_order() {
+    fn sealed_fast_lane_agrees_with_byte_order() -> Result<()> {
         let mut arena = Arena::new();
         for i in [5i64, -3, 99, 0, 42] {
-            intern_num(&mut arena, i);
+            intern_num(&mut arena, i)?;
         }
-        let remap = arena.seal().expect("lawful seal");
+        let remap = arena.seal().into_diagnostic()?;
         match remap { value => core::mem::drop(value) };
         // Re-intern: all sealed hits now.
-        let stamps: Vec<StampedCode> = [5i64, -3, 99, 0, 42, -3]
-            .iter()
-            .map(|&i| intern_num(&mut arena, i))
-            .collect();
+        let mut stamps = Vec::new();
+        for &i in &[5i64, -3, 99, 0, 42, -3] {
+            stamps.push(intern_num(&mut arena, i)?);
+        }
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         for sc in stamps {
-            col.push(sc).expect("lawful push");
+            col.push(sc).into_diagnostic()?;
         }
-        let adm = col.admit(&f).expect("lawful admit");
+        let adm = col.admit(&f).into_diagnostic()?;
         assert!(adm.all_sealed());
         assert!(adm.raw_sealed().is_some());
-        let perm = adm.sort_permutation().expect("lawful sort");
+        let perm = adm.sort_permutation().into_diagnostic()?;
         // The permutation must equal the byte-order sort, exactly.
-        let mut expect: Vec<u32> = (0..match u32::try_from(adm.len()) {
-            Ok(n) => n,
-            Err(_) => return,
-        })
-        .collect();
+        let len_u32 = u32::try_from(adm.len()).map_err(|_| miette!("column len"))?;
+        let mut expect: Vec<u32> = (0..len_u32).collect();
+        let resolved: Vec<&[u8]> = {
+            let mut out = Vec::with_capacity(adm.len());
+            for i in 0..adm.len() {
+                out.push(adm.resolve(i).into_diagnostic()?);
+            }
+            out
+        };
         expect.sort_by(|&i, &j| {
-            adm.resolve(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })
-                .expect("lawful")
-                .cmp(adm.resolve(match usize::try_from(j) { Ok(n) => n, Err(_) => 0 }).expect("lawful"))
+            let ii = match usize::try_from(i) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
+            let jj = match usize::try_from(j) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
+            resolved[ii].cmp(resolved[jj])
         });
         // Stable comparison: resolve-order and permutation order agree
         // pairwise (indices with equal values may swap; compare values).
-        let by_perm: Vec<&[u8]> = perm
-            .iter()
-            .map(|&i| adm.resolve(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 }).expect("lawful"))
-            .collect();
-        let by_expect: Vec<&[u8]> = expect
-            .iter()
-            .map(|&i| adm.resolve(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 }).expect("lawful"))
-            .collect();
+        let by_perm: Vec<&[u8]> = {
+            let mut out = Vec::with_capacity(perm.len());
+            for &i in &perm {
+                let idx = match usize::try_from(i) {
+                    Ok(n) => n,
+                    Err(_) => 0,
+                };
+                out.push(resolved[idx]);
+            }
+            out
+        };
+        let by_expect: Vec<&[u8]> = {
+            let mut out = Vec::with_capacity(expect.len());
+            for &i in &expect {
+                let idx = match usize::try_from(i) {
+                    Ok(n) => n,
+                    Err(_) => 0,
+                };
+                out.push(resolved[idx]);
+            }
+            out
+        };
         assert_eq!(by_perm, by_expect);
+        Ok(())
     }
 
     #[test]
-    fn tail_bearing_columns_leave_the_fast_lane_and_still_order_correctly() {
+    fn tail_bearing_columns_leave_the_fast_lane_and_still_order_correctly() -> Result<()> {
         let mut arena = Arena::new();
-        intern_num(&mut arena, 10);
-        arena.seal().expect("lawful seal");
+        intern_num(&mut arena, 10)?;
+        arena.seal().into_diagnostic()?;
         // Mixed: sealed hit + fresh tail codes, deliberately out of
         // arrival order vs value order.
         let stamps = vec![
-            intern_num(&mut arena, 10),         // sealed
-            str_datum_stamp(&mut arena, "zzz"), // tail
-            intern_num(&mut arena, -7),         // tail — numerically before 10
+            intern_num(&mut arena, 10)?,         // sealed
+            str_datum_stamp(&mut arena, "zzz")?, // tail
+            intern_num(&mut arena, -7)?,         // tail — numerically before 10
         ];
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         for sc in stamps {
-            col.push(sc).expect("lawful push");
+            col.push(sc).into_diagnostic()?;
         }
-        let adm = col.admit(&f).expect("lawful admit");
+        let adm = col.admit(&f).into_diagnostic()?;
         assert!(!adm.all_sealed());
         assert!(adm.raw_sealed().is_none());
-        let perm = adm.sort_permutation().expect("lawful sort");
-        let sorted: Vec<&[u8]> = perm
-            .iter()
-            .map(|&i| adm.resolve(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 }).expect("lawful"))
-            .collect();
+        let perm = adm.sort_permutation().into_diagnostic()?;
+        let mut sorted = Vec::with_capacity(perm.len());
+        for &i in &perm {
+            let idx = match usize::try_from(i) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
+            sorted.push(adm.resolve(idx).into_diagnostic()?);
+        }
         let mut expect = sorted.clone();
         expect.sort();
         assert_eq!(sorted, expect, "tail path diverged from byte order");
@@ -740,6 +779,7 @@ mod tests {
         assert_eq!(perm[0], 2);
         assert_eq!(perm[1], 0);
         assert_eq!(perm[2], 1);
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -748,30 +788,33 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn gather_preserves_values_and_sortedness_and_readmits() {
+    fn gather_preserves_values_and_sortedness_and_readmits() -> Result<()> {
         let mut arena = Arena::new();
-        let stamps: Vec<StampedCode> = (0..50)
-            .map(|i| intern_num(&mut arena, i * 3 % 17))
-            .collect();
+        let mut stamps = Vec::with_capacity(50);
+        for i in 0..50 {
+            stamps.push(intern_num(&mut arena, i * 3 % 17)?);
+        }
         let mut col = CodeColumn::new_in(&arena.frame());
         for sc in stamps {
-            col.push(sc).expect("lawful push");
+            col.push(sc).into_diagnostic()?;
         }
         // Record values + a sorted-by-value permutation before the seal.
         let before: Vec<Vec<u8>> = {
             let f = arena.frame();
-            let adm = col.admit(&f).expect("lawful admit");
-            (0..adm.len())
-                .map(|i| adm.resolve(i).expect("lawful").to_vec())
-                .collect()
+            let adm = col.admit(&f).into_diagnostic()?;
+            let mut out = Vec::with_capacity(adm.len());
+            for i in 0..adm.len() {
+                out.push(adm.resolve(i).into_diagnostic()?.to_vec());
+            }
+            out
         };
-        let remap = arena.seal().expect("lawful seal");
-        let col = col.gather(&remap).expect("lawful gather");
+        let remap = arena.seal().into_diagnostic()?;
+        let col = col.gather(&remap).into_diagnostic()?;
         let f = arena.frame();
-        let adm = col.admit(&f).expect("lawful admit"); // readmits in the new epoch
+        let adm = col.admit(&f).into_diagnostic()?; // readmits in the new epoch
         for (i, b) in before.iter().enumerate() {
             assert_eq!(
-                adm.resolve(i).expect("lawful"),
+                adm.resolve(i).into_diagnostic()?,
                 b.as_slice(),
                 "gather moved a value"
             );
@@ -780,40 +823,42 @@ mod tests {
         let mut arena2 = Arena::new();
         let mut sorted_col = CodeColumn::new_in(&arena2.frame());
         for i in 0..20 {
-            let sc = intern_num(&mut arena2, i);
-            sorted_col.push(sc).expect("lawful push");
+            let sc = intern_num(&mut arena2, i)?;
+            sorted_col.push(sc).into_diagnostic()?;
         }
-        let r1 = arena2.seal().expect("lawful seal");
-        let sorted_col = sorted_col.gather(&r1).expect("lawful gather");
+        let r1 = arena2.seal().into_diagnostic()?;
+        let sorted_col = sorted_col.gather(&r1).into_diagnostic()?;
         // Everything was tail (arrival = insertion order 0..20 which is
         // also value order); after seal, codes are sealed ranks.
-        intern_num(&mut arena2, -1000); // will re-rank on next seal
-        let r2 = arena2.seal().expect("lawful seal");
-        let sorted_col = sorted_col.gather(&r2).expect("lawful gather");
+        intern_num(&mut arena2, -1000)?; // will re-rank on next seal
+        let r2 = arena2.seal().into_diagnostic()?;
+        let sorted_col = sorted_col.gather(&r2).into_diagnostic()?;
         let f2 = arena2.frame();
-        let adm2 = sorted_col.admit(&f2).expect("lawful admit");
-        let raw = adm2.raw_sealed().expect("sealed after gathers");
+        let adm2 = sorted_col.admit(&f2).into_diagnostic()?;
+        let raw = adm2.raw_sealed().ok_or_else(|| miette!("raw_sealed"))?;
         assert!(
             raw.windows(2).all(|w| w[0] < w[1]),
             "monotone gather broke sortedness"
         );
+        Ok(())
     }
 
     #[test]
-    fn gather_refuses_the_wrong_remap() {
+    fn gather_refuses_the_wrong_remap() -> Result<()> {
         let mut arena = Arena::new();
-        let sc = intern_num(&mut arena, 1);
+        let sc = intern_num(&mut arena, 1)?;
         let mut col = CodeColumn::new_in(&arena.frame());
-        col.push(sc).expect("lawful push");
-        let r1 = arena.seal().expect("lawful seal");
-        let col = col.gather(&r1).expect("lawful gather");
-        let _r2_skipped = arena.seal().expect("lawful seal");
-        let r3 = arena.seal().expect("lawful seal");
+        col.push(sc).into_diagnostic()?;
+        let r1 = arena.seal().into_diagnostic()?;
+        let col = col.gather(&r1).into_diagnostic()?;
+        let _r2_skipped = arena.seal().into_diagnostic()?;
+        let r3 = arena.seal().into_diagnostic()?;
         // col is at epoch 1; r3 reads epoch 2.
         assert!(
             matches!(col.gather(&r3), Err(Denial::EpochMismatch { .. })),
             "wrong-epoch remap must refuse typed"
         );
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -822,47 +867,49 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn word_column_holds_mixed_residency_and_gathers() {
+    fn word_column_holds_mixed_residency_and_gathers() -> Result<()> {
         let mut arena = Arena::new();
         let mut col = WordColumn::new_in(&arena.frame());
         let small = encode(Datum::Str("hi"));
         let big = encode(Datum::Str("a string well past the inline max"));
-        col.push(Value::mint(&small, &mut arena).expect("mint"))
-            .expect("lawful push");
-        col.push(Value::mint(&big, &mut arena).expect("mint"))
-            .expect("lawful push");
+        col.push(Value::mint(&small, &mut arena).into_diagnostic()?)
+            .into_diagnostic()?;
+        col.push(Value::mint(&big, &mut arena).into_diagnostic()?)
+            .into_diagnostic()?;
         {
             let f = arena.frame();
-            let adm = col.admit(&f).expect("lawful admit");
-            assert_eq!(adm.canonical(0).expect("lawful"), small.as_bytes());
-            assert_eq!(adm.canonical(1).expect("lawful"), big.as_bytes());
+            let adm = col.admit(&f).into_diagnostic()?;
+            assert_eq!(adm.canonical(0).into_diagnostic()?, small.as_bytes());
+            assert_eq!(adm.canonical(1).into_diagnostic()?, big.as_bytes());
             assert_eq!(
-                adm.cmp_at(0, 1).expect("lawful"),
+                adm.cmp_at(0, 1).into_diagnostic()?,
                 small.as_bytes().cmp(big.as_bytes())
             );
         }
-        let remap = arena.seal().expect("lawful seal");
-        let col = col.gather(&remap).expect("lawful gather");
+        let remap = arena.seal().into_diagnostic()?;
+        let col = col.gather(&remap).into_diagnostic()?;
         let f = arena.frame();
-        let adm = col.admit(&f).expect("lawful admit");
-        assert_eq!(adm.canonical(0).expect("lawful"), small.as_bytes());
+        let adm = col.admit(&f).into_diagnostic()?;
+        assert_eq!(adm.canonical(0).into_diagnostic()?, small.as_bytes());
         assert_eq!(
-            adm.canonical(1).expect("lawful"),
+            adm.canonical(1).into_diagnostic()?,
             big.as_bytes(),
             "gather moved a word's value"
         );
+        Ok(())
     }
 
     #[test]
-    fn word_column_write_door_refuses_stale_wide_words() {
+    fn word_column_write_door_refuses_stale_wide_words() -> Result<()> {
         let mut arena = Arena::new();
         let big = encode(Datum::Str("a string well past the inline max"));
-        let minted = Value::mint(&big, &mut arena).expect("mint");
-        arena.seal().expect("lawful seal");
+        let minted = Value::mint(&big, &mut arena).into_diagnostic()?;
+        arena.seal().into_diagnostic()?;
         let mut col = WordColumn::new_in(&arena.frame());
         assert!(
             matches!(col.push(minted), Err(Denial::EpochMismatch { .. })),
             "stale wide word must refuse typed"
         );
+        Ok(())
     }
 }
