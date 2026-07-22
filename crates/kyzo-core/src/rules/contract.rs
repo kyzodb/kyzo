@@ -715,12 +715,13 @@ mod fixed_rule_output_budget_tests {
     use super::*;
     use kyzo_model::value::DataValue;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn row(i: i64) -> Tuple {
         Tuple::from_vec(vec![DataValue::from(i), DataValue::from(i)])
     }
 
     #[test]
-    fn budgeted_output_refuses_mid_run() {
+    fn budgeted_output_refuses_mid_run() -> Result<()> {
         let mut out = FixedRuleOutput::new_budgeted(2, SourceSpan(3, 5), 0, Some(10));
         let mut err = None;
         for i in 0..1_000 {
@@ -729,25 +730,29 @@ mod fixed_rule_output_budget_tests {
                 break;
             }
         }
-        let err = err.expect("must refuse mid-run");
-        let refusal: &LimitExceeded = err.downcast_ref().expect("typed LimitExceeded");
+        let err = err.ok_or_else(|| miette!("must refuse mid-run"))?;
+        let refusal: &LimitExceeded = err
+            .downcast_ref()
+            .ok_or_else(|| miette!("typed LimitExceeded"))?;
         assert_eq!(refusal.dimension, BudgetDimension::InFlightDerivations);
         assert_eq!(refusal.ceiling, 10);
         assert!(refusal.spent > 10);
         assert!(refusal.spent <= 10 + u64::from(OUTPUT_STRIDE));
         assert_eq!(refusal.span, Some(SourceSpan(3, 5)));
+        Ok(())
     }
 
     #[test]
-    fn small_and_unbudgeted_outputs_never_refuse() {
+    fn small_and_unbudgeted_outputs_never_refuse() -> Result<()> {
         let mut small = FixedRuleOutput::new_budgeted(2, SourceSpan(0, 0), 0, Some(3));
         for i in 0..5 {
-            small.put(row(i)).expect("under a stride, never checked");
+            small.put(row(i))?;
         }
         let mut unbudgeted = FixedRuleOutput::new(2, SourceSpan(0, 0));
         for i in 0..500 {
-            unbudgeted.put(row(i)).expect("no ceiling, never refuses");
+            unbudgeted.put(row(i))?;
         }
+        Ok(())
     }
 }
 
@@ -1335,6 +1340,7 @@ impl<S: StoredInputSource + Send + Sync> FixedRuleEval for SessionFixedRule<'_, 
 pub(crate) mod tests_support {
     use super::*;
 
+    use miette::{IntoDiagnostic, Result, miette};
     pub(crate) struct TestInput {
         pub(crate) bindings: Vec<&'static str>,
         pub(crate) rows: Vec<Tuple>,
@@ -1353,12 +1359,12 @@ pub(crate) mod tests_support {
     }
 
     /// Lift a legacy SmartString-keyed options map into [`FixedRuleOptions`].
-    pub(crate) fn opts_map(map: BTreeMap<SmartString<LazyCompact>, Expr>) -> FixedRuleOptions {
+    pub(crate) fn opts_map(map: BTreeMap<SmartString<LazyCompact>, Expr>) -> Result<FixedRuleOptions> {
         FixedRuleOptions::from_entries(
             map.into_iter()
                 .map(|(k, v)| (Symbol::new(k, SourceSpan::default()), v)),
         )
-        .expect("test options use known fixed-rule option names")
+        .into_diagnostic()
     }
 
     /// Empty options bag for harness call sites.
@@ -1367,13 +1373,13 @@ pub(crate) mod tests_support {
     }
 
     /// Build options from string keys (known fixed-rule option names only).
-    pub(crate) fn opts(pairs: &[(&str, Expr)]) -> FixedRuleOptions {
+    pub(crate) fn opts(pairs: &[(&str, Expr)]) -> Result<FixedRuleOptions> {
         FixedRuleOptions::from_entries(
             pairs
                 .iter()
                 .map(|(k, v)| (Symbol::new(*k, SourceSpan::default()), v.clone())),
         )
-        .expect("test options use known fixed-rule option names")
+        .into_diagnostic()
     }
 
     /// Test-only stored-input double: every stored read refuses. Not the
@@ -1537,26 +1543,29 @@ pub(crate) mod tests_support {
 mod par_try_map_tests {
     use super::*;
 
+    use miette::{IntoDiagnostic, Result, miette};
     #[test]
-    fn preserves_input_order() {
+    fn preserves_input_order() -> Result<()> {
         let got = par_try_map((0u32..1000).collect(), |i| Ok::<_, miette::Report>(i * 2));
         assert_eq!(
-            got.unwrap(),
+            got?,
             (0u32..1000).map(|i| i * 2).collect::<Vec<_>>()
         );
+        Ok(())
     }
 
     #[test]
-    fn single_thread_matches_default_pool() {
+    fn single_thread_matches_default_pool() -> Result<()> {
         // INVARIANT(test_hash_mix): golden-hash mul in a unit test; wrap is intentional.
         let f = |i: u32| Ok::<_, miette::Report>(i.wrapping_mul(2_654_435_761));
-        let default = par_try_map((0u32..2000).collect(), f).unwrap();
+        let default = par_try_map((0u32..2000).collect(), f)?;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
-        let single = pool.install(|| par_try_map((0u32..2000).collect(), f).unwrap());
+            .into_diagnostic()?;
+        let single = pool.install(|| par_try_map((0u32..2000).collect(), f))?;
         assert_eq!(default, single);
+        Ok(())
     }
 
     #[test]
@@ -1577,20 +1586,22 @@ mod tests {
     use super::tests_support::{TestInput, empty_opts, opts_map, run_fixed_rule};
     use super::*;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
 
     #[test]
-    fn output_writer_rejects_wrong_arity() {
+    fn output_writer_rejects_wrong_arity() -> Result<()> {
         let mut out = FixedRuleOutput::new(2, SourceSpan::default());
-        out.put(Tuple::from_vec(vec![s("a"), s("b")])).unwrap();
+        out.put(Tuple::from_vec(vec![s("a"), s("b")]))?;
         let err = out.put(Tuple::from_vec(vec![s("a")])).unwrap_err();
         assert!(err.to_string().contains("arity 2"), "{err}");
         let err = out
             .put(Tuple::from_vec(vec![s("a"), s("b"), s("c")]))
             .unwrap_err();
         assert!(err.to_string().contains("width 3"), "{err}");
+        Ok(())
     }
 
     #[test]
@@ -1615,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_fixed_rule_arity_check_is_universal() {
+    fn simple_fixed_rule_arity_check_is_universal() -> Result<()> {
         let rule = SimpleFixedRule::new(2, MismatchedArityBody);
         let res = run_fixed_rule(&rule, vec![], empty_opts(), CancelFlag::inert());
         assert!(res.is_err());
@@ -1630,9 +1641,10 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![s("p")]), Tuple::from_vec(vec![s("q")])];
         assert_eq!(got, want);
+        Ok(())
     }
 
     #[test]
@@ -1651,7 +1663,7 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_is_honored_mid_run() {
+    fn cancellation_is_honored_mid_run()  -> Result<()> {
         let (auth, cancel) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         let res = run_fixed_rule(
@@ -1673,15 +1685,16 @@ mod tests {
                     val: DataValue::from(true),
                     span: SourceSpan::default(),
                 },
-            )])),
+            )]))?,
             cancel,
         );
         let err = res.unwrap_err();
         assert!(err.to_string().contains("killed"), "{err}");
+        Ok(())
     }
 
     #[test]
-    fn default_rules_registry() {
+    fn default_rules_registry() -> Result<()> {
         for name in [
             "PageRank",
             "Constant",
@@ -1693,22 +1706,28 @@ mod tests {
         ] {
             assert!(DEFAULT_FIXED_RULES.contains_key(name), "{name} missing");
         }
-        let pr = DEFAULT_FIXED_RULES.get("PageRank").unwrap().clone();
+        let pr = DEFAULT_FIXED_RULES.get("PageRank").ok_or_else(|| miette!("PageRank missing"))?.clone();
         assert_eq!(
-            pr.arity(&empty_opts(), &[], SourceSpan::default()).unwrap(),
+            pr.arity(&empty_opts(), &[], SourceSpan::default())?,
             2
         );
+        Ok(())
     }
 
     #[test]
-    fn rule_with_channel_round_trip() {
+    fn rule_with_channel_round_trip() -> Result<()> {
         let (rule, receiver) = SimpleFixedRule::rule_with_channel(1);
-        let handle = std::thread::spawn(move || {
-            let (inputs, _opts, reply) = receiver.recv().unwrap();
-            let (_headers, rows, _next) = inputs.into_iter().next().unwrap().into_parts();
+        let handle = std::thread::spawn(move || -> Result<()> {
+            let (inputs, _opts, reply) = receiver.recv().into_diagnostic()?;
+            let (_headers, rows, _next) = inputs
+                .into_iter()
+                .next()
+                .ok_or_else(|| miette!("test expected Some"))?
+                .into_parts();
             reply
-                .send(Ok(NamedRows::try_new(vec!["x".to_string()], rows).unwrap()))
-                .unwrap();
+                .send(Ok(NamedRows::try_new(vec!["x".to_string()], rows)?))
+                .into_diagnostic()?;
+            Ok(())
         });
         let got = run_fixed_rule(
             &rule,
@@ -1718,15 +1737,17 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        .unwrap();
+        )?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![s("z")])];
         assert_eq!(got, want);
-        handle.join().unwrap();
+        handle
+            .join()
+            .map_err(|_| miette!("channel worker panicked"))??;
+        Ok(())
     }
 
     #[test]
-    fn graph_builders() {
+    fn graph_builders() -> Result<()> {
         struct Probe;
         impl FixedRule for Probe {
             fn arity(&self, _o: &FixedRuleOptions, _h: &[Symbol], _s: SourceSpan) -> Result<usize> {
@@ -1769,7 +1790,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
 
         struct BadEdge;
         impl FixedRule for BadEdge {
@@ -1830,10 +1851,11 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("edge weight"), "{err}");
+        Ok(())
     }
 
     #[test]
-    fn nullary_node_relation_refuses_not_panics_across_algos() {
+    fn nullary_node_relation_refuses_not_panics_across_algos() -> Result<()> {
         use crate::rules::algo::astar::ShortestPathAStar;
         use crate::rules::algo::bfs::Bfs;
         use crate::rules::algo::degree_centrality::DegreeCentrality;
@@ -1882,7 +1904,7 @@ mod tests {
                     opts_map(BTreeMap::from([(
                         SmartString::from("k"),
                         const_expr(DataValue::from(1i64)),
-                    )])),
+                    )]))?,
                     CancelFlag::inert(),
                 ),
             ),
@@ -1905,7 +1927,7 @@ mod tests {
                     opts_map(BTreeMap::from([(
                         SmartString::from("heuristic"),
                         const_expr(DataValue::from(0.0)),
-                    )])),
+                    )]))?,
                     CancelFlag::inert(),
                 ),
             ),
@@ -1927,7 +1949,7 @@ mod tests {
                     opts_map(BTreeMap::from([(
                         SmartString::from("condition"),
                         const_expr(DataValue::from(true)),
-                    )])),
+                    )]))?,
                     CancelFlag::inert(),
                 ),
             ),
@@ -1949,7 +1971,7 @@ mod tests {
                     opts_map(BTreeMap::from([(
                         SmartString::from("condition"),
                         const_expr(DataValue::from(true)),
-                    )])),
+                    )]))?,
                     CancelFlag::inert(),
                 ),
             ),
@@ -2011,7 +2033,7 @@ mod tests {
                     opts_map(BTreeMap::from([(
                         SmartString::from("steps"),
                         const_expr(DataValue::from(1i64)),
-                    )])),
+                    )]))?,
                     CancelFlag::inert(),
                 ),
             ),
@@ -2045,5 +2067,6 @@ mod tests {
                 "{name}: expected the typed arity refusal, got: {err}"
             );
         }
+        Ok(())
     }
 }
