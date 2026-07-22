@@ -428,6 +428,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use kyzo_model::program::op::{OP_ADD, OP_EQ, OP_GT};
     use kyzo_model::value::DataValue;
@@ -454,15 +455,15 @@ mod tests {
 
     /// THE law: columnar equals row-by-row, values and error identity
     /// both, over every (expr, batch) this generator produces.
-    fn differential(expr: &Expr, rows: &[Vec<DataValue>]) {
+    fn differential(expr: &Expr, rows: &[Vec<DataValue>]) -> Result<()> {
         let width = rows.first().map_or(0, Vec::len);
         let owned_rows: Vec<kyzo_model::value::Tuple> = rows
             .iter()
             .cloned()
             .map(kyzo_model::value::Tuple::from_vec)
             .collect();
-        let batch = ColumnBatch::from_rows(owned_rows, width).expect("test rows uniform width");
-        let sel = Selection::all(rows.len()).expect("test batch fits u32");
+        let batch = ColumnBatch::from_rows(owned_rows, width).map_err(|e| miette!("test rows uniform width: {e}"))?;
+        let sel = Selection::all(rows.len()).map_err(|e| miette!("test batch fits u32: {e}"))?;
         let batched = eval_expr_batched(expr, &batch, &sel);
         // Row oracle: first error in row order wins; otherwise all values.
         let mut oracle_vals = vec![];
@@ -484,6 +485,7 @@ mod tests {
             (Ok(v), Some(oe)) => panic!("row eval errors ({oe}) but batch returned {v:?}"),
             (Err(be), None) => panic!("batch errors ({be}) but row eval is clean"),
         }
+        Ok(())
     }
 
     #[test]
