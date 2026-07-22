@@ -83,7 +83,6 @@ pub struct FtsIndexManifest {
 /// Name proof: private fields; the only mints are [`TokenizerConfig::admit`]
 /// (and serde deserialize through that door). Unknown stage names are
 /// unstorable. Argument shape is still proven at [`validate`] / [`build`].
-#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize)]
 pub struct TokenizerConfig {
     name: SmartString<LazyCompact>,

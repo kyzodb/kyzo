@@ -92,7 +92,7 @@ pub(crate) struct SemiringOverflow {
 
 /// Which provenance budget dimension was exceeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProvenanceBudgetDimension {
+pub enum ProvenanceBudgetDimension {
     /// Grounded-derivation enumeration while building the graph.
     EnumeratedDerivations,
     /// Semiring solver fixpoint passes.
@@ -117,10 +117,10 @@ impl std::fmt::Display for ProvenanceBudgetDimension {
     code(provenance::limit_exceeded),
     help("raise the provenance ceiling, or narrow the query")
 )]
-pub(crate) struct ProvenanceLimitExceeded {
-    pub(crate) dimension: ProvenanceBudgetDimension,
-    pub(crate) spent: u64,
-    pub(crate) ceiling: u64,
+pub struct ProvenanceLimitExceeded {
+    pub dimension: ProvenanceBudgetDimension,
+    pub spent: u64,
+    pub ceiling: u64,
 }
 
 /// A proof failed verification. The variant names the first offending

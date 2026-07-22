@@ -61,7 +61,7 @@ pub(crate) trait NormalAggrObj: Send + Sync + seal::Sealed {
 /// including [`DataValue::Null`] when Null is real data, never when it means
 /// "empty."
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum MeetAccum {
+pub enum MeetAccum {
     Empty,
     Value(DataValue),
 }

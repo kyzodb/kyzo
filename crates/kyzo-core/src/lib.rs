@@ -248,14 +248,6 @@
 // No `allow(wildcard_enum_match_arm)` escapes — name the remaining variants
 // or use `if let` / `let else` for single-variant gates.
 #![deny(clippy::wildcard_enum_match_arm)]
-// The transaction traits return boxed iterator types by design; naming them
-// would not simplify the contract.
-#![allow(clippy::type_complexity)]
-// `DataValue` is used as a set/map key throughout (e.g. `DataValue::Set`);
-// clippy flags it as a "mutable key type" through false-positive interior-
-// mutability detection in its field types. Keys are never mutated via shared
-// references.
-#![allow(clippy::mutable_key_type)]
 
 pub(crate) mod data;
 // Target-zone seats landing mid-cut (ideal map: kyzo-model / exec / rules).
@@ -324,7 +316,7 @@ pub use store::fjall::{
     FjallReadTx, FjallStorage, FjallWriteTx, StorageOptions, StorageStats, new_fjall_storage,
     new_fjall_storage_with,
 };
-pub use store::retry::retry_on_conflict;
+pub use store::retry::{RetryError, retry_on_conflict};
 pub use store::verify_walk::{CorruptEntry, VerifyReport, verify_storage};
 pub use store::{
     Aborted, Applied, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage,
@@ -358,9 +350,10 @@ pub use react::standing::StandingQuery;
 /// fixpoint through this path; production hosts use [`Engine`] only.
 pub mod oracle_harness {
     pub use crate::exec::fixpoint::delta_store::{
-        EpochStore, HeadPos, RegularTempStore, TempStoreCorruptRefuse, TupleInIter,
+        EpochStore, HeadPos, LimiterSkip, RegularTempStore, TempStoreCorruptRefuse, TupleInIter,
         collect_materialized,
     };
+    pub use crate::exec::fold::aggr::MeetAccum;
     pub use crate::exec::fixpoint::eval::seal::Sealed;
     pub use crate::exec::fixpoint::eval::{
         AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalOutcome, EvalProgram,
@@ -374,9 +367,9 @@ pub mod oracle_harness {
         RulesetHeadAggrMismatch, bind_for_eval, stratified_magic_compile,
     };
     pub use crate::exec::plan::program::{
-        MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
-        MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes, StratifiedMagicProgram,
-        into_normalized_program,
+        Adornment, AdornmentMark, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicProgram,
+        MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes,
+        StratifiedMagicProgram, into_normalized_program,
     };
     pub use crate::exec::provenance::eval::{Witness, WitnessTable};
     pub use crate::project::current::Segments;

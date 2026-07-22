@@ -137,7 +137,6 @@ pub(crate) fn verify(
 // Query-answer ::verify — provenance door
 // ─────────────────────────────────────────────────────────────────────────
 
-#[allow(private_interfaces)] // ProvenanceLimitExceeded stays crate-private in BudgetRefused
 /// Outcome of one provenance-backed `::verify` run. Never a bare bool: a
 /// MATCH, a budgeted refusal, a reproducible MISMATCH bundle, or a named
 /// unsupported construct.

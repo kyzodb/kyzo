@@ -31,7 +31,7 @@ use crate::store::{
 /// Construct only via [`RetryError::session`] / [`RetryError::session_report`]
 /// — never `From<Report>` on [`RetryError`].
 #[derive(Debug)]
-pub(crate) struct SessionRefuse(miette::Report);
+pub struct SessionRefuse(miette::Report);
 
 impl std::fmt::Display for SessionRefuse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -54,7 +54,7 @@ impl std::error::Error for SessionRefuse {}
 /// Not a miette Diagnostic: a manual [`From`] into [`miette::Report`] owns
 /// the lift so Diagnostic-derive cannot fight it.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RetryFatal {
+pub enum RetryFatal {
     /// Commit-time IO (including durability shortfall after apply).
     #[error(transparent)]
     Io(#[from] CommitIo),
@@ -77,7 +77,7 @@ pub(crate) enum RetryFatal {
 /// formatted string and not a residual Report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 #[diagnostic(code(storage::op))]
-pub(crate) enum StorageOpFailure {
+pub enum StorageOpFailure {
     #[error("storage write_tx failed")]
     WriteTx,
     #[error("storage get failed")]
@@ -97,7 +97,7 @@ pub(crate) enum StorageOpFailure {
 ///
 /// Not a miette Diagnostic: [`From<RetryError> for Report`] is the sole lift.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RetryError {
+pub enum RetryError {
     /// SSI conflict — discard the attempt; retry on a fresh snapshot.
     #[error(transparent)]
     Conflict(ConflictError),
@@ -203,7 +203,6 @@ pub(crate) fn put_attempt(
 /// (the DST campaigns): pausing there wastes wall-clock on races that
 /// virtual time already resolves. Real concurrent sessions retry through
 /// [`retry_on_conflict_with_backoff`] instead.
-#[allow(private_bounds)] // RetryError stack is crate-private; door is the public retry loop
 pub fn retry_on_conflict<T>(
     max_attempts: NonZeroUsize,
     mut attempt: impl FnMut() -> std::result::Result<T, RetryError>,
@@ -234,7 +233,6 @@ pub fn retry_on_conflict<T>(
 /// every writer eventually lands. The session tier's mutation path
 /// retries through this. Timing is the only thing affected; answers
 /// never depend on it.
-#[allow(private_bounds)] // RetryError stack is crate-private; door is the public retry loop
 pub fn retry_on_conflict_with_backoff<T>(
     max_attempts: NonZeroUsize,
     mut attempt: impl FnMut() -> std::result::Result<T, RetryError>,

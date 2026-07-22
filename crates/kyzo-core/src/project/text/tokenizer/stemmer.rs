@@ -18,7 +18,6 @@ use crate::project::text::tokenizer::BoxTokenStream;
 
 /// Available stemmer languages.
 #[derive(Debug, serde_derive::Serialize, serde_derive::Deserialize, Eq, PartialEq, Copy, Clone)]
-#[allow(missing_docs)]
 pub(crate) enum Language {
     Arabic,
     Danish,

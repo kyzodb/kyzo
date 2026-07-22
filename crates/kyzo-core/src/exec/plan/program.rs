@@ -407,7 +407,7 @@ impl StoreLifetimes {
 
 /// One argument position in a demand pattern — bound or free, never a bool.
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
-pub(crate) enum AdornmentMark {
+pub enum AdornmentMark {
     Bound,
     Free,
 }
@@ -428,12 +428,11 @@ impl AdornmentMark {
 
 /// An adornment: for each argument position, [`AdornmentMark::Bound`] or
 /// [`AdornmentMark::Free`]. Rendered `b`/`f` in debug output.
-pub(crate) type Adornment = Vec<AdornmentMark>;
+pub type Adornment = Vec<AdornmentMark>;
 
 /// A rule name after the magic-sets rewrite. The variants carry the demand
 /// analysis in the name itself: evaluation of a magic program computes only
 /// what the entry demands, and the names prove which role each store plays.
-#[allow(private_interfaces)] // AdornmentMark stays crate-private inside MagicSymbol
 #[derive(Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum MagicSymbol {
     /// An unadorned rule, exempt from the rewrite (the entry always is).

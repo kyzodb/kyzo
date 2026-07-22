@@ -57,7 +57,6 @@ use super::{ExtractSpan, IntoChildren, Pairs, Rule, unexpected};
 /// distinct types. **The `Ord` derive IS the semantics** — `Hidden <
 /// ReadOnly < Protected < Normal`, each level permitting strictly more than
 /// the one below. Do not reorder the variants.
-#[allow(missing_docs)]
 #[derive(
     Debug,
     Clone,
@@ -92,7 +91,6 @@ impl std::fmt::Display for AccessLevel {
 /// The distance metric of an HNSW index, as declared. Pure data (the value
 /// plane owns no metric); the engine's HNSW kernels and persisted manifest
 /// consume it by path.
-#[allow(missing_docs)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize,
 )]
@@ -157,7 +155,6 @@ impl TokenizerSpec {
 /// `index_filter` is a parsed typed predicate (never source text). The
 /// engine-typed lift seals this into its `HnswIndexConfig` through a staged
 /// builder that re-proves completeness at compile time.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct HnswConfigSpec {
     pub base_relation: SmartString<LazyCompact>,
@@ -177,7 +174,6 @@ pub struct HnswConfigSpec {
 /// partial-evaluated typed [`Expr`] (an `extract_filter` is folded in as a
 /// typed conditional, not a textual splice); `tokenizer` / `filters` are
 /// [`TokenizerSpec`]s the engine-typed lift admits into analyzer configs.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FtsConfigSpec {
     pub base_relation: SmartString<LazyCompact>,
@@ -190,7 +186,6 @@ pub struct FtsConfigSpec {
 /// A declared MinHash-LSH index, as parsed. Like [`FtsConfigSpec`] plus the
 /// LSH numeric parameters, already range-checked and (for the two weights)
 /// normalized to sum to one — exactly as the CozoDB original did at parse.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct LshConfigSpec {
     pub base_relation: SmartString<LazyCompact>,
@@ -210,7 +205,6 @@ pub struct LshConfigSpec {
 /// counterpart; the two enums are variant-for-variant identical except that
 /// the three index-create variants carry [`*ConfigSpec`](HnswConfigSpec)
 /// pure syntax here and sealed engine configs there.
-#[allow(missing_docs)]
 #[derive(Debug)]
 pub enum SysScript {
     Compact,

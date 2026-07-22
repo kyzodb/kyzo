@@ -1359,7 +1359,7 @@ impl AdmissionSink for () {
 /// Named token (not a bare `bool`): a row either participates in the entry
 /// rule's returned set, or was derived past `:limit` and joins only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum LimiterSkip {
+pub enum LimiterSkip {
     /// Within `:limit` — joins and early-returned rows.
     Include,
     /// Past `:limit` — joins only; filtered from [`EpochStore::early_returned_iter`].
@@ -1846,7 +1846,6 @@ impl TempStore {}
 /// `DataValue`s, never `&'a DataValue` — a byte-backed key has nothing to
 /// reference; decoding produces a value, not a borrow. Byte-backed rows
 /// were sealed at an encode door before reaching this view.
-#[allow(private_interfaces)] // LimiterSkip/MeetAccum stay crate-private; TupleInIter is the public view
 #[derive(Clone, Debug)]
 pub enum TupleInIter<'a> {
     /// A regular store's row: memcmp bytes (chunk 1's bare codec), whole

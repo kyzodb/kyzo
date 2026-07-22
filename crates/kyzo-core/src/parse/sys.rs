@@ -57,7 +57,6 @@ pub(crate) use kyzo_model::parse::sys::{AccessLevel, HnswDistance, ProcessId};
 /// One parsed system operation, engine-shaped. Variant-for-variant identical
 /// to [`SysScript`] except that the three index-create variants carry sealed
 /// engine configs here where the syntax carried pure-data specs.
-#[allow(missing_docs)]
 #[derive(Debug)]
 pub(crate) enum SysOp {
     Compact,
@@ -104,7 +103,6 @@ struct Built;
 /// The session tier consumes it by path (`crate::parse::sys::FtsIndexConfig`);
 /// the stored catalog form is [`crate::project::text::FtsIndexManifest`], a
 /// different concept. Pinned by `fts_index_config_is_the_sole_spelling`.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FtsIndexConfig {
     pub(crate) base_relation: SmartString<LazyCompact>,
@@ -198,7 +196,6 @@ impl BuildFtsConfig for FtsConfigBuilder<Set> {
 }
 
 /// Configuration of a MinHash-LSH (locality-sensitive hashing) index.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MinHashLshConfig {
     pub(crate) base_relation: SmartString<LazyCompact>,
@@ -331,7 +328,6 @@ impl BuildMinHashLshConfig for MinHashLshConfigBuilder<Set> {
 /// [`HnswConfigBuilder`] (the private `_built` witness seals it), so every
 /// value is proven complete: `vec_dim`, `ef_construction`, and `m_neighbours`
 /// are always present, never a sentinel checked after assembly.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HnswIndexConfig {
     pub(crate) base_relation: SmartString<LazyCompact>,
