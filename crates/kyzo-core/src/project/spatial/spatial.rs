@@ -1063,6 +1063,7 @@ mod tests {
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::program::symbol::Symbol;
+    use miette::{IntoDiagnostic, Result, miette};
 
     // -- a tiny deterministic PRNG (splitmix64) so tests need no rand dep -----
 
@@ -1148,22 +1149,20 @@ mod tests {
         points: Vec<(i64, f64, f64)>,
     }
 
-    fn setup(db: &impl Storage, points: &[(i64, f64, f64)]) -> Fixture {
+    fn setup(db: &impl Storage, points: &[(i64, f64, f64)]) -> Result<Fixture> {
         let meta = base_meta();
         let manifest = manifest();
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let base = create_relation(
             &mut tx,
             input_handle("places", meta.clone()),
             KeyspaceKind::Facts,
-        )
-        .unwrap();
+        )?;
         let idx = create_relation(
             &mut tx,
             input_handle("places:geo", spatial_index_metadata(&meta)),
             KeyspaceKind::AlgorithmState,
-        )
-        .unwrap();
+        )?;
         for (id, lat, lon) in points {
             let row = vec![
                 DataValue::from(*id),
@@ -1175,54 +1174,57 @@ mod tests {
                 &row,
                 kyzo_model::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
-            )
-            .unwrap();
-            spatial_put(&mut tx, &row, &manifest, &base, &idx).unwrap();
+            )?;
+            spatial_put(&mut tx, &row, &manifest, &base, &idx)?;
         }
-        tx.commit().unwrap();
-        Fixture {
+        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok(Fixture {
             base,
             idx,
             manifest,
             points: points.to_vec(),
-        }
-    }
-
-    fn range_ids(db: &impl Storage, f: &Fixture, bbox: &BoundingBox) -> Vec<i64> {
-        let rtx = db.read_tx().unwrap();
-        crate::project::contract::search_rows(
-            Spatial::range_query(&rtx, &f.base, &f.idx, bbox).unwrap(),
-        )
-        .unwrap()
-        .iter()
-        .map(|t| t[0].get_int().unwrap())
-        .collect()
-    }
-
-    fn knn_ids(db: &impl Storage, f: &Fixture, q: &GeoPoint, k: usize) -> Vec<(i64, f64)> {
-        let rtx = db.read_tx().unwrap();
-        crate::project::contract::search_rows(
-            Spatial::knn(
-                &rtx,
-                &f.base,
-                &f.idx,
-                q,
-                &KnnParams {
-                    k,
-                    bind_distance: SpatialBindDistance::Append,
-                },
-            )
-            .unwrap(),
-        )
-        .unwrap()
-        .iter()
-        .map(|t| {
-            (
-                t[0].get_int().unwrap(),
-                t.last().unwrap().get_float().unwrap(),
-            )
         })
-        .collect()
+    }
+
+    fn range_ids(db: &impl Storage, f: &Fixture, bbox: &BoundingBox) -> Result<Vec<i64>> {
+        let rtx = db.read_tx()?;
+        let hits = crate::project::contract::search_rows(Spatial::range_query(
+            &rtx, &f.base, &f.idx, bbox,
+        )?)?;
+        let mut out = Vec::with_capacity(hits.len());
+        for t in &hits {
+            out.push(t[0].get_int().ok_or_else(|| miette!("expected int id"))?);
+        }
+        Ok(out)
+    }
+
+    fn knn_ids(
+        db: &impl Storage,
+        f: &Fixture,
+        q: &GeoPoint,
+        k: usize,
+    ) -> Result<Vec<(i64, f64)>> {
+        let rtx = db.read_tx()?;
+        let hits = crate::project::contract::search_rows(Spatial::knn(
+            &rtx,
+            &f.base,
+            &f.idx,
+            q,
+            &KnnParams {
+                k,
+                bind_distance: SpatialBindDistance::Append,
+            },
+        )?)?;
+        let mut out = Vec::with_capacity(hits.len());
+        for t in &hits {
+            let id = t[0].get_int().ok_or_else(|| miette!("expected int id"))?;
+            let dist_dv = t.last().ok_or_else(|| miette!("expected distance"))?;
+            let dist = dist_dv
+                .get_float()
+                .ok_or_else(|| miette!("expected float distance"))?;
+            out.push((id, dist));
+        }
+        Ok(out)
     }
 
     // -- naive references ----------------------------------------------------
@@ -1251,11 +1253,11 @@ mod tests {
     // == Curve codec: round-trip, ordering, pinned format ====================
 
     #[test]
-    fn curve_roundtrip_and_ordering() {
+    fn curve_roundtrip_and_ordering() -> Result<()> {
         let mut rng = Rng(0xC0FFEE);
         let mut pairs: Vec<(u64, DataValue)> = Vec::new();
         for _ in 0..5000 {
-            let p = GeoPoint::admit(rng.lat(), rng.lon()).unwrap();
+            let p = GeoPoint::admit(rng.lat(), rng.lon())?;
             let (qx, qy) = p.quantize();
             // Round-trip: quantize → interleave → de-interleave recovers the cell.
             let code = morton_encode(qx, qy);
@@ -1280,6 +1282,7 @@ mod tests {
             encoded.iter().map(|(_, c)| *c).collect::<Vec<_>>(),
             "memcmp byte order must equal Morton curve order"
         );
+        Ok(())
     }
 
     /// ATTACK R5 (hostile-review F1, killer adopted verbatim): pin the
@@ -1291,7 +1294,7 @@ mod tests {
     /// SF, lon for London, both for Sydney), so any rounding-mode drift
     /// moves the cell and fails loudly.
     #[test]
-    fn rev_pinned_quantization_rounding_mode() {
+    fn rev_pinned_quantization_rounding_mode() -> Result<()> {
         let cases: [(f64, f64, (u32, u32), u64); 3] = [
             (
                 37.7749,
@@ -1313,14 +1316,15 @@ mod tests {
             ),
         ];
         for (lat, lon, cell, code) in cases {
-            let p = GeoPoint::admit(lat, lon).unwrap();
+            let p = GeoPoint::admit(lat, lon)?;
             assert_eq!(p.quantize(), cell, "quantized cell for ({lat},{lon})");
             assert_eq!(p.curve_index(), code, "curve code for ({lat},{lon})");
         }
+        Ok(())
     }
 
     #[test]
-    fn pinned_curve_codes() {
+    fn pinned_curve_codes() -> Result<()> {
         // Format fixtures: literal Morton codes for fixed coordinates. If the
         // quantization precision, the interleave, or the endianness drifts,
         // these fail loudly — the encoding is an on-disk format.
@@ -1330,7 +1334,7 @@ mod tests {
             (LAT_MAX, LON_MAX, u64::MAX), // opposite corner → all-ones cell
         ];
         for (lat, lon, want) in cases {
-            let p = GeoPoint::admit(lat, lon).unwrap();
+            let p = GeoPoint::admit(lat, lon)?;
             assert_eq!(p.curve_index(), want, "curve code for ({lat},{lon})");
         }
         // A mid-domain point, pinned exactly. lat=0 is the midpoint of
@@ -1338,7 +1342,7 @@ mod tests {
         // likewise q_lon. Both quantized coordinates have only bit 31 set, which
         // spreads to bits 62 (lat) and 63 (lon) → 0xC000…. Pinned so any drift
         // in the quantization or interleave is caught.
-        let equator = GeoPoint::admit(0.0, 0.0).unwrap();
+        let equator = GeoPoint::admit(0.0, 0.0)?;
         let (qx, qy) = equator.quantize();
         assert_eq!(
             (qx, qy),
@@ -1355,29 +1359,30 @@ mod tests {
         // above cannot distinguish a coherent lat/lon axis swap (encode and
         // decode both swapped: internally round-trip-consistent, but a
         // different on-disk curve). These two can.
-        let lat_only = GeoPoint::admit(0.0, LON_MIN).unwrap();
+        let lat_only = GeoPoint::admit(0.0, LON_MIN)?;
         assert_eq!(lat_only.quantize(), (0x8000_0000, 0), "(0,-180) cell");
         assert_eq!(
             lat_only.curve_index(),
             0x4000_0000_0000_0000,
             "lat bit 31 spreads to even bit 62; a swapped curve would put it at 63"
         );
-        let lon_only = GeoPoint::admit(LAT_MIN, 0.0).unwrap();
+        let lon_only = GeoPoint::admit(LAT_MIN, 0.0)?;
         assert_eq!(lon_only.quantize(), (0, 0x8000_0000), "(-90,0) cell");
         assert_eq!(
             lon_only.curve_index(),
             0x8000_0000_0000_0000,
             "lon bit 31 spreads to odd bit 63; a swapped curve would put it at 62"
         );
+        Ok(())
     }
 
     #[test]
-    fn negative_zero_encodes_as_zero() {
+    fn negative_zero_encodes_as_zero() -> Result<()> {
         // IEEE -0.0 == 0.0, but they are distinct bit patterns; the curve must
         // give them ONE cell and ONE key, or the same location could carry two
         // different index postings.
-        let neg = GeoPoint::admit(-0.0, -0.0).unwrap();
-        let pos = GeoPoint::admit(0.0, 0.0).unwrap();
+        let neg = GeoPoint::admit(-0.0, -0.0)?;
+        let pos = GeoPoint::admit(0.0, 0.0)?;
         assert_eq!(neg.quantize(), pos.quantize(), "-0.0 and 0.0: same cell");
         assert_eq!(
             neg.curve_index(),
@@ -1389,65 +1394,68 @@ mod tests {
             pos.curve_key(),
             "-0.0 and 0.0: byte-identical key"
         );
+        Ok(())
     }
 
     #[test]
-    fn admit_rejects_nan_and_out_of_range() {
+    fn admit_rejects_nan_and_out_of_range() -> Result<()> {
         // NaN is a TYPED refusal (NonFiniteCoord), never a silent sort: assert
         // the concrete error type, not merely is_err().
-        let nan_err = GeoPoint::admit(f64::NAN, 0.0).unwrap_err();
+        let nan_err = GeoPoint::admit(f64::NAN, 0.0).err().ok_or_else(|| miette!("expected error"))?;
         assert!(
             nan_err.downcast_ref::<NonFiniteCoord>().is_some(),
             "NaN lat must refuse typed as NonFiniteCoord, got: {nan_err}"
         );
-        let nan_lon_err = GeoPoint::admit(0.0, f64::NAN).unwrap_err();
+        let nan_lon_err = GeoPoint::admit(0.0, f64::NAN).err().ok_or_else(|| miette!("expected error"))?;
         assert!(nan_lon_err.downcast_ref::<NonFiniteCoord>().is_some());
-        let inf_err = GeoPoint::admit(0.0, f64::INFINITY).unwrap_err();
+        let inf_err = GeoPoint::admit(0.0, f64::INFINITY).err().ok_or_else(|| miette!("expected error"))?;
         assert!(inf_err.downcast_ref::<NonFiniteCoord>().is_some());
-        let range_err = GeoPoint::admit(90.1, 0.0).unwrap_err();
+        let range_err = GeoPoint::admit(90.1, 0.0).err().ok_or_else(|| miette!("expected error"))?;
         assert!(range_err.downcast_ref::<GeoCoordOutOfRange>().is_some());
-        let lon_range_err = GeoPoint::admit(0.0, -180.001).unwrap_err();
+        let lon_range_err = GeoPoint::admit(0.0, -180.001).err().ok_or_else(|| miette!("expected error"))?;
         assert!(lon_range_err.downcast_ref::<GeoCoordOutOfRange>().is_some());
         assert!(GeoPoint::admit(90.0, 180.0).is_ok());
         // A wrapping box is refused typed.
-        let err = BoundingBox::admit(0.0, 170.0, 10.0, -170.0).unwrap_err();
+        let err = BoundingBox::admit(0.0, 170.0, 10.0, -170.0).err().ok_or_else(|| miette!("expected error"))?;
         assert!(err.downcast_ref::<AntimeridianBoxRefused>().is_some());
+        Ok(())
     }
 
     // == Range query vs naive full scan ======================================
 
     #[test]
-    fn range_matches_naive_fullscan() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn range_matches_naive_fullscan() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let mut rng = Rng(0x5EED_0001);
         let points: Vec<(i64, f64, f64)> = (0..2000).map(|i| (i, rng.lat(), rng.lon())).collect();
-        let f = setup(&db, &points);
+        let f = setup(&db, &points)?;
 
         // Many random non-wrapping boxes, including tiny and huge.
         let mut qr = Rng(0xB0B0);
         for _ in 0..300 {
             let (a, b) = (qr.lat(), qr.lat());
             let (c, d) = (qr.lon(), qr.lon());
-            let bbox = BoundingBox::admit(a.min(b), c.min(d), a.max(b), c.max(d)).unwrap();
-            let got = range_ids(&db, &f, &bbox);
+            let bbox = BoundingBox::admit(a.min(b), c.min(d), a.max(b), c.max(d))?;
+            let got = range_ids(&db, &f, &bbox)?;
             let mut got_sorted = got.clone();
             got_sorted.sort_unstable();
             assert_eq!(got_sorted, naive_range(&points, &bbox), "box {bbox:?}");
             // Canonical order: the query already returns ascending (curve, id);
             // for single-key relations that is a deterministic total order.
-            let rerun = range_ids(&db, &f, &bbox);
+            let rerun = range_ids(&db, &f, &bbox)?;
             assert_eq!(got, rerun, "range query is deterministic");
         }
+        Ok(())
     }
 
     #[test]
-    fn points_on_cell_boundaries() {
+    fn points_on_cell_boundaries() -> Result<()> {
         // Points exactly on quantization cell edges and box edges must not be
         // lost (no under-approximation). Use coordinates that land on bucket
         // boundaries.
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let points = vec![
             (1, 0.0, 0.0),
             (2, 45.0, 90.0),
@@ -1455,12 +1463,13 @@ mod tests {
             (4, 90.0, 180.0),
             (5, -90.0, -180.0),
         ];
-        let f = setup(&db, &points);
+        let f = setup(&db, &points)?;
         // A box whose edges pass exactly through several points.
-        let bbox = BoundingBox::admit(-45.0, -90.0, 45.0, 90.0).unwrap();
-        let mut got = range_ids(&db, &f, &bbox);
+        let bbox = BoundingBox::admit(-45.0, -90.0, 45.0, 90.0)?;
+        let mut got = range_ids(&db, &f, &bbox)?;
         got.sort_unstable();
         assert_eq!(got, vec![1, 2, 3], "inclusive edges keep boundary points");
+        Ok(())
     }
 
     /// A degenerate point-query box (min corner == max corner == a stored
@@ -1470,84 +1479,88 @@ mod tests {
     /// off-by-one in the disjoint check (discarding a cell at the box's upper
     /// edge) drops the point here.
     #[test]
-    fn point_query_returns_exact_row() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn point_query_returns_exact_row() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let points = vec![(1, 10.0, 20.0), (2, -33.3, 44.4), (3, 12.5, -60.25)];
-        let f = setup(&db, &points);
+        let f = setup(&db, &points)?;
         for (id, lat, lon) in &points {
             // The box IS the point: lat_lo == lat_hi == lat, likewise lon.
-            let bbox = BoundingBox::admit(*lat, *lon, *lat, *lon).unwrap();
+            let bbox = BoundingBox::admit(*lat, *lon, *lat, *lon)?;
             assert_eq!(
-                range_ids(&db, &f, &bbox),
+                range_ids(&db, &f, &bbox)?,
                 vec![*id],
                 "point query for ({lat},{lon}) returns exactly its row"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn duplicate_points_are_distinct_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn duplicate_points_are_distinct_rows() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // Three rows at the identical coordinate.
         let points = vec![(10, 12.34, 56.78), (20, 12.34, 56.78), (30, 12.34, 56.78)];
-        let f = setup(&db, &points);
-        let bbox = BoundingBox::admit(12.0, 56.0, 13.0, 57.0).unwrap();
-        let mut got = range_ids(&db, &f, &bbox);
+        let f = setup(&db, &points)?;
+        let bbox = BoundingBox::admit(12.0, 56.0, 13.0, 57.0)?;
+        let mut got = range_ids(&db, &f, &bbox)?;
         got.sort_unstable();
         assert_eq!(
             got,
             vec![10, 20, 30],
             "duplicate coordinates are distinct rows"
         );
+        Ok(())
     }
 
     #[test]
-    fn empty_index_queries() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, &[]);
-        let bbox = BoundingBox::admit(-10.0, -10.0, 10.0, 10.0).unwrap();
-        assert!(range_ids(&db, &f, &bbox).is_empty());
-        let q = GeoPoint::admit(0.0, 0.0).unwrap();
+    fn empty_index_queries() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, &[])?;
+        let bbox = BoundingBox::admit(-10.0, -10.0, 10.0, 10.0)?;
+        assert!(range_ids(&db, &f, &bbox)?.is_empty());
+        let q = GeoPoint::admit(0.0, 0.0)?;
         assert!(
-            knn_ids(&db, &f, &q, 5).is_empty(),
+            knn_ids(&db, &f, &q, 5)?.is_empty(),
             "kNN on empty index terminates"
         );
+        Ok(())
     }
 
     // == k-NN vs exact haversine sort ========================================
 
     #[test]
-    fn knn_matches_exact_haversine_sort() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn knn_matches_exact_haversine_sort() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let mut rng = Rng(0x2A2A);
         let points: Vec<(i64, f64, f64)> = (0..1500).map(|i| (i, rng.lat(), rng.lon())).collect();
-        let f = setup(&db, &points);
+        let f = setup(&db, &points)?;
 
         let mut qr = Rng(0x9119);
         for _ in 0..120 {
-            let q = GeoPoint::admit(qr.lat(), qr.lon()).unwrap();
+            let q = GeoPoint::admit(qr.lat(), qr.lon())?;
             for k in [1usize, 3, 10] {
-                let got: Vec<i64> = knn_ids(&db, &f, &q, k)
+                let got: Vec<i64> = knn_ids(&db, &f, &q, k)?
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect();
                 assert_eq!(got, naive_knn(&points, &q, k), "kNN q={q:?} k={k}");
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn knn_distance_is_exact_and_ascending() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn knn_distance_is_exact_and_ascending() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let points = vec![(1, 0.0, 0.0), (2, 0.0, 1.0), (3, 0.0, 2.0), (4, 1.0, 1.0)];
-        let f = setup(&db, &points);
-        let q = GeoPoint::admit(0.0, 0.0).unwrap();
-        let got = knn_ids(&db, &f, &q, 4);
+        let f = setup(&db, &points)?;
+        let q = GeoPoint::admit(0.0, 0.0)?;
+        let got = knn_ids(&db, &f, &q, 4)?;
         // Distances ascending; the first is the query point itself (distance 0).
         assert_eq!(got[0].0, 1);
         assert!(got[0].1.abs() < 1e-12, "self distance is 0");
@@ -1559,12 +1572,13 @@ mod tests {
             (got[1].1 - 1.0 * DEG_TO_RAD).abs() < 1e-9,
             "exact haversine"
         );
+        Ok(())
     }
 
     #[test]
-    fn knn_wraps_antimeridian_and_pole() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn knn_wraps_antimeridian_and_pole() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         // A neighbour just across the antimeridian, and one over the pole.
         let points = vec![
             (1, 0.0, 179.9),   // query is at lon 179.99
@@ -1573,10 +1587,10 @@ mod tests {
             (4, 89.9, 10.0),   // near north pole
             (5, 89.9, -170.0), // "over" the pole from #4
         ];
-        let f = setup(&db, &points);
+        let f = setup(&db, &points)?;
 
-        let q1 = GeoPoint::admit(0.0, 179.99).unwrap();
-        let near = knn_ids(&db, &f, &q1, 2)
+        let q1 = GeoPoint::admit(0.0, 179.99)?;
+        let near = knn_ids(&db, &f, &q1, 2)?
             .into_iter()
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
@@ -1590,8 +1604,8 @@ mod tests {
             "the point across ±180 is among the 2 nearest"
         );
 
-        let q2 = GeoPoint::admit(89.95, 10.0).unwrap();
-        let polar = knn_ids(&db, &f, &q2, 2)
+        let q2 = GeoPoint::admit(89.95, 10.0)?;
+        let polar = knn_ids(&db, &f, &q2, 2)?
             .into_iter()
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
@@ -1600,93 +1614,97 @@ mod tests {
             naive_knn(&points, &q2, 2),
             "over-the-pole neighbour found"
         );
+        Ok(())
     }
 
     // == Determinism =========================================================
 
     #[test]
-    fn determinism_run_twice() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+    fn determinism_run_twice() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let mut rng = Rng(0xD37);
         let points: Vec<(i64, f64, f64)> = (0..800).map(|i| (i, rng.lat(), rng.lon())).collect();
-        let f = setup(&db, &points);
-        let q = GeoPoint::admit(12.0, 34.0).unwrap();
-        let a = knn_ids(&db, &f, &q, 10);
-        let b = knn_ids(&db, &f, &q, 10);
+        let f = setup(&db, &points)?;
+        let q = GeoPoint::admit(12.0, 34.0)?;
+        let a = knn_ids(&db, &f, &q, 10)?;
+        let b = knn_ids(&db, &f, &q, 10)?;
         assert_eq!(a, b, "kNN identical across runs");
-        let bbox = BoundingBox::admit(-30.0, -30.0, 30.0, 30.0).unwrap();
+        let bbox = BoundingBox::admit(-30.0, -30.0, 30.0, 30.0)?;
         assert_eq!(
-            range_ids(&db, &f, &bbox),
-            range_ids(&db, &f, &bbox),
+            range_ids(&db, &f, &bbox)?,
+            range_ids(&db, &f, &bbox)?,
             "range identical"
         );
+        Ok(())
     }
 
     // == Corruption is typed, never a panic ==================================
 
     #[test]
-    fn corrupt_posting_is_typed_error_not_panic() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, &[(1, 10.0, 20.0)]);
+    fn corrupt_posting_is_typed_error_not_panic() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, &[(1, 10.0, 20.0)])?;
 
         // Overwrite the index row's value with garbage msgpack.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
             let lower = kyzo_model::value::encode_key_with_suffix(f.idx.id, &[], &[]);
             let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
-                .collect::<Result<Vec<_>>>()
-                .unwrap()
+                .collect::<Result<Vec<_>>>()?
         };
         assert!(!kvs.is_empty());
         for (k, _) in &kvs {
             let mut garbage = vec![0u8; 8];
             garbage.push(0xc1); // reserved, never-valid msgpack byte
-            tx.put(k, &garbage).unwrap();
+            tx.put(k, &garbage)?;
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
-        let bbox = BoundingBox::admit(9.0, 19.0, 11.0, 21.0).unwrap();
+        let rtx = db.read_tx()?;
+        let bbox = BoundingBox::admit(9.0, 19.0, 11.0, 21.0)?;
         let err = Spatial::range_query(&rtx, &f.base, &f.idx, &bbox)
-            .expect_err("corrupt posting must error, not panic");
+            .err().ok_or_else(|| miette!("corrupt posting must error, not panic"))?;
         assert!(
             err.downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
             "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );
+        Ok(())
     }
 
     #[test]
-    fn del_withdraws_posting() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let f = setup(&db, &[(1, 10.0, 20.0), (2, 10.1, 20.1)]);
-        let bbox = BoundingBox::admit(9.0, 19.0, 11.0, 21.0).unwrap();
-        assert_eq!(range_ids(&db, &f, &bbox).len(), 2);
+    fn del_withdraws_posting() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
+        let f = setup(&db, &[(1, 10.0, 20.0), (2, 10.1, 20.1)])?;
+        let bbox = BoundingBox::admit(9.0, 19.0, 11.0, 21.0)?;
+        assert_eq!(range_ids(&db, &f, &bbox)?.len(), 2);
 
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let row = vec![
             DataValue::from(1i64),
             DataValue::from(10.0),
             DataValue::from(20.0),
         ];
-        spatial_del(&mut tx, &row, &f.manifest, &f.base, &f.idx).unwrap();
-        tx.commit().unwrap();
+        spatial_del(&mut tx, &row, &f.manifest, &f.base, &f.idx)?;
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let got = range_ids(&db, &f, &bbox);
+        let got = range_ids(&db, &f, &bbox)?;
         assert_eq!(got, vec![2], "only the surviving point remains");
+        Ok(())
     }
 
     // == Manifest wire form round-trips ======================================
 
     #[test]
-    fn manifest_roundtrips() {
+    fn manifest_roundtrips() -> Result<()> {
         let m = manifest();
-        let bytes = rmp_serde::to_vec_named(&m).unwrap();
-        let back: SpatialIndexManifest = rmp_serde::from_slice(&bytes).unwrap();
+        let bytes = rmp_serde::to_vec_named(&m).map_err(|e| miette!("{e}"))?;
+        let back: SpatialIndexManifest = rmp_serde::from_slice(&bytes).map_err(|e| miette!("{e}"))?;
         assert_eq!(m, back, "manifest survives its wire form");
+        Ok(())
     }
 }
