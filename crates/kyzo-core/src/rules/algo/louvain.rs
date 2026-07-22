@@ -294,8 +294,9 @@ mod tests {
     use crate::rules::graph_view::DirectedCsrGraph;
     use kyzo_model::value::{DataValue, Tuple};
 
+    use miette::{IntoDiagnostic, Result, miette};
     #[test]
-    fn sample() {
+    fn sample() -> Result<()> {
         let graph: Vec<Vec<u32>> = vec![
             vec![2, 3, 5],           // 0
             vec![2, 4, 7],           // 1
@@ -325,9 +326,10 @@ mod tests {
                     edges.push((fr_u, to, 1.));
                 }
             }
-            DirectedCsrGraph::from_edges(edges).unwrap()
+            DirectedCsrGraph::from_edges(edges)?
         };
-        louvain(&graph, 0., 100, CancelFlag::inert()).unwrap();
+        louvain(&graph, 0., 100, CancelFlag::inert())?;
+        Ok(())
     }
 
     /// VALUE ORACLE, adjacency-order sensitivity pinned. The graph (all
@@ -356,9 +358,9 @@ mod tests {
     ///     ⇒ node2comm = [0, 0, 1, 1, 0]; the contracted graph has 2
     ///     nodes, so the hierarchy stops after this single level.
     #[test]
-    fn adjacency_tie_break_pinned() {
+    fn adjacency_tie_break_pinned() -> Result<()> {
         let graph = DirectedCsrGraph::from_edges([
-            (0u32, 1u32, 2.0f32),
+            (0u32, 1u32, 2.0f64),
             (1, 0, 2.0),
             (2, 3, 2.0),
             (3, 2, 2.0),
@@ -366,10 +368,10 @@ mod tests {
             (1, 4, 1.0),
             (4, 2, 1.0),
             (2, 4, 1.0),
-        ])
-        .unwrap();
-        let got = louvain(&graph, 0., 10, CancelFlag::inert()).unwrap();
+        ])?;
+        let got = louvain(&graph, 0., 10, CancelFlag::inert())?;
         assert_eq!(got, vec![vec![0, 0, 1, 1, 0]]);
+        Ok(())
     }
 
     /// F2: a raised flag refuses at the top of the per-node community
