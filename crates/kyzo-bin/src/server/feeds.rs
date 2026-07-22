@@ -9,7 +9,7 @@
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): `register_callback` takes one argument here (no per-op
  * filter), matching `runtime/callback.rs`'s signature. The original's
- * `Event::json_data(item).unwrap()` panicked the whole per-connection async
+ * `Event::json_data(item)` panicked (via unwrap) the whole per-connection async
  * task if encoding ever failed; that panic is user-reachable (any change to
  * a watched relation drives it), so a failure now logs and ends the stream
  * — the client sees the SSE connection close, not the server crash a task.

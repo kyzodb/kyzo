@@ -236,7 +236,18 @@ pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
     // route keeps axum's own 2 MiB default (`DefaultBodyLimit`'s doc), so a
     // request to `/text-query` or any other endpoint still gets a 413
     // instead of being buffered without bound.
-    let max_import_bytes = (args.max_import_body_mb as usize).saturating_mul(1024 * 1024);
+    let mb = usize::try_from(args.max_import_body_mb).map_err(|_| {
+        miette::miette!(
+            "max_import_body_mb {} does not fit usize on this host",
+            args.max_import_body_mb
+        )
+    })?;
+    let max_import_bytes = mb.checked_mul(1024 * 1024).ok_or_else(|| {
+        miette::miette!(
+            "max_import_body_mb {} overflows the import byte budget",
+            args.max_import_body_mb
+        )
+    })?;
 
     let app = Router::new()
         .route("/text-query", post(query::text_query))

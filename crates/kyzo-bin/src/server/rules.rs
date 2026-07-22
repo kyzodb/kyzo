@@ -11,7 +11,7 @@
  * `SimpleFixedRule::rule_with_channel` already made that swap in this port
  * (see its port note), and this bridge follows it — see `server/mod.rs`'s
  * module doc for the whole account. Same fix as `changes.rs`: the
- * original's `Event::json_data(item).unwrap()` panicked the per-connection
+ * original's `Event::json_data(item)` panicked (via unwrap) the per-connection
  * async task on an encoding failure; both sites here now log and end the
  * stream instead.
  */
