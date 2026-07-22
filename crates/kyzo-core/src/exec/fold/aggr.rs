@@ -1710,16 +1710,22 @@ impl NormalAggrObj for AggrBitXor {
 mod tests {
     use super::*;
     use kyzo_model::program::aggregate::parse_aggr;
+    use miette::{Result, miette};
     use proptest::prelude::*;
+    use proptest::test_runner::TestCaseError;
+
+    fn lattice_ok(r: Result<()>) -> std::result::Result<(), TestCaseError> {
+        r.map_err(|e| TestCaseError::fail(format!("{e}")))
+    }
 
     fn v(d: DataValue) -> MeetAccum {
         MeetAccum::Value(d)
     }
 
-    fn parse_ok(name: &str) -> Aggregation {
+    fn parse_ok(name: &str) -> Result<Aggregation> {
         parse_aggr(name)
-            .expect("parse_aggr result")
-            .expect("known aggregation")
+            .map_err(|e| miette!("parse_aggr result: {e}"))?
+            .ok_or_else(|| miette!("known aggregation"))
     }
 
     /// One fold with the changed-flag contract pinned in both directions.
@@ -1728,15 +1734,15 @@ mod tests {
         acc: &mut MeetAccum,
         x: &MeetAccum,
         canon: fn(&MeetAccum) -> MeetAccum,
-    ) -> bool {
+    ) -> Result<bool> {
         let before = acc.clone();
-        let changed = op.update(acc, x).expect("meet update failed");
+        let changed = op.update(acc, x).map_err(|e| miette!("meet update failed: {e}"))?;
         assert_eq!(
             changed,
             canon(&before) != canon(acc),
             "changed-flag mismatch folding {x:?} into {before:?} (accumulator now {acc:?})"
         );
-        changed
+        Ok(changed)
     }
 
     fn alg_meet(
@@ -1744,10 +1750,10 @@ mod tests {
         a: &MeetAccum,
         b: &MeetAccum,
         canon: fn(&MeetAccum) -> MeetAccum,
-    ) -> MeetAccum {
+    ) -> Result<MeetAccum> {
         let mut acc = a.clone();
-        update_checked(op, &mut acc, b, canon);
-        acc
+        update_checked(op, &mut acc, b, canon)?;
+        Ok(acc)
     }
 
     fn ident(a: &MeetAccum) -> MeetAccum {
@@ -1769,21 +1775,21 @@ mod tests {
         samples: [&MeetAccum; 3],
         canon: fn(&MeetAccum) -> MeetAccum,
         commutative: bool,
-    ) {
+    ) -> Result<()> {
         let [x, y, z] = samples;
         for a in samples {
             let mut acc = a.clone();
-            let changed = update_checked(op, &mut acc, a, canon);
+            let changed = update_checked(op, &mut acc, a, canon)?;
             assert!(!changed, "meet(x, x) reported a change for x = {a:?}");
             assert_eq!(canon(&acc), canon(a), "meet(x, x) altered x = {a:?}");
         }
         for a in samples {
             let mut acc = op.init_val();
-            update_checked(op, &mut acc, a, canon);
+            update_checked(op, &mut acc, a, canon)?;
             assert_eq!(canon(&acc), canon(a), "meet(init, x) != x for x = {a:?}");
         }
-        let l = alg_meet(op, &alg_meet(op, x, y, canon), z, canon);
-        let r = alg_meet(op, x, &alg_meet(op, y, z, canon), canon);
+        let l = alg_meet(op, &alg_meet(op, x, y, canon)?, z, canon)?;
+        let r = alg_meet(op, x, &alg_meet(op, y, z, canon)?, canon)?;
         assert_eq!(
             canon(&l),
             canon(&r),
@@ -1791,11 +1797,12 @@ mod tests {
         );
         if commutative {
             assert_eq!(
-                canon(&alg_meet(op, x, y, canon)),
-                canon(&alg_meet(op, y, x, canon)),
+                canon(&alg_meet(op, x, y, canon)?),
+                canon(&alg_meet(op, y, x, canon)?),
                 "commutativity failed on {x:?}, {y:?}"
             );
         }
+        Ok(())
     }
 
     fn arb_value() -> impl Strategy<Value = DataValue> {
@@ -1842,28 +1849,63 @@ mod tests {
         #[test]
         fn meet_laws_and_or(x in any::<bool>(), y in any::<bool>(), z in any::<bool>()) {
             let (x, y, z) = (v(DataValue::from(x)), v(DataValue::from(y)), v(DataValue::from(z)));
-            assert_semilattice_laws(&MeetAggrAnd, [&x, &y, &z], ident, true);
-            assert_semilattice_laws(&MeetAggrOr, [&x, &y, &z], ident, true);
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrAnd,
+                [&x, &y, &z],
+                ident,
+                true,
+            ))?;
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrOr,
+                [&x, &y, &z],
+                ident,
+                true,
+            ))?;
         }
 
         #[test]
         fn meet_laws_min_max(x in arb_num(), y in arb_num(), z in arb_num()) {
             let (x, y, z) = (v(x), v(y), v(z));
-            assert_semilattice_laws(&MeetAggrMin, [&x, &y, &z], ident, true);
-            assert_semilattice_laws(&MeetAggrMax, [&x, &y, &z], ident, true);
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrMin,
+                [&x, &y, &z],
+                ident,
+                true,
+            ))?;
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrMax,
+                [&x, &y, &z],
+                ident,
+                true,
+            ))?;
         }
 
         #[test]
         fn meet_laws_choice(x in arb_value(), y in arb_value(), z in arb_value()) {
             let (x, y, z) = (v(x), v(y), v(z));
-            assert_semilattice_laws(&MeetAggrChoice, [&x, &y, &z], ident, false);
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrChoice,
+                [&x, &y, &z],
+                ident,
+                false,
+            ))?;
         }
 
         #[test]
         fn meet_laws_bit_and_or((x, y, z) in arb_bytes_triple()) {
             let (x, y, z) = (v(x), v(y), v(z));
-            assert_semilattice_laws(&MeetAggrBitAnd, [&x, &y, &z], ident, true);
-            assert_semilattice_laws(&MeetAggrBitOr, [&x, &y, &z], ident, true);
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrBitAnd,
+                [&x, &y, &z],
+                ident,
+                true,
+            ))?;
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrBitOr,
+                [&x, &y, &z],
+                ident,
+                true,
+            ))?;
         }
 
         #[test]
@@ -1873,8 +1915,18 @@ mod tests {
             z in arb_small_list()
         ) {
             let (x, y, z) = (v(x), v(y), v(z));
-            assert_semilattice_laws(&MeetAggrUnion, [&x, &y, &z], as_set, true);
-            assert_semilattice_laws(&MeetAggrIntersection, [&x, &y, &z], as_set, true);
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrUnion,
+                [&x, &y, &z],
+                as_set,
+                true,
+            ))?;
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrIntersection,
+                [&x, &y, &z],
+                as_set,
+                true,
+            ))?;
         }
 
         #[test]
@@ -1884,7 +1936,12 @@ mod tests {
             z in arb_small_list()
         ) {
             let (x, y, z) = (v(x), v(y), v(z));
-            assert_semilattice_laws(&MeetAggrShortest, [&x, &y, &z], ident, false);
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrShortest,
+                [&x, &y, &z],
+                ident,
+                false,
+            ))?;
         }
 
         #[test]
@@ -1894,14 +1951,19 @@ mod tests {
             z in arb_costed_pair()
         ) {
             let (x, y, z) = (v(x), v(y), v(z));
-            assert_semilattice_laws(&MeetAggrMinCost, [&x, &y, &z], ident, false);
+            lattice_ok(assert_semilattice_laws(
+                &MeetAggrMinCost,
+                [&x, &y, &z],
+                ident,
+                false,
+            ))?;
         }
     }
 
     /// Exact `Num` order: integers beyond 2^53 that collide as `f64` stay
     /// distinct under min/max.
     #[test]
-    fn min_max_exact_beyond_2_pow_53() {
+    fn min_max_exact_beyond_2_pow_53() -> Result<()> {
         for (lo, hi) in [
             (DataValue::from(i64::MAX - 1), DataValue::from(i64::MAX)),
             (
@@ -1911,142 +1973,146 @@ mod tests {
         ] {
             let (lo, hi) = (v(lo), v(hi));
             let mut acc = lo.clone();
-            assert!(!MeetAggrMin.update(&mut acc, &hi).unwrap());
+            assert!(!MeetAggrMin.update(&mut acc, &hi)?);
             assert_eq!(acc, lo);
             let mut acc = hi.clone();
-            assert!(MeetAggrMin.update(&mut acc, &lo).unwrap());
+            assert!(MeetAggrMin.update(&mut acc, &lo)?);
             assert_eq!(acc, lo);
             let mut acc = lo.clone();
-            assert!(MeetAggrMax.update(&mut acc, &hi).unwrap());
+            assert!(MeetAggrMax.update(&mut acc, &hi)?);
             assert_eq!(acc, hi);
             let mut acc = hi.clone();
-            assert!(!MeetAggrMax.update(&mut acc, &lo).unwrap());
+            assert!(!MeetAggrMax.update(&mut acc, &lo)?);
             assert_eq!(acc, hi);
 
             for order in [[&lo, &hi], [&hi, &lo]] {
                 let mut min = AggrMin::empty();
                 let mut max = AggrMax::empty();
                 for a in order {
-                    min.set(&a.to_value()).unwrap();
-                    max.set(&a.to_value()).unwrap();
+                    min.set(&a.to_value())?;
+                    max.set(&a.to_value())?;
                 }
-                assert_eq!(min.get().unwrap(), lo.to_value());
-                assert_eq!(max.get().unwrap(), hi.to_value());
+                assert_eq!(min.get()?, lo.to_value());
+                assert_eq!(max.get()?, hi.to_value());
             }
         }
 
         let int_val = v(DataValue::from((1i64 << 53) + 1));
         let float_val = v(DataValue::from(Num::int(1i64 << 53).to_f64()));
         let mut acc = int_val.clone();
-        assert!(MeetAggrMin.update(&mut acc, &float_val).unwrap());
+        assert!(MeetAggrMin.update(&mut acc, &float_val)?);
         assert_eq!(acc, float_val);
         let mut acc = float_val.clone();
-        assert!(!MeetAggrMin.update(&mut acc, &int_val).unwrap());
+        assert!(!MeetAggrMin.update(&mut acc, &int_val)?);
         assert_eq!(acc, float_val);
         let mut acc = float_val.clone();
-        assert!(MeetAggrMax.update(&mut acc, &int_val).unwrap());
+        assert!(MeetAggrMax.update(&mut acc, &int_val)?);
         assert_eq!(acc, int_val);
+        Ok(())
     }
 
     /// Regression for the upstream and/or changed-flag inversion.
     #[test]
-    fn and_or_changed_flag() {
+    fn and_or_changed_flag() -> Result<()> {
         let t = v(DataValue::from(true));
         let f = v(DataValue::from(false));
 
         let mut acc = t.clone();
-        assert!(MeetAggrAnd.update(&mut acc, &f).unwrap());
+        assert!(MeetAggrAnd.update(&mut acc, &f)?);
         assert_eq!(acc, f);
-        assert!(!MeetAggrAnd.update(&mut acc, &t).unwrap());
+        assert!(!MeetAggrAnd.update(&mut acc, &t)?);
         assert_eq!(acc, f);
         let mut acc = t.clone();
-        assert!(!MeetAggrAnd.update(&mut acc, &t).unwrap());
+        assert!(!MeetAggrAnd.update(&mut acc, &t)?);
 
         let mut acc = f.clone();
-        assert!(MeetAggrOr.update(&mut acc, &t).unwrap());
+        assert!(MeetAggrOr.update(&mut acc, &t)?);
         assert_eq!(acc, t);
-        assert!(!MeetAggrOr.update(&mut acc, &f).unwrap());
+        assert!(!MeetAggrOr.update(&mut acc, &f)?);
         assert_eq!(acc, t);
         let mut acc = f.clone();
-        assert!(!MeetAggrOr.update(&mut acc, &f).unwrap());
+        assert!(!MeetAggrOr.update(&mut acc, &f)?);
+        Ok(())
     }
 
     /// Regression: bit-op meets report the changed flag exactly.
     #[test]
-    fn bit_meet_changed_flag_exact() {
+    fn bit_meet_changed_flag_exact() -> Result<()> {
         let zero = v(DataValue::Bytes(vec![0x00]));
         let ones = v(DataValue::Bytes(vec![0xff]));
         let some = v(DataValue::Bytes(vec![0x0f]));
 
         let mut acc = zero.clone();
-        assert!(!MeetAggrBitAnd.update(&mut acc, &some).unwrap());
+        assert!(!MeetAggrBitAnd.update(&mut acc, &some)?);
         assert_eq!(acc, zero);
         let mut acc = ones.clone();
-        assert!(MeetAggrBitAnd.update(&mut acc, &some).unwrap());
+        assert!(MeetAggrBitAnd.update(&mut acc, &some)?);
         assert_eq!(acc, some);
 
         let mut acc = ones.clone();
-        assert!(!MeetAggrBitOr.update(&mut acc, &some).unwrap());
+        assert!(!MeetAggrBitOr.update(&mut acc, &some)?);
         assert_eq!(acc, ones);
         let mut acc = zero.clone();
-        assert!(MeetAggrBitOr.update(&mut acc, &some).unwrap());
+        assert!(MeetAggrBitOr.update(&mut acc, &some)?);
         assert_eq!(acc, some);
+        Ok(())
     }
 
     /// All-integer sum/product return exact Int; float input demotes.
     #[test]
-    fn sum_product_exact_int() {
+    fn sum_product_exact_int() -> Result<()> {
         let mut op = AggrSum::empty();
         for i in [1i64, 2, 3] {
-            op.set(&DataValue::from(i)).unwrap();
+            op.set(&DataValue::from(i))?;
         }
-        assert_eq!(op.get().unwrap(), DataValue::from(6i64));
+        assert_eq!(op.get()?, DataValue::from(6i64));
 
         let mut op = AggrSum::empty();
-        op.set(&DataValue::from(1i64)).unwrap();
-        op.set(&DataValue::from(2.0)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(3.0));
+        op.set(&DataValue::from(1i64))?;
+        op.set(&DataValue::from(2.0))?;
+        assert_eq!(op.get()?, DataValue::from(3.0));
 
         let a = (1i64 << 53) + 1;
         let b = (1i64 << 53) + 3;
         let mut op = AggrSum::empty();
-        op.set(&DataValue::from(a)).unwrap();
-        op.set(&DataValue::from(b)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(a + b));
+        op.set(&DataValue::from(a))?;
+        op.set(&DataValue::from(b))?;
+        assert_eq!(op.get()?, DataValue::from(a + b));
 
         let mut op = AggrSum::empty();
-        op.set(&DataValue::from(i64::MAX)).unwrap();
-        op.set(&DataValue::from(i64::MAX)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(2.0 * Num::int(i64::MAX).to_f64()));
+        op.set(&DataValue::from(i64::MAX))?;
+        op.set(&DataValue::from(i64::MAX))?;
+        assert_eq!(op.get()?, DataValue::from(2.0 * Num::int(i64::MAX).to_f64()));
         let mut op = AggrSum::empty();
-        op.set(&DataValue::from(i64::MAX)).unwrap();
-        op.set(&DataValue::from(i64::MAX)).unwrap();
-        op.set(&DataValue::from(i64::MIN)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(i64::MAX - 1));
+        op.set(&DataValue::from(i64::MAX))?;
+        op.set(&DataValue::from(i64::MAX))?;
+        op.set(&DataValue::from(i64::MIN))?;
+        assert_eq!(op.get()?, DataValue::from(i64::MAX - 1));
 
         let mut op = AggrProduct::empty();
         for i in [2i64, 3, 4] {
-            op.set(&DataValue::from(i)).unwrap();
+            op.set(&DataValue::from(i))?;
         }
-        assert_eq!(op.get().unwrap(), DataValue::from(24i64));
+        assert_eq!(op.get()?, DataValue::from(24i64));
 
         let mut op = AggrProduct::empty();
-        op.set(&DataValue::from(2i64)).unwrap();
-        op.set(&DataValue::from(0.5)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(1.0));
+        op.set(&DataValue::from(2i64))?;
+        op.set(&DataValue::from(0.5))?;
+        assert_eq!(op.get()?, DataValue::from(1.0));
 
         let mut op = AggrProduct::empty();
-        op.set(&DataValue::from(i64::MAX)).unwrap();
-        op.set(&DataValue::from(4i64)).unwrap();
-        assert_eq!(op.get().unwrap(), DataValue::from(Num::int(i64::MAX).to_f64() * 4.0));
+        op.set(&DataValue::from(i64::MAX))?;
+        op.set(&DataValue::from(4i64))?;
+        assert_eq!(op.get()?, DataValue::from(Num::int(i64::MAX).to_f64() * 4.0));
 
-        assert_eq!(AggrSum::empty().get().unwrap(), DataValue::from(0i64));
-        assert_eq!(AggrProduct::empty().get().unwrap(), DataValue::from(1i64));
+        assert_eq!(AggrSum::empty().get()?, DataValue::from(0i64));
+        assert_eq!(AggrProduct::empty().get()?, DataValue::from(1i64));
+        Ok(())
     }
 
     /// Fold ops agree with model kind for every registered name.
     #[test]
-    fn fold_ops_agree_with_model_kind() {
+    fn fold_ops_agree_with_model_kind() -> Result<()> {
         const MEETS: &[&str] = &[
             "and",
             "or",
@@ -2081,45 +2147,47 @@ mod tests {
             "tdigest",
         ];
         for name in MEETS {
-            let aggr = parse_ok(name);
+            let aggr = parse_ok(name)?;
             assert!(aggr.is_meet(), "{name} must be a meet");
             assert!(meet_op(&aggr).is_some(), "{name} must yield a meet op");
-            normal_op(&aggr, &[]).unwrap();
+            normal_op(&aggr, &[])?;
         }
         for name in NORMALS {
-            let aggr = parse_ok(name);
+            let aggr = parse_ok(name)?;
             assert!(!aggr.is_meet(), "{name} must not be a meet");
             assert!(meet_op(&aggr).is_none(), "{name} must yield no meet op");
-            normal_op(&aggr, &[]).unwrap();
+            normal_op(&aggr, &[])?;
         }
+        Ok(())
     }
 
     /// `collect`'s optional limit is validated at construction and honored.
     #[test]
-    fn collect_limit_argument() {
-        let aggr = parse_ok("collect");
-        let mut op = normal_op(&aggr, &[DataValue::from(2)]).unwrap();
+    fn collect_limit_argument() -> Result<()> {
+        let aggr = parse_ok("collect")?;
+        let mut op = normal_op(&aggr, &[DataValue::from(2)])?;
         for i in 0..5 {
-            op.set(&DataValue::from(i)).unwrap();
+            op.set(&DataValue::from(i))?;
         }
         assert_eq!(
-            op.get().unwrap(),
+            op.get()?,
             DataValue::List(vec![DataValue::from(0), DataValue::from(1)])
         );
         assert!(normal_op(&aggr, &[DataValue::from(0)]).is_err());
         assert!(normal_op(&aggr, &[DataValue::from("two")]).is_err());
+        Ok(())
     }
 
     /// F1: i128-overflow demotion arm of `NumAccum` is reachable in product.
     #[test]
-    fn product_overflowing_i128_demotes_with_both_operands() {
+    fn product_overflowing_i128_demotes_with_both_operands() -> Result<()> {
         let mut acc = AggrProduct::empty();
         for _ in 0..3 {
-            acc.set(&DataValue::from(i64::MAX)).unwrap();
+            acc.set(&DataValue::from(i64::MAX))?;
         }
-        match acc.get().unwrap() {
+        match acc.get()? {
             DataValue::Num(n) if n.as_float().is_some() => {
-                let f = n.as_float().expect("guarded float");
+                let f = n.as_float().ok_or_else(|| miette!("guarded float"))?;
                 let expected = Num::int(i64::MAX).to_f64().powi(3);
                 assert!(
                     (f - expected).abs() / expected < 1e-9,
@@ -2130,11 +2198,12 @@ mod tests {
                 panic!("expected float after i128 overflow, got {other:?}")
             }
         }
+        Ok(())
     }
 
     /// F2: intersection vs union value oracles.
     #[test]
-    fn set_ops_compute_the_right_operation() {
+    fn set_ops_compute_the_right_operation() -> Result<()> {
         let two = |a: i64, b: i64| {
             v(DataValue::List(vec![
                 DataValue::from(a),
@@ -2144,8 +2213,8 @@ mod tests {
         let meet = MeetAggrIntersection;
         let mut acc = meet.init_val();
         assert!(matches!(acc, MeetAccum::Empty));
-        meet.update(&mut acc, &two(1, 2)).unwrap();
-        meet.update(&mut acc, &two(2, 3)).unwrap();
+        meet.update(&mut acc, &two(1, 2))?;
+        meet.update(&mut acc, &two(2, 3))?;
         assert_eq!(
             acc,
             v(DataValue::Set([DataValue::from(2)].into_iter().collect())),
@@ -2153,8 +2222,8 @@ mod tests {
         );
         let meet = MeetAggrUnion;
         let mut acc = meet.init_val();
-        meet.update(&mut acc, &two(1, 2)).unwrap();
-        meet.update(&mut acc, &two(2, 3)).unwrap();
+        meet.update(&mut acc, &two(1, 2))?;
+        meet.update(&mut acc, &two(2, 3))?;
         assert_eq!(
             acc,
             v(DataValue::Set(
@@ -2164,11 +2233,12 @@ mod tests {
             )),
             "union of {{1,2}} and {{2,3}} must be {{1,2,3}}"
         );
+        Ok(())
     }
 
     /// Null as ordinary set-element data under meet intersection.
     #[test]
-    fn meet_intersection_null_as_data_round_trips() {
+    fn meet_intersection_null_as_data_round_trips() -> Result<()> {
         let meet = MeetAggrIntersection;
         assert!(matches!(meet.init_val(), MeetAccum::Empty));
 
@@ -2178,12 +2248,12 @@ mod tests {
             &mut acc,
             &with_null(&[DataValue::Null, DataValue::from(1), DataValue::from(2)]),
         )
-        .unwrap();
+        ?;
         meet.update(
             &mut acc,
             &with_null(&[DataValue::Null, DataValue::from(2), DataValue::from(3)]),
         )
-        .unwrap();
+        ?;
         assert_eq!(
             acc,
             v(DataValue::Set(
@@ -2195,14 +2265,15 @@ mod tests {
         let mut acc = meet.init_val();
         assert!(
             meet.update(&mut acc, &with_null(&[DataValue::Null]))
-                .unwrap()
+                ?
         );
         assert_eq!(
             acc,
             v(DataValue::List(vec![DataValue::Null])),
             "adopting [Null] from Empty must yield Value, not stay Empty"
         );
-        assert!(!meet.update(&mut acc, &MeetAccum::Empty).unwrap());
+        assert!(!meet.update(&mut acc, &MeetAccum::Empty)?);
         assert_eq!(acc, v(DataValue::List(vec![DataValue::Null])));
+        Ok(())
     }
 }
