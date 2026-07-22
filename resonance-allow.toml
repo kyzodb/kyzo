@@ -30,13 +30,6 @@ citation = "laws.rs::materialize (the oracle's own row-reassembly from a MeetSta
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@206",
-  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@264",
-]
-citation = "Self-documented at the source: the doc comment immediately above the `NegRight::StoredWithValidity` arm (closure@259) states it is 'identical in shape to `NegRight::Stored` just above' (closure@201) 'reading through the SAME as-of skip-scan primitives ... so the -- never skips a tuple whose absence it is asserting -- proof this operator owes is inherited, not reargued'. Deliberate structural mirroring by design, not accidental duplication."
-
-[[copy_detector]]
-members = [
   "crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix",
   "crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix_projected",
 ]
@@ -55,13 +48,6 @@ members = [
   "crates/kyzo-core/src/exec/fold/aggr.rs::init_val",
 ]
 citation = "Story #301 T5 sealed-enum dispatch: NormalAggr::get and MeetAggr::init_val are thin exhaustively-matched arms that forward to the same per-variant methods. Same intentional-dispatch-boilerplate category as stdlib's per-operator table (now consolidated via higher-order helpers under WAIVER-PURITY) -- collapsing these two would need a macro over different return types (DataValue vs MeetAccum). Not accidental copy-paste."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_del",
-  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_put",
-]
-citation = "Symmetric put/delete pair on the sparse index: sparse_put writes a fact at a given row key and sparse_del removes it. Both share the same encode-key → transaction-write skeleton (the only structural difference is the write variant: put vs delete). Not accidental copy-paste -- it is the deliberate write-path symmetry that every storage operation in this engine exhibits (analogous to the scan_bounded_prefix / scan_bounded_prefix_projected pair in relation.rs). Consolidating would need a per-operation callback, a design choice outside this task's scope."
 
 [[copy_detector]]
 members = [
@@ -122,13 +108,6 @@ members = [
   "crates/kyzo-core/src/exec/stdlib/tests/numeric.rs::test_mul",
 ]
 citation = "Stdlib numeric suite: add vs mul — independent n-ary folds with different identities (0 vs 1) and overflow axes. Parallel test shape is intentional."
-
-[[copy_detector]]
-members = [
-  "crates/kyzo-core/src/project/dedup/lsh.rs::lsh_index_metadata",
-  "crates/kyzo-core/src/project/sparse/sparse.rs::sparse_index_metadata",
-]
-citation = "Per-engine index metadata twins (LSH vs sparse): each index owns its StoredRelationMetadata shape under the shared projection architecture (.claude/rules/engines.md). Collapsing would erase per-engine schema seats; independence is the column layout, not the constructor scaffold."
 
 [[copy_detector]]
 members = [
