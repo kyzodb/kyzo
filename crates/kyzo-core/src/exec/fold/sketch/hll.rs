@@ -44,8 +44,6 @@
 //! [`DEFAULT_M`] (`2^DEFAULT_PRECISION`); tests pin other powers of two as
 //! `HyperLogLog::<{1 << p}>`.
 
-use std::io::Write;
-
 use miette::{Result, bail, ensure};
 
 use kyzo_model::value::DataValue;
@@ -270,8 +268,8 @@ impl<const M: usize> HyperLogLog<M> {
     /// choice to make).
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(2 + M);
-        out.write_all(&[FORMAT_TAG, Self::PRECISION]).unwrap();
-        out.write_all(&self.registers).unwrap();
+        out.extend_from_slice(&[FORMAT_TAG, Self::PRECISION]);
+        out.extend_from_slice(&self.registers);
         out
     }
 
@@ -329,7 +327,7 @@ mod tests {
 
     /// The relative standard error of HyperLogLog at precision `p`.
     fn std_error(precision: u8) -> f64 {
-        1.04 / super::u64_to_f64(1u64 << precision).sqrt()
+        1.04 / crate::exec::fold::sketch::u64_to_f64(1u64 << precision).sqrt()
     }
 
     /// Insert `n` distinct integers offset by `salt` into a fresh sketch.
