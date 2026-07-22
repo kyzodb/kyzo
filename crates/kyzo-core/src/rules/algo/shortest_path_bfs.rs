@@ -8,13 +8,12 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): the original's file header was duplicated verbatim
- * (copy-paste); once is enough. The `into_iter().next().unwrap()` on
- * starting/ending rows is annotated as structural (`ensure_min_len(1)`
- * proved a first column exists); the route-reconstruction `unwrap`
- * likewise. Output rows flow through the arity-checked writer. The
- * original's in-file test drove a full `DbInstance`; it is ported onto
- * the payload harness (no runtime yet) with the same graph and the same
- * two assertions.
+ * (copy-paste); once is enough. The first starting/ending row is taken
+ * after `ensure_min_len(1)` proved a column exists; route reconstruction
+ * likewise relies on that proof. Output rows flow through the arity-checked
+ * writer. The original's in-file test drove a full `DbInstance`; it is
+ * ported onto the payload harness (no runtime yet) with the same graph and
+ * the same two assertions.
  * CANCELLATION FIX (deliberate, pinned vs upstream): the inner BFS
  * traversal polled nothing — the only cancel check sat in the outer
  * per-start loop, so a single start over a huge reachable set could not be
@@ -176,6 +175,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -200,7 +200,7 @@ mod tests {
     /// full database: alice → bob has a 3-node path; alice → george is
     /// unreachable and reports `Null`.
     #[test]
-    fn test_bfs_path() {
+    fn test_bfs_path() -> Result<()> {
         let got = run_fixed_rule(
             &ShortestPathBFS,
             vec![
@@ -211,8 +211,8 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
-        assert_eq!(got[0][2].get_slice().unwrap().len(), 3);
+        ?;
+        assert_eq!(got[0][2].get_slice().ok_or_else(|| miette!("test expected Some"))?.len(), 3);
 
         let got = run_fixed_rule(
             &ShortestPathBFS,
@@ -224,8 +224,9 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         assert_eq!(got[0][2], DataValue::Null);
+        Ok(())
     }
 
     /// CANCELLATION: pins the *inner* per-node poll specifically (the
@@ -247,7 +248,7 @@ mod tests {
     /// mutant makes the cancelled run expand the whole chain (~250k), so the
     /// `≤ 1` bound fails; restoring the poll passes.
     #[test]
-    fn honors_cancel_pins_inner_poll() {
+    fn honors_cancel_pins_inner_poll() -> Result<()> {
         use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 250_000;
@@ -261,7 +262,7 @@ mod tests {
             TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("n0")])]),
             TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("absent")])]),
         ];
-        let prepared = prepare_fixed_rule(&ShortestPathBFS, inputs, empty_opts()).unwrap();
+        let prepared = prepare_fixed_rule(&ShortestPathBFS, inputs, empty_opts())?;
 
         // Baseline: no cancellation. The whole chain is expanded.
         take_bfs_nodes_expanded(); // clear any leftover from a reused thread
@@ -284,6 +285,7 @@ mod tests {
             "inner poll did not refuse before expanding the graph: expanded \
              {cancel_expanded} nodes (deleting the per-node poll makes this ~250k)"
         );
+        Ok(())
     }
 
     /// VALUE ORACLE: the exact route, not just its length. On a→b, b→c,
@@ -291,7 +293,7 @@ mod tests {
     /// scanning a's edges, so c's backtrace entry is a itself: the
     /// shortest a→c path is the direct edge [a,c], never [a,b,c].
     #[test]
-    fn exact_route_prefers_direct_edge() {
+    fn exact_route_prefers_direct_edge() -> Result<()> {
         let got = run_fixed_rule(
             &ShortestPathBFS,
             vec![
@@ -309,12 +311,13 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             s("a"),
             s("c"),
             DataValue::List(vec![s("a"), s("c")]),
         ])];
         assert_eq!(got, want);
+        Ok(())
     }
 }
