@@ -103,50 +103,55 @@ impl<S: Storage> Engine<S> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
 
-    fn open_engine<S: crate::store::Storage>(store: S) -> Engine<S> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine<S: crate::store::Storage>(store: S) -> Result<Engine<S>>  {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     #[test]
-    fn run_script_json_success_envelope_has_ok_headers_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn run_script_json_success_envelope_has_ok_headers_rows() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("?[x] <- [[1],[2]]", &json!({}));
         assert_eq!(out["ok"], json!(true));
         assert_eq!(out["headers"], json!(["x"]));
         assert_eq!(out["rows"], json!([[1], [2]]));
+        Ok(())
     }
 
     #[test]
-    fn run_script_json_binds_params_from_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn run_script_json_binds_params_from_json() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("?[x] <- [[$v]]", &json!({"v": 99}));
         assert_eq!(out["ok"], json!(true));
         assert_eq!(out["rows"], json!([[99]]));
+        Ok(())
     }
 
     #[test]
-    fn run_script_json_reports_parse_error_without_panicking() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn run_script_json_reports_parse_error_without_panicking() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("not a valid script", &json!({}));
         assert_eq!(out["ok"], json!(false));
         assert!(out.get("message").is_some());
         assert!(out.get("display").is_some());
+        Ok(())
     }
 
     #[test]
-    fn run_script_json_refuses_non_object_params() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn run_script_json_refuses_non_object_params() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("?[x] <- [[1]]", &json!([1, 2, 3]));
         assert_eq!(out["ok"], json!(false));
+        Ok(())
     }
 
     /// Story #80's product-surface claim, proven at THIS seam rather than
@@ -157,14 +162,13 @@ mod tests {
     /// reach HTTP or the CLI; it rides this seam like any other script the
     /// moment `SysOp::Verify` exists in `kyzo-core`.
     #[test]
-    fn run_script_json_carries_the_verify_directive_for_free() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_engine(new_fjall_storage(dir.path()).unwrap());
+    fn run_script_json_carries_the_verify_directive_for_free() -> Result<()>  {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3]] :create edge {a, b}",
             BTreeMap::new(),
-        )
-        .unwrap();
+        )?;
         let out = db.run_script_json(
             "::verify { path[x, y] := *edge[x, y]
              path[x, z] := path[x, y], *edge[y, z]
@@ -174,5 +178,6 @@ mod tests {
         assert_eq!(out["ok"], json!(true));
         assert_eq!(out["headers"], json!(["status", "summary", "detail"]));
         assert_eq!(out["rows"][0][0], json!("match"));
+        Ok(())
     }
 }
