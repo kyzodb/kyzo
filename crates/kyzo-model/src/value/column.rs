@@ -225,7 +225,11 @@ impl CodeColumn {
         let mut codes = Vec::with_capacity(self.codes.len());
         for c in self.codes {
             let n = remap.apply_raw(super::code::Code(c))?.raw();
-            extent = extent.max(n.saturating_add(1));
+            let next = match n.checked_add(1) {
+                Some(v) => v,
+                None => u32::MAX,
+            };
+            extent = extent.max(next);
             codes.push(n);
         }
         Ok(CodeColumn {
@@ -438,7 +442,11 @@ impl WordColumn {
         for w in self.words {
             let g = w.gathered(remap)?;
             if let Some(code) = g.code() {
-                extent = extent.max(code.raw().saturating_add(1));
+                let next = match code.raw().checked_add(1) {
+                    Some(v) => v,
+                    None => u32::MAX,
+                };
+                extent = extent.max(next);
             }
             words.push(g);
         }

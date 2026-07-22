@@ -146,7 +146,9 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
 
                     let n = dv.get_int().ok_or(BadListLenSpec(dv, span))?;
                     ensure!(n >= 0, BadListLenSpec(DataValue::from(n), span));
-                    Some(ColLen::new(n as usize))
+                    Some(ColLen::new(
+                        usize::try_from(n).map_err(|_| BadListLenSpec(DataValue::from(n), span))?,
+                    ))
                 }
             };
             ColType::List {

@@ -619,7 +619,13 @@ fn decompose_box(qbox: &QBox) -> Vec<(u64, u64)> {
     let mut merged: Vec<(u64, u64)> = Vec::with_capacity(raw.len());
     for (lo, hi) in raw {
         match merged.last_mut() {
-            Some(last) if lo <= last.1.saturating_add(1) => {
+            Some(last)
+                if lo
+                    <= match last.1.checked_add(1) {
+                        Some(v) => v,
+                        None => u64::MAX,
+                    } =>
+            {
                 if hi > last.1 {
                     last.1 = hi;
                 }

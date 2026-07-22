@@ -491,7 +491,9 @@ fn parse_quoted_string_inner(
             r"\t" => ret.push('\t'),
             s if s.starts_with(r"\u") => {
                 let esc_span = pair.extract_span();
-                let code = parse_int(s, 16, esc_span)? as u32;
+                let code = u32::try_from(parse_int(s, 16, esc_span)?).map_err(|_| {
+                    InvalidUtf8Error(0, esc_span)
+                })?;
                 let ch = char::from_u32(code).ok_or_else(|| InvalidUtf8Error(code, esc_span))?;
                 ret.push(ch);
             }

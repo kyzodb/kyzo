@@ -263,7 +263,10 @@ where
                 // failure mode is acceptable in the engine under adversarial
                 // call order; saturate instead, which covers both
                 // (`max_gram < min_gram` already means "done", and stays so).
-                self.max_gram = self.max_gram.saturating_sub(1);
+                self.max_gram = match self.max_gram.checked_sub(1) {
+                    Some(v) => v,
+                    None => 0,
+                };
             }
             self.cursor += 1;
             if self.cursor >= self.memory.len() {

@@ -762,7 +762,10 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             // lawful. Refuse before `Vec::with_capacity` — otherwise a
             // 5-byte input can ask for a multi-gigabyte allocation
             // (fuzz-smoke fact_payload_decode OOM on tag+u32).
-            let rest = body.len().saturating_sub(4);
+            let rest = match body.len().checked_sub(4) {
+                Some(n) => n,
+                None => 0,
+            };
             if count > rest {
                 return Err(DecodeError::Truncated);
             }
@@ -1622,7 +1625,13 @@ mod tests {
             } else {
                 let lo = rng.next().cast_signed() % 1000;
                 let span = match i64::try_from(rng.next() % 50) { Ok(v) => v, Err(_) => 0 };
-                Interval::new(Bound::Closed(lo), Bound::Closed(lo.saturating_add(span)))
+                Interval::new(
+                    Bound::Closed(lo),
+                    Bound::Closed(match lo.checked_add(span) {
+                        Some(v) => v,
+                        None => i64::MAX,
+                    }),
+                )
             }),
             12 => DataValue::Geometry(Geometry::from_cells(
                 match u32::try_from(rng.next() & 0xFFFF_FFFF) { Ok(v) => v, Err(_) => 0 },

@@ -203,9 +203,13 @@ impl<const M: usize> HyperLogLog<M> {
         // Left-align the remaining 64-p bits; OR in a sentinel at bit p-1 so
         // that leading_zeros is at most 64-p and the rank at most 64-p+1.
         let remaining = (h << p) | (1u64 << (p - 1));
-        let rank = match u8::try_from(remaining.leading_zeros().saturating_add(1)) {
-            Ok(v) => v,
-            Err(_gt_u8) => u8::MAX,
+        let rank = match remaining
+            .leading_zeros()
+            .checked_add(1)
+            .and_then(|n| u8::try_from(n).ok())
+        {
+            Some(v) => v,
+            None => u8::MAX,
         };
         if rank > self.registers[idx] {
             self.registers[idx] = rank;

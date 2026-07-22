@@ -639,7 +639,11 @@ fn build_phrase(pair: Pair<'_>) -> Result<FtsLiteral> {
                             .replace('_', "")
                             .parse::<i64>()
                             .map_err(|_| BadFtsNumber(boosted.as_str().to_string(), span))?;
-                        booster = i as f64;
+                        booster = f64::from(
+                            i32::try_from(i).map_err(|_| {
+                                BadFtsNumber(boosted.as_str().to_string(), span)
+                            })?,
+                        );
                     }
                     _other => return Err(unexpected("a booster value", &boosted)),
                 }

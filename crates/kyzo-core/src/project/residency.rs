@@ -108,7 +108,10 @@ impl Residency {
         };
         match misses.get_mut(&key) {
             Some((recorded, count)) if *recorded == live => {
-                *count = count.saturating_add(1);
+                *count = match count.checked_add(1) {
+                    Some(v) => v,
+                    None => u32::MAX,
+                };
                 *count >= REBUILD_AFTER_STABLE_MISSES
             }
             _other => {

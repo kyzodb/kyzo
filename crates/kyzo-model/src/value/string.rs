@@ -103,7 +103,7 @@ impl GermanStr {
             return None;
         }
         let payload = self.0.inline_payload()?;
-        let content = &payload[..payload.len().saturating_sub(2)];
+        let content = &payload[..payload.len().checked_sub(2)?];
         if !content.contains(&0x00) {
             // No escapes: the content bytes are the string bytes.
             return match std::str::from_utf8(content) {
@@ -129,7 +129,7 @@ impl GermanStr {
             return None;
         }
         let payload = self.0.inline_payload()?;
-        let content = &payload[..payload.len().saturating_sub(2)];
+        let content = &payload[..payload.len().checked_sub(2)?];
         if !content.contains(&0x00) {
             return Some(Cow::Borrowed(content));
         }

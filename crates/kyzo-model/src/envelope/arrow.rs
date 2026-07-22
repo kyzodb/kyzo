@@ -356,10 +356,11 @@ struct PlannedColumn {
 /// is valid — `null_count` in the `FieldNode` is what actually tells a
 /// reader whether to expect nulls; an all-valid column need not carry a
 /// buffer of all-one bits at all, and Arrow explicitly permits this.
-fn validity_bitmap(valid: &[bool]) -> (i64, Option<Vec<u8>>) {
-    let null_count = valid.iter().filter(|v| !**v).count() as i64;
+fn validity_bitmap(valid: &[bool]) -> Result<(i64, Option<Vec<u8>>)> {
+    let null_count = i64::try_from(valid.iter().filter(|v| !**v).count())
+        .map_err(|_| miette::miette!("Arrow null_count exceeds i64::MAX"))?;
     if null_count == 0 {
-        return (0, None);
+        return Ok((0, None));
     }
     let mut bytes = vec![0u8; valid.len().div_ceil(8)];
     for (i, v) in valid.iter().enumerate() {
@@ -367,7 +368,7 @@ fn validity_bitmap(valid: &[bool]) -> (i64, Option<Vec<u8>>) {
             bytes[i / 8] |= 1 << (i % 8);
         }
     }
-    (null_count, Some(bytes))
+    Ok((null_count, Some(bytes)))
 }
 
 fn le_bytes_i64(values: &[i64]) -> Vec<u8> {
@@ -481,7 +482,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
         .iter()
         .map(|v| !matches!(v, DataValue::Null))
         .collect();
-    let (null_count, validity) = validity_bitmap(&valid);
+    let (null_count, validity) = validity_bitmap(&valid)?;
     let validity = match validity {
         Some(v) => v,
         None => Vec::new(),
@@ -492,10 +493,12 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             // would be more precise, but this encoder's scope is the four
             // concrete kinds above) — pick Int64 as the total-null case.
             let zeros = vec![0i64; values.len()];
+            let null_count = i64::try_from(values.len())
+                .map_err(|_| miette::miette!("Arrow null_count exceeds i64::MAX"))?;
             Ok(PlannedColumn {
                 arrow_type: PlannedArrowType::Int,
                 nullability: ArrowNullability::Optional,
-                null_count: values.len() as i64,
+                null_count,
                 buffers: vec![validity, le_bytes_i64(&zeros)],
             })
         }
@@ -581,13 +584,16 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
 /// continuation marker, little-endian metadata length, the flatbuffer
 /// bytes themselves padded so the body starts 8-byte aligned, then the
 /// body.
-fn frame_message(message_fb: &[u8], body: &[u8], out: &mut Vec<u8>) {
+fn frame_message(message_fb: &[u8], body: &[u8], out: &mut Vec<u8>) -> Result<()> {
     let padded_len = align8(message_fb.len());
+    let padded_u32 = u32::try_from(padded_len)
+        .map_err(|_| miette::miette!("Arrow IPC metadata length exceeds u32::MAX"))?;
     out.extend_from_slice(&CONTINUATION_MARKER.to_le_bytes());
-    out.extend_from_slice(&(padded_len as u32).to_le_bytes());
+    out.extend_from_slice(&padded_u32.to_le_bytes());
     out.extend_from_slice(message_fb);
     out.resize(out.len() + (padded_len - message_fb.len()), 0);
     out.extend_from_slice(body);
+    Ok(())
 }
 
 /// The end-of-stream marker: a continuation marker followed by a
@@ -675,29 +681,37 @@ fn write_schema_message(fields: &[(&str, &PlannedColumn)]) -> Vec<u8> {
 
 /// Encode one RecordBatch message's metadata (nodes + buffer descriptors)
 /// and return it alongside the concatenated, individually-padded body.
-fn write_record_batch_message(height: usize, planned: &[PlannedColumn]) -> (Vec<u8>, Vec<u8>) {
+fn write_record_batch_message(height: usize, planned: &[PlannedColumn]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut body = Vec::new();
     let mut buffer_descs: Vec<(i64, i64)> = Vec::new();
     for col in planned {
         for buf in &col.buffers {
-            let offset = body.len() as i64;
+            let offset = i64::try_from(body.len())
+                .map_err(|_| miette::miette!("Arrow body offset exceeds i64::MAX"))?;
             let padded = align8(buf.len());
-            buffer_descs.push((offset, buf.len() as i64)); // Buffer{offset, length}
+            let buf_len = i64::try_from(buf.len())
+                .map_err(|_| miette::miette!("Arrow buffer length exceeds i64::MAX"))?;
+            buffer_descs.push((offset, buf_len)); // Buffer{offset, length}
             body.extend_from_slice(buf);
             body.resize(body.len() + (padded - buf.len()), 0);
         }
     }
 
+    let height_i64 = i64::try_from(height)
+        .map_err(|_| miette::miette!("Arrow record-batch height exceeds i64::MAX"))?;
+    let body_len = i64::try_from(body.len())
+        .map_err(|_| miette::miette!("Arrow body length exceeds i64::MAX"))?;
+
     let mut fbb = FlatBufferBuilder::new();
     let nodes: Vec<(i64, i64)> = planned
         .iter()
-        .map(|c| (height as i64, c.null_count)) // FieldNode{length, null_count}
+        .map(|c| (height_i64, c.null_count)) // FieldNode{length, null_count}
         .collect();
     let nodes_vec = push_struct_vector(&mut fbb, &nodes);
     let buffers_vec = push_struct_vector(&mut fbb, &buffer_descs);
 
     let rb_start = fbb.start_table();
-    fbb.push_slot_always::<i64>(4, height as i64); // length
+    fbb.push_slot_always::<i64>(4, height_i64); // length
     fbb.push_slot_always(6, nodes_vec); // nodes
     fbb.push_slot_always(8, buffers_vec); // buffers
     let rb_offset = fbb.end_table(rb_start);
@@ -706,11 +720,11 @@ fn write_record_batch_message(height: usize, planned: &[PlannedColumn]) -> (Vec<
     fbb.push_slot_always::<i16>(4, METADATA_VERSION_V5); // version
     fbb.push_slot_always::<u8>(6, MESSAGE_HEADER_RECORD_BATCH); // header_type
     fbb.push_slot_always(8, rb_offset); // header
-    fbb.push_slot_always::<i64>(10, body.len() as i64); // bodyLength
+    fbb.push_slot_always::<i64>(10, body_len); // bodyLength
     let message_offset = fbb.end_table(message_start);
 
     fbb.finish_minimal(message_offset);
-    (fbb.finished_data().to_vec(), body)
+    Ok((fbb.finished_data().to_vec(), body))
 }
 
 /// Encode one [`ColumnBatch`] as a complete, self-contained Arrow IPC
@@ -732,10 +746,10 @@ pub fn encode_stream(batch: &ColumnBatch, names: &[&str]) -> Result<Vec<u8>> {
     let schema_fields: Vec<(&str, &PlannedColumn)> =
         names.iter().copied().zip(planned.iter()).collect();
     let schema_msg = write_schema_message(&schema_fields);
-    frame_message(&schema_msg, &[], &mut out);
+    frame_message(&schema_msg, &[], &mut out)?;
 
-    let (rb_msg, body) = write_record_batch_message(batch.height(), &planned);
-    frame_message(&rb_msg, &body, &mut out);
+    let (rb_msg, body) = write_record_batch_message(batch.height(), &planned)?;
+    frame_message(&rb_msg, &body, &mut out)?;
 
     write_eos(&mut out);
     Ok(out)
@@ -760,10 +774,11 @@ mod tests {
     }
 
     #[test]
-    fn validity_bitmap_omits_the_buffer_when_every_row_is_valid() {
-        let (null_count, buf) = validity_bitmap(&[true, true, true]);
+    fn validity_bitmap_omits_the_buffer_when_every_row_is_valid() -> Result<()> {
+        let (null_count, buf) = validity_bitmap(&[true, true, true])?;
         assert_eq!(null_count, 0);
         assert!(buf.is_none());
+        Ok(())
     }
 
     #[test]
@@ -771,7 +786,7 @@ mod tests {
         // Row 0 null, rows 1-2 valid, row 3 null, rows 4-7 valid: byte 0
         // should have bits 1,2,4,5,6,7 set (LSB = row 0).
         let (null_count, buf) =
-            validity_bitmap(&[false, true, true, false, true, true, true, true]);
+            validity_bitmap(&[false, true, true, false, true, true, true, true])?;
         assert_eq!(null_count, 2);
         let buf = buf.ok_or_else(|| miette!("validity bitmap present when nulls exist"))?;
         assert_eq!(buf.len(), 1);

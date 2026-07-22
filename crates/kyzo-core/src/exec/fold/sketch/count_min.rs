@@ -116,7 +116,10 @@ impl CountMinSketch {
         for row in 0..self.depth {
             let col = self.column(value, row);
             let cell = &mut self.counters[row * self.width + col];
-            *cell = cell.saturating_add(count);
+            *cell = match cell.checked_add(count) {
+                Some(v) => v,
+                None => u64::MAX,
+            };
         }
     }
 
@@ -153,7 +156,10 @@ impl CountMinSketch {
         let mut changed = false;
         for (l, r) in self.counters.iter_mut().zip(other.counters.iter()) {
             if *r != 0 {
-                *l = l.saturating_add(*r);
+                *l = match l.checked_add(*r) {
+                    Some(v) => v,
+                    None => u64::MAX,
+                };
                 changed = true;
             }
         }

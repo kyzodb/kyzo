@@ -113,7 +113,10 @@ impl FixedRule for ReorderSort {
         let mut count = 0usize;
         let mut rank = 0usize;
         let mut last: Option<&DataValue> = None;
-        let take_plus_skip = take.saturating_add(skip);
+        let take_plus_skip = match take.checked_add(skip) {
+            Some(v) => v,
+            None => usize::MAX,
+        };
         for val in &buffer {
             // Every buffered tuple ends with the sort key pushed above.
             let sorter = val.last().ok_or_else(|| {

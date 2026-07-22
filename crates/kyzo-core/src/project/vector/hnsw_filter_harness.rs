@@ -1585,8 +1585,7 @@ fn t13_acorn_entry_neighbourhood_excluded_still_finds_matches() -> Result<()> {
     let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
     let params = knn_params_p2(P2_K, P2_EF);
     let fb = f.filter_expr();
-    let hits = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false),
-        "ACORN graph walk".map_err(|e| miette!(": {e:?}"))?;
+    let hits = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false)?;
     let ekeys = keys_of(&hits)?;
 
     assert_eq!(
@@ -1749,10 +1748,8 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
                     new_row.as_slice(),
                     kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
-                ),
-                "put_fact insert".map_err(|e| miette!(": {e:?}"))?;
-            hnsw_put(&mut tx, &m, &base, &idx, None, new_row.as_slice()),
-                "hnsw_put insert".map_err(|e| miette!(": {e:?}"))?;
+                )?;
+            hnsw_put(&mut tx, &m, &base, &idx, None, new_row.as_slice())?;
             tx.commit().map_err(|e| miette!("commit insert: {e:?}"))?;
         }
         live_rows.push(new_row);

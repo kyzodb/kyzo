@@ -574,7 +574,10 @@ impl InterruptTicker<'_> {
                     Ok(v) => v,
                     Err(_gt_u64) => u64::MAX,
                 };
-                let spent = self.baseline.saturating_add(in_flight_u64);
+                let spent = match self.baseline.checked_add(in_flight_u64) {
+                    Some(v) => v,
+                    None => u64::MAX,
+                };
                 if spent > ceiling {
                     let symb = self.rule.as_plain_symbol();
                     return Err(LimitExceeded {
