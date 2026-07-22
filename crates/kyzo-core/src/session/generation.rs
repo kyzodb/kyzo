@@ -130,16 +130,15 @@ pub struct IndexStatus {
     sealed: Option<IndexGeneration>,
 }
 
-impl Default for IndexStatus {
-    fn default() -> Self {
+impl IndexStatus {
+    /// No sealed index yet — live Catalog generation at witness zero.
+    pub(crate) fn empty() -> Self {
         IndexStatus::witness(
             CatalogGeneration::from_relation(RelationGeneration::witness(0)),
             None,
         )
     }
-}
 
-impl IndexStatus {
     /// Witness live Catalog generation and optional sealed index generation.
     pub(crate) fn witness(live: CatalogGeneration, sealed: Option<IndexGeneration>) -> Self {
         Self { live, sealed }

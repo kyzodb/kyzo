@@ -224,9 +224,9 @@ pub(crate) fn kill_running() -> Result<NamedRows> {
 /// Build relations from an explicit ephemeral snapshot (observe / tests).
 /// Cap-absent — ephemeral metrics only; quarantine unreachable.
 pub fn relations_from_ephemeral(ephemeral: EphemeralEngineState) -> OperatorEphemeralRelations {
-    let mut surface = OperatorHealthSurface::default();
+    let mut surface = OperatorHealthSurface::empty();
     *surface.ephemeral_mut() = ephemeral;
-    OperatorEphemeralRelations::for_tenant(surface, IndexStatus::default())
+    OperatorEphemeralRelations::for_tenant(surface, IndexStatus::empty())
 }
 
 /// Build Cap-present relations from an ephemeral snapshot (operator / tests).
@@ -235,9 +235,9 @@ pub fn relations_from_ephemeral_for_operator(
     ephemeral: EphemeralEngineState,
     cap: OperatorCap,
 ) -> OperatorEphemeralRelations {
-    let mut surface = OperatorHealthSurface::default();
+    let mut surface = OperatorHealthSurface::empty();
     *surface.ephemeral_mut() = ephemeral;
-    OperatorEphemeralRelations::for_operator(surface, IndexStatus::default(), cap)
+    OperatorEphemeralRelations::for_operator(surface, IndexStatus::empty(), cap)
 }
 
 #[cfg(test)]
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn ephemeral_relations_project_in_flight_and_storage() -> Result<()>  {
-        let mut ephemeral = EphemeralEngineState::default();
+        let mut ephemeral = EphemeralEngineState::empty();
         ephemeral.replace(
             3,
             crate::store::failure::StorageStatsSnapshot {
@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(stats.rows()[0][4].get_int().ok_or_else(|| miette!("get_int"))?, 2);
 
         let op = relations_from_ephemeral_for_operator(
-            EphemeralEngineState::default(),
+            EphemeralEngineState::empty(),
             OperatorCap::mint(),
         );
         assert!(op.has_operator_cap());
@@ -287,7 +287,7 @@ mod tests {
     /// with Cap (test mint via pub(crate)), operator sees data.
     #[test]
     fn quarantine_unreachable_without_operator_cap() -> Result<()>  {
-        let mut surface = OperatorHealthSurface::default();
+        let mut surface = OperatorHealthSurface::empty();
         surface.record_quarantine(mint_quarantine(
             KeyspaceId::from_raw(9),
             b"q0".to_vec(),
@@ -296,7 +296,7 @@ mod tests {
 
         // Cap-absent: no path to topology.
         let tenant =
-            OperatorEphemeralRelations::for_tenant(surface.clone(), IndexStatus::default());
+            OperatorEphemeralRelations::for_tenant(surface.clone(), IndexStatus::empty());
         assert!(!tenant.has_operator_cap());
         assert!(matches!(
             tenant.quarantine_relation(),
@@ -312,7 +312,7 @@ mod tests {
             Err(TenantBlindRefuse::FailureTopologyForbidden)
         ));
 
-        let op = OperatorEphemeralRelations::for_operator(surface, IndexStatus::default(), cap);
+        let op = OperatorEphemeralRelations::for_operator(surface, IndexStatus::empty(), cap);
         assert!(op.has_operator_cap());
         let rows = op.quarantine_relation()?;
         assert_eq!(rows.rows().len(), 1);
@@ -377,13 +377,13 @@ mod tests {
 
     #[test]
     fn compaction_debt_renders_from_debt_ledger_not_ephemeral() -> Result<()>  {
-        let mut surface = OperatorHealthSurface::default();
+        let mut surface = OperatorHealthSurface::empty();
         let cap = OperatorCap::mint();
         let mut debt = crate::store::failure::DebtLedger::with_ceiling(50);
         debt.admit(11).map_err(|e| miette!("admit: {e}"))?;
         surface.set_debt(&cap, debt);
 
-        let rels = OperatorEphemeralRelations::for_tenant(surface, IndexStatus::default());
+        let rels = OperatorEphemeralRelations::for_tenant(surface, IndexStatus::empty());
         assert_eq!(
             rels.compaction_debt_relation()?.rows()[0][0]
                 .get_int().ok_or_else(|| miette!("get_int"))?

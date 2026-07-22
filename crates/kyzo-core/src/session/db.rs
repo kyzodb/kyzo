@@ -347,7 +347,7 @@ impl<S: Storage> Engine<S> {
             catalog,
             segments: Arc::new(crate::project::current::SegmentEngine::new()),
             fixed_rules: Arc::new(RwLock::new(fixed_rules)),
-            event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::default())),
+            event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::empty())),
             callback_count: Arc::new(AtomicU32::new(0)),
             admission,
             sweep,

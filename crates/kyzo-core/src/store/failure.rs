@@ -116,7 +116,7 @@ impl ScopedMismatchCarriage {
 }
 
 /// Unknown-invariant carriage — the only path to whole-store Poisoned (§50).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnknownInvariantCarriage;
 
 impl UnknownInvariantCarriage {
@@ -277,7 +277,7 @@ fn merge_opt_ranges(
 }
 
 /// Store debt economy counters (§42) — silent stall is unrepresentable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DebtLedger {
     /// Admitted ask debt units currently outstanding.
     outstanding: u64,
@@ -383,7 +383,7 @@ pub enum OperatorHealthRefuse {
 ///
 /// Distinct from the fjall `StorageStats` type so the failure seat never
 /// imports the backend — operators project these as relation rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StorageStatsSnapshot {
     /// Bytes resident in the block cache.
     pub cache_size_bytes: u64,
@@ -397,13 +397,26 @@ pub struct StorageStatsSnapshot {
     pub journal_count: u64,
 }
 
+impl StorageStatsSnapshot {
+    /// All counters zero — no storage activity observed yet.
+    pub fn empty() -> Self {
+        Self {
+            cache_size_bytes: 0,
+            cache_capacity_bytes: 0,
+            write_buffer_size_bytes: 0,
+            active_compactions: 0,
+            journal_count: 0,
+        }
+    }
+}
+
 /// Ephemeral engine counters queryable as relations on the sealed operator
 /// surface (§82): in-flight tx + storage-stats only.
 ///
 /// Compaction-debt renders from the one [`DebtLedger`]; index-status renders
 /// from [`crate::session::generation::IndexStatus`] — neither is duplicated
 /// here as a second counter.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EphemeralEngineState {
     /// Open / in-flight transactions (projection of the live registry).
     in_flight_tx: u64,
@@ -412,6 +425,14 @@ pub struct EphemeralEngineState {
 }
 
 impl EphemeralEngineState {
+    /// Zero in-flight / empty storage stats.
+    pub fn empty() -> Self {
+        Self {
+            in_flight_tx: 0,
+            storage_stats: StorageStatsSnapshot::empty(),
+        }
+    }
+
     /// In-flight transaction count.
     pub fn in_flight_tx(&self) -> u64 {
         self.in_flight_tx
@@ -436,7 +457,7 @@ impl EphemeralEngineState {
 /// Cap-gated doors set them; render doors project them. Reclaimable /
 /// staged-object / fence-pressure have no pub-raw zero fields — each renders
 /// from its real authority or typed-refuses when that authority is unbuilt.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperatorHealthSurface {
     /// Debt ledger — **private**; set only through Cap-gated [`Self::set_debt`].
     debt: DebtLedger,
@@ -451,6 +472,17 @@ pub struct OperatorHealthSurface {
 }
 
 impl OperatorHealthSurface {
+    /// Empty operator health — zero debt ceiling, no quarantine/verify/feeds.
+    pub fn empty() -> Self {
+        Self {
+            debt: DebtLedger::with_ceiling(0),
+            compaction_debt_feed: None,
+            quarantine: Vec::new(),
+            last_verify: None,
+            ephemeral: EphemeralEngineState::empty(),
+        }
+    }
+
     /// Borrow the ephemeral engine-state counters.
     pub fn ephemeral(&self) -> &EphemeralEngineState {
         &self.ephemeral
@@ -802,7 +834,7 @@ mod tests {
     /// enum a caller invents. Cap-absent projectors refuse in session/jobs.
     #[test]
     fn quarantine_unreachable_without_operator_cap() {
-        let mut surface = OperatorHealthSurface::default();
+        let mut surface = OperatorHealthSurface::empty();
         surface.record_quarantine(mint_quarantine(
             KeyspaceId::from_raw(1),
             b"a".to_vec(),

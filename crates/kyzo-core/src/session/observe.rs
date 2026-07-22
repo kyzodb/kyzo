@@ -99,7 +99,7 @@ use crate::session::db::Engine;
 use crate::session::generation::IndexStatus;
 use crate::session::jobs::OperatorEphemeralRelations;
 use crate::store::Storage;
-use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange};
+use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange, StorageStatsSnapshot};
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
 
 /// One authoritative metric counter. Private field — constructed only by
@@ -278,9 +278,9 @@ struct HealthTiers {
     integrity: Integrity,
 }
 
-impl Default for HealthTiers {
-    fn default() -> Self {
-        // Engine that answers is live and ready; integrity waits on verify.
+impl HealthTiers {
+    /// Engine that answers is live and ready; integrity waits on verify.
+    fn starting() -> Self {
         Self {
             liveness: Liveness::passing(),
             readiness: Readiness::passing(),
@@ -291,10 +291,9 @@ impl Default for HealthTiers {
 
 /// Tracing detail level. May change diagnostic emission only — never result
 /// rows or budget spend ([`observe_probe`] is behavior-invariant in verbosity).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TracingVerbosity {
     /// Emit no diagnostic detail.
-    #[default]
     Silent,
     /// Emit summary diagnostics.
     Summary,
@@ -447,7 +446,7 @@ impl DeepVerifyStaleness {
 }
 
 /// Operator schedule + persisted last-result for deep-verify (§51).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct DeepVerifyOperatorState {
     /// Next schedule ordinal (monotone).
     next_ordinal: u64,
@@ -458,6 +457,14 @@ struct DeepVerifyOperatorState {
 }
 
 impl DeepVerifyOperatorState {
+    fn empty() -> Self {
+        Self {
+            next_ordinal: 0,
+            pending: None,
+            last_result: None,
+        }
+    }
+
     fn schedule(&mut self) -> ScheduleOrdinal {
         self.next_ordinal = self.next_ordinal.saturating_add(1).max(1);
         let ord = ScheduleOrdinal::from_raw(self.next_ordinal);
@@ -599,7 +606,6 @@ pub(crate) type CallbackCollector =
 /// generation counter, never a second independent u64. Liveness / readiness /
 /// integrity are three distinct independently-queryable tiers; tracing
 /// verbosity is behavior-invariant for rows and budget.
-#[derive(Default)]
 pub(crate) struct EventCallbackRegistry {
     pub(crate) by_id: BTreeMap<CallbackId, CallbackDeclaration>,
     pub(crate) by_relation: BTreeMap<SmartString<LazyCompact>, BTreeSet<CallbackId>>,
@@ -617,6 +623,20 @@ pub(crate) struct EventCallbackRegistry {
 }
 
 impl EventCallbackRegistry {
+    /// Empty registry — no callbacks, starting health tiers, silent tracing.
+    pub(crate) fn empty() -> Self {
+        Self {
+            by_id: BTreeMap::new(),
+            by_relation: BTreeMap::new(),
+            deep_verify: DeepVerifyOperatorState::empty(),
+            operator_health: OperatorHealthSurface::empty(),
+            index_status: IndexStatus::empty(),
+            in_flight_tx: 0,
+            health_tiers: HealthTiers::starting(),
+            tracing_verbosity: TracingVerbosity::Silent,
+        }
+    }
+
     fn register(&mut self, id: CallbackId, decl: CallbackDeclaration) {
         self.by_relation
             .entry(decl.dependent.clone())
@@ -1280,7 +1300,7 @@ mod one_counter_per_metric {
         CatalogGeneration, IndexGeneration, IndexStaleness, IndexStatus, RelationGeneration,
     };
     use crate::session::observe::{MetricExporter, compaction_debt_counter, index_status_counter};
-    use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface};
+    use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface, StorageStatsSnapshot};
     use crate::store::fjall::new_fjall_storage;
 
     /// Prove: DebtLedger is THE compaction-debt counter; Catalog IndexStatus
@@ -1341,11 +1361,11 @@ mod one_counter_per_metric {
 
         let mut debt = DebtLedger::with_ceiling(50);
         debt.admit(11).map_err(|e| miette!("admit: {e}"))?;
-        let mut surface = OperatorHealthSurface::default();
+        let mut surface = OperatorHealthSurface::empty();
         let cap = OperatorCap::mint();
         surface.set_debt(&cap, debt);
         // Hostile seed: ephemeral in-flight only (debt/index no longer live here).
-        surface.ephemeral_mut().replace(0, Default::default());
+        surface.ephemeral_mut().replace(0, StorageStatsSnapshot::empty());
         db.set_operator_health_surface(surface);
 
         // After seal, debt relation must equal DebtLedger.
