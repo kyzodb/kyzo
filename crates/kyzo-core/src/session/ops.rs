@@ -419,15 +419,15 @@ impl<T: WriteTx> SessionTx<T> {
                         // above), and the scan already discards each row's
                         // original bitemporal slots, so there is no
                         // per-row valid instant left to carry forward.
-                        self.plain_index_write(
-                            &base,
-                            &idx_handle,
+                        self.plain_index_write(crate::session::admit::PlainIndexWriteSeats {
+                            base: &base,
+                            idx_handle: &idx_handle,
                             mapper,
-                            row.as_slice(),
-                            ClaimPolarity::Assert,
+                            row: row.as_slice(),
+                            polarity: ClaimPolarity::Assert,
+                            valid: stamp,
                             stamp,
-                            stamp,
-                        )?;
+                        })?;
                     }
                     (None, None) => {
                         bail!(miette::miette!(
@@ -874,23 +874,32 @@ mod temporal_index_tests {
     /// payload, so `old` and `new` compose to the IDENTICAL posting
     /// regardless of content — this flag exercises that both-`Some` path
     /// without needing a dependent column to vary.
-    #[allow(clippy::too_many_arguments)]
-    fn write_base_event(
-        stx: &mut SessionTx<<SimStorage as Storage>::WriteTx>,
-        base: &RelationHandle,
-        idx_handle: &RelationHandle,
+    struct BaseEventWriteSpec<'a> {
+        stx: &'a mut SessionTx<<SimStorage as Storage>::WriteTx>,
+        base: &'a RelationHandle,
+        idx_handle: &'a RelationHandle,
         k: i64,
         valid: i64,
         sys: i64,
         polarity: ClaimPolarity,
         reasserts_existing: bool,
-    ) {
+    }
+
+    fn write_base_event(spec: BaseEventWriteSpec<'_>) -> Result<()> {
+        let BaseEventWriteSpec {
+            stx,
+            base,
+            idx_handle,
+            k,
+            valid,
+            sys,
+            polarity,
+            reasserts_existing,
+        } = spec;
         let span = SourceSpan::default();
         let row = vec![DataValue::from(k)];
-        let key = base
-            .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
-        let val = base
-            .encode_bitemporal_val_for_store(&row, polarity, span)?;
+        let key = base.encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
+        let val = base.encode_bitemporal_val_for_store(&row, polarity, span)?;
         stx.put_routed(Residency::Stored, &key, &val)?;
         match polarity {
             ClaimPolarity::Assert => {
@@ -911,6 +920,7 @@ mod temporal_index_tests {
                 )?;
             }
         }
+        Ok(())
     }
 
     /// One decoded posting row, in the form every assertion below compares
@@ -1019,7 +1029,7 @@ mod temporal_index_tests {
             (1, 10, 3, ClaimPolarity::Erase),
         ];
         for &(k, valid, sys, polarity) in &events {
-            write_base_event(&mut stx, &base, &idx_handle, k, valid, sys, polarity, false);
+            write_base_event(BaseEventWriteSpec { stx: &mut stx, base: &base, idx_handle: &idx_handle, k: k, valid: valid, sys: sys, polarity: polarity, reasserts_existing: false });
         }
         stx.store.commit()?;
 
@@ -1099,16 +1109,7 @@ mod temporal_index_tests {
         let base_a = stx_a.get_relation("b")?;
         let idx_a = stx_a.get_relation("b:t")?;
         for &(k, valid, sys, polarity, reasserts_existing) in &events {
-            write_base_event(
-                &mut stx_a,
-                &base_a,
-                &idx_a,
-                k,
-                valid,
-                sys,
-                polarity,
-                reasserts_existing,
-            );
+            write_base_event(BaseEventWriteSpec { stx: &mut stx_a, base: &base_a, idx_handle: &idx_a, k: k, valid: valid, sys: sys, polarity: polarity, reasserts_existing: reasserts_existing });
         }
         stx_a.store.commit()?;
 
@@ -1184,7 +1185,7 @@ mod temporal_index_tests {
             (2, 6, 4, ClaimPolarity::Erase),
         ];
         for &(k, valid, sys, polarity) in &events {
-            write_base_event(&mut stx, &base, &idx_handle, k, valid, sys, polarity, false);
+            write_base_event(BaseEventWriteSpec { stx: &mut stx, base: &base, idx_handle: &idx_handle, k: k, valid: valid, sys: sys, polarity: polarity, reasserts_existing: false });
         }
         stx.store.commit()?;
 

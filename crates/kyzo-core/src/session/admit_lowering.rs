@@ -656,114 +656,58 @@ mod tests {
         let src = StatementSource::unbound();
         let digest = RecordContentDigest::from_digest([0xD1; 32]);
 
+        use super::super::admit_construct::{
+            OntokCertSeats, OntokPredStmt, OntokValueStmt,
+        };
+        let cert = || OntokCertSeats {
+            store_id: store,
+            digest,
+            surface: SemanticSurface::None,
+            evidence: None,
+            live: &live,
+        };
+        let pred_stmt = || OntokPredStmt {
+            subject: subject.clone(),
+            predicate: pred.clone(),
+            value: value.clone(),
+            validity_time: vt,
+            context: ctx.clone(),
+            source: src.clone(),
+        };
         let kinds = [
-            super::super::admit_construct::event(
-                store,
-                digest,
-                subject.clone(),
-                pred.clone(),
-                value.clone(),
-                vt,
-                ctx.clone(),
-                src.clone(),
-                SemanticSurface::None,
-                None,
-                &live,
-            )
-            .map_err(|e| miette!("event: {e}"))?
-            .0
-            .kind(),
-            super::super::admit_construct::state(
-                store,
-                digest,
-                subject.clone(),
-                pred.clone(),
-                value.clone(),
-                vt,
-                ctx.clone(),
-                src.clone(),
-                SemanticSurface::None,
-                None,
-                &live,
-            )
-            .map_err(|e| miette!("state: {e}"))?
-            .0
-            .kind(),
-            super::super::admit_construct::role(
-                store,
-                digest,
-                subject.clone(),
-                pred.clone(),
-                value.clone(),
-                vt,
-                ctx.clone(),
-                src.clone(),
-                SemanticSurface::None,
-                None,
-                &live,
-            )
-            .map_err(|e| miette!("role: {e}"))?
-            .0
-            .kind(),
-            super::super::admit_construct::concept(
-                store,
-                digest,
-                subject.clone(),
-                pred.clone(),
-                value.clone(),
-                vt,
-                ctx.clone(),
-                src.clone(),
-                SemanticSurface::None,
-                None,
-                &live,
-            )
-            .map_err(|e| miette!("concept: {e}"))?
-            .0
-            .kind(),
-            super::super::admit_construct::rule(
-                store,
-                digest,
-                subject.clone(),
-                pred.clone(),
-                value.clone(),
-                vt,
-                ctx.clone(),
-                src.clone(),
-                SemanticSurface::None,
-                None,
-                &live,
-            )
-            .map_err(|e| miette!("rule: {e}"))?
-            .0
-            .kind(),
-            super::super::admit_construct::derivation(
-                store,
-                digest,
-                subject.clone(),
-                pred.clone(),
-                value.clone(),
-                vt,
-                ctx.clone(),
-                src.clone(),
-                SemanticSurface::None,
-                None,
-                &live,
-            )
-            .map_err(|e| miette!("derivation: {e}"))?
-            .0
-            .kind(),
+            super::super::admit_construct::event(cert(), pred_stmt())
+                .map_err(|e| miette!("event: {e}"))?
+                .0
+                .kind(),
+            super::super::admit_construct::state(cert(), pred_stmt())
+                .map_err(|e| miette!("state: {e}"))?
+                .0
+                .kind(),
+            super::super::admit_construct::role(cert(), pred_stmt())
+                .map_err(|e| miette!("role: {e}"))?
+                .0
+                .kind(),
+            super::super::admit_construct::concept(cert(), pred_stmt())
+                .map_err(|e| miette!("concept: {e}"))?
+                .0
+                .kind(),
+            super::super::admit_construct::rule(cert(), pred_stmt())
+                .map_err(|e| miette!("rule: {e}"))?
+                .0
+                .kind(),
+            super::super::admit_construct::derivation(cert(), pred_stmt())
+                .map_err(|e| miette!("derivation: {e}"))?
+                .0
+                .kind(),
             super::super::admit_construct::context_record(
-                store,
-                digest,
-                subject.clone(),
-                value.clone(),
-                vt,
-                ctx.clone(),
-                src.clone(),
-                SemanticSurface::None,
-                None,
-                &live,
+                cert(),
+                OntokValueStmt {
+                    subject: subject.clone(),
+                    value: value.clone(),
+                    validity_time: vt,
+                    context: ctx.clone(),
+                    source: src.clone(),
+                },
             )
             .map_err(|e| miette!("context: {e}"))?
             .0

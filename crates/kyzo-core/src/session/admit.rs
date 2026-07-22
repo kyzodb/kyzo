@@ -49,7 +49,7 @@ use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::catalog::{IndexKind, KeyspaceKind, RelationHandle, Residency};
-use crate::session::db::{Engine, SessionTx};
+use crate::session::db::{Engine, RunQuerySeats, SessionTx};
 use crate::session::generation::CatalogGeneration;
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::FenceEpoch;
@@ -761,20 +761,36 @@ pub(crate) use lowering::{crossing_envelope_from_record, lower_after_crossing};
 /// [`crate::store::replica::CrossingRefuse::DeclaredEvidenceMissing`];
 /// ScopeUnknown/Revoked/Denied stay distinct from RetentionDeclined via
 /// [`crate::store::replica::CrossingRefuse::Replica`].
-#[allow(clippy::too_many_arguments)] // crossing door carries explicit trust + envelope seats
+/// Explicit seats for [`validate_and_lower_crossing`] — trust tables + envelope status.
+pub(crate) struct ValidateAndLowerCrossingSeats<'a> {
+    pub(crate) record: &'a KyzoRecord,
+    pub(crate) certificate: &'a AdmissionCertificate,
+    pub(crate) local_store: StoreId,
+    pub(crate) local_commit: CommitOrdinal,
+    pub(crate) authorizing_keys: &'a AuthorizingKeyTable,
+    pub(crate) scopes: &'a ScopeManifestTable,
+    pub(crate) continuity: Option<&'a crate::store::replica::OriginContinuity>,
+    pub(crate) held_capabilities: &'a crate::store::replica::CrossingCapabilitySet,
+    pub(crate) status: crate::store::replica::CrossingStatus,
+    pub(crate) shared_capabilities: crate::store::replica::CrossingCapabilitySet,
+}
+
 pub(crate) fn validate_and_lower_crossing(
-    record: &KyzoRecord,
-    certificate: &AdmissionCertificate,
-    local_store: StoreId,
-    local_commit: CommitOrdinal,
-    authorizing_keys: &AuthorizingKeyTable,
-    scopes: &ScopeManifestTable,
-    continuity: Option<&crate::store::replica::OriginContinuity>,
-    held_capabilities: &crate::store::replica::CrossingCapabilitySet,
-    status: crate::store::replica::CrossingStatus,
-    shared_capabilities: crate::store::replica::CrossingCapabilitySet,
+    seats: ValidateAndLowerCrossingSeats<'_>,
 ) -> Result<lowering::OriginSealedLowering, AdmitRefuse> {
     use crate::store::replica::{validate_crossing_before_lower, CrossingValidationSeats};
+    let ValidateAndLowerCrossingSeats {
+        record,
+        certificate,
+        local_store,
+        local_commit,
+        authorizing_keys,
+        scopes,
+        continuity,
+        held_capabilities,
+        status,
+        shared_capabilities,
+    } = seats;
     let envelope = crossing_envelope_from_record(record, certificate, status, shared_capabilities);
     let validated = validate_crossing_before_lower(CrossingValidationSeats {
         certificate,
@@ -1073,19 +1089,57 @@ pub(crate) fn admit_sugar_retract(
 /// Wires `construct::{event,state,role,concept,rule,derivation,context_record}`
 /// (and the other kinds) into the monopoly admission seam — no dead surface.
 pub(crate) mod admit_construct {
-    #![allow(clippy::too_many_arguments)] // typed ONTOK admit arity — each param is a named seat
     use super::*;
     use crate::data::statement::construct;
 
+    /// Certification seats shared by every ONTOK admit door.
+    pub(crate) struct OntokCertSeats<'a> {
+        pub(crate) store_id: StoreId,
+        pub(crate) digest: RecordContentDigest,
+        pub(crate) surface: SemanticSurface,
+        pub(crate) evidence: Option<EvidenceCoordinates>,
+        pub(crate) live: &'a LiveCertificateInputs,
+    }
+
+    /// Statement seats for entity (no predicate/value).
+    pub(crate) struct OntokEntityStmt {
+        pub(crate) subject: StatementSubject,
+        pub(crate) validity_time: ValidityTime,
+        pub(crate) context: StatementContext,
+        pub(crate) source: StatementSource,
+    }
+
+    /// Statement seats for evidence / context_record (value, no predicate).
+    pub(crate) struct OntokValueStmt {
+        pub(crate) subject: StatementSubject,
+        pub(crate) value: StatementValue,
+        pub(crate) validity_time: ValidityTime,
+        pub(crate) context: StatementContext,
+        pub(crate) source: StatementSource,
+    }
+
+    /// Statement seats for predicate-bearing ONTOK kinds.
+    pub(crate) struct OntokPredStmt {
+        pub(crate) subject: StatementSubject,
+        pub(crate) predicate: StatementPredicate,
+        pub(crate) value: StatementValue,
+        pub(crate) validity_time: ValidityTime,
+        pub(crate) context: StatementContext,
+        pub(crate) source: StatementSource,
+    }
+
     fn admit_kind(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
+        cert: OntokCertSeats<'_>,
         kind: OntokKind,
         statement: StatementBody,
-        live: &LiveCertificateInputs,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
+        let OntokCertSeats {
+            store_id,
+            digest,
+            surface,
+            evidence,
+            live,
+        } = cert;
         let core = RecordCore::new(store_id, digest, surface, evidence, kind, statement);
         admit_record(AdmitRecordParts::new(
             core,
@@ -1098,208 +1152,177 @@ pub(crate) mod admit_construct {
 
     /// Admit an Entity construction.
     pub(crate) fn entity(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokEntityStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) = construct::entity(subject, validity_time, context, source)
-            .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::entity(
+            stmt.subject,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        )
+        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a Claim construction.
     pub(crate) fn claim(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::claim(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::claim(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit an Evidence construction.
     pub(crate) fn evidence_record(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokValueStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) = construct::evidence(subject, value, validity_time, context, source)
-            .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::evidence(
+            stmt.subject,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        )
+        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a Relation construction.
     pub(crate) fn relation(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::relation(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::relation(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit an Event construction.
     pub(crate) fn event(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::event(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::event(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a State construction.
     pub(crate) fn state(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::state(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::state(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a Role construction.
     pub(crate) fn role(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::role(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::role(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a Concept construction.
     pub(crate) fn concept(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::concept(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::concept(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a Rule construction.
     pub(crate) fn rule(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::rule(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::rule(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a Derivation construction.
     pub(crate) fn derivation(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokPredStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::derivation(subject, predicate, value, validity_time, context, source);
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::derivation(
+            stmt.subject,
+            stmt.predicate,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        );
+        admit_kind(cert, kind, statement)
     }
 
     /// Admit a Context-record construction.
     pub(crate) fn context_record(
-        store_id: StoreId,
-        digest: RecordContentDigest,
-        subject: StatementSubject,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-        surface: SemanticSurface,
-        evidence: Option<EvidenceCoordinates>,
-        live: &LiveCertificateInputs,
+        cert: OntokCertSeats<'_>,
+        stmt: OntokValueStmt,
     ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-        let (kind, statement) =
-            construct::context_record(subject, value, validity_time, context, source)
-                .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
-        admit_kind(store_id, digest, surface, evidence, kind, statement, live)
+        let (kind, statement) = construct::context_record(
+            stmt.subject,
+            stmt.value,
+            stmt.validity_time,
+            stmt.context,
+            stmt.source,
+        )
+        .map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
+        admit_kind(cert, kind, statement)
     }
 }
 
@@ -1361,26 +1384,99 @@ pub(crate) struct TriggerCascadeTooDeep(pub(crate) String, pub(crate) usize);
 #[diagnostic(code(eval::replace_rel_with_indices))]
 struct ReplaceRelationWithIndices(String);
 
+/// Shared callback / trigger seats for relation mutation doors.
+pub(crate) struct RelationCallbackSeats<'a> {
+    pub(crate) callback_targets: &'a BTreeSet<SmartString<LazyCompact>>,
+    pub(crate) callback_collector: &'a mut CallbackCollector,
+    pub(crate) trigger_depth: usize,
+    pub(crate) force_collect: &'a str,
+}
+
+/// Target relation seats for mutation / ensure doors.
+struct RelationTargetSeats<'a> {
+    relation_store: &'a RelationHandle,
+    metadata: &'a StoredRelationMetadata,
+    key_bindings: &'a [Symbol],
+    span: SourceSpan,
+}
+
+/// Seats for [`SessionTx::execute_relation`].
+pub(crate) struct ExecuteRelationSeats<'a, S: Storage> {
+    pub(crate) db: &'a Engine<S>,
+    pub(crate) op: RelationOp,
+    pub(crate) meta: &'a InputRelationHandle,
+    pub(crate) headers: &'a [Symbol],
+    pub(crate) cur_vld: ValidityTs,
+    pub(crate) write_vld: WriteValidity,
+    pub(crate) callbacks: RelationCallbackSeats<'a>,
+}
+
+/// Seats for put/update/remove relation writers.
+struct RelationWriteSeats<'a, S: Storage> {
+    db: &'a Engine<S>,
+    headers: &'a [Symbol],
+    cur_vld: ValidityTs,
+    write_vld: &'a WriteValidity,
+    callbacks: RelationCallbackSeats<'a>,
+    target: RelationTargetSeats<'a>,
+}
+
+/// Seats for ensure / ensure_not.
+struct RelationEnsureSeats<'a> {
+    headers: &'a [Symbol],
+    cur_vld: ValidityTs,
+    target: RelationTargetSeats<'a>,
+}
+
+/// Seats for [`SessionTx::collect_mutations`].
+struct CollectMutationsSeats<'a, S: Storage> {
+    db: &'a Engine<S>,
+    cur_vld: ValidityTs,
+    callback_targets: &'a BTreeSet<SmartString<LazyCompact>>,
+    callback_collector: &'a mut CallbackCollector,
+    trigger_depth: usize,
+    relation_store: &'a RelationHandle,
+    is_callback_target: bool,
+    new_tuples: Vec<Tuple>,
+    old_tuples: Vec<Tuple>,
+}
+
+/// Seats for [`SessionTx::plain_index_write`].
+pub(crate) struct PlainIndexWriteSeats<'a> {
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx_handle: &'a RelationHandle,
+    pub(crate) mapper: &'a [usize],
+    pub(crate) row: &'a [DataValue],
+    pub(crate) polarity: ClaimPolarity,
+    pub(crate) valid: ValidityTs,
+    pub(crate) stamp: ValidityTs,
+}
+
 impl<T: WriteTx> SessionTx<T> {
     /// Execute a mutation against a stored (or temp) relation with the
     /// query's result rows. The `force_collect` name forces old/new
     /// collection for `:returning` even when no trigger or callback wants
     /// it (upstream's convention, kept).
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Engine<S>,
+        seats: ExecuteRelationSeats<'_, S>,
         res_iter: impl Iterator<Item = Tuple>,
-        op: RelationOp,
-        meta: &InputRelationHandle,
-        headers: &[Symbol],
-        cur_vld: ValidityTs,
-        write_vld: WriteValidity,
-        callback_targets: &BTreeSet<SmartString<LazyCompact>>,
-        callback_collector: &mut CallbackCollector,
-        trigger_depth: usize,
-        force_collect: &str,
     ) -> Result<()> {
+        let ExecuteRelationSeats {
+            db,
+            op,
+            meta,
+            headers,
+            cur_vld,
+            write_vld,
+            callbacks:
+                RelationCallbackSeats {
+                    callback_targets,
+                    callback_collector,
+                    trigger_depth,
+                    force_collect,
+                },
+        } = seats;
         let mut replaced_old_triggers = None;
         if op == RelationOp::Replace {
             if trigger_depth > 0 {
@@ -1411,14 +1507,7 @@ impl<T: WriteTx> SessionTx<T> {
                     // The trigger substance is already parsed — fire the
                     // stored program directly, never a re-parse of source.
                     let program = trigger.program().clone();
-                    db.run_query(
-                        self,
-                        program,
-                        cur_vld,
-                        callback_targets,
-                        callback_collector,
-                        trigger_depth + 1,
-                    )
+                    db.run_query(RunQuerySeats { tx: self, program: program, cur_vld: cur_vld, callback_targets: callback_targets, callback_collector: callback_collector, trigger_depth: trigger_depth + 1 })
                     .map_err(|err| {
                         if err.source_code().is_some() {
                             err
@@ -1463,96 +1552,130 @@ impl<T: WriteTx> SessionTx<T> {
 
         match op {
             RelationOp::Rm | RelationOp::Delete => self.remove_from_relation(
-                db,
+                RelationWriteSeats {
+                    db,
+                    headers,
+                    cur_vld,
+                    write_vld: &write_vld,
+                    callbacks: RelationCallbackSeats {
+                        callback_targets,
+                        callback_collector,
+                        trigger_depth,
+                        force_collect,
+                    },
+                    target: RelationTargetSeats {
+                        relation_store: &relation_store,
+                        metadata,
+                        key_bindings,
+                        span: *span,
+                    },
+                },
                 res_iter,
-                headers,
-                cur_vld,
-                &write_vld,
-                callback_targets,
-                callback_collector,
-                trigger_depth,
-                &relation_store,
-                metadata,
-                key_bindings,
                 op == RelationOp::Delete,
-                force_collect,
-                *span,
             )?,
             RelationOp::Ensure => self.ensure_in_relation(
+                RelationEnsureSeats {
+                    headers,
+                    cur_vld,
+                    target: RelationTargetSeats {
+                        relation_store: &relation_store,
+                        metadata,
+                        key_bindings,
+                        span: *span,
+                    },
+                },
                 res_iter,
-                headers,
-                cur_vld,
-                &relation_store,
-                metadata,
-                key_bindings,
-                *span,
             )?,
             RelationOp::EnsureNot => self.ensure_not_in_relation(
+                RelationEnsureSeats {
+                    headers,
+                    cur_vld,
+                    target: RelationTargetSeats {
+                        relation_store: &relation_store,
+                        metadata,
+                        key_bindings,
+                        span: *span,
+                    },
+                },
                 res_iter,
-                headers,
-                cur_vld,
-                &relation_store,
-                metadata,
-                key_bindings,
-                *span,
             )?,
             RelationOp::Update => self.update_in_relation(
-                db,
+                RelationWriteSeats {
+                    db,
+                    headers,
+                    cur_vld,
+                    write_vld: &write_vld,
+                    callbacks: RelationCallbackSeats {
+                        callback_targets,
+                        callback_collector,
+                        trigger_depth,
+                        force_collect,
+                    },
+                    target: RelationTargetSeats {
+                        relation_store: &relation_store,
+                        metadata,
+                        key_bindings,
+                        span: *span,
+                    },
+                },
                 res_iter,
-                headers,
-                cur_vld,
-                &write_vld,
-                callback_targets,
-                callback_collector,
-                trigger_depth,
-                &relation_store,
-                metadata,
-                key_bindings,
-                force_collect,
-                *span,
             )?,
             RelationOp::Create | RelationOp::Replace | RelationOp::Put | RelationOp::Insert => self
                 .put_into_relation(
-                    db,
+                    RelationWriteSeats {
+                        db,
+                        headers,
+                        cur_vld,
+                        write_vld: &write_vld,
+                        callbacks: RelationCallbackSeats {
+                            callback_targets,
+                            callback_collector,
+                            trigger_depth,
+                            force_collect,
+                        },
+                        target: RelationTargetSeats {
+                            relation_store: &relation_store,
+                            metadata,
+                            key_bindings,
+                            span: *span,
+                        },
+                    },
                     res_iter,
-                    headers,
-                    cur_vld,
-                    &write_vld,
-                    callback_targets,
-                    callback_collector,
-                    trigger_depth,
-                    &relation_store,
-                    metadata,
-                    key_bindings,
                     dep_bindings,
                     op == RelationOp::Insert,
-                    force_collect,
-                    *span,
                 )?,
         };
 
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn put_into_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Engine<S>,
+        seats: RelationWriteSeats<'_, S>,
         res_iter: impl Iterator<Item = Tuple>,
-        headers: &[Symbol],
-        cur_vld: ValidityTs,
-        write_vld: &WriteValidity,
-        callback_targets: &BTreeSet<SmartString<LazyCompact>>,
-        callback_collector: &mut CallbackCollector,
-        trigger_depth: usize,
-        relation_store: &RelationHandle,
-        metadata: &StoredRelationMetadata,
-        key_bindings: &[Symbol],
         dep_bindings: &[Symbol],
         is_insert: bool,
-        force_collect: &str,
-        span: SourceSpan,
     ) -> Result<()> {
+        let RelationWriteSeats {
+            db,
+            headers,
+            cur_vld,
+            write_vld,
+            callbacks:
+                RelationCallbackSeats {
+                    callback_targets,
+                    callback_collector,
+                    trigger_depth,
+                    force_collect,
+                },
+            target:
+                RelationTargetSeats {
+                    relation_store,
+                    metadata,
+                    key_bindings,
+                    span,
+                },
+        } = seats;
         let is_callback_target =
             callback_targets.contains(&relation_store.name) || force_collect == relation_store.name;
 
@@ -1699,7 +1822,7 @@ impl<T: WriteTx> SessionTx<T> {
         }
 
         if need_to_collect && !new_tuples.is_empty() {
-            self.collect_mutations(
+            self.collect_mutations(CollectMutationsSeats {
                 db,
                 cur_vld,
                 callback_targets,
@@ -1709,28 +1832,36 @@ impl<T: WriteTx> SessionTx<T> {
                 is_callback_target,
                 new_tuples,
                 old_tuples,
-            )?;
+            })?;
         }
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn update_in_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Engine<S>,
+        seats: RelationWriteSeats<'_, S>,
         res_iter: impl Iterator<Item = Tuple>,
-        headers: &[Symbol],
-        cur_vld: ValidityTs,
-        write_vld: &WriteValidity,
-        callback_targets: &BTreeSet<SmartString<LazyCompact>>,
-        callback_collector: &mut CallbackCollector,
-        trigger_depth: usize,
-        relation_store: &RelationHandle,
-        metadata: &StoredRelationMetadata,
-        key_bindings: &[Symbol],
-        force_collect: &str,
-        span: SourceSpan,
     ) -> Result<()> {
+        let RelationWriteSeats {
+            db,
+            headers,
+            cur_vld,
+            write_vld,
+            callbacks:
+                RelationCallbackSeats {
+                    callback_targets,
+                    callback_collector,
+                    trigger_depth,
+                    force_collect,
+                },
+            target:
+                RelationTargetSeats {
+                    relation_store,
+                    metadata,
+                    key_bindings,
+                    span,
+                },
+        } = seats;
         let is_callback_target =
             callback_targets.contains(&relation_store.name) || force_collect == relation_store.name;
 
@@ -1849,7 +1980,7 @@ impl<T: WriteTx> SessionTx<T> {
         }
 
         if need_to_collect && !new_tuples.is_empty() {
-            self.collect_mutations(
+            self.collect_mutations(CollectMutationsSeats {
                 db,
                 cur_vld,
                 callback_targets,
@@ -1859,29 +1990,37 @@ impl<T: WriteTx> SessionTx<T> {
                 is_callback_target,
                 new_tuples,
                 old_tuples,
-            )?;
+            })?;
         }
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn remove_from_relation<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Engine<S>,
+        seats: RelationWriteSeats<'_, S>,
         res_iter: impl Iterator<Item = Tuple>,
-        headers: &[Symbol],
-        cur_vld: ValidityTs,
-        write_vld: &WriteValidity,
-        callback_targets: &BTreeSet<SmartString<LazyCompact>>,
-        callback_collector: &mut CallbackCollector,
-        trigger_depth: usize,
-        relation_store: &RelationHandle,
-        metadata: &StoredRelationMetadata,
-        key_bindings: &[Symbol],
         check_exists: bool,
-        force_collect: &str,
-        span: SourceSpan,
     ) -> Result<()> {
+        let RelationWriteSeats {
+            db,
+            headers,
+            cur_vld,
+            write_vld,
+            callbacks:
+                RelationCallbackSeats {
+                    callback_targets,
+                    callback_collector,
+                    trigger_depth,
+                    force_collect,
+                },
+            target:
+                RelationTargetSeats {
+                    relation_store,
+                    metadata,
+                    key_bindings,
+                    span,
+                },
+        } = seats;
         let is_callback_target =
             callback_targets.contains(&relation_store.name) || force_collect == relation_store.name;
 
@@ -2005,14 +2144,7 @@ impl<T: WriteTx> SessionTx<T> {
                     make_const_rule(&mut program, "_new", k_bindings.clone(), &new_tuples)?;
                     make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
 
-                    db.run_query(
-                        self,
-                        program,
-                        cur_vld,
-                        callback_targets,
-                        callback_collector,
-                        trigger_depth + 1,
-                    )
+                    db.run_query(RunQuerySeats { tx: self, program: program, cur_vld: cur_vld, callback_targets: callback_targets, callback_collector: callback_collector, trigger_depth: trigger_depth + 1 })
                     .map_err(|err| {
                         if err.source_code().is_some() {
                             err
@@ -2091,17 +2223,22 @@ impl<T: WriteTx> SessionTx<T> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn ensure_in_relation(
         &mut self,
+        seats: RelationEnsureSeats<'_>,
         res_iter: impl Iterator<Item = Tuple>,
-        headers: &[Symbol],
-        cur_vld: ValidityTs,
-        relation_store: &RelationHandle,
-        metadata: &StoredRelationMetadata,
-        key_bindings: &[Symbol],
-        span: SourceSpan,
     ) -> Result<()> {
+        let RelationEnsureSeats {
+            headers,
+            cur_vld,
+            target:
+                RelationTargetSeats {
+                    relation_store,
+                    metadata,
+                    key_bindings,
+                    span,
+                },
+        } = seats;
         if relation_store.access_level < AccessLevel::ReadOnly {
             bail!(InsufficientAccessLevel(
                 relation_store.name.to_string(),
@@ -2162,17 +2299,22 @@ impl<T: WriteTx> SessionTx<T> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn ensure_not_in_relation(
         &mut self,
+        seats: RelationEnsureSeats<'_>,
         res_iter: impl Iterator<Item = Tuple>,
-        headers: &[Symbol],
-        cur_vld: ValidityTs,
-        relation_store: &RelationHandle,
-        metadata: &StoredRelationMetadata,
-        key_bindings: &[Symbol],
-        span: SourceSpan,
     ) -> Result<()> {
+        let RelationEnsureSeats {
+            headers,
+            cur_vld,
+            target:
+                RelationTargetSeats {
+                    relation_store,
+                    metadata,
+                    key_bindings,
+                    span,
+                },
+        } = seats;
         if relation_store.access_level < AccessLevel::ReadOnly {
             bail!(InsufficientAccessLevel(
                 relation_store.name.to_string(),
@@ -2219,19 +2361,21 @@ impl<T: WriteTx> SessionTx<T> {
     /// mutation. Triggers run inside THIS transaction (atomic with the
     /// mutation); callbacks are only collected here and delivered by the
     /// `Db` after commit.
-    #[allow(clippy::too_many_arguments)]
     fn collect_mutations<S: Storage<WriteTx = T>>(
         &mut self,
-        db: &Engine<S>,
-        cur_vld: ValidityTs,
-        callback_targets: &BTreeSet<SmartString<LazyCompact>>,
-        callback_collector: &mut CallbackCollector,
-        trigger_depth: usize,
-        relation_store: &RelationHandle,
-        is_callback_target: bool,
-        new_tuples: Vec<Tuple>,
-        old_tuples: Vec<Tuple>,
+        seats: CollectMutationsSeats<'_, S>,
     ) -> Result<()> {
+        let CollectMutationsSeats {
+            db,
+            cur_vld,
+            callback_targets,
+            callback_collector,
+            trigger_depth,
+            relation_store,
+            is_callback_target,
+            new_tuples,
+            old_tuples,
+        } = seats;
         let mut kv_bindings = relation_store
             .metadata
             .keys
@@ -2265,14 +2409,7 @@ impl<T: WriteTx> SessionTx<T> {
                 make_const_rule(&mut program, "_new", kv_bindings.clone(), &new_tuples)?;
                 make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
 
-                db.run_query(
-                    self,
-                    program,
-                    cur_vld,
-                    callback_targets,
-                    callback_collector,
-                    trigger_depth + 1,
-                )
+                db.run_query(RunQuerySeats { tx: self, program: program, cur_vld: cur_vld, callback_targets: callback_targets, callback_collector: callback_collector, trigger_depth: trigger_depth + 1 })
                 .map_err(|err| {
                     if err.source_code().is_some() {
                         err
@@ -2326,26 +2463,26 @@ impl<T: WriteTx> SessionTx<T> {
                     let idx_handle =
                         self.get_relation(&index.relation_name(&relation_store.name))?;
                     if let Some(old) = old_kv {
-                        self.plain_index_write(
-                            relation_store,
-                            &idx_handle,
+                        self.plain_index_write(PlainIndexWriteSeats {
+                            base: relation_store,
+                            idx_handle: &idx_handle,
                             mapper,
-                            old,
-                            ClaimPolarity::Retract,
+                            row: old,
+                            polarity: ClaimPolarity::Retract,
                             valid,
                             stamp,
-                        )?;
+                        })?;
                     }
                     if let Some(new) = new_kv {
-                        self.plain_index_write(
-                            relation_store,
-                            &idx_handle,
+                        self.plain_index_write(PlainIndexWriteSeats {
+                            base: relation_store,
+                            idx_handle: &idx_handle,
                             mapper,
-                            new,
-                            ClaimPolarity::Assert,
+                            row: new,
+                            polarity: ClaimPolarity::Assert,
                             valid,
                             stamp,
-                        )?;
+                        })?;
                     }
                 }
                 IndexKind::Temporal => {
@@ -2448,17 +2585,19 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// One plain-index mirror row: the base row projected through the
     /// mapper.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn plain_index_write(
         &mut self,
-        base: &RelationHandle,
-        idx_handle: &RelationHandle,
-        mapper: &[usize],
-        row: &[DataValue],
-        polarity: ClaimPolarity,
-        valid: ValidityTs,
-        stamp: ValidityTs,
+        seats: PlainIndexWriteSeats<'_>,
     ) -> Result<()> {
+        let PlainIndexWriteSeats {
+            base,
+            idx_handle,
+            mapper,
+            row,
+            polarity,
+            valid,
+            stamp,
+        } = seats;
         let idx_tup: Tuple = project_mapper(mapper, row, base)?;
         self.index_write_row(idx_handle, idx_tup.as_slice(), polarity, valid, stamp)
     }

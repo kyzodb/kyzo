@@ -331,6 +331,16 @@ impl<S: Clone> Clone for Engine<S> {
     }
 }
 
+/// Seats for [`Engine::run_query`].
+pub(crate) struct RunQuerySeats<'a, S: Storage> {
+    pub(crate) tx: &'a mut SessionTx<S::WriteTx>,
+    pub(crate) program: InputProgram,
+    pub(crate) cur_vld: ValidityTs,
+    pub(crate) callback_targets: &'a BTreeSet<SmartString<LazyCompact>>,
+    pub(crate) callback_collector: &'a mut CallbackCollector,
+    pub(crate) trigger_depth: usize,
+}
+
 impl<S: Storage> Engine<S> {
     /// Compose an Engine from Store and Catalog capabilities.
     ///
@@ -530,14 +540,7 @@ impl<S: Storage> Engine<S> {
                     crate::store::retry::write_tx_attempt(&self.store)?,
                     self.bind_write_options(options.clone()),
                 );
-                let rows = match self.run_query(
-                    &mut tx,
-                    program.clone(),
-                    cur_vld,
-                    &callback_targets,
-                    &mut collector,
-                    0,
-                ) {
+                let rows = match self.run_query(RunQuerySeats { tx: &mut tx, program: program.clone(), cur_vld: cur_vld, callback_targets: &callback_targets, callback_collector: &mut collector, trigger_depth: 0 }) {
                     Ok(rows) => rows,
                     Err(e) => {
                         tx.abort_write();
@@ -706,16 +709,15 @@ impl<S: Storage> Engine<S> {
     /// recursion, which passes the parent's depth + 1; the mutation
     /// pipeline refuses a cascade past its typed ceiling
     /// ([`crate::session::admit::MAX_TRIGGER_CASCADE_DEPTH`]).
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn run_query(
-        &self,
-        tx: &mut SessionTx<S::WriteTx>,
-        program: InputProgram,
-        cur_vld: ValidityTs,
-        callback_targets: &BTreeSet<SmartString<LazyCompact>>,
-        callback_collector: &mut CallbackCollector,
-        trigger_depth: usize,
-    ) -> Result<NamedRows> {
+    pub(crate) fn run_query(&self, seats: RunQuerySeats<'_, S>) -> Result<NamedRows> {
+        let RunQuerySeats {
+            tx,
+            program,
+            cur_vld,
+            callback_targets,
+            callback_collector,
+            trigger_depth,
+        } = seats;
         let options = tx.options.clone();
         // Pre-mutation preconditions on the output relation.
         if let Some((meta, op, _, _)) = &program.out_opts().store_relation {
@@ -766,17 +768,21 @@ impl<S: Storage> Engine<S> {
                     ""
                 };
                 tx.execute_relation(
-                    self,
+                    crate::session::admit::ExecuteRelationSeats {
+                        db: self,
+                        op,
+                        meta: &meta,
+                        headers: &head,
+                        cur_vld,
+                        write_vld,
+                        callbacks: crate::session::admit::RelationCallbackSeats {
+                            callback_targets,
+                            callback_collector,
+                            trigger_depth,
+                            force_collect,
+                        },
+                    },
                     rows.into_iter(),
-                    op,
-                    &meta,
-                    &head,
-                    cur_vld,
-                    write_vld,
-                    callback_targets,
-                    callback_collector,
-                    trigger_depth,
-                    force_collect,
                 )?;
                 // A mutation reports a small status unless `:returning` asked
                 // for the rows, which the mutation pipeline routed through the
