@@ -631,7 +631,7 @@ impl<S: Storage> Engine<S> {
                 num_to_skip: out_opts.offset,
             }
         } else {
-            RowLimit::default()
+            RowLimit::unlimited()
         };
 
         match cur_vld {

@@ -372,7 +372,7 @@ impl<S: Storage> Engine<S> {
         let (outcome, mut stores) = stratified_evaluate_with_stores(
             &eval_prog,
             &lifetimes,
-            RowLimit::default(),
+            RowLimit::unlimited(),
             &budget,
             None,
         )?;

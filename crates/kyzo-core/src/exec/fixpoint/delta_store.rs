@@ -160,7 +160,7 @@ struct LevelInvariantError(&'static str);
 /// Field is private: arbitrary `Vec<u8>` is not a level arena (P028).
 /// Mint empty via [`Self::new`]; grow only via branded append doors
 /// ([`Self::append_bare`], [`Self::append_row`]). No Deref/AsRef<[u8]>.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 pub(crate) struct LevelArenaBytes(Vec<u8>);
 
@@ -217,7 +217,7 @@ impl LevelArenaBytes {
 
 /// Inclusive/exclusive scan bound key bytes for stored levels.
 /// Mint only via the bare-bound / bare-tuple encode doors below.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 pub(crate) struct LevelBoundKey(Vec<u8>);
 
@@ -253,10 +253,9 @@ impl LevelBoundKey {
 
 /// Whether a sealed normal-level row is an epoch admission or a
 /// flag-refresh shadow (P027). Bare `bool` refresh is unrepresentable.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FlagRefresh {
     /// Admitted this epoch — visible to delta iteration.
-    #[default]
     Admitted,
     /// Present only to carry a refreshed limiter flag; invisible to delta.
     Refresh,
@@ -273,7 +272,7 @@ impl FlagRefresh {
 /// is [`LimiterSkip`] (P093); compiled-position / peeked-iterator expects
 /// are `INVARIANT(...)` at the seal (P095). Refresh is [`FlagRefresh`] —
 /// never an anonymous `(bool, bool)` soup.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RowFlags {
     pub(crate) skip: LimiterSkip,
     pub(crate) refresh: FlagRefresh,
@@ -359,7 +358,7 @@ impl<L> LevelStack<L> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct NormalLevel {
     /// Rows FLATTENED into one dense byte arena: a probe or scan walks
     /// contiguous memory instead of chasing one heap allocation per row.
@@ -374,6 +373,15 @@ pub(crate) struct NormalLevel {
 }
 
 impl NormalLevel {
+    /// Empty sealed level — no rows.
+    pub(crate) fn empty() -> Self {
+        Self {
+            values: LevelArenaBytes::new(),
+            offsets: Vec::new(),
+            flags: Vec::new(),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.offsets.len()
     }
@@ -388,14 +396,15 @@ impl NormalLevel {
     /// INVARIANT(level_row_in_bounds): `i < self.len()`.
     /// The sole mint of [`LevelRowRef`] — foreign `&[u8]` cannot enter the arena.
     fn row_at(&self, i: usize) -> LevelRowRef<'_> {
-        debug_assert!(i < self.len());
+        // Bound is the caller's proof — public door is `row()` → None OOB.
+        // Offset/slice indexing refuses OOB in every build (not debug-only).
         let (start, end) = crate::project::current::offset_row_span(&self.offsets, i);
         LevelRowRef(&self.values.as_bytes()[start..end])
     }
 
     /// INVARIANT(level_row_in_bounds): `i < self.len()`.
     fn row_flags_at(&self, i: usize) -> RowFlags {
-        debug_assert!(i < self.flags.len());
+        // Same bound proof as `row_at`; flags len tracks offsets len by push.
         self.flags[i]
     }
     /// Seal an admitted row's bytes into the level — one arena append, no
@@ -528,7 +537,7 @@ impl NormalLevel {
 /// key, each holding its WHOLE folded accumulator. Head-tuple order for
 /// interleaved layouts is derived from `groups` via
 /// [`MeetLayout::interleave`] at scan time (P036 — no `by_row` twin).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct MeetLevel {
     /// Group key bytes (story #77, same [`encode_tuple_bare`] treatment as
     /// `NormalLevel`'s rows) → folded meet accumulators.
@@ -536,6 +545,11 @@ pub(crate) struct MeetLevel {
 }
 
 impl MeetLevel {
+    /// Empty sealed meet level — no groups.
+    pub(crate) fn empty() -> Self {
+        Self { groups: Vec::new() }
+    }
+
     fn find(&self, group_key: &[u8]) -> Option<&(Box<OwnBareKey>, Vec<MeetAccum>)> {
         match self
             .groups
@@ -635,7 +649,7 @@ pub(crate) enum LevelKind {
 impl EpochStore {
     pub(crate) fn new_normal(arity: usize) -> Self {
         Self {
-            kind: LevelKind::Normal(LevelStack::singleton(NormalLevel::default())),
+            kind: LevelKind::Normal(LevelStack::singleton(NormalLevel::empty())),
             arity,
         }
     }
@@ -647,7 +661,7 @@ impl EpochStore {
                     layout: probe.layout.clone(),
                     meets: probe.meets,
                 },
-                levels: LevelStack::singleton(MeetLevel::default()),
+                levels: LevelStack::singleton(MeetLevel::empty()),
             },
             arity: aggrs.len(),
         })
@@ -695,7 +709,7 @@ impl EpochStore {
     ) -> Result<Admitted> {
         let admitted = match (&mut self.kind, new) {
             (LevelKind::Normal(levels), TempStore::Normal(new)) => {
-                let mut level = NormalLevel::default();
+                let mut level = NormalLevel::empty();
                 let mut admitted = 0usize;
                 for (row_bytes, skip) in new.inner {
                     let existing = levels
@@ -741,7 +755,7 @@ impl EpochStore {
                 admitted
             }
             (LevelKind::Meet { spec, levels }, TempStore::MeetAggr(new)) => {
-                let mut level = MeetLevel::default();
+                let mut level = MeetLevel::empty();
                 let mut admitted = 0usize;
                 for (group, incoming) in new.by_group {
                     let folded = match levels.iter().rev().find_map(|l| l.find(group.as_bytes())) {
@@ -1011,7 +1025,7 @@ fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
     levels.compact_while(
         |older, newer| newer.len() * 2 >= older.len(),
         |older, newer| {
-            let mut merged = NormalLevel::default();
+            let mut merged = NormalLevel::empty();
             let (mut a, mut b) = (0usize, 0usize);
             while a < older.len() || b < newer.len() {
                 if a >= older.len() {
@@ -1213,13 +1227,13 @@ mod level_stack_tests {
         let mut store = EpochStore::new_normal(1);
         // Ten productive epochs...
         for i in 0..10i64 {
-            let mut out = RegularTempStore::default();
+            let mut out = RegularTempStore::new();
             out.put(Tuple::from_vec(vec![DataValue::from(i)]));
             store.merge_in(out.wrap(), &mut ())?;
         }
         // ...then fifty empty (converged) epochs.
         for _ in 0..50 {
-            let out = RegularTempStore::default();
+            let out = RegularTempStore::new();
             store.merge_in(out.wrap(), &mut ())?;
             assert!(!store.has_delta());
         }
@@ -1297,8 +1311,13 @@ impl OwnBareKey {
 /// `derived_tuple_ceiling`. Deterministic: it is a function of the sets
 /// being merged, not of any schedule, so summing it per epoch and checking
 /// at the epoch barrier refuses identically on every run.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) struct Admitted(pub(crate) usize);
+
+impl Admitted {
+    /// Zero admissions — the empty merge account.
+    pub(crate) const ZERO: Self = Self(0);
+}
 
 /// Observer of the admission seam: called once per tuple admitted to a
 /// store's `total`, in canonical key order (see the module doc). This is
@@ -1339,10 +1358,9 @@ impl AdmissionSink for () {
 ///
 /// Named token (not a bare `bool`): a row either participates in the entry
 /// rule's returned set, or was derived past `:limit` and joins only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LimiterSkip {
     /// Within `:limit` — joins and early-returned rows.
-    #[default]
     Include,
     /// Past `:limit` — joins only; filtered from [`EpochStore::early_returned_iter`].
     PastLimit,
@@ -1371,9 +1389,18 @@ impl LimiterSkip {
 /// admission-order/determinism test below keeps its own assertions
 /// unchanged, which is the adversarial check that the swap is
 /// representation-only, not a semantic change.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct RegularTempStore {
     pub(crate) inner: BTreeMap<Box<OwnBareKey>, LimiterSkip>,
+}
+
+impl RegularTempStore {
+    /// Empty store — no derived rows.
+    pub fn new() -> Self {
+        Self {
+            inner: BTreeMap::new(),
+        }
+    }
 }
 
 /// The value-part placeholder for a [`TupleInIter::Values`] whose whole
@@ -1714,7 +1741,7 @@ impl MeetAggrStore {
             }
         }
         Ok(Self {
-            by_group: Default::default(),
+            by_group: BTreeMap::new(),
             meets,
             layout,
         })
@@ -2176,8 +2203,13 @@ mod tests {
     }
 
     /// A recording sink: collects every admission, in the order reported.
-    #[derive(Default)]
     struct Recorder(Vec<Tuple>);
+
+    impl Recorder {
+        fn new() -> Self {
+            Self(Vec::new())
+        }
+    }
 
     impl AdmissionSink for Recorder {
         const RECORDING: bool = true;
@@ -2214,7 +2246,7 @@ mod tests {
 
         // Epoch 0: two fresh tuples — the fast path swaps the whole
         // out-store into the empty total, and total doubles as delta.
-        let mut out0 = RegularTempStore::default();
+        let mut out0 = RegularTempStore::new();
         out0.put(t(&[1, 1]));
         out0.put(t(&[1, 2]));
         let admitted = store.merge_in(out0.wrap(), &mut ())?;
@@ -2225,7 +2257,7 @@ mod tests {
 
         // Epoch 1: pure re-derivation — empty delta, nothing admitted.
         // This is the termination certificate: eval stops here.
-        let mut out1 = RegularTempStore::default();
+        let mut out1 = RegularTempStore::new();
         out1.put(t(&[1, 1]));
         let admitted = store.merge_in(out1.wrap(), &mut ())?;
         assert_eq!(admitted, Admitted(0));
@@ -2235,7 +2267,7 @@ mod tests {
 
         // Epoch 2: one re-derived + one genuinely new — the delta is
         // exactly the new tuple, never the re-derived one.
-        let mut out2 = RegularTempStore::default();
+        let mut out2 = RegularTempStore::new();
         out2.put(t(&[1, 1]));
         out2.put(t(&[2, 3]));
         let admitted = store.merge_in(out2.wrap(), &mut ())?;
@@ -2250,13 +2282,13 @@ mod tests {
     #[test]
     fn empty_epoch_is_fixpoint() -> Result<()>  {
         let mut store = EpochStore::new_normal(1);
-        let mut out = RegularTempStore::default();
+        let mut out = RegularTempStore::new();
         out.put(t(&[7]));
         store.merge_in(out.wrap(), &mut ())?;
         assert!(store.has_delta());
 
         store
-            .merge_in(RegularTempStore::default().wrap(), &mut ())
+            .merge_in(RegularTempStore::new().wrap(), &mut ())
             ?;
         assert!(!store.has_delta());
         assert_eq!(all(&store)?, vec![t(&[7])]); // total survives
@@ -2272,19 +2304,19 @@ mod tests {
 
         // Swap path: puts arrive out of order, admissions are reported in
         // key order because the store is a BTreeMap.
-        let mut out0 = RegularTempStore::default();
+        let mut out0 = RegularTempStore::new();
         out0.put(t(&[3]));
         out0.put(t(&[1]));
-        let mut rec = Recorder::default();
+        let mut rec = Recorder::new();
         let admitted = store.merge_in(out0.wrap(), &mut rec)?;
         assert_eq!(admitted, Admitted(2));
         assert_eq!(rec.0, vec![t(&[1]), t(&[3])]);
 
         // Incremental path: only the genuinely new tuple is admitted.
-        let mut out1 = RegularTempStore::default();
+        let mut out1 = RegularTempStore::new();
         out1.put(t(&[3])); // re-derived
         out1.put(t(&[2])); // new
-        let mut rec = Recorder::default();
+        let mut rec = Recorder::new();
         let admitted = store.merge_in(out1.wrap(), &mut rec)?;
         assert_eq!(admitted, Admitted(1));
         assert_eq!(rec.0, vec![t(&[2])]);
@@ -2327,7 +2359,7 @@ mod tests {
         let mut out1 = MeetAggrStore::new(spec.clone())?;
         out1.meet_put(gv("g", DataValue::from(true)).as_slice())
             ?;
-        let mut rec = Recorder::default();
+        let mut rec = Recorder::new();
         let admitted = store.merge_in(out1.wrap(), &mut rec)?;
         assert_eq!(admitted, Admitted(1));
         assert!(
@@ -2485,7 +2517,7 @@ mod tests {
     #[test]
     fn skip_flags_gate_early_return_only() -> Result<()>  {
         let mut store = EpochStore::new_normal(1);
-        let mut out = RegularTempStore::default();
+        let mut out = RegularTempStore::new();
         out.put(t(&[1]));
         out.put_with_skip(t(&[2]));
         assert!(out.exists(t(&[2]).as_slice()));
@@ -2640,7 +2672,7 @@ mod tests {
             ?;
 
         let mut store = EpochStore::new_meet(&spec)?;
-        let mut rec = Recorder::default();
+        let mut rec = Recorder::new();
         store.merge_in(out.wrap(), &mut rec)?;
         assert_eq!(
             rec.0,
@@ -2683,7 +2715,7 @@ mod tests {
         let mut out1 = MeetAggrStore::new(spec.clone())?;
         out1.meet_put(vg(DataValue::from(3i64), "a").as_slice())
             ?;
-        let mut rec = Recorder::default();
+        let mut rec = Recorder::new();
         assert_eq!(store.merge_in(out1.wrap(), &mut rec)?, Admitted(1));
         assert!(store.has_delta());
         assert_eq!(delta(&store)?, vec![vg(DataValue::from(3i64), "a")]);
@@ -2864,7 +2896,7 @@ mod tests {
                 out.meet_put(rows[*i].as_slice())?;
             }
             let mut store = EpochStore::new_meet(&spec)?;
-            let mut rec = Recorder::default();
+            let mut rec = Recorder::new();
             store.merge_in(out.wrap(), &mut rec)?;
             Ok((rec.0, all(&store)?, delta(&store)?))
         };

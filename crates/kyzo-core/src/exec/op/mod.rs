@@ -1665,14 +1665,14 @@ mod tests {
         let rtx = db.read_tx().unwrap();
 
         let mut store = EpochStore::new_normal(2);
-        let mut baseline = RegularTempStore::default();
+        let mut baseline = RegularTempStore::new();
         baseline.put(Tuple::from_vec(vec![v(0), DataValue::from("a")]));
         baseline.put(Tuple::from_vec(vec![v(1), DataValue::from("b")]));
         store.merge_in(baseline.wrap(), &mut ()).unwrap();
         // First merge into an empty total swaps the whole store in (the
         // `use_total_for_delta` fast path) — so this second merge is the
         // one that actually narrows the delta to what's fresh.
-        let mut fresh = RegularTempStore::default();
+        let mut fresh = RegularTempStore::new();
         fresh.put(Tuple::from_vec(vec![v(2), DataValue::from("c")]));
         store.merge_in(fresh.wrap(), &mut ()).unwrap();
         assert!(store.has_delta(), "the second merge must have a delta");

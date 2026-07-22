@@ -94,7 +94,7 @@ mod tests {
     use kyzo_model::value::DataValue;
 
     fn store_of(rows: &[Vec<i64>]) -> EpochStore {
-        let mut fresh = RegularTempStore::default();
+        let mut fresh = RegularTempStore::new();
         for row in rows {
             fresh.put(row.iter().map(|v| DataValue::from(*v)).collect());
         }

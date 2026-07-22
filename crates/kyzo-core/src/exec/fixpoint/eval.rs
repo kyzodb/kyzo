@@ -894,12 +894,22 @@ impl<R, F> EvalProgram<R, F> {
 
 /// The row limit of a query: how many entry rows to produce before
 /// stopping early, and how many of the first to flag as offset-skipped.
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct RowLimit {
     /// `limit + offset` when a limit is given (see
     /// `QueryOutOptions::num_to_take`); `None` disables the limiter.
     pub num_to_take: Option<usize>,
     pub num_to_skip: Option<usize>,
+}
+
+impl RowLimit {
+    /// No limit / offset — every entry row is produced.
+    pub fn unlimited() -> Self {
+        Self {
+            num_to_take: None,
+            num_to_skip: None,
+        }
+    }
 }
 
 /// The shared early-return counter. Only entry-rule evaluations advance it
@@ -1040,11 +1050,12 @@ pub(crate) fn stratified_evaluate_with_stores<R: RuleBody, F: FixedRuleEval>(
             // showing up here would mean two strata both claim to define
             // `name`, silently overwriting whichever one ran first with an
             // empty store.
-            debug_assert!(
-                clobbered.is_none(),
-                "stratum {stratum_idx} redefines store {name:?}, which a prior stratum already \
-                 defined — a rule name must belong to exactly one stratum"
-            );
+            if clobbered.is_some() {
+                return Err(EvalInvariantError(
+                    "a rule name must belong to exactly one stratum; store redefined across strata",
+                )
+                .into());
+            }
         }
         limited = evaluate_stratum(
             &stratum.defs,
@@ -1128,7 +1139,7 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                             // lower strata); an empty store clears the delta.
                             (
                                 false,
-                                RegularTempStore::default().wrap(),
+                                RegularTempStore::new().wrap(),
                                 PendingWitnesses::new(),
                             )
                         }
@@ -1159,14 +1170,14 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                 },
                 EvalDefinition::Fixed { rule, .. } => {
                     if epoch == 0 {
-                        let mut out = RegularTempStore::default();
+                        let mut out = RegularTempStore::new();
                         rule.run(borrowed_stores, &mut out, budget, epoch_baseline)?;
                         (false, out.wrap(), PendingWitnesses::new())
                     } else {
                         // Fixed rules run exactly once.
                         (
                             false,
-                            RegularTempStore::default().wrap(),
+                            RegularTempStore::new().wrap(),
                             PendingWitnesses::new(),
                         )
                     }
@@ -1346,7 +1357,7 @@ fn initial_plain_eval<R: RuleBody>(
     baseline: u64,
     recording: bool,
 ) -> Result<(bool, TempStore, PendingWitnesses)> {
-    let mut out = RegularTempStore::default();
+    let mut out = RegularTempStore::new();
     let mut pending = PendingWitnesses::new();
     let should_check_limit = limiter.enabled() && rule_symb.is_prog_entry();
     let mut ticker = budget.ticker(baseline, rule_symb);
@@ -1391,7 +1402,7 @@ fn incremental_plain_eval<R: RuleBody>(
     recording: bool,
 ) -> Result<(bool, TempStore, PendingWitnesses)> {
     let prev_store = store_of(stores, rule_symb)?;
-    let mut out = RegularTempStore::default();
+    let mut out = RegularTempStore::new();
     let mut pending = PendingWitnesses::new();
     let should_check_limit = limiter.enabled() && rule_symb.is_prog_entry();
     let mut ticker = budget.ticker(baseline, rule_symb);
@@ -1566,7 +1577,7 @@ fn initial_normal_aggr_eval<R: RuleBody>(
     budget: &Budget,
     baseline: u64,
 ) -> Result<(bool, TempStore, PendingWitnesses)> {
-    let mut out = RegularTempStore::default();
+    let mut out = RegularTempStore::new();
     let should_check_limit = limiter.enabled() && rule_symb.is_prog_entry();
     let signature = &rule_set.aggr;
 

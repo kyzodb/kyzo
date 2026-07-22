@@ -655,7 +655,7 @@ impl FixedRuleOutput {
     /// the application's span for error labeling.
     pub(crate) fn new(arity: usize, span: SourceSpan) -> Self {
         Self {
-            store: RegularTempStore::default(),
+            store: RegularTempStore::new(),
             arity,
             span,
             guard: None,
@@ -671,7 +671,7 @@ impl FixedRuleOutput {
         ceiling: Option<u64>,
     ) -> Self {
         Self {
-            store: RegularTempStore::default(),
+            store: RegularTempStore::new(),
             arity,
             span,
             guard: ceiling.map(|ceiling| OutputSpendGuard {
@@ -1454,7 +1454,7 @@ pub(crate) mod tests_support {
             let name = MagicSymbol::Muggle {
                 inner: Symbol::new(format!("_test_input_{i}"), span),
             };
-            let mut fresh = RegularTempStore::default();
+            let mut fresh = RegularTempStore::new();
             for row in input.rows {
                 fresh.put(row);
             }
