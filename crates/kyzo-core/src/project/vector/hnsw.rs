@@ -2382,10 +2382,36 @@ fn put_vector<T: WriteTx>(
     Ok(())
 }
 
+/// Sources of directed edges at `layer` whose destination is `at`.
+///
+/// Outbound scans of `at` miss asymmetric inbound-only edges left when
+/// [`vamana_set_out_neighbours`] / prune drop `at → D` without deleting
+/// `D → at`. Removal must clean those too or later walks hit
+/// [`IndexCorruptReason::HnswNeighbourMissingNode`].
+fn inbound_sources(
+    tx: &impl ReadTx,
+    base: &RelationHandle,
+    idx: &RelationHandle,
+    at: &VectorId,
+    layer: i64,
+) -> Result<Vec<VectorId>> {
+    let mut prefix = Tuple::with_capacity(1);
+    prefix.push(DataValue::from(layer));
+    let mut ret = Vec::new();
+    for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
+        let row = row?;
+        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
+            HnswRow::Edge { fr, to, .. } if to.as_ref() == at => ret.push(fr),
+            HnswRow::Node { .. } | HnswRow::Edge { .. } | HnswRow::Canary { .. } => {}
+        }
+    }
+    Ok(ret)
+}
+
 /// Remove one vector from the graph: its node rows at every layer, both
-/// directions of every link, with neighbour degrees decremented; if the
-/// entry point was removed, re-elect one (or delete the canary when the
-/// index is now empty).
+/// directions of every link (outbound and asymmetric inbound), with
+/// neighbour degrees decremented; if the entry point was removed, re-elect
+/// one (or delete the canary when the index is now empty).
 fn remove_vec<T: WriteTx>(
     tx: &mut T,
     base: &RelationHandle,
@@ -2404,8 +2430,16 @@ fn remove_vec<T: WriteTx>(
             break;
         }
         let neighbour_list = neighbours(tx, base, idx, at, layer, true)?;
-        encountered_singletons |= neighbour_list.is_empty();
-        for (neighbour, _) in neighbour_list {
+        let inbound = inbound_sources(tx, base, idx, at, layer)?;
+        let mut to_clean: FxHashSet<VectorId> = FxHashSet::default();
+        for (neighbour, _) in &neighbour_list {
+            to_clean.insert(neighbour.clone());
+        }
+        for neighbour in inbound {
+            to_clean.insert(neighbour);
+        }
+        encountered_singletons |= to_clean.is_empty();
+        for neighbour in to_clean {
             // REMARK (inherited from the original): removal can still
             // disconnect the graph with some probability — accepted as a
             // consequence of the algorithm's probabilistic nature; graph
@@ -2628,6 +2662,14 @@ fn vamana_set_out_neighbours<T: WriteTx>(
             let key = idx
                 .encode_key_for_store(edge_key(layer, of, &old)?.as_slice(), SourceSpan::empty())?;
             tx.del(&key)?;
+            // Drop the reverse edge too — put_vector writes both directions;
+            // leaving `old → of` after dropping `of → old` is the asymmetry
+            // that made remove_vec miss inbound cleanup (T13 churn).
+            let rev = idx.encode_key_for_store(
+                edge_key(layer, &old, of)?.as_slice(),
+                SourceSpan::empty(),
+            )?;
+            tx.del(&rev)?;
         }
     }
     for (to, dist) in selected {
