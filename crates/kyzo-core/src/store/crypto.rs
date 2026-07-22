@@ -972,14 +972,13 @@ mod pins {
         CryptoDomain::new(store, FenceEpoch::genesis(store))
     }
 
-    fn test_aad() -> CanonicalTranscript {
-        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT).unwrap();
+    fn test_aad() -> Result<CanonicalTranscript> {
+        let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
         b.append_u64(
             FieldId::ARTIFACT_KIND,
             SealedArtifactKind::AuditKeyLeaf.tag(),
-        )
-        .unwrap();
-        b.seal()
+        )?;
+        Ok(b.seal())
     }
 
     #[test]
@@ -1078,7 +1077,7 @@ mod pins {
         let salt = ShredSalt::from_bytes([0x44; 32]);
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
-        let aad = test_aad();
+        let aad = test_aad()?;
         let plaintext = b"hello compress-then-encrypt pipeline";
         let compressed = compress(plaintext);
         assert_ne!(
@@ -1109,7 +1108,7 @@ mod pins {
         let salt = ShredSalt::from_bytes([0x66; 32]);
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
-        let aad = test_aad();
+        let aad = test_aad()?;
         let ct = compress_then_encrypt(
             b"gcm-arm",
             &dek,
@@ -1131,7 +1130,7 @@ mod pins {
     #[test]
     fn wrong_kind_fixed_arrays_are_unconstructible_as_peer_kinds() -> Result<()> {
         let domain = test_domain();
-        let aad = test_aad();
+        let aad = test_aad()?;
         let audit = AuditKey::from_bytes([0xABu8; 32]);
         let mac: Mac = audit.leaf_mac(&aad);
         assert_eq!(std::mem::size_of_val(&mac), 32);
