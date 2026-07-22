@@ -482,8 +482,16 @@ mod tests {
             (Err(be), Some(oe)) => {
                 assert_eq!(be.to_string(), oe, "error identity diverges for {expr:?}");
             }
-            (Ok(v), Some(oe)) => panic!("row eval errors ({oe}) but batch returned {v:?}"),
-            (Err(be), None) => panic!("batch errors ({be}) but row eval is clean"),
+            (Ok(v), Some(oe)) => {
+                return Err(miette!(
+                    "row eval errors ({oe}) but batch returned {v:?}"
+                ));
+            }
+            (Err(be), None) => {
+                return Err(miette!(
+                    "batch errors ({be}) but row eval is clean"
+                ));
+            }
         }
         Ok(())
     }
@@ -564,9 +572,7 @@ mod tests {
         let mut rng: u64 = 0x5EED_C011;
         fn next(rng: &mut u64) -> u64 {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            *rng = rng
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            *rng = (std::num::Wrapping(rng) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
             *rng >> 33
         }
         fn gen_expr(rng: &mut u64, depth: usize) -> Expr {

@@ -36,7 +36,7 @@
  *   species ([`lsh_put`], [`lsh_del`], [`lsh_search`]); the original's
  *   `SessionTx` methods die with `SessionTx`'s old shape. The RA operator
  *   tier drives the search; the mutation tier drives put/del.
- * - Law 5: the original's `unreachable!()`s on decoded inverse-index rows
+ * - Law 5: the original's abort-on-impossible arms on decoded inverse-index rows
  *   are the typed [`IndexRowCorrupt`] with the row's key context;
  *   `HashPermutations::decode` refuses a byte length that is not a
  *   multiple of 4 (the original silently truncated); band arithmetic that
@@ -318,11 +318,11 @@ pub(crate) const DEFAULT_PERM_SEED: u64 = 0x4c53_485f_5045_524d; // "LSH_PERM"
 #[inline]
 fn splitmix64(state: &mut u64) -> u64 {
     // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
+    *state = (std::num::Wrapping(*state) + std::num::Wrapping(0x9E37_79B9_7F4A_7C15)).0;
+    let mut z = std::num::Wrapping(*state);
+    z = (z ^ (z >> 30)) * std::num::Wrapping(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)) * std::num::Wrapping(0x94D0_49BB_1331_11EB);
+    (z ^ (z >> 31)).0
 }
 
 /// Named refusal when persisted permutation bytes fail the length law.
@@ -645,7 +645,7 @@ impl LshParams {
 // ---------------------------------------------------------------------------
 
 /// Decode an inverse-index row's value (the row's stored band chunks). The
-/// original hit `unreachable!()` on any other shape; a wrong shape is
+/// original hit an abort-on-impossible arm on any other shape; a wrong shape is
 /// stored-byte corruption, typed with the row's key context.
 fn decode_inv_chunks(
     mut found: Tuple,
@@ -1165,7 +1165,15 @@ mod tests {
             let (a, bset, s) = jaccard_pair(n, inter, match i64::try_from(t) { Ok(v) => v, Err(_e) => 0 } * 10_000);
             s_sum += s;
             // INVARIANT(trial_seed_mix): trial index mixes into seed0 by modular add; wrap is intentional diffusion.
-            let perms = HashPermutations::new(num_perm, seed0.wrapping_add(match u64::try_from(t) { Ok(v) => v, Err(_e) => 0 }));
+            let perms = HashPermutations::new(
+                num_perm,
+                (std::num::Wrapping(seed0)
+                    + std::num::Wrapping(match u64::try_from(t) {
+                        Ok(v) => v,
+                        Err(_e) => 0,
+                    }))
+                .0,
+            );
             let ha = HashValues::new(int_bytes(&a).into_iter(), &perms);
             let hb = HashValues::new(int_bytes(&bset).into_iter(), &perms);
             if ha.shares_any_band(&hb, b, r) {
@@ -1472,7 +1480,12 @@ mod tests {
     /// fixed seeds make the outcome the SAME on every run.
     fn test_manifest() -> Result<MinHashLshIndexManifest> {
         // INVARIANT(test_perm_mix): fixture permutation tags use modular golden-ratio mix.
-        manifest_with_perms((0u32..64).map(|i| i.wrapping_mul(2654435761)).collect(), 16)
+        manifest_with_perms(
+            (0u32..64)
+                .map(|i| (std::num::Wrapping(i) * std::num::Wrapping(2654435761)).0)
+                .collect(),
+            16,
+        )
     }
 
     struct Fixture {
@@ -1654,7 +1667,7 @@ mod tests {
     }
 
     /// A corrupt inverse-index row is a typed error with key context,
-    /// never the original's `unreachable!()` panic.
+    /// never the original's abort-on-impossible panic.
     #[test]
     fn corrupt_inverse_row_is_typed_error() -> Result<()> {
         let dir = tempfile::tempdir().into_diagnostic()?;

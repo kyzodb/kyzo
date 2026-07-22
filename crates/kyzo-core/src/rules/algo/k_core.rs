@@ -386,9 +386,7 @@ mod tests {
         let mut state = 0x51ed_2701_dead_c0deu64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
             state
         };
         let owned: Vec<(String, String)> = (0..400)
@@ -427,10 +425,7 @@ mod tests {
             .collect();
         let got = run(&edges)?;
         assert_eq!(
-            match u32::try_from(got.len()) {
-                Ok(u) => u,
-                Err(_) => panic!("test got.len fits u32"),
-            },
+            u32::try_from(got.len()).map_err(|_| miette!("test got.len fits u32"))?,
             n
         );
         assert!(got.values().all(|&c| c == 2));

@@ -688,7 +688,13 @@ impl FixedRuleOutput {
         if let Some(guard) = self.guard.as_mut()
             && guard.stride_left.tick()
         {
-            let spent = guard.baseline.saturating_add(crate::rules::convert::u64_from_usize(self.store.len())?);
+            let spent = match guard
+                .baseline
+                .checked_add(crate::rules::convert::u64_from_usize(self.store.len())?)
+            {
+                Some(v) => v,
+                None => u64::MAX,
+            };
             if spent > guard.ceiling {
                 return Err(LimitExceeded {
                     dimension: BudgetDimension::InFlightDerivations,
@@ -1534,7 +1540,7 @@ pub(crate) mod tests_support {
             _out: &mut FixedRuleOutput,
             _cancel: CancelFlag,
         ) -> Result<()> {
-            unreachable!("the test harness never runs its placeholder impl")
+            Err(miette!("the test harness never runs its placeholder impl"))
         }
     }
 }
@@ -1557,7 +1563,9 @@ mod par_try_map_tests {
     #[test]
     fn single_thread_matches_default_pool() -> Result<()> {
         // INVARIANT(test_hash_mix): golden-hash mul in a unit test; wrap is intentional.
-        let f = |i: u32| Ok::<_, miette::Report>(i.wrapping_mul(2_654_435_761));
+        let f = |i: u32| {
+            Ok::<_, miette::Report>((std::num::Wrapping(i) * std::num::Wrapping(2_654_435_761)).0)
+        };
         let default = par_try_map((0u32..2000).collect(), f)?;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
@@ -2056,10 +2064,12 @@ mod tests {
 
         for (name, res) in cases {
             let err = match res {
-                Ok(rows) => panic!(
-                    "{name}: a nullary node relation must refuse, not succeed — got {} rows",
-                    rows.len()
-                ),
+                Ok(rows) => {
+                    return Err(miette!(
+                        "{name}: a nullary node relation must refuse, not succeed — got {} rows",
+                        rows.len()
+                    ));
+                }
                 Err(e) => e,
             };
             assert!(

@@ -209,7 +209,7 @@ mod tests {
         tolerance: f64,
         max_iterations: usize,
         term: Term,
-    ) -> Vec<f64> {
+    ) -> Result<Vec<f64>> {
         let mut in_adj: Vec<Vec<u32>> = vec![vec![]; node_count];
         let mut out_degree: Vec<u32> = vec![0; node_count];
         for &(f, t) in edges {
@@ -222,10 +222,9 @@ mod tests {
             adj.sort_unstable();
         }
 
-        let n_f = f64::from(match u32::try_from(node_count) {
-            Ok(n) => n,
-            Err(_) => panic!("test fixture node_count fits u32"),
-        });
+        let n_f = f64::from(
+            u32::try_from(node_count).map_err(|_| miette!("test fixture node_count fits u32"))?,
+        );
         let init = 1_f64 / n_f;
         let base = (1.0_f64 - damping) / n_f;
         let mut prev = vec![init; node_count];
@@ -252,7 +251,7 @@ mod tests {
                 break;
             }
         }
-        prev
+        Ok(prev)
     }
 
     /// A Gauss-Seidel reference: the interim (pre-parallel) scheme, scores
@@ -265,7 +264,7 @@ mod tests {
         damping: f64,
         tolerance: f64,
         max_iterations: usize,
-    ) -> Vec<f64> {
+    ) -> Result<Vec<f64>> {
         let mut in_adj: Vec<Vec<u32>> = vec![vec![]; node_count];
         let mut out_degree: Vec<u32> = vec![0; node_count];
         for &(f, t) in edges {
@@ -275,10 +274,9 @@ mod tests {
         for adj in &mut in_adj {
             adj.sort_unstable();
         }
-        let n_f = f64::from(match u32::try_from(node_count) {
-            Ok(n) => n,
-            Err(_) => panic!("test fixture node_count fits u32"),
-        });
+        let n_f = f64::from(
+            u32::try_from(node_count).map_err(|_| miette!("test fixture node_count fits u32"))?,
+        );
         let init = 1_f64 / n_f;
         let base = (1.0_f64 - damping) / n_f;
         let mut scores = vec![init; node_count];
@@ -299,7 +297,7 @@ mod tests {
                 break;
             }
         }
-        scores
+        Ok(scores)
     }
 
     /// A deterministic pseudo-random directed graph (LCG), large enough that
@@ -308,9 +306,7 @@ mod tests {
         let mut state = 0x1234_5678_9abc_def0u64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
             crate::rules::convert::u32_low(state >> 33) % n
         };
         let mut edges = vec![];
@@ -360,7 +356,7 @@ mod tests {
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         for &iters in &[1usize, 2, 5, 10] {
             let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert())?;
-            let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum);
+            let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum)?;
             assert_eq!(
                 got, want,
                 "page_rank must equal the naive Jacobi reference at {iters} iterations"
@@ -398,7 +394,7 @@ mod tests {
         assert_eq!(n, 302, "hub graph should span nodes 0..=301");
         for &iters in &[1usize, 2, 3] {
             let got = page_rank(&graph, 0.85, 0.0, iters, CancelFlag::inert())?;
-            let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum);
+            let want = naive_jacobi(n, &edges, 0.85, 0.0, iters, Term::Sum)?;
             assert_eq!(
                 got, want,
                 "wide-hub Jacobi must match the reference at {iters} iterations \
@@ -423,8 +419,8 @@ mod tests {
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 0.1;
         let got = page_rank(&graph, 0.85, tol, 50, CancelFlag::inert())?;
-        let want_sum = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Sum);
-        let want_max = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Max);
+        let want_sum = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Sum)?;
+        let want_max = naive_jacobi(n, &edges, 0.85, tol, 50, Term::Max)?;
         assert_ne!(
             want_sum, want_max,
             "at this tolerance Σ|Δ| and max|Δ| must stop at different iterations"
@@ -467,7 +463,7 @@ mod tests {
 
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         // Defaults the rule applies: theta 0.85, epsilon 1e-4, iterations 10.
-        let want_scores = naive_jacobi(4, &edges, 0.85, 1e-4, 10, Term::Sum);
+        let want_scores = naive_jacobi(4, &edges, 0.85, 1e-4, 10, Term::Sum)?;
         let want: Vec<Tuple> = ["a", "b", "c", "d"]
             .iter()
             .zip(want_scores.iter())
@@ -531,7 +527,7 @@ mod tests {
         let n = crate::rules::convert::usize_from_u32(graph.node_count());
         let tol = 1e-9;
         let jac = page_rank(&graph, 0.85, tol, 100_000, CancelFlag::inert())?;
-        let gs = naive_gauss_seidel(n, &edges, 0.85, tol, 100_000);
+        let gs = naive_gauss_seidel(n, &edges, 0.85, tol, 100_000)?;
         for (a, b) in jac.iter().zip(gs.iter()) {
             assert!(
                 (a - b).abs() < 1e-4,
@@ -542,7 +538,7 @@ mod tests {
         // against the reference collapsing into the implementation): at a
         // small iteration count the two schemes disagree somewhere.
         let jac_few = page_rank(&graph, 0.85, 0.0, 3, CancelFlag::inert())?;
-        let gs_few = naive_gauss_seidel(n, &edges, 0.85, 0.0, 3);
+        let gs_few = naive_gauss_seidel(n, &edges, 0.85, 0.0, 3)?;
         assert!(
             jac_few.iter().zip(gs_few.iter()).any(|(a, b)| a != b),
             "Jacobi and Gauss-Seidel iterates should differ before convergence"

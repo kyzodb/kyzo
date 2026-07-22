@@ -813,7 +813,11 @@ mod tests {
         let query = "path[a, b] := *edge[a, b]\npath[a, b] := *edge[a, c], path[c, b]\n?[a, b] := path[a, b]";
         let err = match db.register_standing(query, no_params()) {
             Err(e) => e,
-            Ok(_) => panic!("expected a recursion refusal, got a successful registration"),
+            Ok(_) => {
+                return Err(miette!(
+                    "expected a recursion refusal, got a successful registration"
+                ));
+            }
         };
         assert!(
             err.to_string().to_lowercase().contains("recursive"),
@@ -1019,7 +1023,13 @@ mod tests {
                     let mut rows = BTreeSet::new();
                     let n = next_range(4);
                     for _ in 0..n {
-                        let row: Vec<i64> = (0..arity).map(|_| next_range(3) as i64).collect();
+                        let mut row = Vec::with_capacity(arity);
+                        for _ in 0..arity {
+                            row.push(match i64::try_from(next_range(3)) {
+                                Ok(v) => v,
+                                Err(_) => 0,
+                            });
+                        }
                         if rows.insert(row.clone()) {
                             db.run_script(&tuple_script(":put", rel, arity, &row), no_params())
                                 ?;
@@ -1031,15 +1041,37 @@ mod tests {
                 let mut incremental = db.register_standing(shape.query, no_params())?;
 
                 for _commit in 0..5 {
-                    let (rel, arity) = shape.edb[next_range(shape.edb.len() as u64) as usize];
+                    let edb_len = match u64::try_from(shape.edb.len()) {
+                        Ok(v) => v,
+                        Err(_) => 0,
+                    };
+                    let edb_idx = match usize::try_from(next_range(edb_len.max(1))) {
+                        Ok(v) => v,
+                        Err(_) => 0,
+                    };
+                    let (rel, arity) = shape.edb[edb_idx % shape.edb.len()];
                     let existing: Vec<Vec<i64>> = live[rel].iter().cloned().collect();
                     if !existing.is_empty() && next_range(2) == 0 {
-                        let victim = existing[next_range(existing.len() as u64) as usize].clone();
+                        let exist_len = match u64::try_from(existing.len()) {
+                            Ok(v) => v,
+                            Err(_) => 0,
+                        };
+                        let victim_idx = match usize::try_from(next_range(exist_len.max(1))) {
+                            Ok(v) => v,
+                            Err(_) => 0,
+                        };
+                        let victim = existing[victim_idx % existing.len()].clone();
                         db.run_script(&tuple_script(":rm", rel, arity, &victim), no_params())
                             ?;
                         live.get_mut(rel).ok_or_else(|| miette!("get_mut"))?.remove(&victim);
                     } else {
-                        let row: Vec<i64> = (0..arity).map(|_| next_range(3) as i64).collect();
+                        let mut row = Vec::with_capacity(arity);
+                        for _ in 0..arity {
+                            row.push(match i64::try_from(next_range(3)) {
+                                Ok(v) => v,
+                                Err(_) => 0,
+                            });
+                        }
                         db.run_script(&tuple_script(":put", rel, arity, &row), no_params())
                             ?;
                         live.get_mut(rel).ok_or_else(|| miette!("get_mut"))?.insert(row);
