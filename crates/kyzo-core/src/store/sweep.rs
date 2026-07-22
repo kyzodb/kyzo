@@ -1474,7 +1474,7 @@ mod composition_tests {
     use crate::store::scratch::TempTx;
     use crate::store::wal::{GENESIS_PREDECESSOR, WalPayload, WalRecord, replay};
 
-    fn open_live_door() -> (SweepDoor, IncarnationId, SweepSession) {
+    fn open_live_door() -> Result<(SweepDoor, IncarnationId, SweepSession)> {
         let sealed = genesis(GenesisParams {
             identity_seed: [0x24; 32],
             recovery_matrix: None,
@@ -1490,15 +1490,13 @@ mod composition_tests {
         let (_view, auth) = sealed.take_write_authority();
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::from_bytes([0x56; 32]))
-            .expect("incarnation mint");
+            .mint(Entropy::from_bytes([0x56; 32]))?;
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
-        let door =
-            SweepDoor::open(store_id, fence_epoch, session, auth, cap).expect("live SweepDoor");
-        (door, incarnation, session)
+        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)?;
+        Ok((door, incarnation, session))
     }
 
     fn content_root(tag: u8) -> StateRoot {
@@ -1556,7 +1554,7 @@ mod composition_tests {
     /// boundary breaks cut equality against the door's last durable cut.
     #[test]
     fn seal_durable_composes_root_chain_with_wal_byte_chain() -> Result<()> {
-        let (mut door, incarnation, session) = open_live_door();
+        let (mut door, incarnation, session) = open_live_door()?;
         let store_id = session.store_id();
 
         let (key1, dig1) = op_key(store_id, b"compose-1");
@@ -1657,7 +1655,7 @@ mod composition_tests {
     /// SweepDoor mint exactly one IntentOrdinal and one durable Commit effect.
     #[test]
     fn operation_key_retry_admits_once_through_real_door() -> Result<()> {
-        let (mut door, incarnation, session) = open_live_door();
+        let (mut door, incarnation, session) = open_live_door()?;
         let store_id = session.store_id();
         let (key, digest) = op_key(store_id, b"retry-once");
 
@@ -1719,7 +1717,7 @@ mod composition_tests {
     /// §38 — same OperationKey with a changed request digest refuses reuse.
     #[test]
     fn operation_key_reuse_changed_digest_through_real_door() -> Result<()> {
-        let (mut door, incarnation, session) = open_live_door();
+        let (mut door, incarnation, session) = open_live_door()?;
         let store_id = session.store_id();
         let key = OperationKey::single_store(b"kyzo.sweep.test", b"reuse", store_id, b"s0");
         let dig_a = IdempotencyMemo::digest_request(b"envelope-A");
@@ -1741,7 +1739,7 @@ mod composition_tests {
     /// still dedupes (no second effect).
     #[test]
     fn operation_key_ack_write_dedupes_across_wal_replay() -> Result<()> {
-        let (mut door, incarnation, session) = open_live_door();
+        let (mut door, incarnation, session) = open_live_door()?;
         let store_id = session.store_id();
         let preimage = SingleStoreKeyPreimage {
             domain_label: b"kyzo.sweep.test".to_vec(),
