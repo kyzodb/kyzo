@@ -143,12 +143,15 @@ pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_first(args: &[DataValue]) -> Result<DataValue> {
-    Ok(args[0]
+    Ok(match args[0]
         .get_slice()
         .ok_or_else(|| miette!("'first' requires lists"))?
         .first()
         .cloned()
-        .unwrap_or(DataValue::Null))
+    {
+        Some(v) => v,
+        None => DataValue::Null,
+    })
 }
 
 pub(crate) fn op_get(args: &[DataValue]) -> Result<DataValue> {
@@ -233,7 +236,7 @@ pub(crate) fn op_int_range(args: &[DataValue]) -> Result<DataValue> {
             }
             return Ok(DataValue::List(result));
         }
-        _ => bail!("'int_range' requires 1 to 3 argument"),
+        other_len => bail!("'int_range' requires 1 to 3 argument, got {other_len}"),
     };
     Ok(DataValue::List((start..end).map(DataValue::from).collect()))
 }
@@ -264,12 +267,15 @@ pub(crate) fn op_json_to_scalar(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_last(args: &[DataValue]) -> Result<DataValue> {
-    Ok(args[0]
+    Ok(match args[0]
         .get_slice()
         .ok_or_else(|| miette!("'last' requires lists"))?
         .last()
         .cloned()
-        .unwrap_or(DataValue::Null))
+    {
+        Some(v) => v,
+        None => DataValue::Null,
+    })
 }
 
 pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
@@ -493,7 +499,7 @@ fn deep_merge_json(value1: JsonValue, value2: JsonValue) -> JsonValue {
         (JsonValue::Object(mut obj1), JsonValue::Object(obj2)) => {
             for (key, value2) in obj2 {
                 let value1 = obj1.remove(&key);
-                obj1.insert(key, deep_merge_json(value1.unwrap_or(Value::Null), value2));
+                obj1.insert(key, deep_merge_json(match value1 { Some(v) => v, None => Value::Null }, value2));
             }
             JsonValue::Object(obj1)
         }

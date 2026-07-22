@@ -68,24 +68,15 @@ pub(crate) const DEFAULT_M: usize = 1 << DEFAULT_PRECISION as usize;
 const FORMAT_TAG: u8 = 0x01;
 
 /// One-byte register bank whose length `M` is the type law (`M = 2^p`).
+/// Stored as `Box<[u8]>` with invariant `len == M` (proven at construction).
 #[derive(Clone, PartialEq, Eq, Debug)]
-#[repr(transparent)]
-pub(crate) struct HllRegisters<const M: usize>(Box<[u8; M]>);
-
-const _: () =
-    assert!(std::mem::size_of::<HllRegisters<16>>() == std::mem::size_of::<Box<[u8; 16]>>());
-const _: () =
-    assert!(std::mem::align_of::<HllRegisters<16>>() == std::mem::align_of::<Box<[u8; 16]>>());
+pub(crate) struct HllRegisters<const M: usize>(Box<[u8]>);
 
 impl<const M: usize> HllRegisters<M> {
     fn zeros() -> Self {
         // Heap-allocate without a temporary `[u8; M]` on the stack (M can be
-        // up to 2^18).
-        let boxed: Box<[u8; M]> = vec![0u8; M]
-            .into_boxed_slice()
-            .try_into()
-            .unwrap_or_else(|_| unreachable!("allocated length is M"));
-        Self(boxed)
+        // up to 2^18). Length is M by construction.
+        Self(vec![0u8; M].into_boxed_slice())
     }
 
     fn from_bytes(rest: &[u8]) -> Result<Self> {
@@ -94,12 +85,7 @@ impl<const M: usize> HllRegisters<M> {
             "HyperLogLog register length {} does not match const M={M}",
             rest.len()
         );
-        let boxed: Box<[u8; M]> = rest
-            .to_vec()
-            .into_boxed_slice()
-            .try_into()
-            .unwrap_or_else(|_| unreachable!("length checked equal to M"));
-        Ok(Self(boxed))
+        Ok(Self(rest.to_vec().into_boxed_slice()))
     }
 }
 
@@ -173,7 +159,7 @@ impl<const M: usize> HyperLogLog<M> {
     /// An empty sketch — the identity element of [`Self::merge`].
     pub(crate) fn new() -> Self {
         // Force the precision law to evaluate at monomorphization.
-        let _ = Self::PRECISION;
+        drop(Self::PRECISION);
         Self {
             registers: HllRegisters::zeros(),
         }
@@ -294,7 +280,13 @@ fn alpha(m: usize) -> f64 {
         16 => 0.673,
         32 => 0.697,
         64 => 0.709,
-        _ => 0.7213 / (1.0 + 1.079 / m as f64),
+        other => {
+            let m32 = match u32::try_from(other) {
+                Ok(v) => v,
+                Err(_) => return 0.7213,
+            };
+            0.7213 / (1.0 + 1.079 / f64::from(m32))
+        }
     }
 }
 

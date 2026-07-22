@@ -82,7 +82,7 @@
  *      knowledge, not data — the same structural argument as
  *      `TupleInIter::get` in `runtime/temp_store.rs`. The two range-slices
  *      whose in-bounds proof crosses functions (`prefix_join`'s
- *      `other_bindings`) use `.get(..).unwrap_or(&[])` instead.
+ *      `other_bindings`) use `.get(..)` with an explicit empty-slice arm instead.
  *
  * Other deviations from the original, documented:
  *   D1. `TupleIter` is declared here, not in `data/tuple.rs`: a boxed

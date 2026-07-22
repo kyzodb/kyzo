@@ -307,7 +307,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                     }
                 }
             }
-            let _ = node;
+            drop(node);
             Ok(SelAligned { values: out })
         }
         Expr::Lazy { op, args, .. } => {
@@ -576,15 +576,20 @@ mod tests {
                     span: Default::default(),
                 },
                 4 => Expr::Lazy {
-                    op: match next(rng) % 3 {
-                        0 => LazyOp::And,
-                        1 => LazyOp::Or,
-                        _ => LazyOp::Coalesce,
+                    op: {
+                        let lazy_choice = next(rng) % 3;
+                        if lazy_choice == 0 {
+                            LazyOp::And
+                        } else if lazy_choice == 1 {
+                            LazyOp::Or
+                        } else {
+                            LazyOp::Coalesce
+                        }
                     },
                     args: Box::new([gen_expr(rng, depth - 1), gen_expr(rng, depth - 1)]),
                     span: Default::default(),
                 },
-                _ => Expr::Cond {
+                5 => Expr::Cond {
                     clauses: vec![
                         (gen_expr(rng, depth - 1), gen_expr(rng, depth - 1)),
                         (

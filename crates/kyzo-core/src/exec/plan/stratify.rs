@@ -315,7 +315,7 @@ fn verify_no_cycle(
                         UnStratifiableProgram {
                             name: (*v).clone(),
                             scc: scc.iter().map(|s| (*s).clone()).collect(),
-                            span: poison_spans.get(&(*k, *v)).copied().unwrap_or(v.span),
+                            span: match poison_spans.get(&(*k, *v)).copied() { Some(s) => s, None => v.span },
                         }
                     );
                 }
@@ -621,10 +621,10 @@ mod tests {
                 .map(|a| match a {
                     None => HeadAggrSlot::Plain,
                     Some(name) => HeadAggrSlot::Aggregated {
-                        aggr: parse_aggr(name)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
+                        aggr: match parse_aggr(name) {
+                            Ok(Some(a)) => a,
+                            Ok(None) | Err(_) => panic!("real aggregation exists: {name}"),
+                        },
                         args: vec![],
                     },
                 })

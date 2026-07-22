@@ -1289,12 +1289,14 @@ mod tests {
     }
 
     fn rules_of<'a>(stratum: &'a MagicProgram, key: &str) -> &'a [MagicInlineRule] {
-        match stratum
+        let Some((_, rules_or_fixed)) = stratum
             .prog
             .iter()
             .find(|(k, _)| format!("{k:?}") == key)
-            .unwrap_or_else(|| panic!("store '{key}' not found"))
-            .1
+        else {
+            panic!("store '{key}' not found")
+        };
+        match rules_or_fixed
         {
             MagicRulesOrFixed::Rules { rules } => rules,
             MagicRulesOrFixed::Fixed { .. } => panic!("store '{key}' is a fixed rule"),

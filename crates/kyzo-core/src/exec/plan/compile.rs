@@ -208,7 +208,7 @@ impl RelationHandle {
             // row carries the base row's bitemporal coordinate and
             // polarity (the mutation tier mirrors them), so an index scan
             // resolves at any coordinate exactly like the base.
-            let _ = validity_query;
+            drop(validity_query);
             let mut cur_prefix_len = 0usize;
             for i in mapper {
                 // A mapper position beyond the argument list would mean a
@@ -216,7 +216,9 @@ impl RelationHandle {
                 // panicking (law 5: the original indexed unchecked).
                 match arg_uses.get(*i) {
                     Some(IndexPositionUse::Join) => cur_prefix_len += 1,
-                    _ => break,
+                    Some(IndexPositionUse::BindForLater)
+                    | Some(IndexPositionUse::Ignored)
+                    | None => break,
                 }
             }
             if cur_prefix_len > max_prefix_len {
@@ -650,7 +652,9 @@ pub(crate) fn compile_magic_rule_body(
                 // since a posting index has no `Plain` mapper shape.
                 let chosen_index = match &rel_app.validity {
                     Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
-                    _ => store.choose_index(&join_indices, rel_app.validity.is_some()),
+                    Some(ValidityClause::At(_)) | None => {
+                        store.choose_index(&join_indices, rel_app.validity.is_some())
+                    }
                 };
 
                 match chosen_index {
@@ -892,7 +896,9 @@ pub(crate) fn compile_magic_rule_body(
                 // shapes as a negation right side since story #86).
                 let chosen_index = match &rel_app.validity {
                     Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
-                    _ => store.choose_index(&join_indices, rel_app.validity.is_some()),
+                    Some(ValidityClause::At(_)) | None => {
+                        store.choose_index(&join_indices, rel_app.validity.is_some())
+                    }
                 };
 
                 match chosen_index {
@@ -1109,9 +1115,15 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
             // the slice and mints an owned row only on admission.
             let batch = batch?;
             if want_premises {
-                let premises = batch.premises().unwrap_or(&[]);
+                let premises = match batch.premises() {
+                    Some(p) => p,
+                    None => &[],
+                };
                 for (i, row) in batch.iter_rows().enumerate() {
-                    let row_premises = premises.get(i).map(Vec::as_slice).unwrap_or(&[]);
+                    let row_premises = match premises.get(i).map(Vec::as_slice) {
+                        Some(p) => p,
+                        None => &[],
+                    };
                     if f(Cow::Borrowed(row), Premises::Rows(row_premises))?.is_break() {
                         return Ok(());
                     }

@@ -616,7 +616,7 @@ pub(crate) fn extract_min_cost_proof<K: Ord + Clone + Debug>(
                     premise_costs.push(*c);
                     total = total.and_then(|t| t.checked_add(*c));
                 }
-                _ => {
+                Some(Cost::Infinite) | None => {
                     total = None;
                 }
             }

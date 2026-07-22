@@ -44,17 +44,20 @@ pub(crate) fn op_rand_bernoulli(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
-        DataValue::List(l) => Ok(l
-            .choose(&mut rand::rng())
-            .cloned()
-            .unwrap_or(DataValue::Null)),
-        DataValue::Set(l) => Ok(l
+        DataValue::List(l) => Ok(match l.choose(&mut rand::rng()).cloned() {
+            Some(v) => v,
+            None => DataValue::Null,
+        }),
+        DataValue::Set(l) => Ok(match l
             .iter()
             .collect_vec()
             .choose(&mut rand::rng())
             .cloned()
             .cloned()
-            .unwrap_or(DataValue::Null)),
+        {
+            Some(v) => v,
+            None => DataValue::Null,
+        }),
         data_value_any!() => bail!("'rand_choice' requires lists"),
     }
 }

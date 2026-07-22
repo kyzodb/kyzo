@@ -250,7 +250,7 @@ pub(crate) fn meet_op(a: &Aggregation) -> Option<MeetAggr> {
         "bit_and" => Some(MeetAggr::BitAnd(MeetAggrBitAnd)),
         "bit_or" => Some(MeetAggr::BitOr(MeetAggrBitOr)),
         "hll_union" => Some(MeetAggr::HllUnion(MeetAggrHllUnion)),
-        _ => None,
+        _unknown => None,
     }
 }
 
@@ -915,7 +915,7 @@ impl NormalAggrObj for AggrMin {
             Some(found) => {
                 let (found_n, new) = match (found, value) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    _ => bail!("'min' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => bail!("'min' applied to non-numerical values"),
                 };
                 if new < found_n {
                     self.found = Some(value.clone());
@@ -926,7 +926,7 @@ impl NormalAggrObj for AggrMin {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone().unwrap_or(DataValue::Null))
+        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
     }
 }
 
@@ -955,7 +955,7 @@ impl MeetAggrObj for MeetAggrMin {
             MeetAccum::Value(left_v) => {
                 let (l, r) = match (&*left_v, right_v) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    _ => bail!("'min' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => bail!("'min' applied to non-numerical values"),
                 };
                 Ok(if r < l {
                     *left_v = right_v.clone();
@@ -989,7 +989,7 @@ impl NormalAggrObj for AggrMax {
             Some(found) => {
                 let (found_n, new) = match (found, value) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    _ => bail!("'max' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => bail!("'max' applied to non-numerical values"),
                 };
                 if new > found_n {
                     self.found = Some(value.clone());
@@ -1000,7 +1000,7 @@ impl NormalAggrObj for AggrMax {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone().unwrap_or(DataValue::Null))
+        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
     }
 }
 
@@ -1029,7 +1029,7 @@ impl MeetAggrObj for MeetAggrMax {
             MeetAccum::Value(left_v) => {
                 let (l, r) = match (&*left_v, right_v) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    _ => bail!("'max' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => bail!("'max' applied to non-numerical values"),
                 };
                 Ok(if r > l {
                     *left_v = right_v.clone();
@@ -1073,7 +1073,7 @@ impl NormalAggrObj for AggrLatestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone().unwrap_or(DataValue::Null))
+        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
     }
 }
 
@@ -1108,7 +1108,7 @@ impl NormalAggrObj for AggrSmallestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone().unwrap_or(DataValue::Null))
+        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
     }
 }
 
@@ -1147,8 +1147,8 @@ impl NormalAggrObj for AggrMinCost {
 
     fn get(&self) -> Result<DataValue> {
         Ok(DataValue::List(vec![
-            self.found.clone().unwrap_or(DataValue::Null),
-            self.cost.map(DataValue::from).unwrap_or(DataValue::Null),
+            match self.found.clone() { Some(v) => v, None => DataValue::Null },
+            match self.cost { Some(c) => DataValue::from(c), None => DataValue::Null },
         ]))
     }
 }
@@ -1289,7 +1289,7 @@ impl NormalAggrObj for AggrChoice {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone().unwrap_or(DataValue::Null))
+        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
     }
 }
 

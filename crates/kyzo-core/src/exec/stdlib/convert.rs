@@ -270,9 +270,9 @@ pub(crate) fn vec_element_type(arg: Option<&DataValue>, op: &str) -> Result<VecE
         Some(DataValue::Str(s)) => match s.as_str() {
             "F32" | "Float" => Ok(VecElementType::F32),
             "F64" | "Double" => Ok(VecElementType::F64),
-            _ => bail!("'{op}' does not recognize type {s}"),
+            unrecognized => bail!("'{op}' does not recognize type {unrecognized}"),
         },
         None => Ok(VecElementType::F32),
-        _ => bail!("'{op}' requires a string as second argument"),
+        Some(data_value_any!()) => bail!("'{op}' requires a string as second argument"),
     }
 }

@@ -922,11 +922,15 @@ mod tests {
                 let DataValue::Num(ref n_k) = row[0] else {
                     panic!("key not an int")
                 };
-                let k = n_k.as_int().unwrap_or_else(|| panic!("key not an int"));
+                let Some(k) = n_k.as_int() else {
+                    panic!("key not an int")
+                };
                 let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
-                let val = n_val.as_int().unwrap_or_else(|| panic!("val not an int"));
+                let Some(val) = n_val.as_int() else {
+                    panic!("val not an int")
+                };
                 let DataValue::Interval(iv) = &row[2] else {
                     panic!("third column not an interval: {row:?}")
                 };
@@ -1088,15 +1092,21 @@ mod tests {
                 let DataValue::Num(ref n_k) = row[0] else {
                     panic!("key not an int")
                 };
-                let k = n_k.as_int().unwrap_or_else(|| panic!("key not an int"));
+                let Some(k) = n_k.as_int() else {
+                    panic!("key not an int")
+                };
                 let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
-                let val = n_val.as_int().unwrap_or_else(|| panic!("val not an int"));
+                let Some(val) = n_val.as_int() else {
+                    panic!("val not an int")
+                };
                 let DataValue::Num(ref n_sgn) = row[2] else {
                     panic!("sign not an int")
                 };
-                let sgn = n_sgn.as_int().unwrap_or_else(|| panic!("sign not an int"));
+                let Some(sgn) = n_sgn.as_int() else {
+                    panic!("sign not an int")
+                };
                 out.push((k, val, sgn));
             }
         }

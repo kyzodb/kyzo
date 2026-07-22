@@ -75,7 +75,7 @@ fn bit_bytes_binop(
             }
             Ok(DataValue::Bytes(ret))
         }
-        _ => bail!("'{op}' requires bytes"),
+        (data_value_any!(), data_value_any!()) => bail!("'{op}' requires bytes"),
     }
 }
 
@@ -146,7 +146,7 @@ fn fold_num_args(
             data_value_any!() => bail!("{require_msg}"),
         }
     }
-    let _ = op;
+    drop(op);
     Ok(combine_final(i_accum, f_accum))
 }
 
@@ -279,7 +279,7 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
                 .ok_or_else(|| miette!("can only divide numbers by vectors"))?;
             DataValue::Vector(vec_value(b.to_f64s().iter().map(|x| a / x).collect())?)
         }
-        _ => bail!("division requires numbers"),
+        (data_value_any!(), data_value_any!()) => bail!("division requires numbers"),
     })
 }
 
@@ -329,7 +329,7 @@ fn fold_minmax(
                 let chosen = if prefer_b(a, *b) { *b } else { a };
                 Ok(Some(DataValue::Num(chosen)))
             }
-            _ => bail!("'{op}' can only be applied to numbers"),
+            (None, data_value_any!()) | (Some(data_value_any!()), data_value_any!()) => bail!("'{op}' can only be applied to numbers"),
         })?;
     match res {
         None => Ok(DataValue::Num(Num::float(empty))),
@@ -387,7 +387,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
             }
             // Mixed and float pairs: Rust remainder semantics (result
             // takes the dividend's sign), zero divisor refused.
-            _ => {
+            (NumRepr::Int(_), NumRepr::Float(_)) | (NumRepr::Float(_), NumRepr::Int(_)) | (NumRepr::Float(_), NumRepr::Float(_)) => {
                 let (a, b) = (na.to_f64(), nb.to_f64());
                 if b == 0.0 {
                     bail!(DivisionByZero { op: "mod" })
@@ -395,7 +395,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
                 DataValue::Num(Num::float(a.rem(b)))
             }
         },
-        _ => bail!("'mod' requires numbers"),
+        (data_value_any!(), data_value_any!()) => bail!("'mod' requires numbers"),
     })
 }
 
@@ -439,16 +439,13 @@ pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
                         let idx = i % 8;
                         // In bounds: chunk = i/8 < ceil(v.len()/8) = res.len().
                         let target = &mut res[chunk];
-                        match idx {
-                            0 => *target |= 0b10000000,
-                            1 => *target |= 0b01000000,
-                            2 => *target |= 0b00100000,
-                            3 => *target |= 0b00010000,
-                            4 => *target |= 0b00001000,
-                            5 => *target |= 0b00000100,
-                            6 => *target |= 0b00000010,
-                            // idx = i % 8 is exhaustive over 0..=7.
-                            _ => *target |= 0b00000001,
+                        const MASKS: [u8; 8] = [
+                            0b10000000, 0b01000000, 0b00100000, 0b00010000, 0b00001000,
+                            0b00000100, 0b00000010, 0b00000001,
+                        ];
+                        match MASKS.get(idx) {
+                            Some(mask) => *target |= *mask,
+                            None => bail!("'pack_bits' bit index {idx} out of range"),
                         }
                     }
                 }
@@ -565,7 +562,7 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
                 .ok_or_else(|| miette!("can only subtract vectors from numbers"))?;
             DataValue::Vector(vec_value(b.to_f64s().iter().map(|x| a - x).collect())?)
         }
-        _ => bail!("subtraction requires numbers"),
+        (data_value_any!(), data_value_any!()) => bail!("subtraction requires numbers"),
     })
 }
 
@@ -646,7 +643,7 @@ fn fold_vecs(
                 b.to_f64s().iter().map(|x| combine(f, *x)).collect(),
             )?))
         }
-        _ => bail!("{scalar_requires}"),
+        (data_value_any!(), data_value_any!()) => bail!("{scalar_requires}"),
     }
 }
 

@@ -250,8 +250,8 @@ impl TDigest {
         out.write_all(&self.count.to_le_bytes()).unwrap();
         // Layout reserves min/max slots; empty digests leave them zeroed.
         // Semantic absence is empty centroids / Option::None — not a float sentinel.
-        let min_wire = self.min.unwrap_or(0.0);
-        let max_wire = self.max.unwrap_or(0.0);
+        let min_wire = match self.min { Some(v) => v, None => 0.0 };
+        let max_wire = match self.max { Some(v) => v, None => 0.0 };
         out.write_all(&min_wire.to_le_bytes()).unwrap();
         out.write_all(&max_wire.to_le_bytes()).unwrap();
         out.write_all(&(self.centroids.len() as u64).to_le_bytes())

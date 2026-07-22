@@ -217,10 +217,11 @@ pub static OP_WINDOWS: BoundOp = bind_op(opdecl::OP_WINDOWS, collection::op_wind
 
 /// SEALED NAME — sole public name→BoundOp resolve API.
 pub fn resolve_op(name: &str) -> Option<&'static BoundOp> {
-    let key = name
-        .strip_prefix("OP_")
-        .unwrap_or(name)
-        .to_ascii_lowercase();
+    let key = match name.strip_prefix("OP_") {
+        Some(stripped) => stripped,
+        None => name,
+    }
+    .to_ascii_lowercase();
     Some(match key.as_str() {
         "abs" => &OP_ABS,
         "acos" => &OP_ACOS,
@@ -371,6 +372,6 @@ pub fn resolve_op(name: &str) -> Option<&'static BoundOp> {
         "validity" => &OP_VALIDITY,
         "vec" => &OP_VEC,
         "windows" => &OP_WINDOWS,
-        _ => return None,
+        _unknown => return None,
     })
 }

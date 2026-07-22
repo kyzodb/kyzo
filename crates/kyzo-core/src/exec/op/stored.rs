@@ -189,7 +189,7 @@ impl StoredRA {
         // hot probe loop below never touches the generation counter again.
         let seg = match (self.storage.keyspace_kind, segments) {
             (KeyspaceKind::Facts, Segments(Some(engine))) => self.segment_at(tx, engine)?,
-            _ => None,
+            (KeyspaceKind::Facts, Segments(None)) | (KeyspaceKind::AlgorithmState, _) => None,
         };
 
         let probe: Box<dyn FnMut(&[DataValue]) -> Result<TupleIter<'a>> + 'a> =
@@ -262,15 +262,18 @@ impl StoredRA {
                     })
                 }
             } else {
-                let other_bindings = self
+                let other_bindings = match self
                     .bindings
                     .get(right_join_indices.len()..self.storage.metadata.keys.len())
-                    .unwrap_or(&[]);
+                {
+                    Some(b) => b,
+                    None => &[],
+                };
                 let bounds = if self.filters.is_empty() {
                     None
                 } else {
                     let (l_bound, u_bound) =
-                        compute_bounds(&self.filters, other_bindings).unwrap_or_default();
+                        compute_bounds(&self.filters, other_bindings)?;
                     if l_bound.iter().any(|b| *b != ScanBound::Least)
                         || u_bound.iter().any(|b| *b != ScanBound::Greatest)
                     {
@@ -436,15 +439,18 @@ impl StoredWithValidityRA {
             .map(|(a, _)| left_join_indices[a])
             .collect_vec();
 
-        let other_bindings = self
+        let other_bindings = match self
             .bindings
             .get(right_join_indices.len()..self.storage.metadata.keys.len())
-            .unwrap_or(&[]);
+        {
+            Some(b) => b,
+            None => &[],
+        };
         let bounds = if self.filters.is_empty() {
             None
         } else {
             let (l_bound, u_bound) =
-                compute_bounds(&self.filters, other_bindings).unwrap_or_default();
+                compute_bounds(&self.filters, other_bindings)?;
             if l_bound.iter().any(|b| *b != ScanBound::Least)
                 || u_bound.iter().any(|b| *b != ScanBound::Greatest)
             {

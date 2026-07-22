@@ -120,13 +120,16 @@ impl CountMinSketch {
     /// Tests exercise this door; a named frequency-query stdlib op is not yet
     /// seated — no `#[allow(dead_code)]`, no fabricated discard-caller.
     pub(crate) fn estimate(&self, value: &DataValue) -> u64 {
-        (0..self.depth)
+        match (0..self.depth)
             .map(|row| {
                 let col = self.column(value, row);
                 self.counters[row * self.width + col]
             })
             .min()
-            .unwrap_or(0)
+        {
+            Some(v) => v,
+            None => 0,
+        }
     }
 
     /// Merge `other` into `self` by element-wise addition — the monoid

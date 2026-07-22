@@ -140,11 +140,11 @@ impl TempStoreRA {
             .map(|(a, _)| left_join_indices[a])
             .collect_vec();
         let scan_epoch = delta_rule == Some(self.occurrence);
-        let other_bindings = self.bindings.get(right_join_indices.len()..).unwrap_or(&[]);
+        let other_bindings = match self.bindings.get(right_join_indices.len()..) { Some(b) => b, None => &[] };
         let (l_bound, u_bound) = if self.filters.is_empty() {
             Default::default()
         } else {
-            compute_bounds(&self.filters, other_bindings).unwrap_or_default()
+            compute_bounds(&self.filters, other_bindings)?
         };
         let informative = l_bound.iter().any(|b| *b != ScanBound::Least)
             || u_bound.iter().any(|b| *b != ScanBound::Greatest);

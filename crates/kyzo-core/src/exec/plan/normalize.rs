@@ -266,12 +266,13 @@ pub(crate) fn convert_named_field_relation(
     }
     let mut new_args = vec![];
     for col_def in metadata.keys.iter().chain(metadata.non_keys.iter()) {
-        let arg = args
-            .remove(&Symbol::new(col_def.name.clone(), span))
-            .unwrap_or_else(|| Expr::Binding {
+        let arg = match args.remove(&Symbol::new(col_def.name.clone(), span)) {
+            Some(arg) => arg,
+            None => Expr::Binding {
                 var: symb_gen.next_ignored(span),
                 tuple_pos: BindingPos::Unresolved,
-            });
+            },
+        };
         new_args.push(arg);
     }
     Ok(InputRelationApplyAtom {

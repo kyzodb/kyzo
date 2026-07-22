@@ -137,11 +137,12 @@ impl Batch {
 
     /// Drop the most recently pushed row (a filtered-out successful push).
     pub(crate) fn pop(&mut self) {
-        if let Some(end) = self.offsets.pop() {
-            let start = self.offsets.last().copied().unwrap_or(0);
-            debug_assert!(end == self.values.len());
+        if self.offsets.pop().is_some() {
+            let start = match self.offsets.last().copied() {
+                Some(s) => s,
+                None => 0,
+            };
             self.values.truncate(start);
-            let _ = end;
         }
     }
     pub(crate) fn with_rows(rows: Vec<Tuple>) -> Self {
@@ -168,10 +169,10 @@ impl Batch {
     /// Premises already collected for row `i`, or empty when this batch is
     /// not tracking (`premises` is `None`).
     pub(crate) fn row_premises(&self, i: usize) -> Vec<Tuple> {
-        self.premises
-            .as_ref()
-            .map(|p| p[i].clone())
-            .unwrap_or_default()
+        match &self.premises {
+            Some(p) => p[i].clone(),
+            None => Vec::new(),
+        }
     }
 
     /// Record the premise list for the row just pushed. Only call when

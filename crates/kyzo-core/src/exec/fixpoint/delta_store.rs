@@ -299,7 +299,10 @@ impl<L> LevelStack<L> {
 
     #[inline]
     pub(crate) fn last(&self) -> &L {
-        self.above.last().unwrap_or(&self.bottom)
+        match self.above.last() {
+            Some(l) => l,
+            None => &self.bottom,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -539,10 +542,13 @@ pub(crate) struct MeetLevel {
 
 impl MeetLevel {
     fn find(&self, group_key: &[u8]) -> Option<&(Box<OwnBareKey>, Vec<MeetAccum>)> {
-        self.groups
+        match self
+            .groups
             .binary_search_by(|(k, _)| k.as_bytes().cmp(group_key))
-            .ok()
-            .map(|i| &self.groups[i])
+        {
+            Ok(i) => Some(&self.groups[i]),
+            Err(_) => None,
+        }
     }
 }
 
@@ -768,7 +774,8 @@ impl EpochStore {
                 levels.push(level);
                 admitted
             }
-            _ => bail!(
+            (LevelKind::Normal(_), TempStore::MeetAggr(_))
+            | (LevelKind::Meet { .. }, TempStore::Normal(_)) => bail!(
                 "internal invariant violated: mismatched temp-store kinds \
                  in EpochStore::merge_in"
             ),

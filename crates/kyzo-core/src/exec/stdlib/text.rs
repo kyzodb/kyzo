@@ -37,7 +37,7 @@ fn affix_op(
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(on_str(l, r))),
         (DataValue::Bytes(l), DataValue::Bytes(r)) => Ok(DataValue::from(on_bytes(l, r))),
-        _ => bail!("'{op}' requires strings or bytes"),
+        (data_value_any!(), data_value_any!()) => bail!("'{op}' requires strings or bytes"),
     }
 }
 
@@ -101,7 +101,7 @@ pub(crate) fn op_regex_extract(args: &[DataValue]) -> Result<DataValue> {
             let found = compiled.find_iter(s).map(DataValue::from).collect_vec();
             Ok(DataValue::List(found))
         }
-        _ => bail!("'regex_extract' requires strings"),
+        (data_value_any!(), data_value_any!()) => bail!("'regex_extract' requires strings"),
     }
 }
 
@@ -109,9 +109,9 @@ pub(crate) fn op_regex_extract_first(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(s), DataValue::Regex(r)) => {
             let found = compile_regex_value(r)?.find(s).map(DataValue::from);
-            Ok(found.unwrap_or(DataValue::Null))
+            Ok(match found { Some(v) => v, None => DataValue::Null })
         }
-        _ => bail!("'regex_extract_first' requires strings"),
+        (data_value_any!(), data_value_any!()) => bail!("'regex_extract_first' requires strings"),
     }
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn op_regex_matches(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Str(s), DataValue::Regex(r)) => {
             Ok(DataValue::from(compile_regex_value(r)?.is_match(s)))
         }
-        _ => bail!("'regex_matches' requires strings"),
+        (data_value_any!(), data_value_any!()) => bail!("'regex_matches' requires strings"),
     }
 }
 
@@ -129,7 +129,7 @@ pub(crate) fn op_regex_replace(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
             compile_regex_value(r)?.replace(s, rp).into_owned(),
         )),
-        _ => bail!("'regex_replace' requires strings"),
+        (data_value_any!(), data_value_any!(), data_value_any!()) => bail!("'regex_replace' requires strings"),
     }
 }
 
@@ -138,7 +138,7 @@ pub(crate) fn op_regex_replace_all(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
             compile_regex_value(r)?.replace_all(s, rp).into_owned(),
         )),
-        _ => bail!("'regex_replace' requires strings"),
+        (data_value_any!(), data_value_any!(), data_value_any!()) => bail!("'regex_replace' requires strings"),
     }
 }
 
@@ -177,7 +177,7 @@ pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_str_includes(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.find(r as &str).is_some())),
-        _ => bail!("'str_includes' requires strings"),
+        (data_value_any!(), data_value_any!()) => bail!("'str_includes' requires strings"),
     }
 }
 
@@ -218,7 +218,7 @@ pub(crate) fn op_unicode_normalize(args: &[DataValue]) -> Result<DataValue> {
             "nfkd" => s.nfkd().collect(),
             u => bail!("unknown normalization {} for 'unicode_normalize'", u),
         })),
-        _ => bail!("'unicode_normalize' requires strings"),
+        (data_value_any!(), data_value_any!()) => bail!("'unicode_normalize' requires strings"),
     }
 }
 

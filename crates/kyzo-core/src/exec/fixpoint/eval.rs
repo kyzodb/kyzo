@@ -1211,7 +1211,7 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                             }
                             HeadAggrKind::None | HeadAggrKind::Normal => WitnessKeyMode::FullTuple,
                         },
-                        _ => WitnessKeyMode::FullTuple,
+                        Some(EvalDefinition::Fixed { .. }) | None => WitnessKeyMode::FullTuple,
                     };
                     let mut binder = WitnessBinder {
                         store: &name,

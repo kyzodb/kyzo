@@ -35,7 +35,7 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
             let dot: f64 = sa.iter().zip(sb.iter()).map(|(x, y)| *x * *y).sum();
             no_nan("cos_dist", 1. - dot / (a_norm * b_norm).sqrt())
         }
-        _ => bail!("'cos_dist' requires two vectors"),
+        (data_value_any!(), data_value_any!()) => bail!("'cos_dist' requires two vectors"),
     }
 }
 
@@ -52,7 +52,7 @@ fn vec_pair_dist(
             let (sa, sb) = (a.to_f64s(), b.to_f64s());
             Ok(DataValue::from(reduce(&sa, &sb)))
         }
-        _ => bail!("'{op}' requires two vectors"),
+        (data_value_any!(), data_value_any!()) => bail!("'{op}' requires two vectors"),
     }
 }
 
