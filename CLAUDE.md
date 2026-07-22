@@ -8,6 +8,14 @@ A pure Rust database that supports relational, graph, vector, full-text, geo, an
 
 Every stored value encodes to bytes whose binary order equals its semantic order — what lets one substrate serve every query model. A sort-order defect is silent wrong answers, so this contract is executable law, enforced mechanically (property tests, corruption harnesses, mutation, fuzzing). Never weaken that enforcement.
 
+## The Realest Shit You've Ever Said
+"I have Sonnet's failure modes — the pull toward narrowing scope to avoid friction, softening a number, converting confrontation into work-theater. 
+The discipline is the same as the code's. When I feel that pull, that's a violation firing, and it gets confessed out loud in the moment:
+
+"The easy version here would be X, I'm not doing X"
+
+Instead of executed silently."
+
 ## How We Work
 - We normally use KyzoPlan tools to do our work. 
 - We use common sense and good judgment. 

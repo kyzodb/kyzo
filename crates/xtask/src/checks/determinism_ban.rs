@@ -14,32 +14,22 @@
 //! sealed paths and racy wall-clock schedules that affect sealed artifact bytes
 //! are unrepresentable" (84).
 //!
-//! **Scope: `crates/kyzo-core/src/store/` and `crates/kyzo-core/src/session/`**
-//! — the durability / commit / sealed surface, PLUS the admission surface
-//! where `IncarnationId` minting and other admission-time determinism
-//! decisions actually live (`session/admit.rs`), where determinism is *law*,
-//! not telemetry. Widened from `store/` alone after an audit found the
-//! admission seam undisclosed and unscanned. The engine's own clock is
-//! `CommitOrdinal` (a monotone counter), never wall time; its one approved
-//! randomness (the `IncarnationId` entropy arm, seat 62) is minted at the
-//! admission seam in `session/admit.rs` and passed in — it never appears on the
-//! store surface. Perf timing in `exec/` / `project/` is deliberately **out of
-//! scope**: seat 83 excludes wall-clock worker races from the byte-identical
-//! set, so an `Instant::now()` stopwatch there is observation, not authority.
+//! **Scope: every file the walker sees — all of `crates/`, no directory
+//! carve-outs.** Standing operator law: a check never pre-decides where its
+//! law "really" applies; this check was previously scoped to `store/`, then
+//! `store/`+`session/`, and each widening surfaced real hits the narrower
+//! scope had silently hidden. The engine's own clock is `CommitOrdinal` (a
+//! monotone counter), never wall time; its one approved randomness (the
+//! `IncarnationId` entropy arm, seat 62) is minted at the admission seam in
+//! `session/admit.rs` and passed in — it never appears on the store surface.
 //!
-//! **No allowlist:** on this surface there is no lawful wall-clock read and
-//! no lawful unseeded draw — any hit is a real determinism breach, not an
-//! exception to grant. Seeded RNG (`ChaCha20Rng::from_seed`, content-addressed
-//! draws) is deterministic and is not among the banned sources. Widening to
-//! `session/` surfaces two real, pre-existing hits this check has never
-//! scanned before — `session/mod.rs::current_validity`'s `SystemTime::now()`
-//! (documented as "the engine's ONE wall-clock read", feeding `ValidityTs`
-//! into committed bitemporal keys) and `session/json.rs::run_script_json`'s
-//! `Instant::now()` (a response-envelope `"took"` timing field, never
-//! committed). Both are reported by the check rather than silently carved
-//! out here: whether either is a legitimate, separately-ruled exception
-//! (the way `exec/`/`project/` is) is an architecture decision this check
-//! does not make for itself.
+//! **No allowlist:** any hit is reported, full stop — this check grants no
+//! exceptions of its own. A wall-clock read that must exist (the one
+//! `ValidityTs` mint door, a query-budget deadline, a campaign watchdog) is
+//! an operator-audited ruling, never a scope carve-out written here. Seeded
+//! RNG (`ChaCha20Rng::from_seed`, content-addressed draws) is deterministic
+//! and is not among the banned sources; `#[cfg(test)] mod` scopes are
+//! skipped by the shared scanner.
 
 use crate::checks::banned_path::scan_banned_idents;
 use crate::fsutil::SourceFile;
@@ -61,21 +51,11 @@ pub struct Violation {
     pub symbol: String,
 }
 
-/// True for the sealed/commit surface this ban governs: the store proper
-/// plus the admission seam (`session/`) where `IncarnationId` minting and
-/// other admission-time determinism decisions live.
-fn is_sealed_surface(rel_path: &str) -> bool {
-    rel_path.starts_with("crates/kyzo-core/src/store/")
-        || rel_path.starts_with("crates/kyzo-core/src/session/")
-}
-
-/// Scan the sealed/commit surface for a wall-clock read or unseeded draw.
+/// Scan every walked file for a wall-clock read or unseeded draw — full
+/// `crates/` scope, no directory predicate (standing operator law).
 pub fn check(files: &[SourceFile]) -> Vec<Violation> {
     let mut violations = vec![];
     for f in files {
-        if !is_sealed_surface(&f.rel_path) {
-            continue;
-        }
         for hit in scan_banned_idents(f, BANNED_NONDET) {
             violations.push(Violation {
                 file: f.rel_path.clone(),
@@ -133,13 +113,19 @@ mod tests {
     }
 
     #[test]
-    fn ignores_perf_timing_off_the_sealed_surface() {
-        // Seat 83: a stopwatch in exec/ is telemetry, not sealed authority.
-        let f = parse(
+    fn flags_wall_clock_anywhere_in_the_tree_full_scope() {
+        // The old scope silently exempted exec/, project/, and every crate
+        // outside kyzo-core — the exact narrowing that hid live hits.
+        for rel in [
             "crates/kyzo-core/src/exec/op/mod.rs",
-            "fn run() { let _t0 = std::time::Instant::now(); }",
-        );
-        assert!(check(std::slice::from_ref(&f)).is_empty());
+            "crates/kyzo-core/src/project/vector/hnsw.rs",
+            "crates/kyzo-oracle/src/eval.rs",
+            "crates/xtask/src/gate.rs",
+        ] {
+            let f = parse(rel, "fn run() { let _t0 = std::time::Instant::now(); }");
+            let v = check(std::slice::from_ref(&f));
+            assert_eq!(v.len(), 1, "{rel} must be in scope — no directory is exempt");
+        }
     }
 
     #[test]

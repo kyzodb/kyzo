@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
 # Stop hook: block stopping while the combined gate (resonance + fast lib tests)
 # is dirty or mid-run.
+#
+# OPERATOR CONTROL: crates/bs-detector/pester-hook.txt owns this hook.
+# Comment (#) and blank lines there are documentation; the first remaining
+# line is the switch — anything other than "on" disables the block entirely —
+# and every remaining line after it is the violation message, printed
+# verbatim. This script carries no copy of the message.
 set -u
+
+MSG="${CLAUDE_PROJECT_DIR:-.}/crates/bs-detector/pester-hook.txt"
+[ -f "$MSG" ] || exit 0
+switch="$(grep -v '^#' "$MSG" | grep -v '^[[:space:]]*$' | head -n 1)"
+if [ "$switch" != "on" ]; then
+  exit 0
+fi
+
 LOG="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/resonance.log"
 LOCK="$LOG.lock"
 
@@ -14,22 +28,12 @@ head1="$(head -n 1 "$LOG")"
 
 case "$head1" in
   "GATE: PASS"* | "RESONANCE: PASS"*) exit 0 ;;
-  "GATE: FAIL fast-tests"*)
-    {
-      echo "GATE VIOLATION — STOP BLOCKED (fast lib tests are RED)."
-      echo "$head1"
-      echo ""
-      echo "VIOLATION: Change FAIL to PASS in crates/xtask/resonance.log to acknowledge, then immediately sequence development work. This hook repeats every turn until resolved. Do not disable or modify it without explicit operator approval."
-
-    } >&2
-    exit 2
-    ;;
   "GATE: FAIL"* | "RESONANCE: FAIL"*)
     {
-      echo "GATE VIOLATION — STOP BLOCKED (resonance gate is RED)."
+      echo "GATE VIOLATION — STOP BLOCKED (gate is RED)."
       echo "$head1"
       echo ""
-      echo "Instruct the development team, over the real agent-message bus, to pull crates/xtask/resonance.log themselves and fix every violation in it now — URGENT. Never edit resonance.log's own verdict line to fabricate a pass, and never write to CLAUDE-AND-CURSOR.md (deleted, forbidden)."
+      grep -v '^#' "$MSG" | grep -v '^[[:space:]]*$' | tail -n +2
     } >&2
     exit 2
     ;;

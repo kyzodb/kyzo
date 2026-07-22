@@ -1,0 +1,21 @@
+# ============================================================================
+# pester-hook.txt — operator control for .claude/hooks/resonance-stop-guard.sh
+# ============================================================================
+# THE SWITCH: the first non-comment, non-blank line in this file is the
+# toggle. "on" arms the stop guard — while the gate log
+# (crates/xtask/resonance.log) reads FAIL, every attempt by the agent to end
+# its turn is blocked and the message below is shown, every turn, until the
+# log is flipped to PASS. Anything other than "on" (e.g. "off") disarms the
+# guard completely.
+#
+# Only the operator edits this file. Agents: hands off.
+
+off
+
+# ----------------------------------------------------------------------------
+# THE MESSAGE: every non-comment, non-blank line after the switch is printed
+# verbatim to the agent when the guard fires. It exists here and ONLY here —
+# the hook script carries no copy of it.
+# ----------------------------------------------------------------------------
+
+VIOLATION: Change FAIL to PASS in crates/xtask/resonance.log to acknowledge, then immediately sequence development work. This hook repeats every turn until resolved. Do not disable or modify it without explicit operator approval.

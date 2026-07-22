@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # UserPromptSubmit hook: BUILD GATE notice + live BS-detector counts.
+# (bs-message.txt at the repo root belongs to the STOP guard, not this hook.)
 # The count line is produced by the gate itself — run_bs_detector writes
 # crates/xtask/bs-counts.txt on every resonance run (watcher fires on every
 # crates/ change). This script only echoes that artifact; it never counts

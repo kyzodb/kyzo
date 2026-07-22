@@ -268,24 +268,6 @@ pattern = "expect"
 why_not_sabotage = "KEEP: LspUtf16Width — char::len_utf16 is 1 or 2; fits u32. TryFrom.expect is the typed door for the width add."
 
 [[bs_detector]]
-file = "crates/kyzo-core/src/session/observe.rs"
-line = 422
-pattern = "expect"
-why_not_sabotage = "KEEP: INVARIANT(deep_verify_mismatch_count) — Vec::len fits u64 on all supported targets. TryFrom.expect is the typed door; u64::MAX would invent a mismatch count."
-
-[[bs_detector]]
-file = "crates/kyzo-core/src/session/observe.rs"
-line = 682
-pattern = "expect"
-why_not_sabotage = "KEEP: EventCallbackRegistry RwLock poison is fail-closed — refuse silent continue. Helper is the sole observe-registry lock door; into_inner would hide poison."
-
-[[bs_detector]]
-file = "crates/kyzo-core/src/session/observe.rs"
-line = 689
-pattern = "expect"
-why_not_sabotage = "KEEP: EventCallbackRegistry RwLock poison is fail-closed — refuse silent continue. Helper is the sole observe-registry lock door; into_inner would hide poison."
-
-[[bs_detector]]
 file = "crates/kyzo-oracle/src/lib.rs"
 line = 209
 pattern = "as_cast"
@@ -533,12 +515,6 @@ why_not_sabotage = "KEEP: INVARIANT(len_fits_u32) — slice len TryFrom.expect i
 
 [[bs_detector]]
 file = "crates/kyzo-model/src/value/arena.rs"
-line = 274
-pattern = "expect"
-why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
-
-[[bs_detector]]
-file = "crates/kyzo-model/src/value/arena.rs"
 line = 329
 pattern = "expect"
 why_not_sabotage = "KEEP: INVARIANT(needle_len_fits_u32) — needle len TryFrom.expect is the typed door."
@@ -718,12 +694,6 @@ pattern = "expect"
 why_not_sabotage = "KEEP: INVARIANT(effective_fits_usize) — meet admission count TryFrom.expect."
 
 [[bs_detector]]
-file = "crates/kyzo-core/src/session/footprint.rs"
-line = 404
-pattern = "expect"
-why_not_sabotage = "KEEP: INVARIANT(fence_pressure_fits_u64) — live fenced count TryFrom.expect."
-
-[[bs_detector]]
 file = "crates/kyzo-core/src/project/text/tokenizer/tokenized_string.rs"
 line = 99
 pattern = "expect"
@@ -836,30 +806,6 @@ file = "crates/kyzo-core/src/session/admit.rs"
 line = 3360
 pattern = "expect"
 why_not_sabotage = "KEEP: INVARIANT TryFrom.expect — fail-closed width door, not Err→MAX clamp theater."
-
-[[bs_detector]]
-file = "crates/kyzo-core/src/session/db.rs"
-line = 406
-pattern = "expect"
-why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
-
-[[bs_detector]]
-file = "crates/kyzo-core/src/session/db.rs"
-line = 417
-pattern = "expect"
-why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
-
-[[bs_detector]]
-file = "crates/kyzo-core/src/session/db.rs"
-line = 431
-pattern = "expect"
-why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
-
-[[bs_detector]]
-file = "crates/kyzo-core/src/session/db.rs"
-line = 447
-pattern = "expect"
-why_not_sabotage = "KEEP: mutex/rwlock poison is fail-closed — refuse silent continue; into_inner would hide poison."
 
 [[bs_detector]]
 file = "crates/kyzo-core/src/store/merkle.rs"
