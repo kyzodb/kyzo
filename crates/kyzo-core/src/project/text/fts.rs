@@ -278,11 +278,8 @@ pub(crate) fn fts_put<T: WriteTx>(
     };
 
     // Collect, per distinct term, the parallel occurrence arrays.
-    #[allow(clippy::type_complexity)]
-    let mut collector: FxHashMap<
-        SmartString<LazyCompact>,
-        (Vec<DataValue>, Vec<DataValue>, Vec<DataValue>),
-    > = FxHashMap::default();
+    type TermPostings = (Vec<DataValue>, Vec<DataValue>, Vec<DataValue>);
+    let mut collector: FxHashMap<SmartString<LazyCompact>, TermPostings> = FxHashMap::default();
     let mut count = 0i64;
     let mut token_stream = tokenizer.token_stream(&text);
     while let Some(token) = token_stream.next() {

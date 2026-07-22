@@ -512,11 +512,6 @@ impl<S: Storage> Engine<S> {
         // The refusal stands until multi-script sessions land — in this
         // tier the session's temp store dies with the script, so a temp
         // write could never be observed by any later query.
-        // NOTE(constraints-builder): `#[allow]` reconciles a clippy
-        // toolchain-version drift (collapsible_if / let-chains) in this
-        // session-tier block; the block itself is the session author's F2
-        // fix, not constraint work.
-        #[allow(clippy::collapsible_if)]
         if let Some((h, _, _, _)) = &program.out_opts().store_relation
             && h.name.is_temp_relation_name()
         {

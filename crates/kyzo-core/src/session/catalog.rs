@@ -589,8 +589,7 @@ struct StoredRelArityMismatch {
 /// Corruption is typed ([`RelationDeserError`]); the whole store is stamped
 /// with [`FormatVersion`](crate::FormatVersion), which a mismatched decoder
 /// refuses at the door.
-#[allow(clippy::module_inception)] // zone folder + impl module share the seat name by design
-mod catalog {
+mod msgpack_door {
     use super::{RelationDeserError, RelationHandle};
     use miette::Result;
     use rmp_serde::Serializer;
@@ -709,12 +708,12 @@ impl RelationHandle {
     /// these field types in practice, but per law 5 a failure is an error,
     /// never an unwrap (the original unwrapped at every serialize site).
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        catalog::encode_catalog_record(self)
+        msgpack_door::encode_catalog_record(self)
     }
 
     /// Parse a claimed catalog row. Fallible: the bytes may be corrupt.
     pub(crate) fn decode(data: &[u8]) -> Result<Self> {
-        Ok(catalog::decode_catalog_record(data)?)
+        Ok(msgpack_door::decode_catalog_record(data)?)
     }
 
     // -- key/value encoding for this relation's keyspace ------------------

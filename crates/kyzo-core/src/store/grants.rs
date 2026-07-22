@@ -1135,9 +1135,7 @@ impl AncestorReadGrant {
     }
 
     /// First covered epoch.
-    #[allow(clippy::wrong_self_convention)] // from_epoch is a field accessor on the grant, not a converting constructor
-    #[allow(clippy::wrong_self_convention)] // from_epoch is a field accessor on the grant, not a converting constructor
-    pub fn from_epoch(&self) -> FenceEpoch {
+    pub fn covered_from(&self) -> FenceEpoch {
         self.from_epoch
     }
 
@@ -2166,7 +2164,7 @@ mod tests {
         let grant = AncestorReadGrant::new(&table, store_id, from_epoch, to_epoch, proof)?;
 
         assert_eq!(grant.store_id(), store_id);
-        assert_eq!(grant.from_epoch(), from_epoch);
+        assert_eq!(grant.covered_from(), from_epoch);
         assert_eq!(grant.to_epoch(), to_epoch);
         assert_eq!(grant.entitlement_proof().store_id(), store_id);
         assert_eq!(grant.entitlement_proof().payload_digest(), &payload);

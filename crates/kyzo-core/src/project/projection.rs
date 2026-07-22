@@ -289,8 +289,8 @@ mod tests {
     #[test]
     fn five_engine_kinds_share_one_machine() -> Result<()> {
         use crate::project::dedup::lsh::Lsh;
-        use crate::project::sparse::sparse::Sparse;
-        use crate::project::spatial::spatial::Spatial;
+        use crate::project::sparse::index::Sparse;
+        use crate::project::spatial::index::Spatial;
         use crate::project::text::fts::Fts;
         use crate::project::vector::hnsw::Hnsw;
 

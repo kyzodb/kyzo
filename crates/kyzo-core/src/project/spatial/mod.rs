@@ -10,9 +10,8 @@
 //! Geospatial index projections.
 //!
 //! Search door: [`RelationIndexSearch`](crate::project::projection::RelationIndexSearch)
-//! on [`spatial::Spatial`]. Session `IndexKind::Spatial` create/mutation arm is
+//! on [`index::Spatial`]. Session `IndexKind::Spatial` create/mutation arm is
 //! [OPEN] — algorithm seats are complete; this module is `#[cfg(test)]` until
 //! that host arm lands (no module-level dead_code allow).
 
-#[allow(clippy::module_inception)] // zone folder + impl module share the seat name by design
-pub(crate) mod spatial;
+pub(crate) mod index;

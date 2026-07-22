@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 
 use crate::project::contract::search_rows;
-use crate::project::sparse::sparse::{
+use crate::project::sparse::index::{
     Sparse, SparseSearchParams, sparse_index_metadata, sparse_put, sparse_total_docs,
 };
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
@@ -88,7 +88,7 @@ fn setup(db: &impl Storage, docs: &[Doc]) -> Result<Fixture> {
 fn params(k: usize) -> SparseSearchParams {
     SparseSearchParams {
         k,
-        bind_score: crate::project::sparse::sparse::SparseBindScore::Append,
+        bind_score: crate::project::sparse::index::SparseBindScore::Append,
     }
 }
 
@@ -356,7 +356,7 @@ fn k_zero_filter_path_returns_zero_rows() -> Result<()> {
     };
     let p = SparseSearchParams {
         k: 0,
-        bind_score: crate::project::sparse::sparse::SparseBindScore::Omit,
+        bind_score: crate::project::sparse::index::SparseBindScore::Omit,
     };
     let with_filter = search_rows(Sparse::search_index(
         &rtx,
