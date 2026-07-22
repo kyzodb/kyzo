@@ -41,8 +41,6 @@
 //! Counters are `u64` and the merge is integer addition, so the sketch is
 //! exact-to-the-bit deterministic: same input multiset ⇒ same table.
 
-use std::io::Write;
-
 use miette::{Result, bail, ensure};
 
 use kyzo_model::value::DataValue;
@@ -96,7 +94,11 @@ impl CountMinSketch {
 
     /// An empty sketch at the default dimensions.
     pub(crate) fn default_dims() -> Self {
-        Self::new(DEFAULT_WIDTH, DEFAULT_DEPTH).expect("default dims are valid")
+        Self {
+            width: DEFAULT_WIDTH,
+            depth: DEFAULT_DEPTH,
+            counters: vec![0u64; DEFAULT_WIDTH * DEFAULT_DEPTH],
+        }
     }
 
     /// The column a value maps to in a given row.
@@ -163,10 +165,22 @@ impl CountMinSketch {
     /// encoding makes the bytes identical on every platform.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(2 + 8 + self.counters.len() * 8);
-        out.write_all(&[FORMAT_TAG, match u8::try_from(self.depth) { Ok(v) => v, Err(_e) => u8::MAX }]).unwrap();
-        out.write_all(&(match u64::try_from(self.width) { Ok(v) => v, Err(_e) => 0 }).to_le_bytes()).unwrap();
+        out.extend_from_slice(&[
+            FORMAT_TAG,
+            match u8::try_from(self.depth) {
+                Ok(v) => v,
+                Err(_e) => u8::MAX,
+            },
+        ]);
+        out.extend_from_slice(
+            &(match u64::try_from(self.width) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            })
+            .to_le_bytes(),
+        );
         for c in &self.counters {
-            out.write_all(&c.to_le_bytes()).unwrap();
+            out.extend_from_slice(&c.to_le_bytes());
         }
         out
     }
@@ -195,7 +209,11 @@ impl CountMinSketch {
         );
         let counters = rest
             .chunks_exact(8)
-            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+            .map(|c| {
+                let mut arr = [0u8; 8];
+                arr.copy_from_slice(c);
+                u64::from_le_bytes(arr)
+            })
             .collect();
         Ok(Self {
             width,
@@ -241,9 +259,9 @@ mod tests {
     fn overestimate_bound_holds() {
         let (width, depth) = (2048usize, 5usize);
         let (cms, exact, total) = build(5_000, (width, depth));
-        let epsilon = std::f64::consts::E / super::usize_to_f64(width);
-        let delta = (-(super::usize_to_f64(depth))).exp();
-        let bound = match kyzo_model::value::Num::float((epsilon * super::u64_to_f64(total)).ceil()).to_int_coerced() {
+        let epsilon = std::f64::consts::E / crate::exec::fold::sketch::usize_to_f64(width);
+        let delta = (-(crate::exec::fold::sketch::usize_to_f64(depth))).exp();
+        let bound = match kyzo_model::value::Num::float((epsilon * crate::exec::fold::sketch::u64_to_f64(total)).ceil()).to_int_coerced() {
             Some(i) => match u64::try_from(i) { Ok(v) => v, Err(_e) => 0 },
             None => 0,
         };
@@ -261,7 +279,7 @@ mod tests {
         }
         // With probability >= 1-delta each item is within the bound; over
         // `exact.len()` items the expected violations are <= delta*len.
-        let allowed = match kyzo_model::value::Num::float((delta * super::usize_to_f64(exact.len())).ceil()).to_int_coerced() {
+        let allowed = match kyzo_model::value::Num::float((delta * crate::exec::fold::sketch::usize_to_f64(exact.len())).ceil()).to_int_coerced() {
             Some(i) => match usize::try_from(i) { Ok(v) => v, Err(_e) => 0 },
             None => 0,
         } + 1;
