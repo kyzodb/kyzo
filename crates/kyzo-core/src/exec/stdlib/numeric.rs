@@ -122,25 +122,20 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     unary_f64_domain("acosh", args, |a| a >= 1.0, f64::acosh)
 }
 
-struct FoldNumOps<I, F, C, V> {
+struct FoldNumOps<I, F, V> {
     op: &'static str,
     i_init: i64,
     f_init: f64,
     on_int: I,
     on_float: F,
-    combine_final: C,
     vecs: V,
     require_msg: &'static str,
 }
 
-fn fold_num_args<I, F, C, V>(
-    args: &[DataValue],
-    ops: FoldNumOps<I, F, C, V>,
-) -> Result<DataValue>
+fn fold_num_args<I, F, V>(args: &[DataValue], ops: FoldNumOps<I, F, V>) -> Result<DataValue>
 where
     I: Fn(i64, i64) -> Result<i64>,
     F: Fn(f64, f64) -> f64,
-    C: Fn(i64, f64) -> DataValue,
     V: FnOnce(&[DataValue]) -> Result<DataValue>,
 {
     let FoldNumOps {
@@ -149,7 +144,6 @@ where
         f_init,
         on_int,
         on_float,
-        combine_final,
         vecs,
         require_msg,
     } = ops;
@@ -166,7 +160,13 @@ where
         }
     }
     drop(op);
-    Ok(combine_final(i_accum, f_accum))
+    // Float still at the op's identity ⇒ pure-int fold; otherwise fold the
+    // int accumulator into the float lane with the same `on_float` door.
+    Ok(if f_accum == f_init {
+        DataValue::Num(Num::int(i_accum))
+    } else {
+        DataValue::Num(Num::float(on_float(Num::int(i_accum).to_f64(), f_accum)))
+    })
 }
 
 pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
@@ -178,13 +178,6 @@ pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
             f_init: 0.0,
             on_int: |a: i64, b: i64| a.checked_add(b).ok_or(IntegerOverflow { op: "add" }.into()),
             on_float: |a: f64, b: f64| a + b,
-            combine_final: |i, f| {
-                if f == 0.0 {
-                    DataValue::Num(Num::int(i))
-                } else {
-                    DataValue::Num(Num::float(Num::int(i).to_f64() + f))
-                }
-            },
             vecs: add_vecs,
             require_msg: "addition requires numbers",
         },
@@ -429,13 +422,6 @@ pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
             f_init: 1.0,
             on_int: |a: i64, b: i64| a.checked_mul(b).ok_or(IntegerOverflow { op: "mul" }.into()),
             on_float: |a: f64, b: f64| a * b,
-            combine_final: |i, f| {
-                if f == 1.0 {
-                    DataValue::Num(Num::int(i))
-                } else {
-                    DataValue::Num(Num::float(Num::int(i).to_f64() * f))
-                }
-            },
             vecs: mul_vecs,
             require_msg: "multiplication requires numbers",
         },
