@@ -70,12 +70,6 @@ pub(crate) struct Batch {
     premises: Option<Vec<Vec<Tuple>>>,
 }
 
-impl Default for Batch {
-    fn default() -> Self {
-        Batch::new()
-    }
-}
-
 impl Batch {
     pub(crate) fn new() -> Self {
         // Deliberately unallocated: the semi-naive loop mints thousands of

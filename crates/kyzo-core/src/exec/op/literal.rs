@@ -51,7 +51,7 @@ impl InlineFixedRA {
                 Ok(())
             })?;
             if batch.is_full() {
-                chunks.push(std::mem::take(&mut batch));
+                chunks.push(std::mem::replace(&mut batch, Batch::new()));
             }
         }
         if !batch.is_empty() {

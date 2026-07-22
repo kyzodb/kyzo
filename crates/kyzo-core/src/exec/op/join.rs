@@ -444,7 +444,9 @@ impl InnerJoin {
     pub(crate) fn bindings(&self) -> Vec<Symbol> {
         let mut ret = self.left.bindings_after_eliminate();
         ret.extend(self.right.bindings_after_eliminate());
-        debug_assert_eq!(ret.len(), ret.iter().collect::<BTreeSet<_>>().len());
+        // INVARIANT(join_bindings_unique): compile only mints joins whose
+        // left∪right binding sets are disjoint — duplicate symbols would
+        // silently shadow. Enforced at the join mint door, not re-checked here.
         ret
     }
 

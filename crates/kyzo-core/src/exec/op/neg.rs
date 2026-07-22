@@ -31,7 +31,7 @@ use itertools::Itertools;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
-use miette::Result;
+use miette::{Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
@@ -150,7 +150,7 @@ impl NegJoin {
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
         let (left_join_indices, right_join_indices) =
             self.joiner.join_indices(&bindings, self.right.bindings())?;
-        debug_assert!(!right_join_indices.is_empty());
+        ensure!(!right_join_indices.is_empty(), "negation join requires at least one join key");
 
         let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();
         right_invert_indices.sort_by_key(|(_, b)| **b);
