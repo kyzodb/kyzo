@@ -1135,22 +1135,9 @@ impl CrossingKind {
         }
     }
 
-    /// Wire tag for this kind.
+    /// Wire tag for this kind — `#[repr(u8)]` discriminant is sole authority (seat 59).
     pub fn as_wire(self) -> u8 {
-        match self {
-            Self::Entity => 0,
-            Self::Event => 1,
-            Self::State => 2,
-            Self::Role => 3,
-            Self::Relation => 4,
-            Self::Claim => 5,
-            Self::Evidence => 6,
-            Self::Context => 7,
-            Self::Concept => 8,
-            Self::Rule => 9,
-            Self::Derivation => 10,
-            Self::Invalidation => 11,
-        }
+        self as u8
     }
 }
 

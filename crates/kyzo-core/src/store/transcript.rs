@@ -78,22 +78,9 @@ pub enum SealedArtifactKind {
 
 impl SealedArtifactKind {
     /// Stable discriminant written into golden / sealed transcripts.
+    /// `#[repr(u64)]` discriminant is sole authority (seat 59); second serialize Unconstructible.
     pub fn tag(self) -> u64 {
-        match self {
-            Self::CheckpointSeal => 1,
-            Self::AdmissionCertificate => 2,
-            Self::ForkGrant => 3,
-            Self::RecoveryGrant => 4,
-            Self::MergeProofHeader => 5,
-            Self::AuditKeyLeaf => 6,
-            Self::WalHeader => 7,
-            Self::KeyCommit => 8,
-            Self::StateRootHead => 9,
-            Self::LeaveIsFreePack => 10,
-            Self::ChainedStateRoot => 11,
-            Self::AncestorReadGrant => 12,
-            Self::WrappedShredSalt => 13,
-        }
+        self as u64
     }
 }
 
