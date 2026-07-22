@@ -59,7 +59,9 @@ use thiserror::Error;
 use crate::program::span::SourceSpan;
 
 use super::expr::parse_string;
-use super::{ExtractSpan, IntoChildren, KyzoScriptParser, Pair, ParseError, Rule, unexpected};
+use super::{
+    EmptyParseRoot, ExtractSpan, IntoChildren, KyzoScriptParser, Pair, ParseError, Rule, unexpected,
+};
 
 /// Score booster for one FTS literal (`^n`). Bit-identity Eq/Hash so NaN
 /// boosters are representable without a float-order crate at the model wall.
@@ -126,6 +128,22 @@ impl FtsLiteral {
             is_prefix,
             booster,
         })
+    }
+
+    /// Infallible mint for the canonical empty literal (empty text, non-prefix,
+    /// zero booster). The sole construction path for [`FtsExpr::empty_node`].
+    pub fn canonical_empty() -> Self {
+        FtsLiteral {
+            value: SmartString::new(),
+            is_prefix: false,
+            booster: FtsBooster(0.0),
+        }
+    }
+
+    /// Non-empty term with unit booster — the common searchable literal.
+    /// Refuses empty text (use [`canonical_empty`]).
+    pub fn term(value: SmartString<LazyCompact>) -> Option<Self> {
+        Self::new(value, false, 1.0)
     }
 
     pub fn value(&self) -> &str {
@@ -239,10 +257,7 @@ impl FtsExpr {
     /// Canonical empty node (empty literal). Used when And/Or would otherwise
     /// be empty after flatten/tokenize — empty And/Or is refused.
     pub fn empty_node() -> Self {
-        FtsExpr::Literal(
-            FtsLiteral::new(SmartString::new(), false, FtsBooster(0.0))
-                .expect("canonical empty literal"),
-        )
+        FtsExpr::Literal(FtsLiteral::canonical_empty())
     }
 
     /// Conjunction door: refuses empty children (returns [`Self::empty_node`]).
@@ -447,7 +462,9 @@ pub fn parse_fts_query(q: &str) -> Result<FtsExpr> {
             ParseError { span }
         })?
         .next()
-        .unwrap();
+        .ok_or_else(|| EmptyParseRoot {
+            expected: "an fts_doc root",
+        })?;
     // One operator budget for the whole query, threaded through every level.
     let mut ops_left = FTS_OPS_CEILING;
     let pairs = parsed
@@ -647,19 +664,23 @@ fn fts_pratt() -> &'static PrattParser<Rule> {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, bail, ensure};
+
     use super::*;
 
-    fn lit(s: &str) -> FtsExpr {
+    fn lit(s: &str) -> Result<FtsExpr> {
         if s.is_empty() {
-            FtsExpr::empty_node()
-        } else {
-            FtsExpr::Literal(FtsLiteral::new(s.into(), false, 1.0).unwrap())
+            return Ok(FtsExpr::empty_node());
         }
+        let literal = FtsLiteral::new(s.into(), false, 1.0).ok_or_else(|| {
+            miette::miette!("test lit mint refused for non-empty term with booster 1.0")
+        })?;
+        Ok(FtsExpr::Literal(literal))
     }
 
     #[test]
-    fn is_empty_edge_cases() {
-        assert!(lit("").is_empty());
+    fn is_empty_edge_cases() -> Result<()> {
+        assert!(lit("")?.is_empty());
         assert!(FtsLiteral::new("hello".into(), false, 0.0).is_none());
         assert!(FtsExpr::empty_node().is_empty());
         assert!(NonEmptyFtsExprs::admit(vec![]).is_none());
@@ -667,61 +688,65 @@ mod tests {
         assert!(FtsExpr::or(vec![]).is_empty());
         assert!(NonEmptyFtsLiterals::admit(vec![]).is_none());
         assert!(FtsExpr::near(vec![], 10).is_empty());
-        assert!(FtsExpr::Not(Box::new(lit("")), Box::new(lit("x"))).is_empty());
-        assert!(!FtsExpr::Not(Box::new(lit("x")), Box::new(lit(""))).is_empty());
-        let shallow = FtsExpr::and(vec![lit("")]);
+        assert!(FtsExpr::Not(Box::new(lit("")?), Box::new(lit("x")?)).is_empty());
+        assert!(!FtsExpr::Not(Box::new(lit("x")?), Box::new(lit("")?)).is_empty());
+        let shallow = FtsExpr::and(vec![lit("")?]);
         assert!(!shallow.is_empty());
         assert!(shallow.flatten().is_empty());
+        Ok(())
     }
 
     #[test]
-    fn flatten_collapses_nesting_and_drops_empties() {
-        let e = FtsExpr::and(vec![FtsExpr::and(vec![lit("a"), lit("b")]), lit("c")]);
+    fn flatten_collapses_nesting_and_drops_empties() -> Result<()> {
+        let e = FtsExpr::and(vec![FtsExpr::and(vec![lit("a")?, lit("b")?]), lit("c")?]);
         match e.flatten() {
             FtsExpr::And(v) => assert_eq!(v.len(), 3),
             other @ FtsExpr::Literal(_)
             | other @ FtsExpr::Near(_)
             | other @ FtsExpr::Or(_)
-            | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
+            | other @ FtsExpr::Not(..) => bail!("expected And, got {other:?}"),
         }
         let e = FtsExpr::or(vec![
-            FtsExpr::or(vec![lit("a"), lit("b")]),
-            FtsExpr::or(vec![lit("c"), lit("d")]),
+            FtsExpr::or(vec![lit("a")?, lit("b")?]),
+            FtsExpr::or(vec![lit("c")?, lit("d")?]),
         ]);
         match e.flatten() {
             FtsExpr::Or(v) => assert_eq!(v.len(), 4),
             other @ FtsExpr::Literal(_)
             | other @ FtsExpr::Near(_)
             | other @ FtsExpr::And(_)
-            | other @ FtsExpr::Not(..) => panic!("expected Or, got {other:?}"),
+            | other @ FtsExpr::Not(..) => bail!("expected Or, got {other:?}"),
         }
-        let e = FtsExpr::and(vec![lit("a"), lit("")]);
-        assert_eq!(e.flatten(), lit("a"));
-        let e = FtsExpr::or(vec![lit(""), lit("")]);
+        let e = FtsExpr::and(vec![lit("a")?, lit("")?]);
+        assert_eq!(e.flatten(), lit("a")?);
+        let e = FtsExpr::or(vec![lit("")?, lit("")?]);
         let flat = e.flatten();
         assert!(flat.is_empty());
         assert!(matches!(flat, FtsExpr::Literal(_)));
-        let e = FtsExpr::Not(Box::new(lit("keep")), Box::new(lit("")));
-        assert_eq!(e.flatten(), lit("keep"));
+        let e = FtsExpr::Not(Box::new(lit("keep")?), Box::new(lit("")?));
+        assert_eq!(e.flatten(), lit("keep")?);
         let e = FtsExpr::and(vec![FtsExpr::and(vec![FtsExpr::and(vec![FtsExpr::or(
-            vec![lit("x")],
+            vec![lit("x")?],
         )])])]);
-        assert_eq!(e.flatten(), lit("x"));
+        assert_eq!(e.flatten(), lit("x")?);
+        Ok(())
     }
 
     /// Drive the nesting ceiling through the sole non-test constructor
     /// ([`parse_fts_query`]), not a hand-built tree — the parser is what
     /// the depth invariant on [`FtsExpr`] relies on.
     #[test]
-    fn parse_fts_query_refuses_nesting_over_ceiling() {
+    fn parse_fts_query_refuses_nesting_over_ceiling() -> Result<()> {
         // Nested `w NOT (…)`: each NOT raises the weight passed into the
         // grouped child (see `parse_fts_expr` / `build_term`).
         let mut q = String::from("w");
         for _ in 0..FTS_NESTING_CEILING {
             q = format!("w NOT ({q})");
         }
-        let err = parse_fts_query(&q).expect_err("must refuse over nesting ceiling");
-        assert!(
+        let Err(err) = parse_fts_query(&q) else {
+            bail!("must refuse over nesting ceiling");
+        };
+        ensure!(
             err.downcast_ref::<FtsNestingTooDeep>().is_some(),
             "expected FtsNestingTooDeep, got {err:?}"
         );
@@ -730,22 +755,29 @@ mod tests {
         for _ in 0..16 {
             ok = format!("w NOT ({ok})");
         }
-        assert!(
+        ensure!(
             parse_fts_query(&ok).is_ok(),
             "16 nested NOTs must still admit"
         );
+        Ok(())
     }
 
     #[test]
-    fn parse_fts_query_refuses_ops_over_ceiling() {
+    fn parse_fts_query_refuses_ops_over_ceiling() -> Result<()> {
         let terms: Vec<&str> = std::iter::repeat("w").take(FTS_OPS_CEILING + 2).collect();
         let q = terms.join(" AND ");
-        let err = parse_fts_query(&q).expect_err("must refuse over ops ceiling");
-        assert!(
+        let Err(err) = parse_fts_query(&q) else {
+            bail!("must refuse over ops ceiling");
+        };
+        ensure!(
             err.downcast_ref::<FtsTooManyOps>().is_some(),
             "expected FtsTooManyOps, got {err:?}"
         );
         let ok_terms: Vec<&str> = std::iter::repeat("w").take(8).collect();
-        assert!(parse_fts_query(&ok_terms.join(" AND ")).is_ok());
+        ensure!(
+            parse_fts_query(&ok_terms.join(" AND ")).is_ok(),
+            "small AND query must admit"
+        );
+        Ok(())
     }
 }

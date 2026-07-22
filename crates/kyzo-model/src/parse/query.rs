@@ -44,7 +44,7 @@ use crate::value::{AsOf, DataValue, MAX_VALIDITY_TS, ValidityTs};
 
 use super::expr::build_expr;
 use super::schema::parse_schema;
-use super::{ExtractSpan, Pair, Pairs, Rule, UnexpectedRule};
+use super::{ExtractSpan, IntoChildren, Pair, Pairs, Rule, UnexpectedRule};
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Query option {0} is not constant")]
@@ -114,9 +114,12 @@ impl Diagnostic for MultipleRuleDefinitionError {
     }
 }
 
-fn merge_spans(symbs: &[Symbol]) -> SourceSpan {
-    let mut fst = symbs.first().unwrap().span;
-    for nxt in symbs.iter().skip(1) {
+fn merge_spans(symbs: &[Symbol], fallback: SourceSpan) -> SourceSpan {
+    let Some((first, rest)) = symbs.split_first() else {
+        return fallback;
+    };
+    let mut fst = first.span;
+    for nxt in rest {
         fst = fst.merge(nxt.span);
     }
     fst
@@ -179,12 +182,14 @@ pub(crate) fn parse_query(
                                     #[label] SourceSpan,
                                     #[label] SourceSpan,
                                 );
-                                let prev = rs.first().unwrap();
+                                let Some(prev) = rs.first() else {
+                                    bail!(UnexpectedRule(rule.span));
+                                };
                                 ensure!(prev.aggr == rule.aggr, {
                                     RuleHeadMismatch(
                                         key,
-                                        merge_spans(&prev.head),
-                                        merge_spans(&rule.head),
+                                        merge_spans(&prev.head, rule.span),
+                                        merge_spans(&rule.head, rule.span),
                                     )
                                 });
 
@@ -224,8 +229,8 @@ pub(crate) fn parse_query(
             }
             Rule::const_rule => {
                 let span = pair.extract_span();
-                let mut src = pair.into_inner();
-                let (name, mut head, aggr) = parse_rule_head(src.next().unwrap(), param_pool)?;
+                let mut src = pair.children();
+                let (name, mut head, aggr) = parse_rule_head(src.need("a child")?, param_pool)?;
 
                 if let Some(found) = progs.get(&name) {
                     let mut found_span = match found {
@@ -251,7 +256,7 @@ pub(crate) fn parse_query(
                 for (a, v) in aggr.iter().zip(head.iter()) {
                     ensure!(!a.is_aggregated(), AggrInConstRuleError(v.span));
                 }
-                let data_part = src.next().unwrap();
+                let data_part = src.need("a child")?;
                 let entry_param_head = extract_entry_param_head(data_part.clone());
                 let data = build_expr(data_part, param_pool)?;
                 let options =
@@ -298,7 +303,7 @@ pub(crate) fn parse_query(
                 );
             }
             Rule::timeout_option => {
-                let pair = pair.into_inner().next().unwrap();
+                let pair = pair.children().need("a child")?;
                 let span = pair.extract_span();
                 let timeout = build_expr(pair, param_pool)?
                     .eval_to_const()
@@ -317,7 +322,7 @@ pub(crate) fn parse_query(
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let pair = pair.into_inner().next().unwrap();
+                    let pair = pair.children().need("a child")?;
                     let span = pair.extract_span();
                     let sleep = build_expr(pair, param_pool)?
                         .eval_to_const()
@@ -329,7 +334,7 @@ pub(crate) fn parse_query(
                 }
             }
             Rule::limit_option => {
-                let pair = pair.into_inner().next().unwrap();
+                let pair = pair.children().need("a child")?;
                 let span = pair.extract_span();
                 let limit = get_non_neg_int(
                     &build_expr(pair, param_pool)?
@@ -340,7 +345,7 @@ pub(crate) fn parse_query(
                 out_opts.limit = Some(limit as usize);
             }
             Rule::offset_option => {
-                let pair = pair.into_inner().next().unwrap();
+                let pair = pair.children().need("a child")?;
                 let span = pair.extract_span();
                 let offset = get_non_neg_int(
                     &build_expr(pair, param_pool)?
@@ -374,8 +379,8 @@ pub(crate) fn parse_query(
             }
             Rule::relation_option => {
                 let span = pair.extract_span();
-                let mut args = pair.into_inner();
-                let op_pair = args.next().unwrap();
+                let mut args = pair.children();
+                let op_pair = args.need("a child")?;
                 let op = match op_pair.as_rule() {
                     Rule::relation_create => RelationOp::Create,
                     Rule::relation_replace => RelationOp::Replace,
@@ -389,7 +394,7 @@ pub(crate) fn parse_query(
                     _other => bail!(UnexpectedRule(op_pair.extract_span())),
                 };
 
-                let name_p = args.next().unwrap();
+                let name_p = args.need("a child")?;
                 let name = Symbol::new(name_p.as_str(), name_p.extract_span());
                 let schema_or_vld = args.next();
                 let (schema_p, vld_p) = match schema_or_vld {
@@ -416,8 +421,8 @@ pub(crate) fn parse_query(
                             };
                             bail!(WriteValidityOnNonWriteOp(name, span));
                         }
-                        let mut coords = p.into_inner();
-                        let vld_expr = build_expr(coords.next().unwrap(), param_pool)?;
+                        let mut coords = p.children();
+                        let vld_expr = build_expr(coords.need("a child")?, param_pool)?;
                         if coords.next().is_some() {
                             bail!(WriteValiditySetsSystemTime(span));
                         }
@@ -484,7 +489,7 @@ pub(crate) fn parse_query(
                 out_opts.assertion = Some(QueryAssertion::AssertSome(pair.extract_span()))
             }
             Rule::disable_magic_rewrite_option => {
-                let pair = pair.into_inner().next().unwrap();
+                let pair = pair.children().need("a child")?;
                 let span = pair.extract_span();
                 let val = build_expr(pair, param_pool)?
                     .eval_to_const()
@@ -512,7 +517,7 @@ pub(crate) fn parse_query(
         {
             let mut bindings = key_bindings.clone();
             bindings.extend_from_slice(dep_bindings);
-            insert_empty_const_rule(&mut progs, &bindings);
+            insert_empty_const_rule(&mut progs, &bindings)?;
         }
     }
 
@@ -526,7 +531,7 @@ pub(crate) fn parse_query(
         }) => {
             // Need an entry to derive head — ensure Constant placeholder if empty.
             if progs.is_empty() {
-                insert_empty_const_rule(&mut progs, &[]);
+                insert_empty_const_rule(&mut progs, &[])?;
             }
             let mut prog = InputProgram::new(progs, out_opts, disable_magic_rewrite)?;
             let head = prog.get_entry_out_head()?;
@@ -564,7 +569,7 @@ pub(crate) fn parse_query(
             if progs.is_empty() && matches!(op, RelationOp::Create) {
                 let mut bindings = handle.dep_bindings.clone();
                 bindings.extend_from_slice(&handle.key_bindings);
-                insert_empty_const_rule(&mut progs, &bindings);
+                insert_empty_const_rule(&mut progs, &bindings)?;
             }
             out_opts.store_relation = Some((handle, op, returning_mutation, write_vld));
         }
@@ -664,8 +669,8 @@ fn parse_rule(
     cur_vld: ValidityTs,
 ) -> Result<(Symbol, InputInlineRule)> {
     let span = src.extract_span();
-    let mut src = src.into_inner();
-    let head = src.next().unwrap();
+    let mut src = src.children();
+    let head = src.need("a child")?;
     let head_span = head.extract_span();
     let (name, head, aggr) = parse_rule_head(head, param_pool)?;
 
@@ -675,7 +680,7 @@ fn parse_rule(
     struct EmptyRuleHead(#[label] SourceSpan);
 
     ensure!(!head.is_empty(), EmptyRuleHead(head_span));
-    let body = src.next().unwrap();
+    let body = src.need("a child")?;
     let mut body_clauses = vec![];
     let mut ignored_counter = 0;
     for atom_src in body.into_inner() {
@@ -714,7 +719,9 @@ fn parse_disjunction(
         }
     }
     Ok(if res.len() == 1 {
-        res.into_iter().next().unwrap()
+        res.into_iter()
+            .next()
+            .ok_or_else(|| UnexpectedRule(span))?
     } else {
         InputAtom::Disjunction { inner: res, span }
     })
@@ -741,9 +748,9 @@ fn parse_atom(
         Rule::disjunction => parse_disjunction(src, param_pool, cur_vld, ignored_counter)?,
         Rule::negation => {
             let span = src.extract_span();
-            let mut src = src.into_inner();
-            src.next().unwrap();
-            let inner = parse_atom(src.next().unwrap(), param_pool, cur_vld, ignored_counter)?;
+            let mut src = src.children();
+            src.need("a child")?;
+            let inner = parse_atom(src.need("a child")?, param_pool, cur_vld, ignored_counter)?;
             InputAtom::Negation {
                 inner: inner.into(),
                 span,
@@ -755,14 +762,14 @@ fn parse_atom(
         }
         Rule::unify => {
             let span = src.extract_span();
-            let mut src = src.into_inner();
-            let var = src.next().unwrap();
+            let mut src = src.children();
+            let var = src.need("a child")?;
             let mut symb = Symbol::new(var.as_str(), var.extract_span());
             if matches!(symb.kind(), SymbolKind::Ignored) {
                 symb.name = format!("*^*{}", *ignored_counter).into();
                 *ignored_counter += 1;
             }
-            let expr = build_expr(src.next().unwrap(), param_pool)?;
+            let expr = build_expr(src.need("a child")?, param_pool)?;
             InputAtom::Unification {
                 inner: Unification {
                     binding: symb,
@@ -774,15 +781,15 @@ fn parse_atom(
         }
         Rule::unify_multi => {
             let span = src.extract_span();
-            let mut src = src.into_inner();
-            let var = src.next().unwrap();
+            let mut src = src.children();
+            let var = src.need("a child")?;
             let mut symb = Symbol::new(var.as_str(), var.extract_span());
             if matches!(symb.kind(), SymbolKind::Ignored) {
                 symb.name = format!("*^*{}", *ignored_counter).into();
                 *ignored_counter += 1;
             }
-            src.next().unwrap();
-            let expr = build_expr(src.next().unwrap(), param_pool)?;
+            src.need("a child")?;
+            let expr = build_expr(src.need("a child")?, param_pool)?;
             InputAtom::Unification {
                 inner: Unification {
                     binding: symb,
@@ -794,10 +801,10 @@ fn parse_atom(
         }
         Rule::rule_apply => {
             let span = src.extract_span();
-            let mut src = src.into_inner();
-            let name = src.next().unwrap();
+            let mut src = src.children();
+            let name = src.need("a child")?;
             let mut args = Vec::new();
-            for v in src.next().unwrap().into_inner() {
+            for v in src.need("a child")?.into_inner() {
                 args.push(build_expr(v, param_pool)?);
             }
             InputAtom::Rule {
@@ -810,10 +817,10 @@ fn parse_atom(
         }
         Rule::relation_apply => {
             let span = src.extract_span();
-            let mut src = src.into_inner();
-            let name = src.next().unwrap();
+            let mut src = src.children();
+            let name = src.need("a child")?;
             let mut args = Vec::new();
-            for v in src.next().unwrap().into_inner() {
+            for v in src.need("a child")?.into_inner() {
                 args.push(build_expr(v, param_pool)?);
             }
             let validity =
@@ -829,8 +836,8 @@ fn parse_atom(
         }
         Rule::search_apply => {
             let span = src.extract_span();
-            let mut src = src.into_inner();
-            let name_p = src.next().unwrap();
+            let mut src = src.children();
+            let name_p = src.need("a child")?;
             let name_segs: Vec<&str> = name_p.as_str().split(':').collect();
 
             #[derive(Debug, Error, Diagnostic)]
@@ -845,7 +852,7 @@ fn parse_atom(
             let relation = Symbol::new(name_segs[0], name_p.extract_span());
             let index = Symbol::new(name_segs[1], name_p.extract_span());
             let mut bindings = BTreeMap::new();
-            for arg in src.next().unwrap().into_inner() {
+            for arg in src.need("a child")?.into_inner() {
                 let (k, v) = extract_named_apply_arg(arg, param_pool)?;
                 bindings.insert(k, v);
             }
@@ -862,11 +869,11 @@ fn parse_atom(
         }
         Rule::relation_named_apply => {
             let span = src.extract_span();
-            let mut src = src.into_inner();
-            let name_p = src.next().unwrap();
+            let mut src = src.children();
+            let name_p = src.need("a child")?;
             let name = Symbol::new(&name_p.as_str()[1..], name_p.extract_span());
             let mut args = BTreeMap::new();
-            for arg in src.next().unwrap().into_inner() {
+            for arg in src.need("a child")?.into_inner() {
                 let (k, v) = extract_named_apply_arg(arg, param_pool)?;
                 args.insert(k, v);
             }
@@ -889,8 +896,8 @@ fn extract_named_apply_arg(
     pair: Pair<'_>,
     param_pool: &BTreeMap<String, DataValue>,
 ) -> Result<(Symbol, Expr)> {
-    let mut inner = pair.into_inner();
-    let name_p = inner.next().unwrap();
+    let mut inner = pair.children();
+    let name_p = inner.need("a child")?;
     let name = Symbol::new(name_p.as_str(), name_p.extract_span());
     let arg = match inner.next() {
         Some(a) => build_expr(a, param_pool)?,
@@ -906,8 +913,8 @@ fn parse_rule_head(
     src: Pair<'_>,
     param_pool: &BTreeMap<String, DataValue>,
 ) -> Result<(Symbol, Vec<Symbol>, Vec<HeadAggrSlot>)> {
-    let mut src = src.into_inner();
-    let name = src.next().unwrap();
+    let mut src = src.children();
+    let name = src.need("a child")?;
     let mut args = vec![];
     let mut aggrs = vec![];
     for p in src {
@@ -927,17 +934,17 @@ fn parse_rule_head_arg(
     src: Pair<'_>,
     param_pool: &BTreeMap<String, DataValue>,
 ) -> Result<(Symbol, HeadAggrSlot)> {
-    let src = src.into_inner().next().unwrap();
+    let src = src.children().need("a child")?;
     Ok(match src.as_rule() {
         Rule::var => (
             Symbol::new(src.as_str(), src.extract_span()),
             HeadAggrSlot::Plain,
         ),
         Rule::aggr_arg => {
-            let mut inner = src.into_inner();
-            let aggr_p = inner.next().unwrap();
+            let mut inner = src.children();
+            let aggr_p = inner.need("a child")?;
             let aggr_name = aggr_p.as_str();
-            let var = inner.next().unwrap();
+            let var = inner.need("a child")?;
             let mut args = Vec::new();
             for v in inner {
                 args.push(build_expr(v, param_pool)?.eval_to_const()?);
@@ -959,8 +966,8 @@ fn parse_fixed_rule(
     param_pool: &BTreeMap<String, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<(Symbol, FixedRuleApply)> {
-    let mut src = src.into_inner();
-    let (out_symbol, head, aggr) = parse_rule_head(src.next().unwrap(), param_pool)?;
+    let mut src = src.children();
+    let (out_symbol, head, aggr) = parse_rule_head(src.need("a child")?, param_pool)?;
 
     #[derive(Debug, Error, Diagnostic)]
     #[error("fixed rule cannot be combined with aggregation")]
@@ -979,22 +986,22 @@ fn parse_fixed_rule(
     let mut seen_bindings = BTreeSet::new();
     let mut binding_gen_id = 0;
 
-    let name_pair = src.next().unwrap();
+    let name_pair = src.need("a child")?;
     let fixed_name = name_pair.as_str();
     let mut rule_args: Vec<FixedRuleArg> = vec![];
     let mut options = FixedRuleOptions::empty();
-    let args_list = src.next().unwrap();
+    let args_list = src.need("a child")?;
     let args_list_span = args_list.extract_span();
 
     for nxt in args_list.into_inner() {
         match nxt.as_rule() {
             Rule::fixed_rel => {
-                let inner = nxt.into_inner().next().unwrap();
+                let inner = nxt.children().need("a child")?;
                 let span = inner.extract_span();
                 match inner.as_rule() {
                     Rule::fixed_rule_rel => {
-                        let mut els = inner.into_inner();
-                        let name = els.next().unwrap();
+                        let mut els = inner.children();
+                        let name = els.need("a child")?;
                         let mut bindings = Vec::new();
                         for v in els {
                             let s = v.as_str();
@@ -1017,8 +1024,8 @@ fn parse_fixed_rule(
                         })
                     }
                     Rule::fixed_relation_rel => {
-                        let mut els = inner.into_inner();
-                        let name = els.next().unwrap();
+                        let mut els = inner.children();
+                        let name = els.need("a child")?;
                         let mut bindings = vec![];
                         let mut as_of = None;
                         for v in els {
@@ -1047,7 +1054,9 @@ fn parse_fixed_rule(
                         }
                         rule_args.push(FixedRuleArg::Stored {
                             name: Symbol::new(
-                                name.as_str().strip_prefix('*').unwrap(),
+                                name.as_str()
+                                    .strip_prefix('*')
+                                    .ok_or_else(|| UnexpectedRule(name.extract_span()))?,
                                 name.extract_span(),
                             ),
                             bindings,
@@ -1056,15 +1065,15 @@ fn parse_fixed_rule(
                         })
                     }
                     Rule::fixed_named_relation_rel => {
-                        let mut els = inner.into_inner();
-                        let name = els.next().unwrap();
+                        let mut els = inner.children();
+                        let name = els.need("a child")?;
                         let mut bindings = BTreeMap::new();
                         let mut as_of = None;
                         for p in els {
                             match p.as_rule() {
                                 Rule::fixed_named_relation_arg_pair => {
-                                    let mut vs = p.into_inner();
-                                    let kp = vs.next().unwrap();
+                                    let mut vs = p.children();
+                                    let kp = vs.need("a child")?;
                                     let k = Symbol::new(kp.as_str(), kp.extract_span());
                                     let v = match vs.next() {
                                         Some(vp) => {
@@ -1091,7 +1100,9 @@ fn parse_fixed_rule(
 
                         rule_args.push(FixedRuleArg::NamedStored {
                             name: Symbol::new(
-                                name.as_str().strip_prefix('*').unwrap(),
+                                name.as_str()
+                                    .strip_prefix('*')
+                                    .ok_or_else(|| UnexpectedRule(name.extract_span()))?,
                                 name.extract_span(),
                             ),
                             bindings,
@@ -1103,10 +1114,10 @@ fn parse_fixed_rule(
                 }
             }
             Rule::fixed_opt_pair => {
-                let mut inner = nxt.into_inner();
-                let name_p = inner.next().unwrap();
+                let mut inner = nxt.children();
+                let name_p = inner.need("a child")?;
                 let name = Symbol::new(name_p.as_str(), name_p.extract_span());
-                let val = inner.next().unwrap();
+                let val = inner.need("a child")?;
                 let val = build_expr(val, param_pool)?;
                 options.insert(name, val)?;
             }
@@ -1147,7 +1158,7 @@ struct EmptyRowForConstRule(#[label] SourceSpan);
 fn insert_empty_const_rule(
     progs: &mut BTreeMap<Symbol, InputInlineRulesOrFixed>,
     bindings: &[Symbol],
-) {
+) -> Result<()> {
     let entry_symbol = Symbol::prog_entry(Default::default());
     let options = FixedRuleOptions::from_entries([(
         Symbol::new("data", Default::default()),
@@ -1155,8 +1166,7 @@ fn insert_empty_const_rule(
             val: DataValue::List(vec![]),
             span: Default::default(),
         },
-    )])
-    .expect("data is a declared fixed-rule option");
+    )])?;
     progs.insert(
         entry_symbol,
         InputInlineRulesOrFixed::Fixed {
@@ -1173,6 +1183,7 @@ fn insert_empty_const_rule(
             },
         },
     );
+    Ok(())
 }
 
 /// Derive `?[] <- [[$a, $b]]` head bindings from the already-parsed data
@@ -1207,7 +1218,7 @@ fn sole_expr_term(expr: Pair<'_>) -> Option<Pair<'_>> {
     if expr.as_rule() != Rule::expr {
         return None;
     }
-    let mut inner = expr.into_inner();
+    let mut inner = expr.children();
     let first = inner.next()?;
     if matches!(first.as_rule(), Rule::minus | Rule::negate) {
         return None;
@@ -1279,8 +1290,8 @@ fn parse_at_clause(
     param_pool: &BTreeMap<String, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<AsOf> {
-    let mut coords = vld_clause.into_inner();
-    let first = expr2vld_spec(build_expr(coords.next().unwrap(), param_pool)?, cur_vld)?;
+    let mut coords = vld_clause.children();
+    let first = expr2vld_spec(build_expr(coords.need("a child")?, param_pool)?, cur_vld)?;
     Ok(match coords.next() {
         None => AsOf::current(first),
         Some(second) => AsOf::at(
@@ -1306,9 +1317,9 @@ fn parse_read_validity_clause(
     Ok(Some(match clause.as_rule() {
         Rule::validity_clause => ValidityClause::At(parse_at_clause(clause, param_pool, cur_vld)?),
         Rule::spans_clause => {
-            let mut children = clause.into_inner();
-            children.next().unwrap(); // spans_kw
-            let var_pair = children.next().unwrap();
+            let mut children = clause.children();
+            children.need("a child")?; // spans_kw
+            let var_pair = children.need("a child")?;
             let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
             if matches!(var.kind(), SymbolKind::Ignored) {
                 var.name = format!("*^*{}", *ignored_counter).into();
@@ -1326,11 +1337,11 @@ fn parse_read_validity_clause(
             } else {
                 DeltaAxis::Valid
             };
-            let mut children = clause.into_inner();
-            children.next().unwrap(); // delta_kw / delta_sys_kw
-            let from = expr2vld_spec(build_expr(children.next().unwrap(), param_pool)?, cur_vld)?;
-            let to = expr2vld_spec(build_expr(children.next().unwrap(), param_pool)?, cur_vld)?;
-            let var_pair = children.next().unwrap();
+            let mut children = clause.children();
+            children.need("a child")?; // delta_kw / delta_sys_kw
+            let from = expr2vld_spec(build_expr(children.need("a child")?, param_pool)?, cur_vld)?;
+            let to = expr2vld_spec(build_expr(children.need("a child")?, param_pool)?, cur_vld)?;
+            let var_pair = children.need("a child")?;
             let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
             if matches!(var.kind(), SymbolKind::Ignored) {
                 var.name = format!("*^*{}", *ignored_counter).into();
@@ -1355,59 +1366,69 @@ mod tests {
     use crate::value::ValidityTs;
     use std::collections::BTreeMap;
 
-    fn parse_q(src: &str) -> InputProgram {
+    fn parse_q(src: &str) -> Result<InputProgram> {
         let cur = ValidityTs::from_raw(0);
-        match parse_script(src, &BTreeMap::new(), cur).unwrap() {
-            Script::Query(p) => p,
-            other => panic!("expected Query script, got {other:?}"),
+        match parse_script(src, &BTreeMap::new(), cur)? {
+            Script::Query(p) => Ok(p),
+            other => bail!("expected Query script, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_query_const_entry_is_fixed_constant_with_head_arity_two() {
+    fn parse_query_const_entry_is_fixed_constant_with_head_arity_two() -> Result<()> {
         // `<- [[…]]` lifts as the Constant fixed rule, not inline Rules.
-        let prog = parse_q(r#"?[a, b] <- [[1, 2]]"#);
+        let prog = parse_q("?[a, b] <- [[1, 2]]")?;
         assert_eq!(prog.entry_name().to_string(), "?");
         match prog.entry() {
             InputInlineRulesOrFixed::Fixed { fixed } => {
                 assert_eq!(fixed.head.len(), 2);
                 assert_eq!(fixed.head[0].to_string(), "a");
                 assert_eq!(fixed.head[1].to_string(), "b");
-                assert_eq!(fixed.arity().unwrap(), 2);
+                assert_eq!(fixed.arity()?, 2);
                 assert_eq!(fixed.fixed_handle.name.to_string(), "Constant");
             }
             InputInlineRulesOrFixed::Rules { .. } => {
-                panic!("const `<-` entry must be Fixed(Constant), got Rules")
+                bail!("const `<-` entry must be Fixed(Constant), got Rules")
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn parse_query_refuses_empty_and_no_entry() {
+    fn parse_query_refuses_empty_and_no_entry() -> Result<()> {
         let cur = ValidityTs::from_raw(0);
-        assert!(parse_script("", &BTreeMap::new(), cur).is_err());
-        // A rule without `?` entry cannot become an InputProgram.
-        let err = parse_script(r#"r[x] := *s[x]"#, &BTreeMap::new(), cur).unwrap_err();
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("entry") || msg.contains("Entry") || msg.contains("?"),
-            "no-entry query must refuse, got {msg}"
+        ensure!(
+            parse_script("", &BTreeMap::new(), cur).is_err(),
+            "empty script must refuse"
         );
+        // A rule without `?` entry cannot become an InputProgram.
+        match parse_script("r[x] := *s[x]", &BTreeMap::new(), cur) {
+            Ok(_) => bail!("no-entry query must refuse"),
+            Err(err) => {
+                let msg = format!("{err:?}");
+                ensure!(
+                    msg.contains("entry") || msg.contains("Entry") || msg.contains("?"),
+                    "no-entry query must refuse, got {msg}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]
-    fn parse_query_relation_apply_atom_lifts() {
-        let prog = parse_q(r#"?[x] := *r[x]"#);
+    fn parse_query_relation_apply_atom_lifts() -> Result<()> {
+        let prog = parse_q("?[x] := *r[x]")?;
         match prog.entry() {
             InputInlineRulesOrFixed::Rules { rules } => {
                 assert_eq!(rules.len(), 1);
                 assert_eq!(rules[0].head.len(), 1);
-                assert!(
+                ensure!(
                     !rules[0].body.is_empty(),
                     "body must carry the relation apply atom"
                 );
             }
-            InputInlineRulesOrFixed::Fixed { .. } => panic!("expected Rules entry"),
+            InputInlineRulesOrFixed::Fixed { .. } => bail!("expected Rules entry"),
         }
+        Ok(())
     }
 }

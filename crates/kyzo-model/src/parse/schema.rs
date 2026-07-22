@@ -26,13 +26,13 @@ use crate::schema::relation::StoredRelationMetadata;
 use crate::value::DataValue;
 
 use super::expr::build_expr;
-use super::{ExtractSpan, Pair, Rule, UnexpectedRule};
+use super::{ExtractSpan, IntoChildren, Pair, Rule, UnexpectedRule};
 
 /// Parse a `{ keys => dependents }` table schema pair.
 pub(crate) fn parse_schema(
     pair: Pair<'_>,
 ) -> Result<(StoredRelationMetadata, Vec<Symbol>, Vec<Symbol>)> {
-    let mut src = pair.into_inner();
+    let mut src = pair.children();
     let mut keys = vec![];
     let mut dependents = vec![];
     let mut key_bindings = vec![];
@@ -44,7 +44,7 @@ pub(crate) fn parse_schema(
     #[diagnostic(code(parser::dup_name_in_cols))]
     struct DuplicateNameInCols(String, #[label] SourceSpan);
 
-    for p in src.next().unwrap().into_inner() {
+    for p in src.need("the key columns")?.into_inner() {
         let span = p.extract_span();
         let (col, ident) = parse_col(p)?;
         if !seen_names.insert(col.name.clone()) {
@@ -76,8 +76,8 @@ pub(crate) fn parse_schema(
 }
 
 fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
-    let mut src = pair.into_inner();
-    let name_p = src.next().unwrap();
+    let mut src = pair.children();
+    let name_p = src.need("the column name")?;
     let name = SmartString::<LazyCompact>::from(name_p.as_str());
     let mut typing = NullableColType::optional(ColType::Any);
     let mut default_gen = None;
@@ -110,7 +110,7 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
 /// Parse a nullable column type pair.
 pub(crate) fn parse_nullable_type(pair: Pair<'_>) -> Result<NullableColType> {
     let nullable = pair.as_str().ends_with('?');
-    let coltype = parse_type_inner(pair.into_inner().next().unwrap())?;
+    let coltype = parse_type_inner(pair.children().need("the column type")?)?;
     Ok(if nullable {
         NullableColType::optional(coltype)
     } else {
@@ -130,8 +130,8 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
         Rule::json_type => ColType::Json,
         Rule::validity_type => ColType::Validity,
         Rule::list_type => {
-            let mut inner = pair.into_inner();
-            let eltype = parse_nullable_type(inner.next().unwrap())?;
+            let mut inner = pair.children();
+            let eltype = parse_nullable_type(inner.need("the list element type")?)?;
             let len = match inner.next() {
                 None => None,
                 Some(len_p) => {
@@ -155,8 +155,8 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
             }
         }
         Rule::vec_type => {
-            let mut inner = pair.into_inner();
-            let el_p = inner.next().unwrap();
+            let mut inner = pair.children();
+            let el_p = inner.need("the vector element type")?;
             let eltype = match el_p.as_str() {
                 "F32" | "Float" => VecElementType::F32,
                 "F64" | "Double" => VecElementType::F64,
@@ -169,7 +169,7 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
                     bail!(BadVecElType(other.to_string(), el_p.extract_span()))
                 }
             };
-            let len = inner.next().unwrap();
+            let len = inner.need("the vector length")?;
             let len: usize = len
                 .as_str()
                 .replace('_', "")

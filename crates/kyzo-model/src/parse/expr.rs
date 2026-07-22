@@ -31,7 +31,7 @@ use crate::program::span::SourceSpan;
 use crate::program::symbol::Symbol;
 use crate::value::DataValue;
 
-use super::{ExtractSpan, Pair, Rule, UnexpectedRule};
+use super::{ExtractSpan, IntoChildren, Pair, Rule, UnexpectedRule};
 
 fn pratt_parser() -> &'static PrattParser<Rule> {
     static PARSER: OnceLock<PrattParser<Rule>> = OnceLock::new();
@@ -202,7 +202,9 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             #[diagnostic(code(parser::param_not_found))]
             struct ParamNotFoundError(String, #[label] SourceSpan);
 
-            let param_str = pair.as_str().strip_prefix('$').unwrap();
+            let Some(param_str) = pair.as_str().strip_prefix('$') else {
+                bail!(UnexpectedRule(span));
+            };
             Expr::Const {
                 val: param_pool
                     .get(param_str)
@@ -288,9 +290,9 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
         Rule::object => {
             let mut args = vec![];
             for p in pair.into_inner() {
-                let mut p = p.into_inner();
-                let k = p.next().unwrap();
-                let v = p.next().unwrap();
+                let mut p = p.children();
+                let k = p.need("an object key")?;
+                let v = p.need("an object value")?;
                 args.push(build_expr(k, param_pool)?);
                 args.push(build_expr(v, param_pool)?);
             }
@@ -301,24 +303,27 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             }
         }
         Rule::apply => {
-            let mut p = pair.into_inner();
-            let ident_p = p.next().unwrap();
+            let mut p = pair.children();
+            let ident_p = p.need("the applied operator")?;
             let ident = ident_p.as_str();
             let mut args: Vec<Expr> = Vec::new();
-            for v in p.next().unwrap().into_inner() {
+            for v in p.need("the argument list")?.into_inner() {
                 args.push(build_expr(v, param_pool)?);
             }
             match ident {
                 "cond" => {
+                    #[derive(Error, Diagnostic, Debug)]
+                    #[error("'cond' cannot have empty body")]
+                    #[diagnostic(code(parser::empty_cond))]
+                    struct EmptyCond(#[label] SourceSpan);
                     if args.is_empty() {
-                        #[derive(Error, Diagnostic, Debug)]
-                        #[error("'cond' cannot have empty body")]
-                        #[diagnostic(code(parser::empty_cond))]
-                        struct EmptyCond(#[label] SourceSpan);
                         bail!(EmptyCond(span));
                     }
                     if args.len() & 1 == 1 {
-                        let last_span = args.last().unwrap().span();
+                        let Some(last) = args.last() else {
+                            bail!(EmptyCond(span));
+                        };
+                        let last_span = last.span();
                         args.insert(
                             args.len() - 1,
                             Expr::Const {
@@ -363,8 +368,12 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
 
                     let mut clauses = vec![];
                     let mut args = args.into_iter();
-                    let cond = args.next().unwrap();
-                    let then = args.next().unwrap();
+                    let Some(cond) = args.next() else {
+                        bail!(WrongArgsToIf(span));
+                    };
+                    let Some(then) = args.next() else {
+                        bail!(WrongArgsToIf(span));
+                    };
                     clauses.push((cond, then));
                     clauses.push((
                         Expr::Const {
@@ -421,7 +430,7 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
                 },
             }
         }
-        Rule::grouping => build_expr(pair.into_inner().next().unwrap(), param_pool)?,
+        Rule::grouping => build_expr(pair.children().need("the grouped expression")?, param_pool)?,
         _other => bail!(UnexpectedRule(pair.extract_span())),
     })
 }
@@ -464,7 +473,7 @@ fn parse_quoted_string_inner(
     quote_escape: &str,
     quote_char: char,
 ) -> Result<SmartString<LazyCompact>> {
-    let pairs = pair.into_inner().next().unwrap().into_inner();
+    let pairs = pair.children().need("the string body")?.into_inner();
     let mut ret = SmartString::new();
     for pair in pairs {
         let s = pair.as_str();
@@ -505,7 +514,7 @@ fn parse_s_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
 
 fn parse_raw_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
     Ok(SmartString::from(
-        pair.into_inner().next().unwrap().as_str(),
+        pair.children().need("the raw string body")?.as_str(),
     ))
 }
 
@@ -513,49 +522,57 @@ fn parse_raw_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use miette::{Result, bail, ensure};
+
     use crate::parse::parse_expressions;
 
     /// Overflowing radix literals must refuse with BadIntError — never panic/abort.
-    fn assert_radix_overflow_refuses(src: &str) {
-        let err = parse_expressions(src, &BTreeMap::new())
-            .expect_err("overflowing int literal must refuse, not succeed");
+    fn assert_radix_overflow_refuses(src: &str) -> Result<()> {
+        let Err(err) = parse_expressions(src, &BTreeMap::new()) else {
+            bail!("overflowing int literal must refuse, not succeed: {src:?}");
+        };
         let msg = format!("{err:?}");
-        assert!(
+        ensure!(
             msg.contains("Cannot parse integer") || msg.contains("bad_pos_int"),
             "expected BadIntError for {src:?}, got: {msg}"
         );
+        Ok(())
     }
 
     #[test]
-    fn hex_literal_overflow_is_bad_int_error() {
-        assert_radix_overflow_refuses("0xFFFFFFFFFFFFFFFF");
-        assert_radix_overflow_refuses("0x1_0000_0000_0000_0000");
+    fn hex_literal_overflow_is_bad_int_error() -> Result<()> {
+        assert_radix_overflow_refuses("0xFFFFFFFFFFFFFFFF")?;
+        assert_radix_overflow_refuses("0x1_0000_0000_0000_0000")?;
+        Ok(())
     }
 
     #[test]
-    fn octal_literal_overflow_is_bad_int_error() {
+    fn octal_literal_overflow_is_bad_int_error() -> Result<()> {
         // 2^63 in octal exceeds i64::MAX
-        assert_radix_overflow_refuses("0o1000000000000000000000");
+        assert_radix_overflow_refuses("0o1000000000000000000000")?;
+        Ok(())
     }
 
     #[test]
-    fn binary_literal_overflow_is_bad_int_error() {
-        assert_radix_overflow_refuses(&format!("0b{}", "1".repeat(64)));
-        assert_radix_overflow_refuses(&format!("0b{}", "1".repeat(80)));
+    fn binary_literal_overflow_is_bad_int_error() -> Result<()> {
+        assert_radix_overflow_refuses(&format!("0b{}", "1".repeat(64)))?;
+        assert_radix_overflow_refuses(&format!("0b{}", "1".repeat(80)))?;
+        Ok(())
     }
 
     #[test]
-    fn radix_literal_in_bounds_parses() {
-        let e = parse_expressions("0x7FFFFFFFFFFFFFFF", &BTreeMap::new()).unwrap();
+    fn radix_literal_in_bounds_parses() -> Result<()> {
+        let e = parse_expressions("0x7FFFFFFFFFFFFFFF", &BTreeMap::new())?;
         assert_eq!(e.get_const().and_then(|v| v.get_int()), Some(i64::MAX));
-        let e = parse_expressions("0o777", &BTreeMap::new()).unwrap();
+        let e = parse_expressions("0o777", &BTreeMap::new())?;
         assert_eq!(e.get_const().and_then(|v| v.get_int()), Some(0o777));
-        let e = parse_expressions("0b1010", &BTreeMap::new()).unwrap();
+        let e = parse_expressions("0b1010", &BTreeMap::new())?;
         assert_eq!(e.get_const().and_then(|v| v.get_int()), Some(0b1010));
+        Ok(())
     }
 
     #[test]
-    fn fuzzish_radix_overflow_corpus_refuses_without_panic() {
+    fn fuzzish_radix_overflow_corpus_refuses_without_panic() -> Result<()> {
         let corpus = [
             "0xFFFFFFFFFFFFFFFF",
             "0xffffffffffffffff",
@@ -568,13 +585,15 @@ mod tests {
             "0o1_000_000_000_000_000_000_000",
         ];
         for src in corpus {
-            let err = parse_expressions(src, &BTreeMap::new())
-                .expect_err("overflowing radix literal must refuse, not succeed or abort");
+            let Err(err) = parse_expressions(src, &BTreeMap::new()) else {
+                bail!("overflowing radix literal must refuse, not succeed or abort: {src:?}");
+            };
             let msg = format!("{err:?}");
-            assert!(
+            ensure!(
                 msg.contains("Cannot parse integer") || msg.contains("bad_pos_int"),
                 "expected BadIntError for {src:?}, got: {msg}"
             );
         }
+        Ok(())
     }
 }

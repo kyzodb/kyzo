@@ -190,11 +190,11 @@ fn pest_to_parse_error(err: pest::error::Error<Rule>) -> ParseError {
 )]
 #[diagnostic(code(parser::grammar_shape))]
 #[diagnostic(help("This is a bug: grammar.pest and its consumer disagree. Please report it."))]
-struct EmptyParseRoot {
+pub(crate) struct EmptyParseRoot {
     expected: &'static str,
 }
 
-fn expect_root_pair<'a>(mut pairs: Pairs<'a>, expected: &'static str) -> Result<Pair<'a>> {
+pub(crate) fn expect_root_pair<'a>(mut pairs: Pairs<'a>, expected: &'static str) -> Result<Pair<'a>> {
     pairs
         .next()
         .ok_or_else(|| EmptyParseRoot { expected }.into())
