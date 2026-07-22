@@ -324,7 +324,7 @@ mod tests {
 
     /// `try_new` proves header↔row arity (P082).
     #[test]
-    fn named_rows_try_new_proves_arity() {
+    fn named_rows_try_new_proves_arity() -> miette::Result<()> {
         assert!(
             NamedRows::try_new(
                 vec!["a".into(), "b".into()],
@@ -335,9 +335,9 @@ mod tests {
         let ok = NamedRows::try_new(
             vec!["a".into()],
             vec![Tuple::from_vec(vec![DataValue::from(1)])],
-        )
-        .unwrap();
+        )?;
         assert_eq!(ok.headers().len(), 1);
         assert_eq!(ok.rows().len(), 1);
+        Ok(())
     }
 }
