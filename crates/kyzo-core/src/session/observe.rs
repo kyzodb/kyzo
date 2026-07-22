@@ -685,7 +685,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner());
+            .expect("event-callbacks mutex poisoned — refuse silent continue");
         let new_id = CallbackId::from_raw(self.next_callback_id());
         registry.register(new_id, decl);
         (new_id, receiver)
@@ -695,7 +695,7 @@ impl<S: Storage> Engine<S> {
     pub fn unregister_callback(&self, id: CallbackId) -> bool {
         self.event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .unregister(id)
     }
 
@@ -705,7 +705,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn current_callback_targets(&self) -> BTreeSet<SmartString<LazyCompact>> {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .by_relation
             .keys()
             .cloned()
@@ -719,7 +719,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn send_callbacks(&self, collector: CallbackCollector) {
         let mut to_remove = vec![];
         {
-            let registry = self.event_callbacks.read().unwrap_or_else(|p| p.into_inner());
+            let registry = self.event_callbacks.read().expect("event-callbacks mutex poisoned — refuse silent continue");
             for (relation, events) in collector {
                 let Some(ids) = registry.by_relation.get(&relation) else {
                     continue;
@@ -747,7 +747,7 @@ impl<S: Storage> Engine<S> {
             let mut registry = self
                 .event_callbacks
                 .write()
-                .unwrap_or_else(|p| p.into_inner());
+                .expect("event-callbacks mutex poisoned — refuse silent continue");
             for id in to_remove {
                 registry.unregister(id);
             }
@@ -759,7 +759,7 @@ impl<S: Storage> Engine<S> {
     pub fn schedule_deep_verify(&self) -> ScheduleOrdinal {
         self.event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .deep_verify
             .schedule()
     }
@@ -772,7 +772,7 @@ impl<S: Storage> Engine<S> {
             let mut registry = self
                 .event_callbacks
                 .write()
-                .unwrap_or_else(|p| p.into_inner());
+                .expect("event-callbacks mutex poisoned — refuse silent continue");
             match registry.deep_verify.take_pending() {
                 Some(ord) => ord,
                 None => return Ok(None),
@@ -784,7 +784,7 @@ impl<S: Storage> Engine<S> {
             let mut registry = self
                 .event_callbacks
                 .write()
-                .unwrap_or_else(|p| p.into_inner());
+                .expect("event-callbacks mutex poisoned — refuse silent continue");
             registry.health_tiers.integrity = if result.clean {
                 Integrity::passing()
             } else {
@@ -804,7 +804,7 @@ impl<S: Storage> Engine<S> {
     pub fn deep_verify_last_result(&self) -> Option<DeepVerifyLastResult> {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .deep_verify
             .last_result()
     }
@@ -813,7 +813,7 @@ impl<S: Storage> Engine<S> {
     pub fn deep_verify_staleness(&self) -> DeepVerifyStaleness {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .deep_verify
             .staleness()
     }
@@ -824,7 +824,7 @@ impl<S: Storage> Engine<S> {
     /// and index-status are **not** mirrored into ephemeral — relation doors
     /// render [`DebtLedger`] / [`IndexStatus`] directly.
     pub fn operator_health_surface(&self) -> OperatorHealthSurface {
-        let registry = self.event_callbacks.read().unwrap_or_else(|p| p.into_inner());
+        let registry = self.event_callbacks.read().expect("event-callbacks mutex poisoned — refuse silent continue");
         let mut surface = registry.operator_health.clone();
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         surface
@@ -838,7 +838,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner());
+            .expect("event-callbacks mutex poisoned — refuse silent continue");
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         registry.operator_health = surface;
     }
@@ -848,7 +848,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner());
+            .expect("event-callbacks mutex poisoned — refuse silent continue");
         registry.index_status = status;
     }
 
@@ -856,7 +856,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn index_status(&self) -> IndexStatus {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .index_status
     }
 
@@ -879,7 +879,7 @@ impl<S: Storage> Engine<S> {
     pub fn operator_record_quarantine(&self, range: QuarantineRange) {
         self.event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .operator_health
             .record_quarantine(range);
     }
@@ -909,7 +909,7 @@ impl<S: Storage> Engine<S> {
     pub fn in_flight_tx_count(&self) -> u64 {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .in_flight_tx
     }
 
@@ -921,7 +921,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner());
+            .expect("event-callbacks mutex poisoned — refuse silent continue");
         let in_flight = match registry.in_flight_tx.checked_add(1) {
             Some(n) => n,
             None => u64::MAX,
@@ -935,7 +935,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner());
+            .expect("event-callbacks mutex poisoned — refuse silent continue");
         let in_flight = match registry.in_flight_tx.checked_sub(1) {
             Some(n) => n,
             None => 0,
@@ -953,7 +953,7 @@ impl<S: Storage> Engine<S> {
     pub fn liveness(&self) -> Liveness {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .health_tiers
             .liveness
     }
@@ -962,7 +962,7 @@ impl<S: Storage> Engine<S> {
     pub fn readiness(&self) -> Readiness {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .health_tiers
             .readiness
     }
@@ -975,14 +975,14 @@ impl<S: Storage> Engine<S> {
     pub fn integrity(&self) -> Integrity {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .health_tiers
             .integrity
     }
 
     /// Operator integrity relation with rendered last-verify digest.
     pub fn integrity_relation(&self) -> NamedRows {
-        let registry = self.event_callbacks.read().unwrap_or_else(|p| p.into_inner());
+        let registry = self.event_callbacks.read().expect("event-callbacks mutex poisoned — refuse silent continue");
         registry
             .health_tiers
             .integrity
@@ -993,7 +993,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_liveness(&self, tier: Liveness) {
         self.event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .health_tiers
             .liveness = tier;
     }
@@ -1002,7 +1002,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_readiness(&self, tier: Readiness) {
         self.event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .health_tiers
             .readiness = tier;
     }
@@ -1011,7 +1011,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_integrity(&self, tier: Integrity) {
         self.event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .health_tiers
             .integrity = tier;
     }
@@ -1020,7 +1020,7 @@ impl<S: Storage> Engine<S> {
     pub fn tracing_verbosity(&self) -> TracingVerbosity {
         self.event_callbacks
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .tracing_verbosity
     }
 
@@ -1028,7 +1028,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_tracing_verbosity(&self, verbosity: TracingVerbosity) {
         self.event_callbacks
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
             .tracing_verbosity = verbosity;
     }
 
