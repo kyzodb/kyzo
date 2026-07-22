@@ -247,6 +247,8 @@ impl Interval {
 
 #[cfg(test)]
 mod tests {
+    use miette::IntoDiagnostic;
+
     use super::*;
     use crate::value::DataValue;
     use crate::value::canonical::{decode, encode_owned};
@@ -294,7 +296,7 @@ mod tests {
     /// encode/decode WITHOUT becoming an `i64::MAX` sentinel — the two
     /// intervals stay byte-distinct and decode back to their own shapes.
     #[test]
-    fn unbounded_end_survives_canonical_round_trip_without_sentinel() {
+    fn unbounded_end_survives_canonical_round_trip_without_sentinel() -> miette::Result<()> {
         let finite =
             DataValue::Interval(Interval::new(Bound::Closed(300), Bound::Closed(i64::MAX)));
         let open = DataValue::Interval(Interval::new(Bound::Closed(300), Bound::Unbounded));
@@ -305,8 +307,8 @@ mod tests {
             ob.as_bytes(),
             "the two ends must encode to distinct bytes"
         );
-        let f2 = decode(fb.as_bytes()).expect("finite decodes");
-        let o2 = decode(ob.as_bytes()).expect("open decodes");
+        let f2 = decode(fb.as_bytes()).into_diagnostic()?;
+        let o2 = decode(ob.as_bytes()).into_diagnostic()?;
         assert_eq!(f2, finite, "finite interval round-trips unchanged");
         assert_eq!(
             o2, open,
@@ -320,6 +322,7 @@ mod tests {
             None,
             "the decoded open interval still has NO end"
         );
+        Ok(())
     }
 
     /// Allen partition law: over all nonempty bounded pairs in a small
