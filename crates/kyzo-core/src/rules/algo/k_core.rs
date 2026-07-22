@@ -50,7 +50,7 @@ use kyzo_model::value::{DataValue, Tuple};
 // non-test build the note fn is an empty inlined no-op.
 #[cfg(test)]
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 thread_local! {
     static KCORE_VERTS_PEELED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -135,7 +135,10 @@ fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32
     let n = graph.node_count() as usize;
     let adj = simple_adjacency(graph);
     let mut deg: Vec<u32> = adj.iter().map(|a| a.len() as u32).collect();
-    let max_deg = deg.iter().copied().max().unwrap_or(0) as usize;
+    let max_deg = match deg.iter().copied().max() {
+        Some(m) => m,
+        None => 0,
+    } as usize;
 
     // `bin[d]`: first the count of degree-`d` vertices, then (in place) the
     // start offset of the degree-`d` block within `vert`.
@@ -424,7 +427,7 @@ mod tests {
 
         // Spent authority: the inner poll must refuse before peeling the graph.
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let cancelled = prepared.run(&KCoreDecomposition, flag);
         let cancel_peeled = take_kcore_verts_peeled();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));

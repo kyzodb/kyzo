@@ -46,7 +46,7 @@ use kyzo_model::value::Tuple;
 use kyzo_model::value::{DataValue, TERMINAL_VALIDITY};
 
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 #[cfg(test)]
 use smartstring::SmartString;
 #[cfg(test)]
@@ -158,14 +158,27 @@ impl FixedRule for CsvReader {
                                 // refusal. `get_int` alone is strict on
                                 // representation (a float 1.0 is not an
                                 // int), so the integral check is explicit.
-                                let integral = op_to_float(&[dv])
-                                    .ok()
-                                    .and_then(|v| v.get_float())
-                                    .filter(|x| x.is_finite() && x.fract() == 0.0);
-                                match integral {
-                                    Some(x) => out_tuple.push(DataValue::from(x as i64)),
-                                    None if typ.is_nullable() => out_tuple.push(DataValue::Null),
-                                    None => bail!("cannot convert {} to type {}", s, typ),
+                                match op_to_float(&[dv]) {
+                                    Ok(v) => {
+                                        match v
+                                            .get_float()
+                                            .filter(|x| x.is_finite() && x.fract() == 0.0)
+                                        {
+                                            Some(x) => {
+                                                out_tuple.push(DataValue::from(x as i64))
+                                            }
+                                            None if typ.is_nullable() => {
+                                                out_tuple.push(DataValue::Null)
+                                            }
+                                            None => {
+                                                bail!("cannot convert {} to type {}", s, typ)
+                                            }
+                                        }
+                                    }
+                                    Err(_) if typ.is_nullable() => {
+                                        out_tuple.push(DataValue::Null)
+                                    }
+                                    Err(err) => bail!(err),
                                 };
                             }
                             ColType::Bool
@@ -233,7 +246,12 @@ impl FixedRule for CsvReader {
                 val: DataValue::Bool(false),
                 ..
             }) => 0,
-            _ => bail!(CannotDetermineArity(
+            Some(Expr::Const { .. })
+            | Some(Expr::Binding { .. })
+            | Some(Expr::Apply { .. })
+            | Some(Expr::UnboundApply { .. })
+            | Some(Expr::Cond { .. })
+            | Some(Expr::Lazy { .. }) => bail!(CannotDetermineArity(
                 "CsvReader".to_string(),
                 "invalid option 'prepend_index' given, expect a boolean".to_string(),
                 span
@@ -319,7 +337,7 @@ mod tests {
     fn honors_cancel() {
         let content = "a,1,1.5";
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         assert!(run_fixed_rule(&CsvReader, vec![], options(content), flag).is_err());
     }
 

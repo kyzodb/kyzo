@@ -43,7 +43,7 @@ use kyzo_model::value::Tuple;
 /// The filesystem seam of the reader utilities: calculation rules do not
 /// open local paths — the host loads bytes and passes them via `content`.
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 #[cfg(test)]
 use smartstring::SmartString;
 #[derive(Debug, Error, Diagnostic)]
@@ -190,7 +190,12 @@ impl FixedRule for JsonReader {
                 val: DataValue::Bool(false),
                 ..
             }) => 0,
-            _ => bail!(CannotDetermineArity(
+            Some(Expr::Const { .. })
+            | Some(Expr::Binding { .. })
+            | Some(Expr::Apply { .. })
+            | Some(Expr::UnboundApply { .. })
+            | Some(Expr::Cond { .. })
+            | Some(Expr::Lazy { .. }) => bail!(CannotDetermineArity(
                 "JsonReader".to_string(),
                 "invalid option 'prepend_index' given, expect a boolean".to_string(),
                 span
@@ -269,7 +274,7 @@ mod tests {
     fn honors_cancel() {
         let content = r#"{"id": 1, "name": "a"}"#;
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         assert!(run_fixed_rule(&JsonReader, vec![], options(content), flag).is_err());
     }
 

@@ -107,7 +107,13 @@ impl Constant {
                 val: DataValue::List(rows),
                 ..
             }) => Ok(ConstantData(rows.as_slice())),
-            _ => Err(Self::wrong_option(span).into()),
+            Some(Expr::Const { .. })
+            | Some(Expr::Binding { .. })
+            | Some(Expr::Apply { .. })
+            | Some(Expr::UnboundApply { .. })
+            | Some(Expr::Cond { .. })
+            | Some(Expr::Lazy { .. })
+            | None => Err(Self::wrong_option(span).into()),
         }
     }
 }

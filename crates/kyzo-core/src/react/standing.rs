@@ -265,7 +265,10 @@ impl<S: Storage> StandingQuery<S> {
     /// dependency's own `Symbol` and wants ITS state instead.
     pub fn current_answer(&self) -> &BTreeSet<Tuple> {
         static EMPTY: BTreeSet<Tuple> = BTreeSet::new();
-        self.current(&entry_symbol()).unwrap_or(&EMPTY)
+        match self.current(&entry_symbol()) {
+            Some(rows) => rows,
+            None => &EMPTY,
+        }
     }
 
     /// Drain every subscribed relation's pending callback events, fold
@@ -372,10 +375,10 @@ impl<S: Storage> StandingQuery<S> {
     /// cares about the query's own answer changing, not an intermediate
     /// dependency's.
     pub fn apply_pending_answer(&mut self) -> Result<BTreeSet<SignedFact>> {
-        Ok(self
-            .apply_pending()?
-            .remove(&entry_symbol())
-            .unwrap_or_default())
+        Ok(match self.apply_pending()?.remove(&entry_symbol()) {
+            Some(delta) => delta,
+            None => BTreeSet::new(),
+        })
     }
 
     /// Explicitly tear down NOW — unregister every underlying per-relation
@@ -476,6 +479,20 @@ mod tests {
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
     }
+    /// Absent relation key → empty row set (not yet touched).
+    fn current_rows<S: Storage>(sq: &StandingQuery<S>, rel: &Symbol) -> BTreeSet<Tuple> {
+        match sq.current(rel) {
+            Some(rows) => rows.clone(),
+            None => BTreeSet::new(),
+        }
+    }
+    /// Absent delta key → empty signed set (relation unchanged this round).
+    fn delta_for(deltas: &BTreeMap<Symbol, BTreeSet<SignedFact>>, rel: &Symbol) -> BTreeSet<SignedFact> {
+        match deltas.get(rel) {
+            Some(d) => d.clone(),
+            None => BTreeSet::new(),
+        }
+    }
 
     fn rel_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
         let atom = MagicRelationApplyAtom {
@@ -539,7 +556,7 @@ mod tests {
 
         let mut sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
         assert_eq!(
-            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            current_rows(&sq, &sym("?")),
             [vec![v(1)]].into_iter().map(Tuple::from_vec).collect(),
             "q(1) must already hold from the pre-registration snapshot"
         );
@@ -553,7 +570,7 @@ mod tests {
             .unwrap();
         let deltas = sq.apply_pending().unwrap();
         assert_eq!(
-            deltas.get(&sym("?")).cloned().unwrap_or_default(),
+            delta_for(&deltas, &sym("?")),
             [SignedFact::Minus(Tuple::from_vec(vec![v(1)]))]
                 .into_iter()
                 .collect()
@@ -565,13 +582,13 @@ mod tests {
             .unwrap();
         let deltas = sq.apply_pending().unwrap();
         assert_eq!(
-            deltas.get(&sym("?")).cloned().unwrap_or_default(),
+            delta_for(&deltas, &sym("?")),
             [SignedFact::Plus(Tuple::from_vec(vec![v(1)]))]
                 .into_iter()
                 .collect()
         );
         assert_eq!(
-            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            current_rows(&sq, &sym("?")),
             [vec![v(1)]].into_iter().map(Tuple::from_vec).collect()
         );
 
@@ -594,7 +611,7 @@ mod tests {
         let mut sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
         assert_eq!(
             sq.current_answer().clone(),
-            sq.current(&sym("?")).cloned().unwrap_or_default()
+            current_rows(&sq, &sym("?"))
         );
 
         db.run_script("?[x] <- [[1]] :put r {x}", no_params())
@@ -822,14 +839,14 @@ mod tests {
         };
 
         assert_eq!(
-            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            current_rows(&sq, &sym("?")),
             [vec![v(1), v(10)]]
                 .into_iter()
                 .map(Tuple::from_vec)
                 .collect(),
             "initial snapshot: min(y) for x=1 is 10"
         );
-        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real());
 
         // An unrelated assertion (a new, larger y for the same group)
         // must NOT disturb the current min.
@@ -837,14 +854,14 @@ mod tests {
             .unwrap();
         sq.apply_pending().unwrap();
         assert_eq!(
-            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            current_rows(&sq, &sym("?")),
             [vec![v(1), v(10)]]
                 .into_iter()
                 .map(Tuple::from_vec)
                 .collect(),
             "min(y) unchanged by a larger sibling"
         );
-        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real());
 
         // Retracting the CURRENT min: no per-kind formula covers this,
         // only a re-derivation from the group's remaining members {20, 30}.
@@ -852,42 +869,42 @@ mod tests {
             .unwrap();
         sq.apply_pending().unwrap();
         assert_eq!(
-            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            current_rows(&sq, &sym("?")),
             [vec![v(1), v(20)]]
                 .into_iter()
                 .map(Tuple::from_vec)
                 .collect(),
             "min(y) rescans to the new minimum, 20"
         );
-        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real());
 
         // A brand new group appears.
         db.run_script("?[x, y] <- [[2, 5]] :put p {x, y}", no_params())
             .unwrap();
         sq.apply_pending().unwrap();
         assert_eq!(
-            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            current_rows(&sq, &sym("?")),
             [vec![v(1), v(20)], vec![v(2), v(5)]]
                 .into_iter()
                 .map(Tuple::from_vec)
                 .collect(),
             "a new group appears with its own min"
         );
-        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real());
 
         // Retracting a group's LAST member: the group vanishes entirely.
         db.run_script("?[x, y] <- [[2, 5]] :rm p {x, y}", no_params())
             .unwrap();
         sq.apply_pending().unwrap();
         assert_eq!(
-            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            current_rows(&sq, &sym("?")),
             [vec![v(1), v(20)]]
                 .into_iter()
                 .map(Tuple::from_vec)
                 .collect(),
             "the emptied group's row vanishes, not just its value"
         );
-        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+        assert_eq!(current_rows(&sq, &sym("?")), real());
 
         sq.teardown();
     }
@@ -1031,7 +1048,7 @@ mod tests {
                         .into_iter()
                         .collect();
                     assert_eq!(
-                        incremental.current(&sym("?")).cloned().unwrap_or_default(),
+                        current_rows(&incremental, &sym("?")),
                         recomputed,
                         "shape '{}', commit {_commit}: mismatch on the entry relation",
                         shape.query,

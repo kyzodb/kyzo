@@ -205,7 +205,10 @@ pub(crate) fn ground(args: &[Term], bound: &Bindings) -> Tuple {
 /// relation has no entry at all (a relation with zero current rows, not
 /// yet touched, is not an error).
 fn literal_rows(state: &MaintainedState, lit: &Literal) -> BTreeSet<Tuple> {
-    state.get(&lit.rel).cloned().unwrap_or_default()
+    match state.get(&lit.rel) {
+        Some(rows) => rows.clone(),
+        None => BTreeSet::new(),
+    }
 }
 
 /// Every relation this program treats as EDB: mentioned in some rule's
@@ -797,13 +800,18 @@ fn eval_aggregating_head_incremental(
                 delta.insert(SignedFact::Minus(old));
                 delta.insert(SignedFact::Plus(new));
             }
+            (Some(_), Some(_)) => {
+                // Same aggregate row — group unchanged.
+            }
             (Some(old), None) => {
                 delta.insert(SignedFact::Minus(old));
             }
             (None, Some(new)) => {
                 delta.insert(SignedFact::Plus(new));
             }
-            _ => {}
+            (None, None) => {
+                // Group absent before and after.
+            }
         }
     }
     Ok(delta)
@@ -864,7 +872,10 @@ pub fn incremental_eval(
     let mut new_state: MaintainedState = BTreeMap::new();
 
     for rel in order {
-        let old_rows = state.get(&rel).cloned().unwrap_or_default();
+        let old_rows = match state.get(&rel) {
+            Some(rows) => rows.clone(),
+            None => BTreeSet::new(),
+        };
         let (delta, new_rows) = if edb.contains(&rel) {
             // A redundant patch entry (asserting an already-present fact,
             // retracting an absent one) is a no-op on the SET — filtered
@@ -921,7 +932,9 @@ pub fn incremental_eval(
                         (true, false) => {
                             delta.insert(SignedFact::Minus(candidate));
                         }
-                        _ => {}
+                        (true, true) | (false, false) => {
+                            // Truth value unchanged — not a delta.
+                        }
                     }
                 }
                 delta

@@ -39,7 +39,7 @@ use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
 #[cfg(test)]
@@ -173,9 +173,15 @@ fn astar(
                 )
             );
 
-            let cost_to_src = g_score.get(&node).cloned().unwrap_or(f64::INFINITY);
+            let cost_to_src = match g_score.get(&node) {
+                Some(c) => *c,
+                None => f64::INFINITY,
+            };
             let tentative_cost_to_dst = cost_to_src + edge_cost;
-            let prev_cost_to_dst = g_score.get(edge_dst).cloned().unwrap_or(f64::INFINITY);
+            let prev_cost_to_dst = match g_score.get(edge_dst) {
+                Some(c) => *c,
+                None => f64::INFINITY,
+            };
             if tentative_cost_to_dst < prev_cost_to_dst {
                 back_trace.insert(edge_dst.clone(), node.clone());
                 g_score.insert(edge_dst.clone(), tentative_cost_to_dst);
@@ -316,7 +322,7 @@ mod tests {
         assert_eq!(ok[0][3], DataValue::List(vec![]));
         // Spent authority: must refuse on the sink pop itself.
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         assert!(
             run_fixed_rule(&ShortestPathAStar, sink_hub_inputs(), sink_hub_opts(), flag).is_err(),
             "sink hub pop must poll cancel (Ok under mid-scan-only poll)"

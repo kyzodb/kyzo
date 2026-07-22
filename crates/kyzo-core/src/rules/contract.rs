@@ -149,8 +149,9 @@ impl CancelAuthority {
     /// paired poll handle refuses. `OnceLock` publish is the synchronization
     /// edge (no `Relaxed` `AtomicBool`).
     pub fn cancel(self) -> Cancelled {
-        let _ = self.cell.0.set(());
-        Cancelled
+        match self.cell.0.set(()) {
+            Ok(()) | Err(()) => Cancelled,
+        }
     }
 }
 
@@ -330,12 +331,10 @@ impl<'a> FixedRuleInputRelation<'a> {
         Vec<DataValue>,
         BTreeMap<DataValue, u32>,
     )> {
-        let weight_span = self
-            .arg_manifest
-            .bindings()
-            .get(2)
-            .map(|s| s.span)
-            .unwrap_or_else(|| self.span());
+        let weight_span = match self.arg_manifest.bindings().get(2) {
+            Some(s) => s.span,
+            None => self.span(),
+        };
         as_directed_weighted_graph(self, undirected, allow_negative_weights, weight_span)
     }
 }
@@ -435,7 +434,7 @@ impl<'a> FixedRulePayload<'a> {
                     }
                     .into()),
                 },
-                _ => Err(WrongFixedRuleOptionError {
+                Err(_) => Err(WrongFixedRuleOptionError {
                     name: Symbol::new(name, v.span()),
                     span: v.span(),
                     rule_name: self.manifest.fixed_handle.name.clone(),
@@ -470,7 +469,7 @@ impl<'a> FixedRulePayload<'a> {
                     }
                     .into()),
                 },
-                _ => self.typed_option(
+                Ok(_) | Err(_) => self.typed_option(
                     name,
                     None,
                     |_| None,
@@ -503,7 +502,11 @@ impl<'a> FixedRulePayload<'a> {
                 help: bound_help,
             }
         );
-        let span = self.option_span(name).unwrap_or(self.manifest.span);
+        let span = match self.option_span(name) {
+            Ok(s) => s,
+            // Option took its default — label the refusal with the rule span.
+            Err(_) => self.manifest.span,
+        };
         usize::try_from(i).map_err(|_| {
             WrongFixedRuleOptionError {
                 name: Symbol::new(name, span),
@@ -1655,7 +1658,7 @@ mod tests {
     #[test]
     fn cancellation_is_honored_mid_run() {
         let (auth, cancel) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let res = run_fixed_rule(
             &Bfs,
             vec![

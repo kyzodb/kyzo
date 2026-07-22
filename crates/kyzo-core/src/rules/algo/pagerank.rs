@@ -55,7 +55,7 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 pub(crate) struct PageRank;
 
 impl FixedRule for PageRank {
@@ -534,7 +534,7 @@ mod tests {
     fn cancellation_refuses() {
         let graph = graph_of(&pseudo_random_edges(200, 1000));
         let (auth, cancel) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let res = page_rank(&graph, 0.85, 0.0, 30, cancel);
         assert!(res.is_err());
     }

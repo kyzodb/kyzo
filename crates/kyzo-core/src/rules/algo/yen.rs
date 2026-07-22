@@ -47,7 +47,7 @@ use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 #[cfg(test)]
 use kyzo_model::program::expr::Expr;
 #[cfg(test)]
@@ -368,7 +368,7 @@ mod tests {
         ])
         .unwrap();
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         assert!(k_shortest_path_yen(3, &graph, 0, 3, flag).is_err());
     }
 
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn cancellation_stops_spur_search() {
         let (auth, cancel) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let err = run_fixed_rule(
             &KShortestPathYen,
             vec![

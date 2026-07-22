@@ -48,7 +48,7 @@ use kyzo_model::value::{DataValue, Tuple};
 // inlined no-op, so the production loop is unchanged.
 #[cfg(test)]
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 thread_local! {
     static BFS_NODES_EXPANDED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -275,7 +275,7 @@ mod tests {
 
         // Spent authority: the inner poll must refuse before expanding the graph.
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let cancelled = prepared.run(&ShortestPathBFS, flag);
         let cancel_expanded = take_bfs_nodes_expanded();
         assert!(cancelled.is_err());

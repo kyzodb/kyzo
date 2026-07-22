@@ -45,7 +45,7 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 pub(crate) struct StronglyConnectedComponent {
     strong: bool,
 }
@@ -282,7 +282,7 @@ mod tests {
     fn cancellation_inside_dfs() {
         let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (1, 0, ())]).unwrap();
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         assert!(TarjanSccG::new(graph).run(flag).is_err());
     }
 }

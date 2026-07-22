@@ -71,7 +71,10 @@ impl FixedRule for RandomWalk {
             payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))?,
         );
 
-        let mut maybe_weight = payload.expr_option("weight", None).ok();
+        let mut maybe_weight = match payload.manifest.options.get("weight") {
+            None => None,
+            Some(_) => Some(payload.expr_option("weight", None)?),
+        };
         if let Some(weight) = &mut maybe_weight {
             let mut nodes_binding = nodes.get_binding_map(0);
             let nodes_arity = nodes.arity()?;

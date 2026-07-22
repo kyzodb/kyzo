@@ -59,7 +59,7 @@ use kyzo_model::value::DataValue;
 use kyzo_model::value::Tuple;
 
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 #[cfg(test)]
 use kyzo_model::program::expr::Expr;
 #[cfg(test)]
@@ -683,7 +683,7 @@ mod tests {
         assert_eq!(ok, vec![(3, 3.0, vec![0, 1, 2, 3])]);
         // Spent authority: the very first pop refuses.
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         assert!(dijkstra(&graph, 0, &Some(3u32), &(), &(), flag).is_err());
     }
 
@@ -710,7 +710,7 @@ mod tests {
         assert!(ok[0].2.is_empty());
         // Spent authority: must refuse on the hub pop itself.
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         assert!(
             dijkstra_keep_ties(&graph, 0, &Some(1u32), &forbidden, &(), flag).is_err(),
             "all-forbidden hub pop must poll cancel (Ok under mid-scan-only poll)"

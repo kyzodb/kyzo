@@ -45,7 +45,10 @@ impl FixedRule for CommunityDetectionLouvain {
         let undirected = payload.bool_option("undirected", Some(false))?;
         let max_iter = payload.pos_integer_option("max_iter", Some(10))?;
         let delta = payload.unit_interval_option("delta", Some(0.0001))? as f32;
-        let keep_depth = payload.non_neg_integer_option("keep_depth", None).ok();
+        let keep_depth = match payload.manifest.options.get("keep_depth") {
+            None => None,
+            Some(_) => Some(payload.non_neg_integer_option("keep_depth", None)?),
+        };
 
         let (graph, indices, _inv_indices) = edges.as_directed_weighted_graph(undirected, false)?;
         let result = louvain(&graph, delta, max_iter, cancel)?;
@@ -284,7 +287,7 @@ mod tests {
 
     use super::{CommunityDetectionLouvain, louvain};
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
-    use crate::rules::contract::{CancelAuthority, CancelFlag};
+    use crate::rules::contract::{CancelAuthority, CancelFlag, Cancelled};
     use crate::rules::graph_view::DirectedCsrGraph;
     use kyzo_model::value::{DataValue, Tuple};
 
@@ -365,7 +368,7 @@ mod tests {
     #[test]
     fn cancellation_stops_node_scan() {
         let (auth, cancel) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let s = |v: &str| DataValue::from(v);
         let err = run_fixed_rule(
             &CommunityDetectionLouvain,

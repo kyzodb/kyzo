@@ -61,7 +61,7 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 #[cfg(test)]
 use kyzo_model::program::expr::Expr;
 #[cfg(test)]
@@ -107,7 +107,7 @@ fn note_clique_expansion_step() {
             && now == *at
             && let Some((_, auth)) = slot.take()
         {
-            let _ = auth.cancel();
+            let Cancelled = auth.cancel();
         }
     });
 }
@@ -211,7 +211,10 @@ fn simple_adjacency(graph: &DirectedCsrGraph) -> Vec<Vec<u32>> {
 fn degeneracy_order(adj: &[Vec<u32>], cancel: &CancelFlag) -> Result<Vec<u32>> {
     let n = adj.len();
     let mut deg: Vec<usize> = adj.iter().map(|a| a.len()).collect();
-    let max_deg = deg.iter().copied().max().unwrap_or(0);
+    let max_deg = match deg.iter().copied().max() {
+        Some(m) => m,
+        None => 0,
+    };
     let mut buckets: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); max_deg + 1];
     for (v, &d) in deg.iter().enumerate() {
         buckets[d].insert(v as u32);
@@ -823,7 +826,7 @@ mod tests {
 
         // Spent authority: the degeneracy poll must refuse before ordering.
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let cancelled = prepared.run(&MaximalCliques, flag);
         let (cancel_removals, cancel_steps) = take_clique_counters();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));

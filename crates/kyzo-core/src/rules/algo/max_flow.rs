@@ -76,7 +76,7 @@ use kyzo_model::value::{DataValue, Tuple};
 /// positive capacity is therefore strictly above `EPS` and can never be
 /// mis-saturated from the start.
 #[cfg(test)]
-use crate::rules::contract::CancelAuthority;
+use crate::rules::contract::{CancelAuthority, Cancelled};
 const EPS: f64 = 1e-9;
 
 // A test-only observable: how many nodes the augmenting BFS has dequeued.
@@ -650,7 +650,7 @@ mod tests {
 
         // Spent authority: the inner poll must refuse before walking the chain.
         let (auth, flag) = CancelAuthority::arm();
-        let _ = auth.cancel();
+        let Cancelled = auth.cancel();
         let cancelled = prepared.run(&MaxFlow, flag);
         let cancel_pops = take_maxflow_bfs_pops();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));
