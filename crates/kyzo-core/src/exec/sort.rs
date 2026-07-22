@@ -89,18 +89,19 @@ pub(crate) fn sort_and_collect(
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use super::*;
     use crate::exec::fixpoint::delta_store::RegularTempStore;
     use kyzo_model::value::DataValue;
 
-    fn store_of(rows: &[Vec<i64>]) -> EpochStore {
+    fn store_of(rows: &[Vec<i64>]) -> Result<EpochStore> {
         let mut fresh = RegularTempStore::new();
         for row in rows {
             fresh.put(row.iter().map(|v| DataValue::from(*v)).collect());
         }
         let mut store = EpochStore::new_normal(rows.first().map_or(0, Vec::len));
-        store.merge_in(fresh.wrap(), &mut ()).unwrap();
-        store
+        store.merge_in(fresh.wrap(), &mut ())?;
+        Ok(store)
     }
 
     fn sym(s: &str) -> Symbol {
@@ -108,8 +109,8 @@ mod tests {
     }
 
     #[test]
-    fn sorts_by_clause_order_and_direction() {
-        let store = store_of(&[vec![1, 10], vec![2, 5], vec![1, 5], vec![2, 10]]);
+    fn sorts_by_clause_order_and_direction() -> Result<()> {
+        let store = store_of(&[vec![1, 10], vec![2, 5], vec![1, 5], vec![2, 10]])?;
         let head = [sym("a"), sym("b")];
         // :order -b, a  — descending b first, ascending a to break ties.
         let sorted = sort_and_collect(
@@ -117,19 +118,24 @@ mod tests {
             &[(sym("b"), SortDir::Dsc), (sym("a"), SortDir::Asc)],
             &head,
         )
-        .unwrap();
-        let as_ints: Vec<(i64, i64)> = sorted
-            .iter()
-            .map(|t| (t[0].get_int().expect("int"), t[1].get_int().expect("int")))
-            .collect();
+        ?;
+        let mut as_ints: Vec<(i64, i64)> = Vec::new();
+        for t in &sorted {
+            as_ints.push((
+                t[0].get_int().ok_or_else(|| miette!("int"))?,
+                t[1].get_int().ok_or_else(|| miette!("int"))?,
+            ));
+        }
         assert_eq!(as_ints, vec![(1, 10), (2, 10), (1, 5), (2, 5)]);
+        Ok(())
     }
 
     #[test]
-    fn unknown_sorter_is_a_typed_refusal_not_a_panic() {
-        let store = store_of(&[vec![1, 2]]);
+    fn unknown_sorter_is_a_typed_refusal_not_a_panic() -> Result<()> {
+        let store = store_of(&[vec![1, 2]])?;
         let head = [sym("a"), sym("b")];
         let err = sort_and_collect(&store, &[(sym("nope"), SortDir::Asc)], &head).unwrap_err();
         assert!(err.downcast_ref::<SorterNotInHead>().is_some());
+        Ok(())
     }
 }
