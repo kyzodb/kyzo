@@ -66,6 +66,22 @@
 //! The HNSW vector-proximity index engine: graph maintenance and k-nearest
 //! search over an index relation, against the kernel's transaction species.
 //!
+//! # STATUS (#376 T11) — Vamana / DiskANN research-open
+//!
+//! **First milestone LANDED:** [`hnsw_put`] is the ONE mutation door; its
+//! build path is single-layer Vamana (α-RobustPrune — Jayaram Subramanya
+//! et al., DiskANN / NeurIPS 2019) at [`VAMANA_LAYER`] only. Edges are
+//! ordinary [`HnswRow`] rows in the same fjall LSM (one substrate — not a
+//! second DiskANN SSD file). The RNG geometric hierarchy
+//! ([`HnswIndexManifest::random_level`]) is no longer written by put.
+//!
+//! **`[research-open]` remainder + named blocker.** Medoid entry-point
+//! election, single-layer delete/healing under churn, and the T12/T13
+//! content-addressed / filtered-ANN-under-churn programs remain open.
+//! **Named blocker:** no medoid entry-point or churn-healing path on the
+//! Vamana topology yet — first-insert canary entry only. Do not invent
+//! green medoid/churn proofs from this milestone.
+//!
 //! An HNSW index IS a stored relation (its own [`RelationId`] keyspace, the
 //! same machinery as any other relation — base time travel untouched) whose
 //! rows encode a layered proximity graph; [`HnswRow`] is the row schema and
@@ -81,7 +97,8 @@
 //! every vector; more negative layers are sparser. A vector inserted at
 //! layer `L` has node rows at every layer in `L..=0`. Search descends from
 //! the most negative populated layer ("bottom level") toward `0`. Layer `1`
-//! is out of band and marks the canary row.
+//! is out of band and marks the canary row. **Vamana build** uses only
+//! layer [`VAMANA_LAYER`] (`0`) — the hierarchy dies with the RNG level draw.
 //!
 //! ## Distance semantics — READ THIS BEFORE SETTING `radius`
 //!
@@ -135,7 +152,7 @@
 //! are the ratified roadmap items layered on these bones (story #3).
 //! Filter-aware traversal itself is landed (story #87), not a ceiling item.
 
-use std::cmp::{Reverse, max};
+use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 /// Build-time diagnostic counters (test-only, zero cost in production
@@ -548,6 +565,13 @@ impl HnswIndexManifest {
             level_mag += 1;
         }
         -level_mag
+    }
+
+    /// Derive Vamana build params: R = m_max0, L >= R from ef_construction, α = 1.2.
+    fn vamana_build_params(&self) -> Result<VamanaBuildParams> {
+        let r = self.m_max0;
+        let l = if self.ef_construction < r { r } else { self.ef_construction };
+        VamanaBuildParams::admit(r, l, VAMANA_DEFAULT_ALPHA)
     }
 }
 
@@ -2157,7 +2181,11 @@ fn shrink_neighbour<T: WriteTx>(
         let old_dist = old_prio.dist();
         if !new_candidate_set.contains(&old) {
             let old_key_tuple = edge_key(layer, target, &old);
-match             if was_tombstoned.get(&old).copied() { Some(v) => v, None => false } {
+let was_tomb = match was_tombstoned.get(&old).copied() {
+                Some(v) => v,
+                None => false,
+            };
+            if was_tomb {
                 let old_key =
                     idx.encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
                 tx.del(&old_key)?;
@@ -2176,8 +2204,10 @@ match             if was_tombstoned.get(&old).copied() { Some(v) => v, None => f
     Ok(new_degree)
 }
 
-/// Insert one admitted vector into the graph.
-#[allow(clippy::too_many_arguments)]
+/// Insert one admitted vector into the graph — Vamana topology (#376 T11).
+///
+/// ONE mutation door ([`hnsw_put`] → this). Single layer [`VAMANA_LAYER`],
+/// α-RobustPrune, edges as ordinary [`HnswRow`] fjall rows.
 fn put_vector<T: WriteTx>(
     tx: &mut T,
     manifest: &HnswIndexManifest,
@@ -2187,17 +2217,16 @@ fn put_vector<T: WriteTx>(
     at: &VectorId,
     cache: &mut VectorCache<'_>,
 ) -> Result<()> {
+    let params = manifest.vamana_build_params()?;
     let base_key_len = base.metadata.keys.len();
+    let layer = VAMANA_LAYER;
     cache.insert(at.clone(), q.clone());
     let vec_hash = q.content_hash();
 
-    // Unchanged vector: nothing to do. Changed: remove the old graph
-    // presence first. (This read also conflict-tracks the node row under
-    // the kernel's SSI.)
     if let Some(HnswRow::Node {
         vec_hash: stored_hash,
         ..
-    }) = read_node_row(tx, base, idx, 0, at)?
+    }) = read_node_row(tx, base, idx, layer, at)?
     {
         if stored_hash == vec_hash {
             return Ok(());
@@ -2205,102 +2234,71 @@ fn put_vector<T: WriteTx>(
         remove_vec(tx, base, idx, at)?;
     }
 
-    let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
-        // The first vector in the index.
-        let layer = manifest.random_level(&vec_hash);
-        return put_fresh_at_levels(tx, idx, base_key_len, vec_hash.clone(), at, layer, 0);
+    let Some((_bottom, ep_id)) = entry_point(tx, base, idx)? else {
+        return put_fresh_at_levels(tx, idx, base_key_len, vec_hash, at, layer, layer);
     };
 
     cache.ensure(tx, base, &ep_id)?;
     let ep_distance = cache.v_dist(q, &ep_id)?;
-    // max queue
     let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     let ep_beam = Beam::of(ep_distance, &ep_id);
     found_nn.push(ep_id, ep_beam);
-    let target_layer = manifest.random_level(&vec_hash);
-    if target_layer < bottom_layer {
-        // This vector becomes the new entry point.
-        put_fresh_at_levels(
-            tx,
-            idx,
-            base_key_len,
-            vec_hash.clone(),
-            at,
-            target_layer,
-            bottom_layer - 1,
-        )?;
-    }
-    for layer in bottom_layer..target_layer {
-        search_layer(tx, q, 1, layer, base, idx, &mut found_nn, cache)?;
-    }
-    for layer in max(target_layer, bottom_layer)..=0 {
-        let m_max = if layer == 0 {
-            manifest.m_max0
-        } else {
-            manifest.m_max
-        };
-        search_layer(
-            tx,
-            q,
-            manifest.ef_construction,
-            layer,
-            base,
-            idx,
-            &mut found_nn,
-            cache,
-        )?;
-        let selected = select_neighbours_heuristic(
-            tx, q, &found_nn, m_max, layer, manifest, base, idx, cache,
-        )?;
+    search_layer(tx, q, params.l(), layer, base, idx, &mut found_nn, cache)?;
 
-        // This vector's presence at this layer, with its live degree.
-        HnswRow::Node {
+    let mut candidates: Vec<(VectorId, f64)> = found_nn
+        .iter()
+        .map(|(id, prio)| (id.clone(), prio.dist()))
+        .collect();
+    for (n, d) in neighbours(tx, base, idx, at, layer, false)? {
+        candidates.push((n, d));
+    }
+
+    let selected = vamana_robust_prune(
+        tx, at, &candidates, params.alpha(), params.r(), base, idx, cache,
+    )?;
+
+    HnswRow::Node {
+        layer,
+        at: at.clone(),
+        degree: 0,
+        vec_hash: vec_hash.clone(),
+    }
+    .write(tx, idx, base_key_len)?;
+    vamana_set_out_neighbours(tx, at, &selected, base, idx, &vec_hash)?;
+
+    for (neighbour, dist) in &selected {
+        let Some(HnswRow::Node {
+            degree,
+            vec_hash: neighbour_hash,
+            ..
+        }) = read_node_row(tx, base, idx, layer, neighbour)?
+        else {
+            bail!(IndexRowCorrupt::new(
+                &idx.name,
+                node_key(layer, neighbour).as_slice(),
+                IndexCorruptReason::HnswEdgeTargetMissingNode,
+            ));
+        };
+        HnswRow::Edge {
             layer,
-            at: at.clone(),
-            degree: selected.len(),
-            vec_hash: vec_hash.clone(),
+            fr: neighbour.clone(),
+            to: Box::new(at.clone()),
+            dist: *dist,
+            ignore_link: false,
         }
         .write(tx, idx, base_key_len)?;
-
-        // Bidirectional links to the selected neighbours.
-        for (neighbour, Reverse(prio)) in selected.iter() {
-            let dist = prio.dist();
-            HnswRow::Edge {
-                layer,
-                fr: at.clone(),
-                to: Box::new(neighbour.clone()),
-                dist,
-                ignore_link: false,
+        let new_degree = degree + 1;
+        if new_degree > params.r() {
+            let mut nbr_cands: Vec<(VectorId, f64)> =
+                neighbours(tx, base, idx, neighbour, layer, false)?.into_iter().collect();
+            if !nbr_cands.iter().any(|(id, _)| id == at) {
+                nbr_cands.push((at.clone(), *dist));
             }
-            .write(tx, idx, base_key_len)?;
-            HnswRow::Edge {
-                layer,
-                fr: neighbour.clone(),
-                to: Box::new(at.clone()),
-                dist,
-                ignore_link: false,
-            }
-            .write(tx, idx, base_key_len)?;
-
-            // Bump the neighbour's degree; shrink its links if it now
-            // exceeds m_max.
-            let Some(HnswRow::Node {
-                degree,
-                vec_hash: neighbour_hash,
-                ..
-            }) = read_node_row(tx, base, idx, layer, neighbour)?
-            else {
-                bail!(IndexRowCorrupt::new(
-                    &idx.name,
-                    node_key(layer, neighbour).as_slice(),
-                    IndexCorruptReason::HnswEdgeTargetMissingNode,
-                ));
-            };
-            let mut new_degree = degree + 1;
-            if new_degree > m_max {
-                new_degree =
-                    shrink_neighbour(tx, neighbour, m_max, layer, manifest, base, idx, cache)?;
-            }
+            let pruned = vamana_robust_prune(
+                tx, neighbour, &nbr_cands, params.alpha(), params.r(), base, idx, cache,
+            )?;
+            vamana_set_out_neighbours(tx, neighbour, &pruned, base, idx, &neighbour_hash)?;
+        } else {
             HnswRow::Node {
                 layer,
                 at: neighbour.clone(),
@@ -2405,6 +2403,140 @@ fn remove_vec<T: WriteTx>(
             }
         }
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Vamana (DiskANN) — #376 T11 helpers. ONE put door: hnsw_put → put_vector.
+// ---------------------------------------------------------------------------
+
+pub(crate) const VAMANA_LAYER: i64 = 0;
+const VAMANA_DEFAULT_ALPHA: f64 = 1.2;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VamanaAlpha(f64);
+impl VamanaAlpha {
+    pub(crate) fn admit(alpha: f64) -> Result<Self> {
+        if !alpha.is_finite() { bail!(VamanaParamsRefused::NonFiniteAlpha); }
+        if alpha < 1.0 { bail!(VamanaParamsRefused::AlphaBelowOne { got: alpha }); }
+        Ok(Self(alpha))
+    }
+    pub(crate) fn get(self) -> f64 { self.0 }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct VamanaCandidateList(usize);
+impl VamanaCandidateList {
+    pub(crate) fn admit(l: usize) -> Result<Self> {
+        if l == 0 { bail!(VamanaParamsRefused::ZeroCandidateList); }
+        Ok(Self(l))
+    }
+    pub(crate) fn get(self) -> usize { self.0 }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VamanaBuildParams {
+    r: MNeighbours,
+    l: VamanaCandidateList,
+    alpha: VamanaAlpha,
+}
+impl VamanaBuildParams {
+    pub(crate) fn admit(r: usize, l: usize, alpha: f64) -> Result<Self> {
+        let r = MNeighbours::new(r)?;
+        let l = VamanaCandidateList::admit(l)?;
+        if l.get() < r.get() {
+            bail!(VamanaParamsRefused::CandidateListBelowDegree { l: l.get(), r: r.get() });
+        }
+        Ok(Self { r, l, alpha: VamanaAlpha::admit(alpha)? })
+    }
+    pub(crate) fn r(self) -> usize { self.r.get() }
+    pub(crate) fn l(self) -> usize { self.l.get() }
+    pub(crate) fn alpha(self) -> VamanaAlpha { self.alpha }
+}
+
+#[derive(Debug, Clone, PartialEq, Error, Diagnostic)]
+pub(crate) enum VamanaParamsRefused {
+    #[error("Vamana params refused: alpha must be finite")]
+    #[diagnostic(code(vamana::params_refused))]
+    NonFiniteAlpha,
+    #[error("Vamana params refused: alpha must be >= 1.0 (got {got})")]
+    #[diagnostic(code(vamana::params_refused))]
+    AlphaBelowOne { got: f64 },
+    #[error("Vamana params refused: candidate list L must be > 0")]
+    #[diagnostic(code(vamana::params_refused))]
+    ZeroCandidateList,
+    #[error("Vamana params refused: candidate list L ({l}) must be >= degree cap R ({r})")]
+    #[diagnostic(code(vamana::params_refused))]
+    CandidateListBelowDegree { l: usize, r: usize },
+}
+
+fn vamana_robust_prune(
+    tx: &impl ReadTx,
+    center: &VectorId,
+    candidates: &[(VectorId, f64)],
+    alpha: VamanaAlpha,
+    r: usize,
+    base: &RelationHandle,
+    idx: &RelationHandle,
+    cache: &mut VectorCache<'_>,
+) -> Result<Vec<(VectorId, f64)>> {
+    match idx { value => core::mem::drop(value) };
+    let mut working: Vec<(VectorId, f64)> = Vec::with_capacity(candidates.len());
+    let mut seen: FxHashSet<VectorId> = FxHashSet::default();
+    for (id, dist) in candidates {
+        if id == center || !seen.insert(id.clone()) { continue; }
+        working.push((id.clone(), *dist));
+    }
+    working.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    let alpha_v = alpha.get();
+    let mut selected: Vec<(VectorId, f64)> =
+        Vec::with_capacity(crate::session::capacity::admit(r, working.len()));
+    while selected.len() < r && !working.is_empty() {
+        let (p_star, p_star_dist) = working.remove(0);
+        selected.push((p_star.clone(), p_star_dist));
+        cache.ensure(tx, base, &p_star)?;
+        let mut kept: Vec<(VectorId, f64)> = Vec::with_capacity(working.len());
+        for (p_prime, dist_center) in working {
+            cache.ensure(tx, base, &p_prime)?;
+            let d_star = cache.k_dist(&p_star, &p_prime)?;
+            match (alpha_v * d_star).partial_cmp(&dist_center) {
+                Some(std::cmp::Ordering::Greater) => kept.push((p_prime, dist_center)),
+                Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal) | None => {}
+            }
+        }
+        working = kept;
+    }
+    Ok(selected)
+}
+
+fn vamana_set_out_neighbours<T: WriteTx>(
+    tx: &mut T,
+    of: &VectorId,
+    selected: &[(VectorId, f64)],
+    base: &RelationHandle,
+    idx: &RelationHandle,
+    vec_hash: &VecContentHash,
+) -> Result<()> {
+    let base_key_len = base.metadata.keys.len();
+    let layer = VAMANA_LAYER;
+    let mut new_set: FxHashSet<VectorId> = FxHashSet::default();
+    for (to, _) in selected { new_set.insert(to.clone()); }
+    for (old, _, ignore_link) in neighbours_tagged(tx, base, idx, of, layer)? {
+        if !new_set.contains(&old) || ignore_link {
+            let key = idx.encode_key_for_store(edge_key(layer, of, &old).as_slice(), SourceSpan::default())?;
+            tx.del(&key)?;
+        }
+    }
+    for (to, dist) in selected {
+        HnswRow::Edge {
+            layer, fr: of.clone(), to: Box::new(to.clone()), dist: *dist, ignore_link: false,
+        }
+        .write(tx, idx, base_key_len)?;
+    }
+    HnswRow::Node {
+        layer, at: of.clone(), degree: selected.len(), vec_hash: vec_hash.clone(),
+    }
+    .write(tx, idx, base_key_len)?;
     Ok(())
 }
 
@@ -4954,6 +5086,94 @@ mod tests {
 
     /// Determinism at the graph level: the same rows inserted in the same
     /// order into two independent stores produce a BYTE-IDENTICAL index
+    /// Claude adversaries for T11 (binding):
+    /// 1. Connectivity — exact-match knn returns self (100%, small set).
+    /// 2. Degree bound — live out-degree on stored fjall rows never exceeds R.
+    /// 3. Fjall-only — every index row is [`HnswRow`] at layer 0 or canary.
+    #[test]
+    fn vamana_adversary_connectivity_degree_bound_fjall_only() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
+        let db = new_fjall_storage(dir.path())?;
+        let m = HnswIndexManifest::admit(
+            SmartString::from("vecs"), SmartString::from("by_v"), 2,
+            VecElementType::F32, vec![1], HnswDistance::L2, 16, 8, None, false, false,
+        )?;
+        let r_cap = m.vamana_build_params()?.r();
+        let mut rows: Vec<Tuple> = Vec::new();
+        let mut k: i64 = 0;
+        while k < 16 {
+            let mut state = HNSW_LEVEL_SEED ^ u64::from_ne_bytes(k.to_ne_bytes());
+            let bits_x = splitmix64(&mut state) >> 12;
+            let bits_y = splitmix64(&mut state) >> 12;
+            let x = f64::from_bits(0x3FF0_0000_0000_0000 | bits_x) - 1.0;
+            let y = f64::from_bits(0x3FF0_0000_0000_0000 | bits_y) - 1.0;
+            rows.push(row(k, x * 2.0 - 1.0, y * 2.0 - 1.0));
+            k += 1;
+        }
+        let mut tx = db.write_tx()?;
+        let base = create_relation(&mut tx, input_handle("vecs", base_metadata()), KeyspaceKind::Facts)?;
+        let idx = create_relation(
+            &mut tx, input_handle("vecs:by_v", hnsw_index_metadata(&base.metadata)), KeyspaceKind::AlgorithmState,
+        )?;
+        for r in &rows {
+            base.put_fact(&mut tx, r.as_slice(), kyzo_model::value::ValidityTs::from_raw(0), SourceSpan(0, 0))?;
+            if !hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())? {
+                bail!("hnsw_put refused a finite L2 vector");
+            }
+        }
+        tx.commit()?;
+        let kl = base.metadata.keys.len();
+        let rtx = db.read_tx()?;
+        let mut live_out: FxHashMap<VectorId, usize> = FxHashMap::default();
+        let mut node_degree: FxHashMap<VectorId, usize> = FxHashMap::default();
+        let mut node_count = 0usize;
+        for scanned in crate::project::contract::index_rows(&idx.name, idx.scan_all(&rtx)) {
+            let scanned = scanned?;
+            match HnswRow::decode(scanned.as_slice(), kl, &idx.name)? {
+                HnswRow::Node { layer, at, degree, .. } => {
+                    assert_eq!(layer, VAMANA_LAYER);
+                    node_count += 1;
+                    node_degree.insert(at, degree);
+                }
+                HnswRow::Edge { layer, fr, ignore_link, .. } => {
+                    assert_eq!(layer, VAMANA_LAYER);
+                    if !ignore_link { *live_out.entry(fr).or_insert(0) += 1; }
+                }
+                HnswRow::Canary { bottom_layer, .. } => assert_eq!(bottom_layer, VAMANA_LAYER),
+            }
+        }
+        assert_eq!(node_count, rows.len());
+        for (at, deg) in &node_degree {
+            let counted = match live_out.get(at) { Some(n) => *n, None => 0 };
+            assert!(counted <= r_cap);
+            assert_eq!(*deg, counted);
+            assert!(*deg <= r_cap);
+        }
+        for (fr, counted) in &live_out {
+            assert!(*counted <= r_cap);
+            assert!(node_degree.contains_key(fr));
+        }
+        for r in &rows {
+            let q = match r.get(1) {
+                Some(DataValue::Vector(v)) => v.clone(),
+                _other => bail!("fixture missing vector"),
+            };
+            let expected_key = match r.first() {
+                Some(v) => v.get_int().ok_or_else(|| miette!("key not int"))?,
+                None => bail!("fixture missing key"),
+            };
+            let hits = crate::project::contract::search_rows(Hnsw::knn(
+                &rtx, &q, &m, &base, &idx, &knn_params(1), &None, &CancelFlag::default(),
+            )?)?;
+            assert_eq!(hits.len(), 1);
+            let got_key = hits[0].first().and_then(|v| v.get_int()).ok_or_else(|| miette!("missing key"))?;
+            assert_eq!(got_key, expected_key);
+            let dist = hits[0].get(2).and_then(|v| v.get_float()).ok_or_else(|| miette!("missing dist"))?;
+            assert!(dist.abs() < 1e-9);
+        }
+        Ok(())
+    }
+
     /// relation — the guarantee the seeded level assignment exists to make.
     #[test]
     fn index_build_is_byte_identical_across_runs() {
