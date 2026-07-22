@@ -26,11 +26,12 @@ use crate::exec::op::batch_ops::{Batch, BatchIter};
 use crate::exec::op::join::{get_eliminate_indices, join_is_prefix};
 use crate::exec::plan::program::MagicSymbol;
 use crate::project::current::Segments;
+use crate::session::catalog::RelationHandle;
 use crate::store::ReadTx;
 use itertools::Itertools;
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
-use kyzo_model::value::DataValue;
+use kyzo_model::value::{AsOf, DataValue, MAX_VALIDITY_TS};
 use miette::{Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -129,6 +130,65 @@ impl NegJoin {
 }
 
 impl NegJoin {
+    /// One door for [`NegRight::Stored`] and [`NegRight::StoredWithValidity`]
+    /// anti-join probes. Both read through the as-of skip-scan primitives
+    /// (`skip_scan_prefix_projected` / `skip_scan_all`); current-state is
+    /// `AsOf::current(MAX_VALIDITY_TS)` — the coordinate `scan_*` already
+    /// uses for Facts. Arms differ only by validity coordinate.
+    fn stored_asof_has_match<'a>(
+        tx: &'a impl ReadTx,
+        storage: &'a RelationHandle,
+        span: SourceSpan,
+        as_of: AsOf,
+        right_join_indices: &[usize],
+        left_join_indices: Vec<usize>,
+        left_to_prefix_indices: Vec<usize>,
+    ) -> Result<Box<dyn FnMut(&[DataValue]) -> Result<bool> + 'a>> {
+        let name = storage.name.clone();
+        if join_is_prefix(right_join_indices) {
+            let lji = left_join_indices;
+            let rji = right_join_indices.to_vec();
+            Ok(Box::new(move |row: &[DataValue]| {
+                'outer: for found in
+                    storage.skip_scan_prefix_projected(tx, row, &left_to_prefix_indices, as_of)
+                {
+                    let found = found?;
+                    for (l, r) in lji.iter().zip(rji.iter()) {
+                        let found_val = found.get(*r).ok_or_else(|| {
+                            StoredRowTooShortError(
+                                Symbol::new(name.clone(), span),
+                                *r,
+                                found.len(),
+                                span,
+                            )
+                        })?;
+                        if row[*l] != *found_val {
+                            continue 'outer;
+                        }
+                    }
+                    return Ok(true);
+                }
+                Ok(false)
+            }))
+        } else {
+            let mut right_join_vals = BTreeSet::new();
+            for tuple in storage.skip_scan_all(tx, as_of) {
+                let tuple = tuple?;
+                let to_join: Box<[DataValue]> = right_join_indices
+                    .iter()
+                    .map(|i| tuple[*i].clone())
+                    .collect();
+                right_join_vals.insert(to_join);
+            }
+            let lji = left_join_indices;
+            Ok(Box::new(move |row: &[DataValue]| {
+                let left_join_vals: Box<[DataValue]> =
+                    lji.iter().map(|i| row[*i].clone()).collect();
+                Ok(right_join_vals.contains(&left_join_vals))
+            }))
+        }
+    }
+
     /// The anti-join, batch-native: a filter over the left batch stream.
     /// Per left row (a slice into the batch — no `Tuple` minted) one probe
     /// per [`NegRight`] variant answers "does any right row match?": a
@@ -198,111 +258,28 @@ impl NegJoin {
                     })
                 }
             }
-            NegRight::Stored(v) => {
-                if join_is_prefix(&right_join_indices) {
-                    let lji = left_join_indices;
-                    let rji = right_join_indices;
-                    Box::new(move |row: &[DataValue]| {
-                        'outer: for found in
-                            v.storage
-                                .scan_prefix_projected(tx, row, &left_to_prefix_indices)
-                        {
-                            let found = found?;
-                            for (l, r) in lji.iter().zip(rji.iter()) {
-                                let found_val = found.get(*r).ok_or_else(|| {
-                                    StoredRowTooShortError(
-                                        Symbol::new(v.storage.name.clone(), v.span),
-                                        *r,
-                                        found.len(),
-                                        v.span,
-                                    )
-                                })?;
-                                if row[*l] != *found_val {
-                                    continue 'outer;
-                                }
-                            }
-                            return Ok(true);
-                        }
-                        Ok(false)
-                    })
-                } else {
-                    let mut right_join_vals = BTreeSet::new();
-                    for tuple in v.storage.scan_all(tx) {
-                        let tuple = tuple?;
-                        let to_join: Box<[DataValue]> = right_join_indices
-                            .iter()
-                            .map(|i| tuple[*i].clone())
-                            .collect();
-                        right_join_vals.insert(to_join);
-                    }
-                    let lji = left_join_indices;
-                    Box::new(move |row: &[DataValue]| {
-                        let left_join_vals: Box<[DataValue]> =
-                            lji.iter().map(|i| row[*i].clone()).collect();
-                        Ok(right_join_vals.contains(&left_join_vals))
-                    })
-                }
-            }
-            // The skip-scan anti-join (story #86): identical in shape to
-            // `NegRight::Stored` just above, reading through the SAME
-            // as-of skip-scan primitives (`skip_scan_prefix_projected`/
-            // `skip_scan_all`) `StoredWithValidityRA::prefix_join_batched`
-            // already uses for the POSITIVE join — so the "never skips a
-            // tuple whose absence it is asserting" proof this operator
-            // owes is inherited, not reargued: those primitives already
-            // enumerate every matching row at the coordinate for the
-            // positive join (proven by the chunk-2 as-of differentials),
-            // and a "does at least one match exist" probe can only be as
-            // sound as full enumeration would be — it stops at the first
-            // hit instead of collecting every hit, which is strictly less
-            // work over the same, already-proven stream.
-            NegRight::StoredWithValidity(v) => {
-                if join_is_prefix(&right_join_indices) {
-                    let lji = left_join_indices;
-                    let rji = right_join_indices;
-                    Box::new(move |row: &[DataValue]| {
-                        'outer: for found in v.storage.skip_scan_prefix_projected(
-                            tx,
-                            row,
-                            &left_to_prefix_indices,
-                            v.as_of,
-                        ) {
-                            let found = found?;
-                            for (l, r) in lji.iter().zip(rji.iter()) {
-                                let found_val = found.get(*r).ok_or_else(|| {
-                                    StoredRowTooShortError(
-                                        Symbol::new(v.storage.name.clone(), v.span),
-                                        *r,
-                                        found.len(),
-                                        v.span,
-                                    )
-                                })?;
-                                if row[*l] != *found_val {
-                                    continue 'outer;
-                                }
-                            }
-                            return Ok(true);
-                        }
-                        Ok(false)
-                    })
-                } else {
-                    let mut right_join_vals = BTreeSet::new();
-                    for tuple in v.storage.skip_scan_all(tx, v.as_of) {
-                        let tuple = tuple?;
-                        let to_join: Box<[DataValue]> = right_join_indices
-                            .iter()
-                            .map(|i| tuple[*i].clone())
-                            .collect();
-                        right_join_vals.insert(to_join);
-                    }
-                    let lji = left_join_indices;
-                    Box::new(move |row: &[DataValue]| {
-                        let left_join_vals: Box<[DataValue]> =
-                            lji.iter().map(|i| row[*i].clone()).collect();
-                        Ok(right_join_vals.contains(&left_join_vals))
-                    })
-                }
-            }
+            NegRight::Stored(v) => Self::stored_asof_has_match(
+                tx,
+                &v.storage,
+                v.span,
+                AsOf::current(MAX_VALIDITY_TS),
+                &right_join_indices,
+                left_join_indices,
+                left_to_prefix_indices,
+            )?,
+            // Story #86: same skip-scan primitives as the positive as-of
+            // join (`StoredWithValidityRA::prefix_join_batched`); the
+            // "never skips a tuple whose absence it is asserting" proof
+            // is inherited — arms differ only by validity coordinate.
+            NegRight::StoredWithValidity(v) => Self::stored_asof_has_match(
+                tx,
+                &v.storage,
+                v.span,
+                v.as_of,
+                &right_join_indices,
+                left_join_indices,
+                left_to_prefix_indices,
+            )?,
             // `@spans`/`@delta` right sides: no prefix-probe primitive
             // exists for either yet (same chunk-4 gap `RelAlgebra::filter`
             // already lives with), so the anti-join always materializes
