@@ -141,16 +141,19 @@ impl<'a> SplitCompoundWordsTokenStream<'a> {
                 let part_from = parent_from + cut;
                 let part_to = part_from + tail.len();
                 text = head;
-                self.parts.push(
-                    Token::new(
-                        part_from,
-                        part_to,
-                        token.position,
-                        tail.to_owned(),
-                        token.position_length,
-                    )
-                    .expect("part offsets derived from proven parent + cut"),
-                );
+                let Some(part) = Token::new(
+                    part_from,
+                    part_to,
+                    token.position,
+                    tail.to_owned(),
+                    token.position_length,
+                ) else {
+                    // Offsets should be lawful (parent + cut); if admit
+                    // refuses, abandon the split and keep the parent token.
+                    self.parts.clear();
+                    return;
+                };
+                self.parts.push(part);
             }
         }
     }
@@ -193,34 +196,44 @@ impl<'a> TokenStream for SplitCompoundWordsTokenStream<'a> {
 mod tests {
     use super::*;
     use crate::project::text::tokenizer::{SimpleTokenizer, TextAnalyzer};
+    use miette::miette;
+
+    fn expect_text<'a>(stream: &mut BoxTokenStream<'a>, want: &str) -> Result<()> {
+        let got = stream
+            .next()
+            .ok_or_else(|| miette!("expected token {want}"))?;
+        assert_eq!(got.text, want);
+        Ok(())
+    }
 
     /// Umlaut compounds: cuts are UTF-8 byte offsets, and each part's
     /// `offset_from`/`offset_to` reconstruct that part from the source.
     #[test]
-    fn split_compound_umlaut_byte_offsets_round_trip() {
+    fn split_compound_umlaut_byte_offsets_round_trip() -> Result<()> {
         // "über" is 5 bytes (ü = C3 BC); "fahrt" is 5 ASCII bytes.
         let text = "überfahrt";
         assert_eq!("über".len(), 5);
         let tokenizer = TextAnalyzer::from(SimpleTokenizer)
-            .filter(SplitCompoundWords::from_dictionary(["über", "fahrt"]).unwrap());
+            .filter(SplitCompoundWords::from_dictionary(["über", "fahrt"])?);
         let mut stream = tokenizer.token_stream(text);
-        let first = stream.next().expect("über");
+        let first = stream.next().ok_or_else(|| miette!("expected über"))?;
         assert_eq!(first.text, "über");
         assert_eq!(first.offset_from(), 0);
         assert_eq!(first.offset_to(), 5);
         assert_eq!(&text[first.offset_from()..first.offset_to()], "über");
-        let second = stream.next().expect("fahrt");
+        let second = stream.next().ok_or_else(|| miette!("expected fahrt"))?;
         assert_eq!(second.text, "fahrt");
         assert_eq!(second.offset_from(), 5);
         assert_eq!(second.offset_to(), 10);
         assert_eq!(&text[second.offset_from()..second.offset_to()], "fahrt");
         assert!(stream.next().is_none());
+        Ok(())
     }
 
     #[test]
-    fn splitting_compound_words_works() {
+    fn splitting_compound_words_works() -> Result<()> {
         let tokenizer = TextAnalyzer::from(SimpleTokenizer)
-            .filter(SplitCompoundWords::from_dictionary(["foo", "bar"]).unwrap());
+            .filter(SplitCompoundWords::from_dictionary(["foo", "bar"])?);
 
         {
             let mut stream = tokenizer.token_stream("");
@@ -229,78 +242,79 @@ mod tests {
 
         {
             let mut stream = tokenizer.token_stream("foo bar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("foobar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("foobarbaz");
-            assert_eq!(stream.next().unwrap().text, "foobarbaz");
+            expect_text(&mut stream, "foobarbaz")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("baz foobar qux");
-            assert_eq!(stream.next().unwrap().text, "baz");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
-            assert_eq!(stream.next().unwrap().text, "qux");
+            expect_text(&mut stream, "baz")?;
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
+            expect_text(&mut stream, "qux")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("foobar foobar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("foobar foo bar foobar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("foobazbar foo bar foobar");
-            assert_eq!(stream.next().unwrap().text, "foobazbar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
+            expect_text(&mut stream, "foobazbar")?;
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("foobar qux foobar");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
-            assert_eq!(stream.next().unwrap().text, "qux");
-            assert_eq!(stream.next().unwrap().text, "foo");
-            assert_eq!(stream.next().unwrap().text, "bar");
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
+            expect_text(&mut stream, "qux")?;
+            expect_text(&mut stream, "foo")?;
+            expect_text(&mut stream, "bar")?;
             assert_eq!(stream.next(), None);
         }
 
         {
             let mut stream = tokenizer.token_stream("barfoo");
-            assert_eq!(stream.next().unwrap().text, "bar");
-            assert_eq!(stream.next().unwrap().text, "foo");
+            expect_text(&mut stream, "bar")?;
+            expect_text(&mut stream, "foo")?;
             assert_eq!(stream.next(), None);
         }
+        Ok(())
     }
 }
