@@ -42,8 +42,6 @@
 //!
 //! The build uses the standard k1 scale function; no randomness is involved.
 
-use std::io::Write;
-
 use miette::{Result, bail, ensure};
 
 use kyzo_model::data_value_any;
@@ -122,8 +120,9 @@ impl TDigest {
             };
         }
         let total: f64 = sorted.iter().map(|(_, w)| *w).sum();
-        let min = Some(sorted.first().unwrap().0);
-        let max = Some(sorted.last().unwrap().0);
+        // Non-empty: empty branch returned above.
+        let min = Some(sorted[0].0);
+        let max = Some(sorted[sorted.len() - 1].0);
 
         let mut centroids: Vec<Centroid> = Vec::new();
         let mut weight_so_far = 0.0f64;
@@ -245,20 +244,31 @@ impl TDigest {
     /// decode — never `f64::NAN`.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(1 + 8 * 4 + 8 + self.centroids.len() * 16);
-        out.write_all(&[FORMAT_TAG]).unwrap();
-        out.write_all(&self.compression.to_le_bytes()).unwrap();
-        out.write_all(&self.count.to_le_bytes()).unwrap();
+        out.extend_from_slice(&[FORMAT_TAG]);
+        out.extend_from_slice(&self.compression.to_le_bytes());
+        out.extend_from_slice(&self.count.to_le_bytes());
         // Layout reserves min/max slots; empty digests leave them zeroed.
         // Semantic absence is empty centroids / Option::None — not a float sentinel.
-        let min_wire = match self.min { Some(v) => v, None => 0.0 };
-        let max_wire = match self.max { Some(v) => v, None => 0.0 };
-        out.write_all(&min_wire.to_le_bytes()).unwrap();
-        out.write_all(&max_wire.to_le_bytes()).unwrap();
-        out.write_all(&(match u64::try_from(self.centroids.len()) { Ok(v) => v, Err(_e) => 0 }).to_le_bytes())
-            .unwrap();
+        let min_wire = match self.min {
+            Some(v) => v,
+            None => 0.0,
+        };
+        let max_wire = match self.max {
+            Some(v) => v,
+            None => 0.0,
+        };
+        out.extend_from_slice(&min_wire.to_le_bytes());
+        out.extend_from_slice(&max_wire.to_le_bytes());
+        out.extend_from_slice(
+            &(match u64::try_from(self.centroids.len()) {
+                Ok(v) => v,
+                Err(_e) => 0,
+            })
+            .to_le_bytes(),
+        );
         for c in &self.centroids {
-            out.write_all(&c.mean.to_le_bytes()).unwrap();
-            out.write_all(&c.weight.to_le_bytes()).unwrap();
+            out.extend_from_slice(&c.mean.to_le_bytes());
+            out.extend_from_slice(&c.weight.to_le_bytes());
         }
         out
     }
@@ -274,14 +284,14 @@ impl TDigest {
         );
         let body = &bytes[1..];
         ensure!(body.len() >= 40, "t-digest header truncated");
-        let compression = f64::from_le_bytes(body[0..8].try_into().unwrap());
-        let count = f64::from_le_bytes(body[8..16].try_into().unwrap());
-        let min_raw = f64::from_le_bytes(body[16..24].try_into().unwrap());
-        let max_raw = f64::from_le_bytes(body[24..32].try_into().unwrap());
-        let n = match usize::try_from(u64::from_le_bytes(body[32..40].try_into().unwrap())) {
-        Ok(v) => v,
-        Err(_e) => bail!("t-digest centroid count does not fit usize"),
-    };
+        let compression = f64::from_le_bytes(read8(&body[0..8]));
+        let count = f64::from_le_bytes(read8(&body[8..16]));
+        let min_raw = f64::from_le_bytes(read8(&body[16..24]));
+        let max_raw = f64::from_le_bytes(read8(&body[24..32]));
+        let n = match usize::try_from(u64::from_le_bytes(read8(&body[32..40]))) {
+            Ok(v) => v,
+            Err(_e) => bail!("t-digest centroid count does not fit usize"),
+        };
         let rest = &body[40..];
         ensure!(
             rest.len() == n * 16,
@@ -291,8 +301,8 @@ impl TDigest {
         let centroids: Vec<Centroid> = rest
             .chunks_exact(16)
             .map(|c| Centroid {
-                mean: f64::from_le_bytes(c[0..8].try_into().unwrap()),
-                weight: f64::from_le_bytes(c[8..16].try_into().unwrap()),
+                mean: f64::from_le_bytes(read8(&c[0..8])),
+                weight: f64::from_le_bytes(read8(&c[8..16])),
             })
             .collect();
         let (min, max) = if centroids.is_empty() {
@@ -313,6 +323,14 @@ impl TDigest {
     pub(crate) fn to_value(&self) -> DataValue {
         DataValue::Bytes(self.to_bytes())
     }
+}
+
+/// Copy exactly eight bytes into an array — caller proves the slice length
+/// (header ensure / `chunks_exact`).
+fn read8(bytes: &[u8]) -> [u8; 8] {
+    let mut arr = [0u8; 8];
+    arr.copy_from_slice(bytes);
+    arr
 }
 
 /// Linear interpolation in rank space, guarding a zero-width bracket.
@@ -344,7 +362,7 @@ mod tests {
     /// The exact rank of `x` in `sorted` (fraction of points <= x).
     fn exact_rank(sorted: &[f64], x: f64) -> f64 {
         let count = sorted.iter().filter(|&&v| v <= x).count();
-        super::usize_to_f64(count) / super::usize_to_f64(sorted.len())
+        crate::exec::fold::sketch::usize_to_f64(count) / crate::exec::fold::sketch::usize_to_f64(sorted.len())
     }
 
     /// ACCURACY vs EXACT, in two ways. In RANK SPACE — the metric t-digest
@@ -359,7 +377,7 @@ mod tests {
     #[test]
     fn quantile_rank_error_within_bound() {
         let n = 100_000;
-        let data: Vec<f64> = (0..n).map(|i| super::usize_to_f64(i)).collect();
+        let data: Vec<f64> = (0..n).map(|i| crate::exec::fold::sketch::usize_to_f64(i)).collect();
         let digest = digest_of(data.iter().copied(), 100.0);
 
         for &q in &[0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999] {
@@ -372,9 +390,9 @@ mod tests {
                 "q={q}: value {est} has rank {got_rank}, error {err:.4}"
             );
             // Tight value-space band: kills centroid-mean corruption.
-            let true_value = q * super::usize_to_f64(n);
+            let true_value = q * crate::exec::fold::sketch::usize_to_f64(n);
             assert!(
-                (est - true_value).abs() < 0.005 * super::usize_to_f64(n),
+                (est - true_value).abs() < 0.005 * crate::exec::fold::sketch::usize_to_f64(n),
                 "q={q}: value {est} off true {true_value} by more than 0.005*n"
             );
         }
@@ -383,7 +401,7 @@ mod tests {
     /// Extreme quantiles are exact anchors: q=0 is the min, q=1 the max.
     #[test]
     fn extremes_are_exact() {
-        let digest = digest_of((0..1000).map(|i| super::usize_to_f64(i) * 0.5), 100.0);
+        let digest = digest_of((0..1000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.5), 100.0);
         assert_eq!(digest.quantile(0.0), Some(0.0));
         assert_eq!(digest.quantile(1.0), Some(999.0 * 0.5));
     }
@@ -411,7 +429,7 @@ mod tests {
     /// size — the whole point of a sketch.
     #[test]
     fn size_is_bounded_by_compression() {
-        let digest = digest_of((0..1_000_000).map(|i| super::usize_to_f64(i)), 100.0);
+        let digest = digest_of((0..1_000_000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
         assert!(
             digest.centroids.len() <= 300,
             "centroid count {} not bounded by compression",
@@ -424,7 +442,7 @@ mod tests {
     /// because the build sorts first. This is the canonical-fold guarantee.
     #[test]
     fn byte_identical_across_input_orders() {
-        let base: Vec<f64> = (0..5000).map(|i| (super::usize_to_f64(i) * 2.7).sin() * 1000.0).collect();
+        let base: Vec<f64> = (0..5000).map(|i| (crate::exec::fold::sketch::usize_to_f64(i) * 2.7).sin() * 1000.0).collect();
         let asc = {
             let mut v = base.clone();
             v.sort_by(|a, b| a.total_cmp(b));
@@ -455,8 +473,8 @@ mod tests {
     /// a fixed shard-reduction reproducible.
     #[test]
     fn merge_is_deterministic_and_commutative() {
-        let a = digest_of((0..3000).map(|i| super::usize_to_f64(i)), 100.0);
-        let b = digest_of((2000..6000).map(|i| super::usize_to_f64(i) * 1.3), 100.0);
+        let a = digest_of((0..3000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
+        let b = digest_of((2000..6000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 1.3), 100.0);
 
         let ab1 = a.merge(&b).unwrap();
         let ab2 = a.merge(&b).unwrap();
@@ -475,9 +493,9 @@ mod tests {
     /// order-independent [`TDigest::from_values`] build instead.
     #[test]
     fn merge_associativity_is_not_relied_upon() {
-        let a = digest_of((0..2000).map(|i| super::usize_to_f64(i)), 100.0);
-        let b = digest_of((1000..4000).map(|i| super::usize_to_f64(i) * 0.7), 100.0);
-        let c = digest_of((500..2500).map(|i| super::usize_to_f64(i) * 2.1), 100.0);
+        let a = digest_of((0..2000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
+        let b = digest_of((1000..4000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.7), 100.0);
+        let c = digest_of((500..2500).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 2.1), 100.0);
 
         let left = a.merge(&b).unwrap().merge(&c).unwrap();
         let right = a.merge(&b.merge(&c).unwrap()).unwrap();
@@ -502,7 +520,7 @@ mod tests {
     /// Round-trip through the stored form, and reject corruption.
     #[test]
     fn serialization_round_trips_and_rejects_corruption() {
-        let d = digest_of((0..2000).map(|i| super::usize_to_f64(i) * 0.25), 100.0);
+        let d = digest_of((0..2000).map(|i| crate::exec::fold::sketch::usize_to_f64(i) * 0.25), 100.0);
         assert_eq!(TDigest::from_bytes(&d.to_bytes()).unwrap(), d);
         assert!(TDigest::from_bytes(&[]).is_err());
         assert!(TDigest::from_bytes(&[0x02]).is_err());
@@ -522,7 +540,7 @@ mod tests {
     /// algorithm, the scale function, or the serialization fails loudly.
     #[test]
     fn pinned_digest_fingerprint() {
-        let digest = digest_of((0..1000).map(|i| super::usize_to_f64(i)), 100.0);
+        let digest = digest_of((0..1000).map(|i| crate::exec::fold::sketch::usize_to_f64(i)), 100.0);
         let fingerprint = super::super::xxh64(&digest.to_bytes(), 0);
         assert_eq!(fingerprint, 0xA474_C02B_97F8_32C4);
     }
