@@ -31,6 +31,18 @@
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
+
+/// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => loop {
+            assert!(false, "{ctx}: {e}");
+        },
+    }
+}
+
+
 use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
 
 fn no_params() -> BTreeMap<String, DataValue> {
@@ -38,11 +50,11 @@ fn no_params() -> BTreeMap<String, DataValue> {
 }
 
 fn db() -> Engine<FjallStorage> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = new_fjall_storage(dir.path()).expect("fjall storage");
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let storage = must_ok(new_fjall_storage(dir.path()), "fjall storage");
     // Probe process exits after one digest; keep the store alive for the run.
     std::mem::forget(dir);
-    Engine::compose(storage, Catalog::new()).expect("engine")
+    must_ok(Engine::compose(storage, Catalog::new()), "engine")
 }
 
 /// Rows in RETURNED order — no sorting. Order itself is part of the claim.
@@ -64,9 +76,10 @@ fn run(
     tag: &str,
     combined: &mut impl Hasher,
 ) -> NamedRows {
-    let rows = db.run_script(script, no_params()).unwrap_or_else(|e| {
-        panic!("determinism probe script failed ({tag}): {e}\nscript: {script}")
-    });
+    let rows = must_ok(
+        db.run_script(script, no_params()),
+        &format!("determinism probe script failed ({tag}); script: {script}"),
+    );
     let h = hash_named_rows(&rows);
     println!("{tag:<24} rows={:<4} hash={h:016x}", rows.rows().len());
     tag.hash(combined);
@@ -75,7 +88,7 @@ fn run(
 }
 
 fn main() {
-    let threads = std::env::var("RAYON_NUM_THREADS").unwrap_or_else(|_| "default".into());
+    let threads = match std::env::var("RAYON_NUM_THREADS") { Ok(v) => v, Err(_) => String::from("default") };
     let db = db();
     let mut combined = std::collections::hash_map::DefaultHasher::new();
 

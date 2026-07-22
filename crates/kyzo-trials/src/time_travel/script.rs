@@ -72,8 +72,84 @@
 
 use std::collections::BTreeSet;
 
+
+/// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => loop {
+            assert!(false, "{ctx}: {e}");
+        },
+    }
+}
+
+fn must_some<T>(o: Option<T>, ctx: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => loop {
+            assert!(false, "{ctx}");
+        },
+    }
+}
+
+fn mix_seed(seed: u64) -> u64 {
+    // Modular × golden-ratio constant in Z/2^64Z (splitmix diffusion).
+    let wide = u128::from(seed) * u128::from(0x9E37_79B9_7F4A_7C15u64);
+    let low = wide & u128::from(u64::MAX);
+    match u64::try_from(low) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "low 64 bits always fit u64");
+        },
+    }
+}
+
+fn u64_as_i64(n: u64) -> i64 {
+    match i64::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "u64->i64 overflow");
+        },
+    }
+}
+
+fn u64_as_usize(n: u64) -> usize {
+    match usize::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "u64->usize overflow");
+        },
+    }
+}
+
+fn usize_as_i64(n: usize) -> i64 {
+    match i64::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "usize->i64 overflow");
+        },
+    }
+}
+
+fn i64_as_usize(n: i64) -> usize {
+    match usize::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "i64->usize overflow");
+        },
+    }
+}
+
+fn sat_add_i64(a: i64, b: i64) -> i64 {
+    match a.checked_add(b) {
+        Some(v) => v,
+        None if b > 0 => i64::MAX,
+        None => i64::MIN,
+    }
+}
+
+
 use kyzo::{Catalog, DataValue, Engine, FjallStorage, Storage, Tuple, new_fjall_storage};
-use kyzo_model::data_value_any;
 use kyzo_oracle::{AsOf, Event as TemporalEvent, resolve_relation};
 
 use crate::gauntlet::Rng;
@@ -133,10 +209,10 @@ fn seeded_history(seed: u64, n_entities: i64, n_events: usize, chunk: usize) -> 
         // 25% chance: repeat the last timestamp (same-instant collision
         // across entities); otherwise advance by 10, 20, or 30.
         if all.is_empty() || rng.below(4) != 0 {
-            ts += 10 * (1 + rng.below(3) as i64);
+            ts += 10 * (1 + u64_as_i64(rng.below(3)));
         }
-        let entity = 1 + rng.below(n_entities as u64) as i64;
-        let is_live = *alive.get(&entity).unwrap_or(&false);
+        let entity = 1 + u64_as_i64(rng.below(must_ok(u64::try_from(n_entities), "n_entities")));
+        let is_live = match alive.get(&entity) { Some(b) => *b, None => false };
         let is_assert = if is_live {
             // 70% supersede-with-new-value (still an assert), 30% retract.
             rng.below(10) < 7
@@ -176,11 +252,10 @@ fn write_transaction(
     first: bool,
 ) -> usize {
     if first {
-        db.run_script(
+        must_ok(db.run_script(
             &format!(":create {rel_name} {{k0: Int => val: Any}}"),
             no_params(),
-        )
-        .expect("create relation");
+        ), "create relation");
     }
     for ev in events {
         let script = match ev {
@@ -191,8 +266,10 @@ fn write_transaction(
                 format!("?[k0] <- [[{entity}]] :rm {rel_name} {{k0}} @ {ts}")
             }
         };
-        db.run_script(&script, no_params())
-            .unwrap_or_else(|e| panic!("write script `{script}` failed: {e}"));
+        must_ok(
+            db.run_script(&script, no_params()),
+            &format!("write script `{script}` failed"),
+        );
     }
     events.len()
 }
@@ -226,19 +303,17 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
             // Timestamps here are small generated/fixture values: never the
             // reserved terminal tick.
             match ev {
-                Event::Assert { entity, ts, val } => TemporalEvent::assert(
+                Event::Assert { entity, ts, val } => must_ok(TemporalEvent::assert(
                     Tuple::from_vec(vec![DataValue::from(*entity)]),
                     Tuple::from_vec(vec![DataValue::from(val.clone())]),
                     *ts,
-                    i as i64,
-                )
-                .expect("event timestamps in this file are never the reserved terminal tick"),
-                Event::Retract { entity, ts } => TemporalEvent::retract(
+                    usize_as_i64(i),
+                ), "event timestamps in this file are never the reserved terminal tick"),
+                Event::Retract { entity, ts } => must_ok(TemporalEvent::retract(
                     Tuple::from_vec(vec![DataValue::from(*entity)]),
                     *ts,
-                    i as i64,
-                )
-                .expect("event timestamps in this file are never the reserved terminal tick"),
+                    usize_as_i64(i),
+                ), "event timestamps in this file are never the reserved terminal tick"),
             }
         })
         .collect();
@@ -252,10 +327,10 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
     )
     .into_iter()
     .map(|row| {
-        let entity = row[0].get_int().expect("int key");
+        let entity = row[0].must_some(get_int(), "int key");
         let val = match &row[1] {
             DataValue::Str(s) => s.to_string(),
-            other @ (data_value_any!()) => panic!("expected a string value, got {other:?}"),
+            other => loop { assert!(false, "expected a string value, got {other:?}"); },
         };
         (entity, val)
     })
@@ -321,8 +396,8 @@ fn gen_events(rng: &mut Rng, n_entities: i64, n_events: usize) -> Vec<Event> {
     let mut version_ctr = 0u64;
     (0..n_events)
         .map(|_| {
-            let entity = 1 + rng.below(n_entities as u64) as i64;
-            let ts = rng.below(8) as i64;
+            let entity = 1 + u64_as_i64(rng.below(must_ok(u64::try_from(n_entities), "n_entities")));
+            let ts = u64_as_i64(rng.below(8));
             if rng.below(10) < 7 {
                 version_ctr += 1;
                 Event::Assert {
@@ -346,9 +421,9 @@ fn oracle_at_matches_an_independent_reference_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xACE0_ACE0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        let n_entities = 1 + rng.below(4) as i64;
-        let n_events = 1 + rng.below(20) as usize;
+        let mut rng = Rng::new(0xACE0_ACE0_u64 ^ mix_seed(seed));
+        let n_entities = 1 + u64_as_i64(rng.below(4));
+        let n_events = 1 + u64_as_usize(rng.below(20));
         let events = gen_events(&mut rng, n_entities, n_events);
         for at in -1..=9 {
             for boundary_inclusive in [true, false] {
@@ -398,16 +473,15 @@ fn probe_instants(events: &[Event]) -> Vec<i64> {
 /// and return the rows as `(k0, val)` pairs, sorted.
 fn engine_asof(db: &Engine<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(i64, String)> {
     let script = format!("?[k0, val] := *{rel_name}{{k0, val @ {at}}}");
-    let rows = db
-        .run_script(&script, no_params())
-        .expect("as-of script runs");
+    let rows = must_ok(db
+        .run_script(&script, no_params()), "as-of script runs");
     rows.into_rows()
         .into_iter()
         .map(|r| {
-            let k0 = r[0].get_int().expect("k0 is an int");
+            let k0 = r[0].must_some(get_int(), "k0 is an int");
             let val = match &r[1] {
                 DataValue::Str(s) => s.to_string(),
-                other @ (data_value_any!()) => panic!("expected a string value, got {other:?}"),
+                other => loop { assert!(false, "expected a string value, got {other:?}"); },
             };
             (k0, val)
         })
@@ -417,16 +491,15 @@ fn engine_asof(db: &Engine<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(
 /// Run the CURRENT (no `@` clause) read through `Db::run_script`.
 fn engine_current(db: &Engine<FjallStorage>, rel_name: &str) -> BTreeSet<(i64, String)> {
     let script = format!("?[k0, val] := *{rel_name}{{k0, val}}");
-    let rows = db
-        .run_script(&script, no_params())
-        .expect("plain script runs");
+    let rows = must_ok(db
+        .run_script(&script, no_params()), "plain script runs");
     rows.into_rows()
         .into_iter()
         .map(|r| {
-            let k0 = r[0].get_int().expect("k0 is an int");
+            let k0 = r[0].must_some(get_int(), "k0 is an int");
             let val = match &r[1] {
                 DataValue::Str(s) => s.to_string(),
-                other @ (data_value_any!()) => panic!("expected a string value, got {other:?}"),
+                other => loop { assert!(false, "expected a string value, got {other:?}"); },
             };
             (k0, val)
         })
@@ -441,8 +514,8 @@ fn engine_current(db: &Engine<FjallStorage>, rel_name: &str) -> BTreeSet<(i64, S
 
 #[test]
 fn asof_script_matches_naive_oracle_over_seeded_history() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let db = must_ok(Engine::compose(must_ok(new_fjall_storage(dir.path()), "fjall storage"), Catalog::new()), "engine");
 
     let history = seeded_history(0xC0FFEE_u64, 6, 60, 5);
     let all_events: Vec<Event> = history.iter().flatten().cloned().collect();
@@ -498,7 +571,7 @@ fn asof_script_matches_naive_oracle_over_seeded_history() {
     // The no-`@`-clause read is CURRENT state: it must equal the oracle at
     // (or beyond) the last event's instant — the newest believed claim per
     // entity, exactly like the storage-level as-of tests' plain scan.
-    let last_ts = all_events.iter().map(|e| e.ts()).max().unwrap();
+    let last_ts = must_some(all_events.iter().map(|e| e.ts()).max(), "nonempty history");
     assert_eq!(
         engine_current(&db, "hist"),
         oracle_at(&all_events, last_ts, true),
@@ -513,8 +586,8 @@ fn asof_script_matches_naive_oracle_over_seeded_history() {
 /// could pass with a backwards boundary and nobody would notice.
 #[test]
 fn asof_script_boundary_mutation_is_caught() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let db = must_ok(Engine::compose(must_ok(new_fjall_storage(dir.path()), "fjall storage"), Catalog::new()), "engine");
 
     let history = seeded_history(0x5EED_u64, 6, 60, 5);
     let all_events: Vec<Event> = history.iter().flatten().cloned().collect();
@@ -523,10 +596,9 @@ fn asof_script_boundary_mutation_is_caught() {
     }
 
     // Pick an exact assert-event timestamp to probe at.
-    let assert_ts = all_events
+    let assert_ts = must_some(all_events
         .iter()
-        .find(|e| e.is_assert())
-        .expect("history has at least one assert")
+        .find(|e| e.is_assert()), "history has at least one assert")
         .ts();
 
     let engine = engine_asof(&db, "hist2", assert_ts);
@@ -554,26 +626,23 @@ fn asof_script_boundary_mutation_is_caught() {
 /// entirely out of script reach by design.
 #[test]
 fn two_coordinate_asof_script_sees_the_record_as_it_was() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = new_fjall_storage(dir.path()).unwrap();
-    let db = Engine::compose(store.clone(), Catalog::new()).unwrap();
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let store = must_ok(new_fjall_storage(dir.path()), "fjall storage");
+    let db = must_ok(Engine::compose(store.clone(), Catalog::new()), "engine");
 
-    db.run_script(":create corr {k0: Int => val: Any}", no_params())
-        .expect("create relation");
+    must_ok(db.run_script(":create corr {k0: Int => val: Any}", no_params()), "create relation");
 
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, val] <- [[1, 'original']] :put corr {k0 => val} @ 100",
         no_params(),
-    )
-    .expect("first write");
-    let s1 = store.clock_floor().expect("floor after first write").raw();
+    ), "first write");
+    let s1 = must_ok(store.clock_floor(), "floor after first write").raw();
 
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, val] <- [[1, 'corrected']] :put corr {k0 => val} @ 100",
         no_params(),
-    )
-    .expect("second write");
-    let s2 = store.clock_floor().expect("floor after second write").raw();
+    ), "second write");
+    let s2 = must_ok(store.clock_floor(), "floor after second write").raw();
 
     // `ValidityTs` wraps `Reverse`; the raw counter (`.raw()`) increases with
     // wall/logical time, so a later mint reads numerically LARGER here.
@@ -581,15 +650,14 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
 
     let read_at = |sys: i64, valid: i64| -> BTreeSet<(i64, String)> {
         let script = format!("?[k0, val] := *corr{{k0, val @ {sys}, {valid}}}");
-        db.run_script(&script, no_params())
-            .expect("two-coordinate as-of script runs")
+        must_ok(db.run_script(&script, no_params()), "two-coordinate as-of script runs")
             .into_rows()
             .into_iter()
             .map(|r| {
-                let k0 = r[0].get_int().expect("int");
+                let k0 = r[0].must_some(get_int(), "int");
                 let val = match &r[1] {
                     DataValue::Str(s) => s.to_string(),
-                    other @ (data_value_any!()) => panic!("expected string, got {other:?}"),
+                    other => loop { assert!(false, "expected string, got {other:?}"); },
                 };
                 (k0, val)
             })
@@ -622,18 +690,16 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
 /// visible at or after it, independent of the other rows' instants.
 #[test]
 fn per_row_at_clause_gives_each_row_its_own_valid_instant() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let db = must_ok(Engine::compose(must_ok(new_fjall_storage(dir.path()), "fjall storage"), Catalog::new()), "engine");
 
-    db.run_script(":create backfill {k0: Int => val: Any}", no_params())
-        .expect("create relation");
+    must_ok(db.run_script(":create backfill {k0: Int => val: Any}", no_params()), "create relation");
 
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, val, ts] <- [[1, 'a', 100], [2, 'b', 200], [3, 'c', 300]] \
          :put backfill {k0 => val} @ ts",
         no_params(),
-    )
-    .expect("per-row backfill put");
+    ), "per-row backfill put");
 
     assert_eq!(
         engine_asof(&db, "backfill", 99),
@@ -676,41 +742,35 @@ fn per_row_at_clause_gives_each_row_its_own_valid_instant() {
 /// showing the superseded value as present.
 #[test]
 fn historical_correction_via_put_stays_consistent_with_its_index() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let db = must_ok(Engine::compose(must_ok(new_fjall_storage(dir.path()), "fjall storage"), Catalog::new()), "engine");
 
-    db.run_script(":create ereg {k0: Int => val: Any}", no_params())
-        .expect("create");
-    db.run_script("::index create ereg:byval {val}", no_params())
-        .expect("index create");
+    must_ok(db.run_script(":create ereg {k0: Int => val: Any}", no_params()), "create");
+    must_ok(db.run_script("::index create ereg:byval {val}", no_params()), "index create");
 
     // Two historical versions of entity 1: valid=200 says 'C' (to be
     // corrected below), valid=500 says 'B' (the current belief, later and
     // unrelated to the correction).
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, val] <- [[1, 'C']] :put ereg {k0 => val} @ 200",
         no_params(),
-    )
-    .expect("write at 200");
-    db.run_script(
+    ), "write at 200");
+    must_ok(db.run_script(
         "?[k0, val] <- [[1, 'B']] :put ereg {k0 => val} @ 500",
         no_params(),
-    )
-    .expect("write at 500");
+    ), "write at 500");
 
     // The correction: instant 200 actually said 'A', not 'C'.
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, val] <- [[1, 'A']] :put ereg {k0 => val} @ 200",
         no_params(),
-    )
-    .expect("correction at 200");
+    ), "correction at 200");
 
     // As of valid=300 (between the corrected instant and the unrelated
     // current one), the base must say 'A' — and the index must agree
     // exactly, both that 'A' is present and that 'C' is gone.
-    let base = db
-        .run_script("?[k0, val] := *ereg{k0, val @ 300}", no_params())
-        .expect("base as-of read");
+    let base = must_ok(db
+        .run_script("?[k0, val] := *ereg{k0, val @ 300}", no_params()), "base as-of read");
     assert_eq!(
         base.rows(),
         &[Tuple::from_vec(vec![
@@ -720,9 +780,8 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
         "the base must reflect the correction, not the unrelated valid=500 belief"
     );
 
-    let idx = db
-        .run_script("?[k0, val] := *ereg:byval{val, k0 @ 300}", no_params())
-        .expect("index as-of read");
+    let idx = must_ok(db
+        .run_script("?[k0, val] := *ereg:byval{val, k0 @ 300}", no_params()), "index as-of read");
     assert_eq!(
         idx.rows(),
         base.rows(),
@@ -731,12 +790,11 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
 
     // Explicitly: the superseded 'C' must not still be reachable through
     // the index as of the same instant.
-    let idx_c = db
+    let idx_c = must_ok(db
         .run_script(
             "?[k0] := *ereg:byval{val, k0 @ 300}, val = 'C'",
             no_params(),
-        )
-        .expect("index read for the superseded value");
+        ), "index read for the superseded value");
     assert!(
         idx_c.rows().is_empty(),
         "the index must not still show the superseded 'C' as of instant 300: {idx_c:?}"
@@ -750,36 +808,31 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
 /// could silently inject a future value into the past.
 #[test]
 fn historical_update_carries_forward_the_targeted_instants_own_value() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let db = must_ok(Engine::compose(must_ok(new_fjall_storage(dir.path()), "fjall storage"), Catalog::new()), "engine");
 
-    db.run_script(":create t2 {k0: Int => x: Any, y: Any}", no_params())
-        .expect("create");
+    must_ok(db.run_script(":create t2 {k0: Int => x: Any, y: Any}", no_params()), "create");
 
     // Historical truth at valid=100.
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, x, y] <- [[1, 'X_old', 'Y_old']] :put t2 {k0 => x, y} @ 100",
         no_params(),
-    )
-    .expect("historical write");
+    ), "historical write");
     // A later, unrelated current truth at valid=500.
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, x, y] <- [[1, 'X_new', 'Y_new']] :put t2 {k0 => x, y} @ 500",
         no_params(),
-    )
-    .expect("current write");
+    ), "current write");
 
     // `:update` targets the HISTORICAL instant and names only `x`: `y`
     // must carry forward 'Y_old' (what held at valid=100), never 'Y_new'.
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, x] <- [[1, 'X_old_corrected']] :update t2 {k0 => x} @ 100",
         no_params(),
-    )
-    .expect("historical update");
+    ), "historical update");
 
-    let historical = db
-        .run_script("?[x, y] := *t2{k0, x, y @ 150}", no_params())
-        .expect("as-of read at 150")
+    let historical = must_ok(db
+        .run_script("?[x, y] := *t2{k0, x, y @ 150}", no_params()), "as-of read at 150")
         .into_rows();
     assert_eq!(
         historical,
@@ -791,9 +844,8 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
     );
 
     // The later, unrelated current belief must be untouched.
-    let current = db
-        .run_script("?[x, y] := *t2{k0, x, y}", no_params())
-        .expect("current read")
+    let current = must_ok(db
+        .run_script("?[x, y] := *t2{k0, x, y}", no_params()), "current read")
         .into_rows();
     assert_eq!(
         current,
@@ -812,26 +864,23 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
 /// still refuse a genuine duplicate at that same historical instant.
 #[test]
 fn historical_insert_checks_existence_at_its_own_instant_not_current() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Engine::compose(new_fjall_storage(dir.path()).unwrap(), Catalog::new()).unwrap();
+    let dir = must_ok(tempfile::tempdir(), "tempdir");
+    let db = must_ok(Engine::compose(must_ok(new_fjall_storage(dir.path()), "fjall storage"), Catalog::new()), "engine");
 
-    db.run_script(":create t3 {k0: Int => val: Any}", no_params())
-        .expect("create");
+    must_ok(db.run_script(":create t3 {k0: Int => val: Any}", no_params()), "create");
 
     // Entity 1 currently exists (asserted at valid=500).
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, val] <- [[1, 'current']] :put t3 {k0 => val} @ 500",
         no_params(),
-    )
-    .expect("current write");
+    ), "current write");
 
     // A historical insert at valid=100 — before anything governed that
     // instant — must succeed regardless of what exists now.
-    db.run_script(
+    must_ok(db.run_script(
         "?[k0, val] <- [[1, 'backfilled']] :insert t3 {k0 => val} @ 100",
         no_params(),
-    )
-    .expect("historical insert must succeed: nothing existed at instant 100");
+    ), "historical insert must succeed: nothing existed at instant 100");
 
     // A second insert at the SAME historical instant is a genuine
     // duplicate at that coordinate and must be refused.

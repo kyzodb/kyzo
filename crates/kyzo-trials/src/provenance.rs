@@ -32,6 +32,25 @@ use crate::gauntlet::{
     z,
 };
 
+/// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => loop {
+            assert!(false, "{ctx}: {e}");
+        },
+    }
+}
+
+fn must_some<T>(o: Option<T>, ctx: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => loop {
+            assert!(false, "{ctx}");
+        },
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // CAPABILITY 2 — provenance: reconstruct a proof, verify it independently.
 // ════════════════════════════════════════════════════════════════════════
@@ -271,17 +290,15 @@ fn run_with_witnesses(
     let fixed_arities = fixed_arities_of(model, &arities);
     let compiled = compile_for(model, entry.clone(), entry_arity, &fixed_arities);
     let mut table = WitnessTable::default();
-    let outcome = stratified_evaluate(
+    let outcome = must_ok(stratified_evaluate(
         &compiled.program,
         &compiled.lifetimes,
         RowLimit::default(),
         &generous_budget(),
         Some(&mut table),
-    )
-    .expect("evaluates");
+    ), "evaluates");
     let rows: BTreeSet<Tuple> =
-        collect_materialized(outcome.store.all_iter().expect("harness: store iter"))
-            .expect("harness: materialize")
+        must_ok(collect_materialized(must_ok(outcome.store.all_iter(), "harness: store iter")), "harness: materialize")
             .into_iter()
             .collect();
     (
@@ -299,20 +316,28 @@ fn provenance_reconstructs_and_verifies_every_derived_fact() {
     assert!(!rows.is_empty(), "the fixture derives facts");
 
     for tuple in &rows {
-        let proof = reconstruct(entry.clone(), tuple, &witnesses, &per_head, &idb)
-            .unwrap_or_else(|| panic!("reconstruct {entry}{tuple:?}"));
+        let proof = must_some(
+            reconstruct(entry.clone(), tuple, &witnesses, &per_head, &idb),
+            &format!("reconstruct {entry}{tuple:?}"),
+        );
         assert_eq!(proof.head(), (entry.clone(), tuple));
-        verify(&proof, &per_head, &model.facts)
-            .unwrap_or_else(|e| panic!("checker rejected an honest proof of {tuple:?}: {e}"));
+        must_ok(
+            verify(&proof, &per_head, &model.facts),
+            &format!("checker rejected an honest proof of {tuple:?}"),
+        );
         assert!(all_leaves_ground(&proof, &model.facts));
     }
 
-    let path_rows = real_eval(&model, "path", 2, &BTreeMap::new(), &generous_budget()).unwrap();
+    let path_rows = must_ok(real_eval(&model, "path", 2, &BTreeMap::new(), &generous_budget()), "real_eval");
     for tuple in &path_rows {
-        let proof = reconstruct("path".into(), tuple, &witnesses, &per_head, &idb)
-            .unwrap_or_else(|| panic!("reconstruct path{tuple:?}"));
-        verify(&proof, &per_head, &model.facts)
-            .unwrap_or_else(|e| panic!("checker rejected honest path proof: {e}"));
+        let proof = must_some(
+            reconstruct("path".into(), tuple, &witnesses, &per_head, &idb),
+            &format!("reconstruct path{tuple:?}"),
+        );
+        must_ok(
+            verify(&proof, &per_head, &model.facts),
+            "checker rejected honest path proof",
+        );
     }
 }
 
@@ -328,15 +353,18 @@ fn provenance_negative_control_checker_rejects_corruption() {
     let (model, entry) = provenance_fixture();
     let (rows, witnesses, per_head, idb) = run_with_witnesses(&model, entry.clone(), 2);
 
-    let target = rows
-        .iter()
-        .find(|t| {
-            let proof = reconstruct(entry.clone(), t, &witnesses, &per_head, &idb).unwrap();
+    let target = must_some(
+        rows.iter().find(|t| {
+            let proof = must_some(
+                reconstruct(entry.clone(), t, &witnesses, &per_head, &idb),
+                "reconstruct",
+            );
             proof_depth(&proof) >= 3
-        })
-        .expect("a multi-step labeled fact exists");
-    let honest = reconstruct(entry.clone(), target, &witnesses, &per_head, &idb).unwrap();
-    verify(&honest, &per_head, &model.facts).expect("honest proof verifies");
+        }),
+        "a multi-step labeled fact exists",
+    );
+    let honest = must_some(reconstruct(entry.clone(), target, &witnesses, &per_head, &idb), "reconstruct");
+    must_ok(verify(&honest, &per_head, &model.facts), "honest proof verifies");
 
     // (a) Corrupt an interior premise tuple.
     let corrupt_premise = corrupt_first_step_premise(&honest);
@@ -412,7 +440,7 @@ fn flip_interior_rule(proof: &Proof, per_head: &BTreeMap<Rel, Vec<Rule>>) -> Pro
             rule_idx,
             premises,
         } => {
-            let n_rules = per_head.get(rel).map(|r| r.len()).unwrap_or(0);
+            let n_rules = match per_head.get(rel) { Some(r) => r.len(), None => 0 };
             if n_rules > 1 {
                 return Proof::Step {
                     rel: rel.clone(),
@@ -442,7 +470,7 @@ fn flip_interior_rule(proof: &Proof, per_head: &BTreeMap<Rel, Vec<Rule>>) -> Pro
 fn proof_depth(proof: &Proof) -> usize {
     match proof {
         Proof::Ground { .. } => 1,
-        Proof::Step { premises, .. } => 1 + premises.iter().map(proof_depth).max().unwrap_or(0),
+        Proof::Step { premises, .. } => 1 + match premises.iter().map(proof_depth).max() { Some(d) => d, None => 0 },
     }
 }
 
@@ -457,10 +485,10 @@ fn corrupt_first_step_premise(proof: &Proof) -> Proof {
         return proof.clone();
     };
     let mut premises = premises.clone();
-    let pos = premises
-        .iter()
-        .position(|p| matches!(p, Proof::Step { .. }))
-        .unwrap_or(0);
+    let pos = match premises.iter().position(|p| matches!(p, Proof::Step { .. })) {
+        Some(p) => p,
+        None => 0,
+    };
     if let Some(p) = premises.get_mut(pos) {
         *p = with_bumped_tuple(p);
     }

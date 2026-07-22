@@ -36,6 +36,83 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+
+/// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => loop {
+            assert!(false, "{ctx}: {e}");
+        },
+    }
+}
+
+fn must_some<T>(o: Option<T>, ctx: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => loop {
+            assert!(false, "{ctx}");
+        },
+    }
+}
+
+fn mix_seed(seed: u64) -> u64 {
+    // Modular × golden-ratio constant in Z/2^64Z (splitmix diffusion).
+    let wide = u128::from(seed) * u128::from(0x9E37_79B9_7F4A_7C15u64);
+    let low = wide & u128::from(u64::MAX);
+    match u64::try_from(low) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "low 64 bits always fit u64");
+        },
+    }
+}
+
+fn u64_as_i64(n: u64) -> i64 {
+    match i64::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "u64->i64 overflow");
+        },
+    }
+}
+
+fn u64_as_usize(n: u64) -> usize {
+    match usize::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "u64->usize overflow");
+        },
+    }
+}
+
+fn usize_as_i64(n: usize) -> i64 {
+    match i64::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "usize->i64 overflow");
+        },
+    }
+}
+
+fn i64_as_usize(n: i64) -> usize {
+    match usize::try_from(n) {
+        Ok(v) => v,
+        Err(_) => loop {
+            assert!(false, "i64->usize overflow");
+        },
+    }
+}
+
+fn sat_add_i64(a: i64, b: i64) -> i64 {
+    match a.checked_add(b) {
+        Some(v) => v,
+        None if b > 0 => i64::MAX,
+        None => i64::MIN,
+    }
+}
+
+
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::{
     AggrFold, AsOf, Axis, ClaimPolarity, Event, HeadAggr, Interval, Literal, MeetAccum, OPEN_END,
@@ -60,7 +137,7 @@ struct TemporalGenParams {
 
 fn gen_temporal_params(rng: &mut Rng) -> TemporalGenParams {
     TemporalGenParams {
-        n_relations: rng.range(1, 4) as usize,
+        n_relations: i64_as_usize(rng.range(1, 4)),
         keys_per_relation: rng.range(1, 4),
         events_per_key: rng.range(2, 8),
         coord_span: rng.range(4, 20),
@@ -98,7 +175,7 @@ fn push_temporal_event(history: &mut Vec<Event>, rng: &mut Rng, key: &Tuple, val
         ClaimPolarity::Retract => Event::retract(key.clone(), valid, sys),
         ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
     };
-    history.push(event.expect("coord_span keeps every draw far below the reserved terminal tick"));
+    history.push(must_ok(event, "coord_span keeps every draw far below the reserved terminal tick"));
 }
 
 struct TemporalHistories {
@@ -133,7 +210,7 @@ impl TemporalHistories {
 /// positives-before-negatives emission would mask.
 fn shuffle_body(rng: &mut Rng, body: &mut [Literal]) {
     for i in (1..body.len()).rev() {
-        let j = rng.below((i + 1) as u64) as usize;
+        let j = u64_as_usize(rng.below(must_ok(u64::try_from(i + 1), "shuffle idx")));
         body.swap(i, j);
     }
 }
@@ -201,7 +278,7 @@ fn grid_differential_over_generated_temporal_programs() {
     let seeds = 400u64;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0x7E57_A105_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0x7E57_A105_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let hist = gen_temporal_histories(&mut rng, &params);
         let program = temporal_program(&mut rng, &hist);
@@ -234,7 +311,7 @@ fn grid_differential_over_generated_temporal_programs() {
                         cases += 1;
                     }
                 }
-                for &fixed_valid in &[history.first().map(|e| e.valid()).unwrap_or(0), 0] {
+                for &fixed_valid in &[match history.first() { Some(e) => e.valid(), None => 0 }, 0] {
                     let ivs = derive_intervals(history, key, Axis::Sys, fixed_valid);
                     for &sys_pt in &sys_grid {
                         let direct = resolve(
@@ -260,13 +337,13 @@ fn grid_differential_over_generated_temporal_programs() {
             }
         }
 
-        let db = naive_eval_at(&program, AsOf::current()).expect("well-formed generated program");
+        let db = must_ok(naive_eval_at(&program, AsOf::current()), "well-formed generated program");
         let mut expected_out: BTreeSet<Tuple> = BTreeSet::new();
         for history in program.histories.values() {
             expected_out.extend(resolve_relation(history, AsOf::current()));
         }
         assert_eq!(
-            db.get("out").cloned().unwrap_or_default(),
+            match db.get("out") { Some(s) => s.clone(), None => BTreeSet::new() },
             expected_out,
             "seed {seed}: union wiring"
         );
@@ -287,7 +364,7 @@ fn grid_differential_over_generated_temporal_programs() {
                 }
             }
             assert_eq!(
-                db.get("joined").cloned().unwrap_or_default(),
+                match db.get("joined") { Some(s) => s.clone(), None => BTreeSet::new() },
                 expected_joined,
                 "seed {seed}: join wiring"
             );
@@ -318,7 +395,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
     let seeds = 400u64;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xD1FF_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0xD1FF_5EED_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let key: Tuple = Tuple::from_vec(vec![v(0)]);
         let history = gen_temporal_history(&mut rng, &key, &params);
@@ -341,13 +418,13 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         let bc = diff(&history, b, c);
         let ac = diff(&history, a, c);
         assert_eq!(
-            compose(&ab, &bc).expect("unit net"),
+            must_ok(compose(&ab, &bc), "unit net"),
             ac,
             "seed {seed}: valid axis a={av} b={bv} c={cv}"
         );
         cases += 1;
 
-        let fixed_valid = history.first().map(|e| e.valid()).unwrap_or(0);
+        let fixed_valid = match history.first() { Some(e) => e.valid(), None => 0 };
         let (asys, bsys, csys) = ordered_triple(&mut rng, params.coord_span);
         let a = AsOf {
             valid: fixed_valid,
@@ -365,7 +442,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         let bc = diff(&history, b, c);
         let ac = diff(&history, a, c);
         assert_eq!(
-            compose(&ab, &bc).expect("unit net"),
+            must_ok(compose(&ab, &bc), "unit net"),
             ac,
             "seed {seed}: sys axis a={asys} b={bsys} c={csys}"
         );
@@ -394,7 +471,7 @@ fn near_coordinate(rng: &mut Rng, history: &[Event]) -> AsOf {
 }
 
 fn nudge(rng: &mut Rng, coordinate: i64) -> i64 {
-    let out = coordinate.saturating_add(rng.range(-2, 3));
+    let out = sat_add_i64(coordinate, rng.range(-2, 3));
     if out == i64::MAX { out - 1 } else { out }
 }
 
@@ -404,7 +481,7 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
     let seeds = 400u64;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0x9A5D_6E1B_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0x9A5D_6E1B_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let mut history = Vec::new();
         for i in 0..params.keys_per_relation {
@@ -433,11 +510,8 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
             ..Program::default()
         };
 
-        let got = naive_eval(&program)
-            .expect("well-formed generated program")
-            .get("out")
-            .cloned()
-            .unwrap_or_default();
+        let got = must_ok(naive_eval(&program), "well-formed generated program")
+            .get("out");
 
         let hx = &program.histories["hx"];
         let snap1 = resolve_relation(hx, c1);
@@ -509,17 +583,16 @@ fn gen_temporal_history_no_erase(rng: &mut Rng, key: &Tuple, p: &TemporalGenPara
             Event::retract(key.clone(), valid, sys)
         };
         history
-            .push(event.expect("coord_span keeps every draw far below the reserved terminal tick"));
+            .push(must_ok(event, "coord_span keeps every draw far below the reserved terminal tick"));
         if rng.chance(2, 5) {
             let correction_sys = sys + rng.range(1, 5);
             history.push(
-                Event::assert(
+                must_ok(Event::assert(
                     key.clone(),
                     Tuple::from_vec(vec![v(rng.range(0, 5))]),
                     valid,
                     correction_sys,
-                )
-                .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                ), "coord_span keeps every draw far below the reserved terminal tick"),
             );
         }
     }
@@ -546,7 +619,7 @@ fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
     let mut caught_without_erase = false;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0xE1A5_E000_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history_no_erase(&mut rng, &key, &params);
         caught_without_erase |= erase_bug_manifests(&history, &key);
@@ -559,7 +632,7 @@ fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
     let mut caught_with_erase = false;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0xE1A5_E000_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params);
         caught_with_erase |= erase_bug_manifests(&history, &key);
@@ -664,7 +737,7 @@ fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
     let mut caught_nonneg_only = false;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0xA65_5169_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history_nonneg(&mut rng, &key, &params);
         caught_nonneg_only |= abs_sort_bug_manifests(&history, &key);
@@ -674,7 +747,7 @@ fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
     let mut caught_with_negatives = false;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0xA65_5169_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params);
         caught_with_negatives |= abs_sort_bug_manifests(&history, &key);
@@ -763,7 +836,7 @@ fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end
     let mut caught_with_ticks = 0usize;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0x9BAD_E1D0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0x9BAD_E1D0_u64 ^ mix_seed(seed));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params);
 
@@ -813,12 +886,11 @@ fn gen_temporal_existential_history(
             ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
         };
         history
-            .push(event.expect("coord_span keeps every draw far below the reserved terminal tick"));
+            .push(must_ok(event, "coord_span keeps every draw far below the reserved terminal tick"));
         if rng.chance(2, 5) {
             let correction_sys = sys + rng.range(1, 5);
             history.push(
-                Event::assert(key.clone(), Tuple::from_vec(vec![]), valid, correction_sys)
-                    .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                must_ok(Event::assert(key.clone(), Tuple::from_vec(vec![]), valid, correction_sys), "coord_span keeps every draw far below the reserved terminal tick"),
             );
         }
     }
@@ -865,11 +937,13 @@ fn gen_reachability_fixture(rng: &mut Rng) -> ReachabilityFixture {
                 let sys = rng.range(-params.coord_span, params.coord_span);
                 let payload = match meet_op {
                     "and" | "or" => DataValue::from(rng.chance(1, 2)),
-                    _ => v(rng.range(-10, 10)),
+                    other_meet => {
+                        assert!(other_meet != "and" && other_meet != "or", "meet arm partition");
+                        v(rng.range(-10, 10))
+                    }
                 };
                 seed_history.push(
-                    Event::assert(key.clone(), Tuple::from_vec(vec![payload]), valid, sys)
-                        .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                    must_ok(Event::assert(key.clone(), Tuple::from_vec(vec![payload]), valid, sys), "coord_span keeps every draw far below the reserved terminal tick"),
                 );
             }
         }
@@ -1011,8 +1085,8 @@ fn expected_meet(
     seeds: &BTreeSet<Tuple>,
     meet_op: &str,
 ) -> BTreeSet<Tuple> {
-    let fold: Arc<dyn AggrFold> = builtin_fold(meet_op).expect("meet fold exists");
-    let mut op = fold.fresh_meet().expect("meet-capable");
+    let fold: Arc<dyn AggrFold> = must_ok(builtin_fold(meet_op), "meet fold exists");
+    let mut op = must_ok(fold.fresh_meet(), "meet-capable");
     let mut acc: BTreeMap<DataValue, MeetAccum> = BTreeMap::new();
     for row in seeds {
         acc.insert(row[0].clone(), MeetAccum::from_derived(row[1].clone()));
@@ -1036,7 +1110,7 @@ fn expected_meet(
                     changed = true;
                 }
                 Some(mut cur) => {
-                    if op.update(&mut cur, &val).expect("meet update") {
+                    if must_ok(op.update(&mut cur, &val), "meet update") {
                         acc.insert(b.clone(), cur);
                         changed = true;
                     }
@@ -1059,10 +1133,11 @@ fn temporal_negation_recursion_and_both_aggregation_families_match_independent_r
     let seeds = 400u64;
     for seed in 0..seeds {
         // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-        let mut rng = Rng::new(0xF00D_BA11_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::new(0xF00D_BA11_u64 ^ mix_seed(seed));
         let fx = gen_reachability_fixture(&mut rng);
         let program = reachability_program(&mut rng, &fx);
-        let db = naive_eval(&program).expect(
+        let db = must_ok(
+            naive_eval(&program),
             "negation over a fixed as-of historical relation is legal (the lift); \
              recursion and both aggregation families over historical leaves are well-formed",
         );
@@ -1071,28 +1146,28 @@ fn temporal_negation_recursion_and_both_aggregation_families_match_independent_r
         let seed_snapshot = resolve_relation(&fx.seed_history, fx.c_seed);
 
         assert_eq!(
-            db.get("path").cloned().unwrap_or_default(),
+            match db.get("path") { Some(s) => s.clone(), None => BTreeSet::new() },
             brute_force_closure(&edge_snapshot),
             "seed {seed}: path"
         );
         cases += 1;
 
         assert_eq!(
-            db.get("unreachable").cloned().unwrap_or_default(),
+            match db.get("unreachable") { Some(s) => s.clone(), None => BTreeSet::new() },
             expected_unreachable(&fx.nodes, &edge_snapshot),
             "seed {seed}: unreachable"
         );
         cases += 1;
 
         assert_eq!(
-            db.get("deg").cloned().unwrap_or_default(),
+            match db.get("deg") { Some(s) => s.clone(), None => BTreeSet::new() },
             expected_degree(&edge_snapshot),
             "seed {seed}: deg"
         );
         cases += 1;
 
         assert_eq!(
-            db.get("m").cloned().unwrap_or_default(),
+            match db.get("m") { Some(s) => s.clone(), None => BTreeSet::new() },
             expected_meet(&edge_snapshot, &seed_snapshot, fx.meet_op),
             "seed {seed}: m (op={})",
             fx.meet_op

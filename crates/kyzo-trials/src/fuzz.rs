@@ -27,6 +27,27 @@ use kyzo_core::store::fjall::new_fjall_storage;
 use kyzo_core::store::{Storage, WriteTx};
 use smartstring::{LazyCompact, SmartString};
 
+
+/// Fail the trial loudly — `assert!` is always live (not `debug_assert`).
+fn must_ok<T, E: std::fmt::Display>(r: Result<T, E>, ctx: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => loop {
+            assert!(false, "{ctx}: {e}");
+        },
+    }
+}
+
+fn must_some<T>(o: Option<T>, ctx: &str) -> T {
+    match o {
+        Some(v) => v,
+        None => loop {
+            assert!(false, "{ctx}");
+        },
+    }
+}
+
+
 fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHandle {
     use kyzo_model::program::symbol::Symbol;
     let key_bindings = metadata
@@ -57,62 +78,60 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
 
     // (a) surfaces list containing a nested List (not a string).
     {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = must_ok(tempfile::tempdir(), "tempdir");
+        let db = must_ok(new_fjall_storage(dir.path()), "fjall storage");
         let meta = gazetteer_dict_metadata(ColType::Int);
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = must_ok(db.write_tx(), "write_tx");
         let dict =
-            create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts).unwrap();
+            must_ok(create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts), "create_relation");
         let bad = vec![
             DataValue::from(1i64),
             DataValue::List(vec![DataValue::List(vec![DataValue::from("x")])]),
         ];
-        let key = dict.encode_key_for_store(&bad, SourceSpan(0, 0)).unwrap();
-        let val = dict
-            .encode_val_only_for_store(&bad, SourceSpan(0, 0))
-            .unwrap();
-        tx.put(&key, &val).unwrap();
-        tx.commit().unwrap();
-        let rtx = db.read_tx().unwrap();
+        let key = must_ok(dict.encode_key_for_store(&bad, SourceSpan(0, 0)), "encode_key");
+        let val = must_ok(dict
+            .encode_val_only_for_store(&bad, SourceSpan(0, 0)), "encode_val");
+        must_ok(tx.put(&key, &val), "put");
+        must_ok(tx.commit(), "commit");
+        let rtx = must_ok(db.read_tx(), "read_tx");
         let r = catch_unwind(AssertUnwindSafe(|| {
             compile_dictionary(&rtx, &dict, GazetteerConfig::default())
         }));
         assert!(r.is_ok(), "nested-list surface panicked");
         assert!(
-            r.unwrap().is_err(),
+            must_ok(r, "trial").is_err(),
             "nested-list surface should be a typed error"
         );
     }
 
     // (b) enormous surface (~2 MiB of 'a') — must build or error, never panic.
     {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = must_ok(tempfile::tempdir(), "tempdir");
+        let db = must_ok(new_fjall_storage(dir.path()), "fjall storage");
         let big = "a".repeat(2 * 1024 * 1024);
         let rows: &[(i64, &[&str])] = &[(1, &[big.as_str()])];
         let r = catch_unwind(AssertUnwindSafe(|| {
             let meta = gazetteer_dict_metadata(ColType::Int);
-            let mut tx = db.write_tx().unwrap();
+            let mut tx = must_ok(db.write_tx(), "write_tx");
             let dict =
-                create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts).unwrap();
+                must_ok(create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts), "create_relation");
             for (entity, surfaces) in rows {
                 let sl = DataValue::List(surfaces.iter().map(|s| DataValue::from(*s)).collect());
                 let row = vec![DataValue::from(*entity), sl];
-                dict.put_fact(
+                must_ok(dict.put_fact(
                     &mut tx,
                     &row,
                     kyzo_model::value::ValidityTs::of_micros(0),
                     SourceSpan(0, 0),
-                )
-                .unwrap();
+                ), "put_fact");
             }
-            tx.commit().unwrap();
-            let rtx = db.read_tx().unwrap();
-            let g = compile_dictionary(&rtx, &dict, GazetteerConfig::default()).unwrap();
+            must_ok(tx.commit(), "commit");
+            let rtx = must_ok(db.read_tx(), "read_tx");
+            let g = must_ok(compile_dictionary(&rtx, &dict, GazetteerConfig::default()), "compile_dictionary");
             let doc: SmartString<LazyCompact> = SmartString::from(big.as_str());
             g.tag(&doc).len()
         }));
         assert!(r.is_ok(), "enormous surface panicked");
-        assert_eq!(r.unwrap(), 1, "enormous surface tags exactly once");
+        assert_eq!(must_ok(r, "trial"), 1, "enormous surface tags exactly once");
     }
 }
