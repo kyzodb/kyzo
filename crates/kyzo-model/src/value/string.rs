@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn bytes_kind_is_typed_and_str_accessor_refuses_it() -> Result<()> {
         let mut arena = Arena::new();
-        let b = GermanStr::mint_bytes(&[0xFF, 0x00], &mut arena)
+        let b = GermanStr::decode(&[0xFF, 0x00], &mut arena)
             .into_diagnostic()?
             .value();
         assert!(b.is_bytes());

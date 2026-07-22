@@ -846,7 +846,8 @@ mod tests {
                 Tuple::from_vec(vec![v_int(3)]),
             ],
             1,
-        )?;
+        )
+        .expect("lawful width");
         let bytes = encode_stream(&batch, &["n"])?;
         assert!(bytes.len() > 16);
         assert_eq!(&bytes[0..4], &CONTINUATION_MARKER.to_le_bytes());

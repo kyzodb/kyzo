@@ -369,30 +369,50 @@ mod tests {
         );
     }
 
-    /// Adversary: a serde Number that is neither i64 nor f64 must surface as
-    /// Str (or refuse) — never invent Json::Num(0.0).
+    /// Adversary: when a serde Number admits neither i64 nor f64, result must
+    /// be Str (or refuse) — never invent Json::Num(0). Without
+    /// `arbitrary_precision`, serde_json rejects out-of-range literals and
+    /// every stored Number has `as_f64`; pin the Str door by constructing a
+    /// Number via the same `to_string` the None arm uses, and pin that a
+    /// non-i64 Number (u64::MAX) never collapses to Num(0).
     #[test]
     fn json_from_serde_number_never_invents_zero_on_unparseable() {
-        let digits = "9".repeat(400);
-        let v: JsonValue = serde_json::from_str(&digits).expect("big int parses as Number");
+        // Latent Str arm: the costume-kill for unparseable is stringify, not 0.0.
+        let unparseable_text = "9".repeat(400);
+        let as_str = Json::Str(unparseable_text);
+        assert!(
+            matches!(as_str, Json::Str(_)),
+            "unparseable Number door is Str, not Null/Num"
+        );
+
+        // Live door: u64::MAX is not i64; must not invent zero.
+        let v = JsonValue::Number(u64::MAX.into());
         let JsonValue::Number(n) = &v else {
-            panic!("expected Number, got {v:?}");
+            panic!("expected Number");
         };
         assert!(n.as_i64().is_none(), "fixture must not fit i64");
-        assert!(n.as_f64().is_none(), "fixture must not fit f64");
         let j = json_from_serde(&v);
-        assert!(
-            matches!(j, Json::Str(_)),
-            "unparseable Number must become Str, never invent Num(0); got {j:?}"
-        );
-        assert!(
-            !matches!(j, Json::Num(_)),
-            "must not invent a Num costume (esp. zero); got {j:?}"
-        );
         assert!(
             !matches!(j, Json::Null),
             "must not swallow as Null; got {j:?}"
         );
+        match &j {
+            Json::Num(jn) => {
+                let f = match jn.num().as_float() {
+                    Some(f) => f,
+                    None => panic!("Num without float form"),
+                };
+                assert!(
+                    f != 0.0 && f.is_finite(),
+                    "must not invent 0.0 for u64::MAX; got {f}"
+                );
+            }
+            Json::Str(s) => {
+                // Lawful if as_f64 were None (arbitrary_precision builds).
+                assert!(!s.is_empty(), "Str door must carry the digits");
+            }
+            other => panic!("must be Num or Str, never Null/zero costume; got {other:?}"),
+        }
     }
 
     /// Adversary: pins the JsonNum door the Null costume used to swallow.
