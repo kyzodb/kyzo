@@ -16,8 +16,9 @@
 //!
 //! Kind-specific engines re-land as `K` parameterizations of this machine
 //! (story #305 T3): [`crate::project::vector::hnsw::Hnsw`], [`crate::project::text::fts::Fts`],
-//! [`crate::project::dedup::lsh::Lsh`], [`crate::project::sparse::sparse::Sparse`], and
-//! [`crate::project::spatial::spatial::Spatial`]. Relation-backed search is owned by
+//! [`crate::project::dedup::lsh::Lsh`], and (until their session host arms land)
+//! `Sparse` / `Spatial` under `project::{sparse,spatial}` (`#[cfg(test)]`).
+//! Relation-backed search is owned by
 //! [`RelationIndexSearch::search_relation`] on those kinds — inherent
 //! `knn` / `search_index` / `range_query` doors are thin UFCS aliases into
 //! that trait, not a second authority (P103). This module owns the shared
@@ -145,18 +146,6 @@ impl<K> ProjectionBuilder<K> {
     /// Start building a projection of kind `K`.
     pub fn new(kind: K) -> Self {
         ProjectionBuilder { kind }
-    }
-
-    /// Access the kind payload while still building (put/insert paths).
-    #[allow(dead_code)] // mid-wiring / test-only surface
-    pub(crate) fn kind_mut(&mut self) -> &mut K {
-        &mut self.kind
-    }
-
-    /// Borrow the kind payload while still building.
-    #[allow(dead_code)] // mid-wiring surface
-    pub(crate) fn kind(&self) -> &K {
-        &self.kind
     }
 
     /// Consuming seal: spends the builder and yields the sealed form

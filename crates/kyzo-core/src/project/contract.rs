@@ -97,11 +97,16 @@ pub(crate) enum IndexCorruptReason {
     BaseRowMissing,
     DecodeFailed(DecodeError),
 
+    #[cfg(test)]
     SpatialCurveNot8Bytes,
+    #[cfg(test)]
     SpatialLatNotNumber,
+    #[cfg(test)]
     SpatialLonNotNumber,
 
+    #[cfg(test)]
     SparseWeightNotFloat,
+    #[cfg(test)]
     SparseWeightNotFiniteNonNeg,
 
     LshPermutations(LshPermutationDecodeRefused),
@@ -112,7 +117,9 @@ pub(crate) enum IndexCorruptReason {
     FtsPositionsNotList,
     FtsPositionNotInt,
 
+    #[cfg(test)]
     GazetteerSurfacesNotList,
+    #[cfg(test)]
     GazetteerSurfaceNotString,
 
     HnswNotInteger { what: String },
@@ -160,12 +167,17 @@ impl fmt::Display for IndexCorruptReason {
             Self::DecodeFailed(err) => {
                 write!(f, "stored row bytes did not decode: {err}")
             }
+            #[cfg(test)]
             Self::SpatialCurveNot8Bytes => {
                 write!(f, "spatial posting curve column is not 8 bytes")
             }
+            #[cfg(test)]
             Self::SpatialLatNotNumber => write!(f, "spatial posting lat is not a number"),
+            #[cfg(test)]
             Self::SpatialLonNotNumber => write!(f, "spatial posting lon is not a number"),
+            #[cfg(test)]
             Self::SparseWeightNotFloat => write!(f, "sparse posting weight is not a float"),
+            #[cfg(test)]
             Self::SparseWeightNotFiniteNonNeg => {
                 write!(
                     f,
@@ -186,9 +198,11 @@ impl fmt::Display for IndexCorruptReason {
                 write!(f, "FTS posting position column is not a list")
             }
             Self::FtsPositionNotInt => write!(f, "FTS posting position is not an integer"),
+            #[cfg(test)]
             Self::GazetteerSurfacesNotList => {
                 write!(f, "gazetteer dictionary surfaces column is not a list")
             }
+            #[cfg(test)]
             Self::GazetteerSurfaceNotString => {
                 write!(f, "gazetteer dictionary surface form is not a string")
             }
@@ -297,7 +311,7 @@ pub(crate) fn admit_relation_search_hits(tuples: Vec<Tuple>) -> miette::Result<S
 }
 
 /// Materialize admitted search hits for test assertions (output boundary).
-#[allow(dead_code)] // mid-wiring / test-only surface
+#[cfg(test)]
 pub(crate) fn search_rows(hits: SearchHits) -> miette::Result<Vec<Tuple>> {
     Ok(hits.materialize_all_tuples()?)
 }

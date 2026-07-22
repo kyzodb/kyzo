@@ -14,13 +14,18 @@ pub(crate) mod current;
 pub(crate) mod dimension;
 pub(crate) mod projection;
 pub(crate) mod residency;
+#[cfg(test)]
 pub(crate) mod retrieval;
 
+#[cfg(test)]
 pub(crate) mod gazetteer;
 
 pub(crate) mod text;
 
 pub(crate) mod dedup;
+#[cfg(test)]
 pub(crate) mod sparse;
+// Spatial seats complete; IndexKind::Spatial host [OPEN] → cfg(test) until host.
+#[cfg(test)]
 pub(crate) mod spatial;
 pub(crate) mod vector;
