@@ -517,14 +517,14 @@ mod tests {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            ((state >> 33) as usize) % m
+            match usize::try_from(state >> 33) { Ok(v) => v % m, Err(_) => 0 }
         };
         for _case in 0..2000 {
             let n_rows = 1 + next(10);
             let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
             for _ in 0..n_rows {
                 rows.push((
-                    next(3) as i64,
+                    match i64::try_from(next(3)) { Ok(v) => v, Err(_) => 0 },
                     [0, 10, 20, 30][next(4)],
                     [0, 5, 15, 25][next(4)],
                     [

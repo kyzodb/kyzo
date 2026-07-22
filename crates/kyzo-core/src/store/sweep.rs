@@ -128,7 +128,11 @@ fn encode_commit_body(
 }
 
 fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    let len = match u32::try_from(bytes.len()) {
+        Ok(n) => n,
+        Err(_) => u32::MAX,
+    };
+    out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(bytes);
 }
 
@@ -303,7 +307,10 @@ impl LiveSweepHandle {
     pub fn next_anon_operation_id(&self) -> Vec<u8> {
         let mut g = self.inner.lock().expect("live-sweep mutex poisoned — refuse silent continue");
         let n = g.anon_seq;
-        g.anon_seq = g.anon_seq.saturating_add(1);
+        g.anon_seq = match g.anon_seq.checked_add(1) {
+            Some(n) => n,
+            None => u64::MAX,
+        };
         let mut out = b"kyzo.anon.".to_vec();
         out.extend_from_slice(&n.to_be_bytes());
         out
@@ -1397,8 +1404,13 @@ pub const RECOVERY_SLA_SLOPE_DEN: u64 = 1;
 #[cfg(any(test, feature = "bench-internals"))]
 #[inline]
 pub fn recovery_time_bound_ns(bytes_since_last_flush: u64) -> u64 {
-    RECOVERY_SLA_INTERCEPT_NS
-        + bytes_since_last_flush.saturating_mul(RECOVERY_SLA_SLOPE_NUM) / RECOVERY_SLA_SLOPE_DEN
+    match bytes_since_last_flush.checked_mul(RECOVERY_SLA_SLOPE_NUM) {
+        Some(scaled) => match RECOVERY_SLA_INTERCEPT_NS.checked_add(scaled / RECOVERY_SLA_SLOPE_DEN) {
+            Some(n) => n,
+            None => u64::MAX,
+        },
+        None => u64::MAX,
+    }
 }
 
 /// Successful bench-lane emit of the §86 recovery SLA claim.

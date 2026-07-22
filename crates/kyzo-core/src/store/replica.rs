@@ -1123,7 +1123,20 @@ impl CrossingKind {
 
     /// Wire tag for this kind.
     pub fn as_wire(self) -> u8 {
-        self as u8
+        match self {
+            Self::Entity => 0,
+            Self::Event => 1,
+            Self::State => 2,
+            Self::Role => 3,
+            Self::Relation => 4,
+            Self::Claim => 5,
+            Self::Evidence => 6,
+            Self::Context => 7,
+            Self::Concept => 8,
+            Self::Rule => 9,
+            Self::Derivation => 10,
+            Self::Invalidation => 11,
+        }
     }
 }
 
@@ -1734,8 +1747,8 @@ impl SthGossipSubject {
         let mut hex = String::with_capacity(64);
         for b in self.store_id.as_bytes() {
             const HEX: &[u8; 16] = b"0123456789abcdef";
-            hex.push(HEX[(b >> 4) as usize] as char);
-            hex.push(HEX[(b & 0x0f) as usize] as char);
+            hex.push(char::from(HEX[usize::from(b >> 4)]));
+            hex.push(char::from(HEX[usize::from(b & 0x0f)]));
         }
         format!("kyzo.sth.{hex}")
     }

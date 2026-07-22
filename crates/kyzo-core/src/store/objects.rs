@@ -966,7 +966,7 @@ mod durability_dominance_tests {
     }
 
     #[test]
-    fn incomparable_repair_is_typed_refuse_carrying_both_classes() {
+    fn incomparable_repair_is_typed_refuse_carrying_both_classes() -> miette::Result<()> {
         let backend = BackendContract::from_digest([0xBC; 32]);
         // True seat-22 incomparable pair: more copies vs more failure domains.
         let more_copies = ObjectDurabilityClass::new(
@@ -999,8 +999,11 @@ mod durability_dominance_tests {
                 assert_eq!(original, more_copies);
                 assert_eq!(proposed, more_domains);
             }
-            other => panic!("expected IncomparableClasses, got {other:?}"),
+            other => {
+                return Err(miette::miette!("expected IncomparableClasses, got {other:?}"));
+            }
         }
+        Ok(())
     }
 
     #[test]

@@ -123,8 +123,8 @@ impl MerkleHash {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut s = String::with_capacity(64);
         for b in self.0 {
-            s.push(HEX[(b >> 4) as usize] as char);
-            s.push(HEX[(b & 0x0f) as usize] as char);
+            s.push(char::from(HEX[usize::from(b >> 4)]));
+            s.push(char::from(HEX[usize::from(b & 0x0f)]));
         }
         s
     }
@@ -134,7 +134,10 @@ impl MerkleHash {
 fn leaf_hash(key: &[u8], value: &[u8]) -> MerkleHash {
     let mut h = Sha256::new();
     h.update([LEAF_TAG]);
-    h.update((key.len() as u64).to_be_bytes());
+    h.update(match u64::try_from(key.len()) {
+        Ok(n) => n,
+        Err(_) => u64::MAX,
+    }.to_be_bytes());
     h.update(key);
     h.update(value);
     MerkleHash(h.finalize().into())
@@ -1247,7 +1250,10 @@ mod tests {
         let mut opened_pairs = Vec::with_capacity(logical.len());
         for (i, (k, plaintext)) in logical.iter().enumerate() {
             let mut nonce_bytes = [0u8; 12];
-            nonce_bytes[..4].copy_from_slice(&(i as u32).to_be_bytes());
+            nonce_bytes[..4].copy_from_slice(&match u32::try_from(i) {
+                Ok(n) => n,
+                Err(_) => u32::MAX,
+            }.to_be_bytes());
             let nonce = Nonce::from_bytes(nonce_bytes);
             let ct = compress_then_encrypt(plaintext, &dek, nonce, AeadArm::Siv, &aad)?;
             assert_ne!(

@@ -443,13 +443,19 @@ impl DeepVerifyReport {
         h.update(u64::to_be_bytes(self.walk.checked));
         h.update(u64::to_be_bytes(self.walk.ordering_violations));
         h.update([u8::from(self.walk.truncated)]);
-        h.update(u64::to_be_bytes(self.walk.corrupt.len() as u64));
+        h.update(u64::to_be_bytes(match u64::try_from(self.walk.corrupt.len()) {
+            Ok(n) => n,
+            Err(_) => u64::MAX,
+        }));
         for c in &self.walk.corrupt {
             h.update(c.key_hex.as_bytes());
             h.update(c.error.as_bytes());
         }
         h.update(u64::to_be_bytes(self.indices_checked));
-        h.update(u64::to_be_bytes(self.index_mismatches.len() as u64));
+        h.update(u64::to_be_bytes(match u64::try_from(self.index_mismatches.len()) {
+            Ok(n) => n,
+            Err(_) => u64::MAX,
+        }));
         for m in &self.index_mismatches {
             h.update(m.index_name.as_bytes());
             h.update(index_kind_digest_tag(&m.kind));

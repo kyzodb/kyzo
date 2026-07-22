@@ -319,7 +319,10 @@ impl DebtLedger {
 
     /// Release previously admitted debt (saturating at zero).
     pub fn release(&mut self, units: u64) {
-        self.outstanding = self.outstanding.saturating_sub(units);
+        self.outstanding = match self.outstanding.checked_sub(units) {
+            Some(n) => n,
+            None => 0,
+        };
     }
 }
 

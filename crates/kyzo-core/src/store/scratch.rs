@@ -594,15 +594,36 @@ mod tests {
     /// prefixes; length 0..=4 (the empty key included).
     fn gen_key(rng: &mut SimRng) -> Vec<u8> {
         const ALPHABET: [u8; 8] = [0x00, 0x01, 0x07, 0x0D, 0x41, 0x42, 0xFE, 0xFF];
-        let len = rng.below(5) as usize;
+        let len = match usize::try_from(rng.below(5)) {
+            Ok(n) => n,
+            Err(_) => 0,
+        };
+        let alpha_mod = match u64::try_from(ALPHABET.len()) {
+            Ok(n) => n,
+            Err(_) => 1,
+        };
         (0..len)
-            .map(|_| ALPHABET[rng.below(ALPHABET.len() as u64) as usize])
+            .map(|_| {
+                let idx = match usize::try_from(rng.below(alpha_mod)) {
+                    Ok(n) => n,
+                    Err(_) => 0,
+                };
+                ALPHABET[idx]
+            })
             .collect()
     }
 
     fn gen_val(rng: &mut SimRng) -> Vec<u8> {
-        let len = rng.below(12) as usize;
-        (0..len).map(|_| (rng.next_u64() & 0xFF) as u8).collect()
+        let len = match usize::try_from(rng.below(12)) {
+            Ok(n) => n,
+            Err(_) => 0,
+        };
+        (0..len)
+            .map(|_| match u8::try_from(rng.next_u64() & 0xFF) {
+                Ok(b) => b,
+                Err(_) => 0,
+            })
+            .collect()
     }
 
     fn gen_op(rng: &mut SimRng) -> Op {

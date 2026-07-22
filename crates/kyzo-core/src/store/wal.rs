@@ -337,7 +337,15 @@ pub fn replay(store_id: StoreId, segments: &[WalSegment]) -> Result<WalReplaySta
             apply_payload(&mut floors, &mut commit_bodies, record.payload());
             pred = record.record_hash();
         }
-        expected_index = expected_index.saturating_add(1);
+        expected_index = match expected_index.checked_add(1) {
+            Some(n) => n,
+            None => {
+                return Err(WalRefuse::SegmentGap {
+                    expected: expected_index,
+                    got: expected_index,
+                });
+            }
+        };
     }
 
     Ok(WalReplayState {

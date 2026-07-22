@@ -566,7 +566,7 @@ mod tests {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            ((state >> 33) as usize) % m
+            match usize::try_from(state >> 33) { Ok(v) => v % m, Err(_) => 0 }
         };
         let valids = [-30i64, -10, -3, 0, 10, 20, 30];
         let syss = [-25i64, -5, 0, 5, 15, 25];
@@ -575,7 +575,7 @@ mod tests {
             let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
             for _ in 0..n_rows {
                 rows.push((
-                    next(3) as i64,
+                    match i64::try_from(next(3)) { Ok(v) => v, Err(_) => 0 },
                     valids[next(valids.len())],
                     syss[next(syss.len())],
                     [

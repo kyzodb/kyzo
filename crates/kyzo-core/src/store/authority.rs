@@ -274,7 +274,7 @@ impl RecoveryMatrix {
         max_signers: u32,
         group_verifying_key: RecoveryPublicKey,
     ) -> Result<Self, RecoveryMatrixRefuse> {
-        if max_signers == 0 || max_signers > u16::MAX as u32 {
+        if max_signers == 0 || max_signers > u32::from(u16::MAX) {
             return Err(RecoveryMatrixRefuse::ThresholdOutOfRange { max_signers });
         }
         if threshold == 0 || threshold > max_signers {
