@@ -79,7 +79,21 @@ pub enum SealedArtifactKind {
 impl SealedArtifactKind {
     /// Stable discriminant written into golden / sealed transcripts.
     pub fn tag(self) -> u64 {
-        self as u64
+        match self {
+            Self::CheckpointSeal => 1,
+            Self::AdmissionCertificate => 2,
+            Self::ForkGrant => 3,
+            Self::RecoveryGrant => 4,
+            Self::MergeProofHeader => 5,
+            Self::AuditKeyLeaf => 6,
+            Self::WalHeader => 7,
+            Self::KeyCommit => 8,
+            Self::StateRootHead => 9,
+            Self::LeaveIsFreePack => 10,
+            Self::ChainedStateRoot => 11,
+            Self::AncestorReadGrant => 12,
+            Self::WrappedShredSalt => 13,
+        }
     }
 }
 
@@ -277,6 +291,18 @@ enum FieldTag {
     OptionalAbsent = 5,
 }
 
+impl FieldTag {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::U64 => 1,
+            Self::Bytes => 2,
+            Self::Digest32 => 3,
+            Self::Map => 4,
+            Self::OptionalAbsent => 5,
+        }
+    }
+}
+
 /// Sealed canonical bytes produced by the one transcript constructor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CanonicalTranscript {
@@ -335,12 +361,10 @@ impl CanonicalTranscriptBuilder {
             return Err(TranscriptRefuse::UnknownVersion);
         }
         let ver = version.as_bytes();
-        if ver.len() > u8::MAX as usize {
-            return Err(TranscriptRefuse::LengthBoundExceeded);
-        }
+        let ver_len = u8::try_from(ver.len()).map_err(|_| TranscriptRefuse::LengthBoundExceeded)?;
         let mut buf = Vec::with_capacity(64);
         buf.extend_from_slice(MAGIC);
-        buf.push(ver.len() as u8);
+        buf.push(ver_len);
         buf.extend_from_slice(&ver);
         let field_count_at = buf.len();
         buf.extend_from_slice(&0u32.to_be_bytes());
@@ -356,7 +380,7 @@ impl CanonicalTranscriptBuilder {
     /// Append a u64 field (big-endian).
     pub fn append_u64(&mut self, id: FieldId, value: u64) -> Result<(), TranscriptRefuse> {
         self.begin_field(id)?;
-        self.buf.push(FieldTag::U64 as u8);
+        self.buf.push(FieldTag::U64.byte());
         self.buf.extend_from_slice(&value.to_be_bytes());
         Ok(())
     }
@@ -368,7 +392,7 @@ impl CanonicalTranscriptBuilder {
             return Err(TranscriptRefuse::LengthBoundExceeded);
         }
         self.begin_field(id)?;
-        self.buf.push(FieldTag::Bytes as u8);
+        self.buf.push(FieldTag::Bytes.byte());
         self.buf.extend_from_slice(&len.to_be_bytes());
         self.buf.extend_from_slice(bytes);
         Ok(())
@@ -381,7 +405,7 @@ impl CanonicalTranscriptBuilder {
         digest: &[u8; 32],
     ) -> Result<(), TranscriptRefuse> {
         self.begin_field(id)?;
-        self.buf.push(FieldTag::Digest32 as u8);
+        self.buf.push(FieldTag::Digest32.byte());
         self.buf.extend_from_slice(digest);
         Ok(())
     }
@@ -389,7 +413,7 @@ impl CanonicalTranscriptBuilder {
     /// Append an optional field encoded as absent (default encoding).
     pub fn append_optional_absent(&mut self, id: FieldId) -> Result<(), TranscriptRefuse> {
         self.begin_field(id)?;
-        self.buf.push(FieldTag::OptionalAbsent as u8);
+        self.buf.push(FieldTag::OptionalAbsent.byte());
         Ok(())
     }
 
@@ -399,20 +423,26 @@ impl CanonicalTranscriptBuilder {
         id: FieldId,
         entries: &[(Vec<u8>, MapValue)],
     ) -> Result<(), TranscriptRefuse> {
-        if entries.len() as u32 > MAX_MAP_ENTRIES {
+        let entry_count =
+            u32::try_from(entries.len()).map_err(|_| TranscriptRefuse::LengthBoundExceeded)?;
+        if entry_count > MAX_MAP_ENTRIES {
             return Err(TranscriptRefuse::LengthBoundExceeded);
         }
         if self.map_depth >= MAX_MAP_DEPTH {
             return Err(TranscriptRefuse::RecursionLimitExceeded);
         }
         self.begin_field(id)?;
-        self.buf.push(FieldTag::Map as u8);
-        self.buf
-            .extend_from_slice(&(entries.len() as u32).to_be_bytes());
-        self.map_depth = self.map_depth.saturating_add(1);
+        self.buf.push(FieldTag::Map.byte());
+        self.buf.extend_from_slice(&entry_count.to_be_bytes());
+        self.map_depth = self
+            .map_depth
+            .checked_add(1)
+            .ok_or(TranscriptRefuse::RecursionLimitExceeded)?;
         let mut prev: Option<&[u8]> = None;
         for (key, value) in entries {
-            if key.len() as u32 > MAX_BYTES_FIELD {
+            let key_len_u32 =
+                u32::try_from(key.len()).map_err(|_| TranscriptRefuse::LengthBoundExceeded)?;
+            if key_len_u32 > MAX_BYTES_FIELD {
                 return Err(TranscriptRefuse::LengthBoundExceeded);
             }
             if let Some(p) = prev {
@@ -462,7 +492,7 @@ impl CanonicalTranscriptBuilder {
     fn write_map_value(&mut self, value: &MapValue) -> Result<(), TranscriptRefuse> {
         match value {
             MapValue::U64(v) => {
-                self.buf.push(FieldTag::U64 as u8);
+                self.buf.push(FieldTag::U64.byte());
                 self.buf.extend_from_slice(&v.to_be_bytes());
             }
             MapValue::Bytes(b) => {
@@ -471,12 +501,12 @@ impl CanonicalTranscriptBuilder {
                 if len > MAX_BYTES_FIELD {
                     return Err(TranscriptRefuse::LengthBoundExceeded);
                 }
-                self.buf.push(FieldTag::Bytes as u8);
+                self.buf.push(FieldTag::Bytes.byte());
                 self.buf.extend_from_slice(&len.to_be_bytes());
                 self.buf.extend_from_slice(b);
             }
             MapValue::Digest32(d) => {
-                self.buf.push(FieldTag::Digest32 as u8);
+                self.buf.push(FieldTag::Digest32.byte());
                 self.buf.extend_from_slice(d);
             }
         }
@@ -525,7 +555,7 @@ impl CanonicalTranscript {
             return Err(TranscriptRefuse::Corrupt);
         }
         i += MAGIC.len();
-        let ver_len = bytes[i] as usize;
+        let ver_len = usize::from(bytes[i]);
         i += 1;
         if bytes.len() < i + ver_len + 4 {
             return Err(TranscriptRefuse::Corrupt);
@@ -552,32 +582,32 @@ impl CanonicalTranscript {
             let tag = *bytes.get(i).ok_or(TranscriptRefuse::Corrupt)?;
             i += 1;
             match tag {
-                t if t == FieldTag::U64 as u8 => {
+                t if t == FieldTag::U64.byte() => {
                     i = i.checked_add(8).ok_or(TranscriptRefuse::Corrupt)?;
                     if i > bytes.len() {
                         return Err(TranscriptRefuse::Corrupt);
                     }
                 }
-                t if t == FieldTag::Bytes as u8 => {
+                t if t == FieldTag::Bytes.byte() => {
                     let len = read_u32(bytes, &mut i)?;
                     if len > MAX_BYTES_FIELD {
                         return Err(TranscriptRefuse::LengthBoundExceeded);
                     }
                     i = i
-                        .checked_add(len as usize)
+                        .checked_add(usize::try_from(len).map_err(|_| TranscriptRefuse::Corrupt)?)
                         .ok_or(TranscriptRefuse::Corrupt)?;
                     if i > bytes.len() {
                         return Err(TranscriptRefuse::Corrupt);
                     }
                 }
-                t if t == FieldTag::Digest32 as u8 => {
+                t if t == FieldTag::Digest32.byte() => {
                     i = i.checked_add(32).ok_or(TranscriptRefuse::Corrupt)?;
                     if i > bytes.len() {
                         return Err(TranscriptRefuse::Corrupt);
                     }
                 }
-                t if t == FieldTag::OptionalAbsent as u8 => {}
-                t if t == FieldTag::Map as u8 => {
+                t if t == FieldTag::OptionalAbsent.byte() => {}
+                t if t == FieldTag::Map.byte() => {
                     skip_map(bytes, &mut i, 0)?;
                 }
                 unknown_tag => {
@@ -702,10 +732,11 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
     }
     let mut prev: Option<Vec<u8>> = None;
     for _ in 0..count {
-        let key_len = read_u16(bytes, i)? as usize;
-        if key_len as u32 > MAX_BYTES_FIELD {
+        let key_len_u16 = read_u16(bytes, i)?;
+        if u32::from(key_len_u16) > MAX_BYTES_FIELD {
             return Err(TranscriptRefuse::LengthBoundExceeded);
         }
+        let key_len = usize::from(key_len_u16);
         let end = i.checked_add(key_len).ok_or(TranscriptRefuse::Corrupt)?;
         let key = bytes
             .get(*i..end)
@@ -723,22 +754,22 @@ fn skip_map(bytes: &[u8], i: &mut usize, depth: u8) -> Result<(), TranscriptRefu
         let tag = *bytes.get(*i).ok_or(TranscriptRefuse::Corrupt)?;
         *i += 1;
         match tag {
-            t if t == FieldTag::U64 as u8 => {
+            t if t == FieldTag::U64.byte() => {
                 *i = i.checked_add(8).ok_or(TranscriptRefuse::Corrupt)?;
             }
-            t if t == FieldTag::Bytes as u8 => {
+            t if t == FieldTag::Bytes.byte() => {
                 let len = read_u32(bytes, i)?;
                 if len > MAX_BYTES_FIELD {
                     return Err(TranscriptRefuse::LengthBoundExceeded);
                 }
                 *i = i
-                    .checked_add(len as usize)
+                    .checked_add(usize::try_from(len).map_err(|_| TranscriptRefuse::Corrupt)?)
                     .ok_or(TranscriptRefuse::Corrupt)?;
             }
-            t if t == FieldTag::Digest32 as u8 => {
+            t if t == FieldTag::Digest32.byte() => {
                 *i = i.checked_add(32).ok_or(TranscriptRefuse::Corrupt)?;
             }
-            t if t == FieldTag::Map as u8 => {
+            t if t == FieldTag::Map.byte() => {
                 skip_map(bytes, i, depth + 1)?;
             }
             unknown_tag => {
@@ -1328,14 +1359,20 @@ pub fn encode_leave_is_free_pack(
         LEAVE_IS_FREE_PACK_DOMAIN_LABEL,
     )?;
     b.append_bytes(FieldId::PACK_KIND, pack_kind)?;
-    b.append_u64(FieldId::WRAPPED_SALT_COUNT, salts.len() as u64)?;
+    b.append_u64(
+        FieldId::WRAPPED_SALT_COUNT,
+        u64::try_from(salts.len()).map_err(|_| TranscriptRefuse::LengthBoundExceeded)?,
+    )?;
     for salt in salts {
         b.append_digest32(FieldId::SALT_STORE_ID, &salt.store_id)?;
         b.append_u64(FieldId::SALT_FENCE_EPOCH, salt.fence_epoch)?;
         b.append_u64(FieldId::SEGMENT_COUNTER, salt.segment)?;
         b.append_bytes(FieldId::CIPHERTEXT, &salt.ciphertext)?;
     }
-    b.append_u64(FieldId::INCARNATION_COUNT, incarnations.len() as u64)?;
+    b.append_u64(
+        FieldId::INCARNATION_COUNT,
+        u64::try_from(incarnations.len()).map_err(|_| TranscriptRefuse::LengthBoundExceeded)?,
+    )?;
     for incarnation in incarnations {
         b.append_u64(FieldId::PACK_INCARNATION_ORDINAL, incarnation.open_ordinal)?;
         b.append_digest32(FieldId::PACK_INCARNATION_ENTROPY, &incarnation.entropy)?;
@@ -1671,8 +1708,11 @@ mod pins {
         fn bytes(&mut self, id: u16, bytes: &[u8]) {
             self.begin(id);
             self.buf.push(TAG_BYTES);
-            self.buf
-                .extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            let len = match u32::try_from(bytes.len()) {
+                Ok(n) => n,
+                Err(_) => u32::MAX,
+            };
+            self.buf.extend_from_slice(&len.to_be_bytes());
             self.buf.extend_from_slice(bytes);
         }
 
@@ -2130,7 +2170,13 @@ mod pins {
     #[test]
     fn length_bound_checked_before_alloc() -> Result<()> {
         let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
-        let huge = vec![0u8; (MAX_BYTES_FIELD as usize) + 1];
+        let huge = vec![
+            0u8;
+            match usize::try_from(MAX_BYTES_FIELD) {
+                Ok(n) => n,
+                Err(_) => 0,
+            } + 1
+        ];
         assert_eq!(
             b.append_bytes(FieldId::DOMAIN_LABEL, &huge),
             Err(TranscriptRefuse::LengthBoundExceeded)
