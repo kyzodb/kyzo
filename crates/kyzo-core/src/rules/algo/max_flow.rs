@@ -350,6 +350,7 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
@@ -360,7 +361,7 @@ mod tests {
         edges: &[(&str, &str, f64)],
         source: &str,
         sink: &str,
-    ) -> Vec<(String, String, f64)> {
+    ) -> Result<Vec<(String, String, f64)>> {
         let erows = edges
             .iter()
             .map(|&(a, b, c)| Tuple::from_vec(vec![s(a), s(b), DataValue::from(c)]))
@@ -374,25 +375,24 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        .unwrap();
+        )?;
         got.into_iter()
-            .map(|r| {
-                (
-                    r[0].get_str().unwrap().to_string(),
-                    r[1].get_str().unwrap().to_string(),
-                    r[2].get_float().unwrap(),
-                )
+            .map(|r| -> Result<_> {
+                Ok((
+                    r[0].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string(),
+                    r[1].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string(),
+                    r[2].get_float().ok_or_else(|| miette!("test expected Some"))?,
+                ))
             })
             .collect()
     }
 
     /// The maximum-flow value = sum of the returned cut edges' flows.
-    fn flow_value(edges: &[(&str, &str, f64)], source: &str, sink: &str) -> f64 {
-        run_cut(edges, source, sink)
+    fn flow_value(edges: &[(&str, &str, f64)], source: &str, sink: &str) -> Result<f64> {
+        Ok(run_cut(edges, source, sink)?
             .iter()
             .map(|(_, _, f)| *f)
-            .sum()
+            .sum())
     }
 
     /// INDEPENDENT ORACLE: the max-flow value equals the minimum s–t cut
@@ -423,7 +423,7 @@ mod tests {
     /// textbook 23. Exercises antiparallel arcs (`v1↔v2`) and flow
     /// cancellation through reverse arcs.
     #[test]
-    fn clrs_network_max_flow_is_23() {
+    fn clrs_network_max_flow_is_23() -> Result<()> {
         let edges = [
             ("s", "v1", 16.0),
             ("s", "v2", 13.0),
@@ -436,16 +436,18 @@ mod tests {
             ("v3", "t", 20.0),
             ("v4", "t", 4.0),
         ];
-        assert!((flow_value(&edges, "s", "t") - 23.0).abs() < 1e-6);
+        assert!((flow_value(&edges, "s", "t")? - 23.0).abs() < 1e-6);
+        Ok(())
     }
 
     /// VALUE ORACLE: a unique-bottleneck graph pins the exact cut edge. The
     /// only way from s to t narrows through `a → t` (capacity 1), so the cut
     /// is exactly that one saturated edge and the value is 1.
     #[test]
-    fn unique_bottleneck_cut_is_pinned() {
-        let cut = run_cut(&[("s", "a", 10.0), ("a", "t", 1.0)], "s", "t");
+    fn unique_bottleneck_cut_is_pinned() -> Result<()> {
+        let cut = run_cut(&[("s", "a", 10.0), ("a", "t", 1.0)], "s", "t")?;
         assert_eq!(cut, vec![("a".to_string(), "t".to_string(), 1.0)]);
+        Ok(())
     }
 
     /// PARALLEL-EDGE POLICY: two parallel `s → t` arcs (capacities 2 and 3)
@@ -453,9 +455,10 @@ mod tests {
     /// the cut is the one summed edge. A `max`/`last-wins` policy would give
     /// 3; a mis-handled parallel arc would double-count endpoints.
     #[test]
-    fn parallel_edges_sum_capacity() {
-        let cut = run_cut(&[("s", "t", 2.0), ("s", "t", 3.0)], "s", "t");
+    fn parallel_edges_sum_capacity() -> Result<()> {
+        let cut = run_cut(&[("s", "t", 2.0), ("s", "t", 3.0)], "s", "t")?;
         assert_eq!(cut, vec![("s".to_string(), "t".to_string(), 5.0)]);
+        Ok(())
     }
 
     /// A deterministic pseudo-random battery of small graphs, each checked
@@ -476,7 +479,7 @@ mod tests {
         for _ in 0..m {
             let u = crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33)) % n;
             let v = crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33)) % n;
-            let c = 1.0 + f64::from((next() >> 40) % 9);
+            let c = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 9);
             if u != v {
                 *caps.entry((u, v)).or_default() += c;
             }
@@ -485,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn matches_brute_min_cut_oracle() {
+    fn matches_brute_min_cut_oracle() -> Result<()> {
         let n = 8usize;
         for seed in 0..120u64 {
             let caps = random_graph(0xC0FF_EE00 ^ seed, n);
@@ -499,18 +502,19 @@ mod tests {
                 .collect();
             let source = 0usize;
             let sink = n - 1;
-            let got = flow_value(&eref, &source.to_string(), &sink.to_string());
+            let got = flow_value(&eref, &source.to_string(), &sink.to_string())?;
             let expected = brute_min_cut(n, &caps, source, sink);
             assert!(
                 (got - expected).abs() < 1e-6,
                 "seed {seed}: got {got}, brute min-cut {expected}, caps {caps:?}"
             );
         }
+        Ok(())
     }
 
     /// DETERMINISM: byte-identical cut across repeated runs on a random graph.
     #[test]
-    fn deterministic_across_runs() {
+    fn deterministic_across_runs() -> Result<()> {
         let caps = random_graph(0xD37E_C7ED_u64 ^ 0xABCD, 9);
         let edges: Vec<(String, String, f64)> = caps
             .iter()
@@ -520,17 +524,18 @@ mod tests {
             .iter()
             .map(|(u, v, c)| (u.as_str(), v.as_str(), *c))
             .collect();
-        let first = run_cut(&eref, "0", "8");
+        let first = run_cut(&eref, "0", "8")?;
         for _ in 0..6 {
-            assert_eq!(run_cut(&eref, "0", "8"), first);
+            assert_eq!(run_cut(&eref, "0", "8")?, first);
         }
+        Ok(())
     }
 
     /// A saturated-path scale/adversarial case: a long chain plus a fat
     /// bypass. Purely iterative BFS + back-pointer walk, no recursion — the
     /// point being there is no stack to overflow however long the chain.
     #[test]
-    fn long_chain_bottleneck() {
+    fn long_chain_bottleneck() -> Result<()> {
         let k = 5_000u32;
         let mut edges: Vec<(String, String, f64)> = Vec::new();
         edges.push(("s".to_string(), "x0".to_string(), 1.0));
@@ -543,7 +548,8 @@ mod tests {
             .map(|(u, v, c)| (u.as_str(), v.as_str(), *c))
             .collect();
         // The chain carries exactly capacity 1 end to end.
-        assert!((flow_value(&eref, "s", "t") - 1.0).abs() < 1e-9);
+        assert!((flow_value(&eref, "s", "t")? - 1.0).abs() < 1e-9);
+        Ok(())
     }
 
     /// Endpoint validation: an unknown source is refused, typed.
@@ -615,7 +621,7 @@ mod tests {
     /// BFS loop makes the cancelled run walk the whole chain, so the `<= 1`
     /// bound fails. Load-independent: counts BFS pops, not wall-clock.
     #[test]
-    fn honors_cancel_pins_inner_poll() {
+    fn honors_cancel_pins_inner_poll() -> Result<()> {
         use crate::rules::contract::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
@@ -636,7 +642,7 @@ mod tests {
                 vec![Tuple::from_vec(vec![s(&format!("v{}", n - 1))])],
             ),
         ];
-        let prepared = prepare_fixed_rule(&MaxFlow, inputs, empty_opts()).unwrap();
+        let prepared = prepare_fixed_rule(&MaxFlow, inputs, empty_opts())?;
 
         // Baseline: no cancellation. The first BFS walks the whole chain.
         take_maxflow_bfs_pops(); // clear any leftover from a reused thread
@@ -659,6 +665,7 @@ mod tests {
             "inner poll did not refuse before walking the chain: dequeued \
              {cancel_pops} nodes (deleting the per-pop poll makes this ~60k)"
         );
+        Ok(())
     }
 
     /// F1 (hostile review): a positive capacity at or below the saturation
