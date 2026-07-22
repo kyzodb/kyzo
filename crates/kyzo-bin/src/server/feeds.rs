@@ -222,8 +222,13 @@ pub(super) async fn observe_standing(
             let Some(mut sq) = guard.0.take() else {
                 break;
             };
+            // Host boundary: drain the engine's ordered set into a Vec so
+            // this binary iterates facts for JSON, not a set keyed by
+            // SignedFact (DataValue interior-mutability false positive).
             let (result, sq) = match spawn_blocking(move || {
-                let result = sq.apply_pending_answer();
+                let result = sq
+                    .apply_pending_answer()
+                    .map(|delta| delta.into_iter().collect::<Vec<_>>());
                 (result, sq)
             })
             .await
@@ -236,14 +241,6 @@ pub(super) async fn observe_standing(
             };
             guard.0 = Some(sq);
 
-            // `SignedFact` wraps `DataValue`, which clippy flags as a
-            // "mutable key type" through false-positive interior-
-            // mutability detection in ITS OWN field types (a regex
-            // engine's internal cache pool, several layers down) — the
-            // exact false positive kyzo-core's lib.rs already documents
-            // and allows crate-wide; keys here are never mutated via a
-            // shared reference either.
-            #[allow(clippy::mutable_key_type)]
             let delta = match result {
                 Ok(d) => d,
                 Err(err) => {
