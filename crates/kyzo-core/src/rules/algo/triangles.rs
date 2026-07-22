@@ -118,13 +118,14 @@ mod tests {
     use crate::rules::contract::tests_support::{TestInput, empty_opts, run_fixed_rule};
     use kyzo_model::value::Tuple;
 
+    use miette::{IntoDiagnostic, Result, miette};
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
 
     /// A dense-ish deterministic pseudo-random directed graph (LCG), large
     /// enough that the per-node map splits across rayon workers.
-    fn pseudo_random_graph() -> DirectedCsrGraph {
+    fn pseudo_random_graph() -> Result<DirectedCsrGraph> {
         let n = 200u32;
         let mut state = 0x1234_5678_9abc_def0u64;
         let mut next = || {
@@ -142,7 +143,7 @@ mod tests {
             }
         }
         edges.push((n - 1, 0, ())); // pin the node count at n
-        DirectedCsrGraph::from_edges(edges).unwrap()
+        DirectedCsrGraph::from_edges(edges)
     }
 
     /// DETERMINISM: the per-node clustering-coefficient map is byte-identical
@@ -150,18 +151,19 @@ mod tests {
     /// across repeated runs. `clustering_coefficients` returns an ordered
     /// `Vec`, so this pins both value AND order.
     #[test]
-    fn parallel_matches_single_thread() {
-        let graph = pseudo_random_graph();
+    fn parallel_matches_single_thread() -> Result<()> {
+        let graph = pseudo_random_graph()?;
         let single = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
-            .unwrap();
+            .into_diagnostic()?;
         let seq =
-            single.install(|| clustering_coefficients(&graph, CancelFlag::inert()).unwrap());
+            single.install(|| clustering_coefficients(&graph, CancelFlag::inert()))?;
         for _ in 0..8 {
-            let par = clustering_coefficients(&graph, CancelFlag::inert()).unwrap();
+            let par = clustering_coefficients(&graph, CancelFlag::inert())?;
             assert_eq!(seq, par);
         }
+        Ok(())
     }
 
     /// VALUE ORACLE: exact triangle counts and coefficients on the known
@@ -175,7 +177,7 @@ mod tests {
     ///   c: neighbors {a,b}, deg 2; (a,b) ✓ ⇒ 1 triangle, cc = 2·1/(2·1) = 1
     ///   d: neighbors {a,b}, deg 2 ⇒ 1 triangle, cc = 1
     #[test]
-    fn counts_triangles_on_known_graph() {
+    fn counts_triangles_on_known_graph() -> Result<()> {
         let i = |v: i64| DataValue::from(v);
         let got = run_fixed_rule(
             &ClusteringCoefficients,
@@ -192,7 +194,7 @@ mod tests {
             empty_opts(),
             CancelFlag::inert(),
         )
-        .unwrap();
+        ?;
         let two_thirds = DataValue::from(2.0 * 2.0 / (3.0 * 2.0));
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), two_thirds.clone(), i(2), i(3)]),
@@ -201,5 +203,6 @@ mod tests {
             Tuple::from_vec(vec![s("d"), DataValue::from(1.0), i(1), i(2)]),
         ];
         assert_eq!(got, want);
+        Ok(())
     }
 }
