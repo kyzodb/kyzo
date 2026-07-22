@@ -397,7 +397,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn origin_commit(&self) -> CommitOrdinal {
         self.chain
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("admission-chain mutex poisoned — refuse silent continue")
             .origin_commit
     }
 
@@ -405,7 +405,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn retain_supersession(&self, link: supersession::Supersession) {
         self.chain
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("admission-chain mutex poisoned — refuse silent continue")
             .supersessions
             .push(link);
     }
@@ -414,7 +414,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn retained_supersessions(&self) -> Vec<supersession::Supersession> {
         self.chain
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("admission-chain mutex poisoned — refuse silent continue")
             .supersessions
             .clone()
     }
@@ -423,7 +423,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn root_chain(&self) -> RootChain {
         self.chain
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("admission-chain mutex poisoned — refuse silent continue")
             .root_chain
             .clone()
     }
@@ -446,7 +446,10 @@ impl LiveAdmissionSeats {
         &self,
         catalog_generation: CatalogGeneration,
     ) -> Result<LiveCertificateInputs, AdmitRefuse> {
-        let chain = self.chain.lock().unwrap_or_else(|p| p.into_inner());
+        let chain = self
+            .chain
+            .lock()
+            .expect("admission-chain mutex poisoned — refuse silent continue");
         let authority = WriteAuthority::mint(self.store_id, self.write_token);
         let key = AuthorizingKey::mint(self.authorizing_key_id, self.signing_seed);
         LiveCertificateInputs::from_live(
