@@ -35,10 +35,10 @@ use super::crypto::{Digest, Signature};
 use super::epoch::{CryptoDomain, FenceEpoch};
 use super::open::StoreId;
 use super::transcript::{
-    CanonicalTranscript, encode_ancestor_entitlement_key_id, encode_ancestor_read_grant_payload,
-    encode_fork_consent_key_id, encode_fork_grant_payload, encode_fork_store_id,
-    encode_fork_write_token, encode_recovery_grant_payload, encode_recovery_matrix,
-    encode_recovery_write_token,
+    CanonicalTranscript, TranscriptRefuse, encode_ancestor_entitlement_key_id,
+    encode_ancestor_read_grant_payload, encode_fork_consent_key_id, encode_fork_grant_payload,
+    encode_fork_store_id, encode_fork_write_token, encode_recovery_grant_payload,
+    encode_recovery_matrix, encode_recovery_write_token,
 };
 
 /// Domain-separated prefix for recovery quorum signatures.
@@ -246,7 +246,7 @@ impl PredecessorConsentProof {
         Ok(Self {
             predecessor_store,
             payload_digest: *payload_digest,
-            key_id_digest: consent_key_id_digest(consent_verifying_key),
+            key_id_digest: consent_key_id_digest(consent_verifying_key)?,
             _priv: (),
         })
     }
@@ -312,7 +312,7 @@ impl ForkGrant {
             &successor_principal,
             &identity_seed,
             &key_material_commitment,
-        );
+        )?;
         if consent_proof.payload_digest() != &expected {
             return Err(MaterializeRefuse::ConsentUnverified);
         }
@@ -418,7 +418,7 @@ impl RecoveryQuorumProof {
         }
 
         Ok(Self {
-            matrix_digest: recovery_matrix_digest(matrix),
+            matrix_digest: recovery_matrix_digest(matrix)?,
             payload_digest: *payload_digest,
             _priv: (),
         })
@@ -478,7 +478,7 @@ impl RecoveryGrant {
             predecessor_epoch,
             &successor_identity_seed,
             &key_material_commitment,
-        );
+        )?;
         if quorum_proof.payload_digest() != &expected {
             return Err(MaterializeRefuse::QuorumUnverified);
         }
@@ -639,6 +639,10 @@ pub enum MaterializeRefuse {
     #[error("{0}")]
     #[diagnostic(code(store::grants::quorum_equivocation_poison))]
     QuorumEquivocationPoison(Box<QuorumEquivocationPoisonBody>),
+    /// Canonical transcript encode failed for a typed grant/consent field.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Transcript(#[from] TranscriptRefuse),
 }
 
 /// Payload for [`MaterializeRefuse::QuorumEquivocationPoison`], boxed so the
@@ -747,7 +751,7 @@ impl PriorRecoveryTable {
         // (successor CryptoDomain epoch), not a ForkGrant or other grant shape.
         let expected_successor = predecessor_epoch
             .successor()
-            .expect("INVARIANT(PriorRecoveryTable): predecessor epoch space exhausted");
+            .map_err(|_| MaterializeRefuse::EpochSpaceExhausted)?;
         assert_eq!(
             materialized.crypto_domain().fence_epoch(),
             expected_successor,
@@ -840,17 +844,17 @@ fn materialize_fork(
         fork.successor_principal(),
         fork.identity_seed(),
         fork.key_material_commitment(),
-    );
+    )?;
     if fork.consent_proof().payload_digest() != &expected {
         return Err(MaterializeRefuse::ConsentUnverified);
     }
-    if fork.consent_proof().key_id_digest() != &consent_key_id_digest(sealed_key) {
+    if fork.consent_proof().key_id_digest() != &consent_key_id_digest(sealed_key)? {
         return Err(MaterializeRefuse::ConsentUnverified);
     }
-    let store_id = derive_fork_store_id(fork);
+    let store_id = derive_fork_store_id(fork)?;
     let fence_epoch = FenceEpoch::genesis(store_id);
     let crypto_domain = CryptoDomain::new(store_id, fence_epoch);
-    let token_id = derive_fork_write_token(fork, store_id);
+    let token_id = derive_fork_write_token(fork, store_id)?;
     let write_authority = WriteAuthority::mint(store_id, token_id);
     Ok(MaterializedGrant {
         grant_id: fork.grant_id(),
@@ -868,7 +872,7 @@ fn materialize_recovery(
 ) -> Result<MaterializedGrant, MaterializeRefuse> {
     let matrix = recovery_matrix.ok_or(MaterializeRefuse::RecoveryMatrixAbsent)?;
     // Sealed proof is trusted only when its matrix_digest matches THIS store matrix.
-    if recovery.quorum_proof().matrix_digest() != &recovery_matrix_digest(matrix) {
+    if recovery.quorum_proof().matrix_digest() != &recovery_matrix_digest(matrix)? {
         return Err(MaterializeRefuse::QuorumUnverified);
     }
     // One-shot quorum: a second distinct RecoveryGrant for this predecessor
@@ -891,7 +895,7 @@ fn materialize_recovery(
         .successor()
         .map_err(|_| MaterializeRefuse::EpochSpaceExhausted)?;
     let crypto_domain = CryptoDomain::new(store_id, next_epoch);
-    let token_id = derive_recovery_write_token(recovery);
+    let token_id = derive_recovery_write_token(recovery)?;
     let write_authority = WriteAuthority::mint(store_id, token_id);
     Ok(MaterializedGrant {
         grant_id: recovery.grant_id(),
@@ -996,7 +1000,7 @@ impl AncestorEntitlementProof {
         Ok(Self {
             store_id,
             payload_digest: *payload_digest,
-            key_id_digest: entitlement_key_id_digest(entitlement_verifying_key),
+            key_id_digest: entitlement_key_id_digest(entitlement_verifying_key)?,
             _priv: (),
         })
     }
@@ -1064,6 +1068,10 @@ pub enum AncestorReadRefuse {
     )]
     #[diagnostic(code(store::grants::entitlement_trust_root_already_sealed))]
     TrustRootAlreadySealed { store_id: StoreId },
+    /// Canonical transcript encode failed for a typed ancestor-read field.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Transcript(#[from] TranscriptRefuse),
 }
 
 impl AncestorReadGrant {
@@ -1095,7 +1103,7 @@ impl AncestorReadGrant {
         if entitlement_proof.store_id() != store_id {
             return Err(AncestorReadRefuse::EntitlementMismatch);
         }
-        let expected = ancestor_read_grant_payload_digest(store_id, from_epoch, to_epoch);
+        let expected = ancestor_read_grant_payload_digest(store_id, from_epoch, to_epoch)?;
         if entitlement_proof.payload_digest() != &expected {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         }
@@ -1104,7 +1112,7 @@ impl AncestorReadGrant {
         };
         // Sealed entitlement is trusted only when it still binds the sealed table
         // key for this store (not an attacker-chosen key from a private table).
-        if entitlement_proof.key_id_digest() != &entitlement_key_id_digest(sealed_key) {
+        if entitlement_proof.key_id_digest() != &entitlement_key_id_digest(sealed_key)? {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         }
         Ok(Self {
@@ -1159,10 +1167,9 @@ fn hash_transcript(transcript: &CanonicalTranscript) -> Digest {
 }
 
 /// Fork-consent verifying-key id via [`encode_fork_consent_key_id`].
-fn consent_key_id_digest(verifying_key: &[u8; 32]) -> Digest {
-    let transcript = encode_fork_consent_key_id(verifying_key)
-        .expect("INVARIANT(CanonicalTranscript): fork consent key-id encode");
-    hash_transcript(&transcript)
+fn consent_key_id_digest(verifying_key: &[u8; 32]) -> Result<Digest, TranscriptRefuse> {
+    let transcript = encode_fork_consent_key_id(verifying_key)?;
+    Ok(hash_transcript(&transcript))
 }
 
 /// ForkGrant payload digest via [`encode_fork_grant_payload`].
@@ -1173,7 +1180,7 @@ pub(crate) fn fork_grant_payload_digest(
     successor_principal: &SuccessorPrincipal,
     identity_seed: &IdentitySeed,
     key_material_commitment: &KeyMaterialCommitment,
-) -> Digest {
+) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_fork_grant_payload(
         grant_id.as_bytes(),
         predecessor_store.as_bytes(),
@@ -1181,20 +1188,18 @@ pub(crate) fn fork_grant_payload_digest(
         successor_principal.as_bytes(),
         identity_seed.as_bytes(),
         key_material_commitment.as_bytes(),
-    )
-    .expect("INVARIANT(CanonicalTranscript): fork grant payload encode");
-    hash_transcript(&transcript)
+    )?;
+    Ok(hash_transcript(&transcript))
 }
 
 /// RecoveryMatrix digest via [`encode_recovery_matrix`].
-fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> Digest {
+fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_recovery_matrix(
         matrix.threshold(),
         matrix.max_signers(),
         matrix.group_verifying_key().as_bytes(),
-    )
-    .expect("INVARIANT(CanonicalTranscript): recovery matrix encode");
-    hash_transcript(&transcript)
+    )?;
+    Ok(hash_transcript(&transcript))
 }
 
 /// RecoveryGrant payload digest via [`encode_recovery_grant_payload`].
@@ -1204,7 +1209,7 @@ pub(crate) fn recovery_grant_payload_digest(
     predecessor_epoch: FenceEpoch,
     successor_identity_seed: &IdentitySeed,
     key_material_commitment: &KeyMaterialCommitment,
-) -> Digest {
+) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_recovery_grant_payload(
         grant_id.as_bytes(),
         store_id.as_bytes(),
@@ -1212,13 +1217,12 @@ pub(crate) fn recovery_grant_payload_digest(
         predecessor_epoch.store_id().as_bytes(),
         successor_identity_seed.as_bytes(),
         key_material_commitment.as_bytes(),
-    )
-    .expect("INVARIANT(CanonicalTranscript): recovery grant payload encode");
-    hash_transcript(&transcript)
+    )?;
+    Ok(hash_transcript(&transcript))
 }
 
 /// Successor StoreId for a fork — hash of [`encode_fork_store_id`] bytes once.
-fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
+fn derive_fork_store_id(fork: &ForkGrant) -> Result<StoreId, TranscriptRefuse> {
     let transcript = encode_fork_store_id(
         fork.grant_id().as_bytes(),
         fork.predecessor_store().as_bytes(),
@@ -1226,25 +1230,28 @@ fn derive_fork_store_id(fork: &ForkGrant) -> StoreId {
         fork.successor_principal().as_bytes(),
         fork.identity_seed().as_bytes(),
         fork.key_material_commitment().as_bytes(),
-    )
-    .expect("INVARIANT(CanonicalTranscript): fork store-id encode");
-    StoreId::from_digest(*hash_transcript(&transcript).as_bytes())
+    )?;
+    Ok(StoreId::from_digest(*hash_transcript(&transcript).as_bytes()))
 }
 
 /// Fork WriteAuthority token — hash of [`encode_fork_write_token`] bytes once.
-fn derive_fork_write_token(fork: &ForkGrant, store_id: StoreId) -> WriteTokenId {
+fn derive_fork_write_token(
+    fork: &ForkGrant,
+    store_id: StoreId,
+) -> Result<WriteTokenId, TranscriptRefuse> {
     let transcript = encode_fork_write_token(
         store_id.as_bytes(),
         fork.grant_id().as_bytes(),
         fork.identity_seed().as_bytes(),
         fork.key_material_commitment().as_bytes(),
-    )
-    .expect("INVARIANT(CanonicalTranscript): fork write-token encode");
-    WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes())
+    )?;
+    Ok(WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes()))
 }
 
 /// Recovery WriteAuthority token — hash of [`encode_recovery_write_token`] bytes once.
-fn derive_recovery_write_token(recovery: &RecoveryGrant) -> WriteTokenId {
+fn derive_recovery_write_token(
+    recovery: &RecoveryGrant,
+) -> Result<WriteTokenId, TranscriptRefuse> {
     let pred = recovery.predecessor_epoch();
     let transcript = encode_recovery_write_token(
         recovery.store_id().as_bytes(),
@@ -1253,16 +1260,14 @@ fn derive_recovery_write_token(recovery: &RecoveryGrant) -> WriteTokenId {
         pred.store_id().as_bytes(),
         recovery.successor_identity_seed().as_bytes(),
         recovery.key_material_commitment().as_bytes(),
-    )
-    .expect("INVARIANT(CanonicalTranscript): recovery write-token encode");
-    WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes())
+    )?;
+    Ok(WriteTokenId::from_digest(*hash_transcript(&transcript).as_bytes()))
 }
 
 /// Ancestor-entitlement verifying-key id via [`encode_ancestor_entitlement_key_id`].
-fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> Digest {
-    let transcript = encode_ancestor_entitlement_key_id(verifying_key)
-        .expect("INVARIANT(CanonicalTranscript): ancestor entitlement key-id encode");
-    hash_transcript(&transcript)
+fn entitlement_key_id_digest(verifying_key: &[u8; 32]) -> Result<Digest, TranscriptRefuse> {
+    let transcript = encode_ancestor_entitlement_key_id(verifying_key)?;
+    Ok(hash_transcript(&transcript))
 }
 
 /// AncestorReadGrant payload digest via [`encode_ancestor_read_grant_payload`].
@@ -1270,16 +1275,15 @@ fn ancestor_read_grant_payload_digest(
     store_id: StoreId,
     from_epoch: FenceEpoch,
     to_epoch: FenceEpoch,
-) -> Digest {
+) -> Result<Digest, TranscriptRefuse> {
     let transcript = encode_ancestor_read_grant_payload(
         store_id.as_bytes(),
         from_epoch.get(),
         from_epoch.store_id().as_bytes(),
         to_epoch.get(),
         to_epoch.store_id().as_bytes(),
-    )
-    .expect("INVARIANT(CanonicalTranscript): ancestor-read grant payload encode");
-    hash_transcript(&transcript)
+    )?;
+    Ok(hash_transcript(&transcript))
 }
 
 /// Test-only: mint a FROST 2-of-3 recovery matrix + one aggregate signature

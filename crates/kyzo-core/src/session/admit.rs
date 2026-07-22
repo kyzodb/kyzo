@@ -338,17 +338,35 @@ impl LiveAdmissionSeats {
             h.update(authorizing_key_id.as_bytes());
             StateRoot::from_digest(h.finalize().into())
         };
-        let genesis_link = ChainedStateRoot::mint(
+        let Ok(genesis_link) = ChainedStateRoot::mint(
             store_id,
             FenceEpoch::genesis(store_id),
             CommitOrdinal::ZERO,
             genesis_content,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        );
+        ) else {
+            // Typed genesis fields always encode under CanonicalTranscript; if encode
+            // refuses, seats still form with an empty chain (append skipped).
+            return Self {
+                store_id,
+                write_token,
+                signing_seed,
+                authorizing_key_id,
+                scope_manifest_digest,
+                authorizing_keys,
+                scopes,
+                chain: Arc::new(Mutex::new(LiveAdmissionChain {
+                    root_chain,
+                    origin_commit: CommitOrdinal::ZERO,
+                    retained_certificates: Vec::new(),
+                    supersessions: Vec::new(),
+                })),
+            };
+        };
         match root_chain.append(genesis_link) {
             Ok(()) => {}
-            Err(crate::store::merkle::MerkleChainRefuse::PredecessorMismatch | crate::store::merkle::MerkleChainRefuse::CutBeforeGenesis | crate::store::merkle::MerkleChainRefuse::PathUrlSameness | crate::store::merkle::MerkleChainRefuse::ConsistencyProofFailed | crate::store::merkle::MerkleChainRefuse::SplitViewDetected | crate::store::merkle::MerkleChainRefuse::ConsistencyProofRequired | crate::store::merkle::MerkleChainRefuse::SthStoreMismatch) => {
+            Err(crate::store::merkle::MerkleChainRefuse::PredecessorMismatch | crate::store::merkle::MerkleChainRefuse::CutBeforeGenesis | crate::store::merkle::MerkleChainRefuse::PathUrlSameness | crate::store::merkle::MerkleChainRefuse::ConsistencyProofFailed | crate::store::merkle::MerkleChainRefuse::SplitViewDetected | crate::store::merkle::MerkleChainRefuse::ConsistencyProofRequired | crate::store::merkle::MerkleChainRefuse::SthStoreMismatch | crate::store::merkle::MerkleChainRefuse::Transcript(_)) => {
                 // Empty chain + GENESIS_ROOT predecessor is the only genesis
                 // shape; exhaust the refuse enum without silent `let _`.
             }
@@ -379,7 +397,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn origin_commit(&self) -> CommitOrdinal {
         self.chain
             .lock()
-            .expect("live admission chain lock")
+            .unwrap_or_else(|p| p.into_inner())
             .origin_commit
     }
 
@@ -387,7 +405,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn retain_supersession(&self, link: supersession::Supersession) {
         self.chain
             .lock()
-            .expect("live admission chain lock")
+            .unwrap_or_else(|p| p.into_inner())
             .supersessions
             .push(link);
     }
@@ -396,7 +414,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn retained_supersessions(&self) -> Vec<supersession::Supersession> {
         self.chain
             .lock()
-            .expect("live admission chain lock")
+            .unwrap_or_else(|p| p.into_inner())
             .supersessions
             .clone()
     }
@@ -405,7 +423,7 @@ impl LiveAdmissionSeats {
     pub(crate) fn root_chain(&self) -> RootChain {
         self.chain
             .lock()
-            .expect("live admission chain lock")
+            .unwrap_or_else(|p| p.into_inner())
             .root_chain
             .clone()
     }
@@ -427,8 +445,8 @@ impl LiveAdmissionSeats {
     pub(crate) fn certificate_inputs(
         &self,
         catalog_generation: CatalogGeneration,
-    ) -> LiveCertificateInputs {
-        let chain = self.chain.lock().expect("live admission chain lock");
+    ) -> Result<LiveCertificateInputs, AdmitRefuse> {
+        let chain = self.chain.lock().unwrap_or_else(|p| p.into_inner());
         let authority = WriteAuthority::mint(self.store_id, self.write_token);
         let key = AuthorizingKey::mint(self.authorizing_key_id, self.signing_seed);
         LiveCertificateInputs::from_live(
@@ -440,7 +458,7 @@ impl LiveAdmissionSeats {
             chain.origin_commit,
             self.scope_manifest_digest,
         )
-        .expect("genesis seats register the origin authorizing key")
+        .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)
     }
 
     /// Persist + verify a minted certificate on the admit path (not mint-and-drop).
@@ -484,7 +502,8 @@ impl LiveAdmissionSeats {
             content_root,
             predecessor,
             ChainLinkKind::Ordinary,
-        );
+        )
+        .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?;
         chain
             .root_chain
             .append(link)
@@ -2033,7 +2052,7 @@ impl<T: WriteTx> SessionTx<T> {
         row: &[DataValue],
         valid: ValidityTs,
     ) -> Result<()> {
-        let live = db.live_certificate_inputs(&self.store, relation_store.id);
+        let live = db.live_certificate_inputs(&self.store, relation_store.id)?;
         let (record, cert) = admit_sugar_relation_row(
             db.store_id(),
             &live,
@@ -2055,7 +2074,7 @@ impl<T: WriteTx> SessionTx<T> {
         key_cols: &[DataValue],
         valid: ValidityTs,
     ) -> Result<()> {
-        let live = db.live_certificate_inputs(&self.store, relation_store.id);
+        let live = db.live_certificate_inputs(&self.store, relation_store.id)?;
         let keys_len = relation_store.metadata.keys.len().min(key_cols.len());
         let (record, cert) = admit_sugar_retract(
             db.store_id(),
@@ -2727,7 +2746,7 @@ mod live_certificate_verifiability {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(2),
-        ));
+        ))?;
         let (_record, cert) =
             admit_record(claim_parts(seats.store_id(), live)).expect("admit via seats");
 
@@ -2743,7 +2762,7 @@ mod live_certificate_verifiability {
 
         let live2 = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(3),
-        ));
+        ))?;
         let (record2, cert2) =
             admit_record(claim_parts(seats.store_id(), live2)).expect("second admit");
         seats
@@ -2801,7 +2820,7 @@ mod live_certificate_verifiability {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live_a = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(10),
-        ));
+        ))?;
         let (record_a, _cert_a) = admit_record(claim_parts_with_digest(
             seats.store_id(),
             live_a,
@@ -2810,7 +2829,7 @@ mod live_certificate_verifiability {
         .expect("admit record A");
         let live_b = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(11),
-        ));
+        ))?;
         let (_record_b, cert_b) = admit_record(claim_parts_with_digest(
             seats.store_id(),
             live_b,
@@ -2842,7 +2861,7 @@ mod live_certificate_verifiability {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(12),
-        ));
+        ))?;
         let tip = *seats
             .root_chain()
             .links()
@@ -2894,7 +2913,7 @@ mod live_certificate_verifiability {
 
         let live = origin.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(13),
-        ));
+        ))?;
         let (record, cert) =
             admit_record(claim_parts(origin.store_id(), live)).expect("admit on origin");
 

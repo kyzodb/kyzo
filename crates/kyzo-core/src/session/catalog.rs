@@ -819,7 +819,7 @@ impl RelationHandle {
         let seats = LiveAdmissionSeats::mint_genesis();
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
-        ));
+        ))?;
         let (record, _cert) = admit(seats.store_id(), &live)?;
         let _permit = record.durable_write_permit();
         let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
@@ -1375,10 +1375,10 @@ pub(crate) fn list_relations(tx: &impl ReadTx) -> Result<Vec<RelationHandle>> {
     let lower = SystemKey::Relation("").encode();
     // The exclusive upper bound is the next relation prefix; SYSTEM is id
     // zero, so its successor is always in range.
-    let upper = RelationId::SYSTEM
-        .next()
-        .expect("SYSTEM is id zero; its successor exists")
-        .raw_encode();
+    let upper = match RelationId::SYSTEM.next() {
+        Some(id) => id.raw_encode(),
+        None => miette::bail!("RelationId::SYSTEM successor unrepresentable"),
+    };
     let mut ret = vec![];
     for kv in tx.range_scan(&lower, &upper) {
         let (_k, v) = kv?;

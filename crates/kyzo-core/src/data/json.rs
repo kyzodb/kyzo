@@ -115,6 +115,34 @@ impl NamedRows {
         }
     }
 
+    /// One-cell bool column — header/row widths match by construction (P082).
+    pub(crate) fn single_bool_column(name: impl Into<String>, value: bool) -> Self {
+        Self {
+            headers: vec![name.into()],
+            rows: vec![Tuple::from_vec(vec![DataValue::from(value)])],
+            next: None,
+            _seal: NamedRowsSeal,
+        }
+    }
+
+    /// Bool column plus a bytes column — widths match by construction (P082).
+    pub(crate) fn bool_and_bytes_columns(
+        bool_name: impl Into<String>,
+        bool_value: bool,
+        bytes_name: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            headers: vec![bool_name.into(), bytes_name.into()],
+            rows: vec![Tuple::from_vec(vec![
+                DataValue::from(bool_value),
+                DataValue::Bytes(bytes),
+            ])],
+            next: None,
+            _seal: NamedRowsSeal,
+        }
+    }
+
     /// Alias of [`Self::try_new`] — typed refuse, never panic (P082).
     pub fn new(
         headers: Vec<String>,

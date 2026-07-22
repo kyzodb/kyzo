@@ -130,6 +130,14 @@ pub(crate) enum FjallRefuse {
     #[error("max_journaling_size_bytes {requested} is below the {floor}-byte floor (64 MiB)")]
     #[diagnostic(code(storage::fjall::journaling_size_below_floor))]
     JournalingSizeBelowFloor { requested: u64, floor: u64 },
+
+    #[error("FjallWriteTx used after commit/abort")]
+    #[diagnostic(code(storage::fjall::tx_spent))]
+    TxSpent,
+
+    #[error("fjall row value missing despite unconditional load predicate")]
+    #[diagnostic(code(storage::fjall::value_elided))]
+    ValueElided,
 }
 
 const KEYSPACE_NAME: &str = "kyzo";
@@ -673,16 +681,12 @@ pub struct FjallWriteTx {
 }
 
 impl FjallWriteTx {
-    fn open_tx(&self) -> &OptimisticWriteTx {
-        self.tx
-            .as_ref()
-            .expect("FjallWriteTx used after commit/abort")
+    fn open_tx(&self) -> Result<&OptimisticWriteTx, FjallRefuse> {
+        self.tx.as_ref().ok_or(FjallRefuse::TxSpent)
     }
 
-    fn open_tx_mut(&mut self) -> &mut OptimisticWriteTx {
-        self.tx
-            .as_mut()
-            .expect("FjallWriteTx used after commit/abort")
+    fn open_tx_mut(&mut self) -> Result<&mut OptimisticWriteTx, FjallRefuse> {
+        self.tx.as_mut().ok_or(FjallRefuse::TxSpent)
     }
 
     /// Contract v2 (write-set validation): put every written key on the
@@ -698,7 +702,7 @@ impl FjallWriteTx {
     /// this call away breaks `write_write_race_aborts_second_committer`.
     fn mark_written_key_validated(&mut self, key: &[u8]) -> Result<()> {
         let ks = self.ks.clone();
-        self.open_tx_mut()
+        self.open_tx_mut()?
             .contains_key(&ks, key)
             .map_err(FjallRefuse::Read)?;
         Ok(())
@@ -747,7 +751,7 @@ fn materialize_row(guard: Guard) -> Result<(Slice, Slice)> {
     let (k, v) = guard.into_inner_if(|_| true).map_err(FjallRefuse::Read)?;
     Ok((
         k,
-        v.expect("predicate is unconditionally true: the value is always loaded"),
+        v.ok_or(FjallRefuse::ValueElided)?,
     ))
 }
 
@@ -896,11 +900,11 @@ impl_read_tx!(FjallReadTx, snap, fjall::SeekIter);
 
 impl ReadTx for FjallWriteTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        read_get(self.open_tx(), &self.ks, key)
+        read_get(self.open_tx()?, &self.ks, key)
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        read_exists(self.open_tx(), &self.ks, key)
+        read_exists(self.open_tx()?, &self.ks, key)
     }
 
     fn range_scan<'a>(
@@ -908,7 +912,12 @@ impl ReadTx for FjallWriteTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        Box::new(raw_range(self.open_tx(), &self.ks, lower, upper).map(materialize_row))
+        {
+        let Ok(tx) = self.open_tx() else {
+            return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
+        };
+        Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_row))
+    }
     }
 
     fn range_scan_keys<'a>(
@@ -916,7 +925,12 @@ impl ReadTx for FjallWriteTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
-        Box::new(raw_range(self.open_tx(), &self.ks, lower, upper).map(materialize_key))
+        {
+        let Ok(tx) = self.open_tx() else {
+            return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
+        };
+        Box::new(raw_range(tx, &self.ks, lower, upper).map(materialize_key))
+    }
     }
 
     fn range_skip_scan_tuple<'a>(
@@ -934,7 +948,12 @@ impl ReadTx for FjallWriteTx {
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        read_total_scan(self.open_tx(), &self.ks)
+        {
+        let Ok(tx) = self.open_tx() else {
+            return Box::new(std::iter::once(Err(FjallRefuse::TxSpent.into())));
+        };
+        read_total_scan(tx, &self.ks)
+    }
     }
 }
 
@@ -945,9 +964,11 @@ impl OpenSkipCursor for FjallWriteTx {
         if lower >= upper {
             return FjallSkipCursor::Empty;
         }
+        let Ok(tx) = self.open_tx() else {
+            return FjallSkipCursor::Empty;
+        };
         FjallSkipCursor::Live(
-            self.open_tx()
-                .seek_range::<&[u8], _>(&self.ks, (Bound::Included(lower), Bound::Excluded(upper))),
+            tx.seek_range::<&[u8], _>(&self.ks, (Bound::Included(lower), Bound::Excluded(upper))),
         )
     }
 }
@@ -959,13 +980,13 @@ impl WriteTx for FjallWriteTx {
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         let ks = self.ks.clone();
-        self.open_tx_mut().insert(&ks, key, val);
+        self.open_tx_mut()?.insert(&ks, key, val);
         self.mark_written_key_validated(key)
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
         let ks = self.ks.clone();
-        self.open_tx_mut().remove(&ks, key);
+        self.open_tx_mut()?.remove(&ks, key);
         self.mark_written_key_validated(key)
     }
 
@@ -974,7 +995,7 @@ impl WriteTx for FjallWriteTx {
         let mut cursor = lower.to_vec();
         loop {
             let keys: Vec<Slice> = {
-                let tx = self.open_tx();
+                let tx = self.open_tx()?;
                 raw_range(tx, &self.ks, &cursor, upper)
                     .map(materialize_key)
                     .take(CHUNK)
@@ -991,7 +1012,7 @@ impl WriteTx for FjallWriteTx {
             let full_chunk = keys.len() == CHUNK;
             let ks = self.ks.clone();
             for k in keys {
-                self.open_tx_mut().remove(&ks, k);
+                self.open_tx_mut()?.remove(&ks, k);
             }
             if !full_chunk {
                 return Ok(());
@@ -1000,7 +1021,11 @@ impl WriteTx for FjallWriteTx {
     }
 
     fn commit(mut self) -> std::result::Result<(), CommitFailure> {
-        let tx = self.tx.take().expect("FjallWriteTx commit after spend");
+        let tx = self.tx.take().ok_or_else(|| {
+            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(
+                std::io::Error::other("FjallWriteTx commit after spend"),
+            )))
+        })?;
         match tx
             .commit()
             .map_err(|e| CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e))))?
@@ -1012,10 +1037,11 @@ impl WriteTx for FjallWriteTx {
 
     fn commit_durable(mut self) -> std::result::Result<(), CommitFailure> {
         let db = self.db.clone();
-        let tx = self
-            .tx
-            .take()
-            .expect("FjallWriteTx commit_durable after spend");
+        let tx = self.tx.take().ok_or_else(|| {
+            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(
+                std::io::Error::other("FjallWriteTx commit_durable after spend"),
+            )))
+        })?;
         match tx
             .commit()
             .map_err(|e| CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e))))?

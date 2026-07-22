@@ -44,7 +44,10 @@ use kyzo_model::value::{DataValue, Tuple, TupleT};
 use kyzo_model::schema::ColumnDef;
 #[cfg(test)]
 use kyzo_model::schema::NullableColType;
-const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = NonZeroU64::new(1 << 32).unwrap();
+const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = match NonZeroU64::new(1 << 32) {
+    Some(n) => n,
+    None => panic!("1<<32 is nonzero"),
+};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Manifest-index maintenance and lifecycle (the index-operator tier)

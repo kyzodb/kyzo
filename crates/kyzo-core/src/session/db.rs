@@ -134,7 +134,10 @@ pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 /// not failing.
 ///
 /// [`ConflictError`]: crate::store::ConflictError
-const MAX_COMMIT_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+const MAX_COMMIT_ATTEMPTS: NonZeroUsize = match NonZeroUsize::new(128) {
+    Some(n) => n,
+    None => panic!("128 is nonzero"),
+};
 
 /// Closed Engine admission refuse taxonomy (decisions.md §42/§43).
 ///
@@ -367,12 +370,15 @@ impl<S: Storage> Engine<S> {
         &self,
         tx: &impl crate::store::ReadTx,
         relation: kyzo_model::value::RelationId,
-    ) -> crate::session::admit::LiveCertificateInputs {
+    ) -> Result<
+        crate::session::admit::LiveCertificateInputs,
+        crate::session::admit::AdmitRefuse,
+    > {
         use crate::session::generation::{CatalogGeneration, RelationGeneration};
         let generation = self.segments.witness_after_snapshot(tx, relation);
         let catalog_generation =
             CatalogGeneration::from_relation(RelationGeneration::witness(generation.raw()));
-        self.admission.certificate_inputs(catalog_generation)
+        Ok(self.admission.certificate_inputs(catalog_generation)?)
     }
 
     /// The interpretive Catalog capability this Engine holds.
@@ -386,7 +392,7 @@ impl<S: Storage> Engine<S> {
     pub fn fixed_rules(&self) -> BTreeMap<String, Arc<dyn FixedRule>> {
         self.fixed_rules
             .read()
-            .expect("fixed-rule registry poisoned")
+            .unwrap_or_else(|poison| poison.into_inner())
             .clone()
     }
 
@@ -397,7 +403,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .fixed_rules
             .write()
-            .expect("fixed-rule registry poisoned");
+            .unwrap_or_else(|poison| poison.into_inner());
         if registry.contains_key(&name) {
             bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
@@ -411,7 +417,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .fixed_rules
             .write()
-            .expect("fixed-rule registry poisoned");
+            .unwrap_or_else(|poison| poison.into_inner());
         if registry.contains_key(&name) {
             bail!(EngineRefuse::FixedRuleNameConflict(name));
         }
@@ -427,7 +433,7 @@ impl<S: Storage> Engine<S> {
         }
         self.fixed_rules
             .write()
-            .expect("fixed-rule registry poisoned")
+            .unwrap_or_else(|poison| poison.into_inner())
             .remove(name)
             .is_some()
     }
@@ -910,7 +916,10 @@ pub(crate) fn build_budget(
         Some(v) => v,
         None => DEFAULT_EPOCH_CEILING,
     };
-    let ceiling = NonZeroU32::new(ceiling.max(1)).expect("max(1) is nonzero");
+    let ceiling = match NonZeroU32::new(ceiling.max(1)) {
+        Some(n) => n,
+        None => miette::bail!("derived ceiling max(1) was zero"),
+    };
     let mut budget = Budget::new(ceiling).with_cancel(cancel);
     let derived_tuple_ceiling = match options.derived_tuple_ceiling {
         Some(v) => v,

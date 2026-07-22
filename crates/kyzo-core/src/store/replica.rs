@@ -1729,8 +1729,9 @@ impl SthGossipSubject {
     pub fn jetstream_subject(self) -> String {
         let mut hex = String::with_capacity(64);
         for b in self.store_id.as_bytes() {
-            hex.push(char::from_digit((b >> 4) as u32, 16).expect("nibble"));
-            hex.push(char::from_digit((b & 0x0f) as u32, 16).expect("nibble"));
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            hex.push(HEX[(b >> 4) as usize] as char);
+            hex.push(HEX[(b & 0x0f) as usize] as char);
         }
         format!("kyzo.sth.{hex}")
     }
@@ -1793,7 +1794,7 @@ impl SignedStateRootHead {
     /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
     /// head fields.
     pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
-        let body = Digest::from_bytes(head.compact_digest());
+        let body = Digest::from_bytes(head.compact_digest().map_err(|_| ReplicaRefuse::AuthenticityFailed)?);
         let signature = key.sign(&body)?;
         Ok(Self {
             head,
@@ -1826,7 +1827,7 @@ impl SignedStateRootHead {
             Some(k) => k,
             None => return Err(ReplicaRefuse::AuthenticityFailed),
         };
-        let body = Digest::from_bytes(self.head.compact_digest());
+        let body = Digest::from_bytes(self.head.compact_digest().map_err(|_| ReplicaRefuse::AuthenticityFailed)?);
         if key.verify_signature(&body, &self.signature) {
             Ok(())
         } else {

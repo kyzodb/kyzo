@@ -120,10 +120,11 @@ const _: () = assert!(std::mem::align_of::<MerkleHash>() == std::mem::align_of::
 impl MerkleHash {
     /// Lowercase hex, 64 characters.
     pub(crate) fn to_hex(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut s = String::with_capacity(64);
         for b in self.0 {
-            s.push(char::from_digit((b >> 4) as u32, 16).expect("nibble"));
-            s.push(char::from_digit((b & 0x0f) as u32, 16).expect("nibble"));
+            s.push(HEX[(b >> 4) as usize] as char);
+            s.push(HEX[(b & 0x0f) as usize] as char);
         }
         s
     }
@@ -174,11 +175,16 @@ impl MerkleAccumulator {
         let mut node = (1u64, hash);
         // Merge while the stack top is a subtree of the same size: it was
         // pushed earlier, so it is the LEFT sibling of the node we hold.
-        while let Some(&(top_size, _)) = self.stack.last() {
+        loop {
+            let Some(&(top_size, _)) = self.stack.last() else {
+                break;
+            };
             if top_size != node.0 {
                 break;
             }
-            let (_, left) = self.stack.pop().expect("just peeked");
+            let Some((_, left)) = self.stack.pop() else {
+                break;
+            };
             node = (node.0 * 2, node_hash(&left, &node.1));
         }
         self.stack.push(node);
@@ -331,16 +337,16 @@ impl ChainedStateRoot {
         content_root: StateRoot,
         predecessor_root: StateRoot,
         link: ChainLinkKind,
-    ) -> Self {
-        let root = chain_bind(content_root, predecessor_root, link, commit_ordinal);
-        Self {
+    ) -> Result<Self, MerkleChainRefuse> {
+        let root = chain_bind(content_root, predecessor_root, link, commit_ordinal)?;
+        Ok(Self {
             store_id,
             fence_epoch,
             commit_ordinal,
             root,
             predecessor_root,
             link,
-        }
+        })
     }
 
     /// Store identity.
@@ -660,16 +666,16 @@ impl ReplicaCutRecompute {
     }
 
     /// Independently recompute the chained root this side contributes.
-    pub fn recompute(self) -> StateRoot {
-        ChainedStateRoot::mint(
+    pub fn recompute(self) -> Result<StateRoot, MerkleChainRefuse> {
+        Ok(ChainedStateRoot::mint(
             self.store_id,
             self.fence_epoch,
             self.commit_ordinal,
             self.content_root,
             self.predecessor_root,
             self.link,
-        )
-        .root()
+        )?
+        .root())
     }
 }
 
@@ -678,8 +684,11 @@ impl ReplicaCutRecompute {
 /// Each side independently recomputes via [`ReplicaCutRecompute::recompute`];
 /// comparison is [`roots_equal_at_cut`] over those digests. Neither argument
 /// is a received/delivered root — a trust-the-peer costume cannot enter.
-pub fn replica_equivalence_at_cut(left: ReplicaCutRecompute, right: ReplicaCutRecompute) -> bool {
-    roots_equal_at_cut(left.recompute(), right.recompute())
+pub fn replica_equivalence_at_cut(
+    left: ReplicaCutRecompute,
+    right: ReplicaCutRecompute,
+) -> Result<bool, MerkleChainRefuse> {
+    Ok(roots_equal_at_cut(left.recompute()?, right.recompute()?))
 }
 
 /// Path/URL "same store" claim — location is not identity (seat 4) and not
@@ -748,6 +757,10 @@ pub enum MerkleChainRefuse {
     #[error("merkle chain: STH gossip pair spans distinct Store identities")]
     #[diagnostic(code(store::merkle::sth_store_mismatch))]
     SthStoreMismatch,
+    /// Canonical transcript encode failed for a typed head/bind (invariant breach).
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Transcript(#[from] crate::store::transcript::TranscriptRefuse),
 }
 
 // ── STH gossip / consistency (CT non-equivocation; seats 2/56/58/69) ──────
@@ -815,17 +828,16 @@ impl StateRootHead {
     ///
     /// Hand-rolled field hashing of the head is Unconstructible — the
     /// transcript is the sole serializer; this digests its sealed bytes only.
-    pub fn compact_digest(self) -> [u8; 32] {
+    pub fn compact_digest(self) -> Result<[u8; 32], MerkleChainRefuse> {
         let transcript = encode_state_root_head(
             self.store_id.as_bytes(),
             self.fence_epoch.get(),
             self.commit_ordinal.get(),
             self.root.as_bytes(),
-        )
-        .expect("INVARIANT(StateRootHead): typed head encodes under CanonicalTranscript");
+        )?;
         let mut h = Sha256::new();
         h.update(transcript.as_bytes());
-        h.finalize().into()
+        Ok(h.finalize().into())
     }
 }
 
@@ -994,17 +1006,16 @@ fn chain_bind(
     predecessor_root: StateRoot,
     link: ChainLinkKind,
     commit_ordinal: CommitOrdinal,
-) -> StateRoot {
+) -> Result<StateRoot, MerkleChainRefuse> {
     let transcript = encode_chained_state_root(
         content_root.as_bytes(),
         predecessor_root.as_bytes(),
         link.transcript_tag(),
         commit_ordinal.get(),
-    )
-    .expect("INVARIANT(ChainedStateRoot): typed bind encodes under CanonicalTranscript");
+    )?;
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
-    StateRoot(h.finalize().into())
+    Ok(StateRoot(h.finalize().into()))
 }
 
 #[cfg(test)]

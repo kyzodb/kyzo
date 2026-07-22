@@ -597,7 +597,7 @@ impl LeaveIsFreePack {
     /// Content root = SHA-256 of the ONE [`encode_leave_is_free_pack`]
     /// [`CanonicalTranscript`](crate::store::transcript::CanonicalTranscript)
     /// bytes — never a hand-rolled field hasher (seat 59).
-    fn pack_content_root(&self) -> StateRoot {
+    fn pack_content_root(&self) -> Result<StateRoot, crate::store::transcript::TranscriptRefuse> {
         let pack_kind: &[u8] = match self.kind {
             LeaveIsFreeKind::SealAndSuffix => b"seal_and_suffix",
             LeaveIsFreeKind::FullWal => b"full_wal",
@@ -629,23 +629,21 @@ impl LeaveIsFreePack {
             &salts,
             &incarnations,
             self.payload.as_slice(),
-        )
-        .expect("LeaveIsFreePack: sealed pack fields always encode under CanonicalTranscript");
+        )?;
         let mut h = Sha256::new();
         h.update(transcript.as_bytes());
-        StateRoot::from_digest(h.finalize().into())
+        Ok(StateRoot::from_digest(h.finalize().into()))
     }
 
     /// Claimed origin [`StoreId`] carried by this pack (first wrapped salt domain).
     ///
     /// Ceremony trust is never taken from this claim alone — [`OriginRootRegistry`]
     /// must already hold a trusted root for this id (seat 80 / #374 T7).
-    pub fn claimed_origin_store_id(&self) -> StoreId {
+    pub fn claimed_origin_store_id(&self) -> Result<StoreId, PackRefuse> {
         self.wrapped_shred_salts
             .first()
-            .expect("LeaveIsFreePack: non-empty wrapped_shred_salts by build invariant")
-            .crypto_domain()
-            .store_id()
+            .map(|w| w.crypto_domain().store_id())
+            .ok_or(PackRefuse::MissingWrappedShredSalt)
     }
 
     /// Independent [`ReplicaCutRecompute`] derived solely from this pack's
@@ -654,9 +652,13 @@ impl LeaveIsFreePack {
     /// Crate-visible recompute only — unusable as the ceremony `local` anchor
     /// ([`ImportCapability::after_chain_root_verify`] always refuses bare cuts).
     /// Mint via [`OriginRootRegistry::after_chain_root_verify`].
-    pub(crate) fn replica_cut_recompute(&self) -> ReplicaCutRecompute {
-        let content = self.pack_content_root();
-        let store_id = self.claimed_origin_store_id();
+    pub(crate) fn replica_cut_recompute(
+        &self,
+    ) -> Result<ReplicaCutRecompute, PackRefuse> {
+        let content = self
+            .pack_content_root()
+            .map_err(|_| PackRefuse::ForeignHistoryUnverified)?;
+        let store_id = self.claimed_origin_store_id()?;
         let fence = match self.wrapped_shred_salts.first() {
             Some(w) => w.crypto_domain().fence_epoch(),
             None => crate::store::epoch::FenceEpoch::genesis(store_id),
@@ -665,22 +667,22 @@ impl LeaveIsFreePack {
         // pack identity is content-bound; ordinal is cut protocol, not history length.
         let ordinal = CommitOrdinal::ZERO
             .successor()
-            .expect("CommitOrdinal::ZERO always has a successor");
-        ReplicaCutRecompute::from_local(
+            .map_err(|_| PackRefuse::ForeignHistoryUnverified)?;
+        Ok(ReplicaCutRecompute::from_local(
             store_id,
             fence,
             ordinal,
             content,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        )
+        ))
     }
 
     /// Independently recompute this pack's chain root at the leave-is-free cut.
     ///
     /// [`import_verify`] gates admission on `observed == capability.bound_root()`.
-    pub fn recompute_root(&self) -> StateRoot {
-        self.replica_cut_recompute().recompute()
+    pub fn recompute_root(&self) -> Result<StateRoot, PackRefuse> {
+        Ok(self.replica_cut_recompute()?.recompute().map_err(|_| PackRefuse::ForeignHistoryUnverified)?)
     }
 }
 
@@ -745,12 +747,12 @@ impl OriginRootRegistry {
         &self,
         pack: &LeaveIsFreePack,
     ) -> Result<ImportCapability, PackRefuse> {
-        let origin = pack.claimed_origin_store_id();
+        let origin = pack.claimed_origin_store_id()?;
         let Some(trusted) = self.get(origin) else {
             return Err(PackRefuse::ForeignHistoryUnverified);
         };
         // peer: pack's own independently recomputed root (never the local anchor).
-        let peer = pack.recompute_root();
+        let peer = pack.recompute_root()?;
         if !roots_equal_at_cut(trusted, peer) {
             return Err(PackRefuse::ForeignHistoryUnverified);
         }
@@ -898,7 +900,7 @@ pub fn import_verify(
     let Some(bound) = cap.bound_root() else {
         return Err(PackRefuse::ForeignHistoryUnverified);
     };
-    let observed = pack.recompute_root();
+    let observed = pack.recompute_root()?;
     if !roots_equal_at_cut(observed, bound) {
         return Err(PackRefuse::ForeignHistoryUnverified);
     }

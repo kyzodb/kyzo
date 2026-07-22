@@ -195,11 +195,7 @@ impl Liveness {
 
     /// Independently-queryable `liveness` relation — one row, one column.
     pub fn relation(self) -> NamedRows {
-        NamedRows::try_new(
-            vec!["liveness".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(self.is_passing())])],
-        )
-        .expect("liveness relation arity")
+        NamedRows::single_bool_column("liveness", self.is_passing())
     }
 }
 
@@ -226,11 +222,7 @@ impl Readiness {
 
     /// Independently-queryable `readiness` relation — one row, one column.
     pub fn relation(self) -> NamedRows {
-        NamedRows::try_new(
-            vec!["readiness".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(self.is_passing())])],
-        )
-        .expect("readiness relation arity")
+        NamedRows::single_bool_column("readiness", self.is_passing())
     }
 }
 
@@ -261,24 +253,18 @@ impl Integrity {
     /// column (`last_verify` bytes); when absent the column is omitted
     /// (never a zero-filled digest placeholder).
     pub fn relation(self) -> NamedRows {
-        NamedRows::try_new(
-            vec!["integrity".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(self.is_passing())])],
-        )
-        .expect("integrity relation arity")
+        NamedRows::single_bool_column("integrity", self.is_passing())
     }
 
     /// Integrity relation with rendered [`DeepVerifyDigest`] when present.
     pub fn relation_with_last_verify(self, last_verify: Option<DeepVerifyDigest>) -> NamedRows {
         match last_verify {
-            Some(digest) => NamedRows::try_new(
-                vec!["integrity".into(), "last_verify".into()],
-                vec![Tuple::from_vec(vec![
-                    DataValue::from(self.is_passing()),
-                    DataValue::Bytes(digest.as_bytes().to_vec()),
-                ])],
-            )
-            .expect("integrity+digest relation arity"),
+            Some(digest) => NamedRows::bool_and_bytes_columns(
+                "integrity",
+                self.is_passing(),
+                "last_verify",
+                digest.as_bytes().to_vec(),
+            ),
             None => self.relation(),
         }
     }
@@ -670,7 +656,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .expect("registry lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
         let new_id = CallbackId::from_raw(self.next_callback_id());
         registry.register(new_id, decl);
         (new_id, receiver)
@@ -680,7 +666,7 @@ impl<S: Storage> Engine<S> {
     pub fn unregister_callback(&self, id: CallbackId) -> bool {
         self.event_callbacks
             .write()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .unregister(id)
     }
 
@@ -690,7 +676,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn current_callback_targets(&self) -> BTreeSet<SmartString<LazyCompact>> {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .by_relation
             .keys()
             .cloned()
@@ -704,7 +690,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn send_callbacks(&self, collector: CallbackCollector) {
         let mut to_remove = vec![];
         {
-            let registry = self.event_callbacks.read().expect("registry lock poisoned");
+            let registry = self.event_callbacks.read().unwrap_or_else(|p| p.into_inner());
             for (relation, events) in collector {
                 let Some(ids) = registry.by_relation.get(&relation) else {
                     continue;
@@ -732,7 +718,7 @@ impl<S: Storage> Engine<S> {
             let mut registry = self
                 .event_callbacks
                 .write()
-                .expect("registry lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
             for id in to_remove {
                 registry.unregister(id);
             }
@@ -744,7 +730,7 @@ impl<S: Storage> Engine<S> {
     pub fn schedule_deep_verify(&self) -> ScheduleOrdinal {
         self.event_callbacks
             .write()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .deep_verify
             .schedule()
     }
@@ -757,7 +743,7 @@ impl<S: Storage> Engine<S> {
             let mut registry = self
                 .event_callbacks
                 .write()
-                .expect("registry lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
             match registry.deep_verify.take_pending() {
                 Some(ord) => ord,
                 None => return Ok(None),
@@ -769,7 +755,7 @@ impl<S: Storage> Engine<S> {
             let mut registry = self
                 .event_callbacks
                 .write()
-                .expect("registry lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
             registry.health_tiers.integrity = if result.clean {
                 Integrity::passing()
             } else {
@@ -789,7 +775,7 @@ impl<S: Storage> Engine<S> {
     pub fn deep_verify_last_result(&self) -> Option<DeepVerifyLastResult> {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .deep_verify
             .last_result()
     }
@@ -798,7 +784,7 @@ impl<S: Storage> Engine<S> {
     pub fn deep_verify_staleness(&self) -> DeepVerifyStaleness {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .deep_verify
             .staleness()
     }
@@ -809,7 +795,7 @@ impl<S: Storage> Engine<S> {
     /// and index-status are **not** mirrored into ephemeral — relation doors
     /// render [`DebtLedger`] / [`IndexStatus`] directly.
     pub fn operator_health_surface(&self) -> OperatorHealthSurface {
-        let registry = self.event_callbacks.read().expect("registry lock poisoned");
+        let registry = self.event_callbacks.read().unwrap_or_else(|p| p.into_inner());
         let mut surface = registry.operator_health.clone();
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         surface
@@ -823,7 +809,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .expect("registry lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         registry.operator_health = surface;
     }
@@ -833,7 +819,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .expect("registry lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
         registry.index_status = status;
     }
 
@@ -841,7 +827,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn index_status(&self) -> IndexStatus {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .index_status
     }
 
@@ -864,7 +850,7 @@ impl<S: Storage> Engine<S> {
     pub fn operator_record_quarantine(&self, range: QuarantineRange) {
         self.event_callbacks
             .write()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .operator_health
             .record_quarantine(range);
     }
@@ -894,7 +880,7 @@ impl<S: Storage> Engine<S> {
     pub fn in_flight_tx_count(&self) -> u64 {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .in_flight_tx
     }
 
@@ -906,7 +892,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .expect("registry lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
         let in_flight = registry.in_flight_tx.saturating_add(1);
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
@@ -917,7 +903,7 @@ impl<S: Storage> Engine<S> {
         let mut registry = self
             .event_callbacks
             .write()
-            .expect("registry lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
         let in_flight = registry.in_flight_tx.saturating_sub(1);
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
@@ -932,7 +918,7 @@ impl<S: Storage> Engine<S> {
     pub fn liveness(&self) -> Liveness {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .health_tiers
             .liveness
     }
@@ -941,7 +927,7 @@ impl<S: Storage> Engine<S> {
     pub fn readiness(&self) -> Readiness {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .health_tiers
             .readiness
     }
@@ -954,14 +940,14 @@ impl<S: Storage> Engine<S> {
     pub fn integrity(&self) -> Integrity {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .health_tiers
             .integrity
     }
 
     /// Operator integrity relation with rendered last-verify digest.
     pub fn integrity_relation(&self) -> NamedRows {
-        let registry = self.event_callbacks.read().expect("registry lock poisoned");
+        let registry = self.event_callbacks.read().unwrap_or_else(|p| p.into_inner());
         registry
             .health_tiers
             .integrity
@@ -972,7 +958,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_liveness(&self, tier: Liveness) {
         self.event_callbacks
             .write()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .health_tiers
             .liveness = tier;
     }
@@ -981,7 +967,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_readiness(&self, tier: Readiness) {
         self.event_callbacks
             .write()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .health_tiers
             .readiness = tier;
     }
@@ -990,7 +976,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_integrity(&self, tier: Integrity) {
         self.event_callbacks
             .write()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .health_tiers
             .integrity = tier;
     }
@@ -999,7 +985,7 @@ impl<S: Storage> Engine<S> {
     pub fn tracing_verbosity(&self) -> TracingVerbosity {
         self.event_callbacks
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .tracing_verbosity
     }
 
@@ -1007,7 +993,7 @@ impl<S: Storage> Engine<S> {
     pub fn set_tracing_verbosity(&self, verbosity: TracingVerbosity) {
         self.event_callbacks
             .write()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .tracing_verbosity = verbosity;
     }
 

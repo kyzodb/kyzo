@@ -231,14 +231,14 @@ static LIVE_SWEEP_CURRENT: Mutex<Option<LiveSweepHandle>> = Mutex::new(None);
 
 /// Install the Engine's live SweepDoor as the process-current door.
 pub fn install_live_sweep(handle: LiveSweepHandle) {
-    *LIVE_SWEEP_CURRENT.lock().expect("live sweep registry") = Some(handle);
+    *LIVE_SWEEP_CURRENT.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
 }
 
 /// Current process-local live SweepDoor, if any Engine has installed one.
 pub fn current_live_sweep() -> Option<LiveSweepHandle> {
     LIVE_SWEEP_CURRENT
         .lock()
-        .expect("live sweep registry")
+        .unwrap_or_else(|p| p.into_inner())
         .clone()
 }
 
@@ -296,12 +296,12 @@ impl LiveSweepHandle {
 
     /// Store identity this live door is bound to.
     pub fn store_id(&self) -> StoreId {
-        self.inner.lock().expect("live sweep").session.store_id()
+        self.inner.lock().unwrap_or_else(|p| p.into_inner()).session.store_id()
     }
 
     /// Allocate a unique anonymous client-operation id (non-retry path).
     pub fn next_anon_operation_id(&self) -> Vec<u8> {
-        let mut g = self.inner.lock().expect("live sweep");
+        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         let n = g.anon_seq;
         g.anon_seq = g.anon_seq.saturating_add(1);
         let mut out = b"kyzo.anon.".to_vec();
@@ -314,7 +314,7 @@ impl LiveSweepHandle {
         &self,
         f: impl FnOnce(&mut SweepDoor, &SweepSession, IncarnationId) -> R,
     ) -> R {
-        let mut g = self.inner.lock().expect("live sweep");
+        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         let session = g.session;
         let incarnation = g.incarnation;
         f(&mut g.door, &session, incarnation)
@@ -1251,7 +1251,8 @@ impl SweepDoor {
             content_root,
             self.root_chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )
+        .map_err(SweepSealFailure::MerkleChain)?;
         self.root_chain
             .append(chained)
             .map_err(SweepSealFailure::MerkleChain)?;

@@ -117,18 +117,25 @@ impl Default for TempTx {
 }
 
 impl TempTx {
-    fn open_map(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> {
-        self.map.as_ref().expect("TempTx used after commit/abort")
+    fn open_map(&self) -> Result<&BTreeMap<Vec<u8>, Vec<u8>>> {
+        self.map
+            .as_ref()
+            .ok_or_else(|| miette::miette!("TempTx used after commit/abort"))
     }
 
-    fn open_map_mut(&mut self) -> &mut BTreeMap<Vec<u8>, Vec<u8>> {
-        self.map.as_mut().expect("TempTx used after commit/abort")
+    fn open_map_mut(&mut self) -> Result<&mut BTreeMap<Vec<u8>, Vec<u8>>> {
+        self.map
+            .as_mut()
+            .ok_or_else(|| miette::miette!("TempTx used after commit/abort"))
     }
 
     /// Whether nothing has ever been written (used by tests/diagnostics).
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.open_map().is_empty()
+        match self.open_map() {
+            Ok(m) => m.is_empty(),
+            Err(_) => true,
+        }
     }
 
     /// Spend Open without a named commit/abort — session scratch is vacuous:
@@ -141,11 +148,11 @@ impl TempTx {
 
 impl ReadTx for TempTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        Ok(self.open_map().get(key).map(Slice::from))
+        Ok(self.open_map()?.get(key).map(Slice::from))
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        Ok(self.open_map().contains_key(key))
+        Ok(self.open_map()?.contains_key(key))
     }
 
     fn range_scan<'a>(
@@ -158,9 +165,13 @@ impl ReadTx for TempTx {
             // contract; BTreeMap::range would panic on start > end).
             return Box::new(std::iter::empty());
         }
+        let Ok(map) = self.open_map() else {
+            return Box::new(std::iter::once(Err(miette::miette!(
+                "TempTx used after commit/abort"
+            ))));
+        };
         Box::new(
-            self.open_map()
-                .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
+            map.range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
                 .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
     }
@@ -184,11 +195,12 @@ impl ReadTx for TempTx {
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        Box::new(
-            self.open_map()
-                .iter()
-                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
-        )
+        let Ok(map) = self.open_map() else {
+            return Box::new(std::iter::once(Err(miette::miette!(
+                "TempTx used after commit/abort"
+            ))));
+        };
+        Box::new(map.iter().map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))))
     }
 }
 
@@ -218,8 +230,16 @@ impl OpenSkipCursor for TempTx {
     type Cursor<'c> = TempSkipCursor<'c>;
 
     fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        let map = match self.open_map() {
+            Ok(m) => m,
+            Err(_) => {
+                static EMPTY: std::sync::LazyLock<BTreeMap<Vec<u8>, Vec<u8>>> =
+                    std::sync::LazyLock::new(BTreeMap::new);
+                &*EMPTY
+            }
+        };
         TempSkipCursor {
-            map: self.open_map(),
+            map,
             upper: upper.to_vec(),
         }
     }
@@ -231,12 +251,12 @@ impl WriteTx for TempTx {
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.open_map_mut().insert(key.to_vec(), val.to_vec());
+        self.open_map_mut()?.insert(key.to_vec(), val.to_vec());
         Ok(())
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        self.open_map_mut().remove(key);
+        self.open_map_mut()?.remove(key);
         Ok(())
     }
 
@@ -245,11 +265,11 @@ impl WriteTx for TempTx {
             return Ok(()); // the kernel's degenerate-bounds contract
         }
         let doomed: Vec<Vec<u8>> = self
-            .open_map()
+            .open_map()?
             .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
             .map(|(k, _)| k.clone())
             .collect();
-        let map = self.open_map_mut();
+        let map = self.open_map_mut()?;
         for k in doomed {
             map.remove(&k);
         }

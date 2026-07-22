@@ -174,10 +174,13 @@ impl OperatorEphemeralRelations {
                 DataValue::Bytes(range.end().to_vec()),
             ]));
         }
-        Ok(
-            NamedRows::try_new(vec!["keyspace".into(), "start".into(), "end".into()], rows)
-                .expect("quarantine relation arity"),
-        )
+        match NamedRows::try_new(
+            vec!["keyspace".into(), "start".into(), "end".into()],
+            rows,
+        ) {
+            Ok(rows) => Ok(rows),
+            Err(_) => Err(TenantBlindRefuse::QuarantineTopologyForbidden),
+        }
     }
 
     /// Failure-topology probe — **Cap required**; Cap-absent refuses (§82).

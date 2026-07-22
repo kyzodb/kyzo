@@ -124,7 +124,7 @@ pub(crate) fn verify(
         content,
         link.predecessor_root(),
         link.link(),
-    )
+    )?
     .root();
 
     if roots_equal_at_cut(expected, recomputed) {
@@ -381,20 +381,22 @@ impl<S: Storage> Engine<S> {
 
         let evaluated: BTreeSet<Tuple> = stores
             .get(&entry)
-            .expect("entry reinserted")
+            .ok_or_else(|| miette::miette!("verify entry relation missing after reinsert"))?
             .all_iter()?
             .map(TupleInIter::try_into_tuple)
             .collect::<Result<BTreeSet<_>, _>>()?;
 
-        let derivation_ceiling = NonZeroU64::new(
+        let derivation_ceiling = match NonZeroU64::new(
             match options.derived_tuple_ceiling {
                 Some(v) => v,
                 None => DEFAULT_DERIVED_TUPLE_CEILING,
             }
             .max(1),
-        )
-        .expect("max(1) is nonzero");
-        let unit = NonZeroU64::new(1).expect("1 is nonzero");
+        ) {
+            Some(n) => n,
+            None => miette::bail!("derived_tuple_ceiling max(1) was zero"),
+        };
+        let unit = NonZeroU64::MIN;
         let weights = |_: &_, _: usize| unit;
 
         let graph =
@@ -415,14 +417,16 @@ impl<S: Storage> Engine<S> {
                 }
             };
 
-        let solver_ceiling = NonZeroU32::new(
+        let solver_ceiling = match NonZeroU32::new(
             match options.epoch_ceiling {
                 Some(v) => v,
                 None => DEFAULT_EPOCH_CEILING,
             }
             .max(1),
-        )
-        .expect("max(1) is nonzero");
+        ) {
+            Some(n) => n,
+            None => miette::bail!("epoch_ceiling max(1) was zero"),
+        };
         let ann = match solve::<TropicalAnn, _>(&graph, &SolverBudget::new(solver_ceiling)) {
             Ok(a) => a,
             Err(e) => {

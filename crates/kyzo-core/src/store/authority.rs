@@ -326,6 +326,9 @@ pub enum AddressFenceRefuse {
     #[error("StoreFenced: second writer against a locally fenced address")]
     #[diagnostic(code(store::authority::store_fenced))]
     StoreFenced,
+    #[error("AddressFenceLockPoisoned: process-local fence mutex poisoned")]
+    #[diagnostic(code(store::authority::fence_lock_poisoned))]
+    LockPoisoned,
 }
 
 /// Process-local registry of held fences (one claim per store address).
@@ -346,7 +349,10 @@ impl AddressFenceTable {
     /// Claim the local address for this WriteAuthority. Second claim → StoreFenced.
     pub fn claim(&self, authority: &WriteAuthority) -> Result<AddressFence, AddressFenceRefuse> {
         let key = fence_key(authority.store_id(), &authority.write_token_id());
-        let mut held = self.held.lock().expect("address fence mutex");
+        let mut held = self
+            .held
+            .lock()
+            .map_err(|_| AddressFenceRefuse::LockPoisoned)?;
         if !held.insert(key) {
             return Err(AddressFenceRefuse::StoreFenced);
         }
@@ -357,9 +363,14 @@ impl AddressFenceTable {
     }
 
     /// Release a held fence (Drop path for orderly unlock).
+    ///
+    /// Poisoned mutex → no-op release (process already crashed a holder);
+    /// never panics on the Drop path.
     pub fn release(&self, fence: AddressFence) {
         let key = fence_key(fence.store_id, &fence.token_id);
-        let mut held = self.held.lock().expect("address fence mutex");
+        let Ok(mut held) = self.held.lock() else {
+            return;
+        };
         held.remove(&key);
     }
 }

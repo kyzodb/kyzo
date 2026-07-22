@@ -331,7 +331,7 @@ pub(crate) fn append_corrected_fact(
 ) -> Result<Supersession, miette::Report> {
     let live = seats.certificate_inputs(CatalogGeneration::from_relation(
         RelationGeneration::witness(relation.id.raw()),
-    ));
+    ))?;
     let (record, cert) = admit_correction(
         seats.store_id(),
         &live,
@@ -380,7 +380,7 @@ mod tests {
     ) -> (KyzoRecord, AdmissionCertificate) {
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
-        ));
+        ))?;
         let (record, cert) =
             admit_sugar_relation_row(seats.store_id(), &live, relation, row, keys_len, valid)
                 .expect("admit original");
@@ -401,7 +401,7 @@ mod tests {
 
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
-        ));
+        ))?;
         let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
         let (successor, cert) = admit_correction(
             seats.store_id(),
@@ -686,7 +686,7 @@ mod tests {
         for (i, kind) in kinds.into_iter().enumerate() {
             let live = seats.certificate_inputs(CatalogGeneration::from_relation(
                 RelationGeneration::witness(0),
-            ));
+            ))?;
             let subject = DataValue::List(vec![DataValue::from(1i64), DataValue::from(i as i64)]);
             let (successor, cert) = admit_semantic_deletion(
                 seats.store_id(),
@@ -744,7 +744,7 @@ mod tests {
             admit_original(&seats, "quote", &original_row, 1, ValidityTs::from_raw(100));
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
-        ));
+        ))?;
         let (deletion, cert) = admit_semantic_deletion(
             seats.store_id(),
             &live,
