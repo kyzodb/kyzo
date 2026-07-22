@@ -314,7 +314,11 @@ impl FilterSpec {
 /// the graph exactly where a striped one does not.
 fn filter_at_selectivity(target: f64, striped: bool) -> FilterSpec {
     let modulus = 1000i64;
-    let accept = match kyzo_model::value::Num::float((target * usize_to_f64(modulus)).round()).to_int_coerced() {
+    let accept = match kyzo_model::value::Num::float(
+        (target * kyzo_model::value::Num::int(modulus).to_f64()).round(),
+    )
+    .to_int_coerced()
+    {
         Some(i) => i,
         None => 0,
     };
@@ -1095,7 +1099,10 @@ fn min_k_matches_disconnected_from_entry_region() {
 
     let f = FilterSpec::AtLeast { threshold: half }; // matches only the far cluster
     let matches = f.true_match_count(&rows);
-    assert_eq!(matches, n - half);
+    assert_eq!(
+        usize_to_i64(matches).expect("match count fits i64"),
+        n - half
+    );
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
     let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
     let ekeys = keys_of(&hits);

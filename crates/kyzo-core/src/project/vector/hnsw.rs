@@ -3628,6 +3628,7 @@ mod tests {
     use super::*;
     use kyzo_model::program::InputRelationHandle;
     use kyzo_model::value::{TupleT, encode_key_with_suffix};
+    use miette::IntoDiagnostic;
 
     macro_rules! knn_rows {
         ($($arg:expr),* $(,)?) => {
@@ -4736,7 +4737,7 @@ mod tests {
     /// syntactically-broken stored bytes and well-formed rows of the wrong
     /// shape.
     #[test]
-    fn corrupt_rows_are_typed_errors() {
+    fn corrupt_rows_are_typed_errors() -> Result<()> {
         // Well-formed tuple, wrong shape: node degree slot holds a string.
         let at = VectorId {
             tuple_key: Tuple::from_vec(vec![DataValue::from(7)]),
@@ -4749,40 +4750,43 @@ mod tests {
             DataValue::Bytes(vec![]),
             DataValue::from(false),
         ]);
-        let err = HnswRow::decode(tuple.as_slice(), 1, "t").unwrap_err();
+        let err = HnswRow::decode(tuple.as_slice(), 1, "t")
+            .err()
+            .ok_or_else(|| miette!("wrong-shape node must error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 
         // Truncated tuple.
-        let err = HnswRow::decode(&tuple.as_slice()[..3], 1, "t").unwrap_err();
+        let err = HnswRow::decode(&tuple.as_slice()[..3], 1, "t")
+            .err()
+            .ok_or_else(|| miette!("truncated node must error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 
         // A real store with a byte-flipped index row: reads error, never
         // panic.
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let db = new_fjall_storage(dir.path())?;
         let rows = vec![row(1, 0.0, 0.0), row(2, 1.0, 0.0)];
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
 
         // Overwrite every index row's value with garbage msgpack.
-        let mut tx = db.write_tx().unwrap();
+        let mut tx = db.write_tx()?;
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
             let lower = idx.id.raw_encode();
             let upper = (idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(&lower, &upper)
-                .collect::<Result<Vec<_>>>()
-                .unwrap()
+                .collect::<Result<Vec<_>, _>>()?
         };
         assert!(!kvs.is_empty());
         for (k, _) in &kvs {
             // 8-byte header + 0xc1: a reserved, never-valid msgpack byte.
             let mut garbage = vec![0u8; 8];
             garbage.push(0xc1);
-            tx.put(k, &garbage).unwrap();
+            tx.put(k, &garbage)?;
         }
-        tx.commit().unwrap();
+        tx.commit().map_err(|e| miette!("{e}"))?;
 
-        let rtx = db.read_tx().unwrap();
-        let q = Vector::try_new(vec![0.5, 0.5]).unwrap();
+        let rtx = db.read_tx()?;
+        let q = Vector::try_new(vec![0.5, 0.5]).ok_or_else(|| miette!("query vector refused"))?;
         let err = Hnsw::knn(
             &rtx,
             &q,
@@ -4793,11 +4797,13 @@ mod tests {
             &None,
             &CancelFlag::inert(),
         )
-        .expect_err("corrupt rows must be errors, not panics");
+        .err()
+        .ok_or_else(|| miette!("corrupt rows must be errors, not panics"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "corrupt index bytes must surface as the typed IndexRowCorrupt, got: {err:?}"
         );
+        Ok(())
     }
 
     /// The manifest's wire form round-trips and its bytes are pinned: it is
@@ -5153,14 +5159,14 @@ mod tests {
 
     /// relation — the guarantee the seeded level assignment exists to make.
     #[test]
-    fn index_build_is_byte_identical_across_runs() {
+    fn index_build_is_byte_identical_across_runs() -> Result<()> {
         let rows: Vec<Tuple> = (0..40)
-            .map(|i| {
+            .map(|i| -> Result<Tuple> {
                 let x = (usize_to_f64(i) * 0.37).sin();
                 let y = (usize_to_f64(i) * 0.71).cos();
-                row(i, x, y)
+                Ok(row(usize_to_i64(i)?, x, y))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // Compare graph structure independent of relation-id allocation: strip
         // the 8-byte relation-id prefix (key) and header (value).
@@ -5180,6 +5186,7 @@ mod tests {
         let b = dump();
         assert!(!a.is_empty());
         assert_eq!(a, b, "the HNSW graph must be byte-identical across builds");
+        Ok(())
     }
 
     /// Equal-distance results are tie-broken by a TOTAL (distance, identity)
@@ -5317,7 +5324,7 @@ mod tests {
                 violations_hard += 1;
             }
         }
-        let rate = usize_to_f64(violations_eps0) / usize_to_f64(TRIALS);
+        let rate = u64_to_f64(violations_eps0) / u64_to_f64(TRIALS);
         assert!(
             rate <= MAX_VIOLATION_RATE_AT_EPS0,
             "Theorem 3.2 at ε₀={} permits rare failures; rate {rate} \
@@ -5344,7 +5351,7 @@ mod tests {
              ½ Σ truth²={})",
             0.5 * sum_truth_sq
         );
-        let mean_bias = sum_err / usize_to_f64(TRIALS);
+        let mean_bias = sum_err / u64_to_f64(TRIALS);
         assert!(
             mean_bias.abs() < 0.05,
             "Theorem 3.2 unbiasedness: |mean(est−truth)|={mean_bias} too large"
