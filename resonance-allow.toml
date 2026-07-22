@@ -442,3 +442,230 @@ line = 587
 pattern = "expect"
 why_not_sabotage = "KEEP: temporal fixture premise — Event/compose of hand-built valid instants; expect fails loud if the door refuses a known-valid instant."
 
+[[bs_detector]]
+file = "crates/kyzo-model/src/envelope/arrow.rs"
+line = 855
+pattern = "expect"
+why_not_sabotage = "KEEP: lawful Arrow width TryFrom.expect — fixture/plan premise, not silent clamp."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/envelope/arrow.rs"
+line = 870
+pattern = "expect"
+why_not_sabotage = "KEEP: lawful Arrow width TryFrom.expect — fixture/plan premise, not silent clamp."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/envelope/json.rs"
+line = 130
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(serde_json_*) — serde_json finite/unique doors; expect is fail-closed not Null costume."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/envelope/json.rs"
+line = 135
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(serde_json_*) — serde_json finite/unique doors; expect is fail-closed not Null costume."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/envelope/json.rs"
+line = 149
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(serde_json_*) — serde_json finite/unique doors; expect is fail-closed not Null costume."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/bytes_qty.rs"
+line = 59
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/bytes_qty.rs"
+line = 103
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/bytes_qty.rs"
+line = 138
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/cell.rs"
+line = 174
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/cell.rs"
+line = 208
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/exec.rs"
+line = 202
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(code_fits_usize) — domain code TryFrom.expect is the typed door."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/kind/vector.rs"
+line = 104
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/prefix.rs"
+line = 64
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/prefix.rs"
+line = 84
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(len_fits_u32) — slice len TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/prefix.rs"
+line = 86
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(len_fits_u32) — slice len TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 274
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 329
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(needle_len_fits_u32) — needle len TryFrom.expect is the typed door."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 393
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_max_fits_usize) — u32::MAX→usize TryFrom.expect is the typed door on supported widths."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 777
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 781
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 849
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 857
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 861
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 872
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 875
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 962
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_max_fits_usize) — u32::MAX→usize TryFrom.expect is the typed door on supported widths."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 979
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1046
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1093
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1660
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_max_fits_usize) — u32::MAX→usize TryFrom.expect is the typed door on supported widths."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1663
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_max_fits_usize) — u32::MAX→usize TryFrom.expect is the typed door on supported widths."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1687
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1695
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1745
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1756
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1812
+pattern = "expect"
+why_not_sabotage = "KEEP: arena adversary fixture — ChunkId/ByteLen of small literals; expect fails loud if from_usize refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1814
+pattern = "expect"
+why_not_sabotage = "KEEP: arena adversary fixture — ChunkId/ByteLen of small literals; expect fails loud if from_usize refuses."
+
+[[bs_detector]]
+file = "crates/kyzo-model/src/value/arena.rs"
+line = 1909
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(u32_fits_usize) — u32→usize TryFrom.expect is the typed door; inventing MAX would be err_to_max theater."

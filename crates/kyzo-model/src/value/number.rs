@@ -295,17 +295,11 @@ impl Num {
         if !(1..=64).contains(&e) {
             return Err(NumDecodeError::IntRange);
         }
-        let shift = match u32::try_from(72 - e) {
-            Ok(s) => s,
-            Err(_) => return Err(NumDecodeError::IntRange),
-        };
+        let shift = u32::try_from(72 - e).map_err(|_| NumDecodeError::IntRange)?;
         if frac72.trailing_zeros() < shift {
             return Err(NumDecodeError::IntRange);
         }
-        let m = match u64::try_from(frac72 >> shift) {
-            Ok(v) => v,
-            Err(_) => return Err(NumDecodeError::IntRange),
-        };
+        let m = u64::try_from(frac72 >> shift).map_err(|_| NumDecodeError::IntRange)?;
         if neg {
             if m > 1u64 << 63 {
                 return Err(NumDecodeError::IntRange);
@@ -339,14 +333,8 @@ impl Num {
             if frac72.trailing_zeros() < 19 {
                 return Err(NumDecodeError::FloatRange);
             }
-            let sig53 = match u64::try_from(frac72 >> 19) {
-                Ok(v) => v,
-                Err(_) => return Err(NumDecodeError::FloatRange),
-            };
-            let expf = match u64::try_from(e - 1 + 1023) {
-                Ok(v) => v,
-                Err(_) => return Err(NumDecodeError::FloatRange),
-            };
+            let sig53 = u64::try_from(frac72 >> 19).map_err(|_| NumDecodeError::FloatRange)?;
+            let expf = u64::try_from(e - 1 + 1023).map_err(|_| NumDecodeError::FloatRange)?;
             let bits = (expf << 52) | (sig53 & ((1u64 << 52) - 1));
             let v = f64::from_bits(bits);
             Ok(Num::float(if neg { -v } else { v }))
@@ -356,17 +344,11 @@ impl Num {
             if !(1..=52).contains(&bl) {
                 return Err(NumDecodeError::FloatRange);
             }
-            let shift = match u32::try_from(72 - bl) {
-                Ok(s) => s,
-                Err(_) => return Err(NumDecodeError::FloatRange),
-            };
+            let shift = u32::try_from(72 - bl).map_err(|_| NumDecodeError::FloatRange)?;
             if frac72.trailing_zeros() < shift {
                 return Err(NumDecodeError::FloatRange);
             }
-            let frac52 = match u64::try_from(frac72 >> shift) {
-                Ok(v) => v,
-                Err(_) => return Err(NumDecodeError::FloatRange),
-            };
+            let frac52 = u64::try_from(frac72 >> shift).map_err(|_| NumDecodeError::FloatRange)?;
             let v = f64::from_bits(frac52);
             Ok(Num::float(if neg { -v } else { v }))
         }
@@ -1308,7 +1290,7 @@ mod tests {
             "the largest representable f64 strictly below 2^63 must coerce, not refuse"
         );
         assert!(
-            coerced.expect("asserted Some above") > 0,
+            coerced.is_some_and(|n| n > 0),
             "must not have wrapped/saturated to a negative or zero garbage value"
         );
 

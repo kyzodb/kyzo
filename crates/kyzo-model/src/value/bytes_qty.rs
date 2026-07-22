@@ -55,10 +55,8 @@ impl ByteLen {
     pub(super) fn as_usize(self) -> usize {
         // Lossless on every supported pointer width (≥ 32). `From<u32>` is
         // not available on all rustc targets this crate builds for.
-        match usize::try_from(self.0) {
-            Ok(n) => n,
-            Err(_overflow) => usize::MAX,
-        }
+        // INVARIANT(u32_fits_usize): u32 always fits usize on supported targets.
+        usize::try_from(self.0).expect("INVARIANT(u32_fits_usize): u32 fits usize")
     }
 
     /// The raw `u32` for read-only cross-boundary uses (prefix comparison
@@ -101,10 +99,8 @@ impl ByteOff {
     pub(super) fn as_usize(self) -> usize {
         // Lossless on every supported pointer width (≥ 32). `From<u32>` is
         // not available on all rustc targets this crate builds for.
-        match usize::try_from(self.0) {
-            Ok(n) => n,
-            Err(_overflow) => usize::MAX,
-        }
+        // INVARIANT(u32_fits_usize): u32 always fits usize on supported targets.
+        usize::try_from(self.0).expect("INVARIANT(u32_fits_usize): u32 fits usize")
     }
 
     /// Advance this offset by a byte length; `None` on overflow.
@@ -138,9 +134,7 @@ impl ChunkId {
     pub(super) fn as_usize(self) -> usize {
         // Lossless on every supported pointer width (≥ 32). `From<u32>` is
         // not available on all rustc targets this crate builds for.
-        match usize::try_from(self.0) {
-            Ok(n) => n,
-            Err(_overflow) => usize::MAX,
-        }
+        // INVARIANT(u32_fits_usize): u32 always fits usize on supported targets.
+        usize::try_from(self.0).expect("INVARIANT(u32_fits_usize): u32 fits usize")
     }
 }

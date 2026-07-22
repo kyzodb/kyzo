@@ -518,16 +518,21 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             })
         }
         Some(Kind::Float) => {
-            let vals: Vec<f64> = values
-                .iter()
-                .map(|v| match v {
-                    DataValue::Num(n) => match n.as_float() {
-                        Some(f) => f,
-                        None => 0.0,
-                    },
-                    data_value_any!() => 0.0,
-                })
-                .collect();
+            let mut vals = Vec::with_capacity(values.len());
+            for v in values {
+                match v {
+                    DataValue::Null => vals.push(0.0),
+                    DataValue::Num(n) => {
+                        let Some(f) = n.as_float() else {
+                            miette::bail!("Arrow float column saw non-float Num");
+                        };
+                        vals.push(f);
+                    }
+                    data_value_any!() => {
+                        miette::bail!("Arrow float column saw non-float non-null value");
+                    }
+                }
+            }
             Ok(PlannedColumn {
                 arrow_type: PlannedArrowType::FloatingPoint,
                 nullability: ArrowNullability::Optional,

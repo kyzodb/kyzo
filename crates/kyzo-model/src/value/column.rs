@@ -331,7 +331,9 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         }
         let mut idx: Vec<u32> = (0..match u32::try_from(self.codes.len()) {
             Ok(n) => n,
-            Err(_) => return Err(Denial::ExtentOverflow),
+            Err(_) => {
+                return Err(Denial::ExtentOverflow);
+            }
         })
         .collect();
         if self.all_sealed {

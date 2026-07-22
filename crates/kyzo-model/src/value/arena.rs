@@ -326,7 +326,7 @@ impl Entry {
     /// Prefix-first compare against a needle; payload deref only on tie.
     #[inline]
     fn cmp_needle<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Ordering {
-        match cmp_prefixed(self.prefix, self.span.len.raw(), np, match u32::try_from(needle.len()) { Ok(n) => n, Err(_) => u32::MAX }) {
+        match cmp_prefixed(self.prefix, self.span.len.raw(), np, u32::try_from(needle.len()).expect("INVARIANT(needle_len_fits_u32): slice len fits u32")) {
             PrefixCmp::Decided(o) => o,
             PrefixCmp::NeedPayload => store.tie_payload(self.span).cmp(needle),
         }
@@ -390,7 +390,7 @@ impl Run {
     /// rank-invariant and the only remap anyone needs is the seal's
     /// compact [`EpochRemap`].)
     fn merge(a: &Run, b: &Run, heap: &Heap) -> Result<Run, Denial> {
-        if a.entries.len() + b.entries.len() > match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
+        if a.entries.len() + b.entries.len() > usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
             return Err(Denial::ExtentOverflow);
         }
         let mut merged = Vec::with_capacity(a.entries.len() + b.entries.len());
@@ -774,11 +774,11 @@ impl Delta {
 
     fn search<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Result<usize, usize> {
         self.sorted
-            .binary_search_by(|&i| self.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })].cmp_needle(np, needle, store))
+            .binary_search_by(|&i| self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))].cmp_needle(np, needle, store))
     }
 
     fn entry_by_rank(&self, rank: usize) -> Entry {
-        self.arrivals[(match usize::try_from(self.sorted[rank]) { Ok(n) => n, Err(_) => 0 })]
+        self.arrivals[usize::try_from(self.sorted[rank]).expect("INVARIANT(u32_fits_usize): u32 fits usize")]
     }
 }
 
@@ -846,7 +846,7 @@ impl EpochRemap {
     /// Typed [`Denial`] on overflow or a code not live in the source epoch.
     pub(super) fn apply_raw(&self, code: Code) -> Result<Code, Denial> {
         let c = code.0;
-        let visible = (match usize::try_from(self.from_sealed_len) { Ok(n) => n, Err(_) => 0 }) + self.tail.len();
+        let visible = usize::try_from(self.from_sealed_len).expect("INVARIANT(u32_fits_usize): u32 fits usize") + self.tail.len();
         if c < self.from_sealed_len {
             // Old sealed rank r moves to the r-th position not occupied
             // by an inserted value: r + k, where k counts the inserted
@@ -854,11 +854,11 @@ impl EpochRemap {
             // non-inserted positions below D[i]; it is non-decreasing
             // because D is strictly increasing, so k is one binary
             // search.)
-            let r = (match usize::try_from(c) { Ok(n) => n, Err(_) => 0 });
+            let r = usize::try_from(c).expect("INVARIANT(u32_fits_usize): u32 fits usize");
             let (mut lo, mut hi) = (0usize, self.inserted.len());
             while lo < hi {
                 let mid = (lo + hi) / 2;
-                if (match usize::try_from(self.inserted[mid]) { Ok(n) => n, Err(_) => 0 }) - mid <= r {
+                if usize::try_from(self.inserted[mid]).expect("INVARIANT(u32_fits_usize): u32 fits usize") - mid <= r {
                     lo = mid + 1;
                 } else {
                     hi = mid;
@@ -869,10 +869,10 @@ impl EpochRemap {
                 .map(Code)
                 .ok_or(Denial::CodeRemapOverflow)
         } else {
-            let a = (match usize::try_from(c - self.from_sealed_len) { Ok(n) => n, Err(_) => 0 });
+            let a = usize::try_from(c - self.from_sealed_len).expect("INVARIANT(u32_fits_usize): u32 fits usize");
             if a >= self.tail.len() {
                 return Err(Denial::VisibilityOverflow {
-                    required: (match usize::try_from(c) { Ok(n) => n, Err(_) => 0 }) + 1,
+                    required: usize::try_from(c).expect("INVARIANT(u32_fits_usize): u32 fits usize") + 1,
                     visible,
                 });
             }
@@ -959,7 +959,7 @@ impl<'a, S: Store> View<'a, S> {
     /// Refuses with [`Denial::ExtentOverflow`] when the needle exceeds the
     /// `u32` compare space — never a process abort.
     fn rank(&self, value: &[u8]) -> Result<Result<usize, usize>, Denial> {
-        if value.len() > match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
+        if value.len() > usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
             return Err(Denial::ExtentOverflow);
         }
         let np = prefix4(value);
@@ -976,7 +976,7 @@ impl<'a, S: Store> View<'a, S> {
         }
         match self
             .sorted
-            .binary_search_by(|&i| self.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })].cmp_needle(np, value, self.store))
+            .binary_search_by(|&i| self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))].cmp_needle(np, value, self.store))
         {
             Ok(pos) => {
                 rank += pos;
@@ -1043,7 +1043,7 @@ impl<'a, S: Store> View<'a, S> {
     }
 
     fn entry_by_delta_rank(&self, rank: usize) -> Entry {
-        self.arrivals[(match usize::try_from(self.sorted[rank]) { Ok(n) => n, Err(_) => 0 })]
+        self.arrivals[usize::try_from(self.sorted[rank]).expect("INVARIANT(u32_fits_usize): u32 fits usize")]
     }
 
     /// Binary search run `r` for an index whose global rank equals `k`.
@@ -1090,7 +1090,7 @@ impl<'a, S: Store> View<'a, S> {
     /// Number of delta entries strictly less than `e`.
     fn lower_bound_delta(&self, e: Entry) -> usize {
         self.sorted.partition_point(|&i| {
-            self.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })].cmp_entry(&e, self.store) == Ordering::Less
+            self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))].cmp_entry(&e, self.store) == Ordering::Less
         })
     }
 }
@@ -1657,10 +1657,10 @@ impl Arena {
     /// heap-span encoding space, or when heap chunk/offset capacity is
     /// exhausted — never a process abort.
     pub(super) fn intern(&mut self, value: &[u8]) -> Result<StampedCode, Denial> {
-        if self.len() >= match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
+        if self.len() >= usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
             return Err(Denial::ExtentOverflow);
         }
-        if value.len() > match usize::try_from(u32::MAX) { Ok(n) => n, Err(_) => usize::MAX } {
+        if value.len() > usize::try_from(u32::MAX).expect("INVARIANT(u32_max_fits_usize): u32::MAX fits usize") {
             return Err(Denial::ExtentOverflow);
         }
         let np = prefix4(value);
@@ -1679,20 +1679,20 @@ impl Arena {
             }
         }
         let code = if found {
-            Code(match u32::try_from(rank) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) })
+            Code(u32::try_from(rank).map_err(|_| Denial::ExtentOverflow)?)
         } else {
             match self.delta.search(np, value, &self.heap) {
                 Ok(pos) => {
                     let arrival = self.delta.sorted[pos];
-                    Code(match u32::try_from(self.sealed_len + match usize::try_from(arrival) { Ok(n) => n, Err(_) => 0 }) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) })
+                    Code(u32::try_from(self.sealed_len + usize::try_from(arrival).expect("INVARIANT(u32_fits_usize): u32 fits usize")).map_err(|_| Denial::ExtentOverflow)?)
                 }
                 Err(pos) => {
                     let span = self.heap.push(value)?;
                     let entry = Entry::new(span, &self.heap);
-                    let arrival = match u32::try_from(self.delta.arrivals.len()) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) };
+                    let arrival = u32::try_from(self.delta.arrivals.len()).map_err(|_| Denial::ExtentOverflow)?;
                     self.delta.arrivals.push(entry);
                     self.delta.sorted.insert(pos, arrival);
-                    Code(match u32::try_from(self.sealed_len + match usize::try_from(arrival) { Ok(n) => n, Err(_) => 0 }) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) })
+                    Code(u32::try_from(self.sealed_len + usize::try_from(arrival).expect("INVARIANT(u32_fits_usize): u32 fits usize")).map_err(|_| Denial::ExtentOverflow)?)
                 }
             }
         };
@@ -1718,7 +1718,7 @@ impl Arena {
     /// does not cover "cannot obtain two runs."
     pub fn seal(&mut self) -> Result<EpochRemap, Denial> {
         let from = self.epoch;
-        let from_sealed_len = match u32::try_from(self.sealed_len) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) };
+        let from_sealed_len = u32::try_from(self.sealed_len).map_err(|_| Denial::ExtentOverflow)?;
         let delta_n = self.delta.len();
 
         // New global ranks of the delta values: old sealed rank +
@@ -1740,9 +1740,9 @@ impl Arena {
                     Err(pos) => sealed_rank += pos,
                 }
             }
-            let new_rank = match u32::try_from(sealed_rank + j) { Ok(v) => v, Err(_) => return Err(Denial::ExtentOverflow) };
+            let new_rank = u32::try_from(sealed_rank + j).map_err(|_| Denial::ExtentOverflow)?;
             inserted.push(new_rank);
-            tail[(match usize::try_from(self.delta.sorted[j]) { Ok(n) => n, Err(_) => 0 })] = new_rank;
+            tail[(usize::try_from(self.delta.sorted[j]).expect("INVARIANT(u32_fits_usize): u32 fits usize"))] = new_rank;
         }
 
         // Drain the delta into a lawful run (sorted + unique by the
@@ -1753,7 +1753,7 @@ impl Arena {
             let entries: Vec<Entry> = delta
                 .sorted
                 .iter()
-                .map(|&i| delta.arrivals[(match usize::try_from(i) { Ok(n) => n, Err(_) => 0 })])
+                .map(|&i| delta.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))])
                 .collect();
             self.runs
                 .push(Arc::new(Run::from_sorted(entries, &self.heap)?));
@@ -1813,9 +1813,7 @@ mod tests {
             ByteOff::ZERO,
             ByteLen::from_usize(1).expect("len 1 fits"),
         );
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = heap.get(bad);
-        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| heap.get(bad)));
         assert!(
             result.is_err(),
             "unknown chunk must fail closed, not return empty success"
@@ -1908,7 +1906,7 @@ mod tests {
         }
 
         fn resolve(&self, code: u32) -> &[u8] {
-            let c = (match usize::try_from(code) { Ok(n) => n, Err(_) => 0 });
+            let c = usize::try_from(code).expect("INVARIANT(u32_fits_usize): u32 fits usize");
             if c < self.sealed.len() {
                 &self.sealed[c]
             } else {

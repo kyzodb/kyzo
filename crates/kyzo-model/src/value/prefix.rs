@@ -61,7 +61,7 @@ pub enum PrefixCmp {
 pub fn cmp_prefixed(pa: [u8; 4], la: u32, pb: [u8; 4], lb: u32) -> PrefixCmp {
     match pa.cmp(&pb) {
         Ordering::Equal => {
-            if (match usize::try_from(la) { Ok(n) => n, Err(_overflow) => usize::MAX }) <= PREFIX_LEN || (match usize::try_from(lb) { Ok(n) => n, Err(_overflow) => usize::MAX }) <= PREFIX_LEN {
+            if (usize::try_from(la).expect("INVARIANT(u32_fits_usize): u32 fits usize")) <= PREFIX_LEN || (usize::try_from(lb).expect("INVARIANT(u32_fits_usize): u32 fits usize")) <= PREFIX_LEN {
                 PrefixCmp::Decided(la.cmp(&lb))
             } else {
                 PrefixCmp::NeedPayload
@@ -81,15 +81,9 @@ mod tests {
     fn assert_sound(a: &[u8], b: &[u8]) {
         match cmp_prefixed(
             prefix4(a),
-            match u32::try_from(a.len()) {
-                Ok(n) => n,
-                Err(_) => u32::MAX,
-            },
+            u32::try_from(a.len()).expect("INVARIANT(len_fits_u32): slice len fits u32"),
             prefix4(b),
-            match u32::try_from(b.len()) {
-                Ok(n) => n,
-                Err(_) => u32::MAX,
-            },
+            u32::try_from(b.len()).expect("INVARIANT(len_fits_u32): slice len fits u32"),
         ) {
             PrefixCmp::Decided(o) => {
                 assert_eq!(

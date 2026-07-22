@@ -103,17 +103,15 @@ fn lift_tagged(obj: &Map<String, Value>) -> Option<DataValue> {
     match kind {
         "bytes" => {
             let s = obj.get("v")?.as_str()?;
-            let bytes = match STANDARD.decode(s) {
-                Ok(b) => b,
-                Err(_b64) => return None,
+            let Ok(bytes) = STANDARD.decode(s) else {
+                return None;
             };
             Some(DataValue::Bytes(bytes))
         }
         "uuid" => {
             let s = obj.get("v")?.as_str()?;
-            let u = match uuid::Uuid::try_parse(s) {
-                Ok(u) => u,
-                Err(_parse) => return None,
+            let Ok(u) = uuid::Uuid::try_parse(s) else {
+                return None;
             };
             Some(DataValue::uuid(u))
         }
@@ -128,14 +126,12 @@ fn lift_tagged(obj: &Map<String, Value>) -> Option<DataValue> {
         "regex" => {
             let pattern = obj.get("v")?.as_str()?.to_string();
             let flags_u = obj.get("f")?.as_u64()?;
-            let flags_u8 = match u8::try_from(flags_u) {
-                Ok(v) => v,
-                Err(_wide) => return None,
+            let Ok(flags_u8) = u8::try_from(flags_u) else {
+                return None;
             };
             let flags = RegexFlags::from_bits(flags_u8)?;
-            let src = match RegexSource::validated(flags, pattern) {
-                Ok(s) => s,
-                Err(_bad) => return None,
+            let Ok(src) = RegexSource::validated(flags, pattern) else {
+                return None;
             };
             Some(DataValue::Regex(src))
         }

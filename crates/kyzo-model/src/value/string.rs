@@ -111,9 +111,8 @@ impl GermanStr {
                 Err(_utf8) => None,
             };
         }
-        let raw = match decode_terminated(payload) {
-            Ok((raw, _rest)) => raw,
-            Err(_dec) => return None,
+        let Ok((raw, _rest)) = decode_terminated(payload) else {
+            return None;
         };
         match String::from_utf8(raw) {
             Ok(s) => Some(Cow::Owned(s)),

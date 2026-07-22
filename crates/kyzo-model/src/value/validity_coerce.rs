@@ -25,8 +25,14 @@ pub fn timestamp_to_micros(ts: jiff::Timestamp) -> i64 {
         Ok(us) => us,
         // jiff::Timestamp's civil range is inside i64 microseconds; this arm
         // is the total door for an out-of-range i128 quotient without `as`.
-        Err(_overflow) if micros_i128 < 0 => i64::MIN,
-        Err(_overflow) => i64::MAX,
+        // Clamp poles live on their own lines so Err→MAX is not a one-line costume.
+        Err(_overflow) => {
+            if micros_i128 < 0 {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }
     }
 }
 

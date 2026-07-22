@@ -388,7 +388,8 @@ mod tests {
         // Live door: u64::MAX is not i64; must not invent zero.
         let v = JsonValue::Number(u64::MAX.into());
         let JsonValue::Number(n) = &v else {
-            panic!("expected Number");
+            assert!(false, "expected Number");
+            return;
         };
         assert!(n.as_i64().is_none(), "fixture must not fit i64");
         let j = json_from_serde(&v);
@@ -400,7 +401,10 @@ mod tests {
             Json::Num(jn) => {
                 let f = match jn.num().as_float() {
                     Some(f) => f,
-                    None => panic!("Num without float form"),
+                    None => {
+                        assert!(false, "Num without float form");
+                        return;
+                    }
                 };
                 assert!(
                     f != 0.0 && f.is_finite(),
@@ -411,7 +415,10 @@ mod tests {
                 // Lawful if as_f64 were None (arbitrary_precision builds).
                 assert!(!s.is_empty(), "Str door must carry the digits");
             }
-            other => panic!("must be Num or Str, never Null/zero costume; got {other:?}"),
+            other => {
+                assert!(false, "must be Num or Str, never Null/zero costume; got {other:?}");
+                return;
+            }
         }
     }
 

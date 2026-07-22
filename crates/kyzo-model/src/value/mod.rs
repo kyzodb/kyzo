@@ -742,10 +742,10 @@ pub fn bare_prefix_len(bytes: &[u8], n_cols: usize) -> Option<usize> {
         if at >= bytes.len() {
             return None;
         }
-        at += match canonical::skip_one(&bytes[at..]) {
-            Ok(n) => n,
-            Err(_skip) => return None,
+        let Ok(n) = canonical::skip_one(&bytes[at..]) else {
+            return None;
         };
+        at += n;
     }
     Some(at)
 }
@@ -898,9 +898,8 @@ mod facade_tests {
         }
 
         fn below(&mut self, n: usize) -> usize {
-            let n_u = match u64::try_from(n) {
-                Ok(v) => v,
-                Err(_) => return 0,
+            let Ok(n_u) = u64::try_from(n) else {
+                return 0;
             };
             match usize::try_from(self.next() % n_u) {
                 Ok(v) => v,

@@ -101,7 +101,7 @@ impl VectorDimension {
     }
 
     pub fn as_usize(self) -> usize {
-        (match usize::try_from(self.0) { Ok(n) => n, Err(_overflow) => usize::MAX })
+        usize::try_from(self.0).expect("INVARIANT(u32_fits_usize): u32 fits usize")
     }
 }
 

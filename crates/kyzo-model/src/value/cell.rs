@@ -130,7 +130,9 @@ impl Value {
             bytes[1] = match u8::try_from(payload.len()) {
                 Ok(n) => n,
                 // INLINE_MAX is 14; length here always fits u8.
-                Err(_overflow) => return Err(Denial::BookkeepingBroken),
+                Err(_overflow) => {
+                    return Err(Denial::BookkeepingBroken);
+                }
             };
             bytes[2..2 + payload.len()].copy_from_slice(payload);
             Ok(Minted {
@@ -169,7 +171,7 @@ impl Value {
     /// The inline canonical payload (the bytes after the tag), if inline.
     pub fn inline_payload(&self) -> Option<&[u8]> {
         if self.is_inline() {
-            Some(&self.bytes[2..2 + (match usize::try_from(self.bytes[1]) { Ok(n) => n, Err(_overflow) => usize::MAX })])
+            Some(&self.bytes[2..2 + (usize::try_from(self.bytes[1]).expect("INVARIANT(u32_fits_usize): u32 fits usize"))])
         } else {
             None
         }
@@ -203,7 +205,7 @@ impl Value {
     pub fn prefix4(self) -> [u8; 4] {
         if self.is_inline() {
             let mut p = [0u8; 4];
-            let n = (1 + (match usize::try_from(self.bytes[1]) { Ok(n) => n, Err(_overflow) => usize::MAX })).min(4);
+            let n = (1 + (usize::try_from(self.bytes[1]).expect("INVARIANT(u32_fits_usize): u32 fits usize"))).min(4);
             p[..1].copy_from_slice(&self.bytes[..1]);
             if n > 1 {
                 p[1..n].copy_from_slice(&self.bytes[2..2 + n - 1]);

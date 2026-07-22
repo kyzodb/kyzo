@@ -197,10 +197,9 @@ impl ExecRows {
         col: usize,
     ) -> Result<&'o [u8], Denial> {
         let proof = self.domain.admit(o)?;
-        let idx = match usize::try_from(self.row(row)[col]) {
-            Ok(n) => n,
-            Err(_overflow) => usize::MAX,
-        };
+        // INVARIANT(code_fits_usize): domain codes are u32-shaped.
+        let idx = usize::try_from(self.row(row)[col])
+            .expect("INVARIANT(code_fits_usize): code fits usize");
         Ok(o.resolve_raw(idx, proof)?)
     }
 
