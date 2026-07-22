@@ -33,13 +33,11 @@ use super::transcript::{
     CanonicalTranscript, encode_key_commitment, encode_wrapped_shred_salt_aad,
 };
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// AEAD nonce (96-bit). Distinct from [`Digest`] / [`Mac`] / key material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Nonce([u8; 12]);
 
 impl Nonce {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap already-proven nonce bytes (mint / wrap-derive sites).
     pub fn from_bytes(bytes: [u8; 12]) -> Self {
         Self(bytes)
@@ -51,13 +49,11 @@ impl Nonce {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fixed 32-byte digest (SHA-256 / CMT-1 commitment). Distinct from [`Mac`] / keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Digest([u8; 32]);
 
 impl Digest {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap already-proven digest bytes (hash finalize / decode sites).
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
@@ -69,13 +65,11 @@ impl Digest {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Authenticator MAC (AuditKey leaf). Distinct from [`Digest`] — wrong-kind unconstructible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Mac([u8; 32]);
 
 impl Mac {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap already-proven MAC bytes (leaf-MAC finalize).
     pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
@@ -87,13 +81,11 @@ impl Mac {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Sealed signature bytes (ed25519 / FROST wire width 64). Distinct from digests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Signature([u8; 64]);
 
 impl Signature {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap already-proven signature bytes (sign / decode sites).
     pub fn from_bytes(bytes: [u8; 64]) -> Self {
         Self(bytes)
@@ -105,17 +97,14 @@ impl Signature {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Per-segment counter separating DEK space under one CryptoDomain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SegmentCounter(u64);
 
 impl SegmentCounter {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Counter zero.
     pub const ZERO: SegmentCounter = SegmentCounter(0);
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven segment counter.
     pub fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -127,7 +116,6 @@ impl SegmentCounter {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Closed AEAD arm selection. SnapshotFork=yes arms require misuse-resistant SIV.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AeadArm {
@@ -137,11 +125,13 @@ pub enum AeadArm {
     Siv,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Root unwrap capability presented at open (client / HSM trait).
 ///
-/// Absent → open refuses MissingRootKek. Host-held wrapped DEKs are a separate
-/// at-rest layer; zero-access still requires this root.
+/// Absent at open → [`super::failure::StoreRefuse::MissingRootKek`]. Presence
+/// of this type is the crypto-door proof: wrap/unwrap/derive take `&KekUnwrapCap`,
+/// so a missing root is unconstructible at those doors (not a crypto refuse).
+/// Host-held wrapped DEKs are a separate at-rest layer; zero-access still
+/// requires this root.
 #[derive(Debug)]
 pub struct KekUnwrapCap {
     /// Opaque KEK material — never logged, never packed.
@@ -149,7 +139,6 @@ pub struct KekUnwrapCap {
 }
 
 impl KekUnwrapCap {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint a unwrap capability from already-held root KEK material.
     pub(crate) fn from_kek(kek: Kek) -> Self {
         Self { kek }
@@ -161,13 +150,11 @@ impl KekUnwrapCap {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Key-encryption key — closed [`super::keys::Secret`] member. Never in packs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kek([u8; 32]);
 
 impl Kek {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap already-proven KEK bytes (HSM / genesis sites).
     pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
@@ -179,7 +166,6 @@ impl Kek {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Data-encryption key derived under the sealed hierarchy — never unstructured.
 ///
 /// Carries the [`CryptoDomain`] it was derived under so CMT-1 key-commitment
@@ -191,7 +177,6 @@ pub struct Dek {
 }
 
 impl Dek {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     fn from_derived(bytes: [u8; 32], crypto_domain: CryptoDomain) -> Self {
         Self {
             bytes,
@@ -210,7 +195,6 @@ impl Dek {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Plaintext shred salt — transient, memory-only, never persisted.
 ///
 /// No serde. No constructor accepts this into WAL / pack / seal writers.
@@ -219,7 +203,6 @@ impl Dek {
 pub struct ShredSalt([u8; 32]);
 
 impl ShredSalt {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Draw / wrap plaintext salt bytes at the derivation moment only.
     pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
@@ -230,7 +213,6 @@ impl ShredSalt {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// KEK-wrapped shred salt — the only persistable salt form.
 ///
 /// Required in every leave-is-free pack. Useless without the KEK.
@@ -245,7 +227,6 @@ pub struct WrappedShredSalt {
 }
 
 impl WrappedShredSalt {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Segment counter this wrap covers.
     pub fn segment(&self) -> SegmentCounter {
         self.segment
@@ -261,7 +242,6 @@ impl WrappedShredSalt {
         &self.ciphertext
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Reconstruct from already-persisted wrapped bytes (restore / decode).
     pub fn from_persisted(
         ciphertext: Vec<u8>,
@@ -276,7 +256,6 @@ impl WrappedShredSalt {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Audit integrity key — leaf MAC over CanonicalTranscript.
 ///
 /// `AuditKey ≠ AncestorReadGrant ≠ decrypt ≠ WriteAuthority`.
@@ -285,13 +264,11 @@ impl WrappedShredSalt {
 pub struct AuditKey([u8; 32]);
 
 impl AuditKey {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap already-proven audit key bytes.
     pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Leaf MAC over a sealed CanonicalTranscript (cipher-invariant roots).
     pub fn leaf_mac(&self, transcript: &CanonicalTranscript) -> Mac {
         let mut h = Sha256::new();
@@ -305,14 +282,13 @@ impl AuditKey {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refuse from crypto doors.
+///
+/// Missing root KEK is not a variant here — [`KekUnwrapCap`] makes absence
+/// unconstructible at wrap/unwrap/derive; open refuses via
+/// [`super::failure::StoreRefuse::MissingRootKek`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum CryptoRefuse {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-    #[error("crypto: missing root KEK unwrap capability")]
-    #[diagnostic(code(store::crypto::missing_root_kek))]
-    MissingRootKek,
     #[error("crypto: wrapped shred salt unwrap failed")]
     #[diagnostic(code(store::crypto::unwrap_failed))]
     UnwrapFailed,
@@ -330,14 +306,11 @@ pub enum CryptoRefuse {
     DecompressFailed,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Poly1305 / GCM-SIV authentication tag length (both arms).
 const AEAD_TAG_LEN: usize = 16;
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// SHA-256 key-commitment length appended after ciphertext ‖ tag.
 const KEY_COMMIT_LEN: usize = 32;
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// CMT-1 key-commitment over raw key bytes — RustCrypto / `.as_bytes()` edge only.
 ///
 /// Callers must pass [`Dek::as_bytes`] or [`Kek::as_bytes`]; never a peer digest/MAC.
@@ -355,7 +328,6 @@ fn key_commitment_bytes(
     Ok(Digest::from_bytes(out))
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// CMT-1 key-commitment for the DEK encrypt door — [`Kek`] cannot satisfy this.
 ///
 /// Minted through the ONE [`encode_key_commitment`] CanonicalTranscript constructor
@@ -364,13 +336,11 @@ fn key_commitment(key: &Dek, crypto_domain: CryptoDomain) -> Result<Digest, Cryp
     key_commitment_bytes(key.as_bytes(), crypto_domain)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// CMT-1 key-commitment for the KEK wrap door — [`Dek`] cannot satisfy this.
 fn key_commitment_kek(key: &Kek, crypto_domain: CryptoDomain) -> Result<Digest, CryptoRefuse> {
     key_commitment_bytes(key.as_bytes(), crypto_domain)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Constant-time equality over typed digests.
 fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
@@ -381,7 +351,6 @@ fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
     diff == 0
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Mint the ONE WrappedShredSalt wrap-AAD CanonicalTranscript (seat 59).
 fn shred_salt_wrap_transcript(
     crypto_domain: CryptoDomain,
@@ -391,7 +360,6 @@ fn shred_salt_wrap_transcript(
         .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Deterministic 96-bit nonce for KEK wrap (SIV makes repeat safe).
 ///
 /// Digests the ONE wrap-AAD [`CanonicalTranscript`] — no second serialization path.
@@ -405,7 +373,6 @@ fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce {
     Nonce::from_bytes(nonce)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Seal bytes under AES-256-GCM-SIV (misuse-resistant).
 fn aes_gcm_siv_seal(
     key: &[u8; 32],
@@ -429,7 +396,6 @@ fn aes_gcm_siv_seal(
         .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Open bytes under AES-256-GCM-SIV.
 fn aes_gcm_siv_open(
     key: &[u8; 32],
@@ -453,7 +419,6 @@ fn aes_gcm_siv_open(
         .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Seal bytes under ChaCha20-Poly1305 (Gcm arm).
 fn chacha20poly1305_seal(
     key: &[u8; 32],
@@ -477,7 +442,6 @@ fn chacha20poly1305_seal(
         .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Open bytes under ChaCha20-Poly1305 (Gcm arm).
 fn chacha20poly1305_open(
     key: &[u8; 32],
@@ -501,7 +465,6 @@ fn chacha20poly1305_open(
         .map_err(|_| CryptoRefuse::AeadFailed)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Base AEAD seal over raw key bytes — after [`Dek::as_bytes`] / [`Kek::as_bytes`] only.
 fn seal_aead_arm_bytes(
     arm: AeadArm,
@@ -516,7 +479,6 @@ fn seal_aead_arm_bytes(
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Base AEAD open over raw key bytes — after [`Dek::as_bytes`] / [`Kek::as_bytes`] only.
 fn open_aead_arm_bytes(
     arm: AeadArm,
@@ -531,44 +493,12 @@ fn open_aead_arm_bytes(
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Base AEAD seal (ciphertext ‖ tag) under a DEK — no key-commitment. [`Kek`] cannot enter.
-fn seal_aead_arm(
-    arm: AeadArm,
-    key: &Dek,
-    nonce: &Nonce,
-    aad: &[u8],
-    plaintext: &[u8],
-) -> Result<Vec<u8>, CryptoRefuse> {
-    seal_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, plaintext)
-}
-
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Base AEAD seal under a KEK — wrap path only. [`Dek`] cannot enter.
-fn seal_aead_arm_kek(
-    arm: AeadArm,
-    key: &Kek,
-    nonce: &Nonce,
-    aad: &[u8],
-    plaintext: &[u8],
-) -> Result<Vec<u8>, CryptoRefuse> {
-    seal_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, plaintext)
-}
-
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
-/// Base AEAD open over ciphertext ‖ tag under a DEK — no key-commitment. [`Kek`] cannot enter.
-fn open_aead_arm(
-    arm: AeadArm,
-    key: &Dek,
-    nonce: &Nonce,
-    aad: &[u8],
-    ciphertext: &[u8],
-) -> Result<Vec<u8>, CryptoRefuse> {
-    open_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, ciphertext)
-}
-
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Base AEAD open under a KEK — wrap path only. [`Dek`] cannot enter.
+///
+/// Production open goes through [`open_arm_kek`] → [`open_arm_committed`].
+/// This typed non-committed door exists for the guardian collision fixture
+/// that must exercise the base Gcm arm before CMT-1 is applied.
+#[cfg(test)]
 fn open_aead_arm_kek(
     arm: AeadArm,
     key: &Kek,
@@ -579,7 +509,6 @@ fn open_aead_arm_kek(
     open_aead_arm_bytes(arm, key.as_bytes(), nonce, aad, ciphertext)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// ONE committing-AEAD seal body — RustCrypto / `.as_bytes()` edge only.
 ///
 /// Sealed bytes = ciphertext ‖ tag ‖ C, with
@@ -602,7 +531,6 @@ fn seal_arm_committed(
     Ok(sealed)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Committing-AEAD seal under a DEK: thin typed door over [`seal_arm_committed`].
 ///
 /// KeyCommitment posture is on for all AEAD sites (seat 27 pattern).
@@ -618,7 +546,6 @@ fn seal_arm(
     seal_arm_committed(arm, key.as_bytes(), nonce, aad, plaintext, crypto_domain)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Committing-AEAD seal under a KEK — shred-salt wrap door. [`Dek`] cannot enter.
 fn seal_arm_kek(
     arm: AeadArm,
@@ -631,7 +558,6 @@ fn seal_arm_kek(
     seal_arm_committed(arm, key.as_bytes(), nonce, aad, plaintext, crypto_domain)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// ONE committing-AEAD open body — RustCrypto / `.as_bytes()` edge only.
 ///
 /// Base arm open, then constant-time CMT-1 key-commitment check.
@@ -663,7 +589,6 @@ fn open_arm_committed(
     Ok(plaintext)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Committing-AEAD open under a DEK: thin typed door over [`open_arm_committed`].
 ///
 /// A [`Kek`] is type-stopped here.
@@ -678,7 +603,6 @@ fn open_arm(
     open_arm_committed(arm, key.as_bytes(), nonce, aad, sealed, crypto_domain)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Committing-AEAD open under a KEK — shred-salt unwrap door. [`Dek`] cannot enter.
 fn open_arm_kek(
     arm: AeadArm,
@@ -691,7 +615,6 @@ fn open_arm_kek(
     open_arm_committed(arm, key.as_bytes(), nonce, aad, sealed, crypto_domain)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Wrap a plaintext [`ShredSalt`] under the KEK for persistence.
 ///
 /// Plaintext salt must not escape this call except into [`derive_dek`].
@@ -720,7 +643,6 @@ pub fn wrap_shred_salt(
     })
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Unwrap a persisted [`WrappedShredSalt`] to a memory-only [`ShredSalt`].
 ///
 /// Consults [`ShredLedger`] first: a recorded tombstone → [`CryptoRefuse::Shredded`]
@@ -757,7 +679,6 @@ pub fn unwrap_shred_salt(
     Ok(ShredSalt::from_bytes(salt))
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// `DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt)`.
 ///
 /// Unstructured random DEKs / single-global-DEK are Unconstructible.
@@ -780,7 +701,6 @@ pub fn derive_dek(
     Dek::from_derived(out, crypto_domain)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Compressed plaintext — the only input the encrypt door accepts.
 ///
 /// Encrypt-then-compress is Unconstructible: there is no encrypt path over
@@ -789,14 +709,12 @@ pub fn derive_dek(
 pub struct CompressedBytes(Vec<u8>);
 
 impl CompressedBytes {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Borrow compressed bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// AEAD ciphertext sealed over compressed plaintext.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ciphertext {
@@ -806,39 +724,33 @@ pub struct Ciphertext {
 }
 
 impl Ciphertext {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// AEAD arm used.
     pub fn arm(&self) -> AeadArm {
         self.arm
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Nonce sealed into the ciphertext.
     pub fn nonce(&self) -> &Nonce {
         &self.nonce
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Ciphertext body (AEAD ciphertext ‖ tag ‖ key-commitment).
     pub fn body(&self) -> &[u8] {
         &self.body
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Compress plaintext with pure-Rust LZ4 (`lz4_flex`). Must precede AEAD (§67).
 pub fn compress(plaintext: &[u8]) -> CompressedBytes {
     CompressedBytes(lz4_flex::compress_prepend_size(plaintext))
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Decompress LZ4 size-prepended bytes from [`compress`].
 pub fn decompress(compressed: &CompressedBytes) -> Result<Vec<u8>, CryptoRefuse> {
     lz4_flex::decompress_size_prepended(compressed.as_bytes())
         .map_err(|_| CryptoRefuse::DecompressFailed)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Encrypt compressed bytes under a DEK + nonce + arm.
 ///
 /// Only accepts [`CompressedBytes`] — compression precedes AEAD by construction.
@@ -861,7 +773,6 @@ pub fn encrypt(
     Ok(Ciphertext { arm, nonce, body })
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Open AEAD ciphertext back to [`CompressedBytes`].
 pub fn decrypt(
     ciphertext: &Ciphertext,
@@ -879,7 +790,6 @@ pub fn decrypt(
     Ok(CompressedBytes(pt))
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Compression-then-encryption pipeline — the only Store path (§67).
 pub fn compress_then_encrypt(
     plaintext: &[u8],
@@ -891,7 +801,6 @@ pub fn compress_then_encrypt(
     encrypt(compress(plaintext), dek, nonce, arm, aad)
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Shred receipt — wrapped salt destroyed inside the sovereignty boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShredReceipt {
@@ -900,20 +809,17 @@ pub struct ShredReceipt {
 }
 
 impl ShredReceipt {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Segment whose wrapped salt was destroyed.
     pub fn segment(&self) -> SegmentCounter {
         self.segment
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Crypto domain of the shredded segment.
     pub fn crypto_domain(&self) -> CryptoDomain {
         self.crypto_domain
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Durable shred tombstone naming one shredded (CryptoDomain, SegmentCounter).
 ///
 /// Survives so post-shred restore of an old pack that still carries the wrapped
@@ -924,15 +830,12 @@ pub struct ShredTombstone {
     crypto_domain: CryptoDomain,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl ShredTombstone {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Segment this tombstone revokes.
     pub fn segment(self) -> SegmentCounter {
         self.segment
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Crypto domain this tombstone revokes under.
     pub fn crypto_domain(self) -> CryptoDomain {
         self.crypto_domain
@@ -944,7 +847,6 @@ impl ShredTombstone {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Ledger of shredded segments consulted on unwrap / leave-is-free restore.
 #[derive(Debug, Default, Clone)]
 pub struct ShredLedger {
@@ -953,13 +855,11 @@ pub struct ShredLedger {
 }
 
 impl ShredLedger {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty ledger — no segments shredded.
     pub fn new() -> Self {
         Self::default()
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Record a tombstone from [`shred`].
     pub fn record(&mut self, tombstone: ShredTombstone) {
         self.keys.insert((
@@ -979,7 +879,6 @@ impl ShredLedger {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Destroy a [`WrappedShredSalt`] (and, by Spec, all authorized replicas via
 /// retention). Consumes the wrap — post-shred restore → [`CryptoRefuse::Shredded`]
 /// once the returned [`ShredTombstone`] is recorded in a [`ShredLedger`].
