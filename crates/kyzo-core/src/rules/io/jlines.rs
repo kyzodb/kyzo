@@ -225,7 +225,8 @@ mod tests {
     use crate::rules::contract::tests_support::{opts_map, run_fixed_rule};
     use kyzo_model::program::rule::FixedRuleOptions;
 
-    fn options(content: &str) -> FixedRuleOptions {
+    use miette::{IntoDiagnostic, Result, miette};
+    fn options(content: &str) -> Result<FixedRuleOptions> {
         opts_map(BTreeMap::from([
             (
                 SmartString::from("content"),
@@ -253,17 +254,18 @@ mod tests {
 
     /// JSON-lines host content: fields projected, absent fields Null.
     #[test]
-    fn reads_json_lines() {
+    fn reads_json_lines() -> Result<()> {
         let content = r#"{"id": 1, "name": "a"}
 
 {"id": 2}"#;
         let got =
-            run_fixed_rule(&JsonReader, vec![], options(content), CancelFlag::inert()).unwrap();
+            run_fixed_rule(&JsonReader, vec![], options(content)?, CancelFlag::inert())?;
         assert_eq!(got.len(), 2);
         let want0: Tuple = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("a")]);
         let want1: Tuple = Tuple::from_vec(vec![DataValue::from(2i64), DataValue::Null]);
         assert_eq!(got[0], want0);
         assert_eq!(got[1], want1);
+        Ok(())
     }
 
     /// CANCELLATION: a raised flag refuses before rows are emitted (the
@@ -271,16 +273,17 @@ mod tests {
     /// file is interruptible; the unset-flag read above emitted every row, so
     /// the poll changes nothing when the flag is clear.
     #[test]
-    fn honors_cancel() {
+    fn honors_cancel() -> Result<()> {
         let content = r#"{"id": 1, "name": "a"}"#;
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
-        assert!(run_fixed_rule(&JsonReader, vec![], options(content), flag).is_err());
+        assert!(run_fixed_rule(&JsonReader, vec![], options(content)?, flag).is_err());
+        Ok(())
     }
 
     /// The `file://` arm is the filesystem seam: typed refusal, no open.
     #[test]
-    fn file_fetch_refuses_typed() {
+    fn file_fetch_refuses_typed() -> Result<()> {
         let err = run_fixed_rule(
             &JsonReader,
             vec![],
@@ -299,16 +302,17 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])),
+            ]))?,
             CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("filesystem"), "{err}");
+        Ok(())
     }
 
     /// The URL arm is the network seam: typed refusal, no fetch.
     #[test]
-    fn url_fetch_refuses_typed() {
+    fn url_fetch_refuses_typed() -> Result<()> {
         let err = run_fixed_rule(
             &JsonReader,
             vec![],
@@ -327,20 +331,21 @@ mod tests {
                         span: SourceSpan::default(),
                     },
                 ),
-            ])),
+            ]))?,
             CancelFlag::inert(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("network"), "{err}");
+        Ok(())
     }
 
     /// Kernel JSON→DataValue door (via `data::json::json_to_datavalue`).
     #[test]
-    fn json_conversion() {
+    fn json_conversion() -> Result<()> {
         let v: JsonValue =
-            serde_json::from_str(r#"[1, 2.5, "x", null, true, [1], {"a": 1}]"#).unwrap();
+            serde_json::from_str(r#"[1, 2.5, "x", null, true, [1], {"a": 1}]"#).into_diagnostic()?;
         let got = json_to_datavalue(&v);
-        let l = got.get_slice().unwrap();
+        let l = got.get_slice().ok_or_else(|| miette!("test expected Some"))?;
         assert_eq!(l[0], DataValue::from(1i64));
         assert_eq!(l[1], DataValue::from(2.5f64));
         assert_eq!(l[2], DataValue::from("x"));
@@ -348,5 +353,6 @@ mod tests {
         assert_eq!(l[4], DataValue::from(true));
         assert_eq!(l[5], DataValue::List(vec![DataValue::from(1i64)]));
         assert!(matches!(l[6], DataValue::Json(_)));
+        Ok(())
     }
 }
