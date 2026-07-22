@@ -11,6 +11,7 @@
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::session::catalog::Catalog;
@@ -23,41 +24,42 @@ mod tests {
         BTreeMap::new()
     }
 
-    fn open_engine<S: Storage>(store: S) -> Engine<S> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     /// FTS end to end: `::fts create` + a search atom with a bound score.
     #[test]
-    fn fts_create_search_mem() {
+    fn fts_create_search_mem() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         db.run_script(
             "?[id, body] <- [[1, 'the quick brown fox'], [2, 'lazy dogs sleep']] \
              :create doc {id => body: String}",
             no_params(),
         )
-        .expect("create+insert");
+        .map_err(|e| miette!("create+insert: {e}"))?;
         db.run_script(
             "::fts create doc:txt {extractor: body, tokenizer: Simple}",
             no_params(),
         )
-        .expect("fts create");
+        .map_err(|e| miette!("fts create: {e}"))?;
         let out = db
             .run_script(
                 "?[id, s] := ~doc:txt{id | query: 'fox', k: 5, bind_score: s}",
                 no_params(),
             )
-            .expect("fts search");
+            .map_err(|e| miette!("fts search: {e}"))?;
         assert_eq!(out.rows().len(), 1);
         assert_eq!(out.rows()[0][0].get_int(), Some(1));
-        assert!(out.rows()[0][1].get_float().expect("score") > 0.0);
+        assert!(out.rows()[0][1].get_float().ok_or_else(|| miette!("score"))? > 0.0);
         // The searching row must survive a doc deletion (hook coverage).
         db.run_script("?[id] <- [[1]] :rm doc {id}", no_params())
-            .expect("delete");
+            .map_err(|e| miette!("delete: {e}"))?;
         let out = db
             .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 5}", no_params())
-            .expect("fts search after delete");
+            .map_err(|e| miette!("fts search after delete: {e}"))?;
         assert_eq!(out.rows().len(), 0, "deleted doc left the index");
+        Ok(())
     }
 
     /// A single search atom whose hit count exceeds one output batch
@@ -65,26 +67,27 @@ mod tests {
     /// cross-batch resumption must deliver every hit exactly once — the
     /// same suspension state machine the materialized join pins.
     #[test]
-    fn search_hits_resume_across_output_batch_boundary() {
+    fn search_hits_resume_across_output_batch_boundary() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         let mut script = String::from("?[id, body] <- [");
         for i in 0..1200 {
             script.push_str(&format!("[{i}, 'common fox term {i}'],"));
         }
         script.push_str("] :create doc {id => body: String}");
-        db.run_script(&script, no_params()).expect("seed");
+        db.run_script(&script, no_params()).map_err(|e| miette!("seed: {e}"))?;
         db.run_script(
             "::fts create doc:txt {extractor: body, tokenizer: Simple}",
             no_params(),
         )
-        .expect("fts create");
+        .map_err(|e| miette!("fts create: {e}"))?;
         let out = db
             .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 1500}", no_params())
-            .expect("boundary search");
+            .map_err(|e| miette!("boundary search: {e}"))?;
         assert_eq!(
             out.rows().len(),
             1200,
             "every hit exactly once across the boundary"
         );
+        Ok(())
     }
 }

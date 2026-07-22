@@ -249,6 +249,7 @@ mod index_status_authority {
 
 #[cfg(test)]
 mod tests {
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     use crate::data::json::NamedRows;
@@ -262,8 +263,8 @@ mod tests {
         BTreeMap::new()
     }
 
-    fn open_engine<S: Storage>(store: S) -> Engine<S> {
-        Engine::compose(store, Catalog::new()).expect("compose engine")
+    fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
+        Ok(Engine::compose(store, Catalog::new())?)
     }
 
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
@@ -271,7 +272,7 @@ mod tests {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
+            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
             .collect();
         out.sort();
         out
@@ -288,13 +289,12 @@ mod tests {
     /// inside a write session reads the transaction's own uncommitted view,
     /// never a committed-state segment.
     #[test]
-    fn segments_serve_fresh_and_never_dirty() {
+    fn segments_serve_fresh_and_never_dirty() -> Result<()>  {
         let db = open_engine(SimStorage::new(7));
         db.run_script(
             "?[k, v] <- [[1, 10], [2, 20]] :create w {k => v}",
             no_params(),
-        )
-        .unwrap();
+        )?;
 
         // The first read's miss is ungated (declines to build, per the
         // rebuild gate); the second read's miss is at the same generation
@@ -302,31 +302,29 @@ mod tests {
         // way both reads return the correct answer.
         let q = "?[k, v] := *w[k, v]";
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![2, 20]]
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![2, 20]]
         );
 
         // A committed write orphans the segment: the re-read sees it.
-        db.run_script("?[k, v] <- [[3, 30]] :put w {k, v}", no_params())
-            .unwrap();
+        db.run_script("?[k, v] <- [[3, 30]] :put w {k, v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![2, 20], vec![3, 30]]
         );
 
         // A retraction is a write like any other: served state updates.
-        db.run_script("?[k, v] <- [[2, 20]] :rm w {k, v}", no_params())
-            .unwrap();
+        db.run_script("?[k, v] <- [[2, 20]] :rm w {k, v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![3, 30]]
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![3, 30]]
         );
 
@@ -337,15 +335,14 @@ mod tests {
         db.run_script(
             "::constraint create nonneg { ?[k, v] := *w[k, v], v < 0 }",
             no_params(),
-        )
-        .unwrap();
+        )?;
         assert!(
             db.run_script("?[k, v] <- [[4, -1]] :put w {k, v}", no_params())
                 .is_err(),
             "violating write denied"
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![3, 30]]
         );
 
@@ -353,20 +350,19 @@ mod tests {
         // segment must orphan when a base-relation write updates the
         // mirrored rows (hostile-review reproducer: the served index
         // segment returned the stale two-row past after a base `:put`).
-        db.run_script("::index create w:by_v {v}", no_params())
-            .unwrap();
+        db.run_script("::index create w:by_v {v}", no_params())?;
         let qi = "?[v, k] := *w:by_v{v, k}";
         assert_eq!(
-            int_rows(&db.run_script(qi, no_params()).unwrap()),
+            int_rows(&db.run_script(qi, no_params())?),
             vec![vec![10, 1], vec![30, 3]]
         );
-        db.run_script("?[k, v] <- [[5, 50]] :put w {k, v}", no_params())
-            .unwrap();
+        db.run_script("?[k, v] <- [[5, 50]] :put w {k, v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(qi, no_params()).unwrap()),
+            int_rows(&db.run_script(qi, no_params())?),
             vec![vec![10, 1], vec![30, 3], vec![50, 5]],
             "an index segment must never outlive a base write"
         );
+        Ok(())
     }
 
     /// [`segments_serve_fresh_and_never_dirty`]'s reproducer, extended to
@@ -380,46 +376,43 @@ mod tests {
     /// fresh, and the join sees the new row immediately, never a cached
     /// probe answer.
     #[test]
-    fn segments_serve_fresh_and_never_dirty_for_join_probes() {
+    fn segments_serve_fresh_and_never_dirty_for_join_probes() -> Result<()>  {
         let db = open_engine(SimStorage::new(9));
-        db.run_script("?[k] <- [[1], [2]] :create jl {k}", no_params())
-            .unwrap();
-        db.run_script("?[k2, v] <- [[1, 10]] :create jr {k2 => v}", no_params())
-            .unwrap();
+        db.run_script("?[k] <- [[1], [2]] :create jl {k}", no_params())?;
+        db.run_script("?[k2, v] <- [[1, 10]] :create jr {k2 => v}", no_params())?;
 
         // The first read's miss declines (rebuild gate); the second read's
         // miss is at the same stable generation and builds jr's segment, so
         // its point-lookup probe is served from the cache from here on.
         let q = "?[k, v] := *jl[k], *jr[k, v]";
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10]]
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10]]
         );
 
         // A committed write to jr — the PROBE side of the join — orphans
         // its segment: the re-read must see the new row, not a stale
         // probe answer served from before the write.
-        db.run_script("?[k2, v] <- [[2, 20]] :put jr {k2 => v}", no_params())
-            .unwrap();
+        db.run_script("?[k2, v] <- [[2, 20]] :put jr {k2 => v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![2, 20]]
         );
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![1, 10], vec![2, 20]]
         );
 
         // A retraction on the probe side is a write like any other.
-        db.run_script("?[k2, v] <- [[1, 10]] :rm jr {k2, v}", no_params())
-            .unwrap();
+        db.run_script("?[k2, v] <- [[1, 10]] :rm jr {k2, v}", no_params())?;
         assert_eq!(
-            int_rows(&db.run_script(q, no_params()).unwrap()),
+            int_rows(&db.run_script(q, no_params())?),
             vec![vec![2, 20]]
         );
+        Ok(())
     }
 }
