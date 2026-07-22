@@ -454,7 +454,7 @@ mod tests {
         take_kcore_verts_peeled(); // clear any leftover from a reused thread
         let full = prepared.run(&KCoreDecomposition, CancelFlag::inert())?;
         let full_peeled = take_kcore_verts_peeled();
-        let _ = full; // baseline completed
+        drop(full); // baseline completed
         assert!(
             full_peeled >= u64::from(n),
             "baseline should peel every vertex, got {full_peeled}"

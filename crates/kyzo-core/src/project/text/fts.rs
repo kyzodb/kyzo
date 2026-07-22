@@ -425,7 +425,14 @@ fn literal_postings(
         let positions = positions
             .iter()
             .map(|p| {
-                p.get_int().and_then(|i| u32::try_from(i).ok()).ok_or_else(|| {
+                let i = p.get_int().ok_or_else(|| {
+                    miette!(IndexRowCorrupt::new(
+                        &idx.name,
+                        row.as_slice(),
+                        IndexCorruptReason::FtsPositionNotInt,
+                    ))
+                })?;
+                u32::try_from(i).map_err(|_| {
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
                         row.as_slice(),

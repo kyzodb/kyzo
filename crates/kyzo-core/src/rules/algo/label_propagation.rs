@@ -222,7 +222,10 @@ mod tests {
         // seed agree and fails this.
         let base = run(1)?;
         assert!(
-            (2..40).any(|seed| run(seed).ok() != Some(base.clone())),
+            (2..40).any(|seed| match run(seed) {
+                Ok(v) => v != base,
+                Err(_e) => true,
+            }),
             "seed does not steer the tie-break"
         );
         Ok(())

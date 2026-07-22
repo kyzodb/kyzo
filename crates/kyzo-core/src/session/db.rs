@@ -1140,16 +1140,20 @@ impl<T: WriteTx> SessionTx<T> {
         match sealed {
             Ok(()) => Ok(()),
             Err(SweepSealFailure::Apply(f)) => Err(f),
-            Err(SweepSealFailure::Sweep(SweepRefuse::NativeFsyncAckArmRequired))
-            | Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse)) => {
-                Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
-            }
-            Err(SweepSealFailure::Sweep(other)) => {
-                // Unexpected SweepRefuse variants from ack_write map to the
-                // same durable-ack refuse as the known arm/reuse cases.
-                let _ = other;
-                Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
-            }
+            Err(SweepSealFailure::Sweep(
+                SweepRefuse::NativeFsyncAckArmRequired
+                | SweepRefuse::OperationKeyReuse
+                | SweepRefuse::WriteSessionDead
+                | SweepRefuse::SessionStoreMismatch
+                | SweepRefuse::AuthorityStoreMismatch
+                | SweepRefuse::IntentOrdinalExhausted
+                | SweepRefuse::CommitOrdinalExhausted
+                | SweepRefuse::IntentOrderRegression
+                | SweepRefuse::FsyncWindowAlreadyOpen
+                | SweepRefuse::FsyncWindowNotOpen
+                | SweepRefuse::OverlapCohortMismatch
+                | SweepRefuse::EmptyOverlapCohort,
+            )) => Err(CommitFailure::Io(CommitIo::DurableAckArmRefused)),
             Err(SweepSealFailure::MerkleChain(_)) | Err(SweepSealFailure::Wal(_)) => {
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
             }

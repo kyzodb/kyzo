@@ -464,7 +464,10 @@ mod tests {
         assert_eq!(run(1)?, run(1)?);
         let base = run(1)?;
         assert!(
-            (2..40).any(|seed| run(seed).ok() != Some(base.clone())),
+            (2..40).any(|seed| match run(seed) {
+                Ok(v) => v != base,
+                Err(_e) => true,
+            }),
             "seed does not steer the walk"
         );
         Ok(())

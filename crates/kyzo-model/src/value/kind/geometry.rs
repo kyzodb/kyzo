@@ -177,11 +177,13 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
     loop {
         let rx = match (d >> 1) & 1 {
             0 => 0u32,
-            _ => 1u32,
+            1 => 1u32,
+            2.. => 0u32,
         };
         let ry = match (d ^ u64::from(rx)) & 1 {
             0 => 0u32,
-            _ => 1u32,
+            1 => 1u32,
+            2.. => 0u32,
         };
         hilbert_rot(Some(s), &mut lat, &mut lon, rx, ry);
         // INVARIANT(HilbertDecodeStep): s is a power of two on the 32-bit

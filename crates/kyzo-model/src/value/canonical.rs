@@ -1084,7 +1084,7 @@ mod tests {
             // Tags already compared equal: mismatched kinds are uninhabited.
             // Total without abort — Equal is the seal (same tag already).
             (left, right) => {
-                let _ = (left, right);
+                drop((left, right));
                 Ordering::Equal
             }
         }
@@ -1137,7 +1137,7 @@ mod tests {
             // Ranks already compared equal: mismatched variants uninhabited.
             // Total without abort — Equal is the seal (same rank already).
             (left, right) => {
-                let _ = (left, right);
+                drop((left, right));
                 Ordering::Equal
             }
         }

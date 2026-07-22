@@ -1748,7 +1748,7 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
             0 => 40.00,
             1 => 40.01,
             2 => 40.02,
-            _ => bail!("T13: wave out of range"),
+            3.. => bail!("T13: wave out of range"),
         };
         let new_row = Tuple::from_vec(vec![
             DataValue::from(new_key),
