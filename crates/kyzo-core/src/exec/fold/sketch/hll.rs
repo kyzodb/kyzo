@@ -320,6 +320,7 @@ fn alpha(m: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use miette::Result;
 
     fn val(i: i64) -> DataValue {
         DataValue::from(i)
@@ -551,11 +552,11 @@ mod tests {
     /// Round-trip through the stored form, and reject corruption without
     /// panicking.
     #[test]
-    fn serialization_round_trips_and_rejects_corruption() {
+    fn serialization_round_trips_and_rejects_corruption() -> Result<()> {
         const M: usize = 1 << 10;
         let s = sketch_of::<M>(1234, 9);
         let bytes = s.to_bytes();
-        assert_eq!(HyperLogLog::<M>::from_bytes(&bytes).unwrap(), s);
+        assert_eq!(HyperLogLog::<M>::from_bytes(&bytes)?, s);
 
         assert!(HyperLogLog::<M>::from_bytes(&[]).is_err());
         assert!(
@@ -573,6 +574,7 @@ mod tests {
             HyperLogLog::<M>::from_bytes(&wrong_len).is_err(),
             "bad length"
         );
+        Ok(())
     }
 
     /// PINNED-LITERAL sketch bytes for a fixed input and seed: format or
