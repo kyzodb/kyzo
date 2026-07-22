@@ -582,9 +582,10 @@ impl TokenizerCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use miette::{Result, miette};
 
-    fn cfg(name: &str, args: Vec<DataValue>) -> TokenizerConfig {
-        TokenizerConfig::admit(name, args).expect("test stage name must be admitted")
+    fn cfg(name: &str, args: Vec<DataValue>) -> Result<TokenizerConfig> {
+        TokenizerConfig::admit(name, args).map_err(|e| miette!("{e}"))
     }
 
     fn hex(h: impl AsRef<[u8]>) -> String {
@@ -603,8 +604,8 @@ mod tests {
     /// memcmp value encoding drifted, which is a data-format event, not a
     /// test to update.
     #[test]
-    fn config_hash_is_stable() {
-        let simple = cfg("Simple", vec![]);
+    fn config_hash_is_stable() -> Result<()> {
+        let simple = cfg("Simple", vec![])?;
         assert_eq!(
             hex(simple.config_hash(&[])),
             // = sha256("Simple"), checkable with `printf 'Simple' | sha256sum`:
@@ -618,10 +619,10 @@ mod tests {
                 DataValue::from(3),
                 DataValue::Bool(false),
             ],
-        );
+        )?;
         let filters = vec![
-            cfg("Lowercase", vec![]),
-            cfg("Stemmer", vec![DataValue::from("english")]),
+            cfg("Lowercase", vec![])?,
+            cfg("Stemmer", vec![DataValue::from("english")])?,
         ];
         // INDEPENDENT DERIVATION. config_hash = sha256( name ++
         // canonical(args) ++ for each filter: name ++ canonical(args) ).
@@ -654,39 +655,41 @@ mod tests {
             expected,
             "config hash diverged from the hand-derived canonical input"
         );
+        Ok(())
     }
 
     /// Same config ⇒ same hash ⇒ same live analyzer instance; a second name
     /// for the same pipeline resolves through the hashed cache to the same
     /// `Arc`.
     #[test]
-    fn cache_is_deterministic() {
+    fn cache_is_deterministic() -> Result<()> {
         let cache = TokenizerCache::empty();
-        let tk = cfg("Simple", vec![]);
-        let filters = vec![cfg("Lowercase", vec![])];
+        let tk = cfg("Simple", vec![])?;
+        let filters = vec![cfg("Lowercase", vec![])?];
 
         let h1 = hex(tk.config_hash(&filters));
         let h2 = hex(tk.clone().config_hash(&filters.clone()));
         assert_eq!(h1, h2);
 
-        let a1 = cache.get("idx1", &tk, &filters).unwrap();
-        let a2 = cache.get("idx1", &tk, &filters).unwrap();
+        let a1 = cache.get("idx1", &tk, &filters)?;
+        let a2 = cache.get("idx1", &tk, &filters)?;
         assert!(
             Arc::ptr_eq(&a1, &a2),
             "named cache must return the same instance"
         );
 
-        let a3 = cache.get("idx2_same_pipeline", &tk, &filters).unwrap();
+        let a3 = cache.get("idx2_same_pipeline", &tk, &filters)?;
         assert!(
             Arc::ptr_eq(&a1, &a3),
             "same config under a different name must share the analyzer via the hashed cache"
         );
 
         // Different config: different hash, different instance.
-        let other = cfg("Whitespace", vec![]);
+        let other = cfg("Whitespace", vec![])?;
         assert_ne!(h1, hex(other.config_hash(&filters)));
-        let a4 = cache.get("idx3", &other, &filters).unwrap();
+        let a4 = cache.get("idx3", &other, &filters)?;
         assert!(!Arc::ptr_eq(&a1, &a4));
+        Ok(())
     }
 
     /// A non-positive `RemoveLong` length used to wrap through `as usize`
@@ -694,9 +697,9 @@ mod tests {
     /// typed refusal on both moments of truth — definition time
     /// (`validate`) and use time (`build`/`construct_token_filter`).
     #[test]
-    fn remove_long_rejects_non_positive_lengths() {
+    fn remove_long_rejects_non_positive_lengths() -> Result<()> {
         for bad in [-1i64, 0, i64::MIN] {
-            let filter = cfg("RemoveLong", vec![DataValue::from(bad)]);
+            let filter = cfg("RemoveLong", vec![DataValue::from(bad)])?;
             let err = match filter.construct_token_filter() {
                 Err(e) => e,
                 Ok(_) => panic!("RemoveLong({bad}) must not construct"),
@@ -705,7 +708,10 @@ mod tests {
                 err.downcast_ref::<NonPositiveRemoveLong>().is_some(),
                 "RemoveLong({bad}) at use time: expected the typed refusal, got: {err:?}"
             );
-            let err = cfg("Simple", vec![]).validate(&[filter]).unwrap_err();
+            let err = cfg("Simple", vec![])?
+                .validate(&[filter])
+                .err()
+                .ok_or_else(|| miette!("expected RemoveLong validate error"))?;
             assert!(
                 err.downcast_ref::<NonPositiveRemoveLong>().is_some(),
                 "RemoveLong({bad}) at definition time: expected the typed refusal, got: {err:?}"
@@ -713,22 +719,23 @@ mod tests {
         }
         // The smallest lawful length still constructs.
         assert!(
-            cfg("RemoveLong", vec![DataValue::from(1)])
+            cfg("RemoveLong", vec![DataValue::from(1)])?
                 .construct_token_filter()
                 .is_ok()
         );
         // The tokenizer with integer args refuses non-positives too (NGram
         // guards its ranges before any cast).
         assert!(
-            cfg("NGram", vec![DataValue::from(-1)])
+            cfg("NGram", vec![DataValue::from(-1)])?
                 .construct_tokenizer()
                 .is_err()
         );
         assert!(
-            cfg("NGram", vec![DataValue::from(1), DataValue::from(-3)])
+            cfg("NGram", vec![DataValue::from(1), DataValue::from(-3)])?
                 .construct_tokenizer()
                 .is_err()
         );
+        Ok(())
     }
 
     /// Unknown names are refused at the admit door — unstorable as config.
@@ -741,45 +748,44 @@ mod tests {
     /// `validate` is the definition-time proof the operator tier calls
     /// before writing a manifest (known name, argument legality).
     #[test]
-    fn validate_proves_config_at_definition_time() {
-        cfg("Simple", vec![])
-            .validate(&[
-                cfg("Lowercase", vec![]),
-                cfg("Stemmer", vec![DataValue::from("english")]),
-                cfg("AsciiFolding", vec![]),
-                cfg("AlphaNumOnly", vec![]),
-                cfg("RemoveLong", vec![DataValue::from(40)]),
-                cfg("Stopwords", vec![DataValue::from("en")]),
-            ])
-            .unwrap();
+    fn validate_proves_config_at_definition_time() -> Result<()> {
+        cfg("Simple", vec![])?.validate(&[
+            cfg("Lowercase", vec![])?,
+            cfg("Stemmer", vec![DataValue::from("english")])?,
+            cfg("AsciiFolding", vec![])?,
+            cfg("AlphaNumOnly", vec![])?,
+            cfg("RemoveLong", vec![DataValue::from(40)])?,
+            cfg("Stopwords", vec![DataValue::from("en")])?,
+        ])?;
 
         // Unknown tokenizer name — refuse at admit, not at validate.
         assert!(TokenizerConfig::admit("NoSuchTokenizer", vec![]).is_err());
         // Known name, unlawful args.
         assert!(
-            cfg("NGram", vec![DataValue::from(0)])
+            cfg("NGram", vec![DataValue::from(0)])?
                 .validate(&[])
                 .is_err()
         );
         assert!(
-            cfg("NGram", vec![DataValue::from(3), DataValue::from(2)])
+            cfg("NGram", vec![DataValue::from(3), DataValue::from(2)])?
                 .validate(&[])
                 .is_err()
         );
         assert!(
-            cfg("Simple", vec![])
-                .validate(&[cfg("Stemmer", vec![DataValue::from("klingon")])])
+            cfg("Simple", vec![])?
+                .validate(&[cfg("Stemmer", vec![DataValue::from("klingon")])?])
                 .is_err()
         );
         assert!(
-            cfg("Simple", vec![])
-                .validate(&[cfg("Stopwords", vec![DataValue::from("zz")])])
+            cfg("Simple", vec![])?
+                .validate(&[cfg("Stopwords", vec![DataValue::from("zz")])?])
                 .is_err()
         );
         assert!(
-            cfg("Cangjie", vec![DataValue::from("bogus-kind")])
+            cfg("Cangjie", vec![DataValue::from("bogus-kind")])?
                 .validate(&[])
                 .is_err()
         );
+        Ok(())
     }
 }
