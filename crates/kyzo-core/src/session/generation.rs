@@ -272,7 +272,11 @@ mod tests {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
+            .map(|r| {
+                r.iter()
+                    .map(|v| v.get_int().expect("int"))
+                    .collect()
+            })
             .collect();
         out.sort();
         out
@@ -289,8 +293,8 @@ mod tests {
     /// inside a write session reads the transaction's own uncommitted view,
     /// never a committed-state segment.
     #[test]
-    fn segments_serve_fresh_and_never_dirty() -> Result<()>  {
-        let db = open_engine(SimStorage::new(7));
+    fn segments_serve_fresh_and_never_dirty() -> Result<()> {
+        let db = open_engine(SimStorage::new(7))?;
         db.run_script(
             "?[k, v] <- [[1, 10], [2, 20]] :create w {k => v}",
             no_params(),
@@ -376,8 +380,8 @@ mod tests {
     /// fresh, and the join sees the new row immediately, never a cached
     /// probe answer.
     #[test]
-    fn segments_serve_fresh_and_never_dirty_for_join_probes() -> Result<()>  {
-        let db = open_engine(SimStorage::new(9));
+    fn segments_serve_fresh_and_never_dirty_for_join_probes() -> Result<()> {
+        let db = open_engine(SimStorage::new(9))?;
         db.run_script("?[k] <- [[1], [2]] :create jl {k}", no_params())?;
         db.run_script("?[k2, v] <- [[1, 10]] :create jr {k2 => v}", no_params())?;
 
@@ -385,14 +389,8 @@ mod tests {
         // miss is at the same stable generation and builds jr's segment, so
         // its point-lookup probe is served from the cache from here on.
         let q = "?[k, v] := *jl[k], *jr[k, v]";
-        assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
-            vec![vec![1, 10]]
-        );
-        assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
-            vec![vec![1, 10]]
-        );
+        assert_eq!(int_rows(&db.run_script(q, no_params())?), vec![vec![1, 10]]);
+        assert_eq!(int_rows(&db.run_script(q, no_params())?), vec![vec![1, 10]]);
 
         // A committed write to jr — the PROBE side of the join — orphans
         // its segment: the re-read must see the new row, not a stale
@@ -409,10 +407,7 @@ mod tests {
 
         // A retraction on the probe side is a write like any other.
         db.run_script("?[k2, v] <- [[1, 10]] :rm jr {k2, v}", no_params())?;
-        assert_eq!(
-            int_rows(&db.run_script(q, no_params())?),
-            vec![vec![2, 20]]
-        );
+        assert_eq!(int_rows(&db.run_script(q, no_params())?), vec![vec![2, 20]]);
         Ok(())
     }
 }

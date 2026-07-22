@@ -129,7 +129,7 @@ impl<T, E: core::fmt::Debug> Must for Result<T, E> {
         match self {
             Ok(v) => v,
             Err(e) => {
-                assert!(false, "INVARIANT/harness: {why}: {e:?}");
+                assert!(false, "INVARIANT/harness: {why}");
                 loop {}
             }
         }
@@ -377,7 +377,7 @@ fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> Stratifi
     let strata = strata
         .into_iter()
         .map(|defs| {
-            let mut prog = MagicProgram::default();
+            let mut prog = MagicProgram::empty();
             for (name, rules) in defs {
                 prog.prog.insert(name, MagicRulesOrFixed::Rules { rules });
             }
@@ -389,7 +389,7 @@ fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> Stratifi
 }
 
 fn immortal_lifetimes(compiled: &[CompiledProgram]) -> StoreLifetimes {
-    let mut lifetimes = StoreLifetimes::default();
+    let mut lifetimes = StoreLifetimes::empty();
     let last = sub_or_zero(compiled.len(), 1);
     for stratum in compiled {
         for name in stratum.keys() {
@@ -418,7 +418,7 @@ fn write_then_commit<S: Storage>(
             Ok(())
         }
         Err(e) => {
-            if tx.abort().is_err() { /* best-effort cleanup on error path */ }
+            let _ = tx.abort();
             Err(e)
         }
     }
@@ -498,7 +498,7 @@ fn try_run<S: Storage>(db: &S, prog: StratifiedMagicProgram) -> Result<BTreeSet<
     let outcome = stratified_evaluate(
         &program,
         &lifetimes,
-        RowLimit::default(),
+        RowLimit::unlimited(),
         &generous_budget(),
         None,
     )?;
@@ -989,14 +989,14 @@ fn crash_recovery_under_faults_never_tears() {
             ) {
                 Ok(h) => h,
                 Err(e) => {
-                    if tx.abort().is_err() { /* best-effort cleanup on error path */ }
+                    let _ = tx.abort();
                     return Err(e);
                 }
             };
             for (a, b) in [(1, 2), (2, 3)] {
                 let row = vec![v(a), v(b)];
                 if let Err(e) = h.put_fact(&mut tx, &row, ValidityTs::of_micros(0), sp()) {
-                    if tx.abort().is_err() { /* best-effort cleanup on error path */ }
+                    let _ = tx.abort();
                     return Err(e);
                 }
             }
@@ -1025,7 +1025,7 @@ fn crash_recovery_under_faults_never_tears() {
                     if tx.commit().is_err() { /* buffer tier; fault is the campaign observation */ }
                 }
                 Err(_) => {
-                    if tx.abort().is_err() { /* best-effort cleanup on error path */ }
+                    let _ = tx.abort();
                 }
             }
         }
@@ -1126,7 +1126,7 @@ fn snapshot_isolation_holds_at_answer_level() {
         move || {
             let mut rng = SimRng::new(0xB0B0);
             for _ in 0..200 {
-                let k = fit_i64(rng.below(fit_u64(C) + 1));
+                let k = fit_i64(rng.below(u64::try_from(C).expect("C") + 1));
                 // Update both rows atomically in one commit: a=k, b=C-k.
                 let mut done = false;
                 for _ in 0..1000 {
@@ -1153,7 +1153,7 @@ fn snapshot_isolation_holds_at_answer_level() {
                             break;
                         }
                     } else {
-                        if tx.abort().is_err() { /* best-effort cleanup on error path */ }
+                        let _ = tx.abort();
                     }
                 }
                 assert!(done, "writer could not land an atomic pair update");
@@ -1435,7 +1435,7 @@ fn antivacuity_no_faults_means_no_errors() {
     for fx in SINGLE_HEAD_FIXTURES {
         let expected = (fx.expected)();
         for seed in 0..n {
-            match observe_faulted(fx, seed, FaultConfig::default()) {
+            match observe_faulted(fx, seed, FaultConfig::none()) {
                 Observed::Answer(ans) => assert_eq!(
                     ans, expected,
                     "fixture '{}': fault-free run must be correct",
@@ -1696,7 +1696,7 @@ fn sample_crash_instant(seed: u64) -> CrashInstantSample {
         let proof = door
             .seal_durable(
                 intent,
-                TempTx::default(),
+                TempTx::new(),
                 content_root(0x40 ^ i.to_le_bytes()[0]),
                 &session,
             )
@@ -2397,8 +2397,10 @@ pub mod storage_campaign_lanes {
             pred_epoch,
             &successor_seed,
             &commitment,
-        );
-        let (matrix, aggregate) = frost_sign_recovery_quorum(dealer_seed, &payload);
+        )
+        .must("INVARIANT/harness: recovery payload digest");
+        let (matrix, aggregate) = frost_sign_recovery_quorum(dealer_seed, &payload)
+            .must("INVARIANT/harness: frost recovery quorum");
         let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)
             .must("INVARIANT/harness: quorum proof");
         let grant = RecoveryGrant::new(
@@ -2450,7 +2452,8 @@ pub mod storage_campaign_lanes {
             &successor_principal,
             &identity_seed,
             &commitment,
-        );
+        )
+        .must("INVARIANT/harness: fork payload digest");
         let (_vk, sig) = sign_fork_consent(consent_seed, predecessor, &payload);
         let proof = PredecessorConsentProof::verify(consent_table, predecessor, &payload, &sig)
             .must("INVARIANT/harness: predecessor consent");
@@ -2711,7 +2714,7 @@ pub mod storage_campaign_lanes {
                 let (key, dig) = op_key(store_id, op.as_bytes());
                 let intent = door
                     .admit(incarnation, &session, key, dig)
-                    .must(&format!("seed {seed}: admit {i}: {e:?}"));
+                    .must(&format!("seed {seed}: admit {i}"));
                 assert_eq!(
                     intent.intent_ordinal().get(),
                     fit_u64(i),
@@ -2731,11 +2734,11 @@ pub mod storage_campaign_lanes {
                 let committed = door
                     .seal_durable(
                         intent,
-                        TempTx::default(),
+                        TempTx::new(),
                         campaign_content_root(0xB0 ^ wrap_add_u8(u8_lo(seed), i.to_le_bytes()[0])),
                         &session,
                     )
-                    .must(&format!("seed {seed}: seal intent {i}: {e:?}"));
+                    .must(&format!("seed {seed}: seal intent {i}"));
                 let c_ord = committed.commit_ordinal().get();
                 assert_eq!(
                     c_ord, expected_commit,
@@ -2854,7 +2857,7 @@ pub mod storage_campaign_lanes {
                 let (key, digest) = op_key(session.store_id(), op.as_bytes());
                 let intent = door
                     .admit(live, &session, key, digest)
-                    .must(&format!("seed {seed}: admit {i}: {e:?}"));
+                    .must(&format!("seed {seed}: admit {i}"));
                 let mut tx = db.write_tx().must("INVARIANT/harness: sim write_tx");
                 let k = format!("pipeline.committed.{seed}.{i}");
                 let v = format!("survives-power-cut-{seed}-{i}");
@@ -2867,7 +2870,7 @@ pub mod storage_campaign_lanes {
                         campaign_content_root(0xC3 ^ wrap_add_u8(u8_lo(seed), i.to_le_bytes()[0])),
                         &session,
                     )
-                    .must(&format!("seed {seed}: seal {i}: {e:?}"));
+                    .must(&format!("seed {seed}: seal {i}"));
                 last_ordinal = committed.commit_ordinal();
                 assert_eq!(
                     last_ordinal.get(),
@@ -3202,7 +3205,7 @@ pub mod storage_campaign_lanes {
                 let op = format!("idle-admit-{seed}-{i}");
                 let (key, digest) = op_key(store_id, op.as_bytes());
                 door.admit(incarnation, &session, key, digest)
-                    .must(&format!("seed {seed}: idle admit {i}: {e:?}"));
+                    .must(&format!("seed {seed}: idle admit {i}"));
             }
             assert_eq!(
                 door.highest_commit_ordinal(),
@@ -3527,6 +3530,7 @@ pub mod storage_campaign_lanes {
                         corrupt.permanence_candidate_manifest
                     );
                 }
+                _ => unreachable!("primary = seed % 4"),
             }
             if dual {
                 // Second binding distinct from primary — never prefer-dump.
@@ -3653,7 +3657,7 @@ pub mod storage_campaign_lanes {
         let mut saw_non_mid = false;
         let mid = golden.len() / 2;
         for seed in 0..golden.len().min(64) {
-            let idx = fit_usize(wrap_mul_add(seed, 13, 7)) % golden.len();
+            let idx = fit_usize(wrap_mul_add(u64::try_from(seed).expect("seed"), 13, 7)) % golden.len();
             offsets.insert(idx);
             if idx != mid {
                 saw_non_mid = true;
@@ -4305,7 +4309,10 @@ pub mod storage_campaign_lanes {
         // via OriginRootRegistry — never pack-cut self-verify (seat 80 / #374 T7).
         let mut registry = OriginRootRegistry::new();
         registry
-            .insert(pack.claimed_origin_store_id(), pack.recompute_root())
+            .insert(
+            pack.claimed_origin_store_id().must("claimed origin"),
+            pack.recompute_root().must("recompute root"),
+        )
             .must("INVARIANT/harness: register pack origin root");
         let verified = registry
             .after_chain_root_verify(&pack)
@@ -4427,10 +4434,14 @@ pub mod storage_campaign_lanes {
                 ChainLinkKind::Ordinary,
             );
             assert!(
-                replica_equivalence_at_cut(left, right),
+                replica_equivalence_at_cut(left, right)
+                    .must("INVARIANT/harness: replica equivalence"),
                 "seed {seed}: two-instance recompute-and-compare: same ordered facts match"
             );
-            assert!(roots_equal_at_cut(left.recompute(), right.recompute()));
+            assert!(roots_equal_at_cut(
+                left.recompute().must("recompute left"),
+                right.recompute().must("recompute right"),
+            ));
 
             let mut divergent = facts.clone();
             let flip_i = fit_usize(seed) % n;
@@ -4443,13 +4454,14 @@ pub mod storage_campaign_lanes {
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
             );
-            let delivered = left.recompute();
+            let delivered = left.recompute().must("recompute delivered");
             assert!(
                 roots_equal_at_cut(delivered, delivered),
                 "seed {seed}: control: trusting a received root against itself would pass"
             );
             assert!(
-                !replica_equivalence_at_cut(left, right_divergent),
+                !replica_equivalence_at_cut(left, right_divergent)
+                    .must("INVARIANT/harness: divergent inequivalence"),
                 "seed {seed}: recompute-and-compare: delivered root is not the comparison basis"
             );
         }

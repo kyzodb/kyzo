@@ -1007,7 +1007,7 @@ mod tests {
         Ok(Box::new(std::iter::from_fn(move || {
             loop {
                 if idx < current.len() {
-                    let t = std::mem::take(&mut current[idx]);
+                    let t = std::mem::replace(&mut current[idx], Tuple::from_vec(vec![]));
                     idx += 1;
                     return Some(Ok(t));
                 }
@@ -1151,12 +1151,12 @@ mod tests {
             UnificationKind::Spread,
             sp(),
         );
-        let left = RelAlgebra::Fixed(InlineFixedRA {
+        let left = RelAlgebra::Fixed(Box::new(InlineFixedRA {
             bindings: vec![sym("y")],
             data: vec![vec![v(2)]],
             to_eliminate: Default::default(),
             span: sp(),
-        });
+        }));
         assert!(!left.is_unit(), "a data-bearing singleton must not be unit");
         let mut ra = left.join(right, vec![sym("y")], vec![sym("x")], sp())?;
         ra.fill_binding_indices_and_compile()?;
@@ -1583,21 +1583,21 @@ mod tests {
         let mut stores = no_stores();
         stores.insert(storage_key.clone(), store);
 
-        let left = RelAlgebra::Fixed(InlineFixedRA {
+        let left = RelAlgebra::Fixed(Box::new(InlineFixedRA {
             bindings: vec![sym("k")],
             data: vec![vec![v(0)], vec![v(1)], vec![v(2)]],
             to_eliminate: Default::default(),
             span: sp(),
-        });
+        }));
         // `k2` on the right: joins never carry a duplicated symbol across
         // sides (compiler invariant, debug-asserted in InnerJoin::bindings).
-        let right = RelAlgebra::TempStore(TempStoreRA {
+        let right = RelAlgebra::TempStore(Box::new(TempStoreRA {
             bindings: vec![sym("k2"), sym("val")],
             storage_key: storage_key.clone(),
             occurrence: AtomOccurrence(0),
             filters: vec![],
             span: sp(),
-        });
+        }));
         let mut ra = left.join(right, vec![sym("k")], vec![sym("k2")], sp())?;
         ra.fill_binding_indices_and_compile()?;
 

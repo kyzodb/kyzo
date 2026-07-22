@@ -173,7 +173,17 @@ pub(crate) fn crossing_envelope_from_record(
         StatementContext::Unscoped => CrossingContext::Unscoped,
         StatementContext::Scoped(id) => CrossingContext::Scoped(*id.as_digest()),
     };
-    CrossingEnvelope::new(CrossingEnvelopeParts { kind: crossing_kind_from_ontok(record.kind()), schema_version: *certificate.protocol_version(), schema_cut: *certificate.schema_cut(), issuing_authority: certificate.authorizing_key_id(), context: context, evidence_demand: evidence_demand, evidence: evidence, status: status, shared_capabilities: shared_capabilities })
+    CrossingEnvelope::new(CrossingEnvelopeParts {
+        kind: crossing_kind_from_ontok(record.kind()),
+        schema_version: *certificate.protocol_version(),
+        schema_cut: *certificate.schema_cut(),
+        issuing_authority: certificate.authorizing_key_id(),
+        context: context,
+        evidence_demand: evidence_demand,
+        evidence: evidence,
+        status: status,
+        shared_capabilities: shared_capabilities,
+    })
 }
 
 /// Lowering sealed under the origin schema cut (#270 T3 / seat 69).
@@ -368,7 +378,6 @@ fn dimension_tuple(record: &KyzoRecord, dimension: StatementDimension) -> DataVa
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use crate::data::digest::RecordContentDigest;
     use crate::data::statement::{
@@ -386,6 +395,7 @@ mod tests {
     use crate::store::replica::{AuthorizingKey, AuthorizingKeyTable, ScopeManifestDigest};
     use crate::store::sweep::CommitOrdinal;
     use kyzo_model::value::DataValue;
+    use miette::{Result, miette};
 
     fn live_cert(store: StoreId) -> Result<LiveCertificateInputs> {
         let authority = WriteAuthority::mint(store, [0xA1; 32]);
@@ -444,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_tag_encode_decode_round_trip() -> Result<()>  {
+    fn surface_tag_encode_decode_round_trip() -> Result<()> {
         for surface in [
             SemanticSurface::None,
             SemanticSurface::Embedding,
@@ -464,7 +474,7 @@ mod tests {
     /// Real determinism: lower twice into independent allocations; assert
     /// byte/row identity. Not a memoized re-call (no cache field on the record).
     #[test]
-    fn repeated_lowering_equality() -> Result<()>  {
+    fn repeated_lowering_equality() -> Result<()> {
         let record = admit_claim_record()?;
         let first = lower_record(&record);
         let second = lower_record(&record);
@@ -508,24 +518,25 @@ mod tests {
 
     /// Kind decides the dimension set — not a per-write menu.
     #[test]
-    fn kind_type_entails_dimension_set() -> Result<()>  {
+    fn kind_type_entails_dimension_set() -> Result<()> {
         let entity = admit_kind(
             construct::entity(
-                StatementSubject::new(DataValue::from("e1")?),
+                StatementSubject::new(DataValue::from("e1")),
                 ValidityTime::instant(1),
                 StatementContext::Unscoped,
                 StatementSource::unbound(),
             )
             .map_err(|e| miette!("entity: {e}"))?,
-        );
+        )?;
         let relation = admit_kind(construct::relation(
-            StatementSubject::new(DataValue::from("e1")?),
-            crate::data::statement::StatementPredicate::new("owns").map_err(|e| miette!("pred: {e}"))?,
+            StatementSubject::new(DataValue::from("e1")),
+            crate::data::statement::StatementPredicate::new("owns")
+                .map_err(|e| miette!("pred: {e}"))?,
             StatementValue::new(DataValue::from("e2")),
             ValidityTime::instant(1),
             StatementContext::Unscoped,
             StatementSource::unbound(),
-        ));
+        ))?;
         let claim = admit_claim_record()?;
 
         let entity_dims: Vec<_> = lower_record(&entity).dimensions().collect();
@@ -593,7 +604,7 @@ mod tests {
 
     /// KyzoRecord::lower is the door; same as free lower_record.
     #[test]
-    fn record_lower_door_matches_free_function() -> Result<()>  {
+    fn record_lower_door_matches_free_function() -> Result<()> {
         let record = admit_claim_record()?;
         assert_eq!(record.lower(), lower_record(&record));
         Ok(())
@@ -601,7 +612,7 @@ mod tests {
 
     /// Every projection row resolves to the source RecordId (#268 T3).
     #[test]
-    fn every_lowered_row_resolves_to_source_record_id() -> Result<()>  {
+    fn every_lowered_row_resolves_to_source_record_id() -> Result<()> {
         let record = admit_claim_record()?;
         let id = record.record_id();
         let lowering = lower_record(&record);
@@ -619,10 +630,10 @@ mod tests {
 
     /// Sugar relation put mints through admit_record — same RecordId door.
     #[test]
-    fn sugar_relation_row_mints_through_admit_record() -> Result<()>  {
+    fn sugar_relation_row_mints_through_admit_record() -> Result<()> {
         use kyzo_model::value::ValidityTs;
         let store = StoreId::from_digest([0x28; 32]);
-        let live = live_cert(store);
+        let live = live_cert(store)?;
         let (record, cert) = super::super::admit_sugar_relation_row(
             store,
             &live,
@@ -645,20 +656,19 @@ mod tests {
     /// construct::{event,state,role,concept,rule,derivation,context_record}
     /// wire through the admit_construct door.
     #[test]
-    fn construct_kinds_wire_through_admit_construct() -> Result<()>  {
+    fn construct_kinds_wire_through_admit_construct() -> Result<()> {
         let store = StoreId::from_digest([0x29; 32]);
-        let live = live_cert(store);
+        let live = live_cert(store)?;
         let subject = StatementSubject::new(DataValue::from("s"));
-        let pred = crate::data::statement::StatementPredicate::new("p").map_err(|e| miette!("pred: {e}"))?;
+        let pred = crate::data::statement::StatementPredicate::new("p")
+            .map_err(|e| miette!("pred: {e}"))?;
         let value = StatementValue::new(DataValue::from("v"));
         let vt = ValidityTime::instant(1);
         let ctx = StatementContext::Unscoped;
         let src = StatementSource::unbound();
         let digest = RecordContentDigest::from_digest([0xD1; 32]);
 
-        use super::super::admit_construct::{
-            OntokCertSeats, OntokPredStmt, OntokValueStmt,
-        };
+        use super::super::admit_construct::{OntokCertSeats, OntokPredStmt, OntokValueStmt};
         let cert = || OntokCertSeats {
             store_id: store,
             digest,
@@ -730,7 +740,7 @@ mod tests {
 
     /// RecordId is a derived view of the one stored digest.
     #[test]
-    fn record_id_is_derived_view_of_digest() -> Result<()>  {
+    fn record_id_is_derived_view_of_digest() -> Result<()> {
         let record = admit_claim_record()?;
         assert_eq!(record.record_id().as_bytes(), record.digest().as_digest());
         Ok(())
@@ -740,14 +750,14 @@ mod tests {
     /// under that cut (#270 T1/T3). Kind mismatch and local-cut reinterpret
     /// refuse in release builds.
     #[test]
-    fn lower_after_crossing_matches_local_lower() -> Result<()>  {
+    fn lower_after_crossing_matches_local_lower() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::replica::{
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
-            CrossingEvidenceDemand, CrossingStatus, GraphBoundary, KeyBoundaryRefuse,
-            OriginContinuity, PostStateRoot, ScopeManifestDigest, ScopeManifestStatus,
-            ScopeManifestTable, TenantId, mint_admission_certificate, sign_admission_parts,
-            CrossingValidationSeats, validate_crossing_before_lower,
+            CrossingEvidenceDemand, CrossingStatus, CrossingValidationSeats, GraphBoundary,
+            KeyBoundaryRefuse, OriginContinuity, PostStateRoot, ScopeManifestDigest,
+            ScopeManifestStatus, ScopeManifestTable, TenantId, mint_admission_certificate,
+            sign_admission_parts, validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
 
@@ -788,14 +798,26 @@ mod tests {
             CrossingEvidenceDemand::NotRequired
         );
 
-        let validated = validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: record.store_id(), local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() })
+        let validated = validate_crossing_before_lower(CrossingValidationSeats {
+            certificate: &cert,
+            envelope: &envelope,
+            local_store: record.store_id(),
+            local_commit: CommitOrdinal::ZERO,
+            authorizing_keys: &keys,
+            scopes: &scopes,
+            continuity: Some(&OriginContinuity::mint()),
+            held_capabilities: &CrossingCapabilitySet::new(),
+        })
         .map_err(|e| miette!("crossing contract: {e}"))?;
 
-        let sealed = super::lower_after_crossing(&record, &validated).map_err(|e| miette!("lower: {e}"))?;
+        let sealed =
+            super::lower_after_crossing(&record, &validated).map_err(|e| miette!("lower: {e}"))?;
         // Origin cut is consumed: sealed into the result and constrains views.
         assert_eq!(sealed.origin_schema_cut(), cert.schema_cut());
         assert_eq!(
-            sealed.under_local_cut(cert.schema_cut()).map_err(|e| miette!("same cut: {e}"))?,
+            sealed
+                .under_local_cut(cert.schema_cut())
+                .map_err(|e| miette!("same cut: {e}"))?,
             &lower_record(&record)
         );
         assert_eq!(
@@ -803,7 +825,8 @@ mod tests {
             Err(crate::store::replica::CrossingRefuse::LocalReinterpretationUnconstructible)
         );
         // Replay digest includes the cut — different cut would diverge.
-        let again = super::lower_after_crossing(&record, &validated).map_err(|e| miette!("re-lower: {e}"))?;
+        let again = super::lower_after_crossing(&record, &validated)
+            .map_err(|e| miette!("re-lower: {e}"))?;
         assert_eq!(sealed.replay_digest(), again.replay_digest());
         assert_eq!(sealed, again);
 
@@ -824,7 +847,7 @@ mod tests {
     /// content digest — different content diverges; same content replays equal.
     /// Not the tautological before==after on identical inputs.
     #[test]
-    fn promotion_meaning_binds_local_id_to_content_digest() -> Result<()>  {
+    fn promotion_meaning_binds_local_id_to_content_digest() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::replica::{
             AdmissionCertificateParts, AuthorizingKey, PostStateRoot, PromotionRefuse,
@@ -858,18 +881,20 @@ mod tests {
             operation_key: None,
             signature: crate::store::crypto::Signature::admit([0u8; 64]),
         };
-        parts_a.signature = sign_admission_parts(&parts_a, &key).map_err(|e| miette!("sign A: {e}"))?;
+        parts_a.signature =
+            sign_admission_parts(&parts_a, &key).map_err(|e| miette!("sign A: {e}"))?;
         let cert_a = mint_admission_certificate(parts_a).map_err(|e| miette!("mint A: {e}"))?;
 
         // B: different claim content → distinct content digest / local_id.
         let record_b = admit_kind(construct::claim(
-            StatementSubject::new(DataValue::from("intruder")?),
-            crate::data::statement::StatementPredicate::new("part_of").map_err(|e| miette!("pred: {e}"))?,
+            StatementSubject::new(DataValue::from("intruder")),
+            crate::data::statement::StatementPredicate::new("part_of")
+                .map_err(|e| miette!("pred: {e}"))?,
             StatementValue::new(DataValue::from("forged_assembly")),
             ValidityTime::instant(1_700_000_000_000_001),
             StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
             StatementSource::unbound(),
-        ));
+        ))?;
         assert_ne!(
             record_a.digest().as_digest(),
             record_b.digest().as_digest(),
@@ -889,7 +914,8 @@ mod tests {
             operation_key: None,
             signature: crate::store::crypto::Signature::admit([0u8; 64]),
         };
-        parts_b.signature = sign_admission_parts(&parts_b, &key).map_err(|e| miette!("sign B: {e}"))?;
+        parts_b.signature =
+            sign_admission_parts(&parts_b, &key).map_err(|e| miette!("sign B: {e}"))?;
         let cert_b = mint_admission_certificate(parts_b).map_err(|e| miette!("mint B: {e}"))?;
 
         let meaning_a = record_a.promotion_meaning(&cert_a, tenant);
@@ -931,13 +957,13 @@ mod tests {
     /// NOT authorize lowering an unrelated same-kind record B. Token binds the
     /// validated record content digest; `lower_after_crossing` gates on it.
     #[test]
-    fn crossing_validation_for_a_must_not_authorize_lowering_b() -> Result<()>  {
+    fn crossing_validation_for_a_must_not_authorize_lowering_b() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::replica::{
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
-            CrossingRefuse, CrossingStatus, OriginContinuity, PostStateRoot, ScopeManifestDigest,
-            ScopeManifestStatus, ScopeManifestTable, mint_admission_certificate,
-            sign_admission_parts, CrossingValidationSeats, validate_crossing_before_lower,
+            CrossingRefuse, CrossingStatus, CrossingValidationSeats, OriginContinuity,
+            PostStateRoot, ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable,
+            mint_admission_certificate, sign_admission_parts, validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
 
@@ -971,7 +997,16 @@ mod tests {
             CrossingStatus::Active,
             CrossingCapabilitySet::new(),
         );
-        let validated = validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &envelope, local_store: record.store_id(), local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() })
+        let validated = validate_crossing_before_lower(CrossingValidationSeats {
+            certificate: &cert,
+            envelope: &envelope,
+            local_store: record.store_id(),
+            local_commit: CommitOrdinal::ZERO,
+            authorizing_keys: &keys,
+            scopes: &scopes,
+            continuity: Some(&OriginContinuity::mint()),
+            held_capabilities: &CrossingCapabilitySet::new(),
+        })
         .map_err(|e| miette!("validate A: {e}"))?;
         assert_eq!(
             validated.record_digest(),
@@ -981,13 +1016,14 @@ mod tests {
 
         // B: a DIFFERENT Claim record that never passed crossing validation.
         let b = admit_kind(construct::claim(
-            StatementSubject::new(DataValue::from("intruder")?),
-            crate::data::statement::StatementPredicate::new("part_of").map_err(|e| miette!("pred: {e}"))?,
+            StatementSubject::new(DataValue::from("intruder")),
+            crate::data::statement::StatementPredicate::new("part_of")
+                .map_err(|e| miette!("pred: {e}"))?,
             StatementValue::new(DataValue::from("forged_assembly")),
             ValidityTime::instant(1_700_000_000_000_001),
             StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
             StatementSource::unbound(),
-        ));
+        ))?;
         assert_ne!(
             record.record_id(),
             b.record_id(),
@@ -1014,14 +1050,15 @@ mod tests {
 
     /// Kind mismatch refuses in release — not debug_assert-only (#270 T3).
     #[test]
-    fn lower_after_crossing_kind_mismatch_refuses() -> Result<()>  {
+    fn lower_after_crossing_kind_mismatch_refuses() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::replica::{
             AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable, CrossingCapabilitySet,
-            CrossingContext, CrossingEnvelope, CrossingEnvelopeParts, CrossingEvidence, CrossingEvidenceDemand,
-            CrossingKind, CrossingRefuse, CrossingStatus, OriginContinuity, PostStateRoot,
-            ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable,
-            mint_admission_certificate, sign_admission_parts, CrossingValidationSeats, validate_crossing_before_lower,
+            CrossingContext, CrossingEnvelope, CrossingEnvelopeParts, CrossingEvidence,
+            CrossingEvidenceDemand, CrossingKind, CrossingRefuse, CrossingStatus,
+            CrossingValidationSeats, OriginContinuity, PostStateRoot, ScopeManifestDigest,
+            ScopeManifestStatus, ScopeManifestTable, mint_admission_certificate,
+            sign_admission_parts, validate_crossing_before_lower,
         };
         use crate::store::sweep::CommitOrdinal;
 
@@ -1051,8 +1088,27 @@ mod tests {
 
         // Envelope claims Entity while record is Claim — validate would pass
         // envelope-vs-cert; lower_after_crossing must still refuse KindMismatch.
-        let mismatched = CrossingEnvelope::new(CrossingEnvelopeParts { kind: CrossingKind::Entity, schema_version: *cert.protocol_version(), schema_cut: *cert.schema_cut(), issuing_authority: cert.authorizing_key_id(), context: CrossingContext::Unscoped, evidence_demand: CrossingEvidenceDemand::NotRequired, evidence: CrossingEvidence::Absent, status: CrossingStatus::Active, shared_capabilities: CrossingCapabilitySet::new() });
-        let validated = validate_crossing_before_lower(CrossingValidationSeats { certificate: &cert, envelope: &mismatched, local_store: record.store_id(), local_commit: CommitOrdinal::ZERO, authorizing_keys: &keys, scopes: &scopes, continuity: Some(&OriginContinuity::mint()), held_capabilities: &CrossingCapabilitySet::new() })
+        let mismatched = CrossingEnvelope::new(CrossingEnvelopeParts {
+            kind: CrossingKind::Entity,
+            schema_version: *cert.protocol_version(),
+            schema_cut: *cert.schema_cut(),
+            issuing_authority: cert.authorizing_key_id(),
+            context: CrossingContext::Unscoped,
+            evidence_demand: CrossingEvidenceDemand::NotRequired,
+            evidence: CrossingEvidence::Absent,
+            status: CrossingStatus::Active,
+            shared_capabilities: CrossingCapabilitySet::new(),
+        });
+        let validated = validate_crossing_before_lower(CrossingValidationSeats {
+            certificate: &cert,
+            envelope: &mismatched,
+            local_store: record.store_id(),
+            local_commit: CommitOrdinal::ZERO,
+            authorizing_keys: &keys,
+            scopes: &scopes,
+            continuity: Some(&OriginContinuity::mint()),
+            held_capabilities: &CrossingCapabilitySet::new(),
+        })
         .map_err(|e| miette!("envelope kind is a known ONTOK tag: {e}"))?;
         assert_eq!(
             super::lower_after_crossing(&record, &validated),

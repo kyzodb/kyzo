@@ -675,7 +675,7 @@ mod tests {
             }
             assert!(saw_err, "hostile bytes must surface as a typed Err");
             // Polling again re-yields (does not silently move past) the error.
-            assert!(w.next()?.is_err());
+            assert!(w.next().ok_or_else(|| miette!("walk next"))?.is_err());
         }
 
         Ok(())

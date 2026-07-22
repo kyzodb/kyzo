@@ -1998,8 +1998,8 @@ mod authorizing_key_ed25519_tests {
 
         // Golden vector: RFC public key verifies RFC signature (empty message).
         // This is the sovereign-store verify path — public material only.
-        let vk = VerifyingKey::from_bytes(&expect_pk)?;
-        let rfc_sig = Ed25519Signature::try_from(expect_sig.as_slice())?;
+        let vk = VerifyingKey::from_bytes(&expect_pk).map_err(|e| miette!("vk: {e}"))?;
+        let rfc_sig = Ed25519Signature::try_from(expect_sig.as_slice()).map_err(|e| miette!("sig: {e}"))?;
         assert!(
             vk.verify(b"", &rfc_sig).is_ok(),
             "RFC 8032 TEST 1 signature must verify under RFC public key"
@@ -2053,7 +2053,7 @@ mod authorizing_key_ed25519_tests {
         let sig = origin.sign(&body)?;
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&origin.id())?;
+        let looked = table.lookup(&origin.id())?.ok_or_else(|| miette!("lookup"))?;
         assert!(!looked.can_sign());
         assert!(looked.verify_signature(&body, &sig));
 
@@ -2072,7 +2072,7 @@ mod authorizing_key_ed25519_tests {
 
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
-        let looked = table.lookup(&id)?;
+        let looked = table.lookup(&id)?.ok_or_else(|| miette!("lookup"))?;
         assert!(
             !looked.can_sign(),
             "table must not reconstitute signing seed"
@@ -2111,7 +2111,7 @@ mod authorizing_key_ed25519_tests {
         // Table with wrong public key → verify fails.
         let mut table = AuthorizingKeyTable::new();
         table.insert(other.authorizing_public()?);
-        let looked = table.lookup(&AuthorizingKeyId::from_digest([0x02; 32]))??;
+        let looked = table.lookup(&AuthorizingKeyId::from_digest([0x02; 32]))?.ok_or_else(|| miette!("lookup"))?;
         assert!(!looked.verify_signature(&body, &sig));
 
         Ok(())
@@ -2878,7 +2878,7 @@ mod sth_gossip_obligation_tests {
             content_a,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         let mut chain_b = RootChain::empty();
         chain_b.append(ChainedStateRoot::mint(
             store,
@@ -2887,7 +2887,7 @@ mod sth_gossip_obligation_tests {
             content_b,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
 
         let signed_a = SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_a)?, &key)?;
         let signed_b = SignedStateRootHead::sign(StateRootHead::from_chain_tip(&chain_b)?, &key)?;
@@ -2927,7 +2927,7 @@ mod sth_gossip_obligation_tests {
             StateRoot::from_digest([0x01; 32]),
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         chain.append(ChainedStateRoot::mint(
             store,
             fence,
@@ -2935,7 +2935,7 @@ mod sth_gossip_obligation_tests {
             StateRoot::from_digest([0x02; 32]),
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
 
         let older = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o1)?, &key)?;
         let newer = SignedStateRootHead::sign(StateRootHead::from_cut(&chain, o2)?, &key)?;

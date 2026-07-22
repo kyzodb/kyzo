@@ -1331,7 +1331,7 @@ mod pins {
         };
         let current = |rows: Vec<Tuple>| -> i64 {
             assert_eq!(rows.len(), 1, "exactly one live fact, got {rows:?}");
-            rows[0].last()?.get_int()?
+            rows[0].last().expect("col").get_int().expect("int")
         };
 
         {
@@ -1349,7 +1349,7 @@ mod pins {
                 let commits = &commits;
                 let (lower, upper) = (lower.clone(), upper.clone());
                 let (val_of, key_at) = (&val_of, &key_at);
-                scope.spawn(move || {
+                scope.spawn(move || -> Result<()> {
                     for _ in 0..PER_THREAD {
                         loop {
                             let mut tx = db.write_tx()?;
@@ -1360,8 +1360,7 @@ mod pins {
                                     &upper,
                                     AsOf::current(ValidityTs::of_micros(i64::MAX)),
                                 )
-                                .map(|r| r?)
-                                .collect();
+                                .collect::<Result<_>>()?;
                             let old = current(rows);
                             tx.put(&key_at(stamp), &val_of(old + 1))?;
                             match tx.commit() {
@@ -1376,6 +1375,7 @@ mod pins {
                             }
                         }
                     }
+                    Ok(())
                 });
             }
         });
@@ -1387,8 +1387,7 @@ mod pins {
                 &upper,
                 AsOf::current(ValidityTs::of_micros(i64::MAX)),
             )
-            .map(|r| r?)
-            .collect();
+            .collect::<Result<_>>()?;
         assert_eq!(
             current(rows),
             2 * PER_THREAD,
@@ -1417,9 +1416,9 @@ mod pins {
         // Adversary: rewrite the meta stamp to an older-but-parseable version.
         {
             use fjall::{KeyspaceCreateOptions, OptimisticTxDatabase, PersistMode};
-            let raw = OptimisticTxDatabase::builder(dir.path()).open()?;
-            let meta = raw.keyspace(super::META_KEYSPACE_NAME, KeyspaceCreateOptions::default)?;
-            meta.insert(super::FORMAT_VERSION_KEY, older.as_bytes())?;
+            let raw = OptimisticTxDatabase::builder(dir.path()).open().map_err(|e| miette!("fjall: {e}"))?;
+            let meta = raw.keyspace(super::META_KEYSPACE_NAME, KeyspaceCreateOptions::default).map_err(|e| miette!("fjall: {e}"))?;
+            meta.insert(super::FORMAT_VERSION_KEY, older.as_bytes()).map_err(|e| miette!("fjall: {e}"))?;
             raw.persist(PersistMode::SyncAll).into_diagnostic()?;
         }
 
@@ -1476,7 +1475,7 @@ mod pins {
                 ));
             }
         };
-        let refuse = err.downcast_ref::<FjallRefuse>()?;
+        let refuse = err.downcast_ref::<FjallRefuse>().ok_or_else(|| miette!("typed downcast"))?;
         assert!(
             matches!(
                 refuse,

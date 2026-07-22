@@ -67,9 +67,12 @@ impl FixedRule for RandomWalk {
         let steps = payload.pos_integer_option("steps", None)?;
         // Determinism: each step's neighbor pick is seeded from this option
         // (fixed default), never from OS entropy.
-        let seed = SeededRng::seed_from_i64(
-            payload.integer_option("seed", Some(crate::rules::convert::i64_bits_from_u64(SeededRng::DEFAULT_SEED)))?,
-        );
+        let seed = SeededRng::seed_from_i64(payload.integer_option(
+            "seed",
+            Some(crate::rules::convert::i64_bits_from_u64(
+                SeededRng::DEFAULT_SEED,
+            )),
+        )?);
 
         let mut maybe_weight = match payload.manifest.options.get("weight") {
             None => None,
@@ -277,10 +280,11 @@ mod tests {
             ],
             options,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(got.len(), 1);
-        let path = got[0][2].get_slice().ok_or_else(|| miette!("test expected Some"))?;
+        let path = got[0][2]
+            .get_slice()
+            .ok_or_else(|| miette!("test expected Some"))?;
         assert_eq!(path.len(), 5);
         Ok(())
     }
@@ -338,8 +342,7 @@ mod tests {
                 inputs(),
                 steps_opt(steps)?,
                 CancelFlag::inert(),
-            )
-            ?;
+            )?;
             let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
                 DataValue::from(1i64),
                 s("a"),
@@ -404,10 +407,13 @@ mod tests {
         let first = run_fixed_rule(&RandomWalk, inputs(), opts()?, CancelFlag::inert())?;
         // A genuinely random walk: the paths are not all length-1 (choices
         // were actually made), so byte-identity is a real determinism claim.
-        assert!(first.iter().any(|r| matches!(r[2].get_slice(), Some(s) if s.len() > 2)));
+        assert!(
+            first
+                .iter()
+                .any(|r| matches!(r[2].get_slice(), Some(s) if s.len() > 2))
+        );
         for _ in 0..8 {
-            let again =
-                run_fixed_rule(&RandomWalk, inputs(), opts()?, CancelFlag::inert())?;
+            let again = run_fixed_rule(&RandomWalk, inputs(), opts()?, CancelFlag::inert())?;
             assert_eq!(first, again);
         }
         Ok(())

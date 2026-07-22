@@ -324,10 +324,7 @@ impl RawVersion {
 /// of the same public encoding API every caller of this module already
 /// uses.
 pub(crate) fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Vec<u8>) {
-    let lower = Tuple::new()
-        .encode_as_key(storage.id)
-        .as_bytes()
-        .to_vec();
+    let lower = Tuple::new().encode_as_key(storage.id).as_bytes().to_vec();
     let upper = (storage.id.raw() + 1).to_be_bytes().to_vec();
     (lower, upper)
 }
@@ -938,7 +935,8 @@ mod tests {
                 out.push((
                     k,
                     val,
-                    iv.start().ok_or_else(|| miette!("@spans runs always have a finite start"))?,
+                    iv.start()
+                        .ok_or_else(|| miette!("@spans runs always have a finite start"))?,
                     iv.end(), // None iff the run is genuinely open (PosUnbounded)
                 ));
             }
@@ -954,7 +952,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
-    
+
         Ok(())
     }
 
@@ -966,7 +964,7 @@ mod tests {
         retract_at(&db, &h, 1, 20)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
-    
+
         Ok(())
     }
 
@@ -978,7 +976,7 @@ mod tests {
         assert_at(&db, &h, 1, 20, 200)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
-    
+
         Ok(())
     }
 
@@ -990,7 +988,7 @@ mod tests {
         assert_at(&db, &h, 1, 20, 100)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
-    
+
         Ok(())
     }
 
@@ -1003,7 +1001,7 @@ mod tests {
         assert_at(&db, &h, 1, 30, 100)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 100, 30, None)]);
-    
+
         Ok(())
     }
 
@@ -1014,7 +1012,7 @@ mod tests {
         retract_at(&db, &h, 1, 10)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert!(rows.is_empty());
-    
+
         Ok(())
     }
 
@@ -1032,7 +1030,7 @@ mod tests {
         // instant-0 assert governs everywhere it would have fallen
         // through to) — one interval, not two.
         assert_eq!(rows, vec![(1, 100, 0, None)]);
-    
+
         Ok(())
     }
 
@@ -1060,7 +1058,7 @@ mod tests {
         assert_at(&db2, &h2, 1, 10, 100)?;
         let rows = spans_rows(&db2, &h2, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
-    
+
         Ok(())
     }
 
@@ -1076,7 +1074,7 @@ mod tests {
             rows.into_iter().sorted().collect_vec(),
             vec![(1, 100, 10, None), (2, 900, 5, Some(14))]
         );
-    
+
         Ok(())
     }
 
@@ -1133,7 +1131,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100)?;
         let rows = delta_rows(&db, &h, AsOf::current(vts(5)), AsOf::current(vts(20)))?;
         assert_eq!(rows, vec![(1, 100, SIGN_PLUS)]);
-    
+
         Ok(())
     }
 
@@ -1147,7 +1145,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.contains(&(1, 100, SIGN_MINUS)));
         assert!(rows.contains(&(1, 200, SIGN_PLUS)));
-    
+
         Ok(())
     }
 
@@ -1158,7 +1156,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100)?;
         let rows = delta_rows(&db, &h, AsOf::current(vts(20)), AsOf::current(vts(20)))?;
         assert!(rows.is_empty());
-    
+
         Ok(())
     }
 
@@ -1173,7 +1171,7 @@ mod tests {
         let after = AsOf::current(MAX_VALIDITY_TS);
         let rows = delta_rows(&db, &h, before, after)?;
         assert_eq!(rows, vec![(1, 200, SIGN_PLUS)]);
-    
+
         Ok(())
     }
 
@@ -1239,8 +1237,8 @@ mod tests {
             .map_err(|e| miette!("commit setup: {e}"))?;
         let rtx = db.read_tx().map_err(|e| miette!("read tx: {e}"))?;
         let base = get_relation(&rtx, name).map_err(|e| miette!("base handle: {e}"))?;
-        let idx = get_relation(&rtx, &format!("{name}:t"))
-            .map_err(|e| miette!("index handle: {e}"))?;
+        let idx =
+            get_relation(&rtx, &format!("{name}:t")).map_err(|e| miette!("index handle: {e}"))?;
         Ok((base, idx))
     }
 
@@ -1313,7 +1311,9 @@ mod tests {
             base,
             from,
             to,
-            DeltaScan::Accelerated { posting: Box::new(idx.clone(),) },
+            DeltaScan::Accelerated {
+                posting: Box::new(idx.clone()),
+            },
         )?;
         assert_eq!(
             naive, fast,
@@ -1334,7 +1334,7 @@ mod tests {
             AsOf::current(vts(5)),
             AsOf::current(vts(20)),
         )?;
-    
+
         Ok(())
     }
 
@@ -1351,7 +1351,7 @@ mod tests {
             AsOf::current(vts(15)),
             AsOf::current(vts(25)),
         )?;
-    
+
         Ok(())
     }
 
@@ -1367,7 +1367,7 @@ mod tests {
             AsOf::current(vts(20)),
             AsOf::current(vts(20)),
         )?;
-    
+
         Ok(())
     }
 
@@ -1392,7 +1392,7 @@ mod tests {
             AsOf::current(vts(1)),
             AsOf::current(vts(5)),
         )?;
-    
+
         Ok(())
     }
 
@@ -1411,7 +1411,7 @@ mod tests {
             AsOf::current(vts(20)),
             AsOf::current(vts(5)),
         )?;
-    
+
         Ok(())
     }
 
@@ -1472,7 +1472,7 @@ mod tests {
                 AsOf::current(vts(to)),
             )?;
         }
-    
+
         Ok(())
     }
 }

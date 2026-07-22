@@ -263,7 +263,9 @@ mod tests {
         let mut state = 0xd1ce_d1ce_d1ce_d1ceu64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             state
         };
         let mut edges: Vec<Tuple> = vec![];
@@ -314,8 +316,7 @@ mod tests {
                 pseudo_random_inputs(),
                 k_opt(3)?,
                 CancelFlag::inert(),
-            )
-            ?;
+            )?;
             assert_eq!(seq, par);
         }
         Ok(())
@@ -336,8 +337,7 @@ mod tests {
             (1, 3, 1.0),
             (1, 2, 1.0),
             (2, 3, 1.0),
-        ])
-        ?;
+        ])?;
         let got = k_shortest_path_yen(2, &graph, 0, 3, CancelFlag::inert())?;
         assert_eq!(got, vec![(2.0, vec![0, 1, 3]), (3.0, vec![0, 1, 2, 3])]);
         Ok(())
@@ -354,8 +354,7 @@ mod tests {
             (1, 2, 1.0),
             (2, 3, 1.0),
             (0, 2, 3.0),
-        ])
-        ?;
+        ])?;
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         assert!(k_shortest_path_yen(3, &graph, 0, 3, flag).is_err());
@@ -388,10 +387,15 @@ mod tests {
                 },
             )]))?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(got.len(), 2);
-        let costs: Vec<_> = got.iter().map(|t| t[2].get_float().ok_or_else(|| miette!("test expected Some"))).collect::<Result<_>>()?;
+        let costs: Vec<_> = got
+            .iter()
+            .map(|t| {
+                t[2].get_float()
+                    .ok_or_else(|| miette!("test expected Some"))
+            })
+            .collect::<Result<_>>()?;
         assert!(costs.contains(&2.0) && costs.contains(&4.0));
         Ok(())
     }
@@ -424,8 +428,7 @@ mod tests {
             (0, 2, 2.0),
             (2, 3, 2.0),
             (0, 3, 5.0),
-        ])
-        ?;
+        ])?;
         let got = k_shortest_path_yen(3, &graph, 0, 3, CancelFlag::inert())?;
         assert_eq!(
             got,

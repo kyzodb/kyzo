@@ -343,7 +343,9 @@ fn fold_minmax(
                 let chosen = if prefer_b(a, *b) { *b } else { a };
                 Ok(Some(DataValue::Num(chosen)))
             }
-            (None, data_value_any!()) | (Some(data_value_any!()), data_value_any!()) => bail!("'{op}' can only be applied to numbers"),
+            (None, data_value_any!()) | (Some(data_value_any!()), data_value_any!()) => {
+                bail!("'{op}' can only be applied to numbers")
+            }
         })?;
     match res {
         None => Ok(DataValue::Num(Num::float(empty))),
@@ -401,7 +403,9 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
             }
             // Mixed and float pairs: Rust remainder semantics (result
             // takes the dividend's sign), zero divisor refused.
-            (NumRepr::Int(_), NumRepr::Float(_)) | (NumRepr::Float(_), NumRepr::Int(_)) | (NumRepr::Float(_), NumRepr::Float(_)) => {
+            (NumRepr::Int(_), NumRepr::Float(_))
+            | (NumRepr::Float(_), NumRepr::Int(_))
+            | (NumRepr::Float(_), NumRepr::Float(_)) => {
                 let (a, b) = (na.to_f64(), nb.to_f64());
                 if b == 0.0 {
                     bail!(DivisionByZero { op: "mod" })
@@ -449,8 +453,8 @@ pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
                         // In bounds: chunk = i/8 < ceil(v.len()/8) = res.len().
                         let target = &mut res[chunk];
                         const MASKS: [u8; 8] = [
-                            0b10000000, 0b01000000, 0b00100000, 0b00010000, 0b00001000,
-                            0b00000100, 0b00000010, 0b00000001,
+                            0b10000000, 0b01000000, 0b00100000, 0b00010000, 0b00001000, 0b00000100,
+                            0b00000010, 0b00000001,
                         ];
                         match MASKS.get(idx) {
                             Some(mask) => *target |= *mask,

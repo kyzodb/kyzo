@@ -220,7 +220,8 @@ mod tests {
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let guard = residency.marks.lock().expect("fresh mutex");
             // Hold the guard across the panic so the mutex becomes poisoned.
-            std::panic::panic_any((guard, "deliberate poison"));
+            let _hold = guard;
+            panic!("deliberate poison");
         }));
         assert!(poison.is_err(), "poison setup must panic while holding the guard");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

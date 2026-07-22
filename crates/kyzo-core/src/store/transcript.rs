@@ -1933,7 +1933,7 @@ mod pins {
                 expected.as_slice(),
                 "production encode_{kind:?} must match independent wire derivation"
             );
-            let golden = golden_file_for(kind)?;
+            let golden = golden_file_for(kind).ok_or_else(|| miette!("golden file"))?;
             let from_vec = parse_golden_hex(golden)?;
             assert_eq!(
                 from_vec.as_slice(),

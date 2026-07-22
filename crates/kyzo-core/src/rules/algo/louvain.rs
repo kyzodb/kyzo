@@ -112,7 +112,8 @@ fn calculate_delta(
     let mut sigma_out_total = 0.;
     let mut sigma_in_total = 0.;
     let mut d2comm = 0.;
-    let target_community_members = &comm2nodes[crate::rules::convert::usize_from_u32(target_community)];
+    let target_community_members =
+        &comm2nodes[crate::rules::convert::usize_from_u32(target_community)];
     for member in target_community_members.iter() {
         if *member == node {
             continue;
@@ -169,14 +170,17 @@ fn louvain_step(
         let modularity = {
             let mut modularity = 0.;
             for from in 0..n_nodes {
-                for to in &comm2nodes[crate::rules::convert::usize_from_u32(node2comm[crate::rules::convert::usize_from_u32(from)])] {
+                for to in &comm2nodes[crate::rules::convert::usize_from_u32(
+                    node2comm[crate::rules::convert::usize_from_u32(from)],
+                )] {
                     for target in graph.out_neighbors_with_values(from) {
                         if target.target == *to {
                             modularity += target.value;
                         }
                     }
-                    modularity -=
-                        in_weights[crate::rules::convert::usize_from_u32(from)] * out_weights[crate::rules::convert::usize_from_u32(*to)] / total_weight;
+                    modularity -= in_weights[crate::rules::convert::usize_from_u32(from)]
+                        * out_weights[crate::rules::convert::usize_from_u32(*to)]
+                        / total_weight;
                 }
             }
             modularity /= total_weight;
@@ -263,7 +267,9 @@ fn louvain_step(
         vec![BTreeMap::new(); crate::rules::convert::usize_from_u32(new_comm_count)];
     for (node, comm) in node2comm.iter().enumerate() {
         let target = &mut new_graph_list[crate::rules::convert::usize_from_u32(*comm)];
-        for t in graph.out_neighbors_with_values(u32::try_from(node).map_err(|_| crate::rules::graph_view::GraphTooLargeError)?) {
+        for t in graph.out_neighbors_with_values(
+            u32::try_from(node).map_err(|_| crate::rules::graph_view::GraphTooLargeError)?,
+        ) {
             let to_node = t.target;
             let weight = t.value;
             let to_comm = node2comm[crate::rules::convert::usize_from_u32(to_node)];

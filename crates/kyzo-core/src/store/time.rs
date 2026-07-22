@@ -358,8 +358,8 @@ pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
+    use miette::{IntoDiagnostic, Result, miette};
 
     use kyzo_model::value::ValidityTs;
     use kyzo_model::value::{RelationId, TupleT};
@@ -509,7 +509,7 @@ mod tests {
             by_bytes, by_semantics,
             "byte order must equal (valid, system) semantic order"
         );
-    
+
         Ok(())
     }
 
@@ -518,15 +518,23 @@ mod tests {
         let mut state: u64 = 0x5EED_B17E_44C0_FFEE;
         let mut next = move |m: usize| -> usize {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
-            match usize::try_from(state >> 33) { Ok(v) => v % m, Err(_) => 0 }
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
+            match usize::try_from(state >> 33) {
+                Ok(v) => v % m,
+                Err(_) => 0,
+            }
         };
         for _case in 0..2000 {
             let n_rows = 1 + next(10);
             let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
             for _ in 0..n_rows {
                 rows.push((
-                    match i64::try_from(next(3)) { Ok(v) => v, Err(_) => 0 },
+                    match i64::try_from(next(3)) {
+                        Ok(v) => v,
+                        Err(_) => 0,
+                    },
                     [0, 10, 20, 30][next(4)],
                     [0, 5, 15, 25][next(4)],
                     [
@@ -560,7 +568,7 @@ mod tests {
                 }
             }
         }
-    
+
         Ok(())
     }
 
@@ -574,10 +582,7 @@ mod tests {
         // Before the correction was recorded: the assert governs.
         assert_eq!(facts_of(&skip_walk(&store, 15, 15)?)?, vec![1]);
         // After: the retract governs — the fact is absent.
-        assert_eq!(
-            facts_of(&skip_walk(&store, 25, 15)?)?,
-            Vec::<i64>::new()
-        );
+        assert_eq!(facts_of(&skip_walk(&store, 25, 15)?)?, Vec::<i64>::new());
         // An erase instead of a retract falls through to... nothing older:
         // also absent, but by fall-through, not settlement.
         let store: BTreeMap<Vec<u8>, ClaimPolarity> = [
@@ -595,11 +600,8 @@ mod tests {
             (bikey(1, 0, 1), ClaimPolarity::Assert),
         ]
         .into();
-        assert_eq!(
-            facts_of(&skip_walk(&store, 25, 15)?)?,
-            Vec::<i64>::new()
-        );
-    
+        assert_eq!(facts_of(&skip_walk(&store, 25, 15)?)?, Vec::<i64>::new());
+
         Ok(())
     }
 
@@ -610,10 +612,7 @@ mod tests {
         );
         let flagged = [
             DataValue::from(1i64),
-            DataValue::Validity(
-                Validity::new(vts(10), false)?
-                    .into(),
-            ),
+            DataValue::Validity(Validity::new(vts(10), false).ok_or_else(|| miette!("validity"))?.into()),
             DataValue::Validity(slot(5)),
         ]
         .encode_as_key(RelationId::new(7).ok_or_else(|| miette!("relation id"))?)
@@ -656,7 +655,7 @@ mod tests {
                 Err(refuse) => drop(refuse),
             }
         }
-    
+
         Ok(())
     }
 
@@ -701,12 +700,9 @@ mod tests {
         // polarity reads fine, but decoding the non-key columns refuses.
         let mut bad = vec![ClaimPolarity::Assert.encode()];
         bad.push(0xEE); // 0xEE is not a canonical value tag
-        assert_eq!(
-            claim_polarity_of_value(&bad)?,
-            ClaimPolarity::Assert
-        );
+        assert_eq!(claim_polarity_of_value(&bad)?, ClaimPolarity::Assert);
         assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
-    
+
         Ok(())
     }
 

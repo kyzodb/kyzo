@@ -48,16 +48,18 @@ pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
             Some(v) => v,
             None => DataValue::Null,
         }),
-        DataValue::Set(l) => Ok(match l
-            .iter()
-            .collect_vec()
-            .choose(&mut rand::rng())
-            .cloned()
-            .cloned()
-        {
-            Some(v) => v,
-            None => DataValue::Null,
-        }),
+        DataValue::Set(l) => Ok(
+            match l
+                .iter()
+                .collect_vec()
+                .choose(&mut rand::rng())
+                .cloned()
+                .cloned()
+            {
+                Some(v) => v,
+                None => DataValue::Null,
+            },
+        ),
         data_value_any!() => bail!("'rand_choice' requires lists"),
     }
 }
@@ -111,7 +113,9 @@ pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
     let mut rng = rand::rng();
     let components: Vec<f64> = (0..len)
         .map(|_| match t {
-            VecElementType::F32 => crate::exec::stdlib::convert::via_f32_precision(rng.random::<f64>()),
+            VecElementType::F32 => {
+                crate::exec::stdlib::convert::via_f32_precision(rng.random::<f64>())
+            }
             VecElementType::F64 => rng.random::<f64>(),
         })
         .collect();

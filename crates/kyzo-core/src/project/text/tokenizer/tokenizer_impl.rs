@@ -435,8 +435,7 @@ mod test {
 
     #[test]
     fn clone() -> Result<()> {
-        let t1 = Token::new(2, 3, 1, "abc".to_string(), 1)
-            .ok_or_else(|| miette!("lawful"))?;
+        let t1 = Token::new(2, 3, 1, "abc".to_string(), 1).ok_or_else(|| miette!("lawful"))?;
         let t2 = t1.clone();
 
         assert_eq!(t1.position, t2.position);

@@ -8,15 +8,14 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use miette::{Result, miette};
 use crate::exec::stdlib::convert::*;
 use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Vector};
+use miette::{Result, miette};
 use serde_json::json;
 
-
 #[test]
-fn test_encode_decode() -> Result<()>  {
+fn test_encode_decode() -> Result<()> {
     assert_eq!(
         op_decode_base64(&[op_encode_base64(&[DataValue::Bytes([1, 2, 3].into())])?])?,
         DataValue::Bytes([1, 2, 3].into())
@@ -25,7 +24,7 @@ fn test_encode_decode() -> Result<()>  {
 }
 
 #[test]
-fn test_to_string() -> Result<()>  {
+fn test_to_string() -> Result<()> {
     assert_eq!(
         op_to_string(&[DataValue::from(false)])?,
         DataValue::Str("false".into())
@@ -34,24 +33,12 @@ fn test_to_string() -> Result<()>  {
 }
 
 #[test]
-fn test_to_unity() -> Result<()>  {
+fn test_to_unity() -> Result<()> {
     assert_eq!(op_to_unity(&[DataValue::Null])?, DataValue::from(0));
-    assert_eq!(
-        op_to_unity(&[DataValue::from(false)])?,
-        DataValue::from(0)
-    );
-    assert_eq!(
-        op_to_unity(&[DataValue::from(true)])?,
-        DataValue::from(1)
-    );
-    assert_eq!(
-        op_to_unity(&[DataValue::from(10)])?,
-        DataValue::from(1)
-    );
-    assert_eq!(
-        op_to_unity(&[DataValue::from(1.0)])?,
-        DataValue::from(1)
-    );
+    assert_eq!(op_to_unity(&[DataValue::from(false)])?, DataValue::from(0));
+    assert_eq!(op_to_unity(&[DataValue::from(true)])?, DataValue::from(1));
+    assert_eq!(op_to_unity(&[DataValue::from(10)])?, DataValue::from(1));
+    assert_eq!(op_to_unity(&[DataValue::from(1.0)])?, DataValue::from(1));
     assert_eq!(
         op_to_unity(&[DataValue::from(f64::NAN)])?,
         DataValue::from(1)
@@ -64,10 +51,7 @@ fn test_to_unity() -> Result<()>  {
         op_to_unity(&[DataValue::Str("".into())])?,
         DataValue::from(0)
     );
-    assert_eq!(
-        op_to_unity(&[DataValue::List(vec![])])?,
-        DataValue::from(0)
-    );
+    assert_eq!(op_to_unity(&[DataValue::List(vec![])])?, DataValue::from(0));
     assert_eq!(
         op_to_unity(&[DataValue::List(vec![DataValue::Null])])?,
         DataValue::from(1)
@@ -76,84 +60,55 @@ fn test_to_unity() -> Result<()>  {
 }
 
 #[test]
-fn test_to_float() -> Result<()>  {
-    assert_eq!(
-        op_to_float(&[DataValue::Null])?,
-        DataValue::from(0.0)
-    );
+fn test_to_float() -> Result<()> {
+    assert_eq!(op_to_float(&[DataValue::Null])?, DataValue::from(0.0));
     assert_eq!(
         op_to_float(&[DataValue::from(false)])?,
         DataValue::from(0.0)
     );
-    assert_eq!(
-        op_to_float(&[DataValue::from(true)])?,
-        DataValue::from(1.0)
-    );
-    assert_eq!(
-        op_to_float(&[DataValue::from(1)])?,
-        DataValue::from(1.0)
-    );
-    assert_eq!(
-        op_to_float(&[DataValue::from(1.0)])?,
-        DataValue::from(1.0)
-    );
+    assert_eq!(op_to_float(&[DataValue::from(true)])?, DataValue::from(1.0));
+    assert_eq!(op_to_float(&[DataValue::from(1)])?, DataValue::from(1.0));
+    assert_eq!(op_to_float(&[DataValue::from(1.0)])?, DataValue::from(1.0));
     assert!(
         op_to_float(&[DataValue::Str("NAN".into())])?
-            .get_float().ok_or_else(|| miette!("float"))?
+            .get_float()
+            .ok_or_else(|| miette!("float"))?
             .is_nan()
     );
     assert!(
         op_to_float(&[DataValue::Str("INF".into())])?
-            .get_float().ok_or_else(|| miette!("float"))?
+            .get_float()
+            .ok_or_else(|| miette!("float"))?
             .is_infinite()
     );
     assert!(
         op_to_float(&[DataValue::Str("NEG_INF".into())])?
-            .get_float().ok_or_else(|| miette!("float"))?
+            .get_float()
+            .ok_or_else(|| miette!("float"))?
             .is_infinite()
     );
     assert_eq!(
         op_to_float(&[DataValue::Str("3".into())])?
-            .get_float().ok_or_else(|| miette!("float"))?,
+            .get_float()
+            .ok_or_else(|| miette!("float"))?,
         3.
     );
     Ok(())
 }
 
 #[test]
-fn test_to_bool() -> Result<()>  {
-    assert_eq!(
-        op_to_bool(&[DataValue::Null])?,
-        DataValue::from(false)
-    );
-    assert_eq!(
-        op_to_bool(&[DataValue::from(true)])?,
-        DataValue::from(true)
-    );
+fn test_to_bool() -> Result<()> {
+    assert_eq!(op_to_bool(&[DataValue::Null])?, DataValue::from(false));
+    assert_eq!(op_to_bool(&[DataValue::from(true)])?, DataValue::from(true));
     assert_eq!(
         op_to_bool(&[DataValue::from(false)])?,
         DataValue::from(false)
     );
-    assert_eq!(
-        op_to_bool(&[DataValue::from(0)])?,
-        DataValue::from(false)
-    );
-    assert_eq!(
-        op_to_bool(&[DataValue::from(0.0)])?,
-        DataValue::from(false)
-    );
-    assert_eq!(
-        op_to_bool(&[DataValue::from(1)])?,
-        DataValue::from(true)
-    );
-    assert_eq!(
-        op_to_bool(&[DataValue::from("")])?,
-        DataValue::from(false)
-    );
-    assert_eq!(
-        op_to_bool(&[DataValue::from("a")])?,
-        DataValue::from(true)
-    );
+    assert_eq!(op_to_bool(&[DataValue::from(0)])?, DataValue::from(false));
+    assert_eq!(op_to_bool(&[DataValue::from(0.0)])?, DataValue::from(false));
+    assert_eq!(op_to_bool(&[DataValue::from(1)])?, DataValue::from(true));
+    assert_eq!(op_to_bool(&[DataValue::from("")])?, DataValue::from(false));
+    assert_eq!(op_to_bool(&[DataValue::from("a")])?, DataValue::from(true));
     assert_eq!(
         op_to_bool(&[DataValue::List(vec![])])?,
         DataValue::from(false)
@@ -168,7 +123,7 @@ fn test_to_bool() -> Result<()>  {
 // The upstream `test_range` ran `int_range` through a `DbInstance`; the op
 // is exercised directly here.
 #[test]
-fn test_vec_rejects_trailing_bytes() -> Result<()>  {
+fn test_vec_rejects_trailing_bytes() -> Result<()> {
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
     // 5 bytes: one whole f32 plus one trailing byte.
@@ -198,7 +153,7 @@ fn test_vec_rejects_trailing_bytes() -> Result<()>  {
 // `vec` on non-array JSON is an error: the upstream original unwrapped
 // `as_array()` and aborted on e.g. `vec(json('{}'))`.
 #[test]
-fn test_vec_rejects_non_array_json() -> Result<()>  {
+fn test_vec_rejects_non_array_json() -> Result<()> {
     assert!(
         op_vec(&[DataValue::Json(crate::data::json::json_from_serde(
             &json!({"a": 1})

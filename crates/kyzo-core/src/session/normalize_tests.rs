@@ -126,7 +126,7 @@ fn guard_survives_conjunction_pushdown_across_joins() -> Result<()> {
             Ok(r) => r,
             Err(e) => {
                 assert!(false, "{name}: guard must survive pushdown: {e}");
-                return;
+                return Ok(());
             }
         };
         assert_eq!(
@@ -177,19 +177,19 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Vec<Strin
         // fixed rules bind later at session normalize; parse is params-only
         value => core::mem::drop(value),
     }
-    let prog = match parse_script(script, &no_params(), test_vld())? {
+    let prog = match parse_script(script, &no_params(), test_vld()).expect("test helper") {
         Script::Query(p) => p,
-        Script::Imperative(_) | Script::Sys(_) => return Err(miette!("expected a single query")),
+        Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
     };
-    let tx = SessionTx::new_read(db.store.read_tx()?, ScriptOptions::new());
+    let tx = SessionTx::new_read(db.store.read_tx().expect("test helper"), ScriptOptions::new());
     let view = SessionView {
         store: &tx.store,
         temp: &tx.temp,
     };
     let mut normalizer = SessionNormalizer::new(view, CancelFlag::inert());
-    let (nf, _) = crate::exec::plan::program::into_normalized_program(prog, &mut normalizer)?;
-    let (strat, _lifetimes) = nf.into_stratified_program()?;
-    let magic = strat.magic_sets_rewrite(&view)?;
+    let (nf, _) = crate::exec::plan::program::into_normalized_program(prog, &mut normalizer).expect("test helper");
+    let (strat, _lifetimes) = nf.into_stratified_program().expect("test helper");
+    let magic = strat.magic_sets_rewrite(&view).expect("test helper");
     magic
         .into_strata()
         .into_iter()
@@ -366,8 +366,8 @@ mod magic_bypass_differential {
                 &format!("{script}\n:disable_magic_rewrite true"),
                 no_params(),
             )
-            .map_err(|e| miette!("bypass query: {e}"))?,
-        )?
+            .map_err(|e| miette!("bypass query: {e}")).expect("test helper"),
+        ).expect("test helper")
     }
 
     /// Transitive closure over a tiny deterministic chain (`0→1→…→n-1`).
@@ -428,10 +428,10 @@ mod magic_bypass_differential {
                 < count
             {
                 let y = rng.random_range(
-                    0..i64::try_from(vars).map_err(|_| miette!("vars does not fit i64"))?,
+                    0..i64::try_from(vars).expect("vars fits i64"),
                 );
                 let x = rng.random_range(
-                    0..i64::try_from(vars).map_err(|_| miette!("vars does not fit i64"))?,
+                    0..i64::try_from(vars).expect("vars fits i64"),
                 );
                 if y != x {
                     rows.insert((y, x));
@@ -447,7 +447,7 @@ mod magic_bypass_differential {
                 &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
                 no_params(),
             )
-            .map_err(|e| miette!("create: {e}"))?;
+            .expect("create");
         };
         load_rel("addr_of", &gen_rel(1, addrs));
         load_rel("assign", &gen_rel(2, assigns));

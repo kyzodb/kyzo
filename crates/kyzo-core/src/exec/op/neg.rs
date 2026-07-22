@@ -209,7 +209,10 @@ impl NegJoin {
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
         let (left_join_indices, right_join_indices) =
             self.joiner.join_indices(&bindings, self.right.bindings())?;
-        ensure!(!right_join_indices.is_empty(), "negation join requires at least one join key");
+        ensure!(
+            !right_join_indices.is_empty(),
+            "negation join requires at least one join key"
+        );
 
         let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();
         right_invert_indices.sort_by_key(|(_, b)| **b);

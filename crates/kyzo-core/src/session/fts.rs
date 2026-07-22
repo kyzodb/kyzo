@@ -30,8 +30,8 @@ mod tests {
 
     /// FTS end to end: `::fts create` + a search atom with a bound score.
     #[test]
-    fn fts_create_search_mem() -> Result<()>  {
-        let db = open_engine(SimStorage::new(7));
+    fn fts_create_search_mem() -> Result<()> {
+        let db = open_engine(SimStorage::new(7))?;
         db.run_script(
             "?[id, body] <- [[1, 'the quick brown fox'], [2, 'lazy dogs sleep']] \
              :create doc {id => body: String}",
@@ -51,7 +51,12 @@ mod tests {
             .map_err(|e| miette!("fts search: {e}"))?;
         assert_eq!(out.rows().len(), 1);
         assert_eq!(out.rows()[0][0].get_int(), Some(1));
-        assert!(out.rows()[0][1].get_float().ok_or_else(|| miette!("score"))? > 0.0);
+        assert!(
+            out.rows()[0][1]
+                .get_float()
+                .ok_or_else(|| miette!("score"))?
+                > 0.0
+        );
         // The searching row must survive a doc deletion (hook coverage).
         db.run_script("?[id] <- [[1]] :rm doc {id}", no_params())
             .map_err(|e| miette!("delete: {e}"))?;
@@ -67,14 +72,15 @@ mod tests {
     /// cross-batch resumption must deliver every hit exactly once — the
     /// same suspension state machine the materialized join pins.
     #[test]
-    fn search_hits_resume_across_output_batch_boundary() -> Result<()>  {
-        let db = open_engine(SimStorage::new(7));
+    fn search_hits_resume_across_output_batch_boundary() -> Result<()> {
+        let db = open_engine(SimStorage::new(7))?;
         let mut script = String::from("?[id, body] <- [");
         for i in 0..1200 {
             script.push_str(&format!("[{i}, 'common fox term {i}'],"));
         }
         script.push_str("] :create doc {id => body: String}");
-        db.run_script(&script, no_params()).map_err(|e| miette!("seed: {e}"))?;
+        db.run_script(&script, no_params())
+            .map_err(|e| miette!("seed: {e}"))?;
         db.run_script(
             "::fts create doc:txt {extractor: body, tokenizer: Simple}",
             no_params(),

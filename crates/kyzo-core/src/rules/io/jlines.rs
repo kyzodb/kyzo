@@ -258,8 +258,7 @@ mod tests {
         let content = r#"{"id": 1, "name": "a"}
 
 {"id": 2}"#;
-        let got =
-            run_fixed_rule(&JsonReader, vec![], options(content)?, CancelFlag::inert())?;
+        let got = run_fixed_rule(&JsonReader, vec![], options(content)?, CancelFlag::inert())?;
         assert_eq!(got.len(), 2);
         let want0: Tuple = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("a")]);
         let want1: Tuple = Tuple::from_vec(vec![DataValue::from(2i64), DataValue::Null]);
@@ -342,10 +341,12 @@ mod tests {
     /// Kernel JSON→DataValue door (via `data::json::json_to_datavalue`).
     #[test]
     fn json_conversion() -> Result<()> {
-        let v: JsonValue =
-            serde_json::from_str(r#"[1, 2.5, "x", null, true, [1], {"a": 1}]"#).into_diagnostic()?;
+        let v: JsonValue = serde_json::from_str(r#"[1, 2.5, "x", null, true, [1], {"a": 1}]"#)
+            .into_diagnostic()?;
         let got = json_to_datavalue(&v);
-        let l = got.get_slice().ok_or_else(|| miette!("test expected Some"))?;
+        let l = got
+            .get_slice()
+            .ok_or_else(|| miette!("test expected Some"))?;
         assert_eq!(l[0], DataValue::from(1i64));
         assert_eq!(l[1], DataValue::from(2.5f64));
         assert_eq!(l[2], DataValue::from("x"));

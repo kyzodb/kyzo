@@ -283,8 +283,7 @@ impl StoredRA {
                 let bounds = if self.filters.is_empty() {
                     None
                 } else {
-                    let (l_bound, u_bound) =
-                        compute_bounds(&self.filters, other_bindings)?;
+                    let (l_bound, u_bound) = compute_bounds(&self.filters, other_bindings)?;
                     if l_bound.iter().any(|b| *b != ScanBound::Least)
                         || u_bound.iter().any(|b| *b != ScanBound::Greatest)
                     {
@@ -460,8 +459,7 @@ impl StoredWithValidityRA {
         let bounds = if self.filters.is_empty() {
             None
         } else {
-            let (l_bound, u_bound) =
-                compute_bounds(&self.filters, other_bindings)?;
+            let (l_bound, u_bound) = compute_bounds(&self.filters, other_bindings)?;
             if l_bound.iter().any(|b| *b != ScanBound::Least)
                 || u_bound.iter().any(|b| *b != ScanBound::Greatest)
             {
@@ -566,7 +564,10 @@ mod segment_gate_tests {
     /// its bound key is exactly the relation's key (`prefix_join_batched`'s
     /// point-lookup case shares `segment_at` with this one; both dispatch
     /// through the same gate).
-    fn kv_relation(db: &impl Storage, name: &str) -> Result<crate::session::catalog::RelationHandle> {
+    fn kv_relation(
+        db: &impl Storage,
+        name: &str,
+    ) -> Result<crate::session::catalog::RelationHandle> {
         let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let handle = create_relation(
             &mut tx,
@@ -593,7 +594,11 @@ mod segment_gate_tests {
 
     /// Collect a `StoredRA`'s whole-relation scan under a given segment
     /// context — the same `iter_batched` door the compiled plan uses.
-    fn rows(ra: &StoredRA, tx: &impl ReadTx, segments: Segments<'_>) -> Result<Vec<Vec<DataValue>>> {
+    fn rows(
+        ra: &StoredRA,
+        tx: &impl ReadTx,
+        segments: Segments<'_>,
+    ) -> Result<Vec<Vec<DataValue>>> {
         let mut out = Vec::new();
         for b in ra
             .iter_batched(tx, segments)

@@ -146,15 +146,17 @@ pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_first(args: &[DataValue]) -> Result<DataValue> {
-    Ok(match args[0]
-        .get_slice()
-        .ok_or_else(|| miette!("'first' requires lists"))?
-        .first()
-        .cloned()
-    {
-        Some(v) => v,
-        None => DataValue::Null,
-    })
+    Ok(
+        match args[0]
+            .get_slice()
+            .ok_or_else(|| miette!("'first' requires lists"))?
+            .first()
+            .cloned()
+        {
+            Some(v) => v,
+            None => DataValue::Null,
+        },
+    )
 }
 
 pub(crate) fn op_get(args: &[DataValue]) -> Result<DataValue> {
@@ -270,22 +272,26 @@ pub(crate) fn op_json_to_scalar(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_last(args: &[DataValue]) -> Result<DataValue> {
-    Ok(match args[0]
-        .get_slice()
-        .ok_or_else(|| miette!("'last' requires lists"))?
-        .last()
-        .cloned()
-    {
-        Some(v) => v,
-        None => DataValue::Null,
-    })
+    Ok(
+        match args[0]
+            .get_slice()
+            .ok_or_else(|| miette!("'last' requires lists"))?
+            .last()
+            .cloned()
+        {
+            Some(v) => v,
+            None => DataValue::Null,
+        },
+    )
 }
 
 pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
         DataValue::Set(s) => i64::try_from(s.len()).map_err(|_| miette!("'length' overflow"))?,
         DataValue::List(l) => i64::try_from(l.len()).map_err(|_| miette!("'length' overflow"))?,
-        DataValue::Str(s) => i64::try_from(s.chars().count()).map_err(|_| miette!("'length' overflow"))?,
+        DataValue::Str(s) => {
+            i64::try_from(s.chars().count()).map_err(|_| miette!("'length' overflow"))?
+        }
         DataValue::Bytes(b) => i64::try_from(b.len()).map_err(|_| miette!("'length' overflow"))?,
         DataValue::Vector(v) => i64::try_from(v.len()).map_err(|_| miette!("'length' overflow"))?,
         data_value_any!() => bail!("'length' requires lists"),
@@ -502,7 +508,16 @@ fn deep_merge_json(value1: JsonValue, value2: JsonValue) -> JsonValue {
         (JsonValue::Object(mut obj1), JsonValue::Object(obj2)) => {
             for (key, value2) in obj2 {
                 let value1 = obj1.remove(&key);
-                obj1.insert(key, deep_merge_json(match value1 { Some(v) => v, None => Value::Null }, value2));
+                obj1.insert(
+                    key,
+                    deep_merge_json(
+                        match value1 {
+                            Some(v) => v,
+                            None => Value::Null,
+                        },
+                        value2,
+                    ),
+                );
             }
             JsonValue::Object(obj1)
         }
@@ -516,7 +531,8 @@ fn deep_merge_json(value1: JsonValue, value2: JsonValue) -> JsonValue {
 
 fn get_index(mut i: i64, total: usize, is_upper: bool) -> Result<usize> {
     if i < 0 {
-        let total_i = i64::try_from(total).map_err(|_| miette!("collection length does not fit i64"))?;
+        let total_i =
+            i64::try_from(total).map_err(|_| miette!("collection length does not fit i64"))?;
         i += total_i;
     }
     Ok(if i >= 0 {
@@ -551,7 +567,8 @@ fn get_impl(args: &[DataValue]) -> Result<DataValue> {
                     let i = i
                         .as_int()
                         .ok_or_else(|| miette!("index '{:?}' not found in json", i))?;
-                    let idx = usize::try_from(i).map_err(|_| miette!("index '{i}' not found in json"))?;
+                    let idx =
+                        usize::try_from(i).map_err(|_| miette!("index '{i}' not found in json"))?;
                     json.get(idx)
                         .ok_or_else(|| miette!("index '{}' not found in json", i))?
                         .clone()

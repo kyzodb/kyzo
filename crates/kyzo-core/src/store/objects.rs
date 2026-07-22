@@ -207,8 +207,7 @@ impl ObjectRef {
         class: ObjectDurabilityClass,
         confirmed_at: CommitOrdinal,
     ) -> PermanenceWitness {
-        let witness =
-            PermanenceWitness::from_sealed(self, content_hash, class, confirmed_at);
+        let witness = PermanenceWitness::from_sealed(self, content_hash, class, confirmed_at);
         witness
     }
 
@@ -1000,7 +999,9 @@ mod durability_dominance_tests {
                 assert_eq!(proposed, more_domains);
             }
             other => {
-                return Err(miette::miette!("expected IncomparableClasses, got {other:?}"));
+                return Err(miette::miette!(
+                    "expected IncomparableClasses, got {other:?}"
+                ));
             }
         }
         Ok(())

@@ -147,20 +147,17 @@ fn page_rank(
         // in-neighbor sum is a sequential f64 fold in fixed CSR order, so the
         // whole map is byte-identical at any thread count. `cancel.check()`
         // is polled once per node.
-        let updated = par_try_map(
-            (0..n_u32).collect::<Vec<_>>(),
-            |u| -> Result<(f64, f64)> {
-                let incoming_total = graph
-                    .in_neighbors(u)
-                    .map(|v| out_scores[crate::rules::convert::usize_from_u32(v)])
-                    .sum::<f64>();
-                let ui = crate::rules::convert::usize_from_u32(u);
-                let new_score = base_score + damping_factor * incoming_total;
-                let delta = f64::abs(new_score - prev[ui]);
-                cancel.check()?;
-                Ok((new_score, delta))
-            },
-        )?;
+        let updated = par_try_map((0..n_u32).collect::<Vec<_>>(), |u| -> Result<(f64, f64)> {
+            let incoming_total = graph
+                .in_neighbors(u)
+                .map(|v| out_scores[crate::rules::convert::usize_from_u32(v)])
+                .sum::<f64>();
+            let ui = crate::rules::convert::usize_from_u32(u);
+            let new_score = base_score + damping_factor * incoming_total;
+            let delta = f64::abs(new_score - prev[ui]);
+            cancel.check()?;
+            Ok((new_score, delta))
+        })?;
 
         // Cross-node reductions are order-dependent, so fold sequentially
         // over the canonically ordered `Vec` (never a parallel reduce):
@@ -236,7 +233,10 @@ mod tests {
             let mut sum_delta = 0_f64;
             let mut max_delta = 0_f64;
             for u in 0..node_count {
-                let sum: f64 = in_adj[u].iter().map(|&v| out_share[crate::rules::convert::usize_from_u32(v)]).sum();
+                let sum: f64 = in_adj[u]
+                    .iter()
+                    .map(|&v| out_share[crate::rules::convert::usize_from_u32(v)])
+                    .sum();
                 next[u] = base + damping * sum;
                 let d = f64::abs(next[u] - prev[u]);
                 sum_delta += d;
@@ -286,7 +286,10 @@ mod tests {
         for _ in 0..max_iterations {
             let mut error = 0_f64;
             for u in 0..node_count {
-                let sum: f64 = in_adj[u].iter().map(|&v| out_scores[crate::rules::convert::usize_from_u32(v)]).sum();
+                let sum: f64 = in_adj[u]
+                    .iter()
+                    .map(|&v| out_scores[crate::rules::convert::usize_from_u32(v)])
+                    .sum();
                 let old = scores[u];
                 let new = base + damping * sum;
                 scores[u] = new;
@@ -306,7 +309,9 @@ mod tests {
         let mut state = 0x1234_5678_9abc_def0u64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             crate::rules::convert::u32_low(state >> 33) % n
         };
         let mut edges = vec![];
@@ -458,8 +463,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
 
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         // Defaults the rule applies: theta 0.85, epsilon 1e-4, iterations 10.
@@ -485,8 +489,7 @@ mod tests {
             .num_threads(1)
             .build()
             .into_diagnostic()?;
-        let seq =
-            single.install(|| page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()))?;
+        let seq = single.install(|| page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert()))?;
         for _ in 0..20 {
             let par = page_rank(&graph, 0.85, 0.0, 30, CancelFlag::inert())?;
             assert_eq!(

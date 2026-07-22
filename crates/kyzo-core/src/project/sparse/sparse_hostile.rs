@@ -93,7 +93,12 @@ fn params(k: usize) -> SparseSearchParams {
 }
 
 /// Run and project (key, score-bits) so we can compare EXACT f32 bit patterns.
-fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Result<Vec<(i64, u32)>> {
+fn run_bits(
+    db: &impl Storage,
+    f: &Fixture,
+    query: &[(u32, f32)],
+    k: usize,
+) -> Result<Vec<(i64, u32)>> {
     let rtx = db.read_tx()?;
     let hits = search_rows(Sparse::search_index(
         &rtx,
@@ -110,7 +115,7 @@ fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> R
         let score = score_dv
             .get_float()
             .ok_or_else(|| miette!("expected float score"))?;
-        out.push((key, super::sparse::f64_to_f32(score).to_bits()));
+        out.push((key, crate::exec::stdlib::convert::f64_to_f32(score).to_bits()));
     }
     Ok(out)
 }

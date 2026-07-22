@@ -2860,7 +2860,7 @@ mod live_certificate_verifiability {
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("live-subject")),
             crate::data::statement::StatementPredicate::new("about")
-                .map_err(|e| miette!("predicate: {e}"))?,
+                .expect("predicate"),
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
             StatementContext::Scoped(ContextId::from_digest([0xC4; 32])),
@@ -2968,7 +2968,7 @@ mod live_certificate_verifiability {
         let public_only = keys
             .lookup(&key.id())
             .map_err(|e| miette!("lookup: {e}"))?
-            .map_err(|e| miette!("public install: {e}"))?;
+            .ok_or_else(|| miette!("public install: missing key"))?;
         assert!(
             !public_only.can_sign(),
             "table lookup must not reconstitute signing"
@@ -3041,7 +3041,7 @@ mod live_certificate_verifiability {
             .root_chain()
             .links()
             .last()
-            .map_err(|e| miette!("genesis seats carry a tip link: {e}"))?;
+            .ok_or_else(|| miette!("genesis seats carry a tip link"))?;
         let predecessor_history_digest = *tip.predecessor_root().as_bytes();
         let (record, cert) =
             admit_record(claim_parts(seats.store_id(), live)).map_err(|e| miette!("admit: {e}"))?;
@@ -3142,7 +3142,7 @@ mod access_level_mutation_refuse {
     /// (below that floor) refuses every mutation door and commits nothing.
     #[test]
     fn hidden_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()> {
-        let db = open_engine(SimStorage::new(0xACC5_0001));
+        let db = open_engine(SimStorage::new(0xACC5_0001))?;
         db.run_script("?[k, v] <- [] :create h {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :put h {k => v}", no_params())
@@ -3185,7 +3185,7 @@ mod access_level_mutation_refuse {
     /// + commit-nothing contract as Hidden (production `< Protected` gate).
     #[test]
     fn read_only_relation_refuses_put_rm_update_and_commits_nothing() -> Result<()> {
-        let db = open_engine(SimStorage::new(0xACC5_0002));
+        let db = open_engine(SimStorage::new(0xACC5_0002))?;
         db.run_script("?[k, v] <- [] :create r {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :put r {k => v}", no_params())
@@ -3255,14 +3255,14 @@ mod bulk_write_tests {
     /// write run), and removals (retraction through the same key encoder).
     fn run_seeded_workload(db: &Engine<SimStorage>) {
         db.run_script("?[k, v] <- [] :create w {k => v}", no_params())
-            .map_err(|e| miette!("create: {e}"))?;
+            .map_err(|e| miette!("create: {e}")).expect("test helper");
         let mut fresh = String::from("?[k, v] <- [");
         for i in 0..500i64 {
             fresh.push_str(&format!("[{i},{}],", i * 3));
         }
         fresh.push_str("] :put w {k => v}");
         db.run_script(&fresh, no_params())
-            .map_err(|e| miette!("bulk insert: {e}"))?;
+            .map_err(|e| miette!("bulk insert: {e}")).expect("test helper");
 
         // Re-put 200 of those keys with a different value: exercises the
         // probe's FOUND branch (`current_row` returns `Some`) through the
@@ -3273,7 +3273,7 @@ mod bulk_write_tests {
         }
         updates.push_str("] :put w {k => v}");
         db.run_script(&updates, no_params())
-            .map_err(|e| miette!("re-put: {e}"))?;
+            .map_err(|e| miette!("re-put: {e}")).expect("test helper");
 
         // Retract 100 keys: exercises `remove_from_relation`'s use of the
         // same key encoder for a Retract row.
@@ -3283,7 +3283,7 @@ mod bulk_write_tests {
         }
         removals.push_str("] :rm w {k}");
         db.run_script(&removals, no_params())
-            .map_err(|e| miette!("bulk remove: {e}"))?;
+            .map_err(|e| miette!("bulk remove: {e}")).expect("test helper");
     }
 
     /// The bulk-write allocation fix (`encode_key_with_suffix` replacing
@@ -3297,7 +3297,7 @@ mod bulk_write_tests {
     /// probe, put/remove, commit).
     #[test]
     fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() -> Result<()> {
-        let db = open_engine(SimStorage::new(0xB01C_0001));
+        let db = open_engine(SimStorage::new(0xB01C_0001))?;
         run_seeded_workload(&db);
 
         let tx = db.store.read_tx().map_err(|e| miette!("read tx: {e}"))?;
@@ -3393,7 +3393,7 @@ mod bulk_write_tests {
     /// early.
     #[test]
     fn per_row_write_validity_at_terminal_instant_refuses_whole_mutation() -> Result<()> {
-        let db = open_engine(SimStorage::new(0xB01C_0002));
+        let db = open_engine(SimStorage::new(0xB01C_0002))?;
         db.run_script("?[k, v] <- [] :create w3 {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
 
@@ -3432,7 +3432,7 @@ mod bulk_write_tests {
     /// wrote, not the value the refused one tried to place.
     #[test]
     fn insert_of_an_existing_key_refuses_and_commits_nothing() -> Result<()> {
-        let db = open_engine(SimStorage::new(0xB01C_0003));
+        let db = open_engine(SimStorage::new(0xB01C_0003))?;
         db.run_script("?[k, v] <- [] :create wi {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :insert wi {k => v}", no_params())
@@ -3467,7 +3467,7 @@ mod bulk_write_tests {
     /// updates a key it just wrote. Updating an absent key must refuse.
     #[test]
     fn update_of_a_missing_key_refuses() -> Result<()> {
-        let db = open_engine(SimStorage::new(0xB01C_0004));
+        let db = open_engine(SimStorage::new(0xB01C_0004))?;
         db.run_script("?[k, v] <- [] :create wu {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] <- [[1, 10]] :put wu {k => v}", no_params())
@@ -3493,7 +3493,7 @@ mod bulk_write_tests {
     /// omitted one must retain its prior stored value, untouched.
     #[test]
     fn update_carries_forward_an_omitted_non_key_column() -> Result<()> {
-        let db = open_engine(SimStorage::new(0xB01C_0005));
+        let db = open_engine(SimStorage::new(0xB01C_0005))?;
         db.run_script("?[k, a, b] <- [] :create wc {k => a, b}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script(
@@ -3548,7 +3548,7 @@ mod trigger_cache_battery {
             .iter()
             .map(|r| {
                 r.iter()
-                    .map(|v| v.get_int().ok_or_else(|| miette!("int"))?)
+                    .map(|v| v.get_int().expect("int"))
                     .collect()
             })
             .collect();
@@ -3561,7 +3561,7 @@ mod trigger_cache_battery {
     /// the trigger pipeline works at all — nothing else in the tree tests it.
     #[test]
     fn rs3_two_put_triggers_fire_distinctly_in_one_session() -> Result<()> {
-        let db = open_engine(SimStorage::new(41));
+        let db = open_engine(SimStorage::new(41))?;
         db.run_script("?[a, b] <- [[0, 0]] :create src {a => b}", no_params())
             .map_err(|e| miette!("create src: {e}"))?;
         db.run_script("?[a, b] <- [[0, 0]] :create mirror {a => b}", no_params())
@@ -3603,7 +3603,7 @@ mod trigger_cache_battery {
     /// together.
     #[test]
     fn replace_is_atomic_clear_and_insert() -> Result<()> {
-        let db = open_engine(SimStorage::new(3));
+        let db = open_engine(SimStorage::new(3))?;
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4]] :create edge {a, b}",
             no_params(),

@@ -540,11 +540,11 @@ impl<S: Storage> Engine<S> {
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use crate::session::catalog::{Catalog, RelationHasConstraints};
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
+    use miette::{Result, miette};
 
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()
@@ -575,8 +575,8 @@ mod tests {
     /// `note_constraints` collection, or the `execute_single` hook) makes
     /// the `expect_err` here pass a violating commit and the test fail.
     #[test]
-    fn check_constraint_denies_violating_insert_with_witnesses() -> Result<()>  {
-        let db = open_engine(SimStorage::new(21));
+    fn check_constraint_denies_violating_insert_with_witnesses() -> Result<()> {
+        let db = open_engine(SimStorage::new(21))?;
         db.run_script("?[k, v] <- [[1, 5]] :create scores {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script(
@@ -597,8 +597,7 @@ mod tests {
             )
             .expect_err("violating insert must be denied");
         let viol = err
-            .downcast_ref::<ConstraintViolation>()
-            .map_err(|e| miette!("typed ConstraintViolation: {e}"))?;
+            .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed ConstraintViolation:"))?;
         assert_eq!(viol.name, "nonneg");
         assert_eq!(viol.total, 1);
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
@@ -622,8 +621,8 @@ mod tests {
     /// denied (child-side attachment), and deleting a parent that still has
     /// children is denied (parent-side attachment of the SAME constraint).
     #[test]
-    fn fk_constraint_fires_on_child_insert_and_parent_delete() -> Result<()>  {
-        let db = open_engine(SimStorage::new(22));
+    fn fk_constraint_fires_on_child_insert_and_parent_delete() -> Result<()> {
+        let db = open_engine(SimStorage::new(22))?;
         db.run_script("?[id] <- [[1]] :create parent {id}", no_params())
             .map_err(|e| miette!("create parent: {e}"))?;
         db.run_script("?[id, fk] <- [] :create child {id => fk}", no_params())
@@ -651,7 +650,8 @@ mod tests {
         let err = db
             .run_script("?[id, fk] <- [[11, 2]] :put child {id, fk}", no_params())
             .expect_err("orphan child denied");
-        let viol = err.downcast_ref::<ConstraintViolation>().map_err(|e| miette!("typed: {e}"))?;
+        let viol = err
+            .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed:"))?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(2)])];
         assert_eq!(viol.witnesses, want);
 
@@ -667,15 +667,15 @@ mod tests {
             .map_err(|e| miette!("child removal: {e}"))?;
         db.run_script("?[id] <- [[1]] :rm parent {id}", no_params())
             .map_err(|e| miette!("parent delete commits once no child refers to it: {e}"))?;
-            Ok(())
+        Ok(())
     }
 
     /// L4: creating a constraint over already-violating data refuses
     /// creation with the offending rows; after repairing, creation
     /// succeeds; dropping makes previously denied writes commit again.
     #[test]
-    fn creation_over_violating_data_is_refused_with_witnesses() -> Result<()>  {
-        let db = open_engine(SimStorage::new(23));
+    fn creation_over_violating_data_is_refused_with_witnesses() -> Result<()> {
+        let db = open_engine(SimStorage::new(23))?;
         db.run_script(
             "?[k, v] <- [[1, -9], [2, 3]] :create scores {k => v}",
             no_params(),
@@ -689,8 +689,7 @@ mod tests {
             )
             .expect_err("creation over violating data must refuse");
         let rej = err
-            .downcast_ref::<ConstraintRejectedOnCreation>()
-            .map_err(|e| miette!("typed creation rejection: {e}"))?;
+            .downcast_ref::<ConstraintRejectedOnCreation>().ok_or_else(|| miette!("typed creation rejection:"))?;
         assert_eq!(rej.total, 1);
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1),
@@ -729,8 +728,8 @@ mod tests {
     /// constraints, and the denial rolls back the user's write AND the
     /// trigger's write together.
     #[test]
-    fn trigger_writes_are_constrained_and_abort_is_atomic() -> Result<()>  {
-        let db = open_engine(SimStorage::new(24));
+    fn trigger_writes_are_constrained_and_abort_is_atomic() -> Result<()> {
+        let db = open_engine(SimStorage::new(24))?;
         db.run_script("?[x] <- [] :create a {x}", no_params())
             .map_err(|e| miette!("create a: {e}"))?;
         db.run_script("?[y] <- [] :create b {y}", no_params())
@@ -750,7 +749,7 @@ mod tests {
         db.run_script("?[x] <- [[5]] :put a {x}", no_params())
             .map_err(|e| miette!("satisfying cascade commits: {e}"))?;
         assert_eq!(
-            ints(&db.run_script("?[y] := *b[y]", no_params()?)?),
+            ints(&db.run_script("?[y] := *b[y]", no_params())?)?,
             vec![vec![5]]
         );
 
@@ -759,17 +758,18 @@ mod tests {
         let err = db
             .run_script("?[x] <- [[50]] :put a {x}", no_params())
             .expect_err("trigger write violates b's constraint");
-        let viol = err.downcast_ref::<ConstraintViolation>().map_err(|e| miette!("typed: {e}"))?;
+        let viol = err
+            .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed:"))?;
         assert_eq!(viol.name, "small_b");
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(50)])];
         assert_eq!(viol.witnesses, want);
         assert_eq!(
-            ints(&db.run_script("?[x] := *a[x]", no_params()?)?),
+            ints(&db.run_script("?[x] := *a[x]", no_params())?)?,
             vec![vec![5]],
             "the user's own write rolled back with the trigger's"
         );
         assert_eq!(
-            ints(&db.run_script("?[y] := *b[y]", no_params()?)?),
+            ints(&db.run_script("?[y] := *b[y]", no_params())?)?,
             vec![vec![5]],
             "the trigger's write rolled back too"
         );
@@ -780,8 +780,8 @@ mod tests {
     /// refusal naming the constraint — never a hang — and the write it was
     /// checking rolls back.
     #[test]
-    fn constraint_exceeding_budget_is_a_typed_refusal() -> Result<()>  {
-        let db = open_engine(SimStorage::new(25));
+    fn constraint_exceeding_budget_is_a_typed_refusal() -> Result<()> {
+        let db = open_engine(SimStorage::new(25))?;
         db.run_script(
             "?[a, b] <- [[1, 2], [2, 3], [3, 4], [4, 2]] :create edge {a, b}",
             no_params(),
@@ -820,14 +820,13 @@ mod tests {
             "the refusal is the typed budget refusal: {msg}"
         );
         // The insert rolled back with the refusal.
-        let out = db
-            .run_script("?[a, b] := *edge[a, b]", no_params())?;
+        let out = db.run_script("?[a, b] := *edge[a, b]", no_params())?;
         assert_eq!(out.rows().len(), 4, "the guarded insert rolled back");
 
         // The same insert under the default budget commits.
         db.run_script("?[a, b] <- [[9, 9]] :put edge {a, b}", no_params())
             .map_err(|e| miette!("commits under the default budget: {e}"))?;
-            Ok(())
+        Ok(())
     }
 
     /// Determinism: the same violation yields byte-identical witnesses —
@@ -835,21 +834,22 @@ mod tests {
     /// every rayon thread count and on both storage backends.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn witnesses_are_deterministic_across_thread_counts_and_backends() -> Result<()>  {
+    fn witnesses_are_deterministic_across_thread_counts_and_backends() -> Result<()> {
         fn violate<S: Storage>(db: &Engine<S>) -> (String, usize, Vec<Tuple>) {
             db.run_script("?[k, v] <- [[0, 0]] :create scores {k => v}", no_params())
-                .map_err(|e| miette!("create: {e}"))?;
+                .map_err(|e| miette!("create: {e}")).expect("test helper");
             db.run_script(
                 "::constraint create nonneg { ?[k, v] := *scores[k, v], v < 0 }",
                 no_params(),
             )
-            .map_err(|e| miette!("constraint: {e}"))?;
+            .map_err(|e| miette!("constraint: {e}")).expect("test helper");
             let rows: Vec<String> = (1..=20).map(|i| format!("[{i}, {}]", -i)).collect();
             let script = format!("?[k, v] <- [{}] :put scores {{k, v}}", rows.join(", "));
             let err = db
                 .run_script(&script, no_params())
                 .expect_err("20 violations denied");
-            let viol = err.downcast_ref::<ConstraintViolation>().map_err(|e| miette!("typed: {e}"))?;
+            let viol = err
+                .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed:")).expect("test helper");
             (viol.name.clone(), viol.total, viol.witnesses.clone())
         }
 
@@ -857,26 +857,27 @@ mod tests {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
-                .map_err(|e| miette!("thread pool: {e}"))?
+                .expect("thread pool")
                 .install(f)
         }
 
-        let baseline = at_thread_count(1, || violate(&open_engine(SimStorage::new(7))));
+        let baseline = at_thread_count(1, || violate(&open_engine(SimStorage::new(7)).expect("engine")));
         assert_eq!(baseline.1, 20, "full violation count reported");
         assert_eq!(baseline.2.len(), WITNESS_CAP, "witness list capped");
         // Sorted ⇒ the cap keeps the smallest keys 1..=8.
         assert_eq!(
-            baseline.2.first()?,
+            baseline.2.first().expect("witness"),
             &Tuple::from_vec(vec![DataValue::from(1), DataValue::from(-1)])
         );
 
         for threads in [2, 4] {
-            let got = at_thread_count(threads, || violate(&open_engine(SimStorage::new(7))));
+            let got = at_thread_count(threads, || violate(&open_engine(SimStorage::new(7)).expect("engine")));
             assert_eq!(got, baseline, "witnesses differ at {threads} threads");
         }
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let on_fjall = at_thread_count(2, || {
-            violate(&open_engine(new_fjall_storage(dir.path())?))
+            let path = dir.path();
+            violate(&open_engine(new_fjall_storage(path).expect("fjall")).expect("engine"))
         });
         assert_eq!(on_fjall, baseline, "witnesses differ across backends");
         Ok(())
@@ -886,8 +887,8 @@ mod tests {
     /// relations, duplicate names, and missing referenced relations are all
     /// typed refusals, and none of them attaches anything.
     #[test]
-    fn creation_refusals_are_typed_and_attach_nothing() -> Result<()>  {
-        let db = open_engine(SimStorage::new(26));
+    fn creation_refusals_are_typed_and_attach_nothing() -> Result<()> {
+        let db = open_engine(SimStorage::new(26))?;
         db.run_script("?[k] <- [[1]] :create r {k}", no_params())
             .map_err(|e| miette!("create r: {e}"))?;
 
@@ -988,8 +989,8 @@ mod tests {
     /// in a constraint is refused until the constraint is dropped —
     /// otherwise sibling writes would fail forever on a dangling reference.
     #[test]
-    fn destroy_rename_replace_refused_while_constrained() -> Result<()>  {
-        let db = open_engine(SimStorage::new(27));
+    fn destroy_rename_replace_refused_while_constrained() -> Result<()> {
+        let db = open_engine(SimStorage::new(27))?;
         db.run_script("?[id] <- [[1]] :create parent {id}", no_params())
             .map_err(|e| miette!("create parent: {e}"))?;
         db.run_script("?[id, fk] <- [] :create child {id => fk}", no_params())
@@ -1021,7 +1022,7 @@ mod tests {
             .map_err(|e| miette!(":replace after drop: {e}"))?;
         db.run_script("::remove parent", no_params())
             .map_err(|e| miette!("remove after drop: {e}"))?;
-            Ok(())
+        Ok(())
     }
 
     /// Removing a constraint is gated by the same access rung that created it
@@ -1029,8 +1030,8 @@ mod tests {
     /// become a backdoor for dropping a denial its writers still depend on.
     /// (Hostile-review finding: the drop path once ran with no access check.)
     #[test]
-    fn drop_requires_the_same_access_rung_as_create() -> Result<()>  {
-        let db = open_engine(SimStorage::new(30));
+    fn drop_requires_the_same_access_rung_as_create() -> Result<()> {
+        let db = open_engine(SimStorage::new(30))?;
         db.run_script("?[k, v] <- [[1, 5]] :create scores {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script(
@@ -1083,8 +1084,8 @@ mod tests {
     /// depth-ceiling refusal that aborts the transaction whole — never a
     /// silent stop, never an unbounded loop.
     #[test]
-    fn trigger_cascade_runs_deep_and_cycles_hit_the_typed_ceiling() -> Result<()>  {
-        let db = open_engine(SimStorage::new(28));
+    fn trigger_cascade_runs_deep_and_cycles_hit_the_typed_ceiling() -> Result<()> {
+        let db = open_engine(SimStorage::new(28))?;
         for rel in ["a", "b", "c"] {
             db.run_script(&format!("?[x] <- [] :create {rel} {{x}}"), no_params())
                 .map_err(|e| miette!("create: {e}"))?;
@@ -1103,7 +1104,7 @@ mod tests {
         db.run_script("?[x] <- [[7]] :put a {x}", no_params())
             .map_err(|e| miette!("cascading put: {e}"))?;
         assert_eq!(
-            ints(&db.run_script("?[x] := *c[x]", no_params()?)?),
+            ints(&db.run_script("?[x] := *c[x]", no_params())?)?,
             vec![vec![7]],
             "the cascade reached depth 2 (the session draft's silent \
              depth-1 cut would have dropped this)"
@@ -1131,9 +1132,7 @@ mod tests {
             "typed ceiling refusal, got: {msg}"
         );
         assert_eq!(
-            db.run_script("?[x] := *s[x]", no_params())?
-                .rows()
-                .len(),
+            db.run_script("?[x] := *s[x]", no_params())?.rows().len(),
             0,
             "the aborted cascade kept nothing"
         );
@@ -1143,8 +1142,8 @@ mod tests {
     /// Secondary uniqueness as a denial rule: two distinct dependents for
     /// one logical key are denied.
     #[test]
-    fn uniqueness_constraint_shape() -> Result<()>  {
-        let db = open_engine(SimStorage::new(29));
+    fn uniqueness_constraint_shape() -> Result<()> {
+        let db = open_engine(SimStorage::new(29))?;
         // email is a dependent column; k is the primary key.
         db.run_script(
             "?[k, email] <- [[1, 'a@x.com']] :create users {k => email}",
@@ -1170,7 +1169,8 @@ mod tests {
                 no_params(),
             )
             .expect_err("duplicate email denied");
-        let viol = err.downcast_ref::<ConstraintViolation>().map_err(|e| miette!("typed: {e}"))?;
+        let viol = err
+            .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed:"))?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from("a@x.com")])];
         assert_eq!(viol.witnesses, want);
         Ok(())

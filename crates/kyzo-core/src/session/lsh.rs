@@ -31,8 +31,8 @@ mod tests {
     /// LSH end to end: near-duplicate candidates come back; `::index drop`
     /// removes the index and the search atom then refuses typed.
     #[test]
-    fn lsh_create_search_drop_mem() -> Result<()>  {
-        let db = open_engine(SimStorage::new(7));
+    fn lsh_create_search_drop_mem() -> Result<()> {
+        let db = open_engine(SimStorage::new(7))?;
         db.run_script(
             "?[id, body] <- [[1, 'a b c d e f g h i j'], [2, 'a b c d e f g h i z'], [3, 'q r s t u v w x y zz']] \
              :create doc {id => body: String}",
@@ -54,8 +54,8 @@ mod tests {
         let ids: Vec<i64> = out
             .rows()
             .iter()
-            .map(|r| r[0].get_int().ok_or_else(|| miette!("id"))?)
-            .collect();
+            .map(|r| r[0].get_int().ok_or_else(|| miette!("id")))
+            .collect::<Result<_>>()?;
         assert!(
             ids.contains(&2),
             "near-duplicate must be a candidate: {ids:?}"

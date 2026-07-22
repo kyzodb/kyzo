@@ -93,7 +93,10 @@ fn prim(
     cancel: CancelFlag,
 ) -> Result<Vec<(u32, u32, f64)>> {
     let mut visited = vec![false; crate::rules::convert::usize_from_u32(graph.node_count())];
-    let mut mst_edges = Vec::with_capacity(match graph.node_count() { 0 => 0, n => crate::rules::convert::usize_from_u32(n - 1) });
+    let mut mst_edges = Vec::with_capacity(match graph.node_count() {
+        0 => 0,
+        n => crate::rules::convert::usize_from_u32(n - 1),
+    });
     let mut pq = PriorityQueue::new();
 
     let mut relax_edges_at_node = |node: u32, pq: &mut PriorityQueue<_, _>| {
@@ -111,7 +114,12 @@ fn prim(
     relax_edges_at_node(starting, &mut pq);
 
     while let Some((to_node, (Reverse(OrderedFloat(cost)), from_node))) = pq.pop() {
-        if mst_edges.len() == match graph.node_count() { 0 => 0, n => crate::rules::convert::usize_from_u32(n - 1) } {
+        if mst_edges.len()
+            == match graph.node_count() {
+                0 => 0,
+                n => crate::rules::convert::usize_from_u32(n - 1),
+            }
+        {
             break;
         }
         mst_edges.push((from_node, to_node, cost));
@@ -160,8 +168,7 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
             Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
@@ -194,8 +201,7 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
             Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),

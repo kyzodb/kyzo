@@ -109,7 +109,10 @@ pub(crate) fn op_regex_extract_first(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(s), DataValue::Regex(r)) => {
             let found = compile_regex_value(r)?.find(s).map(DataValue::from);
-            Ok(match found { Some(v) => v, None => DataValue::Null })
+            Ok(match found {
+                Some(v) => v,
+                None => DataValue::Null,
+            })
         }
         (data_value_any!(), data_value_any!()) => bail!("'regex_extract_first' requires strings"),
     }
@@ -129,7 +132,9 @@ pub(crate) fn op_regex_replace(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
             compile_regex_value(r)?.replace(s, rp).into_owned(),
         )),
-        (data_value_any!(), data_value_any!(), data_value_any!()) => bail!("'regex_replace' requires strings"),
+        (data_value_any!(), data_value_any!(), data_value_any!()) => {
+            bail!("'regex_replace' requires strings")
+        }
     }
 }
 

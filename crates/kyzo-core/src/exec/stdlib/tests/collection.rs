@@ -8,15 +8,14 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use miette::miette;
 use crate::exec::stdlib::collection::*;
 use crate::exec::stdlib::temporal_format::*;
 use kyzo_model::data_value_any;
 use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs};
+use miette::miette;
 use serde_json::json;
-
 
 #[test]
 fn test_list() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -86,10 +85,7 @@ fn test_length() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         op_length(&[DataValue::Str("abc".into())])?,
         DataValue::from(3)
     );
-    assert_eq!(
-        op_length(&[DataValue::List(vec![])])?,
-        DataValue::from(0)
-    );
+    assert_eq!(op_length(&[DataValue::List(vec![])])?, DataValue::from(0));
     assert_eq!(
         op_length(&[DataValue::Bytes([].into())])?,
         DataValue::from(0)
@@ -132,14 +128,8 @@ fn test_sort_reverse() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 #[test]
 fn test_first_last() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    assert_eq!(
-        op_first(&[DataValue::List(vec![])])?,
-        DataValue::Null,
-    );
-    assert_eq!(
-        op_last(&[DataValue::List(vec![])])?,
-        DataValue::Null,
-    );
+    assert_eq!(op_first(&[DataValue::List(vec![])])?, DataValue::Null,);
+    assert_eq!(op_last(&[DataValue::List(vec![])])?, DataValue::Null,);
     assert_eq!(
         op_first(&[DataValue::List(vec![
             DataValue::from(1),
@@ -432,19 +422,13 @@ fn format_timestamp_numeric_agreed() -> Result<(), Box<dyn std::error::Error + S
     // Millisecond subsecond -> exactly 3 digits.
     assert_eq!(fmt_n(1.5)?, "1970-01-01T00:00:01.500+00:00");
     assert_eq!(fmt_n(-1.5)?, "1969-12-31T23:59:58.500+00:00");
-    assert_eq!(
-        fmt_n(1600000000.5)?,
-        "2020-09-13T12:26:40.500+00:00"
-    );
+    assert_eq!(fmt_n(1600000000.5)?, "2020-09-13T12:26:40.500+00:00");
     assert_eq!(fmt_n(0.123)?, "1970-01-01T00:00:00.123+00:00");
     assert_eq!(fmt_n(0.001)?, "1970-01-01T00:00:00.001+00:00");
     // Sub-millisecond input is truncated to whole seconds by the `* 1000` path.
     assert_eq!(fmt_n(0.0005)?, "1970-01-01T00:00:00+00:00");
     // Fractional beyond milliseconds is dropped (the op keeps only millis).
-    assert_eq!(
-        fmt_n(1234567890.123456)?,
-        "2009-02-13T23:31:30.123+00:00"
-    );
+    assert_eq!(fmt_n(1234567890.123456)?, "2009-02-13T23:31:30.123+00:00");
     // Pre-epoch and small positive years (0000..=9999) print 4-digit years.
     assert_eq!(fmt_n(-2208988800.0)?, "1900-01-01T00:00:00+00:00");
     assert_eq!(fmt_n(-30610224000.0)?, "1000-01-01T00:00:00+00:00");
@@ -455,7 +439,8 @@ fn format_timestamp_numeric_agreed() -> Result<(), Box<dyn std::error::Error + S
 }
 
 #[test]
-fn format_timestamp_validity_input_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn format_timestamp_validity_input_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+{
     use kyzo_model::value::Validity;
     let f = |micros: i64| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let vld = DataValue::Validity(
@@ -478,18 +463,9 @@ fn format_timestamp_timezone_agreed() -> Result<(), Box<dyn std::error::Error + 
     let z = |n: f64, tz: &str| fmt(&[DataValue::from(n), DataValue::from(tz)]);
     // Named zones apply the offset in effect AT that instant (incl. DST).
     assert_eq!(z(0.0, "UTC")?, "1970-01-01T00:00:00+00:00");
-    assert_eq!(
-        z(0.0, "Asia/Shanghai")?,
-        "1970-01-01T08:00:00+08:00"
-    );
-    assert_eq!(
-        z(0.0, "America/New_York")?,
-        "1969-12-31T19:00:00-05:00"
-    );
-    assert_eq!(
-        z(0.0, "Europe/London")?,
-        "1970-01-01T01:00:00+01:00"
-    );
+    assert_eq!(z(0.0, "Asia/Shanghai")?, "1970-01-01T08:00:00+08:00");
+    assert_eq!(z(0.0, "America/New_York")?, "1969-12-31T19:00:00-05:00");
+    assert_eq!(z(0.0, "Europe/London")?, "1970-01-01T01:00:00+01:00");
     assert_eq!(z(0.0, "Asia/Kolkata")?, "1970-01-01T05:30:00+05:30");
     // September 2020: New York is on EDT (-04:00), not EST.
     assert_eq!(
@@ -514,18 +490,9 @@ fn parse_timestamp_agreed() -> Result<(), Box<dyn std::error::Error + Send + Syn
     assert_eq!(parse_secs("1970-01-01T00:00:00Z")?, 0.0);
     assert_eq!(parse_secs("2020-01-01T00:00:00Z")?, 1577836800.0);
     assert_eq!(parse_secs("2020-01-01T00:00:00.5Z")?, 1577836800.5);
-    assert_eq!(
-        parse_secs("2020-01-01T00:00:00+08:00")?,
-        1577808000.0
-    );
-    assert_eq!(
-        parse_secs("2020-01-01T00:00:00-05:00")?,
-        1577854800.0
-    );
-    assert_eq!(
-        parse_secs("2020-01-01T00:00:00-00:00")?,
-        1577836800.0
-    );
+    assert_eq!(parse_secs("2020-01-01T00:00:00+08:00")?, 1577808000.0);
+    assert_eq!(parse_secs("2020-01-01T00:00:00-05:00")?, 1577854800.0);
+    assert_eq!(parse_secs("2020-01-01T00:00:00-00:00")?, 1577836800.0);
     // Pre-epoch parses to a negative count, not a panic (pinned regression).
     assert_eq!(parse_secs("1969-07-20T20:17:00Z")?, -14182980.0);
     assert_eq!(parse_secs("1969-12-31T23:59:59.5Z")?, -0.5);
@@ -554,19 +521,11 @@ fn parse_timestamp_agreed() -> Result<(), Box<dyn std::error::Error + Send + Syn
 /// chrono's exact bit pattern because both floor the whole second and add a
 /// non-negative subsecond fraction. Pins that bit-identity.
 #[test]
-fn parse_timestamp_sub_microsecond_matches_chrono() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    assert_eq!(
-        parse_secs("1969-12-31T23:59:59.123456789Z")?,
-        -0.876543211
-    );
-    assert_eq!(
-        parse_secs("1970-01-01T00:00:00.123456789Z")?,
-        0.123456789
-    );
-    assert_eq!(
-        parse_secs("1970-01-01T00:00:00.0000005Z")?,
-        0.0000005
-    );
+fn parse_timestamp_sub_microsecond_matches_chrono()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    assert_eq!(parse_secs("1969-12-31T23:59:59.123456789Z")?, -0.876543211);
+    assert_eq!(parse_secs("1970-01-01T00:00:00.123456789Z")?, 0.123456789);
+    assert_eq!(parse_secs("1970-01-01T00:00:00.0000005Z")?, 0.0000005);
     // The ULP-noisy pair chrono produced (floored second -1 + 0.9999995):
     assert_eq!(
         parse_secs("1969-12-31T23:59:59.9999995Z")?,
@@ -582,29 +541,14 @@ fn parse_timestamp_sub_microsecond_matches_chrono() -> Result<(), Box<dyn std::e
 #[test]
 fn str2vld_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(vld_micros("1970-01-01T00:00:00Z")?, 0);
-    assert_eq!(
-        vld_micros("2020-01-01T00:00:00Z")?,
-        1577836800000000
-    );
-    assert_eq!(
-        vld_micros("2020-01-01T00:00:00.123456Z")?,
-        1577836800123456
-    );
-    assert_eq!(
-        vld_micros("2020-01-01T00:00:00+08:00")?,
-        1577808000000000
-    );
+    assert_eq!(vld_micros("2020-01-01T00:00:00Z")?, 1577836800000000);
+    assert_eq!(vld_micros("2020-01-01T00:00:00.123456Z")?, 1577836800123456);
+    assert_eq!(vld_micros("2020-01-01T00:00:00+08:00")?, 1577808000000000);
     // Pre-epoch validity is a negative microsecond count.
     assert_eq!(vld_micros("1969-07-20T20:17:00Z")?, -14182980000000);
     assert_eq!(vld_micros("1969-12-31T23:59:59.5Z")?, -500000);
-    assert_eq!(
-        vld_micros("1900-01-01T00:00:00Z")?,
-        -2208988800000000
-    );
-    assert_eq!(
-        vld_micros("0000-01-01T00:00:00Z")?,
-        -62167219200000000
-    );
+    assert_eq!(vld_micros("1900-01-01T00:00:00Z")?, -2208988800000000);
+    assert_eq!(vld_micros("0000-01-01T00:00:00Z")?, -62167219200000000);
     for bad in ["garbage", "", "2020-01-01", "2020-13-01T00:00:00Z"] {
         assert!(vld_micros(bad).is_err(), "expected {bad:?} to be rejected");
     }
@@ -617,7 +561,8 @@ fn str2vld_agreed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// truncates toward zero, so this pins the shared `timestamp_to_micros` helper
 /// that restores the floor. Sub-microsecond finer than a µs is dropped downward.
 #[test]
-fn validity_micros_floor_agreed_pre_and_post_epoch() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn validity_micros_floor_agreed_pre_and_post_epoch()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // (input, floored micros) — chrono baseline; jiff matches after the fix.
     let cases: &[(&str, i64)] = &[
         // Post-epoch: floor == truncate, unaffected by the fix.
@@ -658,10 +603,7 @@ fn validity_coerce_agreed() -> Result<(), Box<dyn std::error::Error + Send + Syn
         (1577808000000000, true)
     );
     // Pre-epoch, asserted and retracted.
-    assert_eq!(
-        coerce_vld("1969-07-20T20:17:00Z")?,
-        (-14182980000000, true)
-    );
+    assert_eq!(coerce_vld("1969-07-20T20:17:00Z")?, (-14182980000000, true));
     assert_eq!(
         coerce_vld("~1969-07-20T20:17:00Z")?,
         (-14182980000000, false)
@@ -682,10 +624,7 @@ fn datetime_deltas_vs_chrono() -> Result<(), Box<dyn std::error::Error + Send + 
     //    jiff clamps it DOWN to :59. A ":60" timestamp parses 1 second earlier.
     assert_eq!(parse_secs("2016-12-31T23:59:60Z")?, 1483228799.0); // chrono: 1483228800.0
     assert_eq!(parse_secs("2020-01-01T00:00:60Z")?, 1577836859.0); // chrono: 1577836860.0
-    assert_eq!(
-        vld_micros("2016-12-31T23:59:60Z")?,
-        1483228799000000
-    ); // chrono: 1483228800000000
+    assert_eq!(vld_micros("2016-12-31T23:59:60Z")?, 1483228799000000); // chrono: 1483228800000000
 
     // -- Delta 2: representable range. jiff's Timestamp spans
     //    -009999-01-02T01:59:59Z ..= 9999-12-30T22:00:00.999999999Z (it reserves
@@ -700,37 +639,19 @@ fn datetime_deltas_vs_chrono() -> Result<(), Box<dyn std::error::Error + Send + 
     // -- Delta 3: expanded-year FORMAT for in-range NEGATIVE years. jiff emits a
     //    signed 6-digit year; chrono emitted a signed minimal-width year. Only
     //    affects years < 0 (positive years 0000..=9999 are byte-identical).
-    assert_eq!(
-        fmt_n(-250000000000.0)?,
-        "-005953-10-25T11:33:20+00:00"
-    ); // chrono: "-5953-10-25T11:33:20+00:00"
+    assert_eq!(fmt_n(-250000000000.0)?, "-005953-10-25T11:33:20+00:00"); // chrono: "-5953-10-25T11:33:20+00:00"
 
     // -- Delta 4: jiff ACCEPTS parse forms chrono rejected (Temporal/RFC9557).
     //    Each was `bad datetime` under chrono; jiff yields the instant below.
     assert_eq!(parse_secs("+002020-01-01T00:00:00Z")?, 1577836800.0); // expanded-year sign
-    assert_eq!(
-        parse_secs("2020-01-01T00:00:00+0000")?,
-        1577836800.0
-    ); // offset without colon
-    assert_eq!(
-        parse_secs("2020-01-01T00:00:00Z[UTC]")?,
-        1577836800.0
-    ); // RFC9557 zone annotation
+    assert_eq!(parse_secs("2020-01-01T00:00:00+0000")?, 1577836800.0); // offset without colon
+    assert_eq!(parse_secs("2020-01-01T00:00:00Z[UTC]")?, 1577836800.0); // RFC9557 zone annotation
     assert_eq!(parse_secs("2020-01-01T00:00:00,5Z")?, 1577836800.5); // comma decimal separator
-    assert_eq!(
-        parse_secs("2020-01-01T00:00:00+05:30:30")?,
-        1577816970.0
-    ); // offset with seconds
+    assert_eq!(parse_secs("2020-01-01T00:00:00+05:30:30")?, 1577816970.0); // offset with seconds
     assert_eq!(parse_secs("2020-01-01T00:00Z")?, 1577836800.0); // seconds field omitted
-    assert_eq!(
-        parse_secs("2020-01-01T00:00:00+24:00")?,
-        1577750400.0
-    ); // out-of-range (>23:59) offset
+    assert_eq!(parse_secs("2020-01-01T00:00:00+24:00")?, 1577750400.0); // out-of-range (>23:59) offset
     // The widening reaches the validity paths too.
-    assert_eq!(
-        vld_micros("2020-01-01T00:00:00,5Z")?,
-        1577836800500000
-    ); // chrono: ERR
+    assert_eq!(vld_micros("2020-01-01T00:00:00,5Z")?, 1577836800500000); // chrono: ERR
     assert_eq!(
         coerce_vld("2020-01-01T00:00:00+05:30:30")?,
         (1577816970000000, true)

@@ -8,9 +8,9 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use miette::{Result, miette};
 use crate::exec::stdlib::geo::*;
 use kyzo_model::value::DataValue;
+use miette::{Result, miette};
 use std::f64::consts::PI;
 
 fn close(a: f64, b: f64) -> bool {
@@ -18,7 +18,7 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 #[test]
-fn test_haversine() -> Result<()>  {
+fn test_haversine() -> Result<()> {
     let d = op_haversine_deg_input(&[
         DataValue::from(0),
         DataValue::from(0),
@@ -52,11 +52,8 @@ fn test_haversine() -> Result<()>  {
 }
 
 #[test]
-fn test_deg_rad() -> Result<()>  {
-    assert_eq!(
-        op_deg_to_rad(&[DataValue::from(180)])?,
-        DataValue::from(PI)
-    );
+fn test_deg_rad() -> Result<()> {
+    assert_eq!(op_deg_to_rad(&[DataValue::from(180)])?, DataValue::from(PI));
     assert_eq!(
         op_rad_to_deg(&[DataValue::from(PI)])?,
         DataValue::from(180.0)

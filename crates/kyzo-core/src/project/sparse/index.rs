@@ -136,7 +136,6 @@ use kyzo_model::value::{DataValue, Tuple};
 #[cfg(test)]
 use kyzo_model::program::expr::BindingPos;
 
-
 pub(crate) use crate::exec::stdlib::convert::f64_to_f32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -666,7 +665,12 @@ mod tests {
     }
 
     /// Run a search and project `(key, score)`.
-    fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Result<Vec<(i64, f32)>> {
+    fn run(
+        db: &impl Storage,
+        f: &Fixture,
+        query: &[(u32, f32)],
+        k: usize,
+    ) -> Result<Vec<(i64, f32)>> {
         let rtx = db.read_tx()?;
         let hits = sparse_rows!(&rtx, query, &f.base, &f.idx, &params(k), &None);
         let mut out = Vec::with_capacity(hits.len());
@@ -838,7 +842,14 @@ mod tests {
             let db = new_fjall_storage(dir.path())?;
             let f = setup(&db, docs)?;
             let rtx = db.read_tx()?;
-            Ok(sparse_rows!(&rtx, query, &f.base, &f.idx, &params(10), &None))
+            Ok(sparse_rows!(
+                &rtx,
+                query,
+                &f.base,
+                &f.idx,
+                &params(10),
+                &None
+            ))
         };
 
         let a = build_and_search()?;
@@ -959,7 +970,10 @@ mod tests {
         // Empty index: any query yields nothing.
         let (_d0, db0) = fresh()?;
         let empty = setup(&db0, &[])?;
-        assert!(run(&db0, &empty, &[(0, 1.0)], 10)?.is_empty(), "empty index");
+        assert!(
+            run(&db0, &empty, &[(0, 1.0)], 10)?.is_empty(),
+            "empty index"
+        );
 
         // Empty query against a populated index: nothing.
         let (_d1, db1) = fresh()?;
@@ -1002,22 +1016,30 @@ mod tests {
 
         let put = |tx: &mut _, v: &[(u32, f32)]| sparse_put(tx, &row, v, &base, &idx);
 
-        let e = put(&mut tx, &[(0, f32::NAN)]).err().ok_or_else(|| miette!("NaN must refuse"))?;
+        let e = put(&mut tx, &[(0, f32::NAN)])
+            .err()
+            .ok_or_else(|| miette!("NaN must refuse"))?;
         assert!(
             e.downcast_ref::<SparseWeightInvalid>().is_some(),
             "NaN refused: {e:?}"
         );
-        let e = put(&mut tx, &[(0, f32::INFINITY)]).err().ok_or_else(|| miette!("inf must refuse"))?;
+        let e = put(&mut tx, &[(0, f32::INFINITY)])
+            .err()
+            .ok_or_else(|| miette!("inf must refuse"))?;
         assert!(
             e.downcast_ref::<SparseWeightInvalid>().is_some(),
             "inf refused: {e:?}"
         );
-        let e = put(&mut tx, &[(0, -0.5)]).err().ok_or_else(|| miette!("negative must refuse"))?;
+        let e = put(&mut tx, &[(0, -0.5)])
+            .err()
+            .ok_or_else(|| miette!("negative must refuse"))?;
         assert!(
             e.downcast_ref::<SparseWeightInvalid>().is_some(),
             "negative refused: {e:?}"
         );
-        let e = put(&mut tx, &[(3, 1.0), (3, 2.0)]).err().ok_or_else(|| miette!("duplicate must refuse"))?;
+        let e = put(&mut tx, &[(3, 1.0), (3, 2.0)])
+            .err()
+            .ok_or_else(|| miette!("duplicate must refuse"))?;
         assert!(
             e.downcast_ref::<SparseDuplicateDimension>().is_some(),
             "duplicate dimension refused: {e:?}"

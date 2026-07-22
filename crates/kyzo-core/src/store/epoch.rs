@@ -298,12 +298,12 @@ pub fn advance_recovery(
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::session::footprint::{
         AskShape, ByteRange, FencedFootprint, Footprint, FootprintIndexKey, LiveFootprintTable,
     };
     use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
+    use miette::{IntoDiagnostic, Result, miette};
 
     /// Nasty: attest clear (via empty-table evidence) then insert a live Fenced
     /// footprint — ordinary advance must refuse EpochAdvanceBlocked. Contentless
@@ -318,8 +318,7 @@ mod tests {
 
         // Attest clear against an empty live table (honest at attest time).
         let mut footprints = LiveFootprintTable::new();
-        let evidence = footprints
-            .prove_epoch_clear(fence_epoch)?;
+        let evidence = footprints.prove_epoch_clear(fence_epoch)?;
         let intent_clear = IntentClear::attest(evidence);
 
         // Live Fenced footprint appears after attest — advance must still refuse.
@@ -333,14 +332,13 @@ mod tests {
             }]),
             0,
         )?;
-        footprints
-            .insert(
-                FootprintIndexKey {
-                    fence_epoch,
-                    incarnation_id: incarnation,
-                },
-                AskShape::Fenced(fenced),
-            )?;
+        footprints.insert(
+            FootprintIndexKey {
+                fence_epoch,
+                incarnation_id: incarnation,
+            },
+            AskShape::Fenced(fenced),
+        )?;
         assert!(footprints.has_live_fenced_in_epoch(fence_epoch));
 
         assert_eq!(
@@ -353,7 +351,7 @@ mod tests {
             footprints.prove_epoch_clear(fence_epoch),
             Err(EpochAdvanceRefuse::EpochAdvanceBlocked)
         );
-    
+
         Ok(())
     }
 }

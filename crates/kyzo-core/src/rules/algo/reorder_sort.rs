@@ -138,10 +138,9 @@ impl FixedRule for ReorderSort {
             if count <= skip {
                 continue;
             }
-            let mut out_t: Tuple =
-                Tuple::from_vec(vec![DataValue::from(
-                    crate::rules::convert::i64_from_usize(if break_ties { count } else { rank })?
-                )]);
+            let mut out_t: Tuple = Tuple::from_vec(vec![DataValue::from(
+                crate::rules::convert::i64_from_usize(if break_ties { count } else { rank })?,
+            )]);
             out_t.extend(val[0..val.len() - 1].iter().cloned());
             out.put(out_t)?;
             cancel.check()?;
@@ -244,8 +243,7 @@ mod tests {
             vec![TestInput::new(vec!["id", "k"], rows)],
             opts(&[])?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let i = |v: i64| DataValue::from(v);
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("n")]), // Null
@@ -284,8 +282,7 @@ mod tests {
             vec![TestInput::new(vec!["id", "k"], rows())],
             opts(&[])?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("a")]),
             Tuple::from_vec(vec![i(1), s("b")]),
@@ -298,8 +295,7 @@ mod tests {
             vec![TestInput::new(vec!["id", "k"], rows())],
             opts(&[("break_ties", DataValue::from(true))])?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("a")]),
             Tuple::from_vec(vec![i(2), s("b")]),
@@ -312,8 +308,7 @@ mod tests {
             vec![TestInput::new(vec!["id", "k"], rows())],
             opts(&[("descending", DataValue::from(true))])?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(1), s("c")]),
             Tuple::from_vec(vec![i(2), s("a")]),
@@ -343,8 +338,7 @@ mod tests {
                 ("take", DataValue::from(1i64)),
             ])?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(2i64), s("b")])];
         assert_eq!(got, want);
         Ok(())

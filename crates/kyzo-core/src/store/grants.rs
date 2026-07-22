@@ -1529,7 +1529,7 @@ mod tests {
             FenceEpoch::genesis(store),
             &IdentitySeed::from_digest([0xEE; 32]),
             &KeyMaterialCommitment::from_digest([0xEF; 32]),
-        );
+        )?;
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let weak_pk = RecoveryPublicKey::admit(weak);
@@ -1622,7 +1622,7 @@ mod tests {
             pred_epoch,
             &successor_seed,
             &commitment,
-        );
+        )?;
 
         let (store_matrix, _store_sig) = frost_sign_recovery_quorum([0xA1; 32], &payload)?;
 
@@ -1688,13 +1688,13 @@ mod tests {
             pred_epoch,
             &successor_seed,
             &commitment,
-        );
+        )?;
         let (matrix, aggregate) = frost_sign_recovery_quorum([0xC1; 32], &payload)?;
         let proof = RecoveryQuorumProof::verify(&matrix, &payload, &aggregate)?;
         // Sealed proof carries only digests — signer subset is not recoverable
         // from proof bytes (no custodian id / share index field exists).
         assert_eq!(proof.payload_digest(), &payload);
-        assert_eq!(proof.matrix_digest(), &recovery_matrix_digest(&matrix));
+        assert_eq!(proof.matrix_digest(), &recovery_matrix_digest(&matrix)?);
         let proof_dbg = format!("{proof:?}");
         assert!(
             !proof_dbg.contains("signer")
@@ -1755,7 +1755,7 @@ mod tests {
         let probe_payload = Digest::admit([0u8; 32]);
         let (matrix, _) = frost_sign_recovery_quorum([0xE1; 32], &probe_payload)?;
 
-        let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
+        let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| -> Result<_> {
             let successor_seed = IdentitySeed::from_digest(seed);
             let commitment = KeyMaterialCommitment::from_digest(commit);
             let payload = recovery_grant_payload_digest(
@@ -1764,7 +1764,7 @@ mod tests {
                 pred_epoch,
                 &successor_seed,
                 &commitment,
-            );
+            )?;
             // Same dealer seed → same group VK as `matrix`.
             let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xE1; 32], &payload)?;
             assert_eq!(
@@ -1779,11 +1779,12 @@ mod tests {
                 successor_seed,
                 commitment,
                 proof,
-            )?
+            )
+            .map_err(|e| miette!("{e}"))
         };
 
-        let g1 = mint(GrantId::admit([0x01; 32]), [0xA1; 32], [0xA2; 32]);
-        let g2 = mint(GrantId::admit([0x02; 32]), [0xB1; 32], [0xB2; 32]);
+        let g1 = mint(GrantId::admit([0x01; 32]), [0xA1; 32], [0xA2; 32])?;
+        let g2 = mint(GrantId::admit([0x02; 32]), [0xB1; 32], [0xB2; 32])?;
 
         let first = materialize(
             &Grant::Recovery(g1.clone()),
@@ -1840,7 +1841,7 @@ mod tests {
         let probe_payload = Digest::admit([0u8; 32]);
         let (matrix, _) = frost_sign_recovery_quorum([0xF1; 32], &probe_payload)?;
 
-        let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| {
+        let mint = |grant_id: GrantId, seed: [u8; 32], commit: [u8; 32]| -> Result<_> {
             let successor_seed = IdentitySeed::from_digest(seed);
             let commitment = KeyMaterialCommitment::from_digest(commit);
             let payload = recovery_grant_payload_digest(
@@ -1849,7 +1850,7 @@ mod tests {
                 pred_epoch,
                 &successor_seed,
                 &commitment,
-            );
+            )?;
             let (signed_matrix, aggregate) = frost_sign_recovery_quorum([0xF1; 32], &payload)?;
             assert_eq!(
                 signed_matrix.group_verifying_key(),
@@ -1863,10 +1864,11 @@ mod tests {
                 successor_seed,
                 commitment,
                 proof,
-            )?
+            )
+            .map_err(|e| miette!("{e}"))
         };
 
-        let legit = mint(GrantId::admit([0x11; 32]), [0xA1; 32], [0xA2; 32]);
+        let legit = mint(GrantId::admit([0x11; 32]), [0xA1; 32], [0xA2; 32])?;
 
         // Attack closed at the type boundary: record takes &MaterializedGrant, not
         // a bare GrantId (e.g. GrantId::admit([0xDE; 32])). Without a real
@@ -1914,7 +1916,7 @@ mod tests {
             &successor,
             &identity,
             &commitment,
-        );
+        )?;
 
         let consent = ConsentSigningKey::from_seed([0xF1; 32]);
         let mut table = PredecessorConsentTable::new();
@@ -1940,7 +1942,7 @@ mod tests {
             &successor,
             &identity,
             &commitment,
-        );
+        )?;
         table.insert(other, *consent.verifying_key())?;
         let other_sig = consent.sign_consent(other, &other_payload);
         let wrong_store_proof =
@@ -1968,7 +1970,7 @@ mod tests {
             &successor,
             &identity,
             &commitment,
-        );
+        )?;
         let forged_sig = consent.sign_consent(victim, &forged_lineage_payload);
         let forged_lineage_proof =
             PredecessorConsentProof::verify(&table, victim, &forged_lineage_payload, &forged_sig)?;
@@ -2005,7 +2007,7 @@ mod tests {
             &successor,
             &identity,
             &commitment,
-        );
+        )?;
 
         let legitimate = ConsentSigningKey::from_seed([0xD1; 32]);
         let attacker = ConsentSigningKey::from_seed([0xD2; 32]);
@@ -2073,7 +2075,7 @@ mod tests {
             &successor,
             &identity,
             &commitment,
-        );
+        )?;
         let consent = ConsentSigningKey::from_seed([0xF2; 32]);
         let mut table = PredecessorConsentTable::new();
         table.insert(predecessor, *consent.verifying_key())?;
@@ -2153,7 +2155,7 @@ mod tests {
         let store_id = StoreId::from_digest([0x81; 32]);
         let from_epoch = FenceEpoch::genesis(store_id);
         let to_epoch = from_epoch.successor()?;
-        let payload = ancestor_read_grant_payload_digest(store_id, from_epoch, to_epoch);
+        let payload = ancestor_read_grant_payload_digest(store_id, from_epoch, to_epoch)?;
 
         let entitlement = EntitlementSigningKey::from_seed([0xE1; 32]);
         let mut table = AncestorEntitlementTable::new();
@@ -2182,7 +2184,7 @@ mod tests {
         let victim = StoreId::from_digest([0x82; 32]);
         let from_epoch = FenceEpoch::genesis(victim);
         let to_epoch = from_epoch.successor()?;
-        let payload = ancestor_read_grant_payload_digest(victim, from_epoch, to_epoch);
+        let payload = ancestor_read_grant_payload_digest(victim, from_epoch, to_epoch)?;
 
         let legitimate = EntitlementSigningKey::from_seed([0xE2; 32]);
         let attacker = EntitlementSigningKey::from_seed([0xE3; 32]);

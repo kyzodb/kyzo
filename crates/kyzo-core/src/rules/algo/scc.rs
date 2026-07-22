@@ -145,7 +145,10 @@ impl TarjanSccG {
 
         let mut low_map: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for (idx, grp) in self.low.into_iter().enumerate() {
-            low_map.entry(grp).or_default().push(crate::rules::convert::u32_from_usize(idx)?);
+            low_map
+                .entry(grp)
+                .or_default()
+                .push(crate::rules::convert::u32_from_usize(idx)?);
         }
 
         Ok(low_map.into_values().collect_vec())
@@ -185,13 +188,18 @@ impl TarjanSccG {
                         self.open(to);
                         frames.push((to, 0));
                     } else if self.on_stack[crate::rules::convert::usize_from_u32(to)] {
-                        self.low[crate::rules::convert::usize_from_u32(at)] = min(self.low[crate::rules::convert::usize_from_u32(at)], self.low[crate::rules::convert::usize_from_u32(to)]);
+                        self.low[crate::rules::convert::usize_from_u32(at)] = min(
+                            self.low[crate::rules::convert::usize_from_u32(at)],
+                            self.low[crate::rules::convert::usize_from_u32(to)],
+                        );
                     }
                 }
                 None => {
                     frames.pop();
                     // INVARIANT(scc_ids_open): `ids[at]` was set to `Some` by `open`.
-                    if self.ids[crate::rules::convert::usize_from_u32(at)] == Some(self.low[crate::rules::convert::usize_from_u32(at)]) {
+                    if self.ids[crate::rules::convert::usize_from_u32(at)]
+                        == Some(self.low[crate::rules::convert::usize_from_u32(at)])
+                    {
                         let label = self.low[crate::rules::convert::usize_from_u32(at)];
                         while let Some(node) = self.stack.pop() {
                             self.on_stack[crate::rules::convert::usize_from_u32(node)] = false;
@@ -207,8 +215,10 @@ impl TarjanSccG {
                     if let Some(&(parent, _)) = frames.last()
                         && self.on_stack[crate::rules::convert::usize_from_u32(at)]
                     {
-                        self.low[crate::rules::convert::usize_from_u32(parent)] =
-                            min(self.low[crate::rules::convert::usize_from_u32(parent)], self.low[crate::rules::convert::usize_from_u32(at)]);
+                        self.low[crate::rules::convert::usize_from_u32(parent)] = min(
+                            self.low[crate::rules::convert::usize_from_u32(parent)],
+                            self.low[crate::rules::convert::usize_from_u32(at)],
+                        );
                     }
                 }
             }
@@ -245,8 +255,7 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let group_of = |name: &str| -> Result<i64> {
             got.iter()
                 .find(|t| t[0] == s(name))

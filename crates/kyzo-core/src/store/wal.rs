@@ -437,11 +437,11 @@ pub fn nonce_floor_payload(lease: &NonceLease) -> WalPayload {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::epoch::FenceEpoch;
     use crate::store::open::StoreId;
     use crate::store::sweep::CommitOrdinal;
+    use miette::{IntoDiagnostic, Result, miette};
 
     fn commit_payload(tag: u8) -> Result<WalPayload> {
         Ok(WalPayload::Commit {
@@ -467,7 +467,7 @@ mod tests {
             segment.append(forged),
             Err(WalRefuse::ChainBreak { expected, got })
         );
-    
+
         Ok(())
     }
 
@@ -485,8 +485,7 @@ mod tests {
 
         let mut seg1 = WalSegment::open(store_id, fence, 1);
         // Empty seg1 terminal is genesis — append permits a genesis-covering record.
-        let spliced =
-            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x11)?)?;
+        let spliced = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x11)?)?;
         seg1.append(spliced)?;
 
         assert_eq!(
@@ -496,7 +495,7 @@ mod tests {
                 got: GENESIS_PREDECESSOR,
             })
         );
-    
+
         Ok(())
     }
 
@@ -520,7 +519,7 @@ mod tests {
                 got: 2,
             })
         );
-    
+
         Ok(())
     }
 
@@ -532,15 +531,14 @@ mod tests {
         let fence = FenceEpoch::genesis(foreign);
 
         let mut foreign_seg = WalSegment::open(foreign, fence, 0);
-        let record =
-            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x30)?)?;
+        let record = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x30)?)?;
         foreign_seg.append(record)?;
 
         assert_eq!(
             replay(store_id, &[foreign_seg]),
             Err(WalRefuse::StoreIdMismatch)
         );
-    
+
         Ok(())
     }
 
@@ -552,20 +550,18 @@ mod tests {
         let fence = FenceEpoch::genesis(store_id);
         let mut segment = WalSegment::open(store_id, fence, 0);
 
-        let mut record =
-            WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x40)?)?;
+        let mut record = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x40)?)?;
         // Adversarial durable corruption — flip a digest byte after seal.
         let mut digest = *record.record_hash().as_bytes();
         digest[0] ^= 0xFF;
         record.record_hash = WalHash::from_digest(digest);
 
-        segment
-            .append(record)?;
+        segment.append(record)?;
         assert_eq!(
             replay(store_id, &[segment]),
             Err(WalRefuse::RecordHashMismatch)
         );
-    
+
         Ok(())
     }
 }

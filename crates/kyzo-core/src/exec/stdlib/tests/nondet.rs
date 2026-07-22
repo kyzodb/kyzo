@@ -8,15 +8,16 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use miette::{Result, miette};
 use crate::exec::stdlib::nondet::*;
 use crate::exec::stdlib::temporal_format::*;
 use kyzo_model::value::DataValue;
-
+use miette::{Result, miette};
 
 #[test]
-fn test_rand() -> Result<()>  {
-    let n = op_rand_float(&[])?.get_float().ok_or_else(|| miette!("get_float"))?;
+fn test_rand() -> Result<()> {
+    let n = op_rand_float(&[])?
+        .get_float()
+        .ok_or_else(|| miette!("get_float"))?;
     assert!(n >= 0.);
     assert!(n <= 1.);
     assert_eq!(
@@ -35,10 +36,7 @@ fn test_rand() -> Result<()>  {
     assert!(n <= 200);
     // An empty range is an error, not a panic.
     assert!(op_rand_int(&[DataValue::from(200), DataValue::from(100)]).is_err());
-    assert_eq!(
-        op_rand_choose(&[DataValue::List(vec![])])?,
-        DataValue::Null
-    );
+    assert_eq!(op_rand_choose(&[DataValue::List(vec![])])?, DataValue::Null);
     assert_eq!(
         op_rand_choose(&[DataValue::List(vec![DataValue::from(123)])])?,
         DataValue::from(123)
@@ -47,7 +45,7 @@ fn test_rand() -> Result<()>  {
 }
 
 #[test]
-fn test_now() -> Result<()>  {
+fn test_now() -> Result<()> {
     let now = op_now(&[])?;
     assert!(matches!(now, DataValue::Num(_)));
     let s = op_format_timestamp(&[now])?;

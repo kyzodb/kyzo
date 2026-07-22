@@ -70,7 +70,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use miette::{Error, Result, miette, ensure};
+use miette::{Error, Result, ensure, miette};
 
 use crate::exec::fold::aggr::NormalAggr;
 use crate::exec::op::temporal::SignedFact;
@@ -967,10 +967,10 @@ pub fn incremental_eval(
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use kyzo_model::SourceSpan;
     use kyzo_model::value::Num;
+    use miette::{Result, miette};
 
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, SourceSpan::empty())
@@ -1021,7 +1021,7 @@ mod tests {
     /// The hard corner, direct: `q(x) :- p(x), not r(x)`. Retracting
     /// `r(1)` while `p(1)` already holds must make `q(1)` newly true.
     #[test]
-    fn retraction_through_negation_produces_a_new_fact() -> Result<()>  {
+    fn retraction_through_negation_produces_a_new_fact() -> Result<()> {
         let program = IncrementalProgram {
             rules: vec![rule(
                 "q",
@@ -1051,7 +1051,7 @@ mod tests {
     /// The mirror: asserting into the negated relation retracts the
     /// dependent fact.
     #[test]
-    fn assertion_into_negation_retracts_the_dependent_fact() -> Result<()>  {
+    fn assertion_into_negation_retracts_the_dependent_fact() -> Result<()> {
         let program = IncrementalProgram {
             rules: vec![rule(
                 "q",
@@ -1086,7 +1086,7 @@ mod tests {
     /// on its first run (`laws.rs`'s module doc). This module's own
     /// direct test for the same law.
     #[test]
-    fn a_second_untouched_derivation_holds_the_fact_up() -> Result<()>  {
+    fn a_second_untouched_derivation_holds_the_fact_up() -> Result<()> {
         let program = IncrementalProgram {
             rules: vec![rule(
                 "q",
@@ -1126,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn recursion_is_refused() -> Result<()>  {
+    fn recursion_is_refused() -> Result<()> {
         let program = IncrementalProgram {
             rules: vec![
                 rule(

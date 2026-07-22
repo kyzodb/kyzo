@@ -8,9 +8,9 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use miette::{Result, miette};
 use crate::exec::stdlib::numeric::*;
 use kyzo_model::value::{DataValue, Vector};
+use miette::{Result, miette};
 use std::f64::consts::{E, PI};
 
 fn close(a: f64, b: f64) -> bool {
@@ -18,7 +18,7 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 #[test]
-fn test_add() -> Result<()>  {
+fn test_add() -> Result<()> {
     assert_eq!(op_add(&[])?, DataValue::from(0));
     assert_eq!(op_add(&[DataValue::from(1)])?, DataValue::from(1));
     assert_eq!(
@@ -46,7 +46,7 @@ fn test_add() -> Result<()>  {
 }
 
 #[test]
-fn test_sub() -> Result<()>  {
+fn test_sub() -> Result<()> {
     assert_eq!(
         op_sub(&[DataValue::from(1), DataValue::from(2)])?,
         DataValue::from(-1)
@@ -70,7 +70,7 @@ fn test_sub() -> Result<()>  {
 }
 
 #[test]
-fn test_mul() -> Result<()>  {
+fn test_mul() -> Result<()> {
     assert_eq!(op_mul(&[])?, DataValue::from(1));
     assert_eq!(
         op_mul(&[DataValue::from(2), DataValue::from(3)])?,
@@ -114,14 +114,18 @@ fn f64_vec(xs: &[f64]) -> Result<DataValue> {
 // recursed into vector *addition* for the prefix: `v1 * v2 * v3` computed
 // `(v1 + v2) * v3`. Multiplication must multiply.
 #[test]
-fn test_mul_vecs_multiplies() -> Result<()>  {
+fn test_mul_vecs_multiplies() -> Result<()> {
     assert_eq!(
         op_mul(&[f64_vec(&[2., 3.])?, f64_vec(&[4., 5.])?])?,
         f64_vec(&[8., 15.])?
     );
     // Three arguments: the buggy version yields [36., 56.] here.
     assert_eq!(
-        op_mul(&[f64_vec(&[2., 3.])?, f64_vec(&[4., 5.])?, f64_vec(&[6., 7.])?])?,
+        op_mul(&[
+            f64_vec(&[2., 3.])?,
+            f64_vec(&[4., 5.])?,
+            f64_vec(&[6., 7.])?
+        ])?,
         f64_vec(&[48., 105.])?
     );
     // Scalars broadcast over vectors.
@@ -133,7 +137,7 @@ fn test_mul_vecs_multiplies() -> Result<()>  {
 }
 
 #[test]
-fn test_div() -> Result<()>  {
+fn test_div() -> Result<()> {
     assert_eq!(
         op_div(&[DataValue::from(1), DataValue::from(1)])?,
         DataValue::from(1.0)
@@ -154,7 +158,7 @@ fn test_div() -> Result<()>  {
 /// used to disagree (`div` float-promoted to `Infinity`, `mod` alone
 /// refused); this locks the two to one consistent typed error.
 #[test]
-fn test_div_mod_by_zero_typed_error() -> Result<()>  {
+fn test_div_mod_by_zero_typed_error() -> Result<()> {
     for res in [
         op_div(&[DataValue::from(1), DataValue::from(0)]),
         op_div(&[DataValue::from(1.0), DataValue::from(0.0)]),
@@ -173,7 +177,7 @@ fn test_div_mod_by_zero_typed_error() -> Result<()>  {
 }
 
 #[test]
-fn test_max_min() -> Result<()>  {
+fn test_max_min() -> Result<()> {
     assert_eq!(op_max(&[DataValue::from(1)])?, DataValue::from(1));
     assert_eq!(
         op_max(&[
@@ -237,15 +241,9 @@ fn test_max_min() -> Result<()>  {
 }
 
 #[test]
-fn test_minus() -> Result<()>  {
-    assert_eq!(
-        op_minus(&[DataValue::from(-1)])?,
-        DataValue::from(1)
-    );
-    assert_eq!(
-        op_minus(&[DataValue::from(1)])?,
-        DataValue::from(-1)
-    );
+fn test_minus() -> Result<()> {
+    assert_eq!(op_minus(&[DataValue::from(-1)])?, DataValue::from(1));
+    assert_eq!(op_minus(&[DataValue::from(1)])?, DataValue::from(-1));
     assert_eq!(
         op_minus(&[DataValue::from(f64::INFINITY)])?,
         DataValue::from(f64::NEG_INFINITY)
@@ -265,13 +263,10 @@ fn test_minus() -> Result<()>  {
 }
 
 #[test]
-fn test_abs() -> Result<()>  {
+fn test_abs() -> Result<()> {
     assert_eq!(op_abs(&[DataValue::from(-1)])?, DataValue::from(1));
     assert_eq!(op_abs(&[DataValue::from(1)])?, DataValue::from(1));
-    assert_eq!(
-        op_abs(&[DataValue::from(-1.5)])?,
-        DataValue::from(1.5)
-    );
+    assert_eq!(op_abs(&[DataValue::from(-1.5)])?, DataValue::from(1.5));
     // Boundary: same asymmetry as unary minus.
     assert_eq!(
         op_abs(&[DataValue::from(i64::MIN + 1)])?,
@@ -282,29 +277,14 @@ fn test_abs() -> Result<()>  {
 }
 
 #[test]
-fn test_signum() -> Result<()>  {
-    assert_eq!(
-        op_signum(&[DataValue::from(0.1)])?,
-        DataValue::from(1)
-    );
-    assert_eq!(
-        op_signum(&[DataValue::from(-0.1)])?,
-        DataValue::from(-1)
-    );
-    assert_eq!(
-        op_signum(&[DataValue::from(0.0)])?,
-        DataValue::from(0)
-    );
+fn test_signum() -> Result<()> {
+    assert_eq!(op_signum(&[DataValue::from(0.1)])?, DataValue::from(1));
+    assert_eq!(op_signum(&[DataValue::from(-0.1)])?, DataValue::from(-1));
+    assert_eq!(op_signum(&[DataValue::from(0.0)])?, DataValue::from(0));
     // `-0.0` collapses to `+0.0` in the value plane (one canonical zero),
     // so its signum is `0`, not `-1`.
-    assert_eq!(
-        op_signum(&[DataValue::from(-0.0)])?,
-        DataValue::from(0)
-    );
-    assert_eq!(
-        op_signum(&[DataValue::from(-3)])?,
-        DataValue::from(-1)
-    );
+    assert_eq!(op_signum(&[DataValue::from(-0.0)])?, DataValue::from(0));
+    assert_eq!(op_signum(&[DataValue::from(-3)])?, DataValue::from(-1));
     assert_eq!(
         op_signum(&[DataValue::from(f64::NEG_INFINITY)])?,
         DataValue::from(-1)
@@ -319,66 +299,32 @@ fn test_signum() -> Result<()>  {
 }
 
 #[test]
-fn test_floor_ceil() -> Result<()>  {
-    assert_eq!(
-        op_floor(&[DataValue::from(-1)])?,
-        DataValue::from(-1)
-    );
-    assert_eq!(
-        op_floor(&[DataValue::from(-1.5)])?,
-        DataValue::from(-2.0)
-    );
-    assert_eq!(
-        op_floor(&[DataValue::from(1.5)])?,
-        DataValue::from(1.0)
-    );
-    assert_eq!(
-        op_ceil(&[DataValue::from(-1)])?,
-        DataValue::from(-1)
-    );
-    assert_eq!(
-        op_ceil(&[DataValue::from(-1.5)])?,
-        DataValue::from(-1.0)
-    );
-    assert_eq!(
-        op_ceil(&[DataValue::from(1.5)])?,
-        DataValue::from(2.0)
-    );
+fn test_floor_ceil() -> Result<()> {
+    assert_eq!(op_floor(&[DataValue::from(-1)])?, DataValue::from(-1));
+    assert_eq!(op_floor(&[DataValue::from(-1.5)])?, DataValue::from(-2.0));
+    assert_eq!(op_floor(&[DataValue::from(1.5)])?, DataValue::from(1.0));
+    assert_eq!(op_ceil(&[DataValue::from(-1)])?, DataValue::from(-1));
+    assert_eq!(op_ceil(&[DataValue::from(-1.5)])?, DataValue::from(-1.0));
+    assert_eq!(op_ceil(&[DataValue::from(1.5)])?, DataValue::from(2.0));
     Ok(())
 }
 
 #[test]
-fn test_round() -> Result<()>  {
-    assert_eq!(
-        op_round(&[DataValue::from(0.6)])?,
-        DataValue::from(1.0)
-    );
-    assert_eq!(
-        op_round(&[DataValue::from(0.5)])?,
-        DataValue::from(1.0)
-    );
-    assert_eq!(
-        op_round(&[DataValue::from(1.5)])?,
-        DataValue::from(2.0)
-    );
-    assert_eq!(
-        op_round(&[DataValue::from(-0.6)])?,
-        DataValue::from(-1.0)
-    );
-    assert_eq!(
-        op_round(&[DataValue::from(-0.5)])?,
-        DataValue::from(-1.0)
-    );
-    assert_eq!(
-        op_round(&[DataValue::from(-1.5)])?,
-        DataValue::from(-2.0)
-    );
+fn test_round() -> Result<()> {
+    assert_eq!(op_round(&[DataValue::from(0.6)])?, DataValue::from(1.0));
+    assert_eq!(op_round(&[DataValue::from(0.5)])?, DataValue::from(1.0));
+    assert_eq!(op_round(&[DataValue::from(1.5)])?, DataValue::from(2.0));
+    assert_eq!(op_round(&[DataValue::from(-0.6)])?, DataValue::from(-1.0));
+    assert_eq!(op_round(&[DataValue::from(-0.5)])?, DataValue::from(-1.0));
+    assert_eq!(op_round(&[DataValue::from(-1.5)])?, DataValue::from(-2.0));
     Ok(())
 }
 
 #[test]
-fn test_exp() -> Result<()>  {
-    let n = op_exp(&[DataValue::from(1)])?.get_float().ok_or_else(|| miette!("get_float"))?;
+fn test_exp() -> Result<()> {
+    let n = op_exp(&[DataValue::from(1)])?
+        .get_float()
+        .ok_or_else(|| miette!("get_float"))?;
     assert!(close(n, E));
 
     let n = op_exp(&[DataValue::from(50.1)])?
@@ -389,7 +335,7 @@ fn test_exp() -> Result<()>  {
 }
 
 #[test]
-fn test_exp2() -> Result<()>  {
+fn test_exp2() -> Result<()> {
     let n = op_exp2(&[DataValue::from(10.)])?
         .get_float()
         .ok_or_else(|| miette!("float"))?;
@@ -398,31 +344,25 @@ fn test_exp2() -> Result<()>  {
 }
 
 #[test]
-fn test_ln() -> Result<()>  {
+fn test_ln() -> Result<()> {
     assert_eq!(op_ln(&[DataValue::from(E)])?, DataValue::from(1.0));
     Ok(())
 }
 
 #[test]
-fn test_log2() -> Result<()>  {
-    assert_eq!(
-        op_log2(&[DataValue::from(1024)])?,
-        DataValue::from(10.)
-    );
+fn test_log2() -> Result<()> {
+    assert_eq!(op_log2(&[DataValue::from(1024)])?, DataValue::from(10.));
     Ok(())
 }
 
 #[test]
-fn test_log10() -> Result<()>  {
-    assert_eq!(
-        op_log10(&[DataValue::from(1000)])?,
-        DataValue::from(3.0)
-    );
+fn test_log10() -> Result<()> {
+    assert_eq!(op_log10(&[DataValue::from(1000)])?, DataValue::from(3.0));
     Ok(())
 }
 
 #[test]
-fn test_trig() -> Result<()>  {
+fn test_trig() -> Result<()> {
     assert!(close(
         op_sin(&[DataValue::from(PI / 2.)])?
             .get_float()
@@ -445,7 +385,7 @@ fn test_trig() -> Result<()>  {
 }
 
 #[test]
-fn test_inv_trig() -> Result<()>  {
+fn test_inv_trig() -> Result<()> {
     assert!(close(
         op_asin(&[DataValue::from(1.0)])?
             .get_float()
@@ -453,11 +393,15 @@ fn test_inv_trig() -> Result<()>  {
         PI / 2.
     ));
     assert!(close(
-        op_acos(&[DataValue::from(0)])?.get_float().ok_or_else(|| miette!("get_float"))?,
+        op_acos(&[DataValue::from(0)])?
+            .get_float()
+            .ok_or_else(|| miette!("get_float"))?,
         PI / 2.
     ));
     assert!(close(
-        op_atan(&[DataValue::from(1)])?.get_float().ok_or_else(|| miette!("get_float"))?,
+        op_atan(&[DataValue::from(1)])?
+            .get_float()
+            .ok_or_else(|| miette!("get_float"))?,
         PI / 4.
     ));
     assert!(close(
@@ -474,7 +418,7 @@ fn test_inv_trig() -> Result<()>  {
 /// out-of-domain input with a typed `domain_error`, never a quiet `NaN`
 /// (or, at a domain boundary that diverges, a quiet infinity).
 #[test]
-fn test_math_domain_errors_typed() -> Result<()>  {
+fn test_math_domain_errors_typed() -> Result<()> {
     for res in [
         op_sqrt(&[DataValue::from(-1)]),
         op_ln(&[DataValue::from(0)]),
@@ -510,7 +454,7 @@ fn test_math_domain_errors_typed() -> Result<()>  {
 /// too, rather than poisoning the whole vector with a `NaN` at that
 /// position.
 #[test]
-fn test_math_domain_errors_vector() -> Result<()>  {
+fn test_math_domain_errors_vector() -> Result<()> {
     let has_negative = Vector::try_new(vec![1.0, -1.0, 4.0]).ok_or_else(|| miette!("vector"))?;
     assert!(op_sqrt(&[DataValue::Vector(has_negative)]).is_err());
 
@@ -525,34 +469,19 @@ fn test_math_domain_errors_vector() -> Result<()>  {
 /// Valid, in-domain inputs to the same ops still compute the correct
 /// value — the domain guard must not reject anything it shouldn't.
 #[test]
-fn test_math_valid_inputs_unaffected() -> Result<()>  {
-    assert_eq!(
-        op_sqrt(&[DataValue::from(4)])?,
-        DataValue::from(2.0)
-    );
+fn test_math_valid_inputs_unaffected() -> Result<()> {
+    assert_eq!(op_sqrt(&[DataValue::from(4)])?, DataValue::from(2.0));
     assert_eq!(op_ln(&[DataValue::from(1)])?, DataValue::from(0.0));
-    assert_eq!(
-        op_asin(&[DataValue::from(0)])?,
-        DataValue::from(0.0)
-    );
-    assert_eq!(
-        op_acos(&[DataValue::from(1)])?,
-        DataValue::from(0.0)
-    );
+    assert_eq!(op_asin(&[DataValue::from(0)])?, DataValue::from(0.0));
+    assert_eq!(op_acos(&[DataValue::from(1)])?, DataValue::from(0.0));
     // Boundary lock: the exact edges the domain guards must NOT refuse, so a
     // later tightening of a guard (e.g. `<` slipping to `<=`, or a closed
     // interval narrowed to open) is caught. sqrt/asin/acos domains are
     // closed; acosh is closed at 1; atanh is open, so a value just inside it
     // must still compute; a negative base with an integral exponent is a real
     // power `pow` must not refuse.
-    assert_eq!(
-        op_sqrt(&[DataValue::from(0)])?,
-        DataValue::from(0.0)
-    );
-    assert_eq!(
-        op_acosh(&[DataValue::from(1)])?,
-        DataValue::from(0.0)
-    );
+    assert_eq!(op_sqrt(&[DataValue::from(0)])?, DataValue::from(0.0));
+    assert_eq!(op_acosh(&[DataValue::from(1)])?, DataValue::from(0.0));
     assert!(
         op_asin(&[DataValue::from(1)]).is_ok(),
         "asin(+1) is in domain"
@@ -584,7 +513,7 @@ fn test_math_valid_inputs_unaffected() -> Result<()>  {
 /// `domain_error`, on both the F32 and F64 lanes, while non-degenerate
 /// vectors still compute.
 #[test]
-fn test_pow() -> Result<()>  {
+fn test_pow() -> Result<()> {
     assert_eq!(
         op_pow(&[DataValue::from(2), DataValue::from(10)])?,
         DataValue::from(1024.0)
@@ -601,7 +530,7 @@ fn test_pow() -> Result<()>  {
 }
 
 #[test]
-fn test_mod() -> Result<()>  {
+fn test_mod() -> Result<()> {
     assert_eq!(
         op_mod(&[DataValue::from(-10), DataValue::from(7)])?,
         DataValue::from(-3)
@@ -626,19 +555,16 @@ fn test_mod() -> Result<()>  {
 }
 
 #[test]
-fn test_boolean() -> Result<()>  {
+fn test_boolean() -> Result<()> {
     // `and`/`or` are language forms (`Expr::Lazy`), not ops; their
     // semantics — including short-circuit — are pinned in
     // `data/tests/exprs.rs`. Only negation remains an op.
-    assert_eq!(
-        op_negate(&[DataValue::from(false)])?,
-        DataValue::from(true)
-    );
+    assert_eq!(op_negate(&[DataValue::from(false)])?, DataValue::from(true));
     Ok(())
 }
 
 #[test]
-fn test_bits() -> Result<()>  {
+fn test_bits() -> Result<()> {
     assert_eq!(
         op_bit_and(&[
             DataValue::Bytes([0b111000].into()),
@@ -668,7 +594,7 @@ fn test_bits() -> Result<()>  {
 }
 
 #[test]
-fn test_pack_bits() -> Result<()>  {
+fn test_pack_bits() -> Result<()> {
     assert_eq!(
         op_pack_bits(&[DataValue::List(vec![DataValue::from(true)])])?,
         DataValue::Bytes([0b10000000].into())
@@ -677,7 +603,7 @@ fn test_pack_bits() -> Result<()>  {
 }
 
 #[test]
-fn test_unpack_bits() -> Result<()>  {
+fn test_unpack_bits() -> Result<()> {
     assert_eq!(
         op_unpack_bits(&[DataValue::Bytes([0b10101010].into())])?,
         DataValue::List(

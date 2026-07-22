@@ -143,9 +143,7 @@ pub(crate) struct AggrHllUnion {
 impl AggrHllUnion {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            acc: None,
-        }
+        Self { acc: None }
     }
 }
 
@@ -220,9 +218,7 @@ pub(crate) struct AggrTDigest {
 impl AggrTDigest {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            buf: Vec::new(),
-        }
+        Self { buf: Vec::new() }
     }
 }
 
@@ -350,10 +346,7 @@ mod tests {
         };
 
         let mut acc = x.clone();
-        assert!(
-            !op.update(&mut acc, &x)?,
-            "meet(x,x) reported change"
-        );
+        assert!(!op.update(&mut acc, &x)?, "meet(x,x) reported change");
         assert_eq!(acc, x, "meet(x,x) altered x");
 
         let mut id = op.init_val();

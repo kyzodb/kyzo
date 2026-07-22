@@ -679,7 +679,6 @@ impl RelationHandle {
         self.metadata.non_keys.len() + self.metadata.keys.len()
     }
 
-
     pub(crate) fn has_no_index(&self) -> bool {
         self.indices.is_empty()
     }
@@ -917,7 +916,6 @@ impl RelationHandle {
         Ok(ret)
     }
 
-
     /// Encode an arbitrary tuple as a stored value (used where the caller
     /// has already split keys from dependents). Canonical bytes, no header.
     pub(crate) fn encode_val_only_for_store(
@@ -1056,12 +1054,9 @@ impl RelationHandle {
     /// one row by exact key (algorithm state).
     pub(crate) fn get(&self, tx: &impl ReadTx, key: &[DataValue]) -> Result<Option<Tuple>> {
         match self.keyspace_kind {
-            KeyspaceKind::Facts => self.current_row(
-                tx,
-                key,
-                AsOf::current(MAX_VALIDITY_TS),
-                SourceSpan::empty(),
-            ),
+            KeyspaceKind::Facts => {
+                self.current_row(tx, key, AsOf::current(MAX_VALIDITY_TS), SourceSpan::empty())
+            }
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
                 tx.get(&key_data)?
@@ -1083,12 +1078,7 @@ impl RelationHandle {
     ) -> Result<Option<Tuple>> {
         match self.keyspace_kind {
             KeyspaceKind::Facts => Ok(self
-                .current_row(
-                    tx,
-                    key,
-                    AsOf::current(MAX_VALIDITY_TS),
-                    SourceSpan::empty(),
-                )?
+                .current_row(tx, key, AsOf::current(MAX_VALIDITY_TS), SourceSpan::empty())?
                 .map(|row| Tuple::from_vec(row.as_slice()[self.metadata.keys.len()..].to_vec()))),
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
@@ -1110,12 +1100,7 @@ impl RelationHandle {
     pub(crate) fn exists(&self, tx: &impl ReadTx, key: &[DataValue]) -> Result<bool> {
         match self.keyspace_kind {
             KeyspaceKind::Facts => Ok(self
-                .current_row(
-                    tx,
-                    key,
-                    AsOf::current(MAX_VALIDITY_TS),
-                    SourceSpan::empty(),
-                )?
+                .current_row(tx, key, AsOf::current(MAX_VALIDITY_TS), SourceSpan::empty())?
                 .is_some()),
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
@@ -1583,7 +1568,8 @@ impl<S: Storage> Engine<S> {
             rows.push(Tuple::from_vec(vec![
                 DataValue::from(handle.name.as_str()),
                 DataValue::from(
-                    i64::try_from(handle.arity()).map_err(|_| miette!("relation arity does not fit i64"))?,
+                    i64::try_from(handle.arity())
+                        .map_err(|_| miette!("relation arity does not fit i64"))?,
                 ),
                 DataValue::from(format!("{:?}", handle.access_level)),
             ]));
@@ -1769,7 +1755,7 @@ mod tests {
     /// (Null < Str in the memcmp encoding), which is what lets `list` scan
     /// the Str range without seeing it.
     #[test]
-    fn system_key_shapes() -> Result<()>  {
+    fn system_key_shapes() -> Result<()> {
         let counter = SystemKey::IdCounter.encode();
         assert_eq!(&counter[..8], &[0u8; 8], "SYSTEM prefix");
         let want_counter: Tuple = Tuple::from_vec(vec![DataValue::Null]);
@@ -1793,7 +1779,7 @@ mod tests {
     /// Catalog round trip against a real store: create, get, list, write a
     /// row through the handle, destroy — and destroy takes the data with it.
     #[test]
-    fn catalog_round_trip() -> Result<()>  {
+    fn catalog_round_trip() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
 
@@ -1832,15 +1818,12 @@ mod tests {
 
         let rtx = db.read_tx()?;
         assert!(a.exists(&rtx, &row.as_slice()[..1])?);
-        assert_eq!(
-            a.get(&rtx, &row.as_slice()[..1])?,
-            Some(row.clone())
-        );
+        assert_eq!(a.get(&rtx, &row.as_slice()[..1])?, Some(row.clone()));
         assert_eq!(
             a.get_val_only(&rtx, &row.as_slice()[..1])?,
             Some(Tuple::from_vec(vec![DataValue::from("one")]))
         );
-        let scanned: Vec<Tuple> = a.scan_all(&rtx).map(|t| t?).collect();
+        let scanned: Vec<Tuple> = a.scan_all(&rtx).collect::<Result<_>>()?;
         assert_eq!(scanned, vec![row.clone()]);
         // The row is invisible from beta's keyspace.
         assert_eq!(b.scan_all(&rtx).count(), 0);
@@ -1870,12 +1853,11 @@ mod tests {
     /// could hold. The real `RelationHandle` must refuse decoding it —
     /// typed error, never a panic, never a constructed handle.
     #[test]
-    fn corrupt_catalog_row_refuses_out_of_range_relation_id() -> Result<()>  {
+    fn corrupt_catalog_row_refuses_out_of_range_relation_id() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
         let mut tx = db.write_tx()?;
-        let handle =
-            create_relation(&mut tx, simple_input("hostile"), KeyspaceKind::Facts)?;
+        let handle = create_relation(&mut tx, simple_input("hostile"), KeyspaceKind::Facts)?;
 
         #[derive(serde_derive::Serialize)]
         struct ShadowHandle {
@@ -1906,8 +1888,7 @@ mod tests {
             keyspace_kind: handle.keyspace_kind,
         };
         let mut bytes = vec![];
-        shadow
-            .serialize(&mut Serializer::new(&mut bytes).with_struct_map())?;
+        shadow.serialize(&mut Serializer::new(&mut bytes).with_struct_map()).map_err(|e| miette!("rmp: {e}"))?;
 
         // Must refuse typed, not panic and not hand back a handle carrying
         // an out-of-range id.
@@ -1922,7 +1903,7 @@ mod tests {
     /// and destroyed within one transaction leaves nothing behind — the
     /// transaction's own writes die with the range.
     #[test]
-    fn destroy_within_one_transaction_kills_own_writes() -> Result<()>  {
+    fn destroy_within_one_transaction_kills_own_writes() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
         let mut tx = db.write_tx()?;
@@ -1942,7 +1923,7 @@ mod tests {
     /// Ids are allocated sequentially from the persisted counter, and the
     /// counter row holds the last id handed out.
     #[test]
-    fn id_counter_allocation() -> Result<()>  {
+    fn id_counter_allocation() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
 
@@ -1950,20 +1931,31 @@ mod tests {
         let first = create_relation(&mut tx, simple_input("one"), KeyspaceKind::Facts)?;
         let second = create_relation(&mut tx, simple_input("two"), KeyspaceKind::Facts)?;
         tx.commit()?;
-        assert_eq!(first.id, RelationId::new(1).map_err(|e| miette!("below cap: {e}"))?);
-        assert_eq!(second.id, RelationId::new(2).map_err(|e| miette!("below cap: {e}"))?);
+        assert_eq!(
+            first.id,
+            RelationId::new(1).ok_or_else(|| miette!("below cap:"))?
+        );
+        assert_eq!(
+            second.id,
+            RelationId::new(2).ok_or_else(|| miette!("below cap:"))?
+        );
 
         // A later transaction continues where the counter left off.
         let mut tx = db.write_tx()?;
         let third = create_relation(&mut tx, simple_input("three"), KeyspaceKind::Facts)?;
         tx.commit()?;
-        assert_eq!(third.id, RelationId::new(3).map_err(|e| miette!("below cap: {e}"))?);
+        assert_eq!(
+            third.id,
+            RelationId::new(3).ok_or_else(|| miette!("below cap:"))?
+        );
 
         let rtx = db.read_tx()?;
-        let counter = rtx.get(&SystemKey::IdCounter.encode())??;
+        let counter = rtx
+            .get(&SystemKey::IdCounter.encode())?
+            .ok_or_else(|| miette!("id counter present"))?;
         assert_eq!(
-            RelationId::raw_decode(&counter)?,
-            RelationId::new(3).map_err(|e| miette!("below cap: {e}"))?
+            RelationId::raw_decode(counter.as_ref())?,
+            RelationId::new(3).ok_or_else(|| miette!("below cap:"))?
         );
         Ok(())
     }
@@ -1972,7 +1964,7 @@ mod tests {
     /// counter conflict at commit; exactly one wins and the loser's error
     /// is the typed, retryable `ConflictError`.
     #[test]
-    fn concurrent_creates_conflict_and_retry_succeeds() -> Result<()>  {
+    fn concurrent_creates_conflict_and_retry_succeeds() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
 
@@ -1994,14 +1986,17 @@ mod tests {
         let mut tx3 = db.write_tx()?;
         let right = create_relation(&mut tx3, simple_input("right"), KeyspaceKind::Facts)?;
         tx3.commit()?;
-        assert_eq!(right.id, RelationId::new(2).map_err(|e| miette!("below cap: {e}"))?);
+        assert_eq!(
+            right.id,
+            RelationId::new(2).ok_or_else(|| miette!("below cap:"))?
+        );
         Ok(())
     }
 
     /// The access ladder gates destructive operations: `Ord` is the
     /// semantics.
     #[test]
-    fn access_level_gates() -> Result<()>  {
+    fn access_level_gates() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
 
@@ -2044,7 +2039,7 @@ mod tests {
     /// Exhausting the 48-bit id space is a typed error, not the original's
     /// panic.
     #[test]
-    fn relation_id_overflow_is_error() -> Result<()>  {
+    fn relation_id_overflow_is_error() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
 
@@ -2070,7 +2065,7 @@ mod tests {
     /// The persistent catalog refuses temp names (the session's temp store
     /// owns them — see the routing seam), and duplicate names.
     #[test]
-    fn create_refuses_temp_names_and_duplicates() -> Result<()>  {
+    fn create_refuses_temp_names_and_duplicates() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
 
@@ -2090,7 +2085,7 @@ mod tests {
 
     /// Rename moves the catalog row and nothing else: same id, same data.
     #[test]
-    fn rename_moves_the_row_and_keeps_the_keyspace() -> Result<()>  {
+    fn rename_moves_the_row_and_keeps_the_keyspace() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
         let mut tx = db.write_tx()?;
@@ -2117,7 +2112,7 @@ mod tests {
     /// version at or before the query time wins, and a retraction is an
     /// honest absence.
     #[test]
-    fn skip_scan_sees_the_asserted_past() -> Result<()>  {
+    fn skip_scan_sees_the_asserted_past() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
         let mut tx = db.write_tx()?;
@@ -2134,16 +2129,15 @@ mod tests {
         tx.commit()?;
 
         let rtx = db.read_tx()?;
-        let at = |ts: i64| -> Vec<Tuple> {
+        let at = |ts: i64| -> Result<Vec<Tuple>> {
             rel.skip_scan_all(&rtx, AsOf::current(ValidityTs::of_micros(ts)))
-                .map(|t| t?)
-                .collect()
+                .collect::<Result<_>>()
         };
-        assert_eq!(at(5).len(), 0, "before the assertion: not yet believed");
-        let hits = at(15);
+        assert_eq!(at(5)?.len(), 0, "before the assertion: not yet believed");
+        let hits = at(15)?;
         assert_eq!(hits.len(), 1, "between assert and retract: believed");
         assert_eq!(hits[0][0], DataValue::from(1));
-        assert_eq!(at(25).len(), 0, "after the retraction: revised away");
+        assert_eq!(at(25)?.len(), 0, "after the retraction: revised away");
         Ok(())
     }
 
@@ -2153,12 +2147,12 @@ mod tests {
     /// dependent type through). Partial column approval is impossible —
     /// prove constructs whole or refuses whole.
     #[test]
-    fn prove_compatible_input_checks_input_dependents_whole() -> Result<()>  {
+    fn prove_compatible_input_checks_input_dependents_whole() -> Result<()> {
         use kyzo_model::schema::RelationWriteShape::{Put, RemoveOrUpdate};
 
         let stored = RelationHandle::new_from_input(
             simple_input("s"),
-            RelationId::new(1).map_err(|e| miette!("below cap: {e}"))?,
+            RelationId::new(1).ok_or_else(|| miette!("below cap:"))?,
             KeyspaceKind::Facts,
         );
         // Compatible input: same shapes → branded proof.
@@ -2193,7 +2187,7 @@ mod tests {
     /// and decodes back to the same provenance, proving the refusal is
     /// specific to malformed input, not "triggers never store".
     #[test]
-    fn malformed_trigger_source_is_refused_and_not_persisted() -> Result<()>  {
+    fn malformed_trigger_source_is_refused_and_not_persisted() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path())?;
 
@@ -2257,39 +2251,33 @@ mod tests {
     /// bytes), so any change to it must arrive together with a migration
     /// decision — this test failing is that conversation starting.
     #[test]
-    fn handle_wire_format_round_trips_and_is_pinned() -> Result<()>  {
+    fn handle_wire_format_round_trips_and_is_pinned() -> Result<()> {
         let mut handle = RelationHandle::new_from_input(
             input_handle(
                 "pin",
                 vec![col("k", ColType::Int)],
                 vec![col("v", ColType::String)],
             ),
-            RelationId::new(7).map_err(|e| miette!("below cap: {e}"))?,
+            RelationId::new(7).ok_or_else(|| miette!("below cap:"))?,
             KeyspaceKind::Facts,
         );
-        handle.put_triggers = vec![
-            Trigger::parse(
-                "?[k, v] := *pin[k, v]",
-                &DEFAULT_FIXED_RULES,
-                trigger_decode_vld(),
-            )
-            ?,
-        ];
+        handle.put_triggers = vec![Trigger::parse(
+            "?[k, v] := *pin[k, v]",
+            &DEFAULT_FIXED_RULES,
+            trigger_decode_vld(),
+        )?];
         handle.access_level = AccessLevel::ReadOnly;
         handle.indices = vec![IndexRef {
             name: SmartString::from("by_v"),
             kind: IndexKind::Plain { mapper: vec![1, 0] },
         }];
         handle.description = SmartString::from("pinned");
-        handle.constraints = vec![
-            ConstraintRef::parse(
-                "no_empty_v",
-                "?[k] := *pin[k, v], v == ''",
-                &DEFAULT_FIXED_RULES,
-                trigger_decode_vld(),
-            )
-            ?,
-        ];
+        handle.constraints = vec![ConstraintRef::parse(
+            "no_empty_v",
+            "?[k] := *pin[k, v], v == ''",
+            &DEFAULT_FIXED_RULES,
+            trigger_decode_vld(),
+        )?];
 
         let bytes = handle.encode()?;
         let decoded = RelationHandle::decode(&bytes)?;
@@ -2316,7 +2304,7 @@ mod tests {
     /// coordinates put the system cut before the write's stamp, where the
     /// record knew nothing.
     #[test]
-    fn asof_clause_first_coordinate_is_system_time() -> Result<()>  {
+    fn asof_clause_first_coordinate_is_system_time() -> Result<()> {
         use crate::session::db::Engine;
         use kyzo_model::SourceSpan;
         use std::collections::BTreeMap;
@@ -2329,7 +2317,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        let db = open_engine(new_fjall_storage(dir.path())?);
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script(
             "?[k, v] <- [[9, 'seed']] :create hist {k => v}",
             no_params(),
@@ -2338,13 +2326,12 @@ mod tests {
         // The retroactive write: valid = 150 µs (ancient), sys = now.
         let mut tx = db.store.write_tx()?;
         let handle = get_relation(&tx, "hist")?;
-        handle
-            .put_fact(
-                &mut tx,
-                &[DataValue::from(1), DataValue::from("retro")],
-                ValidityTs::of_micros(150),
-                SourceSpan(0, 0),
-            )?;
+        handle.put_fact(
+            &mut tx,
+            &[DataValue::from(1), DataValue::from("retro")],
+            ValidityTs::of_micros(150),
+            SourceSpan(0, 0),
+        )?;
         tx.commit()?;
         let now = crate::session::current_validity()?.raw();
 
@@ -2376,7 +2363,7 @@ mod tests {
     /// record as it was). Resolution semantics are pinned by the
     /// time-travel trials; this pins the LANGUAGE surface.
     #[test]
-    fn asof_clause_parses_one_and_two_coordinates() -> Result<()>  {
+    fn asof_clause_parses_one_and_two_coordinates() -> Result<()> {
         use crate::session::db::Engine;
         use std::collections::BTreeMap;
 
@@ -2388,7 +2375,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        let db = open_engine(new_fjall_storage(dir.path())?);
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script("?[k, v] <- [[1, 10]] :create hist {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         db.run_script("?[k, v] := *hist[k, v @ 12345]", no_params())
@@ -2397,7 +2384,7 @@ mod tests {
             .map_err(|e| miette!("two-coordinate as-of parses and runs: {e}"))?;
         db.run_script("?[k, v] := *hist{k, v @ 12345, 67890}", no_params())
             .map_err(|e| miette!("two-coordinate as-of parses in named form: {e}"))?;
-            Ok(())
+        Ok(())
     }
 
     /// The pinned wire bytes of the canonical handle above (msgpack,

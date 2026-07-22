@@ -73,100 +73,65 @@ pub(crate) mod sim;
 // Seat reexports: crate-visible names for hosts and mid-wiring.
 // Production-used names stay live; test-corpus flat imports are cfg(test);
 // unused flat reexports are cut (callers use module paths).
-pub use authority::{
-    WriteAuthority,
-};
+pub use authority::WriteAuthority;
 #[cfg(test)]
-pub use authority::{
-    Entropy, IncarnationId, OpenOrdinal, RecoveryMatrix,
-};
+pub use authority::{Entropy, IncarnationId, OpenOrdinal, RecoveryMatrix};
 // Leave-is-free external import stays fail-closed (#359 / #375 T5): no flat
 // reexport of ImportCapability / OriginRootRegistry — module-path only.
 
-pub use commit_cap::{
-    SnapshotFork,
-};
+pub use commit_cap::SnapshotFork;
 #[cfg(test)]
-pub use commit_cap::{
-    StableCommitCap,
-};
+pub use commit_cap::StableCommitCap;
 
-pub use contract::{
-    FormatVersion, Storage,
-};
-pub(crate) use contract::{
-    SystemClock,
-};
+pub(crate) use contract::SystemClock;
+pub use contract::{FormatVersion, Storage};
 #[cfg(test)]
 pub use crypto::{
-    AeadArm, Kek, KekUnwrapCap, Nonce, SegmentCounter, ShredSalt,
-    compress_then_encrypt, decompress, decrypt, derive_dek,
+    AeadArm, Kek, KekUnwrapCap, Nonce, SegmentCounter, ShredSalt, compress_then_encrypt,
+    decompress, decrypt, derive_dek,
 };
-pub use epoch::{
-    CryptoDomain, FenceEpoch,
-};
+pub use epoch::{CryptoDomain, FenceEpoch};
 #[cfg(test)]
-pub use failure::{
-    FailureLattice, StoreRefuse,
-};
+pub use failure::{FailureLattice, StoreRefuse};
 #[cfg(test)]
-pub use grants::{
-    ForkGrant, Grant, GrantId, PriorMaterialization, RecoveryGrant, materialize,
-};
+pub use grants::{ForkGrant, Grant, GrantId, PriorMaterialization, RecoveryGrant, materialize};
 #[cfg(test)]
-pub use idempotency::{
-    IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest,
-};
+pub use idempotency::{IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest};
 
 #[cfg(test)]
-pub use merkle::{
-    StateRoot,
-};
+pub use merkle::StateRoot;
 #[cfg(test)]
-pub use nonce::{
-    DomainCounter, MintDomain, nonce,
-};
+pub use nonce::{DomainCounter, MintDomain, nonce};
 #[cfg(test)]
 pub use objects::{
-    BackendContract, ConfirmedCopies, ConsistencyClass, ContentHash, Downgrade,
-    FailureDomains, IntegrityVerification, ObjectDurabilityClass, ObjectId, ObjectRef,
-    ObjectRefuse, PermanenceCandidate, PermanenceWitness, ReclaimCertificate, Regions,
-    StagingToken, VolatilePending, reclaim_candidate,
+    BackendContract, ConfirmedCopies, ConsistencyClass, ContentHash, Downgrade, FailureDomains,
+    IntegrityVerification, ObjectDurabilityClass, ObjectId, ObjectRef, ObjectRefuse,
+    PermanenceCandidate, PermanenceWitness, ReclaimCertificate, Regions, StagingToken,
+    VolatilePending, reclaim_candidate,
 };
 pub use open::{
-    EntropyArm, GenesisParams, GenesisSealed, GenesisSealedView, SizeClass,
-    StableCommitCapArm, StagingTtl, StoreId, StoreOpen, genesis,
+    EntropyArm, GenesisParams, GenesisSealed, GenesisSealedView, SizeClass, StableCommitCapArm,
+    StagingTtl, StoreId, StoreOpen, genesis,
 };
 #[cfg(test)]
 pub use replica::{
-    ReplicaCustody, ReplicaKey, ScopeManifestDigest, ScopeManifestStatus,
-    ScopeManifestTable,
+    ReplicaCustody, ReplicaKey, ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable,
 };
 #[cfg(test)]
-pub use seal::{
-    CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest, SealRefuse,
-};
-pub use sweep::{
-    CommitOrdinal, SweepRefuse, SweepSealFailure,
-};
+pub use seal::{CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest, SealRefuse};
+pub use sweep::{CommitOrdinal, SweepRefuse, SweepSealFailure};
 #[cfg(test)]
-pub use sweep::{
-    SweepDoor, SweepSession,
-};
+pub use sweep::{SweepDoor, SweepSession};
 #[cfg(test)]
 pub use transcript::{
     CanonicalTranscript, SealedArtifactKind, TranscriptRefuse,
     encode_normative_production_transcript, parse_golden_hex,
 };
+#[cfg(test)]
+pub use tx::Slice;
 pub use tx::{
-    Aborted, Applied, BackendIoError, CommitCorruption, CommitFailure, CommitIo,
-    Committed, ConflictError, ReadTx, WriteTx,
+    Aborted, Applied, BackendIoError, CommitCorruption, CommitFailure, CommitIo, Committed,
+    ConflictError, ReadTx, WriteTx,
 };
 #[cfg(test)]
-pub use tx::{
-    Slice,
-};
-#[cfg(test)]
-pub use wal::{
-    WalHash,
-};
+pub use wal::WalHash;

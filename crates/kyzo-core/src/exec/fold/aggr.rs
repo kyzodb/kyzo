@@ -25,7 +25,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-
 /// i64 count → f64 via [`Num::to_f64`] (cast lives in kyzo-model, not here).
 fn count_to_f64(count: i64) -> f64 {
     kyzo_model::value::Num::int(count).to_f64()
@@ -368,9 +367,7 @@ pub(crate) struct AggrOr {
 impl AggrOr {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            accum: false,
-        }
+        Self { accum: false }
     }
 }
 
@@ -598,9 +595,7 @@ pub(crate) struct AggrIntersection {
 impl AggrIntersection {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            accum: None,
-        }
+        Self { accum: None }
     }
 }
 
@@ -705,9 +700,10 @@ fn collect_factory(args: &[DataValue]) -> Result<NormalAggr> {
                 "argument to 'collect' must be positive, got {}",
                 limit
             );
-            NormalAggr::Collect(AggrCollect::new(usize::try_from(limit).map_err(|_| {
-                miette!("'collect' limit does not fit usize: {limit}")
-            })?))
+            NormalAggr::Collect(AggrCollect::new(
+                usize::try_from(limit)
+                    .map_err(|_| miette!("'collect' limit does not fit usize: {limit}"))?,
+            ))
         }
     })
 }
@@ -761,9 +757,7 @@ pub(crate) struct AggrCount {
 impl AggrCount {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            count: 0,
-        }
+        Self { count: 0 }
     }
 }
 
@@ -876,10 +870,7 @@ pub(crate) struct AggrMean {
 impl AggrMean {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            count: 0,
-            sum: 0.0,
-        }
+        Self { count: 0, sum: 0.0 }
     }
 }
 
@@ -919,9 +910,14 @@ impl NumAccum {
         match (self, n.repr()) {
             (NumAccum::Int(acc), NumRepr::Int(i)) => match int_op(acc, i128::from(i)) {
                 Some(acc) => NumAccum::Int(acc),
-                None => NumAccum::Float(float_op(i128_approx_f64(acc), kyzo_model::value::Num::int(i).to_f64())),
+                None => NumAccum::Float(float_op(
+                    i128_approx_f64(acc),
+                    kyzo_model::value::Num::int(i).to_f64(),
+                )),
             },
-            (NumAccum::Int(acc), NumRepr::Float(f)) => NumAccum::Float(float_op(i128_approx_f64(acc), f)),
+            (NumAccum::Int(acc), NumRepr::Float(f)) => {
+                NumAccum::Float(float_op(i128_approx_f64(acc), f))
+            }
             (NumAccum::Float(acc), _) => NumAccum::Float(float_op(acc, n.to_f64())),
         }
     }
@@ -1008,9 +1004,7 @@ pub(crate) struct AggrMin {
 impl AggrMin {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            found: None,
-        }
+        Self { found: None }
     }
 }
 
@@ -1029,7 +1023,9 @@ impl NormalAggrObj for AggrMin {
             Some(found) => {
                 let (found_n, new) = match (found, value) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => bail!("'min' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => {
+                        bail!("'min' applied to non-numerical values")
+                    }
                 };
                 if new < found_n {
                     self.found = Some(value.clone());
@@ -1040,7 +1036,10 @@ impl NormalAggrObj for AggrMin {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
+        Ok(match self.found.clone() {
+            Some(v) => v,
+            None => DataValue::Null,
+        })
     }
 }
 
@@ -1069,7 +1068,9 @@ impl MeetAggrObj for MeetAggrMin {
             MeetAccum::Value(left_v) => {
                 let (l, r) = match (&*left_v, right_v) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => bail!("'min' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => {
+                        bail!("'min' applied to non-numerical values")
+                    }
                 };
                 Ok(if r < l {
                     *left_v = right_v.clone();
@@ -1090,9 +1091,7 @@ pub(crate) struct AggrMax {
 impl AggrMax {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            found: None,
-        }
+        Self { found: None }
     }
 }
 
@@ -1111,7 +1110,9 @@ impl NormalAggrObj for AggrMax {
             Some(found) => {
                 let (found_n, new) = match (found, value) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => bail!("'max' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => {
+                        bail!("'max' applied to non-numerical values")
+                    }
                 };
                 if new > found_n {
                     self.found = Some(value.clone());
@@ -1122,7 +1123,10 @@ impl NormalAggrObj for AggrMax {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
+        Ok(match self.found.clone() {
+            Some(v) => v,
+            None => DataValue::Null,
+        })
     }
 }
 
@@ -1151,7 +1155,9 @@ impl MeetAggrObj for MeetAggrMax {
             MeetAccum::Value(left_v) => {
                 let (l, r) = match (&*left_v, right_v) {
                     (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                    (data_value_any!(), data_value_any!()) => bail!("'max' applied to non-numerical values"),
+                    (data_value_any!(), data_value_any!()) => {
+                        bail!("'max' applied to non-numerical values")
+                    }
                 };
                 Ok(if r > l {
                     *left_v = right_v.clone();
@@ -1204,7 +1210,10 @@ impl NormalAggrObj for AggrLatestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
+        Ok(match self.found.clone() {
+            Some(v) => v,
+            None => DataValue::Null,
+        })
     }
 }
 
@@ -1248,7 +1257,10 @@ impl NormalAggrObj for AggrSmallestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
+        Ok(match self.found.clone() {
+            Some(v) => v,
+            None => DataValue::Null,
+        })
     }
 }
 
@@ -1296,8 +1308,14 @@ impl NormalAggrObj for AggrMinCost {
 
     fn get(&self) -> Result<DataValue> {
         Ok(DataValue::List(vec![
-            match self.found.clone() { Some(v) => v, None => DataValue::Null },
-            match self.cost { Some(c) => DataValue::from(c), None => DataValue::Null },
+            match self.found.clone() {
+                Some(v) => v,
+                None => DataValue::Null,
+            },
+            match self.cost {
+                Some(c) => DataValue::from(c),
+                None => DataValue::Null,
+            },
         ]))
     }
 }
@@ -1363,9 +1381,7 @@ pub(crate) struct AggrShortest {
 impl AggrShortest {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            found: None,
-        }
+        Self { found: None }
     }
 }
 
@@ -1437,9 +1453,7 @@ pub(crate) struct AggrChoice {
 impl AggrChoice {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            found: None,
-        }
+        Self { found: None }
     }
 }
 
@@ -1454,7 +1468,10 @@ impl NormalAggrObj for AggrChoice {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(match self.found.clone() { Some(v) => v, None => DataValue::Null })
+        Ok(match self.found.clone() {
+            Some(v) => v,
+            None => DataValue::Null,
+        })
     }
 }
 
@@ -1490,9 +1507,7 @@ pub(crate) struct AggrBitAnd {
 impl AggrBitAnd {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            res: Vec::new(),
-        }
+        Self { res: Vec::new() }
     }
 }
 
@@ -1580,9 +1595,7 @@ pub(crate) struct AggrBitOr {
 impl AggrBitOr {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            res: Vec::new(),
-        }
+        Self { res: Vec::new() }
     }
 }
 
@@ -1670,9 +1683,7 @@ pub(crate) struct AggrBitXor {
 impl AggrBitXor {
     /// Empty accumulator — the fold identity for this aggregation.
     pub(crate) fn empty() -> Self {
-        Self {
-            res: Vec::new(),
-        }
+        Self { res: Vec::new() }
     }
 }
 
@@ -1736,7 +1747,9 @@ mod tests {
         canon: fn(&MeetAccum) -> MeetAccum,
     ) -> Result<bool> {
         let before = acc.clone();
-        let changed = op.update(acc, x).map_err(|e| miette!("meet update failed: {e}"))?;
+        let changed = op
+            .update(acc, x)
+            .map_err(|e| miette!("meet update failed: {e}"))?;
         assert_eq!(
             changed,
             canon(&before) != canon(acc),
@@ -2082,7 +2095,10 @@ mod tests {
         let mut op = AggrSum::empty();
         op.set(&DataValue::from(i64::MAX))?;
         op.set(&DataValue::from(i64::MAX))?;
-        assert_eq!(op.get()?, DataValue::from(2.0 * Num::int(i64::MAX).to_f64()));
+        assert_eq!(
+            op.get()?,
+            DataValue::from(2.0 * Num::int(i64::MAX).to_f64())
+        );
         let mut op = AggrSum::empty();
         op.set(&DataValue::from(i64::MAX))?;
         op.set(&DataValue::from(i64::MAX))?;
@@ -2103,7 +2119,10 @@ mod tests {
         let mut op = AggrProduct::empty();
         op.set(&DataValue::from(i64::MAX))?;
         op.set(&DataValue::from(4i64))?;
-        assert_eq!(op.get()?, DataValue::from(Num::int(i64::MAX).to_f64() * 4.0));
+        assert_eq!(
+            op.get()?,
+            DataValue::from(Num::int(i64::MAX).to_f64() * 4.0)
+        );
 
         assert_eq!(AggrSum::empty().get()?, DataValue::from(0i64));
         assert_eq!(AggrProduct::empty().get()?, DataValue::from(1i64));
@@ -2195,9 +2214,7 @@ mod tests {
                 );
             }
             other @ (data_value_any!()) => {
-                return Err(miette!(
-                    "expected float after i128 overflow, got {other:?}"
-                ));
+                return Err(miette!("expected float after i128 overflow, got {other:?}"));
             }
         }
         Ok(())
@@ -2249,13 +2266,11 @@ mod tests {
         meet.update(
             &mut acc,
             &with_null(&[DataValue::Null, DataValue::from(1), DataValue::from(2)]),
-        )
-        ?;
+        )?;
         meet.update(
             &mut acc,
             &with_null(&[DataValue::Null, DataValue::from(2), DataValue::from(3)]),
-        )
-        ?;
+        )?;
         assert_eq!(
             acc,
             v(DataValue::Set(
@@ -2265,10 +2280,7 @@ mod tests {
         );
 
         let mut acc = meet.init_val();
-        assert!(
-            meet.update(&mut acc, &with_null(&[DataValue::Null]))
-                ?
-        );
+        assert!(meet.update(&mut acc, &with_null(&[DataValue::Null]))?);
         assert_eq!(
             acc,
             v(DataValue::List(vec![DataValue::Null])),

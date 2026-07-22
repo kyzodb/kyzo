@@ -971,12 +971,12 @@ mod pins {
             tx.total_scan()
                 .filter_map(Result::ok)
                 .map(|(k, _)| k.to_vec())
-                .find(|k| k.len() >= 8 && k[..8].iter().any(|&b| b != 0))?
+                .find(|k| k.len() >= 8 && k[..8].iter().any(|&b| b != 0)).ok_or_else(|| miette!("expected some"))?
         };
         {
-            let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
-            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
-            ks.insert(data_key, [0xFFu8])?;
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open().map_err(|e| miette!("fjall open: {e}"))?;
+            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default).map_err(|e| miette!("fjall: {e}"))?;
+            ks.insert(data_key, [0xFFu8]).map_err(|e| miette!("fjall: {e}"))?;
             raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
         let storage = new_fjall_storage(&path)?;
@@ -1007,9 +1007,9 @@ mod pins {
             clean_checked = report.checked;
         }
         {
-            let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
-            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
-            ks.insert([0u8, 0, 0, 0, 0, 0, 0, 7, 0xEE, 0xEE], b"?")?;
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open().map_err(|e| miette!("fjall open: {e}"))?;
+            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default).map_err(|e| miette!("fjall: {e}"))?;
+            ks.insert([0u8, 0, 0, 0, 0, 0, 0, 7, 0xEE, 0xEE], b"?").map_err(|e| miette!("fjall: {e}"))?;
             raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
         let storage = new_fjall_storage(&path)?;
@@ -1075,7 +1075,7 @@ mod pins {
                     }
                 }
             }
-            let idx_id = idx_id?;
+            let idx_id = idx_id.ok_or_else(|| miette!("idx id"))?;
 
             // Phantom index row: projects v=99 for a key that was never a base
             // fact. Valid polarity + canonical bytes → decode/order walk passes.
@@ -1100,7 +1100,7 @@ mod pins {
                         break;
                     }
                 }
-                found?
+                found.ok_or_else(|| miette!("found"))?
             };
             let key = handle.encode_bitemporal_key_for_store(
                 &phantom_key_cols,
@@ -1118,9 +1118,9 @@ mod pins {
         };
 
         {
-            let raw = fjall::OptimisticTxDatabase::builder(&path).open()?;
-            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default)?;
-            ks.insert(&phantom_kv.0, &phantom_kv.1)?;
+            let raw = fjall::OptimisticTxDatabase::builder(&path).open().map_err(|e| miette!("fjall open: {e}"))?;
+            let ks = raw.keyspace("kyzo", fjall::KeyspaceCreateOptions::default).map_err(|e| miette!("fjall: {e}"))?;
+            ks.insert(&phantom_kv.0, &phantom_kv.1).map_err(|e| miette!("fjall: {e}"))?;
             raw.persist(fjall::PersistMode::SyncAll).into_diagnostic()?;
         }
 

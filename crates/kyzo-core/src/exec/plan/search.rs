@@ -446,7 +446,11 @@ pub(crate) fn resolve_search(
         }
         IndexKind::Hnsw(manifest) => {
             let k = take_pos_int(&mut params, "k", span)?.ok_or(SearchParamRequired("k", span))?;
-            let ef = match take_pos_int(&mut params, "ef", span)? { Some(v) => v, None => k }.max(k);
+            let ef = match take_pos_int(&mut params, "ef", span)? {
+                Some(v) => v,
+                None => k,
+            }
+            .max(k);
             let radius = match take_const(&mut params, "radius", span)? {
                 None => None,
                 Some(v) => Some(v.get_float().ok_or(SearchParamInvalid(

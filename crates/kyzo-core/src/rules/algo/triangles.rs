@@ -130,7 +130,9 @@ mod tests {
         let mut state = 0x1234_5678_9abc_def0u64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             crate::rules::convert::u32_low(state >> 33) % n
         };
         let mut edges = vec![];
@@ -155,8 +157,7 @@ mod tests {
             .num_threads(1)
             .build()
             .into_diagnostic()?;
-        let seq =
-            single.install(|| clustering_coefficients(&graph, CancelFlag::inert()))?;
+        let seq = single.install(|| clustering_coefficients(&graph, CancelFlag::inert()))?;
         for _ in 0..8 {
             let par = clustering_coefficients(&graph, CancelFlag::inert())?;
             assert_eq!(seq, par);
@@ -191,8 +192,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let two_thirds = DataValue::from(2.0 * 2.0 / (3.0 * 2.0));
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), two_thirds.clone(), i(2), i(3)]),

@@ -858,7 +858,7 @@ mod temporal_index_tests {
     }
 
     fn open_session(db: &Engine<SimStorage>) -> SessionTx<<SimStorage as Storage>::WriteTx> {
-        SessionTx::new_write(db.store.write_tx()?, ScriptOptions::new())
+        SessionTx::new_write(db.store.write_tx().expect("test helper"), ScriptOptions::new())
     }
 
     /// Write one base point event directly (bypassing `execute_relation`,
@@ -931,10 +931,7 @@ mod temporal_index_tests {
     type DecodedPosting = (i64, i64, i64, i64, ClaimPolarity);
 
     fn scan_postings(tx: &impl ReadTx, idx_handle: &RelationHandle) -> Result<Vec<DecodedPosting>> {
-        let lower: Vec<u8> = Tuple::new()
-            .encode_as_key(idx_handle.id)
-            .as_ref()
-            .to_vec();
+        let lower: Vec<u8> = Tuple::new().encode_as_key(idx_handle.id).as_ref().to_vec();
         let upper = (idx_handle.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
@@ -944,10 +941,14 @@ mod temporal_index_tests {
                 let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
-                        return Err(miette!("expected the leading Validity column, got {other:?}"));
+                        return Err(miette!(
+                            "expected the leading Validity column, got {other:?}"
+                        ));
                     }
                 };
-                let key_col = tup[1].get_int().ok_or_else(|| miette!("int base key column"))?;
+                let key_col = tup[1]
+                    .get_int()
+                    .ok_or_else(|| miette!("int base key column"))?;
                 let tail_valid = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
@@ -980,7 +981,9 @@ mod temporal_index_tests {
                 let (k, v) = r.map_err(|e| miette!("base row decodes cleanly: {e}"))?;
                 let tup = kyzo_model::value::decode_tuple_from_key(&k, 3)
                     .map_err(|e| miette!("base key decodes cleanly: {e}"))?;
-                let key_col = tup[0].get_int().ok_or_else(|| miette!("int base key column"))?;
+                let key_col = tup[0]
+                    .get_int()
+                    .ok_or_else(|| miette!("int base key column"))?;
                 let valid = match &tup.as_slice()[1] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other @ (data_value_any!()) => {
@@ -1014,8 +1017,8 @@ mod temporal_index_tests {
     /// the key layout claim directly: the leading Validity column really
     /// does precede the base key bytes, not follow them.
     #[test]
-    fn temporal_index_posting_rows_match_the_scripted_history_exactly() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x7E57_0001));
+    fn temporal_index_posting_rows_match_the_scripted_history_exactly() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x7E57_0001))?;
         let mut stx = open_session(&db);
         stx.create_relation(base_input("e"), KeyspaceKind::Facts)?;
         stx.create_temporal_index("e", "t")?;
@@ -1031,7 +1034,16 @@ mod temporal_index_tests {
             (1, 10, 3, ClaimPolarity::Erase),
         ];
         for &(k, valid, sys, polarity) in &events {
-            write_base_event(BaseEventWriteSpec { stx: &mut stx, base: &base, idx_handle: &idx_handle, k: k, valid: valid, sys: sys, polarity: polarity, reasserts_existing: false });
+            write_base_event(BaseEventWriteSpec {
+                stx: &mut stx,
+                base: &base,
+                idx_handle: &idx_handle,
+                k: k,
+                valid: valid,
+                sys: sys,
+                polarity: polarity,
+                reasserts_existing: false,
+            });
         }
         stx.store.commit()?;
 
@@ -1065,7 +1077,7 @@ mod temporal_index_tests {
                 &(idx_handle.id.raw() + 1).to_be_bytes(),
             )
             .next()
-            .map_err(|e| miette!("at least one posting at or after the hand-encoded key: {e}"))?;
+            .ok_or_else(|| miette!("at least one posting at or after the hand-encoded key"))??;
         assert_eq!(
             got_key,
             expected_key.as_ref(),
@@ -1083,7 +1095,7 @@ mod temporal_index_tests {
     /// the same order (base, then index), so their relation ids align and
     /// a literal raw-byte comparison — no id-prefix stripping — is valid.
     #[test]
-    fn temporal_index_backfill_equals_incremental() -> Result<()>  {
+    fn temporal_index_backfill_equals_incremental() -> Result<()> {
         // (k, valid, sys, polarity, reasserts_existing) — several keys,
         // mixed polarities, instants not in chronological write order,
         // several sys stamps. The `(1, 120, 14, Assert, true)` event is a
@@ -1103,15 +1115,23 @@ mod temporal_index_tests {
         ];
 
         // Universe A: index live from the start (incremental).
-        let db_a = open_engine(SimStorage::new(0xB0071));
+        let db_a = open_engine(SimStorage::new(0xB0071))?;
         let mut stx_a = open_session(&db_a);
-        stx_a
-            .create_relation(base_input("b"), KeyspaceKind::Facts)?;
+        stx_a.create_relation(base_input("b"), KeyspaceKind::Facts)?;
         stx_a.create_temporal_index("b", "t")?;
         let base_a = stx_a.get_relation("b")?;
         let idx_a = stx_a.get_relation("b:t")?;
         for &(k, valid, sys, polarity, reasserts_existing) in &events {
-            write_base_event(BaseEventWriteSpec { stx: &mut stx_a, base: &base_a, idx_handle: &idx_a, k: k, valid: valid, sys: sys, polarity: polarity, reasserts_existing: reasserts_existing });
+            write_base_event(BaseEventWriteSpec {
+                stx: &mut stx_a,
+                base: &base_a,
+                idx_handle: &idx_a,
+                k: k,
+                valid: valid,
+                sys: sys,
+                polarity: polarity,
+                reasserts_existing: reasserts_existing,
+            });
         }
         stx_a.store.commit()?;
 
@@ -1120,18 +1140,15 @@ mod temporal_index_tests {
         // call is a no-op over an empty index list — write the base rows
         // directly instead, to keep the helper's contract ("an index is
         // attached") honest.
-        let db_b = open_engine(SimStorage::new(0xB0072));
+        let db_b = open_engine(SimStorage::new(0xB0072))?;
         let mut stx_b = open_session(&db_b);
-        stx_b
-            .create_relation(base_input("b"), KeyspaceKind::Facts)?;
+        stx_b.create_relation(base_input("b"), KeyspaceKind::Facts)?;
         let base_b = stx_b.get_relation("b")?;
         for &(k, valid, sys, polarity, _) in &events {
             let span = SourceSpan::empty();
             let row = vec![DataValue::from(k)];
-            let key = base_b
-                .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
-            let val = base_b
-                .encode_bitemporal_val_for_store(&row, polarity, span)?;
+            let key = base_b.encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)?;
+            let val = base_b.encode_bitemporal_val_for_store(&row, polarity, span)?;
             stx_b.put_routed(Residency::Stored, &key, &val)?;
         }
         stx_b.create_temporal_index("b", "t")?;
@@ -1149,12 +1166,8 @@ mod temporal_index_tests {
         let tx_b = db_b.store.read_tx()?;
         let lower: Vec<u8> = Tuple::new().encode_as_key(idx_a.id).as_ref().to_vec();
         let upper = (idx_a.id.raw() + 1).to_be_bytes().to_vec();
-        let raw_a: Vec<(Slice, Slice)> = tx_a
-            .range_scan(&lower, &upper)
-            .collect::<Result<_>>()?;
-        let raw_b: Vec<(Slice, Slice)> = tx_b
-            .range_scan(&lower, &upper)
-            .collect::<Result<_>>()?;
+        let raw_a: Vec<(Slice, Slice)> = tx_a.range_scan(&lower, &upper).collect::<Result<_>>()?;
+        let raw_b: Vec<(Slice, Slice)> = tx_b.range_scan(&lower, &upper).collect::<Result<_>>()?;
         assert!(
             !raw_a.is_empty(),
             "the incremental universe must have posted something"
@@ -1172,8 +1185,8 @@ mod temporal_index_tests {
     /// every base row implies exactly one posting at the SAME (valid,
     /// sys, polarity) — not merely for the byte-verified fixture above.
     #[test]
-    fn every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x7E57_0002));
+    fn every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x7E57_0002))?;
         let mut stx = open_session(&db);
         stx.create_relation(base_input("m"), KeyspaceKind::Facts)?;
         stx.create_temporal_index("m", "t")?;
@@ -1187,7 +1200,16 @@ mod temporal_index_tests {
             (2, 6, 4, ClaimPolarity::Erase),
         ];
         for &(k, valid, sys, polarity) in &events {
-            write_base_event(BaseEventWriteSpec { stx: &mut stx, base: &base, idx_handle: &idx_handle, k: k, valid: valid, sys: sys, polarity: polarity, reasserts_existing: false });
+            write_base_event(BaseEventWriteSpec {
+                stx: &mut stx,
+                base: &base,
+                idx_handle: &idx_handle,
+                k: k,
+                valid: valid,
+                sys: sys,
+                polarity: polarity,
+                reasserts_existing: false,
+            });
         }
         stx.store.commit()?;
 
@@ -1215,8 +1237,8 @@ mod temporal_index_tests {
     /// removal — the exact previously-uncovered branch — and checks the
     /// exact posting byte set.
     #[test]
-    fn temporal_index_production_pipeline_mirrors_one_posting_per_base_event() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x7E57_0003));
+    fn temporal_index_production_pipeline_mirrors_one_posting_per_base_event() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x7E57_0003))?;
         db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
             .map_err(|e| miette!("create: {e}"))?;
         {
@@ -1299,8 +1321,8 @@ mod temporal_index_tests {
     /// `del_call_count` stays 0 throughout: this bitemporal pipeline never
     /// calls `WriteTx::del`/`del_range` on a mutation path at all.
     #[test]
-    fn temporal_index_write_count_law_holds_for_every_mutation_kind() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x7E57_0004));
+    fn temporal_index_write_count_law_holds_for_every_mutation_kind() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x7E57_0004))?;
         db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
             .map_err(|e| miette!("create: {e}"))?;
         {
@@ -1386,7 +1408,11 @@ mod index_surface_tests {
         let mut out: Vec<Vec<i64>> = nr
             .rows()
             .iter()
-            .map(|r| r.iter().map(|v| v.get_int().ok_or_else(|| miette!("int"))?).collect())
+            .map(|r| {
+                r.iter()
+                    .map(|v| v.get_int().expect("int"))
+                    .collect()
+            })
             .collect();
         out.sort();
         out
@@ -1397,9 +1423,9 @@ mod index_surface_tests {
     /// including one where the fact was retracted and one where its value
     /// changed between coordinates.
     #[test]
-    fn plain_index_asof_reads_match_base_scans() -> Result<()>  {
+    fn plain_index_asof_reads_match_base_scans() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        let db = open_engine(new_fjall_storage(dir.path())?);
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script(
             "?[k, v] <- [[1, 10], [2, 20]] :create t {k => v}",
             no_params(),
@@ -1437,9 +1463,9 @@ mod index_surface_tests {
     /// the resume bound (fact prefix + `Bot`) must neither skip nor
     /// double-count across batch boundaries.
     #[test]
-    fn index_backfill_resumes_correctly_across_batches() -> Result<()>  {
+    fn index_backfill_resumes_correctly_across_batches() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        let db = open_engine(new_fjall_storage(dir.path())?);
+        let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script("?[k, v] <- [[0, 0]] :create big {k => v}", no_params())
             .map_err(|e| miette!("create: {e}"))?;
         let mut chunk = vec![];

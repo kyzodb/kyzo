@@ -189,8 +189,12 @@ fn core_numbers(graph: &DirectedCsrGraph, cancel: &CancelFlag) -> Result<Vec<u32
         // The loop mutates `vert`/`pos`/`deg`/`bin` but never `adj`, so
         // iterating `v`'s neighbor slice by reference is sound.
         for &u in &adj[crate::rules::convert::usize_from_u32(v)] {
-            if deg[crate::rules::convert::usize_from_u32(u)] > deg[crate::rules::convert::usize_from_u32(v)] {
-                let du = crate::rules::convert::usize_from_u32(deg[crate::rules::convert::usize_from_u32(u)]);
+            if deg[crate::rules::convert::usize_from_u32(u)]
+                > deg[crate::rules::convert::usize_from_u32(v)]
+            {
+                let du = crate::rules::convert::usize_from_u32(
+                    deg[crate::rules::convert::usize_from_u32(u)],
+                );
                 let pu = pos[crate::rules::convert::usize_from_u32(u)];
                 let pw = bin[du];
                 let w = vert[pw];
@@ -309,11 +313,15 @@ mod tests {
         got.into_iter()
             .map(|r| -> Result<_> {
                 let core = match r[1].get_int() {
-                    Some(i) => u32::try_from(i).map_err(|_| miette!("test core number fits u32"))?,
+                    Some(i) => {
+                        u32::try_from(i).map_err(|_| miette!("test core number fits u32"))?
+                    }
                     None => return Err(miette!("test core column must be int")),
                 };
                 Ok((
-                    r[0].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string(),
+                    r[0].get_str()
+                        .ok_or_else(|| miette!("test expected Some"))?
+                        .to_string(),
                     core,
                 ))
             })
@@ -386,7 +394,9 @@ mod tests {
         let mut state = 0x51ed_2701_dead_c0deu64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             state
         };
         let owned: Vec<(String, String)> = (0..400)

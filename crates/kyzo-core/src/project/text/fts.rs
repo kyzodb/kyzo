@@ -255,9 +255,16 @@ pub(crate) fn fts_put<T: WriteTx>(
     while let Some(token) = token_stream.next() {
         let term = SmartString::<LazyCompact>::from(&token.text);
         let (fr, to, position) = collector.entry(term).or_default();
-        fr.push(DataValue::from(i64::try_from(token.offset_from()).map_err(|_| miette!("token offset_from overflow"))?));
-        to.push(DataValue::from(i64::try_from(token.offset_to()).map_err(|_| miette!("token offset_to overflow"))?));
-        position.push(DataValue::from(i64::try_from(token.position).map_err(|_| miette!("token position overflow"))?));
+        fr.push(DataValue::from(
+            i64::try_from(token.offset_from())
+                .map_err(|_| miette!("token offset_from overflow"))?,
+        ));
+        to.push(DataValue::from(
+            i64::try_from(token.offset_to()).map_err(|_| miette!("token offset_to overflow"))?,
+        ));
+        position.push(DataValue::from(
+            i64::try_from(token.position).map_err(|_| miette!("token position overflow"))?,
+        ));
         count += 1;
     }
 
@@ -438,19 +445,19 @@ fn compute_score(
         FtsScoreKind::Tf => tf * booster,
         FtsScoreKind::TfIdf => {
             let n_found_docs = match u32::try_from(n_found_docs) {
-        Ok(v) => f64::from(v),
-        Err(_gt_u32) => match i64::try_from(n_found_docs) {
-            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-            Err(_gt_i64) => 0.0,
-        },
-    };
+                Ok(v) => f64::from(v),
+                Err(_gt_u32) => match i64::try_from(n_found_docs) {
+                    Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+                    Err(_gt_i64) => 0.0,
+                },
+            };
             let n_total_f = match u32::try_from(n_total) {
-        Ok(v) => f64::from(v),
-        Err(_gt_u32) => match i64::try_from(n_total) {
-            Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
-            Err(_gt_i64) => 0.0,
-        },
-    };
+                Ok(v) => f64::from(v),
+                Err(_gt_u32) => match i64::try_from(n_total) {
+                    Ok(i) => kyzo_model::value::Num::int(i).to_f64(),
+                    Err(_gt_i64) => 0.0,
+                },
+            };
             let idf = (1.0 + (n_total_f - n_found_docs + 0.5) / (n_found_docs + 0.5)).ln();
             tf * idf * booster
         }
@@ -871,12 +878,7 @@ mod tests {
         }
     }
 
-    fn run(
-        db: &impl Storage,
-        f: &Fixture,
-        q: &str,
-        p: FtsSearchParams,
-    ) -> Result<Vec<(i64, f64)>> {
+    fn run(db: &impl Storage, f: &Fixture, q: &str, p: FtsSearchParams) -> Result<Vec<(i64, f64)>> {
         let rtx = db.read_tx()?;
         let n = if p.score_kind == FtsScoreKind::TfIdf {
             fts_total_docs(&rtx, &f.base)?
@@ -1101,7 +1103,9 @@ mod tests {
             tuple_pos: BindingPos::Resolved(0),
         };
         let row = vec![DataValue::from(1), DataValue::from("text")];
-        let err = fts_put(&mut tx, &row, &bad_extractor, &a, &base, &idx).err().ok_or_else(|| miette!("expected error"))?;
+        let err = fts_put(&mut tx, &row, &bad_extractor, &a, &base, &idx)
+            .err()
+            .ok_or_else(|| miette!("expected error"))?;
         assert!(
             err.downcast_ref::<FtsExtractorType>().is_some(),
             "typed extractor error, got: {err:?}"
@@ -1135,8 +1139,21 @@ mod tests {
         tx.commit().map_err(|e| miette!("{e}"))?;
 
         let rtx = db.read_tx()?;
-        let err = Fts::search_index(&rtx, FtsSearchRequest { cancel: &CancelFlag::inert(), query: "hello", base: &f.base, idx: &f.idx, params: &params(1, FtsScoreKind::Tf), filter_code: &None, tokenizer: &f.analyzer, n_total: 0 })
-        .err().ok_or_else(|| miette!("corrupt postings must error, not panic"))?;
+        let err = Fts::search_index(
+            &rtx,
+            FtsSearchRequest {
+                cancel: &CancelFlag::inert(),
+                query: "hello",
+                base: &f.base,
+                idx: &f.idx,
+                params: &params(1, FtsScoreKind::Tf),
+                filter_code: &None,
+                tokenizer: &f.analyzer,
+                n_total: 0,
+            },
+        )
+        .err()
+        .ok_or_else(|| miette!("corrupt postings must error, not panic"))?;
         assert!(
             err.downcast_ref::<crate::project::contract::IndexRowCorrupt>()
                 .is_some(),
@@ -1155,17 +1172,16 @@ mod tests {
         let db = new_fjall_storage(dir.path())?;
         let meta = base_meta();
         // Analyzer with a stopword filter: "the"/"a" tokenize away.
-        let a = TokenizerConfig::admit("Simple", vec![])?
-            .build(&[
-                TokenizerConfig::admit("Lowercase", vec![])?,
-                TokenizerConfig::admit(
-                    "Stopwords",
-                    vec![DataValue::List(vec![
-                        DataValue::from("the"),
-                        DataValue::from("a"),
-                    ])],
-                )?,
-            ])?;
+        let a = TokenizerConfig::admit("Simple", vec![])?.build(&[
+            TokenizerConfig::admit("Lowercase", vec![])?,
+            TokenizerConfig::admit(
+                "Stopwords",
+                vec![DataValue::List(vec![
+                    DataValue::from("the"),
+                    DataValue::from("a"),
+                ])],
+            )?,
+        ])?;
         let ex = extractor();
         let mut tx = db.write_tx()?;
         let base = create_relation(
@@ -1232,8 +1248,7 @@ mod tests {
         let meta = base_meta();
         // ForSearch: jieba-rs keeps 南京长江大桥 as one Default dict entry;
         // search mode emits 南京/长江/大桥 (+ whole) so prefix is meaningful.
-        let a = TokenizerConfig::admit("Cangjie", vec![DataValue::from("search")])?
-            .build(&[])?;
+        let a = TokenizerConfig::admit("Cangjie", vec![DataValue::from("search")])?.build(&[])?;
         let ex = extractor();
         let mut tx = db.write_tx()?;
         let base = create_relation(

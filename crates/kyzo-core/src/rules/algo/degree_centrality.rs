@@ -130,8 +130,7 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), i(2), i(2), i(0)]),
             Tuple::from_vec(vec![s("b"), i(2), i(1), i(1)]),

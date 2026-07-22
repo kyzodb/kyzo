@@ -1185,7 +1185,6 @@ impl GraphAlgorithmInvariantError {
     }
 }
 
-
 /// First column of an owned tuple (consumes the head value).
 pub(crate) fn tuple_into_first_column(tuple: Tuple) -> Result<DataValue> {
     tuple
@@ -1219,7 +1218,8 @@ pub(crate) fn path_predecessor(
     current: u32,
     invariant: &'static str,
 ) -> Result<u32> {
-    back_pointers[crate::rules::convert::usize_from_u32(current)].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+    back_pointers[crate::rules::convert::usize_from_u32(current)]
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
 }
 
 /// Edmonds–Karp BFS parent on the augmenting path.
@@ -1228,7 +1228,8 @@ pub(crate) fn ek_bfs_parent(
     node: u32,
     invariant: &'static str,
 ) -> Result<(u32, usize)> {
-    prev[crate::rules::convert::usize_from_u32(node)].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+    prev[crate::rules::convert::usize_from_u32(node)]
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
 }
 
 /// The sole element of a set whose length is already known to be 1.
@@ -1365,7 +1366,9 @@ pub(crate) mod tests_support {
     }
 
     /// Lift a legacy SmartString-keyed options map into [`FixedRuleOptions`].
-    pub(crate) fn opts_map(map: BTreeMap<SmartString<LazyCompact>, Expr>) -> Result<FixedRuleOptions> {
+    pub(crate) fn opts_map(
+        map: BTreeMap<SmartString<LazyCompact>, Expr>,
+    ) -> Result<FixedRuleOptions> {
         FixedRuleOptions::from_entries(
             map.into_iter()
                 .map(|(k, v)| (Symbol::new(k, SourceSpan::empty()), v)),
@@ -1553,10 +1556,7 @@ mod par_try_map_tests {
     #[test]
     fn preserves_input_order() -> Result<()> {
         let got = par_try_map((0u32..1000).collect(), |i| Ok::<_, miette::Report>(i * 2));
-        assert_eq!(
-            got?,
-            (0u32..1000).map(|i| i * 2).collect::<Vec<_>>()
-        );
+        assert_eq!(got?, (0u32..1000).map(|i| i * 2).collect::<Vec<_>>());
         Ok(())
     }
 
@@ -1648,8 +1648,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![s("p")]), Tuple::from_vec(vec![s("q")])];
         assert_eq!(got, want);
         Ok(())
@@ -1671,7 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_is_honored_mid_run()  -> Result<()> {
+    fn cancellation_is_honored_mid_run() -> Result<()> {
         let (auth, cancel) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         let res = run_fixed_rule(
@@ -1714,11 +1713,11 @@ mod tests {
         ] {
             assert!(DEFAULT_FIXED_RULES.contains_key(name), "{name} missing");
         }
-        let pr = DEFAULT_FIXED_RULES.get("PageRank").ok_or_else(|| miette!("PageRank missing"))?.clone();
-        assert_eq!(
-            pr.arity(&empty_opts(), &[], SourceSpan::empty())?,
-            2
-        );
+        let pr = DEFAULT_FIXED_RULES
+            .get("PageRank")
+            .ok_or_else(|| miette!("PageRank missing"))?
+            .clone();
+        assert_eq!(pr.arity(&empty_opts(), &[], SourceSpan::empty())?, 2);
         Ok(())
     }
 
@@ -1797,8 +1796,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
 
         struct BadEdge;
         impl FixedRule for BadEdge {

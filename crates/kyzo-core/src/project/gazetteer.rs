@@ -415,8 +415,7 @@ mod tests {
     ) -> Result<(RelationHandle, Gazetteer)> {
         let meta = gazetteer_dict_metadata(ColType::Int);
         let mut tx = db.write_tx()?;
-        let dict =
-            create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts)?;
+        let dict = create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts)?;
         for (entity, surfaces) in rows {
             let surface_list =
                 DataValue::List(surfaces.iter().map(|s| DataValue::from(*s)).collect());
@@ -808,8 +807,7 @@ mod tests {
         let db = new_fjall_storage(dir.path())?;
         let meta = gazetteer_dict_metadata(ColType::Int);
         let mut tx = db.write_tx()?;
-        let dict =
-            create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts)?;
+        let dict = create_relation(&mut tx, input_handle("dict", meta), KeyspaceKind::Facts)?;
         let row = vec![
             DataValue::from(1i64),
             DataValue::List(vec![DataValue::from("ok"), DataValue::from("")]),
@@ -824,7 +822,8 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
-            .err().ok_or_else(|| miette!("empty surface must error"))?;
+            .err()
+            .ok_or_else(|| miette!("empty surface must error"))?;
         assert!(
             err.downcast_ref::<GazetteerEmptySurface>().is_some(),
             "typed empty-surface error, got: {err:?}"
@@ -854,7 +853,8 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
-            .err().ok_or_else(|| miette!("non-list surfaces must error, not panic"))?;
+            .err()
+            .ok_or_else(|| miette!("non-list surfaces must error, not panic"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption error, got: {err:?}"
@@ -885,7 +885,8 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let err = compile_dictionary(&rtx, &dict, GazetteerConfig::exact())
-            .err().ok_or_else(|| miette!("non-string surface element must error, not panic"))?;
+            .err()
+            .ok_or_else(|| miette!("non-string surface element must error, not panic"))?;
         assert!(
             err.downcast_ref::<IndexRowCorrupt>().is_some(),
             "typed corruption error, got: {err:?}"

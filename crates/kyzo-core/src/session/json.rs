@@ -103,18 +103,18 @@ impl<S: Storage> Engine<S> {
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
+    use miette::{Result, miette};
 
-    fn open_engine<S: crate::store::Storage>(store: S) -> Result<Engine<S>>  {
+    fn open_engine<S: crate::store::Storage>(store: S) -> Result<Engine<S>> {
         Ok(Engine::compose(store, Catalog::new())?)
     }
 
     #[test]
-    fn run_script_json_success_envelope_has_ok_headers_rows() -> Result<()>  {
+    fn run_script_json_success_envelope_has_ok_headers_rows() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("?[x] <- [[1],[2]]", &json!({}));
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn run_script_json_binds_params_from_json() -> Result<()>  {
+    fn run_script_json_binds_params_from_json() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("?[x] <- [[$v]]", &json!({"v": 99}));
@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn run_script_json_reports_parse_error_without_panicking() -> Result<()>  {
+    fn run_script_json_reports_parse_error_without_panicking() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("not a valid script", &json!({}));
@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn run_script_json_refuses_non_object_params() -> Result<()>  {
+    fn run_script_json_refuses_non_object_params() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = open_engine(new_fjall_storage(dir.path())?)?;
         let out = db.run_script_json("?[x] <- [[1]]", &json!([1, 2, 3]));
@@ -162,7 +162,7 @@ mod tests {
     /// reach HTTP or the CLI; it rides this seam like any other script the
     /// moment `SysOp::Verify` exists in `kyzo-core`.
     #[test]
-    fn run_script_json_carries_the_verify_directive_for_free() -> Result<()>  {
+    fn run_script_json_carries_the_verify_directive_for_free() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script(

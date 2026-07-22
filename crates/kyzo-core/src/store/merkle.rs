@@ -1361,7 +1361,7 @@ mod tests {
             content_v1,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         chain.append(link1)?;
         let root_at_v1 = as_of_root(&chain, o1)?;
 
@@ -1372,7 +1372,7 @@ mod tests {
             content_v2,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         chain.append(link2)?;
 
         let link3 = ChainedStateRoot::mint(
@@ -1382,7 +1382,7 @@ mod tests {
             content_v3,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         chain.append(link3)?;
 
         // T1 stores the prior tip on the SweepDoor — live tip after commit 3.
@@ -1419,7 +1419,7 @@ mod tests {
             content_v1,
             pred_at_o2,
             ChainLinkKind::Ordinary,
-        );
+        )?;
         assert!(
             !roots_equal_at_cut(stored_prior, forged_at_tip.root()),
             "valid-but-stale rollback: older content rebound at tip ≠ stored prior"
@@ -1450,23 +1450,23 @@ mod tests {
         };
 
         fn copy_dir_recursive(src: &Path, dst: &Path) {
-            std::fs::create_dir_all(dst)?;
-            for entry in std::fs::read_dir(src)? {
-                let entry = entry?;
-                let ty = entry.file_type()?;
+            std::fs::create_dir_all(dst).into_diagnostic().expect("test helper");
+            for entry in std::fs::read_dir(src).expect("test helper") {
+                let entry = entry.expect("test helper");
+                let ty = entry.file_type().expect("test helper");
                 let from = entry.path();
                 let to = dst.join(entry.file_name());
                 if ty.is_dir() {
                     copy_dir_recursive(&from, &to);
                 } else {
-                    std::fs::copy(&from, &to)?;
+                    std::fs::copy(&from, &to).expect("test helper");
                 }
             }
         }
 
         fn replace_dir_with(src: &Path, dst: &Path) {
             if dst.exists() {
-                std::fs::remove_dir_all(dst)?;
+                std::fs::remove_dir_all(dst).into_diagnostic().expect("test helper");
             }
             copy_dir_recursive(src, dst);
         }
@@ -1480,7 +1480,7 @@ mod tests {
         let root = tempfile::tempdir().into_diagnostic()?;
         let live: PathBuf = root.path().join("live");
         let backup_v1: PathBuf = root.path().join("backup_v1");
-        std::fs::create_dir_all(&live)?;
+        std::fs::create_dir_all(&live).into_diagnostic()?;
 
         // Cut 1: write v1, seal content root, back up the on-disk directory.
         let content_v1 = {
@@ -1521,7 +1521,7 @@ mod tests {
                 content_v1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))?;
+            )?)?;
             chain.append(ChainedStateRoot::mint(
                 store_id,
                 fence,
@@ -1529,7 +1529,7 @@ mod tests {
                 content_v2,
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))?;
+            )?)?;
             chain.append(ChainedStateRoot::mint(
                 store_id,
                 fence,
@@ -1537,7 +1537,7 @@ mod tests {
                 content_v3,
                 chain.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))?;
+            )?)?;
             drop(db);
             (content_v3, chain)
         };
@@ -1572,7 +1572,7 @@ mod tests {
             restored_content,
             tip_link.predecessor_root(),
             tip_link.link(),
-        )
+        )?
         .root();
         assert!(
             !roots_equal_at_cut(tip_prior, recomputed_at_tip),
@@ -1643,7 +1643,7 @@ mod tests {
             content_v1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        );
+        )?;
         honest.append(h1)?;
         let h2 = ChainedStateRoot::mint(
             store_id,
@@ -1652,7 +1652,7 @@ mod tests {
             content_v2,
             honest.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         honest.append(h2)?;
         let h3 = ChainedStateRoot::mint(
             store_id,
@@ -1661,7 +1661,7 @@ mod tests {
             content_v3,
             honest.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         honest.append(h3)?;
 
         let honest_r1 = as_of_root(&honest, o1)?;
@@ -1677,7 +1677,7 @@ mod tests {
             content_v1_edited,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        );
+        )?;
         edited.append(e1)?;
         assert!(
             !roots_equal_at_cut(honest_r1, as_of_root(&edited, o1)?),
@@ -1691,7 +1691,7 @@ mod tests {
             content_v2,
             edited.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         edited.append(e2)?;
         let e3 = ChainedStateRoot::mint(
             store_id,
@@ -1700,7 +1700,7 @@ mod tests {
             content_v3,
             edited.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         edited.append(e3)?;
 
         // Every forward root breaks — fails if chain_bind drops the predecessor.
@@ -1776,7 +1776,7 @@ mod tests {
             content_v1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        );
+        )?;
         let cut_root_o1 = link1.root();
         chain.append(link1)?;
 
@@ -1787,7 +1787,7 @@ mod tests {
             content_v2,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         let cut_root_o2 = link2.root();
         chain.append(link2)?;
 
@@ -1798,7 +1798,7 @@ mod tests {
             content_v3,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         let tip_root = link3.root();
         chain.append(link3)?;
 
@@ -1887,7 +1887,7 @@ mod tests {
             c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         // Skip o2 deliberately — gap between o1 and o3.
         chain.append(ChainedStateRoot::mint(
             store_id,
@@ -1896,7 +1896,7 @@ mod tests {
             c3,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
 
         assert_eq!(
             build_consistency_proof(&chain, o3, o1),
@@ -2242,11 +2242,11 @@ mod tests {
         );
 
         assert!(
-            replica_equivalence_at_cut(instance_a, instance_b),
+            replica_equivalence_at_cut(instance_a, instance_b)?,
             "two-instance: same ordered facts → matching roots by independent recompute"
         );
         assert!(
-            roots_equal_at_cut(instance_a.recompute(), instance_b.recompute()),
+            roots_equal_at_cut(instance_a.recompute()?, instance_b.recompute()?),
             "comparison basis is roots_equal_at_cut over recomputed digests"
         );
 
@@ -2264,7 +2264,7 @@ mod tests {
             ChainLinkKind::Ordinary,
         );
         assert!(
-            !replica_equivalence_at_cut(instance_a, instance_b_divergent),
+            !replica_equivalence_at_cut(instance_a, instance_b_divergent)?,
             "two-instance: divergent ordered facts must not be replica-equivalent"
         );
 
@@ -2272,18 +2272,18 @@ mod tests {
         // Comparing the delivered digest to itself (or skipping B's recompute)
         // would falsely claim equivalence. The protocol never takes a received
         // root — both sides recompute from local material.
-        let delivered_from_a = instance_a.recompute();
+        let delivered_from_a = instance_a.recompute()?;
         assert!(
             roots_equal_at_cut(delivered_from_a, delivered_from_a),
             "control: trusting a received root against itself would pass"
         );
         assert!(
-            !replica_equivalence_at_cut(instance_a, instance_b_divergent),
+            !replica_equivalence_at_cut(instance_a, instance_b_divergent)?,
             "recompute-and-compare: delivered root is not the comparison basis"
         );
         assert_ne!(
             delivered_from_a,
-            instance_b_divergent.recompute(),
+            instance_b_divergent.recompute()?,
             "B's independent recompute differs from A's delivered root"
         );
 
@@ -2327,7 +2327,7 @@ mod tests {
             content,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        );
+        )?;
 
         // Honest WAL Commit record: body binds the meaning tip; tip = final_hash.
         let honest_record = WalRecord::seal(
@@ -2356,7 +2356,7 @@ mod tests {
             other_content,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        );
+        )?;
         let meaning_broken = DurableCommitCut::compose(&broken_meaning, honest_wal);
         assert!(
             !cuts_equal(honest, meaning_broken),
@@ -2457,7 +2457,7 @@ mod tests {
             c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         chain.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2465,7 +2465,7 @@ mod tests {
             c2,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         chain.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2473,7 +2473,7 @@ mod tests {
             c3,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         Ok((store_id, fence, chain, o1, o2, o3))
     }
 
@@ -2509,7 +2509,7 @@ mod tests {
             c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         honest.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2517,7 +2517,7 @@ mod tests {
             c2,
             honest.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         let head_a = StateRootHead::from_chain_tip(&honest)?;
 
         // Peer B observes an equivocating fork: same StoreId/epoch/ordinal,
@@ -2535,7 +2535,7 @@ mod tests {
             evil_c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         evil.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2543,7 +2543,7 @@ mod tests {
             evil_c2,
             evil.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         let head_b = StateRootHead::from_chain_tip(&evil)?;
 
         assert_eq!(head_a.store_id(), head_b.store_id());
@@ -2604,7 +2604,7 @@ mod tests {
             c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         chain_a.append(ChainedStateRoot::mint(
             store_a,
             fence_a,
@@ -2612,7 +2612,7 @@ mod tests {
             c2,
             chain_a.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
 
         let mut chain_b = RootChain::empty();
         chain_b.append(ChainedStateRoot::mint(
@@ -2622,7 +2622,7 @@ mod tests {
             c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
 
         let head_a = StateRootHead::from_cut(&chain_a, o1)?;
         let head_b = StateRootHead::from_cut(&chain_b, o1)?;
@@ -2700,7 +2700,7 @@ mod tests {
             c1,
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
         honest.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2708,7 +2708,7 @@ mod tests {
             c2,
             honest.prior_root(),
             ChainLinkKind::Ordinary,
-        ))?;
+        )?)?;
 
         let older = StateRootHead::from_cut(&honest, o1)?;
         // Equivocating "newer" tip: same ordinal family but forged root bytes
@@ -2723,7 +2723,7 @@ mod tests {
                 c1,
                 GENESIS_ROOT,
                 ChainLinkKind::Ordinary,
-            ))?;
+            )?)?;
             let evil_c2 = StateRoot::from_merkle(root_of_pairs(&[
                 (b"x".to_vec(), b"1".to_vec()),
                 (b"y".to_vec(), b"FORGED".to_vec()),
@@ -2735,7 +2735,7 @@ mod tests {
                 evil_c2,
                 evil.prior_root(),
                 ChainLinkKind::Ordinary,
-            ))?;
+            )?)?;
             StateRootHead::from_chain_tip(&evil)?
         };
 

@@ -195,7 +195,6 @@ pub(crate) trait AnnAlgebra: Copy + Clone + PartialEq + Eq + Ord + Debug + Sized
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct BooleanAnn(bool);
 
-
 impl AnnAlgebra for BooleanAnn {
     fn zero() -> Self {
         Self(false)

@@ -226,12 +226,12 @@ impl IdempotencyMemo {
 
 #[cfg(test)]
 mod composition_crash_replay_tests {
-    use miette::{IntoDiagnostic, Result, miette};
     use super::*;
     use crate::store::commit_cap::SnapshotFork;
     use crate::store::open::{
         EntropyArm, GenesisParams, SizeClass, StableCommitCapArm, StagingTtl, genesis,
     };
+    use miette::{IntoDiagnostic, Result, miette};
 
     #[test]
     fn same_intent_converges_and_replay_is_not_duplicate_effect() -> Result<()> {
@@ -259,24 +259,22 @@ mod composition_crash_replay_tests {
 
         let mut memo = IdempotencyMemo::new();
         let request_digest = IdempotencyMemo::digest_request(b"envelope+schema+authority");
-        let first = memo
-            .remember(
-                key_pre,
-                request_digest,
-                OperationOutcome::Committed { request_digest },
-            )?;
-        let replay = memo
-            .remember(
-                key_post,
-                request_digest,
-                OperationOutcome::Committed { request_digest },
-            )?;
+        let first = memo.remember(
+            key_pre,
+            request_digest,
+            OperationOutcome::Committed { request_digest },
+        )?;
+        let replay = memo.remember(
+            key_post,
+            request_digest,
+            OperationOutcome::Committed { request_digest },
+        )?;
         assert_eq!(first, replay);
         assert_eq!(
             memo.lookup(&key_pre),
             OperationOutcome::Committed { request_digest }
         );
-    
+
         Ok(())
     }
 }

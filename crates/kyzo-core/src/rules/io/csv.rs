@@ -164,20 +164,12 @@ impl FixedRule for CsvReader {
                                             .get_float()
                                             .filter(|x| x.is_finite() && x.fract() == 0.0)
                                         {
-                                            Some(x) => {
-                                                match Num::float(x).to_int_coerced() {
-                                                    Some(i) => {
-                                                        out_tuple.push(DataValue::from(i))
-                                                    }
-                                                    None => {
-                                                        bail!(
-                                                            "cannot convert {} to type {}",
-                                                            s,
-                                                            typ
-                                                        )
-                                                    }
+                                            Some(x) => match Num::float(x).to_int_coerced() {
+                                                Some(i) => out_tuple.push(DataValue::from(i)),
+                                                None => {
+                                                    bail!("cannot convert {} to type {}", s, typ)
                                                 }
-                                            }
+                                            },
                                             None if typ.is_nullable() => {
                                                 out_tuple.push(DataValue::Null)
                                             }
@@ -186,9 +178,7 @@ impl FixedRule for CsvReader {
                                             }
                                         }
                                     }
-                                    Err(_) if typ.is_nullable() => {
-                                        out_tuple.push(DataValue::Null)
-                                    }
+                                    Err(_) if typ.is_nullable() => out_tuple.push(DataValue::Null),
                                     Err(err) => bail!(err),
                                 };
                             }
@@ -329,8 +319,7 @@ mod tests {
     #[test]
     fn reads_content_with_typing() -> Result<()> {
         let content = "a,1,1.5\nb,2,oops";
-        let got =
-            run_fixed_rule(&CsvReader, vec![], options(content)?, CancelFlag::inert())?;
+        let got = run_fixed_rule(&CsvReader, vec![], options(content)?, CancelFlag::inert())?;
         assert_eq!(got.len(), 2);
         let want: Tuple = Tuple::from_vec(vec![
             DataValue::from("a"),

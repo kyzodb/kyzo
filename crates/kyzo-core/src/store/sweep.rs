@@ -1590,7 +1590,7 @@ mod composition_tests {
         let intent = door.admit(incarnation, &session, key1, dig1)?;
         let proof = door.seal_durable(intent, TempTx::new(), content_root(0xA1), &session)?;
 
-        let cut = door.last_durable_cut()?;
+        let cut = door.last_durable_cut().ok_or_else(|| miette!("durable cut"))?;
         assert_eq!(cut.commit_ordinal(), proof.commit_ordinal());
         assert_eq!(cut.wal_final_hash(), door.wal_final_hash());
         assert_eq!(
@@ -1611,7 +1611,7 @@ mod composition_tests {
             1,
             "one Commit record at the durable boundary"
         );
-        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)?;
+        let decoded = decode_commit_body(&recovered.commit_bodies[0].1).ok_or_else(|| miette!("decode body"))?;
         assert_eq!(
             decoded.meaning_root,
             cut.meaning_root(),
@@ -1621,7 +1621,7 @@ mod composition_tests {
         assert_eq!(decoded.request_digest, dig1);
 
         // Recompose from observed tips — equals the door's cut.
-        let meaning = door.root_chain().links().last().copied()?;
+        let meaning = door.root_chain().links().last().copied().ok_or_else(|| miette!("tip link"))?;
         let recomposed = DurableCommitCut::compose(&meaning, door.wal_final_hash());
         assert!(
             cuts_equal(cut, recomposed),
@@ -1653,7 +1653,7 @@ mod composition_tests {
             content_root(0xB2),
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
-        );
+        )?;
         let meaning_broken = DurableCommitCut::compose(&forged_meaning, door.wal_final_hash());
         assert!(
             !cuts_equal(cut, meaning_broken),
@@ -1664,7 +1664,7 @@ mod composition_tests {
         let (key2, dig2) = op_key(store_id, b"compose-2");
         let intent2 = door.admit(incarnation, &session, key2, dig2)?;
         door.seal_durable(intent2, TempTx::new(), content_root(0xC3), &session)?;
-        let cut2 = door.last_durable_cut()?;
+        let cut2 = door.last_durable_cut().ok_or_else(|| miette!("durable cut"))?;
         assert!(!cuts_equal(cut, cut2), "second cut must differ from first");
         assert_eq!(door.root_chain().links().len(), 2);
         let recovered2 = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
@@ -1793,7 +1793,7 @@ mod composition_tests {
 
         let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(recovered.commit_bodies.len(), 1);
-        let decoded = decode_commit_body(&recovered.commit_bodies[0].1)?;
+        let decoded = decode_commit_body(&recovered.commit_bodies[0].1).ok_or_else(|| miette!("decode body"))?;
         assert_eq!(decoded.key_bytes, *key.as_bytes());
         assert_eq!(decoded.request_digest, digest);
         assert_eq!(decoded.preimage.as_ref(), Some(&preimage));

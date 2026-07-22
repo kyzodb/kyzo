@@ -353,7 +353,6 @@ pub mod oracle_harness {
         EpochStore, HeadPos, LimiterSkip, RegularTempStore, TempStoreCorruptRefuse, TupleInIter,
         collect_materialized,
     };
-    pub use crate::exec::fold::aggr::MeetAccum;
     pub use crate::exec::fixpoint::eval::seal::Sealed;
     pub use crate::exec::fixpoint::eval::{
         AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalOutcome, EvalProgram,
@@ -361,6 +360,7 @@ pub mod oracle_harness {
         LimitExceeded, Premises, RowLimit, RuleBody, RuleSetShapeError, store_of,
         stratified_evaluate,
     };
+    pub use crate::exec::fold::aggr::MeetAccum;
     pub use crate::exec::op::{RelAlgebra, StoredRowTooShortError};
     pub use crate::exec::plan::compile::{
         CompiledProgram, CompiledRuleBody, CompiledRuleSet, IndexPositionUse, NoFixedRules,

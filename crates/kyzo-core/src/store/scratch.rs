@@ -398,7 +398,7 @@ mod tests {
         // Degenerate ranges are empty, never a panic (law 5).
         assert_eq!(t.range_scan(b"z", b"a").count(), 0);
         t.del_range(b"z", b"a")?;
-        let keys: Vec<_> = t.range_scan(b"a", b"c").map(|kv| kv?.0).collect();
+        let keys: Vec<_> = t.range_scan(b"a", b"c").map(|kv| kv.map(|(k, _)| k)).collect::<Result<_, _>>()?;
         assert_eq!(keys, vec![b"a".to_vec(), b"b".to_vec()]);
         t.del_range(b"a", b"c")?;
         assert_eq!(t.total_scan().count(), 1);
@@ -416,7 +416,7 @@ mod tests {
         t.put(b"k", b"first")?;
         t.put(b"k", b"second")?;
         assert_eq!(t.get(b"k")?, Some(Slice::from(b"second")));
-        let rows: Vec<_> = t.total_scan().map(|kv| kv?).collect();
+        let rows: Vec<_> = t.total_scan().collect::<Result<_, _>>()?;
         assert_eq!(rows, vec![(Slice::from(b"k"), Slice::from(b"second"))]);
 
         Ok(())

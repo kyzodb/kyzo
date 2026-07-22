@@ -59,14 +59,20 @@ impl FixedRule for LabelPropagation {
         let max_iter = payload.pos_integer_option("max_iter", Some(10))?;
         // Determinism: the shuffled scan order and random tie-break are
         // seeded from this option (fixed default), never from OS entropy.
-        let seed = SeededRng::seed_from_i64(
-            payload.integer_option("seed", Some(crate::rules::convert::i64_bits_from_u64(SeededRng::DEFAULT_SEED)))?,
-        );
+        let seed = SeededRng::seed_from_i64(payload.integer_option(
+            "seed",
+            Some(crate::rules::convert::i64_bits_from_u64(
+                SeededRng::DEFAULT_SEED,
+            )),
+        )?);
         let (graph, indices, _inv_indices) = edges.as_directed_weighted_graph(undirected, true)?;
         let labels = label_propagation(&graph, max_iter, seed, cancel)?;
         for (idx, label) in labels.into_iter().enumerate() {
             let node = indices[idx].clone();
-            out.put(Tuple::from_vec(vec![DataValue::from(i64::from(label)), node]))?;
+            out.put(Tuple::from_vec(vec![
+                DataValue::from(i64::from(label)),
+                node,
+            ]))?;
         }
         Ok(())
     }
@@ -186,16 +192,14 @@ mod tests {
             ring_inputs(),
             undirected_opt()?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         for _ in 0..8 {
             let again = run_fixed_rule(
                 &LabelPropagation,
                 ring_inputs(),
                 undirected_opt()?,
                 CancelFlag::inert(),
-            )
-            ?;
+            )?;
             assert_eq!(first, again);
         }
         Ok(())
@@ -265,8 +269,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let one = DataValue::from(1i64);
         let four = DataValue::from(4i64);
         let want: Vec<Tuple> = vec![

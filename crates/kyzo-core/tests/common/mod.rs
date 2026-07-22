@@ -16,7 +16,6 @@
 //! `fjall` storage (not an in-memory stand-in), torn down only at process
 //! exit — mirroring `examples/language_tour.rs`'s own fixture.
 
-
 use std::collections::BTreeMap;
 
 use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
@@ -44,12 +43,10 @@ pub fn ints(rows: &NamedRows, col: usize) -> Vec<i64> {
     rows.rows()
         .iter()
         .map(|r| {
-            r[col]
-                .get_int()
-                .unwrap_or_else(|| {
-                    assert!(false, "row {r:?} col {col} not an int");
-                    0
-                })
+            r[col].get_int().unwrap_or_else(|| {
+                assert!(false, "row {r:?} col {col} not an int");
+                0
+            })
         })
         .collect()
 }
@@ -58,12 +55,10 @@ pub fn floats(rows: &NamedRows, col: usize) -> Vec<f64> {
     rows.rows()
         .iter()
         .map(|r| {
-            r[col]
-                .get_float()
-                .unwrap_or_else(|| {
-                    assert!(false, "row {r:?} col {col} not a float");
-                    0.0
-                })
+            r[col].get_float().unwrap_or_else(|| {
+                assert!(false, "row {r:?} col {col} not a float");
+                0.0
+            })
         })
         .collect()
 }
@@ -87,12 +82,10 @@ pub fn bools(rows: &NamedRows, col: usize) -> Vec<bool> {
     rows.rows()
         .iter()
         .map(|r| {
-            r[col]
-                .get_bool()
-                .unwrap_or_else(|| {
-                    assert!(false, "row {r:?} col {col} not a bool");
-                    false
-                })
+            r[col].get_bool().unwrap_or_else(|| {
+                assert!(false, "row {r:?} col {col} not a bool");
+                false
+            })
         })
         .collect()
 }

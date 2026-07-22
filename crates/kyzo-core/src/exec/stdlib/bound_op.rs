@@ -49,7 +49,6 @@ impl BoundOp {
         self.decl().name
     }
 
-
     pub fn is_vararg(&self) -> bool {
         self.decl().is_vararg()
     }

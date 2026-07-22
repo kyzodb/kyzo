@@ -872,7 +872,7 @@ mod tests {
             Symbol::prog_entry(SourceSpan(0, 1)),
             rules_def(vec![rule(&["a", "a"])]),
         );
-        let p = InputProgram::new(prog, QueryOutOptions::default(), false).map_err(|e| miette!("valid program: {e}"))?;
+        let p = InputProgram::new(prog, QueryOutOptions::empty(), false).map_err(|e| miette!("valid program: {e}"))?;
         let (normalized, _opts) =
             into_normalized_program(p, &mut TrivialNormalizer).map_err(|e| miette!("normalizes: {e}"))?;
         let rules = normalized.entry().rules().ok_or_else(|| miette!("entry is rules"))?;
@@ -922,7 +922,7 @@ mod tests {
             rules_def(vec![rule(&["x"])]),
         );
         prog.insert(sym("r"), rules_def(vec![rule(&["y"])]));
-        let p = InputProgram::new(prog, QueryOutOptions::default(), true).map_err(|e| miette!("valid program: {e}"))?;
+        let p = InputProgram::new(prog, QueryOutOptions::empty(), true).map_err(|e| miette!("valid program: {e}"))?;
         let (normalized, _) =
             into_normalized_program(p, &mut TrivialNormalizer).map_err(|e| miette!("normalizes: {e}"))?;
         assert_eq!(normalized.entry_name().span, SourceSpan(3, 1));

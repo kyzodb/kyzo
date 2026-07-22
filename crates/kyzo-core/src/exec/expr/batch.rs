@@ -164,8 +164,8 @@ impl<E> ErrorMin<E> {
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
+    use miette::{Result, miette};
 
     #[test]
     fn error_min_keeps_row_major_order() {
@@ -186,10 +186,16 @@ mod tests {
         let b = ColumnBatch::from_rows(rows, 2).map_err(|e| miette!("uniform width: {e}"))?;
         assert_eq!((b.width(), b.height()), (2, 2));
         assert_eq!(b.column(1).get(1), DataValue::from("b"));
-        let sel = Selection::from_sorted(vec![1]).map_err(|e| miette!("singleton ascending: {e}"))?;
+        let sel =
+            Selection::from_sorted(vec![1]).map_err(|e| miette!("singleton ascending: {e}"))?;
         assert_eq!(sel.iter().collect::<Vec<_>>(), vec![1usize]);
         assert!(!sel.is_empty());
-        assert_eq!(Selection::all(2).map_err(|e| miette!("fits u32: {e}"))?.len(), 2);
+        assert_eq!(
+            Selection::all(2)
+                .map_err(|e| miette!("fits u32: {e}"))?
+                .len(),
+            2
+        );
         Ok(())
     }
 
@@ -198,7 +204,8 @@ mod tests {
         let rows = vec![Tuple::from_vec(vec![DataValue::from(1i64)])];
         let err = ColumnBatch::from_rows(rows, 2).expect_err("wrong width");
         let mismatch = err
-            .downcast_ref::<ColumnBatchWidthMismatch>().ok_or_else(|| miette!("width mismatch"))?;
+            .downcast_ref::<ColumnBatchWidthMismatch>()
+            .ok_or_else(|| miette!("width mismatch"))?;
         assert_eq!(
             *mismatch,
             ColumnBatchWidthMismatch {

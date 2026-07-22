@@ -8,24 +8,26 @@
  */
 
 //! StdlibRefuse::NanAnswer at BoundOp::apply — sole NaN success refuse.
-use miette::{Result, miette};
 use crate::exec::stdlib::errors::StdlibRefuse;
 use crate::exec::stdlib::resolve_op;
 use kyzo_model::value::DataValue;
+use miette::{Result, miette};
 
 #[test]
-fn to_float_nan_string_refused_as_nan_answer() -> Result<()>  {
+fn to_float_nan_string_refused_as_nan_answer() -> Result<()> {
     let op = resolve_op("to_float").ok_or_else(|| miette!("to_float"))?;
     let err = op
         .apply(&[DataValue::from("NAN")])
         .expect_err("NaN must not be a successful answer");
-    let refuse = err.downcast_ref::<StdlibRefuse>().ok_or_else(|| miette!("StdlibRefuse"))?;
+    let refuse = err
+        .downcast_ref::<StdlibRefuse>()
+        .ok_or_else(|| miette!("StdlibRefuse"))?;
     assert!(matches!(refuse, StdlibRefuse::NanAnswer { .. }));
     Ok(())
 }
 
 #[test]
-fn to_float_finite_ok() -> Result<()>  {
+fn to_float_finite_ok() -> Result<()> {
     let op = resolve_op("to_float").ok_or_else(|| miette!("to_float"))?;
     let v = op.apply(&[DataValue::from("1.5")])?;
     assert_eq!(v.get_float(), Some(1.5));

@@ -93,7 +93,10 @@ pub(crate) struct IndexRowCorrupt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IndexCorruptReason {
     RowShorterThanKey,
-    WrongColumnCount { found: usize, expected: usize },
+    WrongColumnCount {
+        found: usize,
+        expected: usize,
+    },
     BaseRowMissing,
     DecodeFailed(DecodeError),
 
@@ -122,21 +125,38 @@ pub(crate) enum IndexCorruptReason {
     #[cfg(test)]
     GazetteerSurfaceNotString,
 
-    HnswNotInteger { what: String },
+    HnswNotInteger {
+        what: String,
+    },
     HnswCanaryNonNullKeys,
     HnswCanaryEntryNotBytes,
-    HnswCanaryEntryKeyTooShort { found: usize },
-    HnswLayerOutOfRange { layer: i64 },
-    HnswNegativeField { side: &'static str },
-    HnswSubOutOfRange { side: &'static str, sub: i64 },
+    HnswCanaryEntryKeyTooShort {
+        found: usize,
+    },
+    HnswLayerOutOfRange {
+        layer: i64,
+    },
+    HnswNegativeField {
+        side: &'static str,
+    },
+    HnswSubOutOfRange {
+        side: &'static str,
+        sub: i64,
+    },
     HnswIgnoreLinkNotBool,
     HnswNodeDegreeNegative,
     HnswNodeHashNotBytes,
-    HnswNodeHashWrongLength { found: usize },
+    HnswNodeHashWrongLength {
+        found: usize,
+    },
     HnswEdgeDistanceNotNumber,
     HnswEdgeHashNotNull,
-    HnswFieldBeyondArity { field: usize },
-    HnswListElementBeyondList { sub: usize },
+    HnswFieldBeyondArity {
+        field: usize,
+    },
+    HnswListElementBeyondList {
+        sub: usize,
+    },
     HnswExpectsListOfVectors,
     HnswExpectsVector,
     HnswCanaryBelowCanaryLayer,
@@ -144,7 +164,9 @@ pub(crate) enum IndexCorruptReason {
     HnswNonNodeRow,
     HnswEdgeTargetMissingNode,
     HnswNeighbourMissingNode,
-    HnswManifestFieldBeyondArity { field: usize },
+    HnswManifestFieldBeyondArity {
+        field: usize,
+    },
     HnswCanaryInsideLayer0Prefix,
     HnswIndexedFieldBeyondRelationArity,
     HnswIndexedFieldBeyondRowArity,

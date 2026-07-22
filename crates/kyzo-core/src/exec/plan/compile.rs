@@ -586,7 +586,10 @@ pub(crate) fn compile_magic_rule_body(
                     occurrence,
                     rule_app.span,
                 );
-                ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
+                ensure!(
+                    prev_joiner_vars.len() == right_joiner_vars.len(),
+                    "join key arity mismatch between sides"
+                );
                 ret = ret.join_capturing_premise(
                     right,
                     prev_joiner_vars,
@@ -671,9 +674,14 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated { posting: Box::new(idx_store,) };
+                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
+                                posting: Box::new(idx_store),
+                            };
                         }
-                        ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
+                        ensure!(
+                            prev_joiner_vars.len() == right_joiner_vars.len(),
+                            "join key arity mismatch between sides"
+                        );
                         ret = ret.join_capturing_premise(
                             right,
                             prev_joiner_vars,
@@ -707,7 +715,10 @@ pub(crate) fn compile_magic_rule_body(
                                 rel_app.span,
                                 rel_app.validity.clone(),
                             )?;
-                            ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
+                            ensure!(
+                                prev_joiner_vars.len() == right_joiner_vars.len(),
+                                "join key arity mismatch between sides"
+                            );
                             // Covering index: the scanned row *is* the
                             // relation atom's grounding (projected).
                             ret = ret.join_capturing_premise(
@@ -841,7 +852,10 @@ pub(crate) fn compile_magic_rule_body(
                     negated_occurrence,
                     rule_app.span,
                 );
-                ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
+                ensure!(
+                    prev_joiner_vars.len() == right_joiner_vars.len(),
+                    "join key arity mismatch between sides"
+                );
                 ret = ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rule_app.span)?;
             }
             MagicAtom::NegatedRelation(rel_app) => {
@@ -915,9 +929,14 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated { posting: Box::new(idx_store,) };
+                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
+                                posting: Box::new(idx_store),
+                            };
                         }
-                        ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
+                        ensure!(
+                            prev_joiner_vars.len() == right_joiner_vars.len(),
+                            "join key arity mismatch between sides"
+                        );
                         ret =
                             ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                     }
@@ -943,7 +962,10 @@ pub(crate) fn compile_magic_rule_body(
                             rel_app.span,
                             rel_app.validity.clone(),
                         )?;
-                        ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
+                        ensure!(
+                            prev_joiner_vars.len() == right_joiner_vars.len(),
+                            "join key arity mismatch between sides"
+                        );
                         ret =
                             ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                     }

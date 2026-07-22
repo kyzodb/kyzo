@@ -89,10 +89,10 @@ pub(crate) fn sort_and_collect(
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use crate::exec::fixpoint::delta_store::RegularTempStore;
     use kyzo_model::value::DataValue;
+    use miette::{Result, miette};
 
     fn store_of(rows: &[Vec<i64>]) -> Result<EpochStore> {
         let mut fresh = RegularTempStore::new();
@@ -117,8 +117,7 @@ mod tests {
             &store,
             &[(sym("b"), SortDir::Dsc), (sym("a"), SortDir::Asc)],
             &head,
-        )
-        ?;
+        )?;
         let mut as_ints: Vec<(i64, i64)> = Vec::new();
         for t in &sorted {
             as_ints.push((

@@ -353,7 +353,6 @@ pub(crate) fn append_corrected_fact(
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use crate::session::admit::{LiveAdmissionSeats, admit_sugar_relation_row};
     use crate::session::catalog::{Catalog, get_relation};
@@ -361,6 +360,7 @@ mod tests {
     use crate::store::sim::SimStorage;
     use crate::store::{ReadTx, Storage};
     use kyzo_model::value::{AsOf, Tuple};
+    use miette::{Result, miette};
     use std::collections::BTreeMap;
 
     fn no_params() -> BTreeMap<String, DataValue> {
@@ -378,7 +378,7 @@ mod tests {
         row: &[DataValue],
         keys_len: usize,
         valid: ValidityTs,
-    ) -> (KyzoRecord, AdmissionCertificate) {
+    ) -> Result<(KyzoRecord, AdmissionCertificate)> {
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
         ))?;
@@ -392,11 +392,16 @@ mod tests {
     }
 
     #[test]
-    fn correction_supersedes_by_record_id_with_dense_commit_ordinal() -> Result<()>  {
+    fn correction_supersedes_by_record_id_with_dense_commit_ordinal() -> Result<()> {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (original, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
+        let (original, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::of_micros(100),
+        )?;
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -414,15 +419,17 @@ mod tests {
             ValidityTs::of_micros(200),
         )
         .map_err(|e| miette!("admit correction: {e}"))?;
-        let (_permit, link) =
-            seal_supersession(&seats, prior, &successor, cert).map_err(|e| miette!("seal supersession: {e}"))?;
+        let (_permit, link) = seal_supersession(&seats, prior, &successor, cert)
+            .map_err(|e| miette!("seal supersession: {e}"))?;
 
         assert_eq!(link.prior(), prior);
         assert_eq!(link.successor(), successor.record_id());
         assert_ne!(link.prior(), link.successor());
         assert_eq!(
             link.commit_ordinal(),
-            prior_commit.successor().map_err(|e| miette!("dense successor: {e}"))?,
+            prior_commit
+                .successor()
+                .map_err(|e| miette!("dense successor: {e}"))?,
             "successor carries the dense CommitOrdinal after prior"
         );
         assert_eq!(seats.origin_commit(), link.commit_ordinal());
@@ -437,8 +444,8 @@ mod tests {
     }
 
     #[test]
-    fn as_of_pre_correction_replays_original_exactly() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x2680_0004));
+    fn as_of_pre_correction_replays_original_exactly() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x2680_0004))?;
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
@@ -449,11 +456,19 @@ mod tests {
         let seats = LiveAdmissionSeats::mint_genesis();
         // Admit the create's logical prior through the correction door's
         // identity plane, then append the correction on the real store.
-        let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
+        let (prior_record, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::of_micros(100),
+        )?;
         let prior = prior_record.record_id();
 
-        let mut tx = db.store.write_tx().map_err(|e| miette!("correction tx: {e}"))?;
+        let mut tx = db
+            .store
+            .write_tx()
+            .map_err(|e| miette!("correction tx: {e}"))?;
         let handle = get_relation(&tx, "quote").map_err(|e| miette!("quote: {e}"))?;
         let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
         let link = append_corrected_fact(
@@ -501,8 +516,8 @@ mod tests {
     /// at the same valid-time. If as-of replays the stale value (or returns both
     /// rows for a single-valued key), history is being read wrong.
     #[test]
-    fn as_of_same_valid_time_correction_supersedes_stale_value() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x2680_0006));
+    fn as_of_same_valid_time_correction_supersedes_stale_value() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x2680_0006))?;
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
@@ -511,11 +526,19 @@ mod tests {
 
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
         let seats = LiveAdmissionSeats::mint_genesis();
-        let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
+        let (prior_record, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::of_micros(100),
+        )?;
         let prior = prior_record.record_id();
 
-        let mut tx = db.store.write_tx().map_err(|e| miette!("correction tx: {e}"))?;
+        let mut tx = db
+            .store
+            .write_tx()
+            .map_err(|e| miette!("correction tx: {e}"))?;
         let handle = get_relation(&tx, "quote").map_err(|e| miette!("quote: {e}"))?;
         let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
         // SAME valid-time (100) as the original: the canonical correction.
@@ -545,8 +568,8 @@ mod tests {
     }
 
     #[test]
-    fn prior_committed_bytes_survive_correction_append() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x2680_0005));
+    fn prior_committed_bytes_survive_correction_append() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x2680_0005))?;
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
@@ -556,18 +579,23 @@ mod tests {
         let rtx = db.store.read_tx().map_err(|e| miette!("read: {e}"))?;
         let before: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
-            .map(|kv| {
+            .map(|kv| -> Result<_> {
                 let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
-                (k.to_vec(), v.to_vec())
+                Ok((k.to_vec(), v.to_vec()))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         drop(rtx);
         let before_len = before.len();
 
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
+        let (prior_record, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::of_micros(100),
+        )?;
 
         let mut tx = db.store.write_tx().map_err(|e| miette!("tx: {e}"))?;
         let handle = get_relation(&tx, "quote").map_err(|e| miette!("handle: {e}"))?;
@@ -586,11 +614,11 @@ mod tests {
         let rtx = db.store.read_tx().map_err(|e| miette!("read after: {e}"))?;
         let after: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
-            .map(|kv| {
+            .map(|kv| -> Result<_> {
                 let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
-                (k.to_vec(), v.to_vec())
+                Ok((k.to_vec(), v.to_vec()))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         assert!(
             after.len() > before_len,
             "correction appends; store must grow (before={before_len}, after={})",
@@ -612,14 +640,14 @@ mod tests {
     }
 
     #[test]
-    fn no_rewrite_api_on_committed_facts() -> Result<()>  {
+    fn no_rewrite_api_on_committed_facts() -> Result<()> {
         // Seat 34 grep-proof: correction appends; no rewrite/overwrite door.
         // Scan production surfaces only — strip this file's cfg(test) module so
         // the forbidden-needle table cannot match itself.
         let supersession_prod = include_str!("admit_supersession.rs")
             .split("#[cfg(test)]")
             .next()
-            .map_err(|e| miette!("production supersession surface: {e}"))?;
+            .ok_or_else(|| miette!("production supersession surface"))?;
         let sources = [
             include_str!("admit.rs"),
             supersession_prod,
@@ -650,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_deletion_kinds_map_to_crossing_status() -> Result<()>  {
+    fn semantic_deletion_kinds_map_to_crossing_status() -> Result<()> {
         assert_eq!(
             SemanticDeletionKind::Invalidation.crossing_status(),
             CrossingStatus::Invalidated
@@ -676,11 +704,16 @@ mod tests {
     }
 
     #[test]
-    fn semantic_deletion_supersedes_without_message_delete() -> Result<()>  {
+    fn semantic_deletion_supersedes_without_message_delete() -> Result<()> {
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (original, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
+        let (original, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::of_micros(100),
+        )?;
         let prior = original.record_id();
         let prior_commit = seats.origin_commit();
 
@@ -694,7 +727,10 @@ mod tests {
             let live = seats.certificate_inputs(CatalogGeneration::from_relation(
                 RelationGeneration::witness(0),
             ))?;
-            let i_i = match i64::try_from(i) { Ok(v) => v, Err(_) => 0 };
+            let i_i = match i64::try_from(i) {
+                Ok(v) => v,
+                Err(_) => 0,
+            };
             let subject = DataValue::List(vec![DataValue::from(1i64), DataValue::from(i_i)]);
             let (successor, cert) = admit_semantic_deletion(
                 seats.store_id(),
@@ -702,7 +738,12 @@ mod tests {
                 kind,
                 prior,
                 subject,
-                ValidityTs::of_micros(200 + match i64::try_from(i) { Ok(v) => v, Err(_) => 0 }),
+                ValidityTs::of_micros(
+                    200 + match i64::try_from(i) {
+                        Ok(v) => v,
+                        Err(_) => 0,
+                    },
+                ),
             )
             .map_err(|e| miette!("admit semantic deletion: {e}"))?;
             let (_permit, link) = seal_semantic_deletion(&seats, kind, prior, &successor, cert)
@@ -728,8 +769,8 @@ mod tests {
     }
 
     #[test]
-    fn prior_committed_bytes_survive_semantic_deletion_append() -> Result<()>  {
-        let db = open_engine(SimStorage::new(0x2700_0004));
+    fn prior_committed_bytes_survive_semantic_deletion_append() -> Result<()> {
+        let db = open_engine(SimStorage::new(0x2700_0004))?;
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),
@@ -739,18 +780,23 @@ mod tests {
         let rtx = db.store.read_tx().map_err(|e| miette!("read: {e}"))?;
         let before: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
-            .map(|kv| {
+            .map(|kv| -> Result<_> {
                 let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
-                (k.to_vec(), v.to_vec())
+                Ok((k.to_vec(), v.to_vec()))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         drop(rtx);
         let before_len = before.len();
 
         let seats = LiveAdmissionSeats::mint_genesis();
         let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let (prior_record, _) =
-            admit_original(&seats, "quote", &original_row, 1, ValidityTs::of_micros(100))?;
+        let (prior_record, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::of_micros(100),
+        )?;
         let live = seats.certificate_inputs(CatalogGeneration::from_relation(
             RelationGeneration::witness(0),
         ))?;
@@ -778,11 +824,11 @@ mod tests {
         let rtx = db.store.read_tx().map_err(|e| miette!("read after: {e}"))?;
         let after: Vec<(Vec<u8>, Vec<u8>)> = rtx
             .total_scan()
-            .map(|kv| {
+            .map(|kv| -> Result<_> {
                 let (k, v) = kv.map_err(|e| miette!("kv: {e}"))?;
-                (k.to_vec(), v.to_vec())
+                Ok((k.to_vec(), v.to_vec()))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(
             after.len(),
             before_len,
@@ -804,9 +850,9 @@ mod tests {
     }
 
     #[test]
-    fn append_correction_uses_as_of_skip_scan_not_rewrite() -> Result<()>  {
+    fn append_correction_uses_as_of_skip_scan_not_rewrite() -> Result<()> {
         // Point-read as-of on the live store path (not script sugar alone).
-        let db = open_engine(SimStorage::new(0x2680_0006));
+        let db = open_engine(SimStorage::new(0x2680_0006))?;
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
             no_params(),

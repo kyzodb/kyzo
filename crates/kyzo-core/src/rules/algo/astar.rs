@@ -264,8 +264,7 @@ mod tests {
                 h_binding,
             )]))?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             s("a"),
             s("c"),
@@ -317,8 +316,7 @@ mod tests {
             sink_hub_inputs(),
             sink_hub_opts()?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(ok.len(), 1);
         assert_eq!(ok[0][2], DataValue::from(f64::INFINITY));
         assert_eq!(ok[0][3], DataValue::List(vec![]));
@@ -326,7 +324,13 @@ mod tests {
         let (auth, flag) = CancelAuthority::arm();
         let Cancelled = auth.cancel();
         assert!(
-            run_fixed_rule(&ShortestPathAStar, sink_hub_inputs(), sink_hub_opts()?, flag).is_err(),
+            run_fixed_rule(
+                &ShortestPathAStar,
+                sink_hub_inputs(),
+                sink_hub_opts()?,
+                flag
+            )
+            .is_err(),
             "sink hub pop must poll cancel (Ok under mid-scan-only poll)"
         );
         Ok(())

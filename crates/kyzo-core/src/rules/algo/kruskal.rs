@@ -78,7 +78,10 @@ impl FixedRule for MinimumSpanningForestKruskal {
 fn kruskal(edges: &DirectedCsrGraph<f64>, cancel: CancelFlag) -> Result<Vec<(u32, u32, f64)>> {
     let mut pq = PriorityQueue::new();
     let mut uf = UnionFind::new(edges.node_count());
-    let mut mst = Vec::with_capacity(match edges.node_count() { 0 => 0, n => crate::rules::convert::usize_from_u32(n - 1) });
+    let mut mst = Vec::with_capacity(match edges.node_count() {
+        0 => 0,
+        n => crate::rules::convert::usize_from_u32(n - 1),
+    });
     for from in 0..edges.node_count() {
         for target in edges.out_neighbors_with_values(from) {
             let to = target.target;
@@ -122,11 +125,15 @@ impl UnionFind {
         let root1 = self.find(p);
         let root2 = self.find(q);
         if root1 != root2 {
-            if self.szs[crate::rules::convert::usize_from_u32(root1)] < self.szs[crate::rules::convert::usize_from_u32(root2)] {
-                self.szs[crate::rules::convert::usize_from_u32(root2)] += self.szs[crate::rules::convert::usize_from_u32(root1)];
+            if self.szs[crate::rules::convert::usize_from_u32(root1)]
+                < self.szs[crate::rules::convert::usize_from_u32(root2)]
+            {
+                self.szs[crate::rules::convert::usize_from_u32(root2)] +=
+                    self.szs[crate::rules::convert::usize_from_u32(root1)];
                 self.ids[crate::rules::convert::usize_from_u32(root1)] = root2;
             } else {
-                self.szs[crate::rules::convert::usize_from_u32(root1)] += self.szs[crate::rules::convert::usize_from_u32(root2)];
+                self.szs[crate::rules::convert::usize_from_u32(root1)] +=
+                    self.szs[crate::rules::convert::usize_from_u32(root2)];
                 self.ids[crate::rules::convert::usize_from_u32(root2)] = root1;
             }
         }
@@ -202,8 +209,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(
             normalized(got),
             vec![
@@ -235,8 +241,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(
             normalized(got),
             vec![
@@ -266,8 +271,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(
             normalized(got),
             vec![

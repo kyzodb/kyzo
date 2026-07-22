@@ -79,7 +79,9 @@ pub(crate) fn kahn_g(graph: &DirectedCsrGraph, cancel: CancelFlag) -> Result<Vec
 
     for (node, degree) in in_degree.iter().enumerate() {
         if *degree == 0 {
-            pending.push(u32::try_from(node).map_err(|_| crate::rules::graph_view::GraphTooLargeError)?);
+            pending.push(
+                u32::try_from(node).map_err(|_| crate::rules::graph_view::GraphTooLargeError)?,
+            );
         }
     }
 
@@ -124,8 +126,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(got.len(), 4);
         let pos_of = |name: &str| -> Result<i64> {
             got.iter()
@@ -168,8 +169,7 @@ mod tests {
             )],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let i = |v: i64| DataValue::from(v);
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![i(0), s("a")]),

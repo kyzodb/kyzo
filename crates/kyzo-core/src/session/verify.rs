@@ -489,19 +489,19 @@ impl<S: Storage> Engine<S> {
 
 #[cfg(test)]
 mod tests {
-    use miette::{Result, miette};
     use super::*;
     use crate::store::fjall::new_fjall_storage;
+    use miette::{Result, miette};
 
     fn merkle_budget() -> std::num::NonZeroU64 {
-        std::num::NonZeroU64::new(1_000_000)?
+        std::num::NonZeroU64::new(1_000_000).expect("literal 1_000_000 is nonzero")
     }
 
     /// Intact store + lawful chain tip → [`RootVerifyOutcome::Intact`].
     /// A forged [`StateRoot`] sitting in scope is never consulted: `verify`
     /// takes only `(tx, chain, cut, budget)`.
     #[test]
-    fn verify_intact_store_matches_stored_root_chain_tip() -> Result<()>  {
+    fn verify_intact_store_matches_stored_root_chain_tip() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::merkle::{ChainLinkKind, GENESIS_ROOT};
         use crate::store::open::StoreId;
@@ -538,7 +538,7 @@ mod tests {
             content_root,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         chain.append(link)?;
 
         // A forged digest in scope — verify never takes it as input.
@@ -556,7 +556,7 @@ mod tests {
             } => {
                 return Err(miette!(
                     "expected Intact, got Tampered {{ expected: {expected:?}, recomputed: {recomputed:?} }}"
-                ))
+                ));
             }
         }
         Ok(())
@@ -568,7 +568,7 @@ mod tests {
     /// comparison against the stored [`RootChain`], not AEAD or a delivered
     /// digest.
     #[test]
-    fn verify_detects_store_tamper_against_stored_root_chain() -> Result<()>  {
+    fn verify_detects_store_tamper_against_stored_root_chain() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::merkle::ChainLinkKind;
         use crate::store::open::StoreId;
@@ -600,7 +600,7 @@ mod tests {
             content_root,
             chain.prior_root(),
             ChainLinkKind::Ordinary,
-        );
+        )?;
         chain.append(link)?;
         let expected_tip = as_of_root(&chain, cut)?;
 
@@ -628,7 +628,7 @@ mod tests {
                 assert!(!roots_equal_at_cut(expected, recomputed));
             }
             RootVerifyOutcome::Intact { root } => {
-                return Err(miette!("tampered store must not Intact; got root={root:?}"))
+                return Err(miette!("tampered store must not Intact; got root={root:?}"));
             }
         }
         Ok(())
@@ -639,7 +639,7 @@ mod tests {
     /// Tampered — same detection class as merkle's stored-prior test, wired
     /// through the session verify door.
     #[test]
-    fn verify_detects_valid_but_stale_rollback_at_tip_cut() -> Result<()>  {
+    fn verify_detects_valid_but_stale_rollback_at_tip_cut() -> Result<()> {
         use crate::store::epoch::FenceEpoch;
         use crate::store::merkle::ChainLinkKind;
         use crate::store::open::StoreId;
@@ -664,26 +664,23 @@ mod tests {
         };
 
         fn write_state(pairs: &[(Vec<u8>, Vec<u8>)]) -> crate::store::fjall::FjallStorage {
-            let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-            let db = new_fjall_storage(dir.path())?;
+            let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}")).expect("test helper");
+            let db = new_fjall_storage(dir.path()).expect("test helper");
             std::mem::forget(dir);
-            let mut tx = db.write_tx()?;
+            let mut tx = db.write_tx().expect("test helper");
             for (k, v) in pairs {
-                tx.put(k, v)?;
+                tx.put(k, v).expect("test helper");
             }
-            tx.commit()?;
+            tx.commit().expect("test helper");
             db
         }
 
         let db_v1 = write_state(&state_v1);
-        let content_v1 =
-            StateRoot::from_merkle(state_root(&db_v1.read_tx()?, merkle_budget())?);
+        let content_v1 = StateRoot::from_merkle(state_root(&db_v1.read_tx()?, merkle_budget())?);
         let db_v2 = write_state(&state_v2);
-        let content_v2 =
-            StateRoot::from_merkle(state_root(&db_v2.read_tx()?, merkle_budget())?);
+        let content_v2 = StateRoot::from_merkle(state_root(&db_v2.read_tx()?, merkle_budget())?);
         let db_v3 = write_state(&state_v3);
-        let content_v3 =
-            StateRoot::from_merkle(state_root(&db_v3.read_tx()?, merkle_budget())?);
+        let content_v3 = StateRoot::from_merkle(state_root(&db_v3.read_tx()?, merkle_budget())?);
         assert_ne!(content_v1, content_v2);
         assert_ne!(content_v2, content_v3);
 
@@ -692,33 +689,30 @@ mod tests {
         let o3 = o2.successor()?;
 
         let mut chain = RootChain::empty();
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o1,
-                content_v1,
-                chain.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o2,
-                content_v2,
-                chain.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
-        chain
-            .append(ChainedStateRoot::mint(
-                store_id,
-                fence,
-                o3,
-                content_v3,
-                chain.prior_root(),
-                ChainLinkKind::Ordinary,
-            ))?;
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o1,
+            content_v1,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        )?)?;
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o2,
+            content_v2,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        )?)?;
+        chain.append(ChainedStateRoot::mint(
+            store_id,
+            fence,
+            o3,
+            content_v3,
+            chain.prior_root(),
+            ChainLinkKind::Ordinary,
+        )?)?;
 
         // Live tip store matches tip cut.
         assert!(matches!(
@@ -728,9 +722,8 @@ mod tests {
 
         // Attacker restores an older internally-consistent backup (v1 bytes).
         let rolled = write_state(&state_v1);
-        let rolled_content = StateRoot::from_merkle(
-            state_root(&rolled.read_tx()?, merkle_budget())?,
-        );
+        let rolled_content =
+            StateRoot::from_merkle(state_root(&rolled.read_tx()?, merkle_budget())?);
         assert_eq!(
             rolled_content, content_v1,
             "rolled-back store must be internally consistent with v1"
@@ -745,7 +738,7 @@ mod tests {
                 assert!(!roots_equal_at_cut(expected, recomputed));
             }
             RootVerifyOutcome::Intact { .. } => {
-                return Err(miette!("valid-but-stale rollback at tip must Tamper"))
+                return Err(miette!("valid-but-stale rollback at tip must Tamper"));
             }
         }
 
@@ -755,14 +748,14 @@ mod tests {
                 assert_eq!(root, as_of_root(&chain, o1)?);
             }
             RootVerifyOutcome::Tampered { .. } => {
-                return Err(miette!("v1 bytes must Intact against as-of cut o1"))
+                return Err(miette!("v1 bytes must Intact against as-of cut o1"));
             }
         }
         Ok(())
     }
 
     #[test]
-    fn provenance_verify_matches_transitive_closure() -> Result<()>  {
+    fn provenance_verify_matches_transitive_closure() -> Result<()> {
         use crate::session::catalog::Catalog;
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let storage = new_fjall_storage(dir.path())?;
@@ -796,14 +789,14 @@ mod tests {
             other @ VerifyOutcome::Mismatch(_)
             | other @ VerifyOutcome::Unsupported { .. }
             | other @ VerifyOutcome::BudgetRefused { .. } => {
-                return Err(miette!("expected Match, got {other:?}"))
+                return Err(miette!("expected Match, got {other:?}"));
             }
         }
         Ok(())
     }
 
     #[test]
-    fn provenance_verify_directive_returns_match_row() -> Result<()>  {
+    fn provenance_verify_directive_returns_match_row() -> Result<()> {
         use crate::session::catalog::Catalog;
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let storage = new_fjall_storage(dir.path())?;
@@ -841,12 +834,12 @@ mod tests {
     /// Seeded edge relation for refuse-path pins through [`Engine::verify_script`].
     fn seeded_edge_db() -> Engine<crate::store::fjall::FjallStorage> {
         use crate::session::catalog::Catalog;
-        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-        let storage = new_fjall_storage(dir.path())?;
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}")).expect("test helper");
+        let storage = new_fjall_storage(dir.path()).expect("test helper");
         std::mem::forget(dir);
-        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}"))?;
+        let db = Engine::compose(storage, Catalog::new()).map_err(|e| miette!("compose: {e}")).expect("test helper");
         db.run_script(":create edge {a: Int, b: Int}", Default::default())
-            .map_err(|e| miette!("create schema: {e}"))?;
+            .map_err(|e| miette!("create schema: {e}")).expect("test helper");
         let rows = DataValue::List(vec![
             DataValue::List(vec![DataValue::from(1i64), DataValue::from(2i64)]),
             DataValue::List(vec![DataValue::from(2i64), DataValue::from(3i64)]),
@@ -856,14 +849,14 @@ mod tests {
             "?[a, b] <- $rows :put edge {a, b}",
             BTreeMap::from([("rows".into(), rows)]),
         )
-        .map_err(|e| miette!("seed: {e}"))?;
+        .map_err(|e| miette!("seed: {e}")).expect("test helper");
         db
     }
 
     /// `:put` reaches [`verify_input_program`] → [`VerifyUnsupported::Mutation`].
     /// Hand-constructed `Unsupported { Mutation }` never proved this door.
     #[test]
-    fn verify_input_program_refuses_mutation() -> Result<()>  {
+    fn verify_input_program_refuses_mutation() -> Result<()> {
         let db = seeded_edge_db();
         let outcome = db
             .verify_script(
@@ -886,7 +879,7 @@ mod tests {
 
     /// `:order` reaches [`verify_input_program`] → [`VerifyUnsupported::OrderLimitOffset`].
     #[test]
-    fn verify_input_program_refuses_order_limit_offset() -> Result<()>  {
+    fn verify_input_program_refuses_order_limit_offset() -> Result<()> {
         let db = seeded_edge_db();
         let outcome = db
             .verify_script(
@@ -909,7 +902,7 @@ mod tests {
 
     /// `@spans` reaches [`verify_input_program`] → [`VerifyUnsupported::IntervalDerivation`].
     #[test]
-    fn verify_input_program_refuses_interval_derivation() -> Result<()>  {
+    fn verify_input_program_refuses_interval_derivation() -> Result<()> {
         let db = seeded_edge_db();
         db.run_script(":create hist {k: Int => v: Any}", Default::default())
             .map_err(|e| miette!("create hist: {e}"))?;
@@ -928,7 +921,9 @@ mod tests {
             | VerifyOutcome::Mismatch(_)
             | VerifyOutcome::BudgetRefused { .. }
             | VerifyOutcome::Unsupported { .. }) => {
-                return Err(miette!("expected IntervalDerivation {{ hist }}, got {other:?}"))
+                return Err(miette!(
+                    "expected IntervalDerivation {{ hist }}, got {other:?}"
+                ));
             }
         }
         Ok(())
@@ -937,7 +932,7 @@ mod tests {
     /// Starved provenance ceiling: eval completes, provenance enumeration
     /// refuses → [`VerifyOutcome::BudgetRefused`] (not Err, not Match).
     #[test]
-    fn verify_input_program_refuses_budget() -> Result<()>  {
+    fn verify_input_program_refuses_budget() -> Result<()> {
         use crate::session::catalog::Catalog;
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let storage = new_fjall_storage(dir.path())?;

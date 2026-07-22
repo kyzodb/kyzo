@@ -1456,7 +1456,6 @@ mod restore_integrity {
     };
     use crate::store::fjall::new_fjall_storage;
     use crate::store::{ReadTx, Storage, WriteTx};
-    use miette::miette;
     use miette::{IntoDiagnostic, Result, miette};
 
     /// NASTY (#374 T11): interrupt mid-pair put after the in-progress mark is

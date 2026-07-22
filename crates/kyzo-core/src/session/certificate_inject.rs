@@ -74,7 +74,8 @@ impl CertificateFault {
 /// - `into_named_rows` does not emit status `"mismatch"` → caller asserts.
 pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedRows> {
     let (graph, honest, answer) = seal_golden_path_certificate()?;
-    verify_proof(&honest, &graph).map_err(|e| miette!("sealed golden certificate must verify: {e}"))?;
+    verify_proof(&honest, &graph)
+        .map_err(|e| miette!("sealed golden certificate must verify: {e}"))?;
 
     let sabotaged = inject_fault(&honest, fault)?;
     assert_ne!(
@@ -101,22 +102,25 @@ pub fn mismatch_named_rows_under_fault(fault: CertificateFault) -> Result<NamedR
 
     let program = fixture_mismatch_program()?;
     let rows: BTreeSet<Tuple> = BTreeSet::from([answer]);
-    Ok(VerifyOutcome::Mismatch(Box::new(crate::session::verify::VerifyMismatch {
-        program,
-        evaluated: rows.clone(),
-        provenance: rows,
-        certificate: Some(format!(
-            "verify_proof rejected injected certificate ({fault:?}): {bad}"
-        )),
-    }))
-    .into_named_rows())
+    Ok(
+        VerifyOutcome::Mismatch(Box::new(crate::session::verify::VerifyMismatch {
+            program,
+            evaluated: rows.clone(),
+            provenance: rows,
+            certificate: Some(format!(
+                "verify_proof rejected injected certificate ({fault:?}): {bad}"
+            )),
+        }))
+        .into_named_rows(),
+    )
 }
 
 /// Control: the sealed golden alone must verify. A corpus that only ever
 /// saw mismatch rows without this control can soft-green on a broken seal.
 pub fn golden_certificate_verifies() -> Result<()> {
     let (graph, honest, _) = seal_golden_path_certificate()?;
-    verify_proof(&honest, &graph).map_err(|e| miette!("sealed golden must verify under verify_proof: {e}"))?;
+    verify_proof(&honest, &graph)
+        .map_err(|e| miette!("sealed golden must verify under verify_proof: {e}"))?;
     Ok(())
 }
 
@@ -215,7 +219,9 @@ fn inject_fault(
             },
         ) => {
             let Some(child) = premises.last_mut() else {
-                return Err(miette!("golden recursive step must carry premises to corrupt"));
+                return Err(miette!(
+                    "golden recursive step must carry premises to corrupt"
+                ));
             };
             *child = ProofNode::Fact { node: "edge:9-9" };
             Ok(ProofNode::Step {
@@ -242,7 +248,7 @@ fn fixture_mismatch_program() -> Result<MismatchProgram> {
     Ok(match script {
         Script::Query(prog) => MismatchProgram(prog),
         Script::Sys(_) | Script::Imperative(_) => {
-            return Err(miette!("fixture must be a query script"))
+            return Err(miette!("fixture must be a query script"));
         }
     })
 }
@@ -282,7 +288,9 @@ mod tests {
                 | other @ DataValue::Set(_)
                 | other @ DataValue::Validity(_)
                 | other @ DataValue::Interval(_)
-                | other @ DataValue::Geometry(_) => return Err(miette!("detail must be Str, got {other:?}")),
+                | other @ DataValue::Geometry(_) => {
+                    return Err(miette!("detail must be Str, got {other:?}"));
+                }
             };
             assert!(
                 detail.contains("verify_proof")
@@ -306,7 +314,9 @@ mod tests {
                 | other @ DataValue::Set(_)
                 | other @ DataValue::Validity(_)
                 | other @ DataValue::Interval(_)
-                | other @ DataValue::Geometry(_) => return Err(miette!("summary must be Str, got {other:?}")),
+                | other @ DataValue::Geometry(_) => {
+                    return Err(miette!("summary must be Str, got {other:?}"));
+                }
             };
             assert!(
                 summary.contains("evaluated") && summary.contains("provenance"),

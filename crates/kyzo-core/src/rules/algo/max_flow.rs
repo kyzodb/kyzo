@@ -255,8 +255,13 @@ impl ResidualNet {
                 if u == sink {
                     break;
                 }
-                for (ai, arc) in self.adj[crate::rules::convert::usize_from_u32(u)].iter().enumerate() {
-                    if arc.cap - arc.flow > EPS && !seen[crate::rules::convert::usize_from_u32(arc.to)] {
+                for (ai, arc) in self.adj[crate::rules::convert::usize_from_u32(u)]
+                    .iter()
+                    .enumerate()
+                {
+                    if arc.cap - arc.flow > EPS
+                        && !seen[crate::rules::convert::usize_from_u32(arc.to)]
+                    {
                         seen[crate::rules::convert::usize_from_u32(arc.to)] = true;
                         prev[crate::rules::convert::usize_from_u32(arc.to)] = Some((u, ai));
                         queue.push_back(arc.to);
@@ -304,7 +309,8 @@ impl ResidualNet {
         queue.push_back(source);
         while let Some(u) = queue.pop_front() {
             for arc in &self.adj[crate::rules::convert::usize_from_u32(u)] {
-                if arc.cap - arc.flow > EPS && !side[crate::rules::convert::usize_from_u32(arc.to)] {
+                if arc.cap - arc.flow > EPS && !side[crate::rules::convert::usize_from_u32(arc.to)]
+                {
                     side[crate::rules::convert::usize_from_u32(arc.to)] = true;
                     queue.push_back(arc.to);
                 }
@@ -313,7 +319,9 @@ impl ResidualNet {
         let mut cut = Vec::new();
         for &(from, idx) in &self.orig {
             let arc = &self.adj[crate::rules::convert::usize_from_u32(from)][idx];
-            if side[crate::rules::convert::usize_from_u32(from)] && !side[crate::rules::convert::usize_from_u32(arc.to)] {
+            if side[crate::rules::convert::usize_from_u32(from)]
+                && !side[crate::rules::convert::usize_from_u32(arc.to)]
+            {
                 cut.push((from, arc.to, arc.flow));
             }
         }
@@ -379,9 +387,14 @@ mod tests {
         got.into_iter()
             .map(|r| -> Result<_> {
                 Ok((
-                    r[0].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string(),
-                    r[1].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string(),
-                    r[2].get_float().ok_or_else(|| miette!("test expected Some"))?,
+                    r[0].get_str()
+                        .ok_or_else(|| miette!("test expected Some"))?
+                        .to_string(),
+                    r[1].get_str()
+                        .ok_or_else(|| miette!("test expected Some"))?
+                        .to_string(),
+                    r[2].get_float()
+                        .ok_or_else(|| miette!("test expected Some"))?,
                 ))
             })
             .collect()
@@ -469,14 +482,20 @@ mod tests {
         let mut state = seed;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             state
         };
         let mut caps: BTreeMap<(usize, usize), f64> = BTreeMap::new();
         let m = 3 * n;
         for _ in 0..m {
-            let u = crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33)) % n;
-            let v = crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33)) % n;
+            let u =
+                crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33))
+                    % n;
+            let v =
+                crate::rules::convert::usize_from_u32(crate::rules::convert::u32_low(next() >> 33))
+                    % n;
             let c = 1.0 + f64::from(crate::rules::convert::u32_low(next() >> 40) % 9);
             if u != v {
                 *caps.entry((u, v)).or_default() += c;

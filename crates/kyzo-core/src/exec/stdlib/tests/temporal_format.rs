@@ -8,16 +8,15 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use miette::{Result, miette};
 use crate::exec::stdlib::temporal_format::*;
 use kyzo_model::data_value_any;
 use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs};
-
+use miette::{Result, miette};
 
 #[test]
-fn test_pre_epoch_timestamps() -> Result<()>  {
+fn test_pre_epoch_timestamps() -> Result<()> {
     let secs = op_parse_timestamp(&[DataValue::from("1969-07-20T20:17:00Z")])?
         .get_float()
         .ok_or_else(|| miette!("float"))?;
@@ -29,12 +28,10 @@ fn test_pre_epoch_timestamps() -> Result<()>  {
     // The schema boundary obeys the same law: coercing a pre-epoch validity
     // string yields negative microseconds.
     let typing = NullableColType::required(ColType::Validity);
-    let coerced = typing
-        .coerce(
-            DataValue::Str("1969-07-20T20:17:00Z".into()),
-            ValidityTs::of_micros(0),
-        )
-        ?;
+    let coerced = typing.coerce(
+        DataValue::Str("1969-07-20T20:17:00Z".into()),
+        ValidityTs::of_micros(0),
+    )?;
     match coerced {
         DataValue::Validity(vld) => assert!(vld.timestamp().raw() < 0),
         v @ (data_value_any!()) => {

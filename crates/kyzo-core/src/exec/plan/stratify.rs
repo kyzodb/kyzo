@@ -315,7 +315,10 @@ fn verify_no_cycle(
                         UnStratifiableProgram {
                             name: (*v).clone(),
                             scc: scc.iter().map(|s| (*s).clone()).collect(),
-                            span: match poison_spans.get(&(*k, *v)).copied() { Some(s) => s, None => v.span },
+                            span: match poison_spans.get(&(*k, *v)).copied() {
+                                Some(s) => s,
+                                None => v.span,
+                            },
                         }
                     );
                 }
@@ -631,10 +634,7 @@ mod tests {
                 .map(|a| match a {
                     None => HeadAggrSlot::Plain,
                     Some(name) => match parse_aggr(name) {
-                        Ok(Some(aggr)) => HeadAggrSlot::Aggregated {
-                            aggr,
-                            args: vec![],
-                        },
+                        Ok(Some(aggr)) => HeadAggrSlot::Aggregated { aggr, args: vec![] },
                         Ok(None) | Err(_) => {
                             assert!(false, "real aggregation exists: {name}");
                             HeadAggrSlot::Plain
@@ -661,10 +661,7 @@ mod tests {
             {
                 InputInlineRulesOrFixed::Rules { rules } => rules.push(rule),
                 InputInlineRulesOrFixed::Fixed { .. } => {
-                    assert!(
-                        false,
-                        "test program defines {head} as both rules and fixed"
-                    );
+                    assert!(false, "test program defines {head} as both rules and fixed");
                 }
             }
             self
@@ -698,7 +695,7 @@ mod tests {
         }
 
         fn stratify(self) -> Result<(StratifiedNormalFormProgram, StoreLifetimes)> {
-            let input = InputProgram::new(self.prog, QueryOutOptions::default(), false)?;
+            let input = InputProgram::new(self.prog, QueryOutOptions::empty(), false)?;
             let (normalized, _opts) = into_normalized_program(input, &mut PassThrough)?;
             normalized.into_stratified_program()
         }
@@ -729,7 +726,7 @@ mod tests {
     ///     z[count] := y ; z[count] := y
     ///     ? := z ; ? := w
     #[test]
-    fn dependencies_stratify_in_execution_order() -> Result<()>  {
+    fn dependencies_stratify_in_execution_order() -> Result<()> {
         let (program, lifetimes) = Prog::empty()
             .fixed("x", &[])
             .rule("w", &[None], vec![])
@@ -747,7 +744,8 @@ mod tests {
         let x = stratum_of(&program, "x").ok_or_else(|| miette!("x is reachable"))?;
         let y = stratum_of(&program, "y").ok_or_else(|| miette!("y is reachable"))?;
         let z = stratum_of(&program, "z").ok_or_else(|| miette!("z is reachable"))?;
-        let entry = stratum_of(&program, "?").ok_or_else(|| miette!("the entry is always placed"))?;
+        let entry =
+            stratum_of(&program, "?").ok_or_else(|| miette!("the entry is always placed"))?;
 
         // Aggregations force strict boundaries below their dependencies…
         assert!(x < y, "y counts over the fixed rule x");
@@ -781,7 +779,7 @@ mod tests {
     /// re-checked from `kyzo-trials`; this in-crate pin keeps a few named
     /// shapes local so the stratifier cannot drift without a core-local meter.
     #[test]
-    fn the_oracle_refusal_corpus_is_refused() -> Result<()>  {
+    fn the_oracle_refusal_corpus_is_refused() -> Result<()> {
         let cases: [(&str, fn() -> Prog); 3] = [
             ("direct negation cycle", || {
                 Prog::empty().rule("p", &[None], vec![neg_dep("p")]).rule(
@@ -817,7 +815,7 @@ mod tests {
     /// inside its own recursion. (Accepting this answers wrongly, it does
     /// not crash — the refusal is the feature.)
     #[test]
-    fn recursive_normal_aggregation_is_refused() -> Result<()>  {
+    fn recursive_normal_aggregation_is_refused() -> Result<()> {
         let err = Prog::empty()
             .rule("p", &[Some("count")], vec![dep("d")])
             .rule("p", &[Some("count")], vec![dep("p")])
@@ -833,7 +831,7 @@ mod tests {
     /// aggregates with meet forms, and the recursion reads the head itself,
     /// positively.
     #[test]
-    fn all_meet_self_recursion_is_accepted() -> Result<()>  {
+    fn all_meet_self_recursion_is_accepted() -> Result<()> {
         let (program, _) = Prog::empty()
             .rule("m", &[None, Some("min")], vec![dep("seed")])
             .rule("m", &[None, Some("min")], vec![dep("m")])
@@ -848,7 +846,7 @@ mod tests {
     /// Mixing a meet with a normal aggregation on a recursive head is
     /// refused: one non-meet position poisons the whole head's recursion.
     #[test]
-    fn mixed_meet_and_normal_recursion_is_refused() -> Result<()>  {
+    fn mixed_meet_and_normal_recursion_is_refused() -> Result<()> {
         let err = Prog::empty()
             .rule("q", &[None, Some("min"), Some("count")], vec![dep("q")])
             .rule("?", &[None], vec![dep("q")])
@@ -861,7 +859,7 @@ mod tests {
     /// A meet head negating itself is refused: the exemption is for
     /// positive self-reads only.
     #[test]
-    fn meet_negating_itself_is_refused() -> Result<()>  {
+    fn meet_negating_itself_is_refused() -> Result<()> {
         let err = Prog::empty()
             .rule("m", &[Some("min")], vec![dep("d"), neg_dep("m")])
             .rule("d", &[None], vec![])
@@ -876,7 +874,7 @@ mod tests {
     /// routed through an intermediary rule is refused, exactly as the
     /// original decided it. (Deliberately preserved upstream behavior.)
     #[test]
-    fn meet_recursion_through_an_intermediary_is_refused() -> Result<()>  {
+    fn meet_recursion_through_an_intermediary_is_refused() -> Result<()> {
         let err = Prog::empty()
             .rule("p", &[Some("min")], vec![dep("q")])
             .rule("q", &[None], vec![dep("p")])
@@ -891,7 +889,7 @@ mod tests {
     /// before, readers start strictly after — but out of recursion they
     /// stratify fine.
     #[test]
-    fn fixed_rules_are_stratum_bounded() -> Result<()>  {
+    fn fixed_rules_are_stratum_bounded() -> Result<()> {
         let (program, _) = Prog::empty()
             .rule("base", &[None], vec![])
             .fixed("f", &["base"])
@@ -918,7 +916,7 @@ mod tests {
     /// Plain negation of a completed dependency is stratified negation —
     /// accepted, with the dependency strictly below.
     #[test]
-    fn stratified_negation_is_accepted_with_a_boundary() -> Result<()>  {
+    fn stratified_negation_is_accepted_with_a_boundary() -> Result<()> {
         let (program, _) = Prog::empty()
             .rule("r", &[None], vec![dep("s")])
             .rule("s", &[None], vec![])
@@ -937,7 +935,7 @@ mod tests {
     /// unstratifiable ones. Deliberately preserved upstream behavior: the
     /// soundness proof is about what will be *evaluated*.
     #[test]
-    fn unreachable_rules_are_pruned_not_checked() -> Result<()>  {
+    fn unreachable_rules_are_pruned_not_checked() -> Result<()> {
         let (program, _) = Prog::empty()
             .rule("a", &[None], vec![])
             .rule("orphan", &[None], vec![neg_dep("orphan")])
@@ -952,7 +950,7 @@ mod tests {
     /// The refusal carries the source span of the body atom that closes
     /// the forbidden cycle, so the diagnostic can point at it.
     #[test]
-    fn the_refusal_points_at_the_offending_dependency() -> Result<()>  {
+    fn the_refusal_points_at_the_offending_dependency() -> Result<()> {
         let offending = SourceSpan(42, 7);
         let err = Prog::empty()
             .rule(
@@ -977,7 +975,8 @@ mod tests {
             .stratify()
             .expect_err("self-negation must be refused");
         let refusal = err
-            .downcast_ref::<UnStratifiableProgram>().ok_or_else(|| miette!("the unstratifiable refusal"))?;
+            .downcast_ref::<UnStratifiableProgram>()
+            .ok_or_else(|| miette!("the unstratifiable refusal"))?;
         assert_eq!(refusal.span, offending);
         Ok(())
     }
@@ -996,7 +995,7 @@ mod tests {
     /// read that actually forbids stratification), not at the innocent
     /// positive read whose symbol happens to hold the map key.
     #[test]
-    fn the_refusal_points_at_the_poisoning_atom_not_the_first_read() -> Result<()>  {
+    fn the_refusal_points_at_the_poisoning_atom_not_the_first_read() -> Result<()> {
         let positive = SourceSpan(10, 1);
         let poisoning = SourceSpan(42, 7);
         let dep_at = |name: &str, span: SourceSpan| InputAtom::Rule {
@@ -1024,7 +1023,8 @@ mod tests {
             .stratify()
             .expect_err("negated self-read must be refused");
         let refusal = err
-            .downcast_ref::<UnStratifiableProgram>().ok_or_else(|| miette!("the unstratifiable refusal"))?;
+            .downcast_ref::<UnStratifiableProgram>()
+            .ok_or_else(|| miette!("the unstratifiable refusal"))?;
         assert_eq!(
             refusal.span, poisoning,
             "the label must land on `not p`, not the positive self-read"
@@ -1036,7 +1036,7 @@ mod tests {
     /// stratifies on a deliberately small thread stack. The original's
     /// recursive Tarjan/reachability overflowed here.
     #[test]
-    fn a_deep_rule_chain_stratifies_without_stack_overflow() -> Result<()>  {
+    fn a_deep_rule_chain_stratifies_without_stack_overflow() -> Result<()> {
         let handle = std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(|| -> Result<()> {
@@ -1060,7 +1060,7 @@ mod tests {
     /// The entry field carries its real span into the pipeline (the
     /// original rebuilt `?` with a dummy span to look it up).
     #[test]
-    fn a_minimal_program_stratifies_to_one_stratum() -> Result<()>  {
+    fn a_minimal_program_stratifies_to_one_stratum() -> Result<()> {
         let (program, lifetimes) = Prog::empty()
             .rule("?", &[None], vec![])
             .stratify()

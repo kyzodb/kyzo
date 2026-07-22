@@ -222,7 +222,7 @@ enum FilterSpec {
 impl FilterSpec {
     /// Native predicate over a BASE row `[k, v, …]`. The oracle's truth.
     fn passes(&self, row: &[DataValue]) -> bool {
-        let k = row[0].get_int().ok_or_else(|| miette!("key is int"))?;
+        let k = row[0].get_int().expect("key is int");
         match *self {
             FilterSpec::LessThan { threshold } => k < threshold,
             FilterSpec::ModLessThan { modulus, accept } => k.rem_euclid(modulus) < accept,
@@ -592,12 +592,12 @@ fn seeded_permutation_preserves_the_set_and_reorders() -> Result<()> {
     // Same set of keys.
     let mut a: Vec<i64> = rows
         .iter()
-        .map(|r| r[0].get_int().ok_or_else(|| miette!("expected int"))?)
-        .collect();
+        .map(|r| r[0].get_int().ok_or_else(|| miette!("expected int")))
+        .collect::<Result<_>>()?;
     let mut b: Vec<i64> = shuffled
         .iter()
-        .map(|r| r[0].get_int().ok_or_else(|| miette!("expected int"))?)
-        .collect();
+        .map(|r| r[0].get_int().ok_or_else(|| miette!("expected int")))
+        .collect::<Result<_>>()?;
     assert_ne!(a, b, "the shuffle must actually reorder");
     a.sort_unstable();
     b.sort_unstable();
@@ -755,7 +755,7 @@ fn selector_chooses_scan_when_selective_graph_otherwise() -> Result<()> {
 fn filtered_search_is_byte_deterministic() -> Result<()> {
     let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED)?;
     let q = seeded_query(P2_DIM, P2_QUERY_SEED)?;
-    let run = || -> Vec<Vec<Tuple>> {
+    let run = || -> Result<Vec<Vec<Tuple>>> {
         let dir = tempfile::tempdir().into_diagnostic()?;
         let db = new_fjall_storage(dir.path())?;
         let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows)?;
@@ -763,21 +763,24 @@ fn filtered_search_is_byte_deterministic() -> Result<()> {
         SELECTIVITY_BANDS
             .iter()
             .map(|&t| {
+                let f = filter_at_selectivity(t, true);
                 filtered_search(
                     &rtx,
-                    &q,
-                    &m,
-                    &base,
-                    &idx,
-                    P2_K,
-                    P2_EF,
-                    &filter_at_selectivity(t, true),
-                )?
+                    FilteredSearchSpec {
+                        q: &q,
+                        manifest: &m,
+                        base: &base,
+                        idx: &idx,
+                        k: P2_K,
+                        ef: P2_EF,
+                        filter: &f,
+                    },
+                )
             })
             .collect()
     };
-    let a = run();
-    let b = run();
+    let a = run()?;
+    let b = run()?;
     assert_eq!(
         a, b,
         "filtered search must be byte-identical across builds/runs"
@@ -827,13 +830,13 @@ fn order_invariant_strategy_and_scan_results() -> Result<()> {
     let shuffled = seeded_permutation(&rows, 0xC0FFEE);
     let q = seeded_query(P2_DIM, P2_QUERY_SEED)?;
 
-    let build = |data: &[Tuple]| {
+    let build = |data: &[Tuple]| -> Result<Vec<(SearchPlan, Vec<Tuple>)>> {
         let dir = tempfile::tempdir().into_diagnostic()?;
         let db = new_fjall_storage(dir.path())?;
         let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, data)?;
         // Return owned results per band, keeping dir alive for the scope.
         let rtx = db.read_tx()?;
-        let out: Vec<(SearchPlan, Vec<Tuple>)> = SELECTIVITY_BANDS
+        SELECTIVITY_BANDS
             .iter()
             .map(|&t| {
                 let f = filter_at_selectivity(t, true);
@@ -861,13 +864,12 @@ fn order_invariant_strategy_and_scan_results() -> Result<()> {
                         filter: &f,
                     },
                 )?;
-                (plan, hits)
+                Ok((plan, hits))
             })
-            .collect();
-        out
+            .collect()
     };
-    let natural = build(&rows);
-    let permuted = build(&shuffled);
+    let natural = build(&rows)?;
+    let permuted = build(&shuffled)?;
 
     for (i, (&target, (nat, perm))) in SELECTIVITY_BANDS
         .iter()
@@ -1025,7 +1027,7 @@ fn production_fallback_repairs_starved_real_search() -> Result<()> {
     // No duplicates: a naive "concat the partial with the scan, then
     // truncate" repair would double-count whatever the partial already
     // found.
-    let mut ekeys = keys_of(&hits)?;
+    let mut ekeys = keys_of(&hits).expect("keys_of");
     let before = ekeys.len();
     ekeys.sort_unstable();
     ekeys.dedup();
@@ -1096,6 +1098,7 @@ fn engine_ordering_is_total_under_ties() -> Result<()> {
         vec![0, 1, 2, 3, 4],
         "under exact ties the smallest keys win, deterministically"
     );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1195,7 +1198,7 @@ fn min_k_matches_law_generative() -> Result<()> {
             "pinned band: the production fallback must repair the non-empty \
              partial to exactly k rows"
         );
-        let mut ekeys = keys_of(&hits)?;
+        let mut ekeys = keys_of(&hits).expect("keys_of");
         let before = ekeys.len();
         ekeys.sort_unstable();
         ekeys.dedup();
@@ -1217,7 +1220,7 @@ fn min_k_matches_law_generative() -> Result<()> {
         let accept = accept_raw % modulus;
         let f = FilterSpec::ModLessThan { modulus, accept };
         let matches = f.true_match_count(&rows);
-        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f })?;
+        let hits = filtered_search(&rtx, FilteredSearchSpec { q: &q, manifest: &m, base: &base, idx: &idx, k: k, ef: P2_EF, filter: &f }).expect("filtered_search");
         prop_assert_eq!(
             hits.len(),
             k.min(matches),
@@ -1228,7 +1231,7 @@ fn min_k_matches_law_generative() -> Result<()> {
             prop_assert!(f.passes(h.as_slice()), "returned row {h:?} fails its own filter");
         }
         // No duplicates: every returned key is distinct.
-        let mut ekeys = keys_of(&hits)?;
+        let mut ekeys = keys_of(&hits).expect("keys_of");
         let before = ekeys.len();
         ekeys.sort_unstable();
         ekeys.dedup();
@@ -1287,6 +1290,7 @@ fn min_k_matches_tiny_match_sets() -> Result<()> {
             "threshold={threshold}: a {matches}-row match set must be exact"
         );
     }
+    Ok(())
 }
 
 /// Parameterized near/far cluster corpus (shared by Phase-2 and T13).
@@ -1337,7 +1341,7 @@ fn min_k_matches_disconnected_from_entry_region() -> Result<()> {
     let f = FilterSpec::AtLeast { threshold: half }; // matches only the far cluster
     let matches = f.true_match_count(&rows);
     assert_eq!(
-        usize_to_i64(matches).ok_or_else(|| miette!("match count fits i64"))?,
+        usize_to_i64(matches)?,
         n - half
     );
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m)?;
@@ -1548,31 +1552,35 @@ fn filtered_search_is_thread_count_invariant() -> Result<()> {
     let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows)?;
     let rtx = db.read_tx()?;
 
-    let run_under_pool = |n_threads: usize| -> Vec<Vec<Tuple>> {
+    let run_under_pool = |n_threads: usize| -> Result<Vec<Vec<Tuple>>> {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(n_threads)
-            .build()?;
+            .build()
+            .map_err(|e| miette!("rayon pool: {e}"))?;
         pool.install(|| {
             SELECTIVITY_BANDS
                 .iter()
                 .map(|&t| {
+                    let f = filter_at_selectivity(t, true);
                     filtered_search(
                         &rtx,
-                        &q,
-                        &m,
-                        &base,
-                        &idx,
-                        P2_K,
-                        P2_EF,
-                        &filter_at_selectivity(t, true),
-                    )?
+                        FilteredSearchSpec {
+                            q: &q,
+                            manifest: &m,
+                            base: &base,
+                            idx: &idx,
+                            k: P2_K,
+                            ef: P2_EF,
+                            filter: &f,
+                        },
+                    )
                 })
                 .collect()
         })
     };
-    let baseline = run_under_pool(1);
+    let baseline = run_under_pool(1)?;
     for n in [2usize, 4, 8] {
-        let got = run_under_pool(n);
+        let got = run_under_pool(n)?;
         assert_eq!(
             baseline, got,
             "rayon pool size {n}: results diverged from the 1-thread baseline"
@@ -1591,22 +1599,26 @@ fn filtered_search_is_thread_count_invariant() -> Result<()> {
                 let base = &base;
                 let idx = &idx;
                 scope.spawn(move || {
+                    let f = filter_at_selectivity(t, true);
                     filtered_search(
                         rtx,
-                        q,
-                        m,
-                        base,
-                        idx,
-                        P2_K,
-                        P2_EF,
-                        &filter_at_selectivity(t, true),
-                    )?
+                        FilteredSearchSpec {
+                            q,
+                            manifest: m,
+                            base,
+                            idx,
+                            k: P2_K,
+                            ef: P2_EF,
+                            filter: &f,
+                        },
+                    )
+                    .expect("filtered_search")
                 })
             })
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().map_err(|e| miette!("join: {e:?}"))?)
+            .map(|h| h.join().expect("join"))
             .collect()
     });
     assert_eq!(
@@ -1650,7 +1662,7 @@ fn min_k_matches_k_exceeds_entire_population() -> Result<()> {
             filter: &f,
         },
     )?;
-    let mut ekeys = keys_of(&hits)?;
+    let mut ekeys = keys_of(&hits).expect("keys_of");
 
     assert_eq!(
         hits.len(),
@@ -1727,18 +1739,20 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
     let dim = 16;
     let n = P2_N;
     let rows: Vec<Tuple> = (0..n)
-        .map(|i| {
+        .map(|i| -> Result<Tuple> {
             let mut comps = vec![0.0f64; dim];
             comps[match usize::try_from(i) {
                 Ok(v) => v,
                 Err(_e) => 0,
             } % dim] = 1.0; // a distinct axis unit vector per residue class
-            Tuple::from_vec(vec![
+            Ok(Tuple::from_vec(vec![
                 DataValue::from(i),
-                DataValue::Vector(Vector::try_new(comps).ok_or_else(|| miette!("vector refused"))?),
-            ])
+                DataValue::Vector(
+                    Vector::try_new(comps).ok_or_else(|| miette!("vector refused"))?,
+                ),
+            ]))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let dir = tempfile::tempdir().into_diagnostic()?;
     let db = new_fjall_storage(dir.path())?;
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows)?;
@@ -1836,10 +1850,11 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
 
     // Thread-count invariance of that same tie-break: rayon pools of
     // 1/2/4/8 and genuinely concurrent OS threads must all agree.
-    let run_under_pool = |n_threads: usize| -> Vec<Tuple> {
+    let run_under_pool = |n_threads: usize| -> Result<Vec<Tuple>> {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(n_threads)
-            .build()?;
+            .build()
+            .map_err(|e| miette!("rayon pool: {e}"))?;
         pool.install(|| {
             filtered_search(
                 &rtx,
@@ -1856,7 +1871,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
         })
     };
     for n_threads in [1usize, 2, 4, 8] {
-        let got = run_under_pool(n_threads);
+        let got = run_under_pool(n_threads)?;
         assert_eq!(
             got, baseline,
             "rayon pool size {n_threads}: the graph-plan tie-break diverged \
@@ -1884,13 +1899,14 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
                             ef: P2_EF,
                             filter: f,
                         },
-                    )?
+                    )
+                    .expect("filtered_search")
                 })
             })
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().map_err(|e| miette!("join: {e:?}"))?)
+            .map(|h| h.join().expect("join"))
             .collect()
     });
     for got in concurrent {
@@ -1899,6 +1915,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
             "a concurrent OS thread's graph-plan tie-break diverged from the baseline"
         );
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1988,7 +2005,7 @@ fn t13_delete_then_search_never_returns_deleted_id_after_reopen() -> Result<()> 
 
     let live: Vec<Tuple> = rows
         .iter()
-        .filter(|r| !deleted.contains(&t13_row_key(r)?))
+        .filter(|r| !deleted.contains(&t13_row_key(r).expect("t13 key")))
         .cloned()
         .collect();
 
@@ -2097,7 +2114,7 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
             0 => 40.00,
             1 => 40.01,
             2 => 40.02,
-            3.. => bail!("T13: wave out of range"),
+            _ => bail!("T13: wave out of range"),
         };
         let new_row = Tuple::from_vec(vec![
             DataValue::from(new_key),

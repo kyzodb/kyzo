@@ -167,7 +167,8 @@ pub(crate) fn dijkstra_cost_only(
     use ordered_float::OrderedFloat;
     use priority_queue::PriorityQueue;
 
-    let mut distance = vec![f64::INFINITY; crate::rules::convert::usize_from_u32(edges.node_count())];
+    let mut distance =
+        vec![f64::INFINITY; crate::rules::convert::usize_from_u32(edges.node_count())];
     let mut pq = PriorityQueue::new();
     distance[crate::rules::convert::usize_from_u32(start)] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
@@ -236,7 +237,9 @@ mod tests {
         let mut state = 0x0bad_c0de_dead_beefu64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             state
         };
         let mut rows: Vec<Tuple> = vec![];
@@ -286,8 +289,7 @@ mod tests {
                 vec![pseudo_random_edges()],
                 undirected_opt()?,
                 CancelFlag::inert(),
-            )
-            ?;
+            )?;
             assert_eq!(seq, par);
         }
         Ok(())
@@ -316,8 +318,7 @@ mod tests {
                 vec![pseudo_random_edges()],
                 undirected_opt()?,
                 CancelFlag::inert(),
-            )
-            ?;
+            )?;
             assert_eq!(seq, par);
         }
         Ok(())
@@ -338,8 +339,7 @@ mod tests {
             vec![path_graph()],
             undirected_opt()?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), DataValue::from(1.5)]),
             Tuple::from_vec(vec![s("b"), DataValue::from(2.25)]),
@@ -361,8 +361,7 @@ mod tests {
             vec![path_graph()],
             undirected_opt()?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), DataValue::from(0.0)]),
             Tuple::from_vec(vec![s("b"), DataValue::from(2.0)]),

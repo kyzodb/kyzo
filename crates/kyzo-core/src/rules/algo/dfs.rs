@@ -208,8 +208,7 @@ mod tests {
                 ),
             ]))?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![s("a"), s("a"), DataValue::List(vec![s("a")])]),
             Tuple::from_vec(vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])]),

@@ -210,9 +210,14 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
-        assert_eq!(got[0][2].get_slice().ok_or_else(|| miette!("test expected Some"))?.len(), 3);
+        )?;
+        assert_eq!(
+            got[0][2]
+                .get_slice()
+                .ok_or_else(|| miette!("test expected Some"))?
+                .len(),
+            3
+        );
 
         let got = run_fixed_rule(
             &ShortestPathBFS,
@@ -223,8 +228,7 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(got[0][2], DataValue::Null);
         Ok(())
     }
@@ -310,8 +314,7 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             s("a"),
             s("c"),

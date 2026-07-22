@@ -280,7 +280,8 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
     let mut distance = vec![f64::INFINITY; crate::rules::convert::usize_from_u32(graph_size)];
     let mut pq = PriorityQueue::new();
     // Absence is `None` — never a reserved node id (P078).
-    let mut back_pointers: Vec<Option<u32>> = vec![None; crate::rules::convert::usize_from_u32(graph_size)];
+    let mut back_pointers: Vec<Option<u32>> =
+        vec![None; crate::rules::convert::usize_from_u32(graph_size)];
     distance[crate::rules::convert::usize_from_u32(start)] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
     let mut goals_remaining = goals.clone();
@@ -347,9 +348,11 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
     forbidden_nodes: &FN,
     cancel: CancelFlag,
 ) -> Result<Vec<(u32, f64, Vec<u32>)>> {
-    let mut distance = vec![f64::INFINITY; crate::rules::convert::usize_from_u32(edges.node_count())];
+    let mut distance =
+        vec![f64::INFINITY; crate::rules::convert::usize_from_u32(edges.node_count())];
     let mut pq = PriorityQueue::new();
-    let mut back_pointers: Vec<Vec<u32>> = vec![vec![]; crate::rules::convert::usize_from_u32(edges.node_count())];
+    let mut back_pointers: Vec<Vec<u32>> =
+        vec![vec![]; crate::rules::convert::usize_from_u32(edges.node_count())];
     distance[crate::rules::convert::usize_from_u32(start)] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
     let mut goals_remaining = goals.clone();
@@ -458,7 +461,9 @@ mod tests {
         let mut state = 0xfeed_face_cafe_babeu64;
         let mut next = || {
             // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+            state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                + std::num::Wrapping(1442695040888963407))
+            .0;
             state
         };
         let mut edges: Vec<Tuple> = vec![];
@@ -509,8 +514,7 @@ mod tests {
                 pseudo_random_inputs(),
                 empty_opts(),
                 CancelFlag::inert(),
-            )
-            ?;
+            )?;
             assert_eq!(seq, par);
         }
         Ok(())
@@ -532,8 +536,7 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0][2], DataValue::from(2.0));
         assert_eq!(got[0][3], DataValue::List(vec![s("a"), s("c"), s("b")]));
@@ -584,8 +587,7 @@ mod tests {
                 },
             )]))?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![
                 s("a"),
@@ -631,8 +633,7 @@ mod tests {
                 },
             )]))?,
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         let want: Vec<Tuple> = vec![
             Tuple::from_vec(vec![
                 s("a"),
@@ -672,11 +673,12 @@ mod tests {
             ],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0][2], DataValue::from(2.0));
-        let path = got[0][3].get_slice().ok_or_else(|| miette!("test expected Some"))?;
+        let path = got[0][3]
+            .get_slice()
+            .ok_or_else(|| miette!("test expected Some"))?;
         assert_eq!(path.len(), 3);
         assert_eq!(path[0], s("a"));
         assert!(path[1] == s("b") || path[1] == s("c"), "{:?}", path);
@@ -690,8 +692,7 @@ mod tests {
     /// poll never changes an answer. Pins the fix that threaded the flag in.
     #[test]
     fn plain_dijkstra_honors_cancel() -> Result<()> {
-        let graph =
-            DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64), (1, 2, 1.0), (2, 3, 1.0)])?;
+        let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64), (1, 2, 1.0), (2, 3, 1.0)])?;
         // Unset flag: the search completes, path 0→3 costs 3.
         let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::inert())?;
         assert_eq!(ok, vec![(3, 3.0, vec![0, 1, 2, 3])]);
@@ -711,15 +712,7 @@ mod tests {
         let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, 1.0f64)])?;
         let forbidden: BTreeSet<(u32, u32)> = BTreeSet::from([(0, 1)]);
         // Unset flag: hub is a dead end; goal 1 stays unreachable.
-        let ok = dijkstra_keep_ties(
-            &graph,
-            0,
-            &Some(1u32),
-            &forbidden,
-            &(),
-            CancelFlag::inert(),
-        )
-        ?;
+        let ok = dijkstra_keep_ties(&graph, 0, &Some(1u32), &forbidden, &(), CancelFlag::inert())?;
         assert_eq!(ok.len(), 1);
         assert!(!ok[0].1.is_finite());
         assert!(ok[0].2.is_empty());

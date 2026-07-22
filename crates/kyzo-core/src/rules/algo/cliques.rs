@@ -300,12 +300,18 @@ fn enumerate_cliques(
         let p: Vec<u32> = adj[crate::rules::convert::usize_from_u32(v)]
             .iter()
             .copied()
-            .filter(|&u| pos[crate::rules::convert::usize_from_u32(u)] > pos[crate::rules::convert::usize_from_u32(v)])
+            .filter(|&u| {
+                pos[crate::rules::convert::usize_from_u32(u)]
+                    > pos[crate::rules::convert::usize_from_u32(v)]
+            })
             .collect();
         let x: Vec<u32> = adj[crate::rules::convert::usize_from_u32(v)]
             .iter()
             .copied()
-            .filter(|&u| pos[crate::rules::convert::usize_from_u32(u)] < pos[crate::rules::convert::usize_from_u32(v)])
+            .filter(|&u| {
+                pos[crate::rules::convert::usize_from_u32(u)]
+                    < pos[crate::rules::convert::usize_from_u32(v)]
+            })
             .collect();
         ctx.bron_kerbosch(vec![v], p, x, cancel)?;
     }
@@ -522,9 +528,16 @@ mod tests {
         let mut by_id: BTreeMap<i64, Vec<String>> = BTreeMap::new();
         for r in got {
             by_id
-                .entry(r[0].get_int().ok_or_else(|| miette!("test expected Some"))?)
+                .entry(
+                    r[0].get_int()
+                        .ok_or_else(|| miette!("test expected Some"))?,
+                )
                 .or_default()
-                .push(r[1].get_str().ok_or_else(|| miette!("test expected Some"))?.to_string());
+                .push(
+                    r[1].get_str()
+                        .ok_or_else(|| miette!("test expected Some"))?
+                        .to_string(),
+                );
         }
         let mut cliques: Vec<Vec<String>> = by_id
             .into_values()
@@ -644,10 +657,13 @@ mod tests {
         // Pseudo-random graphs.
         for seed in 0..40u64 {
             // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
-            let mut state = (std::num::Wrapping(0x9E37_79B9_7F4A_7C15u64) * std::num::Wrapping(seed + 1)).0;
+            let mut state =
+                (std::num::Wrapping(0x9E37_79B9_7F4A_7C15u64) * std::num::Wrapping(seed + 1)).0;
             let mut next = || {
                 // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
-                state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005) + std::num::Wrapping(1442695040888963407)).0;
+                state = (std::num::Wrapping(state) * std::num::Wrapping(6364136223846793005)
+                    + std::num::Wrapping(1442695040888963407))
+                .0;
                 state
             };
             let n = 12u64;
@@ -799,8 +815,7 @@ mod tests {
             vec![TestInput::new(vec!["fr", "to"], rows)],
             empty_opts(),
             CancelFlag::inert(),
-        )
-        ?;
+        )?;
         // One clique (id 0) containing all m nodes ⇒ m membership rows.
         assert_eq!(got.len(), crate::rules::convert::usize_from_u32(m));
         assert!(got.iter().all(|r| matches!(r[0].get_int(), Some(0))));

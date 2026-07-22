@@ -129,8 +129,8 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
     let (batch_ab, committed_ab) = admit(
         door.seal_durable_overlap_batch(
             vec![
-                (TempTx::default(), content_root(1)),
-                (TempTx::default(), content_root(2)),
+                (TempTx::new(), content_root(1)),
+                (TempTx::new(), content_root(2)),
             ],
             &session,
         ),
@@ -181,7 +181,7 @@ fn overlap_only_group_commit_non_overlapping_arrival_not_batched() {
         "begin later fsync window for C",
     );
     let (batch_c, committed_c) = admit(
-        door.seal_durable_overlap_batch(vec![(TempTx::default(), content_root(3))], &session),
+        door.seal_durable_overlap_batch(vec![(TempTx::new(), content_root(3))], &session),
         "seal overlap batch C",
     );
 
@@ -524,7 +524,7 @@ mod fuse_crash_matrix {
             // runs once the active writer has actually filled past 64e6 —
             // stock 64 MiB memtable also rotates, just later.
             max_memtable_size_bytes: Some(16 * 1_024 * 1_024),
-            ..StorageOptions::default()
+            ..StorageOptions::empty()
         }
     }
 

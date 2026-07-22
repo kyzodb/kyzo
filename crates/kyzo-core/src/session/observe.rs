@@ -1063,7 +1063,8 @@ mod exactly_once_battery {
                         Ok(())
                     })
                     .join()
-                    .map_err(|_| miette!("thread join"))??;
+                    .expect("thread join")
+                    .expect("thread result");
             }
         });
 
@@ -1071,7 +1072,7 @@ mod exactly_once_battery {
         while let Ok(event) = receiver.try_recv() {
             assert_eq!(event.op.as_str(), "Put");
             for row in event.new_rows.rows() {
-                new_values.push(row[1].get_int().ok_or_else(|| miette!("int"))?);
+                new_values.push(row[1].get_int().expect("int"));
             }
         }
         new_values.sort();
@@ -1165,14 +1166,14 @@ mod deep_verify_schedule {
         let result = db
             .run_scheduled_deep_verify()
             .map_err(|e| miette!("deep-verify runs: {e}"))?
-            .map_err(|e| miette!("pending schedule must produce a result: {e}"))?;
+            .ok_or_else(|| miette!("pending schedule must produce a result"))?;
         assert!(result.clean, "healthy store deep-verify: {result:?}");
         assert!(result.indices_checked >= 1);
         assert_eq!(result.schedule_ordinal, ord);
 
         let persisted = db
             .deep_verify_last_result()
-            .map_err(|e| miette!("last_result queryable: {e}"))?;
+            .ok_or_else(|| miette!("last_result queryable"))?;
         assert_eq!(persisted, result);
         assert!(matches!(
             db.deep_verify_staleness(),
@@ -1330,7 +1331,7 @@ mod one_counter_per_metric {
             index_exporter.value()
         );
         // Forged recompute from sealed generation alone diverges from live Catalog.
-        let forged_from_sealed = status.sealed()?.counter();
+        let forged_from_sealed = status.sealed().ok_or_else(|| miette!("sealed"))?.counter();
         assert_ne!(
             index_exporter.value(),
             forged_from_sealed,
@@ -1423,7 +1424,7 @@ mod health_tiers_and_tracing {
                 Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)]),
             ],
         )
-        .map_err(|e| miette!("probe rows: {e}"))?
+        .map_err(|e| miette!("probe rows: {e}")).expect("test helper")
     }
 
     /// Prove: liveness / readiness / integrity are three distinct doors that
