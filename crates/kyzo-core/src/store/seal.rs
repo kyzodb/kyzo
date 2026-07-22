@@ -33,13 +33,11 @@ use super::transcript::{
 };
 use super::wal::WalHash;
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fixed-width seal / manifest digest (SHA-256).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SealDigest([u8; 32]);
 
 impl SealDigest {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Wrap an already-proven seal digest.
     pub fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
@@ -63,11 +61,9 @@ impl AsRef<[u8]> for SealDigest {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Genesis prior-seal digest — first seal in a lineage covers this.
 pub const GENESIS_PRIOR_SEAL: SealDigest = SealDigest([0u8; 32]);
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Bound NonceLease floors for the sealed prefix (per MintDomain).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NonceLeaseFloors {
@@ -80,7 +76,6 @@ pub struct NonceLeaseFloors {
 }
 
 impl NonceLeaseFloors {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Genesis floors (all domains at zero).
     pub fn genesis() -> Self {
         Self {
@@ -90,7 +85,6 @@ impl NonceLeaseFloors {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Ceiling for a mint domain.
     pub fn ceiling(self, domain: MintDomain) -> DomainCounter {
         match domain {
@@ -101,7 +95,6 @@ impl NonceLeaseFloors {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Inputs required to privately mint a [`CheckpointSeal`].
 ///
 /// Binding list (minimum, §26): StoreId; CryptoDomain; cut FenceEpoch;
@@ -146,7 +139,6 @@ pub struct CheckpointSealParts {
     pub retention_certificate_digest: SealDigest,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Prefix authority transfer artifact. Privately minted; truncate consumes it.
 ///
 /// Dump without a seal stays disposable. Restore/open against a seal that
@@ -173,9 +165,7 @@ pub struct CheckpointSeal {
     seal_digest: SealDigest,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl CheckpointSeal {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Privately mint a seal after replay verification + retention coverage.
     ///
     /// Callers must have verified that replay of the covered prefix reproduces
@@ -210,13 +200,11 @@ impl CheckpointSeal {
         })
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Store identity.
     pub fn store_id(&self) -> StoreId {
         self.store_id
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Crypto domain at the cut.
     pub fn crypto_domain(&self) -> CryptoDomain {
         self.crypto_domain
@@ -372,7 +360,6 @@ impl CheckpointSeal {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Consume a covering [`CheckpointSeal`] against a [`TruncateLedger`].
 ///
 /// Truncation without consuming a seal is Unconstructible — there is no
@@ -396,7 +383,6 @@ pub fn truncate(
     })
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Durable truncate-authority ledger — records spent seal digests so crash
 /// retry converges without double-truncation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -405,13 +391,11 @@ pub struct TruncateLedger {
 }
 
 impl TruncateLedger {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Empty ledger (no seals consumed yet).
     pub fn new() -> Self {
         Self::default()
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Whether `digest` was already consumed.
     pub fn is_consumed(&self, digest: SealDigest) -> bool {
         self.spent.contains(&digest)
@@ -423,7 +407,6 @@ impl TruncateLedger {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Proof that a covering seal was consumed for truncation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TruncationReceipt {
@@ -433,15 +416,12 @@ pub struct TruncationReceipt {
     final_wal_hash: WalHash,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl TruncationReceipt {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Store whose prefix was truncated.
     pub fn store_id(&self) -> StoreId {
         self.store_id
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Cut through which the seal authorized truncation.
     pub fn cut(&self) -> CommitOrdinal {
         self.cut
@@ -458,7 +438,6 @@ impl TruncationReceipt {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Typed refusals on the seal / truncate / verify path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum SealRefuse {
@@ -474,7 +453,6 @@ pub enum SealRefuse {
     #[error("CheckpointSeal: StoreId does not match CryptoDomain")]
     #[diagnostic(code(store::seal::store_id_mismatch))]
     StoreIdMismatch,
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Truncate ledger already recorded this seal as spent (idempotent crash path).
     #[error("CheckpointSeal: seal already consumed for truncation")]
     #[diagnostic(code(store::seal::already_consumed))]
@@ -491,13 +469,11 @@ pub enum SealRefuse {
 }
 
 impl SealRefuse {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     fn from_transcript(_err: TranscriptRefuse) -> Self {
         SealRefuse::TranscriptEncode
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Map mint/verify parts onto the ONE CheckpointSeal transcript schema.
 fn checkpoint_seal_transcript_parts(parts: &CheckpointSealParts) -> CheckpointSealTranscriptParts {
     CheckpointSealTranscriptParts {
@@ -524,7 +500,6 @@ fn checkpoint_seal_transcript_parts(parts: &CheckpointSealParts) -> CheckpointSe
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Binding digest: one SHA-256 over the ONE [`encode_checkpoint_seal`] byte stream.
 ///
 /// Not a field-by-field hasher — the transcript is the serializer; this is only

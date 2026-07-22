@@ -377,7 +377,6 @@ impl ChainedStateRoot {
 /// Genesis predecessor root for the first mint in a CryptoDomain.
 pub const GENESIS_ROOT: StateRoot = StateRoot([0u8; 32]);
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fork-point root sealed in a ForkGrant — shared ancestry without revealing
 /// post-fork content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -392,7 +391,6 @@ pub struct ForkPoint {
 }
 
 impl ForkPoint {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Seal a fork-point from grant materialization inputs.
     pub(crate) fn seal(
         fork_point: StateRoot,
@@ -498,7 +496,6 @@ impl DurableCommitCut {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Composed cuts equal iff both tips and the composition digest agree.
 pub fn cuts_equal(left: DurableCommitCut, right: DurableCommitCut) -> bool {
     left.composed() == right.composed()
@@ -556,7 +553,6 @@ impl RootChain {
         self.links.last().map(|l| l.root()).unwrap_or(GENESIS_ROOT)
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Contiguous segment for STH consistency proofs — first link may sit
     /// mid-lineage (predecessor need not be [`GENESIS_ROOT`]); every later
     /// link must cover the prior tip.
@@ -602,7 +598,6 @@ pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, Me
     link_at_cut(chain, cut).map(|l| l.root())
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Fork-equivalence: shared fork-point root without revealing post-fork content.
 ///
 /// Equality at a cut = recomputed roots ([`replica_equivalence_at_cut`]).
@@ -620,7 +615,6 @@ pub fn roots_equal_at_cut(left: StateRoot, right: StateRoot) -> bool {
     left == right
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// One replica's local mint material for independent recomputation at a cut.
 ///
 /// Carries only what *this* instance observed (content from its ordered facts,
@@ -640,7 +634,6 @@ pub struct ReplicaCutRecompute {
 }
 
 impl ReplicaCutRecompute {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Build from local observation only — never from a received root.
     pub(crate) fn from_local(
         store_id: StoreId,
@@ -674,7 +667,6 @@ impl ReplicaCutRecompute {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Recompute-and-compare replica equivalence at a cut (seat 58).
 ///
 /// Each side independently recomputes via [`ReplicaCutRecompute::recompute`];
@@ -684,7 +676,6 @@ pub fn replica_equivalence_at_cut(left: ReplicaCutRecompute, right: ReplicaCutRe
     roots_equal_at_cut(left.recompute(), right.recompute())
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Path/URL "same store" claim — location is not identity (seat 4) and not
 /// equivalence (seat 58). Construction is allowed; using it as equivalence
 /// is refused by [`refuse_path_url_sameness`].
@@ -694,9 +685,7 @@ pub struct PathUrlSamenessClaim {
     right_location: String,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 impl PathUrlSamenessClaim {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Record a path/URL pair that would costume location as sameness.
     pub fn claim(left_location: impl Into<String>, right_location: impl Into<String>) -> Self {
         Self {
@@ -705,7 +694,6 @@ impl PathUrlSamenessClaim {
         }
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Left path/URL location.
     pub fn left_location(&self) -> &str {
         &self.left_location
@@ -717,7 +705,6 @@ impl PathUrlSamenessClaim {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Refuse a path/URL "same store" claim — never an equivalence proof.
 pub fn refuse_path_url_sameness(_claim: PathUrlSamenessClaim) -> MerkleChainRefuse {
     MerkleChainRefuse::PathUrlSameness
@@ -759,7 +746,6 @@ pub enum MerkleChainRefuse {
 
 // ── STH gossip / consistency (CT non-equivocation; seats 2/56/58/69) ──────
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Compact unsigned state-root head — the digest payload an STH carries.
 ///
 /// Signed and carried on the NATS JetStream fabric by the replica gossip
@@ -773,7 +759,6 @@ pub struct StateRootHead {
 }
 
 impl StateRootHead {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint a head from a chain tip link.
     pub fn from_chain_tip(chain: &RootChain) -> Result<Self, MerkleChainRefuse> {
         let tip = chain
@@ -788,7 +773,6 @@ impl StateRootHead {
         })
     }
 
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Mint a head at a committed cut (as-of).
     pub fn from_cut(chain: &RootChain, cut: CommitOrdinal) -> Result<Self, MerkleChainRefuse> {
         let link = link_at_cut(chain, cut)?;
@@ -839,7 +823,6 @@ impl StateRootHead {
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Contiguous RootChain subsegment proving a newer head extends an older one.
 ///
 /// Analogue of RFC 6962 consistency proofs over the Spec chained-root spine:
@@ -851,14 +834,12 @@ pub struct ConsistencyProof {
 }
 
 impl ConsistencyProof {
-    #[allow(dead_code)] // mid-wiring Spec seat — lands with callers
     /// Links in commit order covering the older-through-newer segment.
     pub fn links(&self) -> &[ChainedStateRoot] {
         &self.links
     }
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Build a consistency proof from an honest [`RootChain`] between two cuts.
 pub fn build_consistency_proof(
     chain: &RootChain,
@@ -890,7 +871,6 @@ pub fn build_consistency_proof(
     Ok(ConsistencyProof { links })
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Verify that `newer` is a consistent extension of `older` under `proof`.
 pub fn verify_consistency_proof(
     older: &StateRootHead,
@@ -948,7 +928,6 @@ pub fn verify_consistency_proof(
     Ok(())
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Outcome of a same-Store STH gossip consistency check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GossipConsistency {
@@ -958,7 +937,6 @@ pub enum GossipConsistency {
     ConsistentExtension,
 }
 
-#[allow(dead_code)] // mid-wiring Spec seat — lands with callers
 /// Cross-check two gossiped state-root heads (Certificate Transparency gossip).
 ///
 /// Same ordinal + divergent roots → [`MerkleChainRefuse::SplitViewDetected`].

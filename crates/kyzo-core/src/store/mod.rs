@@ -67,132 +67,106 @@ pub(crate) mod wal;
 // sealed Storage trait can admit it as the contract's own test double.
 // Path is relative to this file (`store/mod.rs`).
 #[cfg(any(test, feature = "bench-internals"))]
-#[cfg_attr(all(feature = "bench-internals", not(test)), allow(dead_code))]
 #[path = "../../../kyzo-crashfs/src/sim.rs"]
 pub(crate) mod sim;
 
 // Seat reexports: crate-visible names for hosts and mid-wiring.
-// `unused_imports` here is reexport noise only — not a dead_code silence.
-#[allow(unused_imports)]
+// Production-used names stay live; test-corpus flat imports are cfg(test);
+// unused flat reexports are cut (callers use module paths).
 pub use authority::{
-    AddressFence, AddressFenceRefuse, AddressFenceTable, Entropy, IncarnationId,
-    IncarnationMintCap, OpenOrdinal, RecoveryMatrix, RecoveryPublicKey, WriteAuthority,
-    WriteTokenId,
+    WriteAuthority,
 };
-// Leave-is-free external import is DELIBERATELY fail-closed (#359 / #375 T5):
-// `OriginRootRegistry` is intentionally omitted from this reexport. The only
-// public mint door on `ImportCapability` hard-refuses; external callers cannot
-// obtain a verified capability. Crate-internal registry ceremony stays for
-// tests / future host wiring — not unfinished export.
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use backup::{
-    ImportCapability, LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, ObjectsCompleteness,
-    PackRefuse, dump_storage, import_leave_is_free, import_verify, restore_storage,
+#[cfg(test)]
+pub use authority::{
+    Entropy, IncarnationId, OpenOrdinal, RecoveryMatrix,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use commit_cap::{ForkGenerationWitness, SnapshotFork, StableCommitCap};
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use compact::{
-    CompactRefuse, CompactStateRoot, CompactionDebt, CompactionPace, KvSeparationThreshold,
-    LineageHash, MergeProof, MergeProofParts, MergedPacket, PacketContentHash, RangeClass,
-    classify_range_at_commit, pace,
+// Leave-is-free external import stays fail-closed (#359 / #375 T5): no flat
+// reexport of ImportCapability / OriginRootRegistry — module-path only.
+
+pub use commit_cap::{
+    SnapshotFork,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use contract::{FormatVersion, Storage};
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub(crate) use contract::{SystemClock, SystemClockRefuse};
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
+pub use commit_cap::{
+    StableCommitCap,
+};
+
+pub use contract::{
+    FormatVersion, Storage,
+};
+pub(crate) use contract::{
+    SystemClock,
+};
+#[cfg(test)]
 pub use crypto::{
-    AeadArm, AuditKey, Ciphertext, CompressedBytes, CryptoRefuse, Dek, Digest, Kek, KekUnwrapCap,
-    Mac, Nonce, SegmentCounter, ShredLedger, ShredReceipt, ShredSalt, ShredTombstone, Signature,
-    WrappedShredSalt, compress, compress_then_encrypt, decompress, decrypt, derive_dek, encrypt,
-    shred, unwrap_shred_salt, wrap_shred_salt,
+    AeadArm, Kek, KekUnwrapCap, Nonce, SegmentCounter, ShredSalt,
+    compress_then_encrypt, decompress, decrypt, derive_dek,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use epoch::{
-    CryptoDomain, EpochAdvanceCommitted, EpochGrant, FenceEpoch, IntentClear, advance,
-    advance_recovery,
+    CryptoDomain, FenceEpoch,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
 pub use failure::{
-    DebtLedger, FailureLattice, KeyspaceId, OperatorHealthSurface, QuarantineRange, StoreRefuse,
+    FailureLattice, StoreRefuse,
 };
-#[allow(unused_imports)] // seat 8 forge wall witness
-pub use forge_wall::StoreCurrencyOnly;
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
 pub use grants::{
-    AncestorReadGrant, ForkGrant, ForkPointRoot, Grant, GrantId, IdentitySeed,
-    KeyMaterialCommitment, MaterializedGrant, PriorMaterialization, RecoveryGrant,
-    SuccessorPrincipal, materialize,
+    ForkGrant, Grant, GrantId, PriorMaterialization, RecoveryGrant, materialize,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
 pub use idempotency::{
-    IdempotencyEntry, IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest,
+    IdempotencyMemo, OperationKey, OperationOutcome, RequestDigest,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use keys::{Secret, SecretKeyRefuse, refuse_if_secret};
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+
+#[cfg(test)]
 pub use merkle::{
-    ChainLinkKind, ChainedStateRoot, ForkPoint, GENESIS_ROOT, MerkleChainRefuse,
-    ReplicaCutRecompute, RootChain, StateRoot, as_of_root, fork_equivalence,
-    replica_equivalence_at_cut, roots_equal_at_cut,
+    StateRoot,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use nonce::{DomainCounter, MintDomain, NonceLease, nonce};
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
+pub use nonce::{
+    DomainCounter, MintDomain, nonce,
+};
+#[cfg(test)]
 pub use objects::{
-    BackendContract, ConfirmedCopies, ConsistencyClass, ContentHash, Downgrade, FailureDomains,
-    IntegrityVerification, ObjectDurabilityClass, ObjectId, ObjectRef, ObjectRefuse, ObjectSlot,
-    ObjectStore, PermanenceCandidate, PermanenceWitness, ReclaimCertificate, Regions, Repair,
-    ResolvedObject, RetentionCertificate, StagingToken, VolatilePending, gc_durable,
-    reclaim_candidate, resolve,
+    BackendContract, ConfirmedCopies, ConsistencyClass, ContentHash, Downgrade,
+    FailureDomains, IntegrityVerification, ObjectDurabilityClass, ObjectId, ObjectRef,
+    ObjectRefuse, PermanenceCandidate, PermanenceWitness, ReclaimCertificate, Regions,
+    StagingToken, VolatilePending, reclaim_candidate,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use open::{
-    EntropyArm, GenesisParams, GenesisRefuse, GenesisSealed, GenesisSealedView, SizeClass,
-    StableCommitCapArm, StagingTtl, StoreId, StoreOpen, StoreOpenVerb, genesis, open_path_only,
-    open_with_capability,
+    EntropyArm, GenesisParams, GenesisSealed, GenesisSealedView, SizeClass,
+    StableCommitCapArm, StagingTtl, StoreId, StoreOpen, genesis,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
 pub use replica::{
-    AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
-    AuthorizingKeyTable, CrossingCapabilitySet, CrossingContext, CrossingEnvelope,
-    CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingRefuse, CrossingStatus,
-    CrossingValidated, GraphBoundKey, GraphBoundary, KeyBoundaryRefuse, LocalProjection,
-    NamespacedRecordIdentity, OriginContinuity, PostStateRoot, PromotionMeaning, PromotionRefuse,
-    ReplicaCustody, ReplicaCustodyTable, ReplicaKey, ReplicaRefuse, ScopeManifestDigest,
-    ScopeManifestStatus, ScopeManifestTable, TenantId, anchor_pending, prove_promotion_replay,
-    refuse_in_place_local_reinterpretation, validate_crossing_before_lower, verify_replica,
-    view_under_schema_cut,
+    ReplicaCustody, ReplicaKey, ScopeManifestDigest, ScopeManifestStatus,
+    ScopeManifestTable,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
 pub use seal::{
-    CheckpointSeal, CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest,
-    SealRefuse, TruncateLedger, TruncationReceipt, truncate,
+    CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest, SealRefuse,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use sweep::{
-    AdmittedIntent, CommitOrdinal, IntentOrdinal, IntentionQueue, SweepDoor, SweepRefuse,
-    SweepSealFailure, SweepSession,
+    CommitOrdinal, SweepRefuse, SweepSealFailure,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
+#[cfg(test)]
+pub use sweep::{
+    SweepDoor, SweepSession,
+};
+#[cfg(test)]
 pub use transcript::{
-    AdmissionCertificateTranscriptParts, CanonicalTranscript, CanonicalTranscriptBuilder,
-    CheckpointSealTranscriptParts, FieldId, LeaveIsFreeIncarnationTranscriptPart,
-    LeaveIsFreeSaltTranscriptPart, MapValue, SEALED_ARTIFACT_KINDS, SealedArtifactKind,
-    TranscriptRefuse, WalRecordPayloadParts, encode_admission_certificate,
-    encode_all_normative_production_transcripts, encode_ancestor_entitlement_key_id,
-    encode_ancestor_read_grant_payload, encode_audit_key_leaf, encode_chained_state_root,
-    encode_checkpoint_seal, encode_fork_consent_key_id, encode_fork_grant_payload,
-    encode_fork_store_id, encode_fork_write_token, encode_key_commitment,
-    encode_leave_is_free_pack, encode_merge_proof_header, encode_normative_production_transcript,
-    encode_recovery_grant_payload, encode_recovery_matrix, encode_recovery_write_token,
-    encode_state_root_head, encode_wal_record, parse_golden_hex,
+    CanonicalTranscript, SealedArtifactKind, TranscriptRefuse,
+    encode_normative_production_transcript, parse_golden_hex,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
 pub use tx::{
-    Aborted, Applied, BackendIoError, CommitCorruption, CommitFailure, CommitIo, Committed,
-    ConflictError, ReadTx, Slice, WriteTx,
+    Aborted, Applied, BackendIoError, CommitCorruption, CommitFailure, CommitIo,
+    Committed, ConflictError, ReadTx, WriteTx,
 };
-#[allow(unused_imports)] // seat reexport; production may not bind yet
-pub use wal::{WalFloors, WalHash, WalPayload, WalRecord, WalReplayState, WalSegment, replay};
+#[cfg(test)]
+pub use tx::{
+    Slice,
+};
+#[cfg(test)]
+pub use wal::{
+    WalHash,
+};
