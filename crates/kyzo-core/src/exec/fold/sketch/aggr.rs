@@ -321,7 +321,7 @@ mod tests {
         }
         let out = run_normal(normal_op(&aggr("hll"), &[]).unwrap(), &stream);
         let est = out.get_int().unwrap();
-        let rel = super::u64_to_f64((est - 5000).unsigned_abs()) / 5000.0;
+        let rel = crate::exec::fold::sketch::u64_to_f64((est - 5000).unsigned_abs()) / 5000.0;
         assert!(rel < 0.05, "hll estimate {est} off by {rel}");
     }
 
@@ -415,10 +415,12 @@ mod tests {
     /// `quantile(x, q)` returns the estimated value at q, order-independently.
     #[test]
     fn quantile_aggregation_is_order_independent() {
-        let asc: Vec<DataValue> = (0..10_000).map(|i| DataValue::from(super::usize_to_f64(i))).collect();
+        let asc: Vec<DataValue> = (0..10_000)
+            .map(|i| DataValue::from(crate::exec::fold::sketch::usize_to_f64(i)))
+            .collect();
         let desc: Vec<DataValue> = (0..10_000)
             .rev()
-            .map(|i| DataValue::from(super::usize_to_f64(i)))
+            .map(|i| DataValue::from(crate::exec::fold::sketch::usize_to_f64(i)))
             .collect();
 
         let q_asc = run_normal(quantile_factory(&[DataValue::from(0.9f64)]).unwrap(), &asc);

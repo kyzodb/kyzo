@@ -1216,7 +1216,7 @@ fn meet_ranged<'s>(
 #[cfg(test)]
 mod level_stack_tests {
     use super::*;
-    use miette::{Result, miette};
+    use miette::{Result, bail};
 
     /// A converging fixpoint's level stack stays bounded: epochs that
     /// admit nothing must not accumulate levels (the consumed empty delta
@@ -1238,7 +1238,7 @@ mod level_stack_tests {
             assert!(!store.has_delta());
         }
         let LevelKind::Normal(levels) = &store.kind else {
-            unreachable!()
+            bail!(LevelInvariantError("level_stack_stays_bounded expected Normal"));
         };
         assert!(
             levels.len() <= 6,

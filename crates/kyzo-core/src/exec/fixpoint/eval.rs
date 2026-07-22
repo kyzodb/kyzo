@@ -848,9 +848,9 @@ pub struct EvalStratum<R, F> {
     pub defs: BTreeMap<MagicSymbol, EvalDefinition<R, F>>,
 }
 
-// Manual: the derive would needlessly bound `R: Default, F: Default`.
-impl<R, F> Default for EvalStratum<R, F> {
-    fn default() -> Self {
+impl<R, F> EvalStratum<R, F> {
+    /// Empty stratum — no definitions yet.
+    pub(crate) fn empty() -> Self {
         Self {
             defs: BTreeMap::new(),
         }

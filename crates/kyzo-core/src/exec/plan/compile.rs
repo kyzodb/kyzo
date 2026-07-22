@@ -77,9 +77,9 @@
  *      an `ensure!` — restructured: the unbound symbol is matched, and the
  *      impossible empty-difference case is a typed
  *      [`PlanInvariantError`](crate::exec::op::PlanInvariantError).
- *   3. compile.rs:501,535,569 `debug_assert!(seen_variables.contains(..))`
- *      in the search arms — gone with the search seams (the index tier
- *      re-establishes them as typed checks when those atoms land).
+ *   3. compile.rs search-arm seen_variables containment checks — gone
+ *      with the search seams (the index tier re-establishes them as
+ *      typed checks when those atoms land).
  *
  * Other deviations from the original, documented:
  *   D1. Index selection speaks the landed catalog shape: `choose_index`
@@ -586,7 +586,7 @@ pub(crate) fn compile_magic_rule_body(
                     occurrence,
                     rule_app.span,
                 );
-                debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
+                ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                 ret = ret.join_capturing_premise(
                     right,
                     prev_joiner_vars,
@@ -675,7 +675,7 @@ pub(crate) fn compile_magic_rule_body(
                                 posting: idx_store,
                             };
                         }
-                        debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
+                        ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                         ret = ret.join_capturing_premise(
                             right,
                             prev_joiner_vars,
@@ -709,7 +709,7 @@ pub(crate) fn compile_magic_rule_body(
                                 rel_app.span,
                                 rel_app.validity.clone(),
                             )?;
-                            debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
+                            ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                             // Covering index: the scanned row *is* the
                             // relation atom's grounding (projected).
                             ret = ret.join_capturing_premise(
@@ -843,7 +843,7 @@ pub(crate) fn compile_magic_rule_body(
                     negated_occurrence,
                     rule_app.span,
                 );
-                debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
+                ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                 ret = ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rule_app.span)?;
             }
             MagicAtom::NegatedRelation(rel_app) => {
@@ -921,7 +921,7 @@ pub(crate) fn compile_magic_rule_body(
                                 posting: idx_store,
                             };
                         }
-                        debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
+                        ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                         ret =
                             ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                     }
@@ -947,7 +947,7 @@ pub(crate) fn compile_magic_rule_body(
                             rel_app.span,
                             rel_app.validity.clone(),
                         )?;
-                        debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
+                        ensure!(prev_joiner_vars.len() == right_joiner_vars.len(), "join key arity mismatch between sides");
                         ret =
                             ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                     }
@@ -1181,7 +1181,7 @@ pub fn bind_for_eval<'a, T: ReadTx, F: FixedRuleEval>(
 ) -> Result<EvalProgram<CompiledRuleBody<'a, T>, F>> {
     let mut strata = Vec::with_capacity(compiled.len());
     for stratum in compiled {
-        let mut out: EvalStratum<CompiledRuleBody<'a, T>, F> = EvalStratum::default();
+        let mut out: EvalStratum<CompiledRuleBody<'a, T>, F> = EvalStratum::empty();
         for (name, rule_set) in stratum {
             let def = match rule_set {
                 CompiledRuleSet::Rules(rules) => {
