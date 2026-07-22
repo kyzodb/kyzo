@@ -52,17 +52,17 @@
  *
  * Upstream panic-site audit (Law 5) for this file — every site outside
  * `#[cfg(test)]`, and what became of it:
- *   1. ra.rs:718   Reorder `.expect("program logic error: reorder indices
- *      mismatch")` — typed [`PlanInvariantError`].
- *   2. ra.rs:922   `lsh_search.filter.as_mut().unwrap()` — gone with the
+ *   1. ra.rs:718   Reorder panic on index mismatch — typed
+ *      [`PlanInvariantError`].
+ *   2. ra.rs:922   `lsh_search.filter.as_mut()` panic-on-miss — gone with the
  *      search seams (three sites, one per search operator).
- *   3. ra.rs:1036  FTS `coll.write_str(..).unwrap()` — gone (seam).
- *   4. ra.rs:1549,1573,1672  `stores.get(&self.storage_key).unwrap()` —
+ *   3. ra.rs:1036  FTS `coll.write_str(..)` panic — gone (seam).
+ *   4. ra.rs:1549,1573,1672  `stores.get(&self.storage_key)` panic-on-miss —
  *      typed via [`epoch_store_of`].
- *   5. ra.rs:1812f Joiner `left_binding_map.get(l).unwrap()` (and the right
+ *   5. ra.rs:1812f Joiner `left_binding_map.get(l)` panic-on-miss (and the right
  *      twin) — typed [`PlanInvariantError`]; the function already returned
  *      `Result`.
- *   6. ra.rs:1954,1968,2076,2090,2107,2141,... `join_indices(..).unwrap()`
+ *   6. ra.rs:1954,1968,2076,2090,2107,2141,... `join_indices(..)` panic-on-miss
  *      at every join dispatch — now `?` (the indices are minted from the
  *      same binding maps, but a bug is an error, never an abort).
  *   7. ra.rs:1976,2021  `unreachable!()` on a NegJoin right side — the
@@ -70,12 +70,12 @@
  *   8. ra.rs:2118,2121,2214,2217  `panic!("joining on reordered"/"joining
  *      on NegJoin")` — refused at construction by [`RelAlgebra::join`];
  *      the residual iteration arms are typed errors, not panics.
- *   9. ra.rs:446   `storage.metadata.keys.last().unwrap()` in the original's
+ *   9. ra.rs:446   `storage.metadata.keys.last()` panic in the original's
  *      validity check of `RelAlgebra::relation` — RETIRED WITHOUT
  *      SUCCESSOR: every stored relation time-travels through the
  *      universal bitemporal format, so no per-schema validity column
  *      exists to check and no key is inspected at construction.
- *  10. ra.rs:266   Debug-impl `r.data.get(0).unwrap()` — `if let` fallback.
+ *  10. ra.rs:266   Debug-impl `r.data.get(0)` panic — `if let` fallback.
  *  11. Slice-index sites (`tuple[*i]`, `bindings[n..m]`): positions are
  *      minted at compile time from the same plan's binding maps
  *      (`fill_binding_indices_and_compile`), so binding indices are filled
@@ -278,7 +278,7 @@ pub struct StoredRowTooShortError(
 );
 
 /// Typed lookup for "every referenced rule has a store" (upstream panic
-/// sites: three `stores.get(..).unwrap()`s in this file).
+/// sites: three `stores.get(..)` panic-on-miss in this file).
 pub(crate) fn epoch_store_of<'m>(
     stores: &'m BTreeMap<MagicSymbol, EpochStore>,
     key: &MagicSymbol,

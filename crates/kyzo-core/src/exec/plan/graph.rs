@@ -487,50 +487,53 @@ mod tests {
     }
 
     proptest! {
-        /// The iterative Tarjan agrees with the naive reachability oracle
-        /// on random graphs: identical component partitions.
+        // The iterative Tarjan agrees with the naive reachability oracle
+        // on random graphs: identical component partitions.
         #[test]
         fn scc_matches_naive_reachability_oracle(
             n in 1usize..12,
             edges in proptest::collection::vec((0usize..12, 0usize..12), 0..60)
-        ) -> Result<(), TestCaseError> {
+        ) {
             let edges: Vec<(usize, usize)> = edges
                 .into_iter()
                 .map(|(a, b)| (a % n, b % n))
                 .collect();
             let g = graph_of(&edges, n);
-            prop_assert_eq!(scc_partition(&g).map_err(|e| TestCaseError::fail(format!("{e}")))?, naive_scc(&g, n));
-            Ok(())
+            let got = match scc_partition(&g) {
+                Ok(v) => v,
+                Err(e) => return Err(TestCaseError::fail(format!("{e}"))),
+            };
+            prop_assert_eq!(got, naive_scc(&g, n));
         }
 
-        /// The iterative Tarjan is *output-identical* to the original
-        /// recursive formulation: same components, same order, same member
-        /// order — not merely the same partition.
+        // The iterative Tarjan is output-identical to the original
+        // recursive formulation: same components, same order, same member
+        // order — not merely the same partition.
         #[test]
         fn iterative_tarjan_is_output_identical_to_recursive(
             n in 1usize..12,
             edges in proptest::collection::vec((0usize..12, 0usize..12), 0..60)
-        ) -> Result<(), TestCaseError> {
+        ) {
             let mut idx_graph: Vec<Vec<usize>> = vec![vec![]; n];
             for (a, b) in edges {
                 idx_graph[a % n].push(b % n);
             }
-            let iterative = TarjanScc::new(&idx_graph)
-                .map_err(|e| TestCaseError::fail(format!("validated targets: {e}")))?
-                .run();
+            let iterative = match TarjanScc::new(&idx_graph) {
+                Ok(t) => t.run(),
+                Err(e) => return Err(TestCaseError::fail(format!("validated targets: {e}"))),
+            };
             let recursive = RecursiveTarjan::new(&idx_graph).run();
             prop_assert_eq!(iterative, recursive);
-            Ok(())
         }
 
-        /// Kahn's output on a random poisoned DAG is a stratification:
-        /// every node exactly once; every edge points into the same or a
-        /// later stratum; every poisoned edge into a strictly later one.
+        // Kahn's output on a random poisoned DAG is a stratification:
+        // every node exactly once; every edge points into the same or a
+        // later stratum; every poisoned edge into a strictly later one.
         #[test]
         fn kahn_output_is_a_stratification(
             n in 1usize..12,
             edges in proptest::collection::vec((0usize..12, 0usize..12, any::<bool>()), 0..60)
-        ) -> Result<(), TestCaseError> {
+        ) {
             // Orient every edge low → high so the graph is a DAG.
             let mut g: StratifiedGraph<usize> = BTreeMap::new();
             for (a, b, poisoned) in edges {
@@ -542,7 +545,10 @@ mod tests {
                 let e = g.entry(fr).or_default().entry(to).or_insert(false);
                 *e = *e || poisoned;
             }
-            let strata = generalized_kahn(&g, n).map_err(|e| TestCaseError::fail(format!("a DAG stratifies: {e}")))?;
+            let strata = match generalized_kahn(&g, n) {
+                Ok(s) => s,
+                Err(e) => return Err(TestCaseError::fail(format!("a DAG stratifies: {e}"))),
+            };
             let mut stratum_of: BTreeMap<usize, usize> = BTreeMap::new();
             for (idx, stratum) in strata.iter().enumerate() {
                 for node in stratum {
@@ -561,7 +567,6 @@ mod tests {
                     }
                 }
             }
-            Ok(())
         }
     }
 

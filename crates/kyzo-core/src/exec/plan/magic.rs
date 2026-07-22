@@ -24,7 +24,7 @@
  * — extra join tuples, i.e. changed *results*, not just changed demand);
  * every stored relation time-travels through the universal bitemporal
  * format (no per-schema validity column exists to check, so the old
- * `keys.last().unwrap()` panic site has no successor); the
+ * `keys.last()` panic site has no successor); the
  * transaction-facing schema
  * lookups sit behind the [`StoredRelationSchemaSource`] seam (the mirror of
  * `BodyNormalizer` in `data/program.rs` — the runtime's session transaction
@@ -943,7 +943,7 @@ impl AdornedProgram {
 }
 
 /// Append one rule under `key`, creating the rule set if absent. Replaces
-/// the original's `entry().or_default().mut_rules().unwrap()`: the key
+/// the original's `entry().or_default().mut_rules()` panic-on-miss: the key
 /// roles are disjoint by construction (`Sup`/`Input` names are minted only
 /// here, and one name is never both rules and fixed), so a collision with a
 /// fixed rule is a rewrite bug, reported as such.

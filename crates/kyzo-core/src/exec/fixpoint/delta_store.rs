@@ -18,7 +18,7 @@
  * or accounting logic lives here. The kind-mismatch `unreachable!` in
  * `EpochStore::merge_in` is a typed internal error; the meet range scan
  * compares slices through `DataValue`'s total order instead of
- * `partial_cmp(..).unwrap()`. `either::{Left, Right}` becomes
+ * `partial_cmp` (no panic on incomparable). `either::{Left, Right}` becomes
  * `itertools::Either` (the workspace carries no direct `either`
  * dependency). The ported meet forms take no arguments (see `data/aggr.rs`),
  * so the argument lists in the constructor spec are carried for eval's

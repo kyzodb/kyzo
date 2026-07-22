@@ -73,7 +73,7 @@
  *   1. compile.rs:46,55  `rs[0]`/`rules[0]` indexing (arity, aggr_kind) —
  *      structurally removed by [`CompiledInlineRules::new`]'s non-empty
  *      proof; the signature is a field, not an index expression.
- *   2. compile.rs:655  `ret_vars_set.difference(..).next().unwrap()` under
+ *   2. compile.rs:655  `ret_vars_set.difference(..).next()` under
  *      an `ensure!` — restructured: the unbound symbol is matched, and the
  *      impossible empty-difference case is a typed
  *      [`PlanInvariantError`](crate::exec::op::PlanInvariantError).
