@@ -514,6 +514,7 @@ mod segment_gate_tests {
     use kyzo_model::program::query::InputRelationHandle;
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
+    use miette::{Result, miette};
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)
@@ -554,8 +555,8 @@ mod segment_gate_tests {
     /// its bound key is exactly the relation's key (`prefix_join_batched`'s
     /// point-lookup case shares `segment_at` with this one; both dispatch
     /// through the same gate).
-    fn kv_relation(db: &impl Storage, name: &str) -> crate::session::catalog::RelationHandle {
-        let mut tx = db.write_tx().unwrap();
+    fn kv_relation(db: &impl Storage, name: &str) -> Result<crate::session::catalog::RelationHandle> {
+        let mut tx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         let handle = create_relation(
             &mut tx,
             input_handle(
@@ -565,9 +566,9 @@ mod segment_gate_tests {
             ),
             KeyspaceKind::Facts,
         )
-        .unwrap();
-        tx.commit().unwrap();
-        handle
+        .map_err(|e| miette!("create_relation: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        Ok(handle)
     }
 
     fn ra_over(handle: &crate::session::catalog::RelationHandle) -> StoredRA {
@@ -581,13 +582,16 @@ mod segment_gate_tests {
 
     /// Collect a `StoredRA`'s whole-relation scan under a given segment
     /// context — the same `iter_batched` door the compiled plan uses.
-    fn rows(ra: &StoredRA, tx: &impl ReadTx, segments: Segments<'_>) -> Vec<Vec<DataValue>> {
+    fn rows(ra: &StoredRA, tx: &impl ReadTx, segments: Segments<'_>) -> Result<Vec<Vec<DataValue>>> {
         let mut out = Vec::new();
-        for b in ra.iter_batched(tx, segments).unwrap() {
-            let b = b.unwrap();
-            out.extend((0..b.len()).map(|i| b.row(i).expect("i < batch.len()").to_vec()));
+        for b in ra
+            .iter_batched(tx, segments)
+            .map_err(|e| miette!("iter_batched: {e}"))?
+        {
+            let b = b.map_err(|e| miette!("batch: {e}"))?;
+            out.extend(b.iter_rows().map(|r| r.to_vec()));
         }
-        out
+        Ok(out)
     }
 
     fn put(
@@ -596,16 +600,17 @@ mod segment_gate_tests {
         engine: &SegmentEngine,
         k: i64,
         val: i64,
-    ) {
-        let mut wtx = db.write_tx().unwrap();
+    ) -> Result<()> {
+        let mut wtx = db.write_tx().map_err(|e| miette!("write_tx: {e}"))?;
         handle
             .put_fact(&mut wtx, &[v(k), v(val)], ValidityTs::from_raw(0), sp())
-            .unwrap();
+            .map_err(|e| miette!("put_fact: {e}"))?;
         // Writers bump BEFORE commit (`engines/segments.rs` module doc's
         // soundness pairing) — mirrors exactly what `runtime/db.rs`'s
         // mutate path does around the real storage commit.
         engine.bump_before_commit(handle.id);
-        wtx.commit().unwrap();
+        wtx.commit().map_err(|e| miette!("commit: {e}"))?;
+        Ok(())
     }
 
     /// (a)/(c) end to end: a caller whose every read is immediately
@@ -615,20 +620,20 @@ mod segment_gate_tests {
     /// cross the threshold — and every gated-out read must still answer
     /// correctly (never stale, never an error).
     #[test]
-    fn segment_gate_never_builds_under_write_interleaved_reads() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let handle = kv_relation(&db, "gate_rw");
+    fn segment_gate_never_builds_under_write_interleaved_reads() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let handle = kv_relation(&db, "gate_rw")?;
         let engine = SegmentEngine::new();
         let ra = ra_over(&handle);
 
         for i in 0..50i64 {
-            put(&db, &handle, &engine, 0, i);
+            put(&db, &handle, &engine, 0, i)?;
 
-            let rtx = db.read_tx().unwrap();
+            let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
             let live = engine.witness_after_snapshot(&rtx, handle.id);
             assert_eq!(
-                rows(&ra, &rtx, Segments(Some(&engine))),
+                rows(&ra, &rtx, Segments(Some(&engine)))?,
                 vec![vec![v(0), v(i)]],
                 "iteration {i}: a gated-out read must still answer correctly"
             );
@@ -644,6 +649,7 @@ mod segment_gate_tests {
                 "iteration {i}: a write-interleaved read must never have just built a segment"
             );
         }
+        Ok(())
     }
 
     /// (b) a read-only run's gate crosses threshold at exactly the
@@ -652,37 +658,38 @@ mod segment_gate_tests {
     /// read after that — including the one that triggered the build —
     /// answers correctly.
     #[test]
-    fn segment_gate_builds_after_stable_read_run_and_serves() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let handle = kv_relation(&db, "gate_stable");
+    fn segment_gate_builds_after_stable_read_run_and_serves() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let handle = kv_relation(&db, "gate_stable")?;
         let engine = SegmentEngine::new();
         for k in 0..5i64 {
-            put(&db, &handle, &engine, k, k * 10);
+            put(&db, &handle, &engine, k, k * 10)?;
         }
         let ra = ra_over(&handle);
         let expected: Vec<Vec<DataValue>> = (0..5i64).map(|k| vec![v(k), v(k * 10)]).collect();
 
-        let rtx = db.read_tx().unwrap();
+        let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
         let live = engine.witness_after_snapshot(&rtx, handle.id);
 
-        assert_eq!(rows(&ra, &rtx, Segments(Some(&engine))), expected);
+        assert_eq!(rows(&ra, &rtx, Segments(Some(&engine)))?, expected);
         assert!(
             matches!(engine.get(handle.id, live), Err(SegmentMiss::Absent)),
             "first miss must decline to build"
         );
 
-        assert_eq!(rows(&ra, &rtx, Segments(Some(&engine))), expected);
+        assert_eq!(rows(&ra, &rtx, Segments(Some(&engine)))?, expected);
         assert!(
             engine.get(handle.id, live).is_ok(),
             "second stable miss (no intervening write) must build and install"
         );
 
         assert_eq!(
-            rows(&ra, &rtx, Segments(Some(&engine))),
+            rows(&ra, &rtx, Segments(Some(&engine)))?,
             expected,
             "a served segment must answer identically to the scan it was built from"
         );
+        Ok(())
     }
 
     /// (c), isolated from (a): one miss, then a write, then the very next
@@ -690,35 +697,36 @@ mod segment_gate_tests {
     /// prior count — proven through `segment_at`'s production call site,
     /// not just the raw counter.
     #[test]
-    fn segment_gate_reset_by_intervening_write_end_to_end() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let handle = kv_relation(&db, "gate_reset");
+    fn segment_gate_reset_by_intervening_write_end_to_end() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let handle = kv_relation(&db, "gate_reset")?;
         let engine = SegmentEngine::new();
-        put(&db, &handle, &engine, 1, 10);
+        put(&db, &handle, &engine, 1, 10)?;
         let ra = ra_over(&handle);
 
-        let rtx1 = db.read_tx().unwrap();
+        let rtx1 = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
         assert_eq!(
-            rows(&ra, &rtx1, Segments(Some(&engine))),
+            rows(&ra, &rtx1, Segments(Some(&engine)))?,
             vec![vec![v(1), v(10)]]
         );
 
-        put(&db, &handle, &engine, 2, 20);
+        put(&db, &handle, &engine, 2, 20)?;
 
-        let rtx2 = db.read_tx().unwrap();
+        let rtx2 = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
         let live2 = engine.witness_after_snapshot(&rtx2, handle.id);
         let expected2 = vec![vec![v(1), v(10)], vec![v(2), v(20)]];
-        assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine))), expected2);
+        assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine)))?, expected2);
         assert!(
             matches!(engine.get(handle.id, live2), Err(SegmentMiss::Absent)),
             "the first miss at the post-write generation must decline, not inherit the pre-write count"
         );
-        assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine))), expected2);
+        assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine)))?, expected2);
         assert!(
             engine.get(handle.id, live2).is_ok(),
             "the second miss at the post-write generation builds normally"
         );
+        Ok(())
     }
 
     /// (d) the point of the gate: it may only ever decide WHEN to build,
@@ -730,10 +738,10 @@ mod segment_gate_tests {
     /// independently maintained model — never a run of the same machine
     /// checked against itself.
     #[test]
-    fn segment_served_and_gated_out_answers_match_across_seeded_mixed_workload() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let handle = kv_relation(&db, "gate_diff");
+    fn segment_served_and_gated_out_answers_match_across_seeded_mixed_workload() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
+        let db = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall: {e}"))?;
+        let handle = kv_relation(&db, "gate_diff")?;
         let engine = SegmentEngine::new();
         let ra = ra_over(&handle);
 
@@ -758,7 +766,7 @@ mod segment_gate_tests {
                 Ok(v) => v,
                 Err(_gt_i64) => 0,
             };
-            put(&db, &handle, &engine, key, val);
+            put(&db, &handle, &engine, key, val)?;
             model.insert(key, val);
 
             // 1..=4 reads this round: a lone read after the write always
@@ -766,11 +774,11 @@ mod segment_gate_tests {
             // partway through and serves from the segment for the rest.
             let n_reads = 1 + (next_u64() % 4);
             for read_i in 0..n_reads {
-                let rtx = db.read_tx().unwrap();
+                let rtx = db.read_tx().map_err(|e| miette!("read_tx: {e}"))?;
                 let expected: Vec<Vec<DataValue>> =
                     model.iter().map(|(&k, &val)| vec![v(k), v(val)]).collect();
-                let off = rows(&ra, &rtx, Segments::OFF);
-                let on = rows(&ra, &rtx, Segments(Some(&engine)));
+                let off = rows(&ra, &rtx, Segments::OFF)?;
+                let on = rows(&ra, &rtx, Segments(Some(&engine)))?;
                 assert_eq!(
                     off, expected,
                     "round {round} read {read_i}: segments-off diverged from the model"
@@ -781,5 +789,6 @@ mod segment_gate_tests {
                 );
             }
         }
+        Ok(())
     }
 }
