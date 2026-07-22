@@ -294,41 +294,43 @@ mod tests {
     use crate::exec::fold::aggr::{meet_op, normal_op};
     use crate::exec::fold::sketch::hll::HyperLogLog;
     use kyzo_model::program::aggregate::{Aggregation, parse_aggr};
+    use miette::{Result, miette};
 
     fn val(i: i64) -> DataValue {
         DataValue::from(i)
     }
 
-    fn aggr(name: &str) -> Aggregation {
+    fn aggr(name: &str) -> Result<Aggregation> {
         parse_aggr(name)
-            .expect("sketch name is lawful")
-            .expect("sketch name is known")
+            .map_err(|e| miette!("sketch name is lawful: {e}"))?
+            .ok_or_else(|| miette!("sketch name is known"))
     }
 
-    fn run_normal(mut op: NormalAggr, vals: &[DataValue]) -> DataValue {
+    fn run_normal(mut op: NormalAggr, vals: &[DataValue]) -> Result<DataValue> {
         for v in vals {
-            op.set(v).unwrap();
+            op.set(v)?;
         }
-        op.get().unwrap()
+        op.get()
     }
 
     /// `hll` end-to-end through the aggregation trait.
     #[test]
-    fn hll_aggregation_estimates_distinct() {
+    fn hll_aggregation_estimates_distinct() -> Result<()> {
         let mut stream = vec![];
         for i in 0..20_000i64 {
             stream.push(val(i % 5000));
         }
-        let out = run_normal(normal_op(&aggr("hll"), &[]).unwrap(), &stream);
-        let est = out.get_int().unwrap();
+        let out = run_normal(normal_op(&aggr("hll")?, &[])?, &stream)?;
+        let est = out.get_int().ok_or_else(|| miette!("int"))?;
         let rel = crate::exec::fold::sketch::u64_to_f64((est - 5000).unsigned_abs()) / 5000.0;
         assert!(rel < 0.05, "hll estimate {est} off by {rel}");
+        Ok(())
     }
 
     /// `hll_union` meet form obeys the semilattice laws over sketch-bytes.
     #[test]
-    fn hll_union_meet_obeys_semilattice_laws() {
-        let op = meet_op(&aggr("hll_union")).expect("hll_union is a meet");
+    fn hll_union_meet_obeys_semilattice_laws() -> Result<()> {
+        let op = meet_op(&aggr("hll_union")?).ok_or_else(|| miette!("hll_union is a meet"))?;
 
         let mk = |lo: i64, hi: i64| {
             let mut h = HyperLogLog::default_precision();
@@ -341,30 +343,35 @@ mod tests {
         let y = MeetAccum::Value(mk(1000, 5000));
         let z = MeetAccum::Value(mk(4000, 6000));
 
-        let meet = |a: &MeetAccum, b: &MeetAccum| {
+        let meet = |a: &MeetAccum, b: &MeetAccum| -> Result<MeetAccum> {
             let mut acc = a.clone();
-            op.update(&mut acc, b).unwrap();
-            acc
+            op.update(&mut acc, b)?;
+            Ok(acc)
         };
 
         let mut acc = x.clone();
         assert!(
-            !op.update(&mut acc, &x).unwrap(),
+            !op.update(&mut acc, &x)?,
             "meet(x,x) reported change"
         );
         assert_eq!(acc, x, "meet(x,x) altered x");
 
         let mut id = op.init_val();
-        op.update(&mut id, &x).unwrap();
+        op.update(&mut id, &x)?;
         assert_eq!(id, x, "meet(init,x) != x");
 
-        assert_eq!(meet(&meet(&x, &y), &z), meet(&x, &meet(&y, &z)), "assoc");
-        assert_eq!(meet(&x, &y), meet(&y, &x), "commutative");
+        assert_eq!(
+            meet(&meet(&x, &y)?, &z)?,
+            meet(&x, &meet(&y, &z)?)?,
+            "assoc"
+        );
+        assert_eq!(meet(&x, &y)?, meet(&y, &x)?, "commutative");
+        Ok(())
     }
 
     /// Meet form and normal form of `hll_union` agree.
     #[test]
-    fn hll_union_meet_and_normal_agree() {
+    fn hll_union_meet_and_normal_agree() -> Result<()> {
         let mk = |lo: i64, hi: i64| {
             let mut h = HyperLogLog::default_precision();
             for i in lo..hi {
@@ -374,47 +381,50 @@ mod tests {
         };
         let sketches = [mk(0, 2000), mk(1500, 4000), mk(3000, 5000)];
 
-        let meet = meet_op(&aggr("hll_union")).unwrap();
+        let meet = meet_op(&aggr("hll_union")?).ok_or_else(|| miette!("hll_union meet"))?;
         let mut acc = meet.init_val();
         for s in &sketches {
-            meet.update(&mut acc, &MeetAccum::Value(s.clone())).unwrap();
+            meet.update(&mut acc, &MeetAccum::Value(s.clone()))?;
         }
 
-        let normal_out = run_normal(normal_op(&aggr("hll_union"), &[]).unwrap(), &sketches);
+        let normal_out = run_normal(normal_op(&aggr("hll_union")?, &[])?, &sketches)?;
         assert_eq!(acc.to_value(), normal_out, "meet and normal folds disagree");
+        Ok(())
     }
 
     /// Only `hll_union` is a meet among the sketch family.
     #[test]
-    fn only_hll_union_is_meet() {
-        assert!(aggr("hll_union").is_meet());
-        assert!(!aggr("hll").is_meet());
-        assert!(!aggr("count_min").is_meet());
-        assert!(!aggr("tdigest").is_meet());
-        assert!(!aggr("quantile").is_meet());
-        assert!(meet_op(&aggr("count_min")).is_none());
+    fn only_hll_union_is_meet() -> Result<()> {
+        assert!(aggr("hll_union")?.is_meet());
+        assert!(!aggr("hll")?.is_meet());
+        assert!(!aggr("count_min")?.is_meet());
+        assert!(!aggr("tdigest")?.is_meet());
+        assert!(!aggr("quantile")?.is_meet());
+        assert!(meet_op(&aggr("count_min")?).is_none());
+        Ok(())
     }
 
     /// `count_min` builds a queryable frequency table through the trait.
     #[test]
-    fn count_min_aggregation_builds_table() {
+    fn count_min_aggregation_builds_table() -> Result<()> {
         let mut stream = vec![];
         for i in 0..1000i64 {
             for _ in 0..(i % 7 + 1) {
                 stream.push(val(i));
             }
         }
-        let out = run_normal(normal_op(&aggr("count_min"), &[]).unwrap(), &stream);
+        let out = run_normal(normal_op(&aggr("count_min")?, &[])?, &stream)?;
         let DataValue::Bytes(bytes) = out else {
-            panic!("count_min should return bytes")
+            return Err(miette!("count_min should return bytes"));
         };
-        let cms = CountMinSketch::from_bytes(&bytes).unwrap();
+        let cms = CountMinSketch::from_bytes(&bytes)?;
         assert!(cms.estimate(&val(6)) >= 7);
+        Ok(())
     }
 
     /// `quantile(x, q)` returns the estimated value at q, order-independently.
     #[test]
-    fn quantile_aggregation_is_order_independent() {
+    fn quantile_aggregation_is_order_independent() -> Result<()> {
         let asc: Vec<DataValue> = (0..10_000)
             .map(|i| DataValue::from(crate::exec::fold::sketch::usize_to_f64(i)))
             .collect();
@@ -423,12 +433,13 @@ mod tests {
             .map(|i| DataValue::from(crate::exec::fold::sketch::usize_to_f64(i)))
             .collect();
 
-        let q_asc = run_normal(quantile_factory(&[DataValue::from(0.9f64)]).unwrap(), &asc);
-        let q_desc = run_normal(quantile_factory(&[DataValue::from(0.9f64)]).unwrap(), &desc);
+        let q_asc = run_normal(quantile_factory(&[DataValue::from(0.9f64)])?, &asc)?;
+        let q_desc = run_normal(quantile_factory(&[DataValue::from(0.9f64)])?, &desc)?;
         assert_eq!(q_asc, q_desc, "quantile depended on input order");
 
-        let est = q_asc.get_float().unwrap();
+        let est = q_asc.get_float().ok_or_else(|| miette!("float"))?;
         assert!((est - 9000.0).abs() < 200.0, "p90 estimate {est} off");
+        Ok(())
     }
 
     /// `quantile` rejects an out-of-range level at construction.
@@ -440,7 +451,7 @@ mod tests {
 
     /// Model [`parse_aggr`] admits exactly the sketch names.
     #[test]
-    fn model_admits_sketch_names() {
+    fn model_admits_sketch_names() -> Result<()> {
         for name in [
             "hll",
             "hll_sketch",
@@ -449,8 +460,9 @@ mod tests {
             "tdigest",
             "quantile",
         ] {
-            assert_eq!(aggr(name).name, name);
+            assert_eq!(aggr(name)?.name, name);
         }
-        assert!(parse_aggr("not_a_sketch").unwrap().is_none());
+        assert!(parse_aggr("not_a_sketch")?.is_none());
+        Ok(())
     }
 }
