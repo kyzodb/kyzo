@@ -30,8 +30,8 @@ citation = "laws.rs::materialize (the oracle's own row-reassembly from a MeetSta
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@207",
-  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@265",
+  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@206",
+  "crates/kyzo-core/src/exec/op/neg.rs::iter_batched::closure@264",
 ]
 citation = "Self-documented at the source: the doc comment immediately above the `NegRight::StoredWithValidity` arm (closure@259) states it is 'identical in shape to `NegRight::Stored` just above' (closure@201) 'reading through the SAME as-of skip-scan primitives ... so the -- never skips a tuple whose absence it is asserting -- proof this operator owes is inherited, not reargued'. Deliberate structural mirroring by design, not accidental duplication."
 
@@ -146,8 +146,8 @@ citation = "Expr walkers: collect_bindings vs do_binding_indices — one collect
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@449",
-  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@453",
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@448",
+  "crates/kyzo-core/src/exec/plan/compile.rs::stratified_magic_compile::closure@452",
 ]
 citation = "stratified_magic_compile: nested map closures over strata then (symbol, body) — Rules vs Fixed arms of MagicRulesOrFixed. Line-adjacent closures of one compile pass, not two compilers. Detector pairs the map layers; independence is the Rules/Fixed dispatch inside."
 
