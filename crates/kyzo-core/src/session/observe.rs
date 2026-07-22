@@ -90,6 +90,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use kyzo_model::value::{DataValue, Tuple};
 use smartstring::{LazyCompact, SmartString};
@@ -99,7 +100,9 @@ use crate::session::db::Engine;
 use crate::session::generation::IndexStatus;
 use crate::session::jobs::OperatorEphemeralRelations;
 use crate::store::Storage;
-use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange, StorageStatsSnapshot};
+use crate::store::failure::{
+    DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange, StorageStatsSnapshot,
+};
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
 
 /// One authoritative metric counter. Private field — constructed only by
@@ -415,10 +418,10 @@ impl DeepVerifyLastResult {
         Self {
             clean: report.is_clean(),
             indices_checked: report.indices_checked,
-            mismatch_count: match u64::try_from(report.index_mismatches.len()) {
-                Ok(n) => n,
-                Err(_) => u64::MAX,
-            },
+            // INVARIANT(deep_verify_mismatch_count): Vec::len fits u64 on all supported targets.
+            mismatch_count: u64::try_from(report.index_mismatches.len()).expect(
+                "INVARIANT(deep_verify_mismatch_count): Vec::len fits u64",
+            ),
             digest: report.digest(),
             schedule_ordinal,
         }
@@ -670,6 +673,23 @@ impl EventCallbackRegistry {
     }
 }
 
+
+impl<S: Storage> Engine<S> {
+    /// Fail-closed observe-registry read — mutex poison is not a silent continue.
+    fn event_callbacks_read(&self) -> RwLockReadGuard<'_, EventCallbackRegistry> {
+        self.event_callbacks
+            .read()
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
+    }
+
+    /// Fail-closed observe-registry write — mutex poison is not a silent continue.
+    fn event_callbacks_write(&self) -> RwLockWriteGuard<'_, EventCallbackRegistry> {
+        self.event_callbacks
+            .write()
+            .expect("event-callbacks mutex poisoned — refuse silent continue")
+    }
+}
+
 impl<S: Storage> Engine<S> {
     /// Register a callback channel to receive changes when the requested
     /// relation is successfully committed. The returned id unregisters it.
@@ -682,10 +702,7 @@ impl<S: Storage> Engine<S> {
             dependent: SmartString::from(relation),
             sender,
         };
-        let mut registry = self
-            .event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue");
+        let mut registry = self.event_callbacks_write();
         let new_id = CallbackId::of_u32(self.next_callback_id());
         registry.register(new_id, decl);
         (new_id, receiver)
@@ -693,9 +710,7 @@ impl<S: Storage> Engine<S> {
 
     /// Unregister a callback; true if it existed.
     pub fn unregister_callback(&self, id: CallbackId) -> bool {
-        self.event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_write()
             .unregister(id)
     }
 
@@ -703,9 +718,7 @@ impl<S: Storage> Engine<S> {
     /// old/new rows only for these (snapshotted once per transaction, so a
     /// registration racing a commit either sees all of it or none of it).
     pub(crate) fn current_callback_targets(&self) -> BTreeSet<SmartString<LazyCompact>> {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .by_relation
             .keys()
             .cloned()
@@ -719,7 +732,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn send_callbacks(&self, collector: CallbackCollector) {
         let mut to_remove = vec![];
         {
-            let registry = self.event_callbacks.read().expect("event-callbacks mutex poisoned — refuse silent continue");
+            let registry = self.event_callbacks_read();
             for (relation, events) in collector {
                 let Some(ids) = registry.by_relation.get(&relation) else {
                     continue;
@@ -744,10 +757,7 @@ impl<S: Storage> Engine<S> {
             }
         }
         if !to_remove.is_empty() {
-            let mut registry = self
-                .event_callbacks
-                .write()
-                .expect("event-callbacks mutex poisoned — refuse silent continue");
+            let mut registry = self.event_callbacks_write();
             for id in to_remove {
                 registry.unregister(id);
             }
@@ -757,9 +767,7 @@ impl<S: Storage> Engine<S> {
     /// Arm an operator-scheduled deep-verify (§51). Does not run it —
     /// [`Self::run_scheduled_deep_verify`] does. Returns the schedule ordinal.
     pub fn schedule_deep_verify(&self) -> ScheduleOrdinal {
-        self.event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_write()
             .deep_verify
             .schedule()
     }
@@ -769,10 +777,7 @@ impl<S: Storage> Engine<S> {
     /// nothing is pending.
     pub fn run_scheduled_deep_verify(&self) -> miette::Result<Option<DeepVerifyLastResult>> {
         let ordinal = {
-            let mut registry = self
-                .event_callbacks
-                .write()
-                .expect("event-callbacks mutex poisoned — refuse silent continue");
+            let mut registry = self.event_callbacks_write();
             match registry.deep_verify.take_pending() {
                 Some(ord) => ord,
                 None => return Ok(None),
@@ -781,10 +786,7 @@ impl<S: Storage> Engine<S> {
         let report = deep_verify_storage(&self.store)?;
         let result = DeepVerifyLastResult::from_report(&report, ordinal);
         {
-            let mut registry = self
-                .event_callbacks
-                .write()
-                .expect("event-callbacks mutex poisoned — refuse silent continue");
+            let mut registry = self.event_callbacks_write();
             registry.health_tiers.integrity = if result.clean {
                 Integrity::passing()
             } else {
@@ -802,18 +804,14 @@ impl<S: Storage> Engine<S> {
 
     /// Query the persisted deep-verify last-result, if any run has completed.
     pub fn deep_verify_last_result(&self) -> Option<DeepVerifyLastResult> {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .deep_verify
             .last_result()
     }
 
     /// Query deep-verify staleness relative to the operator schedule.
     pub fn deep_verify_staleness(&self) -> DeepVerifyStaleness {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .deep_verify
             .staleness()
     }
@@ -824,7 +822,7 @@ impl<S: Storage> Engine<S> {
     /// and index-status are **not** mirrored into ephemeral — relation doors
     /// render [`DebtLedger`] / [`IndexStatus`] directly.
     pub fn operator_health_surface(&self) -> OperatorHealthSurface {
-        let registry = self.event_callbacks.read().expect("event-callbacks mutex poisoned — refuse silent continue");
+        let registry = self.event_callbacks_read();
         let mut surface = registry.operator_health.clone();
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         surface
@@ -835,28 +833,20 @@ impl<S: Storage> Engine<S> {
     /// Re-syncs ephemeral in-flight from the live registry so a stale
     /// ephemeral cannot disagree with the registry counter.
     pub fn set_operator_health_surface(&self, mut surface: OperatorHealthSurface) {
-        let mut registry = self
-            .event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue");
+        let mut registry = self.event_callbacks_write();
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         registry.operator_health = surface;
     }
 
     /// Set the index-status authority (§20).
     pub(crate) fn set_index_status(&self, status: IndexStatus) {
-        let mut registry = self
-            .event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue");
+        let mut registry = self.event_callbacks_write();
         registry.index_status = status;
     }
 
     /// Query the index-status authority (Catalog generation / staleness).
     pub(crate) fn index_status(&self) -> IndexStatus {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .index_status
     }
 
@@ -877,9 +867,7 @@ impl<S: Storage> Engine<S> {
     /// tenant door). Cap-absent asks still cannot select it — see
     /// [`OperatorHealthSurface::quarantine_ranges`].
     pub fn operator_record_quarantine(&self, range: QuarantineRange) {
-        self.event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_write()
             .operator_health
             .record_quarantine(range);
     }
@@ -907,9 +895,7 @@ impl<S: Storage> Engine<S> {
 
     /// Live in-flight-tx registry count — THE `::running` authority.
     pub fn in_flight_tx_count(&self) -> u64 {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .in_flight_tx
     }
 
@@ -918,10 +904,7 @@ impl<S: Storage> Engine<S> {
     /// SessionTx open/close in `session/db.rs` should call these; until that
     /// wire lands, tests and Cap doors call them explicitly.
     pub fn in_flight_tx_begin(&self) {
-        let mut registry = self
-            .event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue");
+        let mut registry = self.event_callbacks_write();
         let in_flight = match registry.in_flight_tx.checked_add(1) {
             Some(n) => n,
             None => u64::MAX,
@@ -932,10 +915,7 @@ impl<S: Storage> Engine<S> {
 
     /// Unregister a closed transaction from the live in-flight registry.
     pub fn in_flight_tx_end(&self) {
-        let mut registry = self
-            .event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue");
+        let mut registry = self.event_callbacks_write();
         let in_flight = match registry.in_flight_tx.checked_sub(1) {
             Some(n) => n,
             None => 0,
@@ -951,18 +931,14 @@ impl<S: Storage> Engine<S> {
 
     /// Query the liveness tier — independently of readiness and integrity.
     pub fn liveness(&self) -> Liveness {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .health_tiers
             .liveness
     }
 
     /// Query the readiness tier — independently of liveness and integrity.
     pub fn readiness(&self) -> Readiness {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .health_tiers
             .readiness
     }
@@ -973,16 +949,14 @@ impl<S: Storage> Engine<S> {
     /// last_verify field when a deep-verify has completed; otherwise the
     /// digest column is absent (never zero-filled).
     pub fn integrity(&self) -> Integrity {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .health_tiers
             .integrity
     }
 
     /// Operator integrity relation with rendered last-verify digest.
     pub fn integrity_relation(&self) -> NamedRows {
-        let registry = self.event_callbacks.read().expect("event-callbacks mutex poisoned — refuse silent continue");
+        let registry = self.event_callbacks_read();
         registry
             .health_tiers
             .integrity
@@ -991,44 +965,34 @@ impl<S: Storage> Engine<S> {
 
     /// Operator wiring: set the liveness tier without touching readiness/integrity.
     pub fn set_liveness(&self, tier: Liveness) {
-        self.event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_write()
             .health_tiers
             .liveness = tier;
     }
 
     /// Operator wiring: set the readiness tier without touching liveness/integrity.
     pub fn set_readiness(&self, tier: Readiness) {
-        self.event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_write()
             .health_tiers
             .readiness = tier;
     }
 
     /// Operator wiring: set the integrity tier without touching liveness/readiness.
     pub fn set_integrity(&self, tier: Integrity) {
-        self.event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_write()
             .health_tiers
             .integrity = tier;
     }
 
     /// Current tracing verbosity (diagnostics only).
     pub fn tracing_verbosity(&self) -> TracingVerbosity {
-        self.event_callbacks
-            .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_read()
             .tracing_verbosity
     }
 
     /// Set tracing verbosity — must not change query result rows or budget.
     pub fn set_tracing_verbosity(&self, verbosity: TracingVerbosity) {
-        self.event_callbacks
-            .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+        self.event_callbacks_write()
             .tracing_verbosity = verbosity;
     }
 
@@ -1065,7 +1029,7 @@ mod exactly_once_battery {
         BTreeMap::new()
     }
 
-    fn open_engine<S: crate::store::Storage>(store: S) -> Result<Engine<S>>  {
+    fn open_engine<S: crate::store::Storage>(store: S) -> Result<Engine<S>> {
         Ok(Engine::compose(store, Catalog::new())?)
     }
 
@@ -1074,7 +1038,7 @@ mod exactly_once_battery {
     /// increment — the new values are exactly {1..=N}, no duplicates from
     /// conflicted-and-retried attempts, none missing.
     #[test]
-    fn rs3_callbacks_exactly_once_under_contention() -> Result<()>  {
+    fn rs3_callbacks_exactly_once_under_contention() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = open_engine(new_fjall_storage(dir.path())?)?;
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
@@ -1087,18 +1051,19 @@ mod exactly_once_battery {
         std::thread::scope(|scope| {
             for _ in 0..THREADS {
                 let db = db.clone();
-                scope.spawn(move || -> Result<()> {
-                    for _ in 0..PER_THREAD {
-                        db.run_script(
-                            "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
-                            no_params(),
-                        )
-                        .map_err(|e| miette!("increment: {e}"))?;
-                    }
-                    Ok(())
-                })
-                .join()
-                .map_err(|_| miette!("thread join"))??;
+                scope
+                    .spawn(move || -> Result<()> {
+                        for _ in 0..PER_THREAD {
+                            db.run_script(
+                                "?[k, v] := *ctr[k, old], v = old + 1 :put ctr {k, v}",
+                                no_params(),
+                            )
+                            .map_err(|e| miette!("increment: {e}"))?;
+                        }
+                        Ok(())
+                    })
+                    .join()
+                    .map_err(|_| miette!("thread join"))??;
             }
         });
 
@@ -1124,7 +1089,7 @@ mod exactly_once_battery {
     /// not rebuilt per attempt (or delivered pre-commit) duplicates events; the
     /// callback stream must be exactly one Put event per committed increment.
     #[test]
-    fn rs3_callbacks_exactly_once_under_seeded_spurious_conflicts() -> Result<()>  {
+    fn rs3_callbacks_exactly_once_under_seeded_spurious_conflicts() -> Result<()> {
         let faults = FaultConfig {
             spurious_conflict_ppm: 400_000, // ~40% of commits conflict spuriously
             ..Default::default()
@@ -1177,7 +1142,7 @@ mod deep_verify_schedule {
     }
 
     #[test]
-    fn scheduled_deep_verify_persists_queryable_last_result_and_staleness() -> Result<()>  {
+    fn scheduled_deep_verify_persists_queryable_last_result_and_staleness() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
             .map_err(|e| miette!("compose: {e}"))?;
@@ -1205,7 +1170,9 @@ mod deep_verify_schedule {
         assert!(result.indices_checked >= 1);
         assert_eq!(result.schedule_ordinal, ord);
 
-        let persisted = db.deep_verify_last_result().map_err(|e| miette!("last_result queryable: {e}"))?;
+        let persisted = db
+            .deep_verify_last_result()
+            .map_err(|e| miette!("last_result queryable: {e}"))?;
         assert_eq!(persisted, result);
         assert!(matches!(
             db.deep_verify_staleness(),
@@ -1258,7 +1225,7 @@ mod tenant_blind_operator_surface {
 
     /// Adversarial: quarantine unreachable without Cap — not "pass Tenant → refuse".
     #[test]
-    fn quarantine_unreachable_without_operator_cap() -> Result<()>  {
+    fn quarantine_unreachable_without_operator_cap() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
             .map_err(|e| miette!("compose: {e}"))?;
@@ -1275,8 +1242,8 @@ mod tenant_blind_operator_surface {
         assert!(!tenant.has_operator_cap());
         assert_eq!(
             tenant.in_flight_tx_relation()?.rows()[0][0]
-                .get_int().ok_or_else(|| miette!("get_int"))?
-                ,
+                .get_int()
+                .ok_or_else(|| miette!("get_int"))?,
             0
         );
         assert!(matches!(
@@ -1310,21 +1277,23 @@ mod one_counter_per_metric {
     //! Adversarial: one authoritative counter per metric; exporters render,
     //! never recompute a divergent value (§20 / §42 / §44).
 
-    use miette::{Result, miette};
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
     use crate::session::generation::{
         CatalogGeneration, IndexGeneration, IndexStaleness, IndexStatus, RelationGeneration,
     };
     use crate::session::observe::{MetricExporter, compaction_debt_counter, index_status_counter};
-    use crate::store::failure::{DebtLedger, OperatorCap, OperatorHealthSurface, StorageStatsSnapshot};
+    use crate::store::failure::{
+        DebtLedger, OperatorCap, OperatorHealthSurface, StorageStatsSnapshot,
+    };
     use crate::store::fjall::new_fjall_storage;
+    use miette::{Result, miette};
 
     /// Prove: DebtLedger is THE compaction-debt counter; Catalog IndexStatus
     /// is THE index-status counter; MetricExporter can only render those —
     /// a forged recompute disagrees and is not on the export path.
     #[test]
-    fn exporters_render_one_counter_never_recompute_divergent() -> Result<()>  {
+    fn exporters_render_one_counter_never_recompute_divergent() -> Result<()> {
         let mut ledger = DebtLedger::with_ceiling(100);
         ledger.admit(17).map_err(|e| miette!("admit debt: {e}"))?;
 
@@ -1374,7 +1343,7 @@ mod one_counter_per_metric {
     /// relation rows agree with exporters; a mismatched ephemeral seed is
     /// overwritten by authority on seal (no second counter survives).
     #[test]
-    fn engine_projects_authorities_so_ephemeral_cannot_diverge() -> Result<()>  {
+    fn engine_projects_authorities_so_ephemeral_cannot_diverge() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
             .map_err(|e| miette!("compose: {e}"))?;
@@ -1385,7 +1354,9 @@ mod one_counter_per_metric {
         let cap = OperatorCap::mint();
         surface.set_debt(&cap, debt);
         // Hostile seed: ephemeral in-flight only (debt/index no longer live here).
-        surface.ephemeral_mut().replace(0, StorageStatsSnapshot::empty());
+        surface
+            .ephemeral_mut()
+            .replace(0, StorageStatsSnapshot::empty());
         db.set_operator_health_surface(surface);
 
         // After seal, debt relation must equal DebtLedger.
@@ -1393,8 +1364,8 @@ mod one_counter_per_metric {
         let rels = db.operator_ephemeral_relations();
         assert_eq!(
             rels.compaction_debt_relation()?.rows()[0][0]
-                .get_int().ok_or_else(|| miette!("get_int"))?
-                ,
+                .get_int()
+                .ok_or_else(|| miette!("get_int"))?,
             11,
             "relation must render DebtLedger, not a forged ephemeral seed"
         );
@@ -1411,8 +1382,8 @@ mod one_counter_per_metric {
             db.operator_ephemeral_relations()
                 .index_status_relation()?
                 .rows()[0][0]
-                .get_int().ok_or_else(|| miette!("get_int"))?
-                ,
+                .get_int()
+                .ok_or_else(|| miette!("get_int"))?,
             7
         );
         // Exporter and relation are the same counter — not two sources.
@@ -1422,7 +1393,8 @@ mod one_counter_per_metric {
             .rows()[0][0]
             .get_int()
             .ok_or_else(|| miette!("get_int"))?;
-        let status_u = u64::try_from(status_i).map_err(|_| miette!("index status does not fit u64"))?;
+        let status_u =
+            u64::try_from(status_i).map_err(|_| miette!("index status does not fit u64"))?;
         assert_eq!(db.index_status_exporter().value(), status_u);
         Ok(())
     }
@@ -1433,7 +1405,6 @@ mod health_tiers_and_tracing {
     //! Adversarial: three independently-queryable health tiers (not one bool
     //! with three faces); tracing verbosity never changes result rows or budget.
 
-    use miette::{Result, miette};
     use crate::data::json::NamedRows;
     use crate::session::catalog::Catalog;
     use crate::session::db::Engine;
@@ -1442,6 +1413,7 @@ mod health_tiers_and_tracing {
     };
     use crate::store::fjall::new_fjall_storage;
     use kyzo_model::value::{DataValue, Tuple};
+    use miette::{Result, miette};
 
     fn probe_rows() -> NamedRows {
         NamedRows::try_new(
@@ -1457,7 +1429,7 @@ mod health_tiers_and_tracing {
     /// Prove: liveness / readiness / integrity are three distinct doors that
     /// can disagree — flipping one never mutates the other two.
     #[test]
-    fn three_tiers_independently_queryable_not_one_bool() -> Result<()>  {
+    fn three_tiers_independently_queryable_not_one_bool() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
             .map_err(|e| miette!("compose: {e}"))?;
@@ -1522,7 +1494,7 @@ mod health_tiers_and_tracing {
     /// Prove: turning tracing verbosity up/down changes neither result rows
     /// nor budget spend — only diagnostic emission may differ.
     #[test]
-    fn tracing_verbosity_behavior_invariant_rows_and_budget() -> Result<()>  {
+    fn tracing_verbosity_behavior_invariant_rows_and_budget() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
             .map_err(|e| miette!("compose: {e}"))?;

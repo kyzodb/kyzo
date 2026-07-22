@@ -267,3 +267,22 @@ file = "crates/kyzo-lsp/src/translate.rs"
 line = 89
 pattern = "expect"
 why_not_sabotage = "KEEP: LspUtf16Width — char::len_utf16 is 1 or 2; fits u32. TryFrom.expect is the typed door for the width add."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/observe.rs"
+line = 422
+pattern = "expect"
+why_not_sabotage = "KEEP: INVARIANT(deep_verify_mismatch_count) — Vec::len fits u64 on all supported targets. TryFrom.expect is the typed door; u64::MAX would invent a mismatch count."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/observe.rs"
+line = 682
+pattern = "expect"
+why_not_sabotage = "KEEP: EventCallbackRegistry RwLock poison is fail-closed — refuse silent continue. Helper is the sole observe-registry lock door; into_inner would hide poison."
+
+[[bs_detector]]
+file = "crates/kyzo-core/src/session/observe.rs"
+line = 689
+pattern = "expect"
+why_not_sabotage = "KEEP: EventCallbackRegistry RwLock poison is fail-closed — refuse silent continue. Helper is the sole observe-registry lock door; into_inner would hide poison."
+
