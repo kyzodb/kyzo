@@ -803,6 +803,7 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::{MAX_VALIDITY_TS, ValidityTs};
+    use miette::{Result, miette};
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)
@@ -829,7 +830,7 @@ mod tests {
         db: &crate::store::fjall::FjallStorage,
         name: &str,
         key_arity: usize,
-    ) -> RelationHandle {
+    ) -> Result<RelationHandle> {
         let keys: Vec<ColumnDef> = (0..key_arity).map(|i| col(&format!("k{i}"))).collect();
         let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
         let input = kyzo_model::program::query::InputRelationHandle {
@@ -842,10 +843,11 @@ mod tests {
             dep_bindings: vec![sym("val")],
             span: sp(),
         };
-        let mut tx = db.write_tx().expect("write tx");
-        let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
-        tx.commit().expect("commit");
-        handle
+        let mut tx = db.write_tx().map_err(|e| miette!("write tx: {e}"))?;
+        let handle = create_relation(&mut tx, input, KeyspaceKind::Facts)
+            .map_err(|e| miette!("create relation: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        Ok(handle)
     }
 
     /// Assert `key ++ [val]` at `valid`, its own transaction (so it gets a
@@ -857,12 +859,13 @@ mod tests {
         key: i64,
         valid: i64,
         val: i64,
-    ) {
-        let mut tx = db.write_tx().expect("write tx");
+    ) -> Result<()> {
+        let mut tx = db.write_tx().map_err(|e| miette!("write tx: {e}"))?;
         handle
             .put_fact(&mut tx, &[v(key), v(val)], vts(valid), sp())
-            .expect("put fact");
-        tx.commit().expect("commit");
+            .map_err(|e| miette!("put fact: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        Ok(())
     }
 
     fn retract_at(
@@ -870,12 +873,13 @@ mod tests {
         handle: &RelationHandle,
         key: i64,
         valid: i64,
-    ) {
-        let mut tx = db.write_tx().expect("write tx");
+    ) -> Result<()> {
+        let mut tx = db.write_tx().map_err(|e| miette!("write tx: {e}"))?;
         handle
             .retract_fact(&mut tx, &[v(key)], vts(valid), sp())
-            .expect("retract fact");
-        tx.commit().expect("commit");
+            .map_err(|e| miette!("retract fact: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        Ok(())
     }
 
     /// Write a raw ERASE row directly (no production write-path exposes
@@ -887,17 +891,19 @@ mod tests {
         handle: &RelationHandle,
         key: i64,
         valid: i64,
-    ) {
-        let mut tx = db.write_tx().expect("write tx");
+    ) -> Result<()> {
+        let mut tx = db.write_tx().map_err(|e| miette!("write tx: {e}"))?;
         let sys = tx.system_stamp();
         let encoded_key = handle
             .encode_bitemporal_key_for_store(&[v(key)], vts(valid), sys, sp())
-            .expect("encode key");
+            .map_err(|e| miette!("encode key: {e}"))?;
         let val = handle
             .encode_bitemporal_val_for_store(&[v(key)], ClaimPolarity::Erase, sp())
-            .expect("encode erase value");
-        tx.put(encoded_key.as_bytes(), &val).expect("put erase row");
-        tx.commit().expect("commit");
+            .map_err(|e| miette!("encode erase value: {e}"))?;
+        tx.put(encoded_key.as_bytes(), &val)
+            .map_err(|e| miette!("put erase row: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        Ok(())
     }
 
     /// Rows as `(k, val, start, end)` where `end` is `None` for a
@@ -908,32 +914,32 @@ mod tests {
         db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
         sys: ValidityTs,
-    ) -> Result<Vec<(i64, i64, i64, Option<i64>)>, &'static str> {
+    ) -> Result<Vec<(i64, i64, i64, Option<i64>)>> {
         let ra = SpansRA {
             bindings: vec![sym("k"), sym("val"), sym("iv")],
             storage: handle.clone(),
             sys,
             span: sp(),
         };
-        let rtx = db.read_tx().map_err(|_| "read tx")?;
+        let rtx = db.read_tx().map_err(|e| miette!("read tx: {e}"))?;
         let mut out = vec![];
-        for batch in ra.iter_batched(&rtx).map_err(|_| "iter")? {
-            for row in batch.map_err(|_| "batch")?.into_rows() {
+        for batch in ra.iter_batched(&rtx).map_err(|e| miette!("iter: {e}"))? {
+            for row in batch.map_err(|e| miette!("batch: {e}"))?.into_rows() {
                 let DataValue::Num(ref n_k) = row[0] else {
-                    return Err("key not an int");
+                    return Err(miette!("key not an int"));
                 };
-                let k = n_k.as_int().ok_or("key not an int")?;
+                let k = n_k.as_int().ok_or_else(|| miette!("key not an int"))?;
                 let DataValue::Num(ref n_val) = row[1] else {
-                    return Err("val not an int");
+                    return Err(miette!("val not an int"));
                 };
-                let val = n_val.as_int().ok_or("val not an int")?;
+                let val = n_val.as_int().ok_or_else(|| miette!("val not an int"))?;
                 let DataValue::Interval(iv) = &row[2] else {
-                    return Err("third column not an interval");
+                    return Err(miette!("third column not an interval"));
                 };
                 out.push((
                     k,
                     val,
-                    iv.start().ok_or("@spans runs always have a finite start")?,
+                    iv.start().ok_or_else(|| miette!("@spans runs always have a finite start"))?,
                     iv.end(), // None iff the run is genuinely open (PosUnbounded)
                 ));
             }
@@ -943,10 +949,10 @@ mod tests {
     }
 
     #[test]
-    fn single_assert_is_one_open_interval() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_single", 1);
-        assert_at(&db, &h, 1, 10, 100);
+    fn single_assert_is_one_open_interval() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_single", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     
@@ -954,11 +960,11 @@ mod tests {
     }
 
     #[test]
-    fn retract_clips_the_interval_exclusive() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_retract", 1);
-        assert_at(&db, &h, 1, 10, 100);
-        retract_at(&db, &h, 1, 20);
+    fn retract_clips_the_interval_exclusive() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_retract", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
+        retract_at(&db, &h, 1, 20)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
     
@@ -966,11 +972,11 @@ mod tests {
     }
 
     #[test]
-    fn payload_change_splits_into_two_intervals() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_split", 1);
-        assert_at(&db, &h, 1, 10, 100);
-        assert_at(&db, &h, 1, 20, 200);
+    fn payload_change_splits_into_two_intervals() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_split", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
+        assert_at(&db, &h, 1, 20, 200)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
     
@@ -978,11 +984,11 @@ mod tests {
     }
 
     #[test]
-    fn double_assert_same_payload_is_idempotent_one_interval() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_idempotent", 1);
-        assert_at(&db, &h, 1, 10, 100);
-        assert_at(&db, &h, 1, 20, 100);
+    fn double_assert_same_payload_is_idempotent_one_interval() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_idempotent", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
+        assert_at(&db, &h, 1, 20, 100)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     
@@ -990,12 +996,12 @@ mod tests {
     }
 
     #[test]
-    fn assert_after_retract_opens_a_new_interval() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_reopen", 1);
-        assert_at(&db, &h, 1, 10, 100);
-        retract_at(&db, &h, 1, 20);
-        assert_at(&db, &h, 1, 30, 100);
+    fn assert_after_retract_opens_a_new_interval() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_reopen", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
+        retract_at(&db, &h, 1, 20)?;
+        assert_at(&db, &h, 1, 30, 100)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 100, 30, None)]);
     
@@ -1003,10 +1009,10 @@ mod tests {
     }
 
     #[test]
-    fn dangling_retract_holds_nowhere() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_dangling_retract", 1);
-        retract_at(&db, &h, 1, 10);
+    fn dangling_retract_holds_nowhere() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_dangling_retract", 1)?;
+        retract_at(&db, &h, 1, 10)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert!(rows.is_empty());
     
@@ -1016,12 +1022,12 @@ mod tests {
     /// Erase transparency: a system-time correction that un-records the
     /// instant-10 assertion falls through to the older instant-0 one.
     #[test]
-    fn erase_is_transparent_falls_through_to_older_instant() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_erase", 1);
-        assert_at(&db, &h, 1, 0, 100);
-        assert_at(&db, &h, 1, 10, 200);
-        erase_at(&db, &h, 1, 10);
+    fn erase_is_transparent_falls_through_to_older_instant() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_erase", 1)?;
+        assert_at(&db, &h, 1, 0, 100)?;
+        assert_at(&db, &h, 1, 10, 200)?;
+        erase_at(&db, &h, 1, 10)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         // Instant 10 is erased, so the payload is 100 throughout (the
         // instant-0 assert governs everywhere it would have fallen
@@ -1032,11 +1038,11 @@ mod tests {
     }
 
     #[test]
-    fn no_zero_width_intervals_at_any_fixed_sys() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_no_zero_width", 1);
-        assert_at(&db, &h, 1, 10, 100);
-        assert_at(&db, &h, 1, 10, 200); // same instant, later sys: corrects it
+    fn no_zero_width_intervals_at_any_fixed_sys() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_no_zero_width", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
+        assert_at(&db, &h, 1, 10, 200)?; // same instant, later sys: corrects it
         for (start, end, _, _) in spans_rows(&db, &h, MAX_VALIDITY_TS)?
             .into_iter()
             .map(|(k, val, s, e)| (s, e, k, val))
@@ -1050,9 +1056,9 @@ mod tests {
         }
         // At the OLDER system snapshot the first (pre-correction) write
         // governs — still no zero-width run.
-        let db2 = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h2 = make_relation(&db2, "spans_no_zero_width2", 1);
-        assert_at(&db2, &h2, 1, 10, 100);
+        let db2 = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h2 = make_relation(&db2, "spans_no_zero_width2", 1)?;
+        assert_at(&db2, &h2, 1, 10, 100)?;
         let rows = spans_rows(&db2, &h2, MAX_VALIDITY_TS)?;
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     
@@ -1060,12 +1066,12 @@ mod tests {
     }
 
     #[test]
-    fn multiple_facts_derive_independently() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "spans_multi", 1);
-        assert_at(&db, &h, 1, 10, 100);
-        assert_at(&db, &h, 2, 5, 900);
-        retract_at(&db, &h, 2, 15);
+    fn multiple_facts_derive_independently() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "spans_multi", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
+        assert_at(&db, &h, 2, 5, 900)?;
+        retract_at(&db, &h, 2, 15)?;
         let rows = spans_rows(&db, &h, MAX_VALIDITY_TS)?;
         assert_eq!(
             rows.into_iter().sorted().collect_vec(),
@@ -1080,7 +1086,7 @@ mod tests {
         handle: &RelationHandle,
         from: AsOf,
         to: AsOf,
-    ) -> Result<Vec<(i64, i64, i64)>, &'static str> {
+    ) -> Result<Vec<(i64, i64, i64)>> {
         delta_rows_with_posting(db, handle, from, to, DeltaScan::Naive)
     }
 
@@ -1090,7 +1096,7 @@ mod tests {
         from: AsOf,
         to: AsOf,
         scan: DeltaScan,
-    ) -> Result<Vec<(i64, i64, i64)>, &'static str> {
+    ) -> Result<Vec<(i64, i64, i64)>> {
         let ra = DeltaRA {
             bindings: vec![sym("k"), sym("val"), sym("sgn")],
             storage: handle.clone(),
@@ -1099,22 +1105,22 @@ mod tests {
             span: sp(),
             scan,
         };
-        let rtx = db.read_tx().map_err(|_| "read tx")?;
+        let rtx = db.read_tx().map_err(|e| miette!("read tx: {e}"))?;
         let mut out = vec![];
-        for batch in ra.iter_batched(&rtx).map_err(|_| "iter")? {
-            for row in batch.map_err(|_| "batch")?.into_rows() {
+        for batch in ra.iter_batched(&rtx).map_err(|e| miette!("iter: {e}"))? {
+            for row in batch.map_err(|e| miette!("batch: {e}"))?.into_rows() {
                 let DataValue::Num(ref n_k) = row[0] else {
-                    return Err("key not an int");
+                    return Err(miette!("key not an int"));
                 };
-                let k = n_k.as_int().ok_or("key not an int")?;
+                let k = n_k.as_int().ok_or_else(|| miette!("key not an int"))?;
                 let DataValue::Num(ref n_val) = row[1] else {
-                    return Err("val not an int");
+                    return Err(miette!("val not an int"));
                 };
-                let val = n_val.as_int().ok_or("val not an int")?;
+                let val = n_val.as_int().ok_or_else(|| miette!("val not an int"))?;
                 let DataValue::Num(ref n_sgn) = row[2] else {
-                    return Err("sign not an int");
+                    return Err(miette!("sign not an int"));
                 };
-                let sgn = n_sgn.as_int().ok_or("sign not an int")?;
+                let sgn = n_sgn.as_int().ok_or_else(|| miette!("sign not an int"))?;
                 out.push((k, val, sgn));
             }
         }
@@ -1122,10 +1128,10 @@ mod tests {
     }
 
     #[test]
-    fn diff_valid_axis_sees_a_new_assertion_as_plus() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "delta_new", 1);
-        assert_at(&db, &h, 1, 10, 100);
+    fn diff_valid_axis_sees_a_new_assertion_as_plus() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "delta_new", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
         let rows = delta_rows(&db, &h, AsOf::current(vts(5)), AsOf::current(vts(20)))?;
         assert_eq!(rows, vec![(1, 100, SIGN_PLUS)]);
     
@@ -1133,11 +1139,11 @@ mod tests {
     }
 
     #[test]
-    fn diff_payload_change_is_a_minus_plus_pair_never_modified() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "delta_change", 1);
-        assert_at(&db, &h, 1, 10, 100);
-        assert_at(&db, &h, 1, 20, 200);
+    fn diff_payload_change_is_a_minus_plus_pair_never_modified() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "delta_change", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
+        assert_at(&db, &h, 1, 20, 200)?;
         let rows = delta_rows(&db, &h, AsOf::current(vts(15)), AsOf::current(vts(25)))?;
         assert_eq!(rows.len(), 2);
         assert!(rows.contains(&(1, 100, SIGN_MINUS)));
@@ -1147,10 +1153,10 @@ mod tests {
     }
 
     #[test]
-    fn diff_identical_snapshots_is_empty() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "delta_empty", 1);
-        assert_at(&db, &h, 1, 10, 100);
+    fn diff_identical_snapshots_is_empty() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "delta_empty", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?;
         let rows = delta_rows(&db, &h, AsOf::current(vts(20)), AsOf::current(vts(20)))?;
         assert!(rows.is_empty());
     
@@ -1158,11 +1164,11 @@ mod tests {
     }
 
     #[test]
-    fn diff_sys_axis_sees_a_correction() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let h = make_relation(&db, "delta_sys", 1);
-        assert_at(&db, &h, 1, 10, 100); // sys stamp 1 (first commit)
-        assert_at(&db, &h, 1, 10, 200); // sys stamp 2 (correction, same instant)
+    fn diff_sys_axis_sees_a_correction() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let h = make_relation(&db, "delta_sys", 1)?;
+        assert_at(&db, &h, 1, 10, 100)?; // sys stamp 1 (first commit)
+        assert_at(&db, &h, 1, 10, 200)?; // sys stamp 2 (correction, same instant)
         // Fixed valid = MAX (current belief about "now"); sys axis varies.
         let before = AsOf::at(vts(0), MAX_VALIDITY_TS);
         let after = AsOf::current(MAX_VALIDITY_TS);
@@ -1172,17 +1178,18 @@ mod tests {
         Ok(())
     }
 
-    fn tempfile_dir() -> std::path::PathBuf {
+    fn tempfile_dir() -> Result<std::path::PathBuf> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| miette!("clock: {e}"))?
+            .as_nanos();
         let dir = std::env::temp_dir().join(format!(
             "kyzo-temporal-ra-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            nanos
         ));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
+        std::fs::create_dir_all(&dir).map_err(|e| miette!("mkdir: {e}"))?;
+        Ok(dir)
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -1209,9 +1216,11 @@ mod tests {
     fn make_indexed_relation(
         db: &crate::store::fjall::FjallStorage,
         name: &str,
-    ) -> (RelationHandle, RelationHandle) {
-        let mut stx =
-            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::new());
+    ) -> Result<(RelationHandle, RelationHandle)> {
+        let mut stx = SessionTx::new_write(
+            db.write_tx().map_err(|e| miette!("write tx: {e}"))?,
+            ScriptOptions::new(),
+        );
         let input = kyzo_model::program::query::InputRelationHandle {
             name: sym(name),
             metadata: StoredRelationMetadata {
@@ -1223,14 +1232,17 @@ mod tests {
             span: sp(),
         };
         stx.create_relation(input, KeyspaceKind::Facts)
-            .expect("create base relation");
+            .map_err(|e| miette!("create base relation: {e}"))?;
         stx.create_temporal_index(name, "t")
-            .expect("create temporal index");
-        stx.store.commit().expect("commit setup");
-        let rtx = db.read_tx().expect("read tx");
-        let base = get_relation(&rtx, name).expect("base handle");
-        let idx = get_relation(&rtx, &format!("{name}:t")).expect("index handle");
-        (base, idx)
+            .map_err(|e| miette!("create temporal index: {e}"))?;
+        stx.store
+            .commit()
+            .map_err(|e| miette!("commit setup: {e}"))?;
+        let rtx = db.read_tx().map_err(|e| miette!("read tx: {e}"))?;
+        let base = get_relation(&rtx, name).map_err(|e| miette!("base handle: {e}"))?;
+        let idx = get_relation(&rtx, &format!("{name}:t"))
+            .map_err(|e| miette!("index handle: {e}"))?;
+        Ok((base, idx))
     }
 
     /// One event, its own fresh write session (so it mints its own
@@ -1244,9 +1256,11 @@ mod tests {
         key: i64,
         valid: i64,
         val: Option<i64>,
-    ) {
-        let mut stx =
-            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::new());
+    ) -> Result<()> {
+        let mut stx = SessionTx::new_write(
+            db.write_tx().map_err(|e| miette!("write tx: {e}"))?,
+            ScriptOptions::new(),
+        );
         let sys = stx.store.system_stamp();
         let key_cols = vec![v(key)];
         match val {
@@ -1254,29 +1268,32 @@ mod tests {
                 let full = vec![v(key), v(payload)];
                 let enc_key = base
                     .encode_bitemporal_key_for_store(&key_cols, vts(valid), sys, sp())
-                    .expect("encode key");
+                    .map_err(|e| miette!("encode key: {e}"))?;
                 let enc_val = base
                     .encode_bitemporal_val_for_store(&full, ClaimPolarity::Assert, sp())
-                    .expect("encode assert value");
+                    .map_err(|e| miette!("encode assert value: {e}"))?;
                 stx.put_routed(base.residency(), enc_key.as_bytes(), &enc_val)
-                    .expect("put base row");
+                    .map_err(|e| miette!("put base row: {e}"))?;
                 stx.update_indices(base, Some(&full), None, vts(valid), sys)
-                    .expect("maintain indices");
+                    .map_err(|e| miette!("maintain indices: {e}"))?;
             }
             None => {
                 let enc_key = base
                     .encode_bitemporal_key_for_store(&key_cols, vts(valid), sys, sp())
-                    .expect("encode key");
+                    .map_err(|e| miette!("encode key: {e}"))?;
                 let enc_val = base
                     .encode_bitemporal_val_for_store(&key_cols, ClaimPolarity::Retract, sp())
-                    .expect("encode retract value");
+                    .map_err(|e| miette!("encode retract value: {e}"))?;
                 stx.put_routed(base.residency(), enc_key.as_bytes(), &enc_val)
-                    .expect("put base row");
+                    .map_err(|e| miette!("put base row: {e}"))?;
                 stx.update_indices(base, None, Some(&key_cols), vts(valid), sys)
-                    .expect("maintain indices");
+                    .map_err(|e| miette!("maintain indices: {e}"))?;
             }
         }
-        stx.store.commit().expect("commit event");
+        stx.store
+            .commit()
+            .map_err(|e| miette!("commit event: {e}"))?;
+        Ok(())
     }
 
     /// Both paths on the SAME two coordinates: the naive full-snapshot
@@ -1290,7 +1307,7 @@ mod tests {
         idx: &RelationHandle,
         from: AsOf,
         to: AsOf,
-    ) -> Result<(), &'static str> {
+    ) -> Result<()> {
         let naive = delta_rows(db, base, from, to)?;
         let fast = delta_rows_with_posting(
             db,
@@ -1309,10 +1326,10 @@ mod tests {
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_new_assertion() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let (base, idx) = make_indexed_relation(&db, "posting_new");
-        write_indexed_event(&db, &base, 1, 10, Some(100));
+    fn posting_fast_path_matches_naive_on_a_new_assertion() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let (base, idx) = make_indexed_relation(&db, "posting_new")?;
+        write_indexed_event(&db, &base, 1, 10, Some(100))?;
         assert_paths_agree(
             &db,
             &base,
@@ -1325,11 +1342,11 @@ mod tests {
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_payload_change() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let (base, idx) = make_indexed_relation(&db, "posting_change");
-        write_indexed_event(&db, &base, 1, 10, Some(100));
-        write_indexed_event(&db, &base, 1, 20, Some(200));
+    fn posting_fast_path_matches_naive_on_a_payload_change() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let (base, idx) = make_indexed_relation(&db, "posting_change")?;
+        write_indexed_event(&db, &base, 1, 10, Some(100))?;
+        write_indexed_event(&db, &base, 1, 20, Some(200))?;
         assert_paths_agree(
             &db,
             &base,
@@ -1342,10 +1359,10 @@ mod tests {
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_identical_snapshots() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let (base, idx) = make_indexed_relation(&db, "posting_identical");
-        write_indexed_event(&db, &base, 1, 10, Some(100));
+    fn posting_fast_path_matches_naive_on_identical_snapshots() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let (base, idx) = make_indexed_relation(&db, "posting_identical")?;
+        write_indexed_event(&db, &base, 1, 10, Some(100))?;
         assert_paths_agree(
             &db,
             &base,
@@ -1358,11 +1375,11 @@ mod tests {
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_retraction() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let (base, idx) = make_indexed_relation(&db, "posting_retract");
-        write_indexed_event(&db, &base, 1, 10, Some(100));
-        write_indexed_event(&db, &base, 1, 20, None);
+    fn posting_fast_path_matches_naive_on_a_retraction() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let (base, idx) = make_indexed_relation(&db, "posting_retract")?;
+        write_indexed_event(&db, &base, 1, 10, Some(100))?;
+        write_indexed_event(&db, &base, 1, 20, None)?;
         assert_paths_agree(
             &db,
             &base,
@@ -1383,13 +1400,13 @@ mod tests {
     }
 
     #[test]
-    fn posting_fast_path_matches_naive_on_a_backward_diff() -> Result<(), &'static str> {
+    fn posting_fast_path_matches_naive_on_a_backward_diff() -> Result<()> {
         // `to` earlier than `from`: `lo`/`hi` still resolve correctly
         // since the fast path takes them by numeric min/max, not by
         // positional role.
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let (base, idx) = make_indexed_relation(&db, "posting_backward");
-        write_indexed_event(&db, &base, 1, 10, Some(100));
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let (base, idx) = make_indexed_relation(&db, "posting_backward")?;
+        write_indexed_event(&db, &base, 1, 10, Some(100))?;
         assert_paths_agree(
             &db,
             &base,
@@ -1407,9 +1424,9 @@ mod tests {
     /// assert/retract events, many random coordinate pairs — the two
     /// production paths must agree on every one.
     #[test]
-    fn posting_fast_path_matches_naive_generatively() -> Result<(), &'static str> {
-        let db = new_fjall_storage(tempfile_dir()).expect("storage");
-        let (base, idx) = make_indexed_relation(&db, "posting_generative");
+    fn posting_fast_path_matches_naive_generatively() -> Result<()> {
+        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+        let (base, idx) = make_indexed_relation(&db, "posting_generative")?;
 
         let mut state: u64 = 0x2545_F491_4F6C_DD1D;
         let mut next_u64 = move || {
@@ -1439,10 +1456,10 @@ mod tests {
             let key = to_i64(next_range(n_keys_u));
             let valid = to_i64(next_range(max_valid_u));
             if next_range(4) == 0 {
-                write_indexed_event(&db, &base, key, valid, None);
+                write_indexed_event(&db, &base, key, valid, None)?;
             } else {
                 let payload = to_i64(next_range(1000));
-                write_indexed_event(&db, &base, key, valid, Some(payload));
+                write_indexed_event(&db, &base, key, valid, Some(payload))?;
             }
         }
 
