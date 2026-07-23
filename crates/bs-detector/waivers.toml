@@ -904,3 +904,87 @@ line = 1920
 construct = "unchecked_arith"
 why_not_sabotage = "KEEP: LCG/seed mix — wrapping_mul/add is Knuth LCG64 / golden-ratio seed diffusion defined mod 2^64, not silent overflow loss. One hit per line (dual-hit lines are unwaivable)."
 
+
+[[waiver]]
+check = "err_costume"
+file = "crates/bs-detector/src/engines/graph.rs"
+line = 349
+construct = "err_to_zero_costume"
+why_not_sabotage = "None => 0 is the documented 'declared but not textually locatable' line sentinel for agreements.toml entries; the declaration itself is still reported, never dropped — no error is swallowed, a display coordinate is floored."
+
+[[waiver]]
+check = "err_costume"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 135
+construct = "err_to_literal_costume"
+why_not_sabotage = "Err(_) => false in attrs_are_cfg_test is the FAIL-CLOSED arm: an unparseable cfg counts as NOT test scope, keeping the site scanned by every ProductionOnly law. The literal false widens detection; the swallow direction would be true."
+
+[[waiver]]
+check = "err_costume"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 766
+construct = "err_to_literal_costume"
+why_not_sabotage = "None => true in line_starts_scan means 'no extra needle required' — Option-as-configuration dispatch on the scanner's own parameter; there is no error object on this path to launder, both arms are total configuration handling."
+
+[[waiver]]
+check = "err_costume"
+file = "crates/bs-detector/src/run.rs"
+line = 57
+construct = "err_to_literal_costume"
+why_not_sabotage = "None => true in in_scope reads 'no scope_waiver exists' as FULL boundary — the strictest possible scope. Option-as-presence of a narrowing, not an error; true is the maximally-wide direction the law demands."
+
+[[waiver]]
+check = "err_costume"
+file = "crates/bs-detector/src/run.rs"
+line = 130
+construct = "err_to_literal_costume"
+why_not_sabotage = "None => true in the waiver filter means 'no unconsumed matching waiver, hit stays UNCONFESSED' — the red direction. Option-as-lookup-result; laundering would be the false arm."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/bs-detector/src/engines/graph.rs"
+line = 313
+construct = "unchecked_arith"
+why_not_sabotage = "FNV-1a's published mixing contract multiplies modulo 2^64 by definition; a checked multiply would refuse on exactly the wraps the hash function requires. The digest feeds shingle identity only, never stored bytes."
+
+[[waiver]]
+check = "unchecked_arith"
+file = "crates/bs-detector/src/engines/graph.rs"
+line = 317
+construct = "unchecked_arith"
+why_not_sabotage = "Word-boundary fold of the same FNV-1a mix: identical published wrap-by-definition contract as the byte loop above; shingle identity only, never stored bytes."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 111
+construct = "nondeterminism"
+why_not_sabotage = "The flagged ident is syn::Local — the let-statement AST node in test_scope_lines's visitor signature — not chrono::Local. No clock, no randomness; the wide ident net pays this cost so chrono::Local can never hide."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 355
+construct = "nondeterminism"
+why_not_sabotage = "syn::Local in m_let_underscore's visitor signature — the let-statement AST node, not chrono::Local. No nondeterministic input exists at this site."
+
+[[waiver]]
+check = "nondeterminism"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 691
+construct = "nondeterminism"
+why_not_sabotage = "syn::Local in m_test_err_early_return's let-else visitor signature — the let-statement AST node, not chrono::Local. No nondeterministic input exists at this site."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 411
+construct = "crates/bs-detector/src/engines/shape.rs::m_as_cast ~ crates/bs-detector/src/engines/shape.rs::m_default_impl"
+why_not_sabotage = "Two single-node-kind walkers (ExprCast vs ItemImpl) whose bodies are the irreducible visitor shell syn's typed Visit trait forces; predicates differ entirely and both push through the one shared push(). Adjacent in one file, one authority per node kind, no drift surface."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/bs-detector/src/engines/shape.rs"
+line = 411
+construct = "crates/bs-detector/src/engines/shape.rs::m_as_cast ~ crates/bs-detector/src/engines/shape.rs::m_unsafe_token"
+why_not_sabotage = "Same irreducible visitor-shell shape: m_as_cast walks ExprCast, m_unsafe_token walks unsafe tokens across four node kinds; predicates unrelated, one shared push(), adjacent in one file. Node-kind dispatch mandated by syn, not a second authority."
