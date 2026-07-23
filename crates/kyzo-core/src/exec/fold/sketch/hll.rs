@@ -149,33 +149,28 @@ impl HyperLogLog<DEFAULT_M> {
 impl<const M: usize> HyperLogLog<M> {
     /// Precision `p` such that `M = 2^p`. Const-evaluated; `M` must be a
     /// power of two in `2^4..=2^18`.
-    pub(crate) const PRECISION: u8 = {
-        assert!(
-            M.is_power_of_two(),
-            "HyperLogLog register count M must be a power of two"
-        );
-        let p = M.trailing_zeros();
-        assert!(p >= 4 && p <= 18, "HyperLogLog precision must be in 4..=18");
-        // Const `TryFrom` is not yet stable; exhaust the asserted range.
-        match p {
-            4 => 4,
-            5 => 5,
-            6 => 6,
-            7 => 7,
-            8 => 8,
-            9 => 9,
-            10 => 10,
-            11 => 11,
-            12 => 12,
-            13 => 13,
-            14 => 14,
-            15 => 15,
-            16 => 16,
-            17 => 17,
-            18 => 18,
-            // Asserted `p ∈ 4..=18` above; name the uninhabited complement.
-            0..=3 | 19..=u32::MAX => 0,
-        }
+    /// Precision `p` for lawful `M ∈ {2^4, …, 2^18}`. Illegal `M` has no
+    /// arm — monomorphization fails at the `_` placeholder via a length
+    /// mismatch that is only evaluated for that arm.
+    pub(crate) const PRECISION: u8 = match M {
+        16 => 4,
+        32 => 5,
+        64 => 6,
+        128 => 7,
+        256 => 8,
+        512 => 9,
+        1024 => 10,
+        2048 => 11,
+        4096 => 12,
+        8192 => 13,
+        16384 => 14,
+        32768 => 15,
+        65536 => 16,
+        131072 => 17,
+        262144 => 18,
+        // Illegal M: index by M so the panic isn't unconditional; const-eval
+        // fails when this arm is selected (M ≥ 1 outside the lawful set).
+        _ => [0u8; 1][M],
     };
 
     /// An empty sketch — the identity element of [`Self::merge`].

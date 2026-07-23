@@ -255,7 +255,10 @@ fn edb_relations(program: &IncrementalProgram, patched: &BTreeSet<Symbol>) -> BT
 /// have no dependencies, since nothing in the rule set reads them) —
 /// sound only because [`incremental_eval`] has already refused any
 /// program with a cycle at all (see [`has_any_cycle`]).
-fn topological_order(program: &IncrementalProgram, patched: &BTreeSet<Symbol>) -> Vec<Symbol> {
+fn topological_order(
+    program: &IncrementalProgram,
+    patched: &BTreeSet<Symbol>,
+) -> Result<Vec<Symbol>, Error> {
     let mut all_rels: BTreeSet<Symbol> = edb_relations(program, patched);
     for rule in &program.rules {
         all_rels.insert(rule.head_rel.clone());
@@ -289,12 +292,13 @@ fn topological_order(program: &IncrementalProgram, patched: &BTreeSet<Symbol>) -
                 progressed = true;
             }
         }
-        assert!(
-            progressed,
-            "topological_order called on a cyclic program: incremental_eval must refuse first"
-        );
+        if !progressed {
+            // Caller (`incremental_eval`) refuses cycles first; this is the
+            // total-refusal backstop if that door is ever bypassed.
+            return Err(Error::from(IncrementalRejection::Recursive));
+        }
     }
-    order
+    Ok(order)
 }
 
 /// Does `program`'s dependency graph contain a cycle at all? Recursion is
@@ -873,7 +877,7 @@ pub fn incremental_eval(
     }
 
     let patched: BTreeSet<Symbol> = edb_patch.keys().cloned().collect();
-    let order = topological_order(program, &patched);
+    let order = topological_order(program, &patched)?;
     let edb = edb_relations(program, &patched);
     let mut rel_deltas: BTreeMap<Symbol, BTreeSet<SignedFact>> = BTreeMap::new();
     let mut new_state: MaintainedState = BTreeMap::new();
