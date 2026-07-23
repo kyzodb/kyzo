@@ -981,7 +981,7 @@ mod crypto_shred_deep_reachability {
         GENESIS_PRIOR_SEAL,
     };
     use crate::store::sweep::CommitOrdinal;
-    use crate::store::transcript::{
+    use crate::store::transcript::{Digest32, 
         encode_all_normative_production_transcripts, encode_normative_production_transcript,
         refuse_residual_secret_bytes, refuse_residual_secrets_in_all_sealed_kinds,
         CanonicalTranscriptBuilder, FieldId, TranscriptRefuse, SEALED_ARTIFACT_KINDS,
@@ -1165,7 +1165,7 @@ mod crypto_shred_deep_reachability {
             "kind",
         );
         admit(
-            dirty_builder.append_digest32(FieldId::PRIMARY_DIGEST, &salt_bytes),
+            dirty_builder.append_digest32(FieldId::PRIMARY_DIGEST, &Digest32::admit(salt_bytes)),
             "plant salt as digest",
         );
         let dirty_transcript = dirty_builder.seal();

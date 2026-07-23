@@ -8,7 +8,7 @@ scope_waiver = []
 [[waiver]]
 check = "as_cast"
 file = "crates/kyzo-core/src/store/replica.rs"
-line = 1140
+line = 1203
 construct = "as_cast"
 why_not_sabotage = "SEAT-59: CrossingKind is #[repr(u8)]; `self as u8` extracts the sealed discriminant \u2014 the sole wire mint. Not a truncating numeric cast of a value width."
 
@@ -283,56 +283,56 @@ why_not_sabotage = "NameSites is THE one name-scan walker; syn's typed Visit tra
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit.rs"
-line = 337
+line = 340
 construct = "hand_layout"
 why_not_sabotage = "KEEP: genesis RootChain content tip — H(kyzo.admission.seats.genesis_root.v1 ‖ store ‖ authorizing_key). Internal identity digest binding seats at open; not a sealed-artifact layout. No encode_* owns this domain; routing through CanonicalTranscript would rewrite every genesis tip."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit.rs"
-line = 546
+line = 549
 construct = "hand_layout"
 why_not_sabotage = "KEEP: ScopeManifestDigest mint — H(kyzo.scope.manifest.v1 ‖ store ‖ key_id ‖ verifying). Session-local identity digest for genesis scope bind; not a SealedArtifactKind. No transcript encode door; changing layout would orphan verified scope table entries."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit.rs"
-line = 621
+line = 630
 construct = "hand_layout"
 why_not_sabotage = "KEEP: schema_cut_from_catalog — H(kyzo.catalog.generation.schema_cut.v1 ‖ generation). Maps CatalogGeneration to the certificate schema_cut digest field; identity bind only. AdmissionCertificate encode_* consumes the digest bytes, does not mint them."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit.rs"
-line = 991
+line = 1000
 construct = "hand_layout"
 why_not_sabotage = "KEEP: digest_sugar_row — H(kyzo.sugar.row.v1 ‖ relation ‖ encoded cols). Content-address for sugar→admit_record; domain separates row digests from correction/deletion digests. Not a sealed artifact serializer; no encode_* door."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit_lowering.rs"
-line = 255
+line = 258
 construct = "hand_layout"
 why_not_sabotage = "KEEP: OriginSealedLowering::replay_digest — H(kyzo.origin_sealed_lowering.v1 ‖ cut ‖ kind ‖ custody ‖ rows). Meter/replay identity over already-lowered custody; not wire mint of a sealed artifact. No CanonicalTranscript encode owns this domain."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit_lowering.rs"
-line = 299
+line = 302
 construct = "hand_layout"
 why_not_sabotage = "KEEP: promotion_valid_time_digest — H(kyzo.promotion.valid_time.v1 ‖ encoded interval). PromotionMeaning seat bind; internal identity digest. Not a second sealed-artifact layout; encode_* for certificates does not mint this field."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit_lowering.rs"
-line = 307
+line = 310
 construct = "hand_layout"
 why_not_sabotage = "KEEP: promotion_provenance_digest domain tag — H(kyzo.promotion.provenance.v1 ‖ source). Domain-separated identity for PromotionMeaning provenance seat; sworn KDF-style digest, not sealed-artifact construction."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/admit_lowering.rs"
-line = 309
+line = 312
 construct = "hand_layout"
 why_not_sabotage = "KEEP: StatementSource::Unbound discriminant byte tag inside promotion_provenance_digest — encodes the unbound pole of the provenance sum into the identity digest. Not a sealed-artifact domain label; collapsing it would collide unbound with artifact digests."
 
@@ -353,28 +353,28 @@ why_not_sabotage = "KEEP: digest_semantic_deletion — H(kyzo.semantic.deletion.
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/composition.rs"
-line = 43
+line = 44
 construct = "hand_layout"
 why_not_sabotage = "KEEP: CompositionId::derive — H(kyzo.composition_id.v1 ‖ principal ‖ client_op ‖ composition_digest). Client-rooted identity law (§38); Engine must re-derive the same bytes. Not a sealed artifact; CanonicalTranscript rewrite would break cross-process CompositionId stability."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/composition.rs"
-line = 63
+line = 69
 construct = "hand_layout"
 why_not_sabotage = "KEEP: canonical_composition_digest — H(kyzo.composition_digest.v1 ‖ shape ‖ steps…). Identity digest of composition shape before CompositionId derivation. No encode_* sealed door; changing layout would mint divergent CompositionIds for the same client intent."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/session/composition.rs"
-line = 70
+line = 76
 construct = "hand_layout"
 why_not_sabotage = "KEEP: compensation step separator inside canonical_composition_digest — distinguishes compensation tuples from forward steps in the same hash transcript. Field-separator tag for identity digest construction, not a sealed-artifact domain serializer."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/store/authority.rs"
-line = 390
+line = 395
 construct = "hand_layout"
 why_not_sabotage = "KEEP: fence_key — H(kyzo.address_fence.v1 ‖ store ‖ write_token). Map key for held AddressFence table; internal identity digest so fences cannot collide across stores/tokens. Not a sealed-artifact layout; no encode_* owns this domain."
 
@@ -395,21 +395,21 @@ why_not_sabotage = "KEEP: derive_dek — DEK = H(kyzo.dek.derive.v1 ‖ KEK ‖ 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/store/idempotency.rs"
-line = 43
+line = 44
 construct = "hand_layout"
 why_not_sabotage = "KEEP: OperationKey::derive — H(kyzo.operation_key.v1 ‖ domain ‖ CompositionId ‖ StoreId ‖ StepId). The one idempotency organ identity (§38/§39). Not a sealed artifact; transcript re-encode would break safe-retry memo equality across processes."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/store/idempotency.rs"
-line = 59
+line = 60
 construct = "hand_layout"
 why_not_sabotage = "KEEP: OperationKey::single_store degenerate CompositionId — H(kyzo.composition_id.degenerate.v1 ‖ client_op). Single-store safe-retry feeds the same OperationKey::derive organ; domain separates degenerate ids from real CompositionIds. Identity digest, not sealed-artifact mint."
 
 [[waiver]]
 check = "hand_layout"
 file = "crates/kyzo-core/src/store/idempotency.rs"
-line = 157
+line = 153
 construct = "hand_layout"
 why_not_sabotage = "KEEP: IdempotencyMemo::digest_request — H(kyzo.request_digest.v1 ‖ envelope). Digests caller-already-sealed envelope bytes for memo consult; domain separates request digests from OperationKeys. Identity digest over opaque bytes, not a second sealed-artifact constructor."
 

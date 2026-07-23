@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 
 use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
+use crate::store::transcript::Digest32;
 
 /// Client-rooted composition identity (§38).
 ///
@@ -37,19 +38,24 @@ impl CompositionId {
     pub fn derive(
         principal: &[u8],
         client_operation_id: &[u8],
-        canonical_composition_digest: &[u8; 32],
+        canonical_composition_digest: Digest32,
     ) -> Self {
         let mut h = Sha256::new();
         h.update(b"kyzo.composition_id.v1");
         h.update(principal);
         h.update(client_operation_id);
-        h.update(canonical_composition_digest);
+        h.update(canonical_composition_digest.as_bytes());
         Self(h.finalize().into())
     }
 
     /// Borrow the identity digest (Store idempotency organ consumes these bytes).
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// Sealed digest carrier for the store idempotency organ (one-way layering).
+    pub fn digest32(self) -> Digest32 {
+        Digest32::admit(self.0)
     }
 }
 
@@ -58,7 +64,7 @@ pub fn canonical_composition_digest(
     shape_tag: u8,
     steps: &[(StoreId, &[u8])],
     compensations: &[(StoreId, &[u8])],
-) -> [u8; 32] {
+) -> Digest32 {
     let mut h = Sha256::new();
     h.update(b"kyzo.composition_digest.v1");
     h.update([shape_tag]);
@@ -71,7 +77,7 @@ pub fn canonical_composition_digest(
         h.update(store.as_bytes());
         h.update(comp);
     }
-    h.finalize().into()
+    Digest32::admit(h.finalize().into())
 }
 
 /// Closed composition sum (§38) — no TryAtomic / global snapshot arm.

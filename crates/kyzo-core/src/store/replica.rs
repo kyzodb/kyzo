@@ -45,9 +45,12 @@ use std::fmt;
 use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest as ShaDigest, Sha256};
 
+use crate::data::digest::{ProvenanceDigest, RecordContentDigest, ValidTimeDigest};
+
 use super::contract::FormatVersion;
 use super::crypto::{Digest, Signature};
 use super::epoch::FenceEpoch;
+use super::idempotency::OperationKey;
 use super::merkle::{
     ConsistencyProof, GossipConsistency, MerkleChainRefuse, StateRootHead, check_sth_gossip,
 };
@@ -144,6 +147,44 @@ impl PostStateRoot {
 
 impl AsRef<[u8]> for PostStateRoot {
     fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Catalog / certificate schema-cut digest — origin meaning forever as-of this cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SchemaCutDigest([u8; 32]);
+
+impl SchemaCutDigest {
+    /// Wrap an already-proven schema-cut digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes at transcript / hash edges only.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for SchemaCutDigest {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Local admitted-record id bytes (session [`crate::session::record_id::RecordId`] view).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LocalRecordId([u8; 32]);
+
+impl LocalRecordId {
+    /// Wrap already-proven local record id bytes.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the id bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -408,13 +449,13 @@ pub struct AdmissionCertificate {
     origin_store: StoreId,
     origin_epoch: FenceEpoch,
     origin_commit: CommitOrdinal,
-    record_digest: [u8; 32],
-    operation_key: Option<[u8; 32]>,
+    record_digest: RecordContentDigest,
+    operation_key: Option<OperationKey>,
     authorizing_key_id: AuthorizingKeyId,
     scope_manifest_digest: ScopeManifestDigest,
     signature: Signature,
     protocol_version: [u8; 8],
-    schema_cut: [u8; 32],
+    schema_cut: SchemaCutDigest,
     predecessor_history_digest: [u8; 32],
     post_state_root: PostStateRoot,
 }
@@ -441,13 +482,13 @@ impl AdmissionCertificate {
     }
 
     /// Record digest bound by the certificate.
-    pub fn record_digest(&self) -> &[u8; 32] {
-        &self.record_digest
+    pub fn record_digest(&self) -> RecordContentDigest {
+        self.record_digest
     }
 
     /// Optional OperationKey when the admission was composed (§38).
-    pub fn operation_key(&self) -> Option<&[u8; 32]> {
-        self.operation_key.as_ref()
+    pub fn operation_key(&self) -> Option<OperationKey> {
+        self.operation_key
     }
 
     /// Authorizing key id sealed into the certificate.
@@ -475,8 +516,8 @@ impl AdmissionCertificate {
     /// Crossing receivers interpret as-of this cut forever. A local Catalog
     /// cut never rewrites this field in place — only [`LocalProjection`] or a
     /// newly admitted derived Record may carry a different reading.
-    pub fn schema_cut(&self) -> &[u8; 32] {
-        &self.schema_cut
+    pub fn schema_cut(&self) -> SchemaCutDigest {
+        self.schema_cut
     }
 
     /// Sealed signature bytes.
@@ -491,13 +532,13 @@ impl AdmissionCertificate {
             origin_store: self.origin_store,
             origin_epoch: self.origin_epoch,
             origin_commit: self.origin_commit,
-            schema_cut: &self.schema_cut,
-            record_digest: &self.record_digest,
+            schema_cut: self.schema_cut.as_bytes(),
+            record_digest: self.record_digest.as_bytes(),
             predecessor_history_digest: &self.predecessor_history_digest,
             post_state_root: self.post_state_root.as_bytes(),
             authorizing_key_id: &self.authorizing_key_id,
             scope_manifest_digest: &self.scope_manifest_digest,
-            operation_key: self.operation_key.as_ref(),
+            operation_key: self.operation_key.as_ref().map(|k| k.as_bytes()),
         })
     }
 }
@@ -516,14 +557,14 @@ impl ReplicaKey {
         origin_store: StoreId,
         origin_epoch: FenceEpoch,
         origin_commit: CommitOrdinal,
-        record_digest: &[u8; 32],
+        record_digest: RecordContentDigest,
     ) -> Self {
         let mut h = Sha256::new();
         h.update(b"kyzo.replica_key.v1");
         h.update(origin_store.as_bytes());
         h.update(u64::to_be_bytes(origin_epoch.get()));
         h.update(u64::to_be_bytes(origin_commit.get()));
-        h.update(record_digest);
+        h.update(record_digest.as_bytes());
         Self(h.finalize().into())
     }
 
@@ -567,19 +608,19 @@ impl AsRef<[u8]> for TenantId {
 /// (one authority); this type is the anti-collapse equality domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NamespacedRecordIdentity {
-    local_id: [u8; 32],
+    local_id: LocalRecordId,
     origin_authority: AuthorizingKeyId,
     tenant: TenantId,
-    content: [u8; 32],
+    content: RecordContentDigest,
 }
 
 impl NamespacedRecordIdentity {
     /// Bind the four namespace seats — private fields, one constructor.
     pub fn bind(
-        local_id: [u8; 32],
+        local_id: LocalRecordId,
         origin_authority: AuthorizingKeyId,
         tenant: TenantId,
-        content: [u8; 32],
+        content: RecordContentDigest,
     ) -> Self {
         Self {
             local_id,
@@ -592,7 +633,7 @@ impl NamespacedRecordIdentity {
     /// Bind from a verified certificate's authority + content, plus local id
     /// and tenant supplied by the receiving / admitting door.
     pub fn from_certificate(
-        local_id: [u8; 32],
+        local_id: LocalRecordId,
         certificate: &AdmissionCertificate,
         tenant: TenantId,
     ) -> Self {
@@ -600,13 +641,13 @@ impl NamespacedRecordIdentity {
             local_id,
             certificate.authorizing_key_id(),
             tenant,
-            *certificate.record_digest(),
+            certificate.record_digest(),
         )
     }
 
     /// Local admitted id bytes (session [`crate::session::record_id::RecordId`]).
-    pub fn local_id(&self) -> &[u8; 32] {
-        &self.local_id
+    pub fn local_id(&self) -> LocalRecordId {
+        self.local_id
     }
 
     /// Origin authorizing key id — distinct origins never share this seat.
@@ -620,19 +661,19 @@ impl NamespacedRecordIdentity {
     }
 
     /// Record content digest.
-    pub fn content(&self) -> &[u8; 32] {
-        &self.content
+    pub fn content(&self) -> RecordContentDigest {
+        self.content
     }
 
     /// Federation-stable digest of the four-tuple (not a custody key).
-    pub fn digest(&self) -> [u8; 32] {
+    pub fn digest(&self) -> Digest32 {
         let mut h = Sha256::new();
         h.update(b"kyzo.namespaced_record_identity.v1");
-        h.update(self.local_id);
+        h.update(self.local_id.as_bytes());
         h.update(self.origin_authority.as_bytes());
         h.update(self.tenant.as_bytes());
-        h.update(self.content);
-        h.finalize().into()
+        h.update(self.content.as_bytes());
+        Digest32::admit(h.finalize().into())
     }
 
     /// Custody key under origin coordinates — delegates to [`ReplicaKey`]
@@ -643,7 +684,7 @@ impl NamespacedRecordIdentity {
         origin_epoch: FenceEpoch,
         origin_commit: CommitOrdinal,
     ) -> ReplicaKey {
-        ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &self.content)
+        ReplicaKey::derive(origin_store, origin_epoch, origin_commit, self.content)
     }
 }
 
@@ -736,14 +777,14 @@ pub struct LocalProjection {
     origin: AdmissionCertificate,
     /// Local Catalog schema cut at projection build — never reshapes origin
     /// certificate meaning; cache under projection law only.
-    local_schema_cut: [u8; 32],
+    local_schema_cut: SchemaCutDigest,
 }
 
 impl LocalProjection {
     /// Bind a verified certificate to a local Catalog schema cut.
     pub(crate) fn from_certificate(
         origin: AdmissionCertificate,
-        local_schema_cut: [u8; 32],
+        local_schema_cut: SchemaCutDigest,
     ) -> Self {
         Self {
             origin,
@@ -757,8 +798,8 @@ impl LocalProjection {
     }
 
     /// Local Catalog schema cut at build (projection cache only).
-    pub fn local_schema_cut(&self) -> &[u8; 32] {
-        &self.local_schema_cut
+    pub fn local_schema_cut(&self) -> SchemaCutDigest {
+        self.local_schema_cut
     }
 }
 
@@ -814,9 +855,9 @@ pub struct AdmissionCertificateParts {
     /// Origin commit ordinal.
     pub origin_commit: CommitOrdinal,
     /// Schema cut digest.
-    pub schema_cut: [u8; 32],
+    pub schema_cut: SchemaCutDigest,
     /// Record digest.
-    pub record_digest: [u8; 32],
+    pub record_digest: RecordContentDigest,
     /// Predecessor history digest.
     pub predecessor_history_digest: [u8; 32],
     /// Post-state root.
@@ -826,7 +867,7 @@ pub struct AdmissionCertificateParts {
     /// Scope manifest digest (+ issuer lineage / validity sealed elsewhere).
     pub scope_manifest_digest: ScopeManifestDigest,
     /// Optional OperationKey when composed.
-    pub operation_key: Option<[u8; 32]>,
+    pub operation_key: Option<OperationKey>,
     /// Signature over the signing body under the authorizing key.
     pub signature: Signature,
 }
@@ -907,7 +948,7 @@ pub(crate) fn mint_admission_certificate(
     builder
         .append_digest32(
             FieldId::PRIMARY_DIGEST,
-            &Digest32::admit(parts.record_digest),
+            &Digest32::admit(*parts.record_digest.as_bytes()),
         )
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
     builder
@@ -941,7 +982,10 @@ pub(crate) fn mint_admission_certificate(
             b"protocol_version".to_vec(),
             MapValue::Bytes(parts.protocol_version.to_vec()),
         ),
-        (b"schema_cut".to_vec(), MapValue::Digest32(parts.schema_cut)),
+        (
+            b"schema_cut".to_vec(),
+            MapValue::Digest32(*parts.schema_cut.as_bytes()),
+        ),
         (
             b"scope_manifest_digest".to_vec(),
             MapValue::Digest32(*parts.scope_manifest_digest.as_bytes()),
@@ -960,7 +1004,13 @@ pub(crate) fn mint_admission_certificate(
             Some(i) => i,
             None => bindings.len(),
         };
-        bindings.insert(idx, (b"operation_key".to_vec(), MapValue::Digest32(op)));
+        bindings.insert(
+            idx,
+            (
+                b"operation_key".to_vec(),
+                MapValue::Digest32(*op.as_bytes()),
+            ),
+        );
     }
     builder
         .append_map(FieldId::BINDINGS_MAP, &bindings)
@@ -1002,13 +1052,13 @@ pub(crate) fn sign_admission_parts(
         origin_store: parts.origin_store,
         origin_epoch: parts.origin_epoch,
         origin_commit: parts.origin_commit,
-        schema_cut: &parts.schema_cut,
-        record_digest: &parts.record_digest,
+        schema_cut: parts.schema_cut.as_bytes(),
+        record_digest: parts.record_digest.as_bytes(),
         predecessor_history_digest: &parts.predecessor_history_digest,
         post_state_root: parts.post_state_root.as_bytes(),
         authorizing_key_id: &parts.authorizing_key_id,
         scope_manifest_digest: &parts.scope_manifest_digest,
-        operation_key: parts.operation_key.as_ref(),
+        operation_key: parts.operation_key.as_ref().map(|k| k.as_bytes()),
     });
     key.sign(&body)
 }
@@ -1219,7 +1269,7 @@ pub enum CrossingStatus {
 /// [`ReplicaRefuse::RetentionDeclined`] or [`ReplicaRefuse::ScopeDenied`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrossingCapabilitySet {
-    digests: BTreeMap<[u8; 32], ()>,
+    digests: BTreeMap<Digest32, ()>,
 }
 
 impl CrossingCapabilitySet {
@@ -1231,7 +1281,7 @@ impl CrossingCapabilitySet {
     }
 
     /// Insert a claimed / held capability digest.
-    pub fn insert(&mut self, digest: [u8; 32]) {
+    pub fn insert(&mut self, digest: Digest32) {
         self.digests.insert(digest, ());
     }
 
@@ -1241,7 +1291,7 @@ impl CrossingCapabilitySet {
     }
 
     /// Borrow claimed digests in ascending order.
-    pub fn digests(&self) -> impl Iterator<Item = &[u8; 32]> {
+    pub fn digests(&self) -> impl Iterator<Item = &Digest32> {
         self.digests.keys()
     }
 }
@@ -1258,7 +1308,7 @@ pub struct CrossingEnvelope {
     /// Protocol / schema version — must equal certificate protocol_version.
     schema_version: [u8; 8],
     /// Schema cut — must equal certificate schema_cut (origin cut forever).
-    schema_cut: [u8; 32],
+    schema_cut: SchemaCutDigest,
     /// Issuing authority — must equal certificate authorizing_key_id.
     issuing_authority: AuthorizingKeyId,
     /// Durable context scope.
@@ -1281,7 +1331,7 @@ pub struct CrossingEnvelopeParts {
     /// Protocol / schema version — must equal certificate protocol_version.
     pub schema_version: [u8; 8],
     /// Schema cut — must equal certificate schema_cut (origin cut forever).
-    pub schema_cut: [u8; 32],
+    pub schema_cut: SchemaCutDigest,
     /// Issuing authority — must equal certificate authorizing_key_id.
     pub issuing_authority: AuthorizingKeyId,
     /// Durable context scope.
@@ -1323,8 +1373,8 @@ impl CrossingEnvelope {
     }
 
     /// Schema cut digest.
-    pub fn schema_cut(&self) -> &[u8; 32] {
-        &self.schema_cut
+    pub fn schema_cut(&self) -> SchemaCutDigest {
+        self.schema_cut
     }
 
     /// Issuing authority key id.
@@ -1368,10 +1418,10 @@ impl CrossingEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrossingValidated {
     custody: ReplicaCustody,
-    origin_schema_cut: [u8; 32],
+    origin_schema_cut: SchemaCutDigest,
     kind: CrossingKind,
     /// Certificate [`AdmissionCertificate::record_digest`] this validation sealed.
-    record_content_digest: [u8; 32],
+    record_content_digest: RecordContentDigest,
     _priv: (),
 }
 
@@ -1382,8 +1432,8 @@ impl CrossingValidated {
     }
 
     /// Origin schema cut sealed on the certificate — never a local Catalog cut.
-    pub fn origin_schema_cut(&self) -> &[u8; 32] {
-        &self.origin_schema_cut
+    pub fn origin_schema_cut(&self) -> SchemaCutDigest {
+        self.origin_schema_cut
     }
 
     /// Validated ONTOK kind.
@@ -1392,12 +1442,12 @@ impl CrossingValidated {
     }
 
     /// Record content digest this token validated — identity gate for lowering.
-    pub fn record_digest(&self) -> &[u8; 32] {
-        &self.record_content_digest
+    pub fn record_digest(&self) -> RecordContentDigest {
+        self.record_content_digest
     }
 
     /// Alias for [`Self::record_digest`].
-    pub fn record_content_digest(&self) -> &[u8; 32] {
+    pub fn record_content_digest(&self) -> RecordContentDigest {
         self.record_digest()
     }
 }
@@ -1562,9 +1612,9 @@ pub fn validate_crossing_before_lower(
 
     Ok(CrossingValidated {
         custody,
-        origin_schema_cut: *certificate.schema_cut(),
+        origin_schema_cut: certificate.schema_cut(),
         kind: envelope.kind(),
-        record_content_digest: *certificate.record_digest(),
+        record_content_digest: certificate.record_digest(),
         _priv: (),
     })
 }
@@ -1583,8 +1633,8 @@ pub fn refuse_in_place_local_reinterpretation() -> CrossingRefuse {
 /// Equal cuts → same sealed interpretation. A different local Catalog cut is
 /// Unconstructible in place — produce [`LocalProjection`] or a derived Record.
 pub fn view_under_schema_cut(
-    origin_schema_cut: &[u8; 32],
-    candidate_cut: &[u8; 32],
+    origin_schema_cut: SchemaCutDigest,
+    candidate_cut: SchemaCutDigest,
 ) -> Result<(), CrossingRefuse> {
     if origin_schema_cut == candidate_cut {
         Ok(())
@@ -1629,21 +1679,21 @@ pub enum KeyBoundaryRefuse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GraphBoundKey {
     graph: GraphBoundary,
-    key: [u8; 32],
+    key: ReplicaKey,
 }
 
 impl GraphBoundKey {
     /// Confine a [`ReplicaKey`] to a graph boundary.
     pub fn bind(graph: GraphBoundary, key: &ReplicaKey) -> Self {
-        Self {
-            graph,
-            key: *key.as_bytes(),
-        }
+        Self { graph, key: *key }
     }
 
     /// Confine an already-proven key digest to a graph boundary.
-    pub fn bind_digest(graph: GraphBoundary, key: [u8; 32]) -> Self {
-        Self { graph, key }
+    pub fn bind_digest(graph: GraphBoundary, key: Digest32) -> Self {
+        Self {
+            graph,
+            key: ReplicaKey(*key.as_bytes()),
+        }
     }
 
     /// Sealed graph boundary.
@@ -1651,9 +1701,9 @@ impl GraphBoundKey {
         self.graph
     }
 
-    /// Key digest bytes (not authority under a foreign graph).
-    pub fn key_digest(&self) -> &[u8; 32] {
-        &self.key
+    /// Key digest (not authority under a foreign graph).
+    pub fn key_digest(&self) -> ReplicaKey {
+        self.key
     }
 
     /// Authorize under `acting` only when it equals the sealed boundary.
@@ -1674,18 +1724,18 @@ impl GraphBoundKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PromotionMeaning {
     identity: NamespacedRecordIdentity,
-    valid_time: [u8; 32],
-    provenance: [u8; 32],
-    schema_cut: [u8; 32],
+    valid_time: ValidTimeDigest,
+    provenance: ProvenanceDigest,
+    schema_cut: SchemaCutDigest,
 }
 
 impl PromotionMeaning {
     /// Bind the four preserved seats — private fields, one constructor.
     pub fn bind(
         identity: NamespacedRecordIdentity,
-        valid_time: [u8; 32],
-        provenance: [u8; 32],
-        schema_cut: [u8; 32],
+        valid_time: ValidTimeDigest,
+        provenance: ProvenanceDigest,
+        schema_cut: SchemaCutDigest,
     ) -> Self {
         Self {
             identity,
@@ -1701,29 +1751,29 @@ impl PromotionMeaning {
     }
 
     /// Valid-time digest seat.
-    pub fn valid_time(&self) -> &[u8; 32] {
-        &self.valid_time
+    pub fn valid_time(&self) -> ValidTimeDigest {
+        self.valid_time
     }
 
     /// Provenance / source digest seat.
-    pub fn provenance(&self) -> &[u8; 32] {
-        &self.provenance
+    pub fn provenance(&self) -> ProvenanceDigest {
+        self.provenance
     }
 
     /// Origin schema cut seat — never a local Catalog rewrite.
-    pub fn schema_cut(&self) -> &[u8; 32] {
-        &self.schema_cut
+    pub fn schema_cut(&self) -> SchemaCutDigest {
+        self.schema_cut
     }
 
     /// Stable digest over all four seats (replay meter).
-    pub fn digest(&self) -> [u8; 32] {
+    pub fn digest(&self) -> Digest32 {
         let mut h = Sha256::new();
         h.update(b"kyzo.promotion_meaning.v1");
-        h.update(self.identity.digest());
-        h.update(self.valid_time);
-        h.update(self.provenance);
-        h.update(self.schema_cut);
-        h.finalize().into()
+        h.update(self.identity.digest().as_bytes());
+        h.update(self.valid_time.as_bytes());
+        h.update(self.provenance.as_bytes());
+        h.update(self.schema_cut.as_bytes());
+        Digest32::admit(h.finalize().into())
     }
 
     /// Replay equality: every seat identical (where it runs may change).
@@ -1952,6 +2002,7 @@ pub fn enforce_sth_gossip(
 
 #[cfg(test)]
 mod authorizing_key_ed25519_tests {
+    use crate::store::authority::Entropy;
     use super::*;
     use ed25519_dalek::Verifier;
     use miette::{IntoDiagnostic, Result, miette};
@@ -2144,13 +2195,14 @@ mod authorizing_key_ed25519_tests {
 
 #[cfg(test)]
 mod crossing_contract_tests {
+    use crate::store::authority::Entropy;
     use super::*;
     use miette::{IntoDiagnostic, Result, miette};
 
     fn mint_signed(
         key: &AuthorizingKey,
         scope: ScopeManifestDigest,
-        schema_cut: [u8; 32],
+        schema_cut: SchemaCutDigest,
     ) -> Result<AdmissionCertificate> {
         let store = StoreId::from_digest([0xC7; 32]);
         let mut parts = AdmissionCertificateParts {
@@ -2159,7 +2211,7 @@ mod crossing_contract_tests {
             origin_epoch: FenceEpoch::genesis(store),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut,
-            record_digest: [0xE1; 32],
+            record_digest: RecordContentDigest::from_digest([0xE1; 32]),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -2175,7 +2227,7 @@ mod crossing_contract_tests {
         CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Claim,
             schema_version: *cert.protocol_version(),
-            schema_cut: *cert.schema_cut(),
+            schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
@@ -2193,13 +2245,13 @@ mod crossing_contract_tests {
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, [0x51; 32])?;
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
         let local = StoreId::from_digest([0xD1; 32]);
 
         let envelope = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Claim,
             schema_version: *cert.protocol_version(),
-            schema_cut: *cert.schema_cut(),
+            schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
@@ -2232,7 +2284,7 @@ mod crossing_contract_tests {
         let scope = ScopeManifestDigest::from_digest([0x5D; 32]);
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
-        let cert = mint_signed(&key, scope, [0x51; 32])?;
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
         let local = StoreId::from_digest([0xD2; 32]);
         let envelope = matching_envelope(&cert);
         let held = CrossingCapabilitySet::new();
@@ -2309,14 +2361,14 @@ mod crossing_contract_tests {
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, [0x51; 32])?;
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
         let local = StoreId::from_digest([0xD3; 32]);
         let mut claimed = CrossingCapabilitySet::new();
-        claimed.insert([0xCA; 32]);
+        claimed.insert(Digest32::admit([0xCA; 32]));
         let envelope = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Claim,
             schema_version: *cert.protocol_version(),
-            schema_cut: *cert.schema_cut(),
+            schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Scoped([0xC0; 32]),
             evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
@@ -2325,7 +2377,7 @@ mod crossing_contract_tests {
             shared_capabilities: claimed.clone(),
         });
         let mut held = CrossingCapabilitySet::new();
-        held.insert([0xCA; 32]);
+        held.insert(Digest32::admit([0xCA; 32]));
 
         let validated = validate_crossing_before_lower(CrossingValidationSeats {
             certificate: &cert,
@@ -2361,7 +2413,7 @@ mod crossing_contract_tests {
         let tombstoned = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Claim,
             schema_version: *cert.protocol_version(),
-            schema_cut: *cert.schema_cut(),
+            schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::NotRequired,
@@ -2399,13 +2451,13 @@ mod crossing_contract_tests {
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, [0x51; 32])?;
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
         let local = StoreId::from_digest([0xD4; 32]);
 
         let bad_schema = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Entity,
             schema_version: *b"bad.vers",
-            schema_cut: *cert.schema_cut(),
+            schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::NotRequired,
@@ -2430,7 +2482,7 @@ mod crossing_contract_tests {
         let bad_cut = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Entity,
             schema_version: *cert.protocol_version(),
-            schema_cut: [0xFF; 32],
+            schema_cut: SchemaCutDigest::from_digest([0xFF; 32]),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::NotRequired,
@@ -2455,7 +2507,7 @@ mod crossing_contract_tests {
         let bad_auth = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Entity,
             schema_version: *cert.protocol_version(),
-            schema_cut: *cert.schema_cut(),
+            schema_cut: cert.schema_cut(),
             issuing_authority: AuthorizingKeyId::from_digest([0x00; 32]),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::NotRequired,
@@ -2495,6 +2547,7 @@ mod crossing_contract_tests {
 /// Board Check filters `replica::identity` — keep this module name stable.
 #[cfg(test)]
 mod identity {
+    use crate::store::authority::Entropy;
     use super::*;
     use miette::{IntoDiagnostic, Result};
 
@@ -2502,7 +2555,7 @@ mod identity {
         origin_store: StoreId,
         origin_epoch: FenceEpoch,
         origin_commit: CommitOrdinal,
-        record_digest: [u8; 32],
+        record_digest: RecordContentDigest,
         key: &AuthorizingKey,
         scope: ScopeManifestDigest,
     ) -> Result<AdmissionCertificate> {
@@ -2511,7 +2564,7 @@ mod identity {
             origin_store,
             origin_epoch,
             origin_commit,
-            schema_cut: [0x51; 32],
+            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
             record_digest,
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
@@ -2527,8 +2580,8 @@ mod identity {
     #[test]
     fn distinct_origins_never_collapse_on_same_content() {
         // Same local id + content; only origin authority differs → identities diverge.
-        let content = [0xE1; 32];
-        let local_id = content; // admission law: RecordId is a view of content
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
+        let local_id = LocalRecordId::from_digest(*content.as_bytes()); // admission law: RecordId is a view of content
         let tenant = TenantId::from_digest([0x7E; 32]);
         let auth_a = AuthorizingKeyId::from_digest([0xA1; 32]);
         let auth_b = AuthorizingKeyId::from_digest([0xB2; 32]);
@@ -2548,8 +2601,8 @@ mod identity {
 
     #[test]
     fn distinct_tenants_never_collapse_on_same_content() {
-        let content = [0xE1; 32];
-        let local_id = content;
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
+        let local_id = LocalRecordId::from_digest(*content.as_bytes());
         let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
         let tenant_a = TenantId::from_digest([0x71; 32]);
         let tenant_b = TenantId::from_digest([0x72; 32]);
@@ -2563,12 +2616,22 @@ mod identity {
 
     #[test]
     fn distinct_local_ids_never_collapse_on_same_content() {
-        let content = [0xE1; 32];
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
         let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
         let tenant = TenantId::from_digest([0x7E; 32]);
 
-        let a = NamespacedRecordIdentity::bind([0x01; 32], auth, tenant, content);
-        let b = NamespacedRecordIdentity::bind([0x02; 32], auth, tenant, content);
+        let a = NamespacedRecordIdentity::bind(
+            LocalRecordId::from_digest([0x01; 32]),
+            auth,
+            tenant,
+            content,
+        );
+        let b = NamespacedRecordIdentity::bind(
+            LocalRecordId::from_digest([0x02; 32]),
+            auth,
+            tenant,
+            content,
+        );
 
         assert_ne!(
             a, b,
@@ -2579,11 +2642,12 @@ mod identity {
 
     #[test]
     fn same_namespace_tuple_is_equal_and_stable() {
-        let content = [0xE1; 32];
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
         let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
         let tenant = TenantId::from_digest([0x7E; 32]);
-        let a = NamespacedRecordIdentity::bind(content, auth, tenant, content);
-        let b = NamespacedRecordIdentity::bind(content, auth, tenant, content);
+        let local = LocalRecordId::from_digest(*content.as_bytes());
+        let a = NamespacedRecordIdentity::bind(local, auth, tenant, content);
+        let b = NamespacedRecordIdentity::bind(local, auth, tenant, content);
         assert_eq!(a, b);
         assert_eq!(a.digest(), b.digest());
     }
@@ -2593,7 +2657,7 @@ mod identity {
         let store = StoreId::from_digest([0xC7; 32]);
         let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC1; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
-        let content = [0xE1; 32];
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
         let cert = mint_signed(
             store,
             FenceEpoch::genesis(store),
@@ -2603,23 +2667,24 @@ mod identity {
             scope,
         )?;
         let tenant = TenantId::from_digest([0x7E; 32]);
-        let id = NamespacedRecordIdentity::from_certificate(content, &cert, tenant);
+        let local = LocalRecordId::from_digest(*content.as_bytes());
+        let id = NamespacedRecordIdentity::from_certificate(local, &cert, tenant);
         assert_eq!(id.origin_authority(), key.id());
-        assert_eq!(id.content(), &content);
+        assert_eq!(id.content(), content);
         assert_eq!(id.tenant(), tenant);
-        assert_eq!(id.local_id(), &content);
+        assert_eq!(id.local_id(), local);
         Ok(())
     }
 
     #[test]
     fn distinct_origin_stores_yield_distinct_replica_keys() {
-        let content = [0xE1; 32];
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
         let store_a = StoreId::from_digest([0x01; 32]);
         let store_b = StoreId::from_digest([0x02; 32]);
         let epoch_a = FenceEpoch::genesis(store_a);
         let epoch_b = FenceEpoch::genesis(store_b);
-        let key_a = ReplicaKey::derive(store_a, epoch_a, CommitOrdinal::ZERO, &content);
-        let key_b = ReplicaKey::derive(store_b, epoch_b, CommitOrdinal::ZERO, &content);
+        let key_a = ReplicaKey::derive(store_a, epoch_a, CommitOrdinal::ZERO, content);
+        let key_b = ReplicaKey::derive(store_b, epoch_b, CommitOrdinal::ZERO, content);
         assert_ne!(
             key_a, key_b,
             "same content under distinct origins must not share ReplicaKey"
@@ -2628,18 +2693,18 @@ mod identity {
 
     #[test]
     fn custody_key_delegates_to_replica_key_authority() {
-        let content = [0xE1; 32];
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
         let store = StoreId::from_digest([0xC7; 32]);
         let epoch = FenceEpoch::genesis(store);
         let id = NamespacedRecordIdentity::bind(
-            content,
+            LocalRecordId::from_digest(*content.as_bytes()),
             AuthorizingKeyId::from_digest([0xA1; 32]),
             TenantId::from_digest([0x7E; 32]),
             content,
         );
         assert_eq!(
             id.custody_key(store, epoch, CommitOrdinal::ZERO),
-            ReplicaKey::derive(store, epoch, CommitOrdinal::ZERO, &content),
+            ReplicaKey::derive(store, epoch, CommitOrdinal::ZERO, content),
             "namespaced custody must extend ReplicaKey — not fork a second key"
         );
     }
@@ -2650,7 +2715,7 @@ mod identity {
         let local = StoreId::from_digest([0x70; 32]);
         let origin_epoch = FenceEpoch::genesis(origin);
         let origin_commit = CommitOrdinal::ZERO;
-        let record_digest = [0xE1; 32];
+        let record_digest = RecordContentDigest::from_digest([0xE1; 32]);
         let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x69; 32]));
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
         let mut keys = AuthorizingKeyTable::new();
@@ -2666,9 +2731,13 @@ mod identity {
             &key,
             scope,
         )?;
-        let expected = ReplicaKey::derive(origin, origin_epoch, origin_commit, &record_digest);
+        let expected = ReplicaKey::derive(origin, origin_epoch, origin_commit, record_digest);
         let tenant = TenantId::from_digest([0x7E; 32]);
-        let namespaced = NamespacedRecordIdentity::from_certificate(record_digest, &cert, tenant);
+        let namespaced = NamespacedRecordIdentity::from_certificate(
+            LocalRecordId::from_digest(*record_digest.as_bytes()),
+            &cert,
+            tenant,
+        );
         assert_eq!(
             namespaced.custody_key(origin, origin_epoch, origin_commit),
             expected
@@ -2714,15 +2783,16 @@ mod identity {
     #[test]
     fn content_only_id_is_not_federation_identity() {
         // Two origins, identical content: content digests equal, namespaced ids do not.
-        let content = [0xAA; 32];
+        let content = RecordContentDigest::from_digest([0xAA; 32]);
+        let local = LocalRecordId::from_digest(*content.as_bytes());
         let a = NamespacedRecordIdentity::bind(
-            content,
+            local,
             AuthorizingKeyId::from_digest([0x01; 32]),
             TenantId::from_digest([0x10; 32]),
             content,
         );
         let b = NamespacedRecordIdentity::bind(
-            content,
+            local,
             AuthorizingKeyId::from_digest([0x02; 32]),
             TenantId::from_digest([0x10; 32]),
             content,
@@ -2736,24 +2806,36 @@ mod identity {
 /// Promotion replay equality + graph-bound key proofs (#270 T3).
 #[cfg(test)]
 mod promotion {
+    use crate::store::authority::Entropy;
     use super::*;
     use miette::{IntoDiagnostic, Result, miette};
 
-    fn sample_meaning(schema_cut: [u8; 32], provenance: [u8; 32]) -> PromotionMeaning {
+    fn sample_meaning(schema_cut: SchemaCutDigest, provenance: ProvenanceDigest) -> PromotionMeaning {
         let identity = NamespacedRecordIdentity::bind(
-            [0x11; 32],
+            LocalRecordId::from_digest([0x11; 32]),
             AuthorizingKeyId::from_digest([0xA1; 32]),
             TenantId::from_digest([0x7E; 32]),
-            [0xC0; 32],
+            RecordContentDigest::from_digest([0xC0; 32]),
         );
-        PromotionMeaning::bind(identity, [0x71; 32], provenance, schema_cut)
+        PromotionMeaning::bind(
+            identity,
+            ValidTimeDigest::from_digest([0x71; 32]),
+            provenance,
+            schema_cut,
+        )
     }
 
     #[test]
     fn promotion_replay_equality_preserves_four_seats() -> Result<()> {
-        let before = sample_meaning([0x51; 32], [0xB1; 32]);
+        let before = sample_meaning(
+            SchemaCutDigest::from_digest([0x51; 32]),
+            ProvenanceDigest::from_digest([0xB1; 32]),
+        );
         // Local-to-hosted: same meaning seats, different host — equality holds.
-        let after = sample_meaning([0x51; 32], [0xB1; 32]);
+        let after = sample_meaning(
+            SchemaCutDigest::from_digest([0x51; 32]),
+            ProvenanceDigest::from_digest([0xB1; 32]),
+        );
         assert!(before.replay_equal(&after));
         assert_eq!(before.digest(), after.digest());
         assert_eq!(prove_promotion_replay(&before, &after), Ok(()));
@@ -2763,8 +2845,14 @@ mod promotion {
 
     #[test]
     fn promotion_schema_divergence_refuses() -> Result<()> {
-        let before = sample_meaning([0x51; 32], [0xB1; 32]);
-        let after = sample_meaning([0x99; 32], [0xB1; 32]);
+        let before = sample_meaning(
+            SchemaCutDigest::from_digest([0x51; 32]),
+            ProvenanceDigest::from_digest([0xB1; 32]),
+        );
+        let after = sample_meaning(
+            SchemaCutDigest::from_digest([0x99; 32]),
+            ProvenanceDigest::from_digest([0xB1; 32]),
+        );
         assert!(!before.replay_equal(&after));
         assert_eq!(
             prove_promotion_replay(&before, &after),
@@ -2776,8 +2864,14 @@ mod promotion {
 
     #[test]
     fn promotion_provenance_divergence_refuses() -> Result<()> {
-        let before = sample_meaning([0x51; 32], [0xB1; 32]);
-        let after = sample_meaning([0x51; 32], [0xB2; 32]);
+        let before = sample_meaning(
+            SchemaCutDigest::from_digest([0x51; 32]),
+            ProvenanceDigest::from_digest([0xB1; 32]),
+        );
+        let after = sample_meaning(
+            SchemaCutDigest::from_digest([0x51; 32]),
+            ProvenanceDigest::from_digest([0xB2; 32]),
+        );
         assert_eq!(
             prove_promotion_replay(&before, &after),
             Err(PromotionRefuse::MeaningDiverged)
@@ -2788,10 +2882,10 @@ mod promotion {
 
     #[test]
     fn view_under_schema_cut_consumes_origin_cut() -> Result<()> {
-        let origin = [0x51u8; 32];
-        assert_eq!(view_under_schema_cut(&origin, &origin), Ok(()));
+        let origin = SchemaCutDigest::from_digest([0x51u8; 32]);
+        assert_eq!(view_under_schema_cut(origin, origin), Ok(()));
         assert_eq!(
-            view_under_schema_cut(&origin, &[0x99; 32]),
+            view_under_schema_cut(origin, SchemaCutDigest::from_digest([0x99; 32])),
             Err(CrossingRefuse::LocalReinterpretationUnconstructible)
         );
         // LocalProjection is the lawful different-cut path — not in-place reshape.
@@ -2803,7 +2897,7 @@ mod promotion {
             origin_epoch: FenceEpoch::genesis(StoreId::from_digest([0x01; 32])),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut: origin,
-            record_digest: [0xAA; 32],
+            record_digest: RecordContentDigest::from_digest([0xAA; 32]),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -2813,7 +2907,10 @@ mod promotion {
         };
         parts.signature = sign_admission_parts(&parts, &key)?;
         let cert = mint_admission_certificate(parts)?;
-        let projection = LocalProjection::from_certificate(cert, [0x99; 32]);
+        let projection = LocalProjection::from_certificate(
+            cert,
+            SchemaCutDigest::from_digest([0x99; 32]),
+        );
         assert_ne!(
             projection.local_schema_cut(),
             projection.origin().schema_cut()
@@ -2830,7 +2927,7 @@ mod promotion {
             StoreId::from_digest([0x01; 32]),
             FenceEpoch::genesis(StoreId::from_digest([0x01; 32])),
             CommitOrdinal::ZERO,
-            &[0xC0; 32],
+            RecordContentDigest::from_digest([0xC0; 32]),
         );
         let bound = GraphBoundKey::bind(home, &key);
         assert_eq!(bound.authorize(home), Ok(()));
@@ -2852,6 +2949,7 @@ mod promotion {
 
 #[cfg(test)]
 mod sth_gossip_obligation_tests {
+    use crate::store::authority::Entropy;
     use super::*;
     use crate::store::merkle::{
         ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, GossipConsistency, RootChain, StateRoot,

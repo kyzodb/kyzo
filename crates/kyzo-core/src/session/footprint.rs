@@ -258,6 +258,22 @@ pub enum AcceleratorVerdict {
     Neither,
 }
 
+/// Admission-snapshot digest bound into a projection confirmation (§36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SnapshotDigest([u8; 32]);
+
+impl SnapshotDigest {
+    /// Wrap an already-proven snapshot digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// Authenticated confirmation against the authority reachability projection (§36).
 ///
 /// Minted only by the projection door — caller-forged confirmation is
@@ -265,20 +281,20 @@ pub enum AcceleratorVerdict {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProjectionConfirmation {
     /// Admission-snapshot digest the projection confirmed against.
-    snapshot_digest: [u8; 32],
+    snapshot_digest: SnapshotDigest,
 }
 
 impl ProjectionConfirmation {
     /// Mint confirmation from the authority reachability projection.
     ///
     /// Sole constructor — session/store projection seams only.
-    pub(crate) fn mint(snapshot_digest: [u8; 32]) -> Self {
+    pub(crate) fn mint(snapshot_digest: SnapshotDigest) -> Self {
         Self { snapshot_digest }
     }
 
     /// Snapshot digest this confirmation binds.
-    pub fn snapshot_digest(&self) -> &[u8; 32] {
-        &self.snapshot_digest
+    pub fn snapshot_digest(&self) -> SnapshotDigest {
+        self.snapshot_digest
     }
 }
 

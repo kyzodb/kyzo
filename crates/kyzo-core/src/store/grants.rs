@@ -1537,7 +1537,7 @@ mod tests {
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = PredecessorConsentTable::new();
-        table.insert(store, weak)?;
+        table.insert(store, VerifyingPublicKey::admit(weak))?;
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(
@@ -1562,7 +1562,7 @@ mod tests {
         let mut weak = [0u8; 32];
         weak[0] = 1;
         let mut table = AncestorEntitlementTable::new();
-        table.insert(store, weak)?;
+        table.insert(store, VerifyingPublicKey::admit(weak))?;
         let mut forged = [0u8; 64];
         forged[0] = 1;
         assert!(

@@ -59,6 +59,22 @@ impl ProvenanceDigest {
     }
 }
 
+/// Validity-time digest for promotion / meaning seats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ValidTimeDigest([u8; 32]);
+
+impl ValidTimeDigest {
+    /// Wrap an already-proven validity-time digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Borrow the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// Geography / residency region identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionId([u8; 16]);

@@ -63,8 +63,11 @@ use crate::store::open::{
 };
 use crate::store::replica::{
     AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyId,
-    AuthorizingKeyTable, PostStateRoot, ReplicaRefuse, ScopeManifestDigest, ScopeManifestStatus,
-    ScopeManifestTable, mint_admission_certificate, sign_admission_parts, verify_replica, VerifyingPublicKey};
+    AuthorizingKeyTable, PostStateRoot, ReplicaRefuse, SchemaCutDigest, ScopeManifestDigest,
+    ScopeManifestStatus, ScopeManifestTable, VerifyingPublicKey, mint_admission_certificate,
+    sign_admission_parts, verify_replica,
+};
+use crate::store::transcript::Digest32;
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
 use crate::store::{Storage, WriteTx};
@@ -494,7 +497,7 @@ impl LiveAdmissionSeats {
         record: &KyzoRecord,
         certificate: AdmissionCertificate,
     ) -> Result<(), AdmitRefuse> {
-        if certificate.record_digest() != record.digest().as_bytes() {
+        if certificate.record_digest() != *record.digest() {
             return Err(AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
         }
         // Verify with public table material only (receiver shape).
@@ -600,8 +603,8 @@ impl LiveCertificateInputs {
         let (predecessor_history_digest, post_state_root) = root_tip_digests(root_chain);
         Ok(Self {
             catalog_generation,
-            predecessor_history_digest,
-            post_state_root,
+            predecessor_history_digest: *predecessor_history_digest.as_bytes(),
+            post_state_root: *post_state_root.as_bytes(),
             authorizing_key: authorizing_key.clone(),
             origin_commit,
             scope_manifest_digest,
@@ -609,18 +612,24 @@ impl LiveCertificateInputs {
     }
 }
 
-fn root_tip_digests(root_chain: &RootChain) -> ([u8; 32], [u8; 32]) {
+fn root_tip_digests(root_chain: &RootChain) -> (Digest32, Digest32) {
     match root_chain.links().last() {
-        Some(link) => (*link.predecessor_root().as_bytes(), *link.root().as_bytes()),
-        None => (*GENESIS_ROOT.as_bytes(), *GENESIS_ROOT.as_bytes()),
+        Some(link) => (
+            Digest32::admit(*link.predecessor_root().as_bytes()),
+            Digest32::admit(*link.root().as_bytes()),
+        ),
+        None => (
+            Digest32::admit(*GENESIS_ROOT.as_bytes()),
+            Digest32::admit(*GENESIS_ROOT.as_bytes()),
+        ),
     }
 }
 
-fn schema_cut_from_catalog(generation: CatalogGeneration) -> [u8; 32] {
+fn schema_cut_from_catalog(generation: CatalogGeneration) -> SchemaCutDigest {
     let mut h = Sha256::new();
     h.update(b"kyzo.catalog.generation.schema_cut.v1");
     h.update(generation.counter().to_be_bytes());
-    h.finalize().into()
+    SchemaCutDigest::from_digest(h.finalize().into())
 }
 
 fn mint_certificate_from_live(
@@ -638,7 +647,7 @@ fn mint_certificate_from_live(
         origin_commit: live.origin_commit,
         schema_cut: schema_cut_from_catalog(live.catalog_generation),
         // Single digest: certificate record_digest IS the core digest.
-        record_digest: *core.digest.as_bytes(),
+        record_digest: core.digest,
         predecessor_history_digest: live.predecessor_history_digest,
         post_state_root: PostStateRoot::from_digest(live.post_state_root),
         authorizing_key_id: key.id(),
@@ -3066,13 +3075,13 @@ mod live_certificate_verifiability {
             origin_store: cert.origin_store(),
             origin_epoch: cert.origin_epoch(),
             origin_commit: cert.origin_commit(),
-            schema_cut: *cert.schema_cut(),
-            record_digest: *cert.record_digest(),
+            schema_cut: cert.schema_cut(),
+            record_digest: cert.record_digest(),
             predecessor_history_digest,
             post_state_root: cert.post_state_root(),
             authorizing_key_id: cert.authorizing_key_id(),
             scope_manifest_digest: cert.scope_manifest_digest(),
-            operation_key: cert.operation_key().copied(),
+            operation_key: cert.operation_key(),
             signature: Signature::admit(flipped),
         })
         .map_err(|e| {

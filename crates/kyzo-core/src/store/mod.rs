@@ -75,7 +75,7 @@ pub(crate) mod sim;
 // unused flat reexports are cut (callers use module paths).
 pub use authority::WriteAuthority;
 #[cfg(test)]
-pub use authority::{Entropy, IncarnationId, OpenOrdinal, RecoveryMatrix};
+pub use authority::{Entropy, IncarnationId, OpenOrdinal, RecoveryMatrix, WriteTokenId};
 // Leave-is-free external import stays fail-closed (#359 / #375 T5): no flat
 // reexport of ImportCapability / OriginRootRegistry — module-path only.
 
@@ -115,8 +115,12 @@ pub use open::{
 };
 #[cfg(test)]
 pub use replica::{
-    ReplicaCustody, ReplicaKey, ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable,
+    AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable,
+    LocalProjection, OriginContinuity, PostStateRoot, ReplicaCustody, ReplicaKey, SchemaCutDigest,
+    ScopeManifestDigest, ScopeManifestStatus, ScopeManifestTable, VerifyingPublicKey,
 };
+#[cfg(test)]
+pub(crate) use replica::{mint_admission_certificate, sign_admission_parts, verify_replica};
 #[cfg(test)]
 pub use seal::{CheckpointSealParts, GENESIS_PRIOR_SEAL, NonceLeaseFloors, SealDigest, SealRefuse};
 pub use sweep::{CommitOrdinal, SweepRefuse, SweepSealFailure};
@@ -124,7 +128,7 @@ pub use sweep::{CommitOrdinal, SweepRefuse, SweepSealFailure};
 pub use sweep::{SweepDoor, SweepSession};
 #[cfg(test)]
 pub use transcript::{
-    CanonicalTranscript, SealedArtifactKind, TranscriptRefuse,
+    CanonicalTranscript, Digest32, SealedArtifactKind, TranscriptRefuse,
     encode_normative_production_transcript, parse_golden_hex,
 };
 #[cfg(test)]

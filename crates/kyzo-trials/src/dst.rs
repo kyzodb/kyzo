@@ -2211,7 +2211,7 @@ fn operation_key_production_commit_write_dedupes_same_process() {
 fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
     use crate::session::catalog::Catalog;
     use crate::session::db::{Engine, ScriptOptions, SessionTx};
-    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority};
+    use crate::store::authority::{Entropy, OpenOrdinal, WriteAuthority, WriteTokenId};
     use crate::store::commit_cap::{SnapshotFork, StableCommitCap};
     use crate::store::idempotency::OperationOutcome;
     use crate::store::sweep::{
@@ -2256,7 +2256,7 @@ fn operation_key_production_commit_write_dedupes_across_crash_wal_replay() {
     );
 
     // Fresh door + restore memo (simulated reopen after crash).
-    let auth = WriteAuthority::mint(store_id, [0x37; 32]);
+    let auth = WriteAuthority::mint(store_id, WriteTokenId::from_digest([0x37; 32]));
     let incarnation = auth
         .incarnation_mint_cap(OpenOrdinal::ZERO)
         .mint(Entropy::admit([0x50; 32]))
@@ -2397,14 +2397,16 @@ pub mod storage_campaign_lanes {
         SuccessorPrincipal, fork_grant_payload_digest, frost_sign_recovery_quorum,
         recovery_grant_payload_digest, sign_fork_consent,
     };
+    use crate::data::digest::RecordContentDigest;
     use crate::store::replica::{
         AdmissionCertificate, AdmissionCertificateParts, AuthorizingKey, AuthorizingKeyTable,
-        LocalProjection, OriginContinuity, PostStateRoot, ReplicaRefuse,
-        mint_admission_certificate, sign_admission_parts, verify_replica,
+        LocalProjection, OriginContinuity, PostStateRoot, ReplicaRefuse, SchemaCutDigest,
+        VerifyingPublicKey, mint_admission_certificate, sign_admission_parts, verify_replica,
     };
     use crate::store::scratch::TempTx;
     use crate::store::seal::CheckpointSeal;
     use crate::store::sim::SimStorage;
+    use crate::store::transcript::Digest32;
     use crate::store::{
         BackendContract, CanonicalTranscript, CheckpointSealParts, CommitOrdinal, ConfirmedCopies,
         ConsistencyClass, ContentHash, CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm,
@@ -2416,8 +2418,8 @@ pub mod storage_campaign_lanes {
         ReplicaCustody, ReplicaKey, RequestDigest, ScopeManifestDigest, ScopeManifestStatus,
         ScopeManifestTable, SealDigest, SealRefuse, SealedArtifactKind, SizeClass, SnapshotFork,
         StableCommitCap, StagingToken, StagingTtl, StateRoot, Storage, StoreId, StoreRefuse,
-        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, VolatilePending, WalHash, WriteTx,
-        encode_normative_production_transcript, genesis, materialize, nonce, parse_golden_hex,
+        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, VolatilePending, WalHash, WriteTokenId,
+        WriteTx, encode_normative_production_transcript, genesis, materialize, nonce, parse_golden_hex,
         reclaim_candidate,
     };
 
@@ -2468,7 +2470,7 @@ pub mod storage_campaign_lanes {
     ) {
         let (vk, _) = sign_fork_consent(consent_seed, predecessor, &Digest::admit([0u8; 32]));
         table
-            .insert(predecessor, vk)
+            .insert(predecessor, VerifyingPublicKey::admit(vk))
             .must("INVARIANT/harness: register predecessor consent key");
     }
 
@@ -2519,7 +2521,7 @@ pub mod storage_campaign_lanes {
         origin_store: StoreId,
         origin_epoch: FenceEpoch,
         origin_commit: CommitOrdinal,
-        record_digest: [u8; 32],
+        record_digest: RecordContentDigest,
         scope: ScopeManifestDigest,
         key: &AuthorizingKey,
     ) -> AdmissionCertificate {
@@ -2528,7 +2530,7 @@ pub mod storage_campaign_lanes {
             origin_store,
             origin_epoch,
             origin_commit,
-            schema_cut: [0x51; 32],
+            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
             record_digest,
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
@@ -2641,7 +2643,7 @@ pub mod storage_campaign_lanes {
                 for (tag, incarnation) in [(0u8, clone_a), (1u8, clone_b)] {
                     let n = nonce(MintDomain::Commit, counter, domain, incarnation);
                     assert!(
-                        seen.insert((n, tag)),
+                        seen.insert((*n.as_bytes(), tag)),
                         "seed {seed}: clone-tag collision at counter step {step}"
                     );
                 }
@@ -3282,7 +3284,7 @@ pub mod storage_campaign_lanes {
 
             // Reclaim always lawful idle — matching certificate.
             let reclaim =
-                ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
+                ReclaimCertificate::mint(store_id, token.object_id(), Digest32::admit(seed_bytes(0xCE, seed)));
             reclaim_candidate(candidate, &reclaim)
                 .must("INVARIANT/harness: idle reclaim must be lawful");
         }
@@ -3478,7 +3480,7 @@ pub mod storage_campaign_lanes {
             let mismatch = ReclaimCertificate::mint(
                 store_id,
                 ObjectId::from_digest(seed_bytes(0xFF, seed)),
-                seed_bytes(0xBD, seed),
+                Digest32::admit(seed_bytes(0xBD, seed)),
             );
             assert_eq!(
                 reclaim_candidate(candidate.clone(), &mismatch),
@@ -3486,7 +3488,7 @@ pub mod storage_campaign_lanes {
                 "seed {seed}: reclaim under foreign object id must refuse ReclaimMismatch"
             );
             let ok_cert =
-                ReclaimCertificate::mint(store_id, token.object_id(), seed_bytes(0xCE, seed));
+                ReclaimCertificate::mint(store_id, token.object_id(), Digest32::admit(seed_bytes(0xCE, seed)));
             reclaim_candidate(candidate, &ok_cert)
                 .must("INVARIANT/harness: matching reclaim after stall");
         }
@@ -3779,11 +3781,11 @@ pub mod storage_campaign_lanes {
             let origin_store = origin.store_id();
             let origin_epoch = origin.fence_epoch();
             let origin_commit = CommitOrdinal::ZERO;
-            let record_digest = seed_bytes(0xE1, seed);
+            let record_digest = RecordContentDigest::from_digest(seed_bytes(0xE1, seed));
             let local_store = local.store_id();
             let local_commit = CommitOrdinal::ZERO;
 
-            let key = AuthorizingKey::mint_with_verifying_id(seed_bytes(0x69, seed));
+            let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(seed_bytes(0x69, seed)));
             let scope = ScopeManifestDigest::from_digest(seed_bytes(0x5C, seed));
             let mut keys = AuthorizingKeyTable::new();
             keys.insert(key.clone());
@@ -3800,7 +3802,7 @@ pub mod storage_campaign_lanes {
                 &key,
             );
             let expected_key =
-                ReplicaKey::derive(origin_store, origin_epoch, origin_commit, &record_digest);
+                ReplicaKey::derive(origin_store, origin_epoch, origin_commit, record_digest);
 
             // At-least-once deliveries through verify_replica → one Queryable custody.
             let mut first: Option<ReplicaCustody> = None;
@@ -3851,7 +3853,7 @@ pub mod storage_campaign_lanes {
                 origin_store,
                 origin_epoch,
                 origin_commit,
-                &seed_bytes(0xE2, seed),
+                RecordContentDigest::from_digest(seed_bytes(0xE2, seed)),
             );
             assert_ne!(
                 expected_key, other,
@@ -3873,7 +3875,7 @@ pub mod storage_campaign_lanes {
         let origin_store = origin.store_id();
         let origin_epoch = origin.fence_epoch();
         let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
-        let key = AuthorizingKey::mint_with_verifying_id([0xFE; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xFE; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
 
@@ -3881,7 +3883,7 @@ pub mod storage_campaign_lanes {
             origin_store,
             origin_epoch,
             CommitOrdinal::ZERO,
-            [0xE1; 32],
+            RecordContentDigest::from_digest([0xE1; 32]),
             scope,
             &key,
         );
@@ -3948,17 +3950,17 @@ pub mod storage_campaign_lanes {
             // Caller-durable CompositionId digest (session owns the type; Store
             // sees sealed bytes). Crash-before-return: client re-derives from the
             // same durable intent — Engine never mints.
-            let composition_id = seed_bytes(0x38, seed);
+            let composition_id = crate::store::transcript::Digest32::admit(seed_bytes(0x38, seed));
             let domain = b"kyzo.composition";
 
             let mut memo = IdempotencyMemo::new();
             for i in 0..step_n {
                 let step = format!("step-{seed}-{i}");
                 let key_pre =
-                    OperationKey::derive(domain, &composition_id, store_id, step.as_bytes());
+                    OperationKey::derive(domain, composition_id, store_id, step.as_bytes());
                 // Process dies before returning CompositionId — retry with same intent.
                 let key_post =
-                    OperationKey::derive(domain, &composition_id, store_id, step.as_bytes());
+                    OperationKey::derive(domain, composition_id, store_id, step.as_bytes());
                 assert_eq!(
                     key_pre, key_post,
                     "seed {seed} step {i}: CompositionId re-derive must converge OperationKey after crash"
@@ -3999,7 +4001,7 @@ pub mod storage_campaign_lanes {
 
             // Absent adversary: never memoizes as terminal — a later Committed for
             // the same key must still land (no phantom terminal blocking reuse).
-            let read_key = OperationKey::derive(domain, &composition_id, store_id, b"read-at");
+            let read_key = OperationKey::derive(domain, composition_id, store_id, b"read-at");
             let request_digest = IdempotencyMemo::digest_request(format!("read-{seed}").as_bytes());
             assert_eq!(
                 memo.remember(read_key, request_digest, OperationOutcome::Absent),
@@ -4106,9 +4108,9 @@ pub mod storage_campaign_lanes {
             let origin_store = sealed.store_id();
             let origin_epoch = sealed.fence_epoch();
             let origin_commit = CommitOrdinal::ZERO;
-            let record_digest = seed_bytes(0xAD, seed);
+            let record_digest = RecordContentDigest::from_digest(seed_bytes(0xAD, seed));
 
-            let key = AuthorizingKey::mint_with_verifying_id(seed_bytes(0xCA, seed));
+            let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(seed_bytes(0xCA, seed)));
             let scope = ScopeManifestDigest::from_digest(seed_bytes(0xCA, seed));
             let cert = mint_signed_admission(
                 origin_store,
@@ -4133,11 +4135,11 @@ pub mod storage_campaign_lanes {
                     wrap_add_u8(wrap_mul_u8(u8_lo(seed), 17), i.to_le_bytes()[0]),
                     3,
                 );
-                let local_schema_cut = [cut_tag; 32];
+                let local_schema_cut = SchemaCutDigest::from_digest([cut_tag; 32]);
                 let projection = LocalProjection::from_certificate(cert.clone(), local_schema_cut);
                 assert_eq!(
                     projection.local_schema_cut(),
-                    &local_schema_cut,
+                    local_schema_cut,
                     "seed {seed}: LocalProjection rebuilds under advancing local_schema_cut"
                 );
                 assert_eq!(
@@ -4171,7 +4173,7 @@ pub mod storage_campaign_lanes {
                 origin_store,
                 origin_epoch,
                 origin_commit,
-                &seed_bytes(0xBE, seed),
+                RecordContentDigest::from_digest(seed_bytes(0xBE, seed)),
             );
             assert_ne!(
                 origin_key, other_cut,

@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 
 use super::failure::StoreRefuse;
 use super::open::StoreId;
+use super::transcript::Digest32;
 
 /// Store-scoped idempotency identity (§38/§39).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,18 +32,18 @@ impl OperationKey {
     /// Derive `H(domain_label, CompositionId, StoreId, StepId)`.
     ///
     /// `composition_id` is the caller-derived CompositionId digest (session
-    /// owns the type; Store sees only the sealed bytes so the layering stays
+    /// owns the type; Store sees only the sealed digest so the layering stays
     /// one-way).
     pub fn derive(
         domain_label: &[u8],
-        composition_id: &[u8; 32],
+        composition_id: Digest32,
         store_id: StoreId,
         step_id: &[u8],
     ) -> Self {
         let mut h = Sha256::new();
         h.update(b"kyzo.operation_key.v1");
         h.update(domain_label);
-        h.update(composition_id);
+        h.update(composition_id.as_bytes());
         h.update(store_id.as_bytes());
         h.update(step_id);
         Self(h.finalize().into())
@@ -58,8 +59,8 @@ impl OperationKey {
         let mut h = Sha256::new();
         h.update(b"kyzo.composition_id.degenerate.v1");
         h.update(client_operation_id);
-        let degenerate: [u8; 32] = h.finalize().into();
-        Self::derive(domain_label, &degenerate, store_id, step_id)
+        let degenerate = Digest32::admit(h.finalize().into());
+        Self::derive(domain_label, degenerate, store_id, step_id)
     }
 
     /// Borrow the key digest.
@@ -240,14 +241,15 @@ mod composition_crash_replay_tests {
         })
         .store_id();
 
-        let mut composition_id = [0u8; 32];
-        composition_id[..16].copy_from_slice(b"client-op-crash1");
-        composition_id[16..].copy_from_slice(b"comp-digest-fixe");
+        let mut composition_bytes = [0u8; 32];
+        composition_bytes[..16].copy_from_slice(b"client-op-crash1");
+        composition_bytes[16..].copy_from_slice(b"comp-digest-fixe");
+        let composition_id = Digest32::admit(composition_bytes);
         let domain = b"kyzo.composition";
         let step = b"step-0";
 
-        let key_pre = OperationKey::derive(domain, &composition_id, store_id, step);
-        let key_post = OperationKey::derive(domain, &composition_id, store_id, step);
+        let key_pre = OperationKey::derive(domain, composition_id, store_id, step);
+        let key_post = OperationKey::derive(domain, composition_id, store_id, step);
         assert_eq!(key_pre, key_post);
 
         let mut memo = IdempotencyMemo::new();

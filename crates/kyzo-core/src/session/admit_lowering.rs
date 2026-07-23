@@ -19,14 +19,17 @@
 //! token's `origin_schema_cut` ([`OriginSealedLowering`]) — local Catalog
 //! cuts cannot reshape it; kind mismatch refuses in release builds.
 
+use crate::data::digest::{ProvenanceDigest, ValidTimeDigest};
 use crate::data::statement::{OntokKind, StatementContext, StatementSource};
 use crate::project::dimension::{LoweredRow, RecordLowering, StatementDimension};
 use crate::store::replica::{
     AdmissionCertificate, CrossingCapabilitySet, CrossingContext, CrossingEnvelope,
     CrossingEnvelopeParts, CrossingEvidence, CrossingEvidenceDemand, CrossingKind, CrossingRefuse,
-    CrossingStatus, CrossingValidated, GraphBoundKey, GraphBoundary, NamespacedRecordIdentity,
-    PromotionMeaning, ReplicaKey, TenantId, view_under_schema_cut,
+    CrossingStatus, CrossingValidated, GraphBoundKey, GraphBoundary, LocalRecordId,
+    NamespacedRecordIdentity, PromotionMeaning, ReplicaKey, SchemaCutDigest, TenantId,
+    view_under_schema_cut,
 };
+use crate::store::transcript::Digest32;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::canonical::encode_owned;
 use sha2::{Digest, Sha256};
@@ -176,7 +179,7 @@ pub(crate) fn crossing_envelope_from_record(
     CrossingEnvelope::new(CrossingEnvelopeParts {
         kind: crossing_kind_from_ontok(record.kind()),
         schema_version: *certificate.protocol_version(),
-        schema_cut: *certificate.schema_cut(),
+        schema_cut: certificate.schema_cut(),
         issuing_authority: certificate.authorizing_key_id(),
         context: context,
         evidence_demand: evidence_demand,
@@ -193,7 +196,7 @@ pub(crate) fn crossing_envelope_from_record(
 /// Catalog cut cannot reshape this via [`OriginSealedLowering::under_local_cut`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OriginSealedLowering {
-    origin_schema_cut: [u8; 32],
+    origin_schema_cut: SchemaCutDigest,
     kind: CrossingKind,
     custody_key: ReplicaKey,
     rows: RecordLowering,
@@ -202,7 +205,7 @@ pub struct OriginSealedLowering {
 impl OriginSealedLowering {
     /// Seal rows under the validated origin schema cut — private mint path.
     fn seal(
-        origin_schema_cut: [u8; 32],
+        origin_schema_cut: SchemaCutDigest,
         kind: CrossingKind,
         custody_key: ReplicaKey,
         rows: RecordLowering,
@@ -216,8 +219,8 @@ impl OriginSealedLowering {
     }
 
     /// Origin schema cut that constrains this lowering.
-    pub fn origin_schema_cut(&self) -> &[u8; 32] {
-        &self.origin_schema_cut
+    pub fn origin_schema_cut(&self) -> SchemaCutDigest {
+        self.origin_schema_cut
     }
 
     /// Validated ONTOK kind sealed with the cut.
@@ -238,9 +241,9 @@ impl OriginSealedLowering {
     /// Seat 69: view under a local Catalog cut — equal cut only; else refuse.
     pub fn under_local_cut(
         &self,
-        local_schema_cut: &[u8; 32],
+        local_schema_cut: SchemaCutDigest,
     ) -> Result<&RecordLowering, CrossingRefuse> {
-        view_under_schema_cut(&self.origin_schema_cut, local_schema_cut)?;
+        view_under_schema_cut(self.origin_schema_cut, local_schema_cut)?;
         Ok(&self.rows)
     }
 
@@ -250,14 +253,14 @@ impl OriginSealedLowering {
     }
 
     /// Replay meter: origin cut + kind + custody key + concatenated row bytes.
-    pub fn replay_digest(&self) -> [u8; 32] {
+    pub fn replay_digest(&self) -> Digest32 {
         let mut h = Sha256::new();
         h.update(b"kyzo.origin_sealed_lowering.v1");
-        h.update(self.origin_schema_cut);
+        h.update(self.origin_schema_cut.as_bytes());
         h.update([self.kind.as_wire()]);
         h.update(self.custody_key.as_bytes());
         h.update(self.rows.concatenated_bytes());
-        h.finalize().into()
+        Digest32::admit(h.finalize().into())
     }
 }
 
@@ -276,12 +279,12 @@ pub(crate) fn lower_after_crossing(
         return Err(CrossingRefuse::KindMismatch);
     }
     // Seat 69: token binds the certificate record digest — same-kind B refuses.
-    if record.digest().as_bytes() != validated.record_digest() {
+    if *record.digest() != validated.record_digest() {
         return Err(CrossingRefuse::RecordIdentityMismatch);
     }
     // Consume origin_schema_cut: seal lowering under it (not a local Catalog cut).
     // under_local_cut / replay_digest constrain meaning to this cut in release.
-    let origin_schema_cut = *validated.origin_schema_cut();
+    let origin_schema_cut = validated.origin_schema_cut();
     let custody_key = validated.custody().key();
     let rows = lower_record(record);
     Ok(OriginSealedLowering::seal(
@@ -293,23 +296,23 @@ pub(crate) fn lower_after_crossing(
 }
 
 /// Digest of validity-time for [`PromotionMeaning`] (#270 T3).
-pub(crate) fn promotion_valid_time_digest(record: &KyzoRecord) -> [u8; 32] {
+pub(crate) fn promotion_valid_time_digest(record: &KyzoRecord) -> ValidTimeDigest {
     let encoded = encode_owned(&DataValue::Interval(record.validity_time().as_interval()));
     let mut h = Sha256::new();
     h.update(b"kyzo.promotion.valid_time.v1");
     h.update(encoded.as_bytes());
-    h.finalize().into()
+    ValidTimeDigest::from_digest(h.finalize().into())
 }
 
 /// Digest of provenance / source for [`PromotionMeaning`] (#270 T3).
-pub(crate) fn promotion_provenance_digest(record: &KyzoRecord) -> [u8; 32] {
+pub(crate) fn promotion_provenance_digest(record: &KyzoRecord) -> ProvenanceDigest {
     let mut h = Sha256::new();
     h.update(b"kyzo.promotion.provenance.v1");
     match record.source() {
         StatementSource::Unbound => h.update(b"unbound"),
         StatementSource::Artifact(id) => h.update(id.as_bytes()),
     }
-    h.finalize().into()
+    ProvenanceDigest::from_digest(h.finalize().into())
 }
 
 /// Bind promotion meaning seats from an admitted record + certificate (#270 T3).
@@ -319,7 +322,7 @@ pub(crate) fn promotion_meaning_from_record(
     tenant: TenantId,
 ) -> PromotionMeaning {
     let identity = NamespacedRecordIdentity::from_certificate(
-        *record.record_id().as_bytes(),
+        LocalRecordId::from_digest(*record.record_id().as_bytes()),
         certificate,
         tenant,
     );
@@ -327,7 +330,7 @@ pub(crate) fn promotion_meaning_from_record(
         identity,
         promotion_valid_time_digest(record),
         promotion_provenance_digest(record),
-        *certificate.schema_cut(),
+        certificate.schema_cut(),
     )
 }
 
@@ -645,7 +648,7 @@ mod tests {
         .map_err(|e| miette!("sugar admit: {e}"))?;
         assert_eq!(record.kind(), OntokKind::Relation);
         assert_eq!(record.store_id(), store);
-        assert_eq!(cert.record_digest(), record.digest().as_bytes());
+        assert_eq!(cert.record_digest(), *record.digest());
         let permit = record.durable_write_permit();
         assert_eq!(permit.record_id(), record.record_id());
         let lowering = record.lower();
@@ -769,8 +772,8 @@ mod tests {
             origin_store: record.store_id(),
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
-            schema_cut: [0x51; 32],
-            record_digest: *record.digest().as_bytes(),
+            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
+            record_digest: *record.digest(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -821,7 +824,7 @@ mod tests {
             &lower_record(&record)
         );
         assert_eq!(
-            sealed.under_local_cut(&[0x99; 32]),
+            sealed.under_local_cut(SchemaCutDigest::from_digest([0x99; 32])),
             Err(crate::store::replica::CrossingRefuse::LocalReinterpretationUnconstructible)
         );
         // Replay digest includes the cut — different cut would diverge.
@@ -859,7 +862,7 @@ mod tests {
         let tenant = TenantId::from_digest([0x7E; 32]);
         let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x27; 32]));
         let scope = ScopeManifestDigest::from_digest([0x51; 32]);
-        let schema_cut = [0x51; 32];
+        let schema_cut = SchemaCutDigest::from_digest([0x51; 32]);
 
         let record_a = admit_claim_record()?;
         assert_eq!(
@@ -873,7 +876,7 @@ mod tests {
             origin_epoch: FenceEpoch::genesis(record_a.store_id()),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut,
-            record_digest: *record_a.digest().as_bytes(),
+            record_digest: *record_a.digest(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -906,7 +909,7 @@ mod tests {
             origin_epoch: FenceEpoch::genesis(record_b.store_id()),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut,
-            record_digest: *record_b.digest().as_bytes(),
+            record_digest: *record_b.digest(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -922,12 +925,12 @@ mod tests {
         let meaning_b = record_b.promotion_meaning(&cert_b, tenant);
 
         assert_eq!(
-            meaning_a.identity().local_id(),
+            meaning_a.identity().local_id().as_bytes(),
             record_a.digest().as_bytes(),
             "local_id must equal content digest for A"
         );
         assert_eq!(
-            meaning_b.identity().local_id(),
+            meaning_b.identity().local_id().as_bytes(),
             record_b.digest().as_bytes(),
             "local_id must equal content digest for B"
         );
@@ -949,7 +952,7 @@ mod tests {
             Ok(()),
             "same-content record must replay-equal PromotionMeaning"
         );
-        assert_eq!(meaning_a.schema_cut(), &schema_cut);
+        assert_eq!(meaning_a.schema_cut(), schema_cut);
         Ok(())
     }
 
@@ -976,8 +979,8 @@ mod tests {
             origin_store: record.store_id(),
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
-            schema_cut: [0x51; 32],
-            record_digest: *record.digest().as_bytes(),
+            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
+            record_digest: *record.digest(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -1010,7 +1013,7 @@ mod tests {
         .map_err(|e| miette!("validate A: {e}"))?;
         assert_eq!(
             validated.record_digest(),
-            record.digest().as_bytes(),
+            *record.digest(),
             "token must seal A's certificate record digest"
         );
 
@@ -1070,8 +1073,8 @@ mod tests {
             origin_store: record.store_id(),
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
-            schema_cut: [0x51; 32],
-            record_digest: *record.digest().as_bytes(),
+            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
+            record_digest: *record.digest(),
             predecessor_history_digest: [0x52; 32],
             post_state_root: PostStateRoot::from_digest([0x53; 32]),
             authorizing_key_id: key.id(),
@@ -1091,7 +1094,7 @@ mod tests {
         let mismatched = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Entity,
             schema_version: *cert.protocol_version(),
-            schema_cut: *cert.schema_cut(),
+            schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::NotRequired,

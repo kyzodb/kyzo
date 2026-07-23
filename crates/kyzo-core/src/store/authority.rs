@@ -326,13 +326,23 @@ pub enum AddressFenceRefuse {
     LockPoisoned,
 }
 
+/// Process-local fence table key: H(store ‖ write_token).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct AddressFenceKey([u8; 32]);
+
+impl AddressFenceKey {
+    fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+}
+
 /// Process-local registry of held fences (one claim per store address).
 ///
 /// Interior mutability is the stated concurrency need: multiple Engine
 /// handles in one process share the fence table.
 #[derive(Debug)]
 pub struct AddressFenceTable {
-    held: std::sync::Mutex<std::collections::BTreeSet<[u8; 32]>>,
+    held: std::sync::Mutex<std::collections::BTreeSet<AddressFenceKey>>,
 }
 
 impl AddressFenceTable {
@@ -379,11 +389,11 @@ impl AddressFence {
     }
 }
 
-fn fence_key(store_id: StoreId, token_id: &WriteTokenId) -> [u8; 32] {
+fn fence_key(store_id: StoreId, token_id: &WriteTokenId) -> AddressFenceKey {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(b"kyzo.address_fence.v1");
     h.update(store_id.as_bytes());
     h.update(token_id.as_bytes());
-    h.finalize().into()
+    AddressFenceKey::from_digest(h.finalize().into())
 }

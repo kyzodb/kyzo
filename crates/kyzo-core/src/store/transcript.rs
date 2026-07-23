@@ -1736,7 +1736,7 @@ mod tests {
         fn digest32(&mut self, id: u16, digest: &Digest32) {
             self.begin(id);
             self.buf.push(TAG_DIGEST32);
-            self.buf.extend_from_slice(digest);
+            self.buf.extend_from_slice(digest.as_bytes());
         }
 
         fn optional_absent(&mut self, id: u16) {
@@ -1765,8 +1765,8 @@ mod tests {
     /// Field order and tags come from the CanonicalTranscript wire schema / FieldId table —
     /// never from calling production `encode_*` and capturing output.
     fn independent_encode_normative(kind: SealedArtifactKind) -> Vec<u8> {
-        let store = [0x11u8; 32];
-        let dig = [0x22u8; 32];
+        let store = Digest32::admit([0x11u8; 32]);
+        let dig = Digest32::admit([0x22u8; 32]);
         match kind {
             SealedArtifactKind::CheckpointSeal => {
                 let mut w = indep_begin_sealed(1, b"kyzo.checkpoint_seal.v1");
@@ -1871,8 +1871,8 @@ mod tests {
                 let mut w = IndepWire::new_v6();
                 w.u64(1, 8); // ARTIFACT_KIND = KeyCommit
                 w.bytes(2, b"6"); // FORMAT_VERSION
-                w.digest32(3, &key_id); // PRIMARY_DIGEST
-                w.digest32(4, &key_store); // SECONDARY_DIGEST
+                w.digest32(3, &Digest32::admit(key_id)); // PRIMARY_DIGEST
+                w.digest32(4, &Digest32::admit(key_store)); // SECONDARY_DIGEST
                 w.bytes(5, b"KEY_COMMIT"); // DOMAIN_LABEL
                 w.u64(8, 0); // FENCE_EPOCH
                 w.finish()

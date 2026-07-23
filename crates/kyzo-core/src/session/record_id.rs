@@ -19,7 +19,9 @@
 //! origins never collapse (local id + origin authority + tenant + content).
 
 use crate::data::digest::RecordContentDigest;
-use crate::store::replica::{AuthorizingKeyId, NamespacedRecordIdentity, TenantId};
+use crate::store::replica::{
+    AuthorizingKeyId, LocalRecordId, NamespacedRecordIdentity, TenantId,
+};
 
 /// Admitted record identity — derived view of the record content digest.
 ///
@@ -53,6 +55,11 @@ impl RecordId {
         tenant: TenantId,
         content: RecordContentDigest,
     ) -> NamespacedRecordIdentity {
-        NamespacedRecordIdentity::bind(self.0, origin_authority, tenant, *content.as_bytes())
+        NamespacedRecordIdentity::bind(
+            LocalRecordId::from_digest(self.0),
+            origin_authority,
+            tenant,
+            content,
+        )
     }
 }
