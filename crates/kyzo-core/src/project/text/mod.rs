@@ -8,9 +8,9 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): `TokenizerConfig::validate` is new (a config is *provable* at
- * index-definition time, not only at first use); `TokenizerCache` recovers
- * from lock poisoning instead of unwrapping; the `indexing` submodule is a
- * seam until the operator tier lands.
+ * index-definition time, not only at first use); `TokenizerCache` lock
+ * poison is a typed refuse, never silent continue; the `indexing` submodule
+ * is a seam until the operator tier lands.
  */
 
 //! Full-text search: tokenizer configuration and the analyzer cache.
@@ -537,17 +537,27 @@ pub(crate) struct TokenizerCache {
     pub(crate) hashed_cache: RwLock<HashMap<Vec<u8>, Arc<TextAnalyzer>>>,
 }
 
+/// Typed refuse for the per-database tokenizer analyzer cache.
+///
+/// Reachable cache-lock failures — never `.expect` / panic costumes.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum TokenizerCacheRefuse {
+    /// Named or hashed analyzer-cache [`RwLock`] poisoned after a panic under lock.
+    #[error("TokenizerCacheLockPoisoned: tokenizer-cache RwLock poisoned")]
+    #[diagnostic(code(fts::tokenizer_cache_lock_poisoned))]
+    LockPoisoned,
+}
+
 // Poisoned cache locks refuse silent continue — same loud-poison law as
 // residency/current (admit.rs wording).
 #[cfg(test)]
-fn read_lock<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    l.read()
-        .expect("tokenizer-cache rwlock poisoned — refuse silent continue")
+fn read_lock<T>(l: &RwLock<T>) -> Result<RwLockReadGuard<'_, T>, TokenizerCacheRefuse> {
+    l.read().map_err(|_| TokenizerCacheRefuse::LockPoisoned)
 }
 #[cfg(test)]
-fn write_lock<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    l.write()
-        .expect("tokenizer-cache rwlock poisoned — refuse silent continue")
+fn write_lock<T>(l: &RwLock<T>) -> Result<RwLockWriteGuard<'_, T>, TokenizerCacheRefuse> {
+    l.write().map_err(|_| TokenizerCacheRefuse::LockPoisoned)
 }
 
 #[cfg(test)]
@@ -567,25 +577,25 @@ impl TokenizerCache {
         filters: &[TokenizerConfig],
     ) -> Result<Arc<TextAnalyzer>> {
         {
-            let idx_cache = read_lock(&self.named_cache);
+            let idx_cache = read_lock(&self.named_cache)?;
             if let Some(analyzer) = idx_cache.get(tokenizer_name) {
                 return Ok(analyzer.clone());
             }
         }
         let hash = tokenizer.config_hash(filters);
         {
-            let hashed_cache = read_lock(&self.hashed_cache);
+            let hashed_cache = read_lock(&self.hashed_cache)?;
             if let Some(analyzer) = hashed_cache.get(hash.as_ref()) {
-                let mut idx_cache = write_lock(&self.named_cache);
+                let mut idx_cache = write_lock(&self.named_cache)?;
                 idx_cache.insert(tokenizer_name.into(), analyzer.clone());
                 return Ok(analyzer.clone());
             }
         }
         {
             let analyzer = Arc::new(tokenizer.build(filters)?);
-            let mut hashed_cache = write_lock(&self.hashed_cache);
+            let mut hashed_cache = write_lock(&self.hashed_cache)?;
             hashed_cache.insert(hash.as_ref().to_vec(), analyzer.clone());
-            let mut idx_cache = write_lock(&self.named_cache);
+            let mut idx_cache = write_lock(&self.named_cache)?;
             idx_cache.insert(tokenizer_name.into(), analyzer.clone());
             Ok(analyzer)
         }
