@@ -93,7 +93,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use kyzo_model::value::{DataValue, Tuple};
+use miette::{Diagnostic, IntoDiagnostic};
 use smartstring::{LazyCompact, SmartString};
+use thiserror::Error;
 
 use crate::data::json::NamedRows;
 use crate::session::db::Engine;
@@ -104,6 +106,22 @@ use crate::store::failure::{
     DebtLedger, OperatorCap, OperatorHealthSurface, QuarantineRange, StorageStatsSnapshot,
 };
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
+
+/// Typed refuses for the observe / event-callback / deep-verify door.
+///
+/// Reachable registry and report failures — never `.expect` / panic costumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
+pub enum ObserveRefuse {
+    /// Process-local observe registry [`RwLock`] poisoned after a panic under lock.
+    #[error("EventCallbacksLockPoisoned: observe registry RwLock poisoned")]
+    #[diagnostic(code(session::observe::event_callbacks_lock_poisoned))]
+    EventCallbacksLockPoisoned,
+
+    /// `index_mismatches.len()` could not become [`u64`] (unsupported target width).
+    #[error("DeepVerifyMismatchCountOverflow: index_mismatches.len does not fit u64")]
+    #[diagnostic(code(session::observe::deep_verify_mismatch_count_overflow))]
+    DeepVerifyMismatchCountOverflow,
+}
 
 /// One authoritative metric counter. Private field — constructed only by
 /// authority doors ([`compaction_debt_counter`], [`index_status_counter`]).
@@ -414,17 +432,19 @@ pub struct DeepVerifyLastResult {
 }
 
 impl DeepVerifyLastResult {
-    fn from_report(report: &DeepVerifyReport, schedule_ordinal: ScheduleOrdinal) -> Self {
-        Self {
+    fn from_report(
+        report: &DeepVerifyReport,
+        schedule_ordinal: ScheduleOrdinal,
+    ) -> Result<Self, ObserveRefuse> {
+        let mismatch_count = u64::try_from(report.index_mismatches.len())
+            .map_err(|_| ObserveRefuse::DeepVerifyMismatchCountOverflow)?;
+        Ok(Self {
             clean: report.is_clean(),
             indices_checked: report.indices_checked,
-            // INVARIANT(deep_verify_mismatch_count): Vec::len fits u64 on all supported targets.
-            mismatch_count: u64::try_from(report.index_mismatches.len()).expect(
-                "INVARIANT(deep_verify_mismatch_count): Vec::len fits u64",
-            ),
+            mismatch_count,
             digest: report.digest(),
             schedule_ordinal,
-        }
+        })
     }
 }
 
@@ -675,18 +695,22 @@ impl EventCallbackRegistry {
 
 
 impl<S: Storage> Engine<S> {
-    /// Fail-closed observe-registry read — mutex poison is not a silent continue.
-    fn event_callbacks_read(&self) -> RwLockReadGuard<'_, EventCallbackRegistry> {
+    /// Fail-closed observe-registry read — lock poison is a typed refuse.
+    fn event_callbacks_read(
+        &self,
+    ) -> Result<RwLockReadGuard<'_, EventCallbackRegistry>, ObserveRefuse> {
         self.event_callbacks
             .read()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+            .map_err(|_| ObserveRefuse::EventCallbacksLockPoisoned)
     }
 
-    /// Fail-closed observe-registry write — mutex poison is not a silent continue.
-    fn event_callbacks_write(&self) -> RwLockWriteGuard<'_, EventCallbackRegistry> {
+    /// Fail-closed observe-registry write — lock poison is a typed refuse.
+    fn event_callbacks_write(
+        &self,
+    ) -> Result<RwLockWriteGuard<'_, EventCallbackRegistry>, ObserveRefuse> {
         self.event_callbacks
             .write()
-            .expect("event-callbacks mutex poisoned — refuse silent continue")
+            .map_err(|_| ObserveRefuse::EventCallbacksLockPoisoned)
     }
 }
 
@@ -696,43 +720,51 @@ impl<S: Storage> Engine<S> {
     ///
     /// (The CozoDB original took an optional bounded capacity; see the
     /// header — delivery is unbounded and lossy-by-disconnect.)
-    pub fn register_callback(&self, relation: &str) -> (CallbackId, Receiver<CallbackEvent>) {
+    pub fn register_callback(
+        &self,
+        relation: &str,
+    ) -> Result<(CallbackId, Receiver<CallbackEvent>), ObserveRefuse> {
         let (sender, receiver) = channel();
         let decl = CallbackDeclaration {
             dependent: SmartString::from(relation),
             sender,
         };
-        let mut registry = self.event_callbacks_write();
+        let mut registry = self.event_callbacks_write()?;
         let new_id = CallbackId::of_u32(self.next_callback_id());
         registry.register(new_id, decl);
-        (new_id, receiver)
+        Ok((new_id, receiver))
     }
 
     /// Unregister a callback; true if it existed.
-    pub fn unregister_callback(&self, id: CallbackId) -> bool {
-        self.event_callbacks_write()
-            .unregister(id)
+    pub fn unregister_callback(&self, id: CallbackId) -> Result<bool, ObserveRefuse> {
+        Ok(self.event_callbacks_write()?.unregister(id))
     }
 
     /// The relations any callback currently watches: mutation collects
     /// old/new rows only for these (snapshotted once per transaction, so a
     /// registration racing a commit either sees all of it or none of it).
-    pub(crate) fn current_callback_targets(&self) -> BTreeSet<SmartString<LazyCompact>> {
-        self.event_callbacks_read()
+    pub(crate) fn current_callback_targets(
+        &self,
+    ) -> Result<BTreeSet<SmartString<LazyCompact>>, ObserveRefuse> {
+        Ok(self
+            .event_callbacks_read()?
             .by_relation
             .keys()
             .cloned()
-            .collect()
+            .collect())
     }
 
     /// Deliver a committed transaction's collected events. Post-commit
     /// only. A send failing means the receiver is gone; the callback is
     /// pruned and the event dropped (lossy by disconnect — the documented
     /// contract).
-    pub(crate) fn send_callbacks(&self, collector: CallbackCollector) {
+    pub(crate) fn send_callbacks(
+        &self,
+        collector: CallbackCollector,
+    ) -> Result<(), ObserveRefuse> {
         let mut to_remove = vec![];
         {
-            let registry = self.event_callbacks_read();
+            let registry = self.event_callbacks_read()?;
             for (relation, events) in collector {
                 let Some(ids) = registry.by_relation.get(&relation) else {
                     continue;
@@ -757,19 +789,18 @@ impl<S: Storage> Engine<S> {
             }
         }
         if !to_remove.is_empty() {
-            let mut registry = self.event_callbacks_write();
+            let mut registry = self.event_callbacks_write()?;
             for id in to_remove {
                 registry.unregister(id);
             }
         }
+        Ok(())
     }
 
     /// Arm an operator-scheduled deep-verify (§51). Does not run it —
     /// [`Self::run_scheduled_deep_verify`] does. Returns the schedule ordinal.
-    pub fn schedule_deep_verify(&self) -> ScheduleOrdinal {
-        self.event_callbacks_write()
-            .deep_verify
-            .schedule()
+    pub fn schedule_deep_verify(&self) -> Result<ScheduleOrdinal, ObserveRefuse> {
+        Ok(self.event_callbacks_write()?.deep_verify.schedule())
     }
 
     /// Run deep-verify if one is scheduled. Persists
@@ -777,16 +808,16 @@ impl<S: Storage> Engine<S> {
     /// nothing is pending.
     pub fn run_scheduled_deep_verify(&self) -> miette::Result<Option<DeepVerifyLastResult>> {
         let ordinal = {
-            let mut registry = self.event_callbacks_write();
+            let mut registry = self.event_callbacks_write().into_diagnostic()?;
             match registry.deep_verify.take_pending() {
                 Some(ord) => ord,
                 None => return Ok(None),
             }
         };
         let report = deep_verify_storage(&self.store)?;
-        let result = DeepVerifyLastResult::from_report(&report, ordinal);
+        let result = DeepVerifyLastResult::from_report(&report, ordinal).into_diagnostic()?;
         {
-            let mut registry = self.event_callbacks_write();
+            let mut registry = self.event_callbacks_write().into_diagnostic()?;
             registry.health_tiers.integrity = if result.clean {
                 Integrity::passing()
             } else {
@@ -803,17 +834,13 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Query the persisted deep-verify last-result, if any run has completed.
-    pub fn deep_verify_last_result(&self) -> Option<DeepVerifyLastResult> {
-        self.event_callbacks_read()
-            .deep_verify
-            .last_result()
+    pub fn deep_verify_last_result(&self) -> Result<Option<DeepVerifyLastResult>, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.deep_verify.last_result())
     }
 
     /// Query deep-verify staleness relative to the operator schedule.
-    pub fn deep_verify_staleness(&self) -> DeepVerifyStaleness {
-        self.event_callbacks_read()
-            .deep_verify
-            .staleness()
+    pub fn deep_verify_staleness(&self) -> Result<DeepVerifyStaleness, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.deep_verify.staleness())
     }
 
     /// Snapshot the sealed [`OperatorHealthSurface`] (§82).
@@ -821,55 +848,62 @@ impl<S: Storage> Engine<S> {
     /// Ephemeral in-flight is synced from the live registry. Compaction-debt
     /// and index-status are **not** mirrored into ephemeral — relation doors
     /// render [`DebtLedger`] / [`IndexStatus`] directly.
-    pub fn operator_health_surface(&self) -> OperatorHealthSurface {
-        let registry = self.event_callbacks_read();
+    pub fn operator_health_surface(&self) -> Result<OperatorHealthSurface, ObserveRefuse> {
+        let registry = self.event_callbacks_read()?;
         let mut surface = registry.operator_health.clone();
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
-        surface
+        Ok(surface)
     }
 
     /// Replace the sealed operator health surface (operator wiring door).
     ///
     /// Re-syncs ephemeral in-flight from the live registry so a stale
     /// ephemeral cannot disagree with the registry counter.
-    pub fn set_operator_health_surface(&self, mut surface: OperatorHealthSurface) {
-        let mut registry = self.event_callbacks_write();
+    pub fn set_operator_health_surface(
+        &self,
+        mut surface: OperatorHealthSurface,
+    ) -> Result<(), ObserveRefuse> {
+        let mut registry = self.event_callbacks_write()?;
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
         registry.operator_health = surface;
+        Ok(())
     }
 
     /// Set the index-status authority (§20).
-    pub(crate) fn set_index_status(&self, status: IndexStatus) {
-        let mut registry = self.event_callbacks_write();
+    pub(crate) fn set_index_status(&self, status: IndexStatus) -> Result<(), ObserveRefuse> {
+        let mut registry = self.event_callbacks_write()?;
         registry.index_status = status;
+        Ok(())
     }
 
     /// Query the index-status authority (Catalog generation / staleness).
-    pub(crate) fn index_status(&self) -> IndexStatus {
-        self.event_callbacks_read()
-            .index_status
+    pub(crate) fn index_status(&self) -> Result<IndexStatus, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.index_status)
     }
 
     /// Compaction-debt metric exporter — renders [`DebtLedger`] only (§42/§44).
-    pub fn compaction_debt_exporter(&self) -> MetricExporter {
-        let surface = self.operator_health_surface();
+    pub fn compaction_debt_exporter(&self) -> Result<MetricExporter, ObserveRefuse> {
+        let surface = self.operator_health_surface()?;
         let cap = OperatorCap::mint();
         let ledger = surface.debt(&cap);
-        MetricExporter::from_counter(compaction_debt_counter(&ledger))
+        Ok(MetricExporter::from_counter(compaction_debt_counter(&ledger)))
     }
 
     /// Index-status metric exporter — renders [`IndexStatus`] only (§20).
-    pub fn index_status_exporter(&self) -> MetricExporter {
-        MetricExporter::from_counter(index_status_counter(self.index_status()))
+    pub fn index_status_exporter(&self) -> Result<MetricExporter, ObserveRefuse> {
+        Ok(MetricExporter::from_counter(index_status_counter(
+            self.index_status()?,
+        )))
     }
 
     /// Record a quarantine range on the sealed operator surface (never a
     /// tenant door). Cap-absent asks still cannot select it — see
     /// [`OperatorHealthSurface::quarantine_ranges`].
-    pub fn operator_record_quarantine(&self, range: QuarantineRange) {
-        self.event_callbacks_write()
+    pub fn operator_record_quarantine(&self, range: QuarantineRange) -> Result<(), ObserveRefuse> {
+        self.event_callbacks_write()?
             .operator_health
             .record_quarantine(range);
+        Ok(())
     }
 
     /// Cap-absent ephemeral engine-state relations (§82).
@@ -877,70 +911,75 @@ impl<S: Storage> Engine<S> {
     /// Projects in-flight tx / debt / index-status / storage-stats.
     /// Quarantine and failure topology are **unreachable** without
     /// [`OperatorCap`] — this door does not mint or accept Cap.
-    pub fn operator_ephemeral_relations(&self) -> OperatorEphemeralRelations {
-        OperatorEphemeralRelations::for_tenant(self.operator_health_surface(), self.index_status())
+    pub fn operator_ephemeral_relations(
+        &self,
+    ) -> Result<OperatorEphemeralRelations, ObserveRefuse> {
+        Ok(OperatorEphemeralRelations::for_tenant(
+            self.operator_health_surface()?,
+            self.index_status()?,
+        ))
     }
 
     /// Cap-present operator ephemeral relations (§82).
     ///
     /// Requires unforgeable [`OperatorCap`] (composition-root / host mint
     /// only — like `StoreOpen::mint`). Tenant doors have no path here.
-    pub fn operator_ephemeral_relations_for(&self, cap: OperatorCap) -> OperatorEphemeralRelations {
-        OperatorEphemeralRelations::for_operator(
-            self.operator_health_surface(),
-            self.index_status(),
+    pub fn operator_ephemeral_relations_for(
+        &self,
+        cap: OperatorCap,
+    ) -> Result<OperatorEphemeralRelations, ObserveRefuse> {
+        Ok(OperatorEphemeralRelations::for_operator(
+            self.operator_health_surface()?,
+            self.index_status()?,
             cap,
-        )
+        ))
     }
 
     /// Live in-flight-tx registry count — THE `::running` authority.
-    pub fn in_flight_tx_count(&self) -> u64 {
-        self.event_callbacks_read()
-            .in_flight_tx
+    pub fn in_flight_tx_count(&self) -> Result<u64, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.in_flight_tx)
     }
 
     /// Register an open transaction on the live in-flight registry.
     ///
     /// SessionTx open/close in `session/db.rs` should call these; until that
     /// wire lands, tests and Cap doors call them explicitly.
-    pub fn in_flight_tx_begin(&self) {
-        let mut registry = self.event_callbacks_write();
+    pub fn in_flight_tx_begin(&self) -> Result<(), ObserveRefuse> {
+        let mut registry = self.event_callbacks_write()?;
         let in_flight = match registry.in_flight_tx.checked_add(1) {
             Some(n) => n,
             None => u64::MAX,
         };
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
+        Ok(())
     }
 
     /// Unregister a closed transaction from the live in-flight registry.
-    pub fn in_flight_tx_end(&self) {
-        let mut registry = self.event_callbacks_write();
+    pub fn in_flight_tx_end(&self) -> Result<(), ObserveRefuse> {
+        let mut registry = self.event_callbacks_write()?;
         let in_flight = match registry.in_flight_tx.checked_sub(1) {
             Some(n) => n,
             None => 0,
         };
         registry.in_flight_tx = in_flight;
         sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
+        Ok(())
     }
 
     /// `::running` via the live in-flight-tx registry (never a default-zero surface).
     pub fn list_running_jobs(&self) -> miette::Result<NamedRows> {
-        crate::session::jobs::list_running_from(self.in_flight_tx_count())
+        crate::session::jobs::list_running_from(self.in_flight_tx_count().into_diagnostic()?)
     }
 
     /// Query the liveness tier — independently of readiness and integrity.
-    pub fn liveness(&self) -> Liveness {
-        self.event_callbacks_read()
-            .health_tiers
-            .liveness
+    pub fn liveness(&self) -> Result<Liveness, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.health_tiers.liveness)
     }
 
     /// Query the readiness tier — independently of liveness and integrity.
-    pub fn readiness(&self) -> Readiness {
-        self.event_callbacks_read()
-            .health_tiers
-            .readiness
+    pub fn readiness(&self) -> Result<Readiness, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.health_tiers.readiness)
     }
 
     /// Query the integrity tier — independently of liveness and readiness.
@@ -948,52 +987,49 @@ impl<S: Storage> Engine<S> {
     /// The relation **renders** [`DeepVerifyDigest`] from the private
     /// last_verify field when a deep-verify has completed; otherwise the
     /// digest column is absent (never zero-filled).
-    pub fn integrity(&self) -> Integrity {
-        self.event_callbacks_read()
-            .health_tiers
-            .integrity
+    pub fn integrity(&self) -> Result<Integrity, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.health_tiers.integrity)
     }
 
     /// Operator integrity relation with rendered last-verify digest.
-    pub fn integrity_relation(&self) -> NamedRows {
-        let registry = self.event_callbacks_read();
-        registry
+    pub fn integrity_relation(&self) -> Result<NamedRows, ObserveRefuse> {
+        let registry = self.event_callbacks_read()?;
+        Ok(registry
             .health_tiers
             .integrity
-            .relation_with_last_verify(registry.operator_health.last_verify())
+            .relation_with_last_verify(registry.operator_health.last_verify()))
     }
 
     /// Operator wiring: set the liveness tier without touching readiness/integrity.
-    pub fn set_liveness(&self, tier: Liveness) {
-        self.event_callbacks_write()
-            .health_tiers
-            .liveness = tier;
+    pub fn set_liveness(&self, tier: Liveness) -> Result<(), ObserveRefuse> {
+        self.event_callbacks_write()?.health_tiers.liveness = tier;
+        Ok(())
     }
 
     /// Operator wiring: set the readiness tier without touching liveness/integrity.
-    pub fn set_readiness(&self, tier: Readiness) {
-        self.event_callbacks_write()
-            .health_tiers
-            .readiness = tier;
+    pub fn set_readiness(&self, tier: Readiness) -> Result<(), ObserveRefuse> {
+        self.event_callbacks_write()?.health_tiers.readiness = tier;
+        Ok(())
     }
 
     /// Operator wiring: set the integrity tier without touching liveness/readiness.
-    pub fn set_integrity(&self, tier: Integrity) {
-        self.event_callbacks_write()
-            .health_tiers
-            .integrity = tier;
+    pub fn set_integrity(&self, tier: Integrity) -> Result<(), ObserveRefuse> {
+        self.event_callbacks_write()?.health_tiers.integrity = tier;
+        Ok(())
     }
 
     /// Current tracing verbosity (diagnostics only).
-    pub fn tracing_verbosity(&self) -> TracingVerbosity {
-        self.event_callbacks_read()
-            .tracing_verbosity
+    pub fn tracing_verbosity(&self) -> Result<TracingVerbosity, ObserveRefuse> {
+        Ok(self.event_callbacks_read()?.tracing_verbosity)
     }
 
     /// Set tracing verbosity — must not change query result rows or budget.
-    pub fn set_tracing_verbosity(&self, verbosity: TracingVerbosity) {
-        self.event_callbacks_write()
-            .tracing_verbosity = verbosity;
+    pub fn set_tracing_verbosity(
+        &self,
+        verbosity: TracingVerbosity,
+    ) -> Result<(), ObserveRefuse> {
+        self.event_callbacks_write()?.tracing_verbosity = verbosity;
+        Ok(())
     }
 
     /// Observe a fixed probe under the engine's current tracing verbosity.
@@ -1005,9 +1041,9 @@ impl<S: Storage> Engine<S> {
         rows: NamedRows,
         charge: u64,
         budget: &mut ObservationBudget,
-    ) -> (ObservationOutcome, DiagnosticEmission) {
-        let verbosity = self.tracing_verbosity();
-        observe_probe(rows, charge, budget, verbosity)
+    ) -> Result<(ObservationOutcome, DiagnosticEmission), ObserveRefuse> {
+        let verbosity = self.tracing_verbosity()?;
+        Ok(observe_probe(rows, charge, budget, verbosity))
     }
 }
 
@@ -1044,7 +1080,7 @@ mod exactly_once_battery {
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
             .map_err(|e| miette!("create counter: {e}"))?;
 
-        let (_id, receiver) = db.register_callback("ctr");
+        let (_id, receiver) = db.register_callback("ctr")?;
 
         const PER_THREAD: i64 = 15;
         const THREADS: i64 = 2;
@@ -1099,7 +1135,7 @@ mod exactly_once_battery {
         db.run_script("?[k, v] <- [[0, 0]] :create ctr {k => v}", no_params())
             .map_err(|e| miette!("create counter (retries through spurious conflicts): {e}"))?;
 
-        let (_id, receiver) = db.register_callback("ctr");
+        let (_id, receiver) = db.register_callback("ctr")?;
         const N: i64 = 20;
         for _ in 0..N {
             db.run_script(
@@ -1151,15 +1187,15 @@ mod deep_verify_schedule {
         db.run_script("::index create t:by_v {v}", no_params())?;
 
         assert!(matches!(
-            db.deep_verify_staleness(),
+            db.deep_verify_staleness()?,
             DeepVerifyStaleness::NeverRun
         ));
-        assert!(db.deep_verify_last_result().is_none());
+        assert!(db.deep_verify_last_result()?.is_none());
 
-        let ord = db.schedule_deep_verify();
+        let ord = db.schedule_deep_verify()?;
         assert!(ord.get() >= 1);
         assert!(
-            db.deep_verify_staleness().is_stale(),
+            db.deep_verify_staleness()?.is_stale(),
             "armed schedule must report staleness before the run"
         );
 
@@ -1172,17 +1208,17 @@ mod deep_verify_schedule {
         assert_eq!(result.schedule_ordinal, ord);
 
         let persisted = db
-            .deep_verify_last_result()
+            .deep_verify_last_result()?
             .ok_or_else(|| miette!("last_result queryable"))?;
         assert_eq!(persisted, result);
         assert!(matches!(
-            db.deep_verify_staleness(),
+            db.deep_verify_staleness()?,
             DeepVerifyStaleness::Fresh { .. }
         ));
 
         // Re-schedule → stale again even though a prior result exists.
-        db.schedule_deep_verify();
-        match db.deep_verify_staleness() {
+        db.schedule_deep_verify()?;
+        match db.deep_verify_staleness()? {
             DeepVerifyStaleness::Stale {
                 last_result: Some(prev),
                 pending_ordinal,
@@ -1236,10 +1272,10 @@ mod tenant_blind_operator_surface {
             KeyspaceId::of_u64(3),
             b"lo".to_vec(),
             b"hi".to_vec(),
-        ));
+        ))?;
 
         // Cap-absent ordinary door: ephemeral metrics OK, topology unreachable.
-        let tenant = db.operator_ephemeral_relations();
+        let tenant = db.operator_ephemeral_relations()?;
         assert!(!tenant.has_operator_cap());
         assert_eq!(
             tenant.in_flight_tx_relation()?.rows()[0][0]
@@ -1256,7 +1292,7 @@ mod tenant_blind_operator_surface {
         let cap = OperatorCap::mint();
         let lattice = FailureLattice::Quarantined {
             ranges: db
-                .operator_health_surface()
+                .operator_health_surface()?
                 .quarantine_ranges(&cap)
                 .to_vec(),
         };
@@ -1265,7 +1301,7 @@ mod tenant_blind_operator_surface {
             Err(TenantBlindRefuse::FailureTopologyForbidden)
         ));
 
-        let op = db.operator_ephemeral_relations_for(cap);
+        let op = db.operator_ephemeral_relations_for(cap)?;
         assert!(op.has_operator_cap());
         assert_eq!(op.quarantine_relation()?.rows().len(), 1);
         assert!(op.failure_topology(&lattice).is_ok());
@@ -1358,11 +1394,11 @@ mod one_counter_per_metric {
         surface
             .ephemeral_mut()
             .replace(0, StorageStatsSnapshot::empty());
-        db.set_operator_health_surface(surface);
+        db.set_operator_health_surface(surface)?;
 
         // After seal, debt relation must equal DebtLedger.
-        assert_eq!(db.compaction_debt_exporter().value(), 11);
-        let rels = db.operator_ephemeral_relations();
+        assert_eq!(db.compaction_debt_exporter()?.value(), 11);
+        let rels = db.operator_ephemeral_relations()?;
         assert_eq!(
             rels.compaction_debt_relation()?.rows()[0][0]
                 .get_int()
@@ -1376,11 +1412,11 @@ mod one_counter_per_metric {
             Some(IndexGeneration::witness(7)),
         );
         assert!(!status.staleness().is_stale());
-        db.set_index_status(status);
+        db.set_index_status(status)?;
 
-        assert_eq!(db.index_status_exporter().value(), 7);
+        assert_eq!(db.index_status_exporter()?.value(), 7);
         assert_eq!(
-            db.operator_ephemeral_relations()
+            db.operator_ephemeral_relations()?
                 .index_status_relation()?
                 .rows()[0][0]
                 .get_int()
@@ -1389,14 +1425,14 @@ mod one_counter_per_metric {
         );
         // Exporter and relation are the same counter — not two sources.
         let status_i = db
-            .operator_ephemeral_relations()
+            .operator_ephemeral_relations()?
             .index_status_relation()?
             .rows()[0][0]
             .get_int()
             .ok_or_else(|| miette!("get_int"))?;
         let status_u =
             u64::try_from(status_i).map_err(|_| miette!("index status does not fit u64"))?;
-        assert_eq!(db.index_status_exporter().value(), status_u);
+        assert_eq!(db.index_status_exporter()?.value(), status_u);
         Ok(())
     }
 }
@@ -1436,47 +1472,47 @@ mod health_tiers_and_tracing {
             .map_err(|e| miette!("compose: {e}"))?;
 
         // Defaults: live + ready; integrity fails until verify witnesses clean.
-        assert!(db.liveness().is_passing());
-        assert!(db.readiness().is_passing());
-        assert!(!db.integrity().is_passing());
+        assert!(db.liveness()?.is_passing());
+        assert!(db.readiness()?.is_passing());
+        assert!(!db.integrity()?.is_passing());
 
         // Distinct relation columns — three query surfaces, not one shared name.
         assert_eq!(
-            db.liveness().relation().headers(),
+            db.liveness()?.relation().headers(),
             &["liveness".to_string()]
         );
         assert_eq!(
-            db.readiness().relation().headers(),
+            db.readiness()?.relation().headers(),
             &["readiness".to_string()]
         );
         assert_eq!(
-            db.integrity().relation().headers(),
+            db.integrity()?.relation().headers(),
             &["integrity".to_string()]
         );
 
         // Flip only readiness — liveness and integrity must be unchanged.
-        db.set_readiness(Readiness::failing());
+        db.set_readiness(Readiness::failing())?;
         assert!(
-            db.liveness().is_passing(),
+            db.liveness()?.is_passing(),
             "liveness must not follow readiness"
         );
-        assert!(!db.readiness().is_passing());
+        assert!(!db.readiness()?.is_passing());
         assert!(
-            !db.integrity().is_passing(),
+            !db.integrity()?.is_passing(),
             "integrity must not follow readiness"
         );
 
         // Flip only integrity — liveness and readiness must be unchanged.
-        db.set_integrity(Integrity::passing());
-        assert!(db.liveness().is_passing());
-        assert!(!db.readiness().is_passing());
-        assert!(db.integrity().is_passing());
+        db.set_integrity(Integrity::passing())?;
+        assert!(db.liveness()?.is_passing());
+        assert!(!db.readiness()?.is_passing());
+        assert!(db.integrity()?.is_passing());
 
         // Flip only liveness — readiness and integrity must be unchanged.
-        db.set_liveness(Liveness::failing());
-        assert!(!db.liveness().is_passing());
-        assert!(!db.readiness().is_passing());
-        assert!(db.integrity().is_passing());
+        db.set_liveness(Liveness::failing())?;
+        assert!(!db.liveness()?.is_passing());
+        assert!(!db.readiness()?.is_passing());
+        assert!(db.integrity()?.is_passing());
 
         // Type-level independence: the three types are not interchangeable.
         let live = Liveness::passing();
@@ -1562,13 +1598,13 @@ mod health_tiers_and_tracing {
         assert!(emissions[1].event_count < emissions[2].event_count);
 
         // Engine door: set_tracing_verbosity up/down — same rows + budget.
-        db.set_tracing_verbosity(TracingVerbosity::Silent);
+        db.set_tracing_verbosity(TracingVerbosity::Silent)?;
         let mut budget_lo = ObservationBudget::with_ceiling(ceiling);
-        let (lo, emit_lo) = db.observe_under_tracing(probe_rows()?, charge, &mut budget_lo);
+        let (lo, emit_lo) = db.observe_under_tracing(probe_rows()?, charge, &mut budget_lo)?;
 
-        db.set_tracing_verbosity(TracingVerbosity::Detail);
+        db.set_tracing_verbosity(TracingVerbosity::Detail)?;
         let mut budget_hi = ObservationBudget::with_ceiling(ceiling);
-        let (hi, emit_hi) = db.observe_under_tracing(probe_rows()?, charge, &mut budget_hi);
+        let (hi, emit_hi) = db.observe_under_tracing(probe_rows()?, charge, &mut budget_hi)?;
 
         assert_eq!(
             lo.rows().headers(),
