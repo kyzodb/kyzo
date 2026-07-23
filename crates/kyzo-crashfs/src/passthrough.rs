@@ -836,7 +836,9 @@ impl Filesystem for PassthroughFs {
         for entry in entries {
             let entry = match entry {
                 Ok(e) => e,
-                Err(_) => continue,
+                Err(_) => {
+                    continue;
+                }
             };
             let child_rel = rel.join(entry.file_name());
             let child_ino = {

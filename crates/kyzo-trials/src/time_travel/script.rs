@@ -214,7 +214,13 @@ fn seeded_history(seed: u64, n_entities: i64, n_events: usize, chunk: usize) -> 
             ts += 10 * (1 + u64_as_i64(rng.below(3)));
         }
         let entity = 1 + u64_as_i64(rng.below(must_ok(u64::try_from(n_entities), "n_entities")));
-        let is_live = match alive.get(&entity) { Some(b) => *b, None => false };
+        let is_live = match alive.get(&entity) {
+            Some(b) => *b,
+            None => {
+                let never_seen = false;
+                never_seen
+            }
+        };
         let is_assert = if is_live {
             // 70% supersede-with-new-value (still an assert), 30% retract.
             rng.below(10) < 7

@@ -315,7 +315,10 @@ pub(crate) fn for_each_seed(seeds: std::ops::Range<u64>, f: impl Fn(u64)) {
                 Some(s) => s.as_str(),
                 None => match payload.downcast_ref::<&str>() {
                     Some(s) => *s,
-                    None => "<non-string panic payload>",
+                    None => {
+                        let non_string_panic = "<non-string panic payload>";
+                        non_string_panic
+                    },
                 },
             };
             std::panic::resume_unwind(Box::new(format!(
@@ -724,7 +727,9 @@ impl SimWriteTx {
                         };
                         match w {
                             Some(v) => Some((k.clone(), v.clone())),
-                            None => continue,
+                            None => {
+                                continue;
+                            }
                         }
                     }
                     (Some(sk), Some(wk)) => match sk.cmp(wk) {
@@ -745,7 +750,9 @@ impl SimWriteTx {
                             };
                             match w {
                                 Some(v) => Some((k.clone(), v.clone())),
-                                None => continue,
+                                None => {
+                                continue;
+                            }
                             }
                         }
                         // Same key in both: the write shadows the snapshot
@@ -758,7 +765,9 @@ impl SimWriteTx {
                             };
                             match w {
                                 Some(v) => Some((k.clone(), v.clone())),
-                                None => continue,
+                                None => {
+                                continue;
+                            }
                             }
                         }
                     },

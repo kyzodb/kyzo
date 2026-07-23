@@ -546,7 +546,10 @@ mod magic_bypass_differential {
         let oracle = must(naive_eval(program), "naive oracle evaluates");
         let ext = match oracle.get(target) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let absent_ext = BTreeSet::new();
+                absent_ext
+            }
         };
         let mut rows: Vec<Vec<i64>> = ext
             .into_iter()

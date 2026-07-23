@@ -209,7 +209,10 @@ impl ModelBody {
         } else {
             match self.facts.get(&rel) {
                 Some(set) => set.iter().cloned().collect(),
-                None => Vec::new(),
+                None => {
+                    let absent_facts = Vec::new();
+                    absent_facts
+                }
             }
         }
     }
@@ -226,7 +229,10 @@ impl ModelBody {
                 .next()
                 .is_some_and(|t| match t.try_into_tuple() {
                     Ok(tup) => &tup == probe,
-                    Err(_) => false,
+                    Err(_) => {
+                        let decode_refuse = false;
+                        decode_refuse
+                    }
                 })
         } else {
             self.facts.get(&rel).is_some_and(|set| set.contains(probe))
@@ -335,7 +341,10 @@ impl FixedRuleEval for ModelFixed {
                 } else {
                     match self.facts.get(rel) {
                         Some(set) => set.clone(),
-                        None => BTreeSet::new(),
+                        None => {
+                            let absent_rel = BTreeSet::new();
+                            absent_rel
+                        }
                     }
                 }
             })
@@ -442,7 +451,10 @@ pub(crate) fn compile_for(
     let strata_map = strata_of(model);
     let entry_stratum = match strata_map.values().copied().max() {
         Some(m) => m + 1,
-        None => 1,
+        None => {
+            let empty_strata_entry = 1;
+            empty_strata_entry
+        }
     };
 
     let mut strata: Vec<EvalStratum<ModelBody, ModelFixed>> = (0..=entry_stratum)
@@ -1113,7 +1125,10 @@ fn differential(model: &Program) -> Option<String> {
     for rel in idb_of(model) {
         let oracle_rows = match oracle_db.get(&rel) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let absent_oracle = BTreeSet::new();
+                absent_oracle
+            }
         };
         let arity = arities[&rel];
         let real_rows = match real_eval(

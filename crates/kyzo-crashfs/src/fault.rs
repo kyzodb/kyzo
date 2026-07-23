@@ -176,7 +176,10 @@ impl Counters {
     pub fn count(&self, path: &str, op: OpKind) -> u64 {
         match self.counts.get(&(path.to_string(), op)).copied() {
             Some(n) => n,
-            None => occurrence_floor(),
+            None => {
+                let floor = occurrence_floor();
+                floor
+            },
         }
     }
 }

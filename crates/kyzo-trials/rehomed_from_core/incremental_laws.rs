@@ -195,11 +195,17 @@ fn assert_matches_oracle(
             .find(|(k, _)| k.as_str() == rel)
         {
             Some((_, v)) => v.iter().map(conv_signed).collect(),
-            None => BTreeSet::new(),
+            None => {
+                let absent_expected = BTreeSet::new();
+                absent_expected
+            }
         };
         let got = match production_out.get(&sym(rel)) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let absent_got = BTreeSet::new();
+                absent_got
+            }
         };
         assert_eq!(expected, got, "{ctx}: mismatch on relation '{rel}'");
     }

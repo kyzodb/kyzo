@@ -239,7 +239,9 @@ fn abort_fuse_connection(mountpoint: &Path) {
                 }
                 return;
             }
-            Err(_write) => continue,
+            Err(_write) => {
+                continue;
+            }
         }
     }
 }

@@ -1162,7 +1162,9 @@ fn snapshot_isolation_holds_at_answer_level() {
                 for _ in 0..1000 {
                     let mut tx = match db.write_tx() {
                         Ok(t) => t,
-                        Err(_) => continue,
+                        Err(_) => {
+                            continue;
+                        }
                     };
                     let mut good = true;
                     for (slot, num) in [(0i64, k), (1, C - k)] {

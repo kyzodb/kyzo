@@ -361,7 +361,9 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
         }
         match tx.commit() {
             Ok(_committed) => return CommittedTxn { ops, stamp },
-            Err(e) if e.is_conflict() => continue,
+            Err(e) if e.is_conflict() => {
+                continue;
+            }
             Err(e) => {
                 assert!(false, "unexpected commit error (not a SSI conflict): {e:?}");
                 loop {}
@@ -681,7 +683,10 @@ fn run_seed(seed: u64) -> Result<(), String> {
 fn stressor_thread_count() -> usize {
     match std::thread::available_parallelism() {
         Ok(n) => n.get(),
-        Err(_) => 4,
+        Err(_) => {
+            let parallelism_floor = 4;
+            parallelism_floor
+        }
     }
 }
 

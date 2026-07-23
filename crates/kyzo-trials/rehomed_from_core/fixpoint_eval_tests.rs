@@ -117,7 +117,10 @@ fn assert_matches_oracle(model: &Program) {
         let oracle = must(naive_eval(model), "oracle evaluates");
         let exp = match oracle.get(rel.as_ref()) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let absent_oracle = BTreeSet::new();
+                absent_oracle
+            }
         };
         assert_eq!(got, exp, "mismatch on relation {rel}");
     }
