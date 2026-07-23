@@ -107,12 +107,28 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         let unconfessed: Vec<&Hit> = match check.policy {
             Policy::HardBan => raw.iter().collect(),
             Policy::SwornWaiver => {
+                // One waiver confesses exactly ONE hit. Two violations of
+                // the same construct sharing a line coordinate cannot ride
+                // one confession — the duplicate-site refusal in
+                // WaiverFile::load means the second occurrence has no
+                // representable waiver and stays red until FIXED.
                 let sworn = waivers.for_check(&check.name);
+                let mut consumed = vec![false; sworn.len()];
                 raw.iter()
                     .filter(|h| {
-                        !sworn.iter().any(|w| {
-                            w.file == h.file && w.line == h.line && w.construct == h.construct
-                        })
+                        let found = sworn.iter().enumerate().find(|(i, w)| {
+                            !consumed[*i]
+                                && w.file == h.file
+                                && w.line == h.line
+                                && w.construct == h.construct
+                        });
+                        match found {
+                            Some((i, _)) => {
+                                consumed[i] = true;
+                                false
+                            }
+                            None => true,
+                        }
                     })
                     .collect()
             }

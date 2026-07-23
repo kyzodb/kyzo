@@ -109,7 +109,7 @@ impl Registry {
             }
             if !bite_fns.contains(c.bite_proof.trim()) {
                 bail!(
-                    "check `{}` names bite_proof `{}` but no such fn exists in the bite-proof source — an unproven detector may not register",
+                    "check `{}` names bite_proof `{}` but no #[test] fn of that name exists in the bite-proof source — a name that never runs under the suite proves nothing",
                     c.name,
                     c.bite_proof
                 );
@@ -166,9 +166,13 @@ impl Registry {
     }
 }
 
-/// Every fn name defined anywhere in the bite-proof source, by parsing it —
-/// a string `contains` would accept a name inside a comment or a string
-/// literal, which is exactly the fraud this cross-check exists to refuse.
+/// Every `#[test]` fn name defined in the bite-proof source, by parsing it.
+/// Two frauds refused here: a name inside a comment or string literal (a
+/// `contains` scan would accept it), and a non-test helper fn cited as a
+/// proof (it would never execute under the suite). What this cross-check
+/// enforces is existence-as-a-test; DETONATION is enforced by the suite
+/// itself running in the same gate (`cargo test -p bs-detector`) — a proof
+/// that stops asserting fails there, red either way.
 fn defined_fns(src: &str) -> Result<BTreeSet<String>> {
     use syn::visit::Visit;
     let ast = syn::parse_file(src)
@@ -178,7 +182,13 @@ fn defined_fns(src: &str) -> Result<BTreeSet<String>> {
     }
     impl<'ast> Visit<'ast> for V {
         fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-            self.fns.insert(node.sig.ident.to_string());
+            let is_test = node.attrs.iter().any(|a| {
+                a.path().is_ident("test")
+                    || a.path().segments.last().is_some_and(|s| s.ident == "test")
+            });
+            if is_test {
+                self.fns.insert(node.sig.ident.to_string());
+            }
             syn::visit::visit_item_fn(self, node);
         }
     }
@@ -237,6 +247,21 @@ bite_proof = "unwrap_detonates_on_bare_unwrap"
         assert!(
             load(&ghost, EMPTY_WAIVERS).is_err(),
             "a bite_proof naming no defined fn must refuse — unproven detectors do not register"
+        );
+    }
+
+    #[test]
+    fn bite_proof_naming_a_non_test_helper_does_not_count() {
+        let mut cf = tempfile::NamedTempFile::new().expect("checks tempfile");
+        cf.write_all(GOOD.as_bytes()).expect("write checks");
+        let waivers = WaiverFile {
+            waiver: vec![],
+            scope_waiver: vec![],
+        };
+        let helper_only = "fn unwrap_detonates_on_bare_unwrap() {}\n#[test]\nfn other() {}\n";
+        assert!(
+            Registry::load(cf.path(), &waivers, helper_only).is_err(),
+            "a helper fn never runs under the suite — citing it proves nothing"
         );
     }
 

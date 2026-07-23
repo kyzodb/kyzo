@@ -133,11 +133,38 @@ fn attrs_are_cfg_test(attrs: &[syn::Attribute]) -> bool {
             // `#[cfg(test)]`; unparseable stays PRODUCTION scope — the
             // exemption must be proven, never defaulted into.
             Err(_) => false,
-            Ok(m) => {
-                m.path().is_ident("test") || m.to_token_stream().to_string().contains("test")
-            }
+            Ok(m) => meta_implies_test(&m),
         }
     })
+}
+
+/// True only when the cfg predicate IMPLIES test — it cannot evaluate true
+/// outside a test build. A substring or contains() reading is a hole:
+/// `cfg(not(test))` ships ONLY in production, `cfg(feature = "attestation")`
+/// merely contains the letters, `cfg(any(test, feature = "x"))` ships too.
+/// - bare `test` — implies test.
+/// - `all(...)` — implies test if ANY conjunct does (all must hold).
+/// - `any(...)` — implies test only if EVERY disjunct does.
+/// - `not(...)`, name-values, anything else — never exempt.
+fn meta_implies_test(m: &syn::Meta) -> bool {
+    match m {
+        syn::Meta::Path(p) => p.is_ident("test"),
+        syn::Meta::List(l) => {
+            let Ok(nested) = l.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) else {
+                return false;
+            };
+            if l.path.is_ident("all") {
+                nested.iter().any(meta_implies_test)
+            } else if l.path.is_ident("any") {
+                !nested.is_empty() && nested.iter().all(meta_implies_test)
+            } else {
+                false
+            }
+        }
+        syn::Meta::NameValue(_) => false,
+    }
 }
 
 fn is_test_fn(attrs: &[syn::Attribute]) -> bool {
@@ -1129,6 +1156,28 @@ mod tests {
             "fn f(a: u64, b: u64) -> u64 {\n    // INVARIANT(SeedMix): wrap is the published mix contract.\n    a.wrapping_mul(b)\n}",
         );
         assert!(proven.is_empty(), "an adjacent INVARIANT proof stands");
+    }
+
+    #[test]
+    fn cfg_exemption_requires_implication_not_substring() {
+        // not(test) ships ONLY in production — the exact opposite of
+        // scaffolding; a substring reading exempted it.
+        assert_eq!(
+            run("unwrap", "#[cfg(not(test))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
+            1
+        );
+        // "attestation" contains the letters t-e-s-t; it is not test scope.
+        assert_eq!(
+            run("unwrap", "#[cfg(feature = \"attestation\")]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
+            1
+        );
+        // any(test, feature) compiles outside test builds too.
+        assert_eq!(
+            run("unwrap", "#[cfg(any(test, feature = \"x\"))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
+            1
+        );
+        // all(test, unix) cannot be true outside a test build — exempt.
+        assert!(run("unwrap", "#[cfg(all(test, unix))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").is_empty());
     }
 
     #[test]
