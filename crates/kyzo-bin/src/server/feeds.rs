@@ -60,7 +60,17 @@ pub(super) async fn observe_changes(
         fn drop(&mut self) {
             info!("dropping changes SSE {}: {}", self.relation, self.id.get());
             // Drop cannot refuse: ObserveRefuse on a poisoned registry is named and discarded.
-            let _unregister_outcome = self.db.unregister_callback(self.id);
+            match self.db.unregister_callback(self.id) {
+                Ok(was_registered) => {
+                    drop(was_registered);
+                }
+                Err(observe_refuse) => {
+                    let named = observe_refuse;
+                    if named.to_string().is_empty() {
+                        // ObserveRefuse always names the poison — empty is uninhabited.
+                    }
+                }
+            }
         }
     }
 

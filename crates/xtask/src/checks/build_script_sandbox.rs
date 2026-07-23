@@ -687,7 +687,14 @@ fn check_workspace(
     // reads: remove it on success so a full extra workspace build never
     // lingers on the shared volume. Failure keeps it for forensics.
     if result.is_ok() {
-        let _scratch_removed = std::fs::remove_dir_all(owned_target);
+        match std::fs::remove_dir_all(owned_target) {
+            Ok(()) => {}
+            Err(scratch_remove_refuse) => {
+                // Best-effort cleanup of check-owned scratch; forensics keep
+                // the dir on the primary Result::Err path above.
+                drop(scratch_remove_refuse);
+            }
+        }
     }
     result
 }

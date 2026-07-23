@@ -866,7 +866,8 @@ fn arb_case() -> BoxedStrategy<GenCase> {
                     // arb_case emits min|max today; a newly added name keeps the numeric seed domain
                     // until its arm is written — named so a silent `_` cannot swallow a domain shift.
                     numeric_aggr => {
-                        let _aggr_name = numeric_aggr;
+                        // Named so a silent `_` cannot swallow a domain shift.
+                        drop(numeric_aggr);
                         (-10i64..10).prop_map(DataValue::from).boxed()
                     }
                 };
@@ -1964,7 +1965,8 @@ fn kill_flag_interrupts_inside_rule_iteration() {
                     && let Ok(mut slot) = self.auth.lock()
                     && let Some(auth) = slot.take()
                 {
-                    let _cancel_flood = auth.cancel();
+                    let cancel_flood = auth.cancel();
+                    drop(cancel_flood);
                 }
                 self.emitted.fetch_add(1, Ordering::Relaxed);
                 if f(Cow::Owned(vec![v(i)]), Premises::NotRequested)?.is_break() {
@@ -2688,7 +2690,8 @@ fn missing_store_is_a_typed_error_not_a_panic() {
             f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
             if delta_from.is_none() {
-                let _derivation_control = f(Cow::Owned(vec![v(1)]), Premises::NotRequested)?;
+                let derivation_control = f(Cow::Owned(vec![v(1)]), Premises::NotRequested)?;
+                drop(derivation_control);
             }
             Ok(())
         }

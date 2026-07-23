@@ -147,8 +147,16 @@ fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
     // "Updating index / Downloading ..." noise that would false-match the
     // banned-crate scan below. Both fetch variants may fail; that is fine,
     // same as the script's `|| true`.
-    let _fetch_warm =
-        run_cargo(repo_root, &["fetch", "--locked"]).or_else(|_| run_cargo(repo_root, &["fetch"]));
+    match run_cargo(repo_root, &["fetch", "--locked"]).or_else(|_| run_cargo(repo_root, &["fetch"]))
+    {
+        Ok(fetch_warm) => {
+            drop(fetch_warm);
+        }
+        Err(fetch_warm_refuse) => {
+            // Cold-cache warm is best-effort — same as the script's `|| true`.
+            drop(fetch_warm_refuse);
+        }
+    }
 
     // Story #322: the set of package trees scanned is derived from `cargo
     // metadata`'s real workspace-member list, not a hand-maintained package

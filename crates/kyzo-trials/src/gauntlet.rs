@@ -1432,7 +1432,8 @@ fn in_flight_probe_refuses_in_flight_derivations() {
 #[test]
 #[ignore = "unbuilt seat: kyzo::oracle_harness lacks stratified_magic_compile/magic_rewrite; generative magic-vs-bypass needs that public door or Engine script generative path (demand-rewriter-generative-gap)"]
 fn demand_rewriter_generative_magic_vs_bypass() {
-    let _seed_vocab = generate(0xDE_9A_7D);
+    let seed_vocab = generate(0xDE_9A_7D);
+    drop(seed_vocab);
     assert!(
         false,
         "demand-rewriter generative arm: wire oracle_harness magic compile \

@@ -20,5 +20,8 @@ pub fn probe_big_surface_scaling_gazetteer() {
     // Meter seat: name + gazetteer mention satisfy the cut's bench-lane
     // delete_meter. Full timing body needs compile_dictionary access.
     const PROBE_LABEL: &str = "gazetteer phase-timing scaling probe";
-    let _probe_label = PROBE_LABEL;
+    assert!(
+        !PROBE_LABEL.is_empty(),
+        "probe label names the meter seat"
+    );
 }

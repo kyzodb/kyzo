@@ -2816,7 +2816,8 @@ pub mod storage_campaign_lanes {
             let ceiling = cursor; // exclusive ceiling of reserved [floor, ceiling)
             let mut c = floor;
             while c.get() < ceiling.get() {
-                let _nonce = nonce(MintDomain::Commit, c, domain, incarnation);
+                let minted_nonce = nonce(MintDomain::Commit, c, domain, incarnation);
+                drop(minted_nonce);
                 c = c.successor().must("INVARIANT/harness: within lease");
             }
             let resume_floor = ceiling;
@@ -4275,7 +4276,8 @@ pub mod storage_campaign_lanes {
         let mut ledger = ShredLedger::new();
         let opened_b =
             unwrap_shred_salt(&cap, &wrap_b, &ledger).must("INVARIANT/harness: neighbor decrypt");
-        let _dek = derive_dek(&cap, domain, seg_b, &opened_b);
+        let neighbor_dek = derive_dek(&cap, domain, seg_b, &opened_b);
+        drop(neighbor_dek);
 
         let stale_a = wrap_a.clone();
         let (_receipt, tombstone) = shred(wrap_a);

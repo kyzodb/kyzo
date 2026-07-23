@@ -733,12 +733,13 @@ pub fn bench(graphs: &[String]) -> Result<(), BenchRefuse> {
     } else {
         graphs.iter().map(|g| GraphName::new(g)).collect()
     };
-    let _admit = emit_bench(
+    let admit = emit_bench(
         OpponentPin::sealed(),
         BenchCaps::required(),
         probe_commit_state(),
         &graphs,
     )?;
+    drop(admit);
     Ok(())
 }
 
@@ -1119,8 +1120,9 @@ mod bench_refuse_fixtures {
     #[test]
     fn admit_all_four_conditions_yields_emit_token() {
         let sealed = fixture_sealed_digests();
-        let _admit = BenchAdmit::admit_with_sealed(&lawful_evidence(&sealed), &sealed)
+        let admit = BenchAdmit::admit_with_sealed(&lawful_evidence(&sealed), &sealed)
             .expect("lawful evidence must admit");
+        drop(admit);
     }
 
     #[test]
