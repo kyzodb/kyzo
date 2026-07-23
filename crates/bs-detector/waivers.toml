@@ -106,9 +106,30 @@ why_not_sabotage = "KEEP: INVARIANT TryFrom.expect \u2014 fail-closed width door
 [[waiver]]
 check = "copy_detector"
 file = "crates/kyzo-core/src/session/catalog.rs"
-line = 1186
+line = 1198
 construct = "crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix ~ crates/kyzo-core/src/session/catalog.rs::scan_bounded_prefix_projected"
 why_not_sabotage = "Self-documented at the source: scan_bounded_prefix_projected's doc comment states it is '[scan_bounded_prefix] with the prefix read THROUGH a projection of row -- both scan bounds encoded straight from projected values plus the bound literals'. The same owned-vs-projected variant pattern row.rs's scan_key_lower/scan_key_lower_projected pair already uses (see that file's own doc), applied one layer up at the catalog-handle scan surface."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/exec/fold/aggr.rs"
+line = 157
+construct = "crates/kyzo-core/src/exec/fold/aggr.rs::get ~ crates/kyzo-model/src/value/column.rs::len"
+why_not_sabotage = "FALSE TWIN: NormalAggr::get is sealed-enum dispatch forwarding to per-aggregator get(); Column::len is sealed-enum dispatch for columnar length. Same exhaustive-match shape, different authorities (fold result vs batch geometry) — collapsing would invent a fake shared seat. Not accidental copy-paste."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/exec/fold/aggr.rs"
+line = 210
+construct = "crates/kyzo-core/src/exec/fold/aggr.rs::init_val ~ crates/kyzo-model/src/value/column.rs::len"
+why_not_sabotage = "FALSE TWIN: MeetAggr::init_val is sealed-enum dispatch minting MeetAccum; Column::len is sealed-enum dispatch for columnar length. Same match-arm shape, independent authorities (meet identity vs batch geometry). Not a second encode/order law and not consolidatable without erasing both seats."
+
+[[waiver]]
+check = "copy_detector"
+file = "crates/kyzo-core/src/exec/plan/graph.rs"
+line = 249
+construct = "crates/kyzo-core/src/exec/plan/graph.rs::run ~ crates/kyzo-core/src/exec/plan/graph.rs::run"
+why_not_sabotage = "ORACLE vs ENGINE: TarjanScc::run is the production iterative Tarjan; RecursiveTarjan::run is the deliberate CozoDB-recursive oracle kept for output-identical differential (iterative_tarjan_is_output_identical_to_recursive). Independence is the proof — collapsing would erase the adversary. Naive reachability oracle already covers partition equality separately."
 
 [[waiver]]
 check = "copy_detector"

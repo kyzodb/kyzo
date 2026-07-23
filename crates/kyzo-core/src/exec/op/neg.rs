@@ -79,16 +79,16 @@ pub struct NegJoin {
 
 impl NegJoin {
     pub(crate) fn do_eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
-        super::mark_unused_bindings(
-            self.left.bindings_after_eliminate(),
+        // right acts as a filter, introduces nothing, no need to eliminate
+        let mark = self.left.bindings_after_eliminate();
+        let keep = self.joiner.left_keys.clone();
+        super::eliminate_child_temp_vars(
+            &mut self.left,
+            mark,
             used,
             &mut self.to_eliminate,
-        );
-        let mut left = used.clone();
-        left.extend(self.joiner.left_keys.clone());
-        self.left.eliminate_temp_vars(&left)?;
-        // right acts as a filter, introduces nothing, no need to eliminate
-        Ok(())
+            keep,
+        )
     }
 
     /// The join strategy this node will use (explain output).

@@ -322,6 +322,21 @@ pub(crate) fn mark_unused_bindings(
     }
 }
 
+/// Mark unused bindings, extend `used` with keep-alive symbols, recurse into
+/// `child` — ONE seat for NegJoin / FilteredRA / UnificationRA (copy_detector).
+pub(crate) fn eliminate_child_temp_vars(
+    child: &mut RelAlgebra,
+    mark_bindings: impl IntoIterator<Item = Symbol>,
+    used: &BTreeSet<Symbol>,
+    to_eliminate: &mut BTreeSet<Symbol>,
+    keep_alive: impl IntoIterator<Item = Symbol>,
+) -> Result<()> {
+    mark_unused_bindings(mark_bindings, used, to_eliminate);
+    let mut nxt = used.clone();
+    nxt.extend(keep_alive);
+    child.eliminate_temp_vars(&nxt)
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // The operator tree
 // ─────────────────────────────────────────────────────────────────────────

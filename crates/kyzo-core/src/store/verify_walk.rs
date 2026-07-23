@@ -496,19 +496,9 @@ fn set_diff_detail(
     ))
 }
 
-fn base_column_frame(base: &RelationHandle) -> BTreeMap<Symbol, usize> {
-    base.metadata
-        .keys
-        .iter()
-        .chain(base.metadata.non_keys.iter())
-        .enumerate()
-        .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::empty()), i))
-        .collect()
-}
-
 fn bind_extractor(base: &RelationHandle, extractor: &Expr) -> Result<Expr> {
     let mut expr = extractor.clone();
-    expr.fill_binding_indices(&base_column_frame(base))?;
+    expr.fill_binding_indices(&base.base_column_frame())?;
     Ok(expr)
 }
 

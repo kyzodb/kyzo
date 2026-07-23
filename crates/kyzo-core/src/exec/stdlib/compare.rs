@@ -23,14 +23,17 @@ pub(crate) fn op_assert(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
+/// Expression equality / inequality seat (copy_detector — op_eq / op_neq).
+/// NUMERIC for numbers (1 == 1.0, exact beyond 2^53), identity elsewhere.
+fn eq_values(a: &DataValue, b: &DataValue) -> bool {
+    match (a, b) {
+        (DataValue::Num(x), DataValue::Num(y)) => NumericOrd::of(*x) == NumericOrd::of(*y),
+        (x, y) => x == y,
+    }
+}
+
 pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
-    // Expression equality: NUMERIC for numbers (1 == 1.0, and — unlike
-    // the inherited lossy `i as f64` — EXACT beyond 2^53), identity for
-    // every other kind. Numeric order lives on [`NumericOrd`], not [`Num`].
-    Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => NumericOrd::of(*a) == NumericOrd::of(*b),
-        (a, b) => a == b,
-    }))
+    Ok(DataValue::from(eq_values(&args[0], &args[1])))
 }
 
 fn cmp_op(args: &[DataValue], pred: impl Fn(std::cmp::Ordering) -> bool) -> Result<DataValue> {
@@ -135,10 +138,7 @@ pub(crate) fn op_lt(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_neq(args: &[DataValue]) -> Result<DataValue> {
-    Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => NumericOrd::of(*a) != NumericOrd::of(*b),
-        (a, b) => a != b,
-    }))
+    Ok(DataValue::from(!eq_values(&args[0], &args[1])))
 }
 
 fn ensure_same_value_type(a: &DataValue, b: &DataValue) -> Result<()> {

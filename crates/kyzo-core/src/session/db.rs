@@ -378,6 +378,18 @@ impl<S: Storage> Engine<S> {
         })
     }
 
+    /// One seat for short-lived probe/example engines on a fresh Fjall dir
+    /// (copy_detector — language_tour / determinism_digest). The TempDir is
+    /// leaked on purpose: the process exits after one run.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compose_temp_fjall() -> Result<Engine<crate::store::fjall::FjallStorage>> {
+        let dir = tempfile::tempdir().map_err(|e| miette::miette!("tempdir: {e}"))?;
+        let storage = crate::store::fjall::new_fjall_storage(dir.path())
+            .map_err(|e| miette::miette!("fjall storage: {e}"))?;
+        std::mem::forget(dir);
+        Engine::compose(storage, Catalog::new())
+    }
+
     /// Bind this Engine's live SweepDoor (+ optional client op id) onto options.
     pub(crate) fn bind_write_options(&self, mut options: ScriptOptions) -> ScriptOptions {
         options.sweep = Some(self.sweep.clone());
@@ -424,19 +436,12 @@ impl<S: Storage> Engine<S> {
     /// (including by a built-in). The rule becomes usable in every session of
     /// this Engine (and its clones).
     pub fn register_fixed_rule(&self, name: String, rule: impl FixedRule + 'static) -> Result<()> {
-        let mut registry = self
-            .fixed_rules
-            .write()
-            .map_err(|_| EngineRefuse::FixedRulesLockPoisoned)?;
-        if registry.contains_key(&name) {
-            bail!(EngineRefuse::FixedRuleNameConflict(name));
-        }
-        registry.insert(name, Arc::from(Box::new(rule) as Box<dyn FixedRule>));
-        Ok(())
+        self.register_fixed_rule_arc(name, Arc::from(Box::new(rule) as Box<dyn FixedRule>))
     }
 
     /// Register a fixed rule from an already-boxed `Arc<dyn FixedRule>` (for
-    /// callers holding trait objects). Same name-conflict contract.
+    /// callers holding trait objects). Same name-conflict contract — the one
+    /// registry door (copy_detector).
     pub fn register_fixed_rule_arc(&self, name: String, rule: Arc<dyn FixedRule>) -> Result<()> {
         let mut registry = self
             .fixed_rules
@@ -1047,8 +1052,9 @@ pub struct SessionTx<T> {
     pub(crate) retired_relations: std::collections::BTreeSet<kyzo_model::value::RelationId>,
 }
 
-impl<T: ReadTx> SessionTx<T> {
-    pub fn new_read(store: T, options: ScriptOptions) -> Self {
+impl<T> SessionTx<T> {
+    /// One fresh-session field seat (copy_detector — new_read / new_write).
+    fn fresh(store: T, options: ScriptOptions) -> Self {
         Self {
             store,
             temp: TempTx::new(),
@@ -1058,6 +1064,12 @@ impl<T: ReadTx> SessionTx<T> {
             touched_relations: std::collections::BTreeSet::new(),
             retired_relations: std::collections::BTreeSet::new(),
         }
+    }
+}
+
+impl<T: ReadTx> SessionTx<T> {
+    pub fn new_read(store: T, options: ScriptOptions) -> Self {
+        Self::fresh(store, options)
     }
 
     /// Catalog lookup, routed by name: `_`-prefixed names live in the
@@ -1110,15 +1122,7 @@ impl<T: ReadTx> SessionTx<T> {
 
 impl<T: WriteTx> SessionTx<T> {
     pub(crate) fn new_write(store: T, options: ScriptOptions) -> Self {
-        Self {
-            store,
-            temp: TempTx::new(),
-            index_ctxs: BTreeMap::new(),
-            options,
-            pending_constraints: BTreeMap::new(),
-            touched_relations: std::collections::BTreeSet::new(),
-            retired_relations: std::collections::BTreeSet::new(),
-        }
+        Self::fresh(store, options)
     }
 
     /// Spend both the persistent write tx and the session scratch Open —

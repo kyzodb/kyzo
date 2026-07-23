@@ -23,17 +23,19 @@ pub(crate) fn op_interval_during(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(a.during(b)))
 }
 
+/// Bound → published DataValue (finite instant, else SQL NULL).
+fn bound_or_null(bound: Option<i64>) -> DataValue {
+    match bound {
+        Some(t) => DataValue::from(t),
+        None => DataValue::Null,
+    }
+}
+
 pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
         .get_interval()
         .ok_or_else(|| miette!("'interval_end' expects an interval, got {:?}", args[0]))?;
-    Ok(match iv.end() {
-        Some(t) => DataValue::from(t),
-        None => {
-            // Unbounded/empty end — SQL NULL is the published absent render.
-            DataValue::Null
-        }
-    })
+    Ok(bound_or_null(iv.end()))
 }
 
 pub(crate) fn op_interval_finishes(args: &[DataValue]) -> Result<DataValue> {
@@ -97,13 +99,7 @@ pub(crate) fn op_interval_start(args: &[DataValue]) -> Result<DataValue> {
     let iv = args[0]
         .get_interval()
         .ok_or_else(|| miette!("'interval_start' expects an interval, got {:?}", args[0]))?;
-    Ok(match iv.start() {
-        Some(t) => DataValue::from(t),
-        None => {
-            // Unbounded/empty end — SQL NULL is the published absent render.
-            DataValue::Null
-        }
-    })
+    Ok(bound_or_null(iv.start()))
 }
 
 pub(crate) fn op_interval_starts(args: &[DataValue]) -> Result<DataValue> {

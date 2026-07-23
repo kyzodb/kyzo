@@ -30,23 +30,15 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::process::ExitCode;
 
-use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
+use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
-/// A fresh store per chapter, backed by the real pure-Rust engine (not a
-/// test-only in-memory stand-in) — this tour runs the same code path a real
-/// embedder does. Leaks its tempdir on purpose: an example process is
-/// short-lived, and every chapter needs its own store torn down only at
-/// exit, not mid-run.
+/// Fresh engine per chapter via the one probe door ([`Engine::compose_temp_fjall`]).
 fn db() -> Result<Engine<FjallStorage>, String> {
-    let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
-    let storage =
-        new_fjall_storage(dir.path()).map_err(|e| format!("fjall storage: {e:?}"))?;
-    std::mem::forget(dir);
-    Engine::compose(storage, Catalog::new()).map_err(|e| format!("engine: {e:?}"))
+    Engine::compose_temp_fjall().map_err(|e| format!("engine: {e:?}"))
 }
 
 fn script(db: &Engine<FjallStorage>, src: &str, door: &str) -> Result<NamedRows, String> {

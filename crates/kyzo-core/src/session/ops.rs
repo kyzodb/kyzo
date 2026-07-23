@@ -92,18 +92,6 @@ pub(crate) enum IndexCtx {
 pub(crate) struct IndexLifecycleError(pub(crate) String);
 
 impl<T: WriteTx> SessionTx<T> {
-    /// The base relation's full column frame (keys then non-keys), for
-    /// resolving extractor/filter expressions by column name.
-    fn base_column_frame(base: &RelationHandle) -> BTreeMap<Symbol, usize> {
-        base.metadata
-            .keys
-            .iter()
-            .chain(base.metadata.non_keys.iter())
-            .enumerate()
-            .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::empty()), i))
-            .collect()
-    }
-
     /// Bind an already-parsed row extractor ([`crate::parse::sys::FtsIndexConfig::extractor`]
     /// / the manifest's stored typed substance) to the base column frame.
     /// The extractor is never re-parsed from source at build time — it arrives typed.
@@ -112,7 +100,7 @@ impl<T: WriteTx> SessionTx<T> {
         extractor: &kyzo_model::program::expr::Expr,
     ) -> Result<Expr> {
         let mut expr = extractor.clone();
-        expr.fill_binding_indices(&Self::base_column_frame(base))?;
+        expr.fill_binding_indices(&base.base_column_frame())?;
         Ok(expr)
     }
 
@@ -539,7 +527,7 @@ impl<T: WriteTx> SessionTx<T> {
         cfg: &crate::parse::sys::HnswIndexConfig,
     ) -> Result<NamedRows> {
         let base = self.get_relation(&cfg.base_relation)?;
-        let frame = Self::base_column_frame(&base);
+        let frame = base.base_column_frame();
         let mut vec_fields = Vec::with_capacity(cfg.vec_fields.len());
         for f in &cfg.vec_fields {
             let pos = frame

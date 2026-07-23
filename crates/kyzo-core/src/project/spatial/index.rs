@@ -430,13 +430,12 @@ fn posting_key(point: &GeoPoint, base_key_len: usize, tuple: &[DataValue]) -> Tu
 /// in the same transaction, having first removed the row's previous posting via
 /// [`spatial_del`] when the coordinate changed (a moved point lands on a
 /// different curve key, so the stale posting must be deleted, not overwritten).
-pub(crate) fn spatial_put<T: WriteTx>(
-    tx: &mut T,
+/// Resolve the posting key for one base row — ONE seat (copy_detector).
+fn spatial_posting_key(
     tuple: &[DataValue],
     manifest: &SpatialIndexManifest,
     base: &RelationHandle,
-    idx: &RelationHandle,
-) -> Result<()> {
+) -> Result<(GeoPoint, Tuple)> {
     let base_key_len = base.metadata.keys.len();
     if tuple.len() < base_key_len {
         bail!(IndexRowCorrupt::new(
@@ -447,6 +446,17 @@ pub(crate) fn spatial_put<T: WriteTx>(
     }
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
+    Ok((point, key))
+}
+
+pub(crate) fn spatial_put<T: WriteTx>(
+    tx: &mut T,
+    tuple: &[DataValue],
+    manifest: &SpatialIndexManifest,
+    base: &RelationHandle,
+    idx: &RelationHandle,
+) -> Result<()> {
+    let (point, key) = spatial_posting_key(tuple, manifest, base)?;
     let val = vec![DataValue::from(point.lat()), DataValue::from(point.lon())];
     let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
     let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::empty())?;
@@ -463,16 +473,7 @@ pub(crate) fn spatial_del<T: WriteTx>(
     base: &RelationHandle,
     idx: &RelationHandle,
 ) -> Result<()> {
-    let base_key_len = base.metadata.keys.len();
-    if tuple.len() < base_key_len {
-        bail!(IndexRowCorrupt::new(
-            &base.name,
-            tuple,
-            IndexCorruptReason::RowShorterThanKey,
-        ));
-    }
-    let point = extract_point(tuple, manifest)?;
-    let key = posting_key(&point, base_key_len, tuple);
+    let (_point, key) = spatial_posting_key(tuple, manifest, base)?;
     let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::empty())?;
     tx.del(&key_bytes)
 }

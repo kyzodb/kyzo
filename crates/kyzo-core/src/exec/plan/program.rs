@@ -326,6 +326,25 @@ pub struct StratifiedNormalFormProgram {
     disable_magic_rewrite: bool,
 }
 
+/// Prove the entry sits in the final stratum — ONE seat (copy_detector).
+fn ensure_entry_in_final_stratum<S>(
+    strata: &[S],
+    holds_entry: impl Fn(&S) -> bool,
+    misplaced: &'static str,
+) -> Result<()> {
+    match strata.last() {
+        None => bail!(NoEntry::spanless()),
+        Some(last) if !holds_entry(last) => {
+            if strata.iter().any(holds_entry) {
+                bail!(TierInvariantError(misplaced))
+            } else {
+                bail!(NoEntry::spanless())
+            }
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 impl StratifiedNormalFormProgram {
     /// Mint the stratified tier from the stratifier's output, which is in
     /// reverse execution order (element `0` = evaluated last). The reversal
@@ -336,17 +355,11 @@ impl StratifiedNormalFormProgram {
     ) -> Result<Self> {
         reversed_strata.reverse();
         let strata = reversed_strata;
-        match strata.last() {
-            None => bail!(NoEntry::spanless()),
-            Some(last) if !last.holds_entry() => {
-                if strata.iter().any(NormalFormStratum::holds_entry) {
-                    bail!(TierInvariantError("entry rule is not in the final stratum"))
-                } else {
-                    bail!(NoEntry::spanless())
-                }
-            }
-            Some(_) => {}
-        }
+        ensure_entry_in_final_stratum(
+            &strata,
+            NormalFormStratum::holds_entry,
+            "entry rule is not in the final stratum",
+        )?;
         Ok(Self {
             strata,
             disable_magic_rewrite,
@@ -844,19 +857,11 @@ impl StratifiedMagicProgram {
     /// execution order. Proves the entry survived the rewrite unadorned and
     /// sits in the final stratum.
     pub fn from_execution_order(strata: Vec<MagicProgram>) -> Result<Self> {
-        match strata.last() {
-            None => bail!(NoEntry::spanless()),
-            Some(last) if !last.holds_entry() => {
-                if strata.iter().any(MagicProgram::holds_entry) {
-                    bail!(TierInvariantError(
-                        "magic entry rule is not in the final stratum"
-                    ))
-                } else {
-                    bail!(NoEntry::spanless())
-                }
-            }
-            Some(_) => {}
-        }
+        ensure_entry_in_final_stratum(
+            &strata,
+            MagicProgram::holds_entry,
+            "magic entry rule is not in the final stratum",
+        )?;
         Ok(Self { strata })
     }
 

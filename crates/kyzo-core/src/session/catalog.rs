@@ -677,6 +677,18 @@ impl RelationHandle {
         self.metadata.non_keys.len() + self.metadata.keys.len()
     }
 
+    /// Full column frame (keys then non-keys) for binding extractors by name —
+    /// ONE seat (copy_detector — session/ops + store/verify_walk).
+    pub(crate) fn base_column_frame(&self) -> BTreeMap<Symbol, usize> {
+        self.metadata
+            .keys
+            .iter()
+            .chain(self.metadata.non_keys.iter())
+            .enumerate()
+            .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::empty()), i))
+            .collect()
+    }
+
     pub(crate) fn has_no_index(&self) -> bool {
         self.indices.is_empty()
     }

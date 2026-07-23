@@ -34,18 +34,15 @@ use std::hash::{Hash, Hasher};
 
 use miette::{Result, miette};
 
-use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
+use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
 fn db() -> Result<Engine<FjallStorage>> {
-    let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
-    let storage = new_fjall_storage(dir.path()).map_err(|e| miette!("fjall storage: {e}"))?;
-    // Probe process exits after one digest; keep the store alive for the run.
-    std::mem::forget(dir);
-    Engine::compose(storage, Catalog::new()).map_err(|e| miette!("engine: {e}"))
+    // One probe door with language_tour (copy_detector).
+    Engine::compose_temp_fjall().map_err(|e| miette!("engine: {e}"))
 }
 
 /// Rows in RETURNED order — no sorting. Order itself is part of the claim.

@@ -276,20 +276,28 @@ struct MinAccum {
     least: Option<DataValue>,
 }
 
-/// Prefer the numerically smaller of two values; refuse non-numbers.
-fn lesser_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
+/// Prefer the numerically extreme of two values — ONE seat (copy_detector).
+fn extreme_number(
+    a: &DataValue,
+    b: &DataValue,
+    prefer_b: impl Fn(&Num, &Num) -> bool,
+    refuse: &'static str,
+) -> Result<DataValue, String> {
     match (a, b) {
         (DataValue::Num(x), DataValue::Num(y)) => {
-            if y < x {
+            if prefer_b(x, y) {
                 Ok(b.clone())
             } else {
                 Ok(a.clone())
             }
         }
-        (kyzo_model::data_value_any!(), kyzo_model::data_value_any!()) => {
-            Err("min fold requires numeric operands".into())
-        }
+        (kyzo_model::data_value_any!(), kyzo_model::data_value_any!()) => Err(refuse.into()),
     }
+}
+
+/// Prefer the numerically smaller of two values; refuse non-numbers.
+fn lesser_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
+    extreme_number(a, b, |x, y| y < x, "min fold requires numeric operands")
 }
 
 /// Absorb one non-null extremum — ONE seat for min/max normal set.
@@ -403,18 +411,7 @@ struct MaxAccum {
 
 /// Prefer the numerically larger of two values; refuse non-numbers.
 fn greater_number(a: &DataValue, b: &DataValue) -> Result<DataValue, String> {
-    match (a, b) {
-        (DataValue::Num(x), DataValue::Num(y)) => {
-            if y > x {
-                Ok(b.clone())
-            } else {
-                Ok(a.clone())
-            }
-        }
-        (kyzo_model::data_value_any!(), kyzo_model::data_value_any!()) => {
-            Err("max fold requires numeric operands".into())
-        }
-    }
+    extreme_number(a, b, |x, y| y > x, "max fold requires numeric operands")
 }
 
 impl NormalAccum for MaxAccum {

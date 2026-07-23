@@ -927,22 +927,23 @@ pub(crate) enum HnswRow {
     },
 }
 
-/// Key tuple of a node row at `layer` (fr == to == `at`).
-fn node_key(layer: i64, at: &VectorId) -> Result<Tuple> {
-    let mut k = Tuple::with_capacity(2 * at.tuple_key.len() + 5);
-    k.push(DataValue::from(layer));
-    at.push_onto(&mut k)?;
-    at.push_onto(&mut k)?;
-    Ok(k)
-}
-
-/// Key tuple of an edge row at `layer`.
-fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Result<Tuple> {
+/// Key tuple at `layer` with endpoints `(fr, to)` — ONE seat (copy_detector).
+fn layer_endpoints_key(layer: i64, fr: &VectorId, to: &VectorId) -> Result<Tuple> {
     let mut k = Tuple::with_capacity(2 * fr.tuple_key.len() + 5);
     k.push(DataValue::from(layer));
     fr.push_onto(&mut k)?;
     to.push_onto(&mut k)?;
     Ok(k)
+}
+
+/// Key tuple of a node row at `layer` (fr == to == `at`).
+fn node_key(layer: i64, at: &VectorId) -> Result<Tuple> {
+    layer_endpoints_key(layer, at, at)
+}
+
+/// Key tuple of an edge row at `layer`.
+fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Result<Tuple> {
+    layer_endpoints_key(layer, fr, to)
 }
 
 /// Key tuple of the canary row for an index over a base relation with

@@ -111,34 +111,25 @@ impl OperatorEphemeralRelations {
 
     /// `in_flight_tx` relation — one row: count from the live registry projection.
     pub fn in_flight_tx_relation(&self) -> Result<NamedRows> {
-        let n = self.surface.ephemeral().in_flight_tx();
-        let n_i = i64::try_from(n).map_err(|_| miette!("in_flight_tx does not fit i64"))?;
-        Ok(NamedRows::try_new(
-            vec!["in_flight_tx".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(n_i)])],
-        )?)
+        list_running_from(self.surface.ephemeral().in_flight_tx())
     }
 
     /// `compaction_debt` relation — renders the one [`DebtLedger`] (§42/§44).
     pub fn compaction_debt_relation(&self) -> Result<NamedRows> {
-        let debt = self.surface.render_debt_outstanding();
-        let debt_i =
-            i64::try_from(debt).map_err(|_| miette!("compaction_debt does not fit i64"))?;
-        Ok(NamedRows::try_new(
-            vec!["compaction_debt".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(debt_i)])],
-        )?)
+        single_i64_relation(
+            "compaction_debt",
+            self.surface.render_debt_outstanding(),
+            "compaction_debt does not fit i64",
+        )
     }
 
     /// `index_status` relation — renders [`IndexStatus`] Catalog generation (§20).
     pub fn index_status_relation(&self) -> Result<NamedRows> {
-        let index_gen = self.index_status.counter();
-        let index_gen_i = i64::try_from(index_gen)
-            .map_err(|_| miette!("index_status generation does not fit i64"))?;
-        Ok(NamedRows::try_new(
-            vec!["index_status_generation".into()],
-            vec![Tuple::from_vec(vec![DataValue::from(index_gen_i)])],
-        )?)
+        single_i64_relation(
+            "index_status_generation",
+            self.index_status.counter(),
+            "index_status generation does not fit i64",
+        )
     }
 
     /// `storage_stats` relation — one row of backend counters.
@@ -228,12 +219,17 @@ pub(crate) fn list_running() -> Result<NamedRows> {
 }
 
 /// `::running` from the live in-flight-tx registry count.
-pub(crate) fn list_running_from(in_flight: u64) -> Result<NamedRows> {
-    let n = i64::try_from(in_flight).map_err(|_| miette!("in_flight_tx does not fit i64"))?;
+/// One-column / one-row u64→i64 relation seat (copy_detector).
+fn single_i64_relation(col: &str, n: u64, overflow: &'static str) -> Result<NamedRows> {
+    let n_i = i64::try_from(n).map_err(|_| miette!("{overflow}"))?;
     Ok(NamedRows::try_new(
-        vec!["in_flight_tx".into()],
-        vec![Tuple::from_vec(vec![DataValue::from(n)])],
+        vec![col.into()],
+        vec![Tuple::from_vec(vec![DataValue::from(n_i)])],
     )?)
+}
+
+pub(crate) fn list_running_from(in_flight: u64) -> Result<NamedRows> {
+    single_i64_relation("in_flight_tx", in_flight, "in_flight_tx does not fit i64")
 }
 
 /// `::kill` — cancel a running job. Own typed refuse until jobs land.

@@ -112,17 +112,18 @@ pub struct FilteredRA {
 
 impl FilteredRA {
     pub(crate) fn do_eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
-        super::mark_unused_bindings(
-            self.parent.bindings_before_eliminate(),
+        let mut keep = Vec::new();
+        for e in self.filters.iter() {
+            keep.extend(e.bindings()?);
+        }
+        let mark = self.parent.bindings_before_eliminate();
+        super::eliminate_child_temp_vars(
+            &mut self.parent,
+            mark,
             used,
             &mut self.to_eliminate,
-        );
-        let mut nxt = used.clone();
-        for e in self.filters.iter() {
-            nxt.extend(e.bindings()?);
-        }
-        self.parent.eliminate_temp_vars(&nxt)?;
-        Ok(())
+            keep,
+        )
     }
 
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
@@ -194,15 +195,15 @@ impl UnificationRA {
     }
 
     pub(crate) fn do_eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
-        super::mark_unused_bindings(
-            self.parent.bindings_before_eliminate(),
+        let keep = self.expr.bindings()?;
+        let mark = self.parent.bindings_before_eliminate();
+        super::eliminate_child_temp_vars(
+            &mut self.parent,
+            mark,
             used,
             &mut self.to_eliminate,
-        );
-        let mut nxt = used.clone();
-        nxt.extend(self.expr.bindings()?);
-        self.parent.eliminate_temp_vars(&nxt)?;
-        Ok(())
+            keep,
+        )
     }
 
     /// Batched unification: ONE columnar evaluation of the bound

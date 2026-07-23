@@ -846,9 +846,29 @@ mod tests {
         Ok(handle)
     }
 
-    /// Assert `key ++ [val]` at `valid`, its own transaction (so it gets a
-    /// genuinely distinct, monotonically increasing system stamp — every
-    /// commit mints one).
+    /// One Valid-axis write seat (copy_detector — assert_at / retract_at).
+    /// Each call is its own transaction so it gets a genuinely distinct,
+    /// monotonically increasing system stamp.
+    fn write_at(
+        db: &crate::store::fjall::FjallStorage,
+        handle: &RelationHandle,
+        key: i64,
+        valid: i64,
+        payload: Option<i64>,
+    ) -> Result<()> {
+        let mut tx = db.write_tx().map_err(|e| miette!("write tx: {e}"))?;
+        match payload {
+            Some(val) => handle
+                .put_fact(&mut tx, &[v(key), v(val)], vts(valid), sp())
+                .map_err(|e| miette!("put fact: {e}"))?,
+            None => handle
+                .retract_fact(&mut tx, &[v(key)], vts(valid), sp())
+                .map_err(|e| miette!("retract fact: {e}"))?,
+        }
+        tx.commit().map_err(|e| miette!("commit: {e}"))?;
+        Ok(())
+    }
+
     fn assert_at(
         db: &crate::store::fjall::FjallStorage,
         handle: &RelationHandle,
@@ -856,12 +876,7 @@ mod tests {
         valid: i64,
         val: i64,
     ) -> Result<()> {
-        let mut tx = db.write_tx().map_err(|e| miette!("write tx: {e}"))?;
-        handle
-            .put_fact(&mut tx, &[v(key), v(val)], vts(valid), sp())
-            .map_err(|e| miette!("put fact: {e}"))?;
-        tx.commit().map_err(|e| miette!("commit: {e}"))?;
-        Ok(())
+        write_at(db, handle, key, valid, Some(val))
     }
 
     fn retract_at(
@@ -870,12 +885,7 @@ mod tests {
         key: i64,
         valid: i64,
     ) -> Result<()> {
-        let mut tx = db.write_tx().map_err(|e| miette!("write tx: {e}"))?;
-        handle
-            .retract_fact(&mut tx, &[v(key)], vts(valid), sp())
-            .map_err(|e| miette!("retract fact: {e}"))?;
-        tx.commit().map_err(|e| miette!("commit: {e}"))?;
-        Ok(())
+        write_at(db, handle, key, valid, None)
     }
 
     /// Write a raw ERASE row directly (no production write-path exposes
@@ -1322,96 +1332,43 @@ mod tests {
         Ok(())
     }
 
+    /// Fixed cases for posting-index fast path ≡ naive snapshot diff
+    /// (copy_detector — one seat; each case still falsifies alone).
     #[test]
-    fn posting_fast_path_matches_naive_on_a_new_assertion() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let (base, idx) = make_indexed_relation(&db, "posting_new")?;
-        write_indexed_event(&db, &base, 1, 10, Some(100))?;
-        assert_paths_agree(
-            &db,
-            &base,
-            &idx,
-            AsOf::current(vts(5)),
-            AsOf::current(vts(20)),
-        )?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn posting_fast_path_matches_naive_on_a_payload_change() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let (base, idx) = make_indexed_relation(&db, "posting_change")?;
-        write_indexed_event(&db, &base, 1, 10, Some(100))?;
-        write_indexed_event(&db, &base, 1, 20, Some(200))?;
-        assert_paths_agree(
-            &db,
-            &base,
-            &idx,
-            AsOf::current(vts(15)),
-            AsOf::current(vts(25)),
-        )?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn posting_fast_path_matches_naive_on_identical_snapshots() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let (base, idx) = make_indexed_relation(&db, "posting_identical")?;
-        write_indexed_event(&db, &base, 1, 10, Some(100))?;
-        assert_paths_agree(
-            &db,
-            &base,
-            &idx,
-            AsOf::current(vts(20)),
-            AsOf::current(vts(20)),
-        )?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn posting_fast_path_matches_naive_on_a_retraction() -> Result<()> {
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let (base, idx) = make_indexed_relation(&db, "posting_retract")?;
-        write_indexed_event(&db, &base, 1, 10, Some(100))?;
-        write_indexed_event(&db, &base, 1, 20, None)?;
-        assert_paths_agree(
-            &db,
-            &base,
-            &idx,
-            AsOf::current(vts(15)),
-            AsOf::current(vts(25)),
-        )?;
-        // A window entirely BEFORE any event: empty candidate set either way.
-        assert_paths_agree(
-            &db,
-            &base,
-            &idx,
-            AsOf::current(vts(1)),
-            AsOf::current(vts(5)),
-        )?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn posting_fast_path_matches_naive_on_a_backward_diff() -> Result<()> {
-        // `to` earlier than `from`: `lo`/`hi` still resolve correctly
-        // since the fast path takes them by numeric min/max, not by
-        // positional role.
-        let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
-        let (base, idx) = make_indexed_relation(&db, "posting_backward")?;
-        write_indexed_event(&db, &base, 1, 10, Some(100))?;
-        assert_paths_agree(
-            &db,
-            &base,
-            &idx,
-            AsOf::current(vts(20)),
-            AsOf::current(vts(5)),
-        )?;
-
+    fn posting_fast_path_matches_naive_on_fixed_cases() -> Result<()> {
+        // (name, events[key,valid,payload], windows[from_valid,to_valid])
+        let cases: &[(&str, &[(i64, i64, Option<i64>)], &[(i64, i64)])] = &[
+            ("posting_new", &[(1, 10, Some(100))], &[(5, 20)]),
+            (
+                "posting_change",
+                &[(1, 10, Some(100)), (1, 20, Some(200))],
+                &[(15, 25)],
+            ),
+            ("posting_identical", &[(1, 10, Some(100))], &[(20, 20)]),
+            (
+                "posting_retract",
+                &[(1, 10, Some(100)), (1, 20, None)],
+                &[(15, 25), (1, 5)],
+            ),
+            // `to` earlier than `from`: lo/hi resolve by numeric min/max.
+            ("posting_backward", &[(1, 10, Some(100))], &[(20, 5)]),
+        ];
+        for (name, events, windows) in cases {
+            let db = new_fjall_storage(tempfile_dir()?).map_err(|e| miette!("storage: {e}"))?;
+            let (base, idx) = make_indexed_relation(&db, name)?;
+            for &(key, valid, payload) in *events {
+                write_indexed_event(&db, &base, key, valid, payload)?;
+            }
+            for &(from, to) in *windows {
+                assert_paths_agree(
+                    &db,
+                    &base,
+                    &idx,
+                    AsOf::current(vts(from)),
+                    AsOf::current(vts(to)),
+                )?;
+            }
+        }
         Ok(())
     }
 

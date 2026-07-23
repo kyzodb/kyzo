@@ -338,23 +338,35 @@ pub(crate) fn normalize_args(
     (out_args, unifs)
 }
 
+/// Normalize apply args then push the positive/negated atom — ONE seat
+/// (copy_detector — rule vs relation apply).
+fn normalize_apply_body(
+    args: Vec<Expr>,
+    symb_gen: &mut TempSymbGen,
+    finish: impl FnOnce(Vec<Symbol>) -> NormalFormAtom,
+) -> Vec<Vec<NormalFormAtom>> {
+    let (args, mut ret) = normalize_args(args, symb_gen);
+    ret.push(finish(args));
+    vec![ret]
+}
+
 pub(crate) fn normalize_rule_apply(
     atom: InputRuleApplyAtom,
     is_negated: bool,
     symb_gen: &mut TempSymbGen,
 ) -> Vec<Vec<NormalFormAtom>> {
-    let (args, mut ret) = normalize_args(atom.args, symb_gen);
-    let apply = NormalFormRuleApplyAtom {
-        name: atom.name,
-        args,
-        span: atom.span,
-    };
-    ret.push(if is_negated {
-        NormalFormAtom::NegatedRule(apply)
-    } else {
-        NormalFormAtom::Rule(apply)
-    });
-    vec![ret]
+    normalize_apply_body(atom.args, symb_gen, |args| {
+        let apply = NormalFormRuleApplyAtom {
+            name: atom.name,
+            args,
+            span: atom.span,
+        };
+        if is_negated {
+            NormalFormAtom::NegatedRule(apply)
+        } else {
+            NormalFormAtom::Rule(apply)
+        }
+    })
 }
 
 pub(crate) fn normalize_relation_apply(
@@ -362,19 +374,19 @@ pub(crate) fn normalize_relation_apply(
     is_negated: bool,
     symb_gen: &mut TempSymbGen,
 ) -> Vec<Vec<NormalFormAtom>> {
-    let (args, mut ret) = normalize_args(atom.args, symb_gen);
-    let apply = NormalFormRelationApplyAtom {
-        name: atom.name,
-        args,
-        validity: atom.validity,
-        span: atom.span,
-    };
-    ret.push(if is_negated {
-        NormalFormAtom::NegatedRelation(apply)
-    } else {
-        NormalFormAtom::Relation(apply)
-    });
-    vec![ret]
+    normalize_apply_body(atom.args, symb_gen, |args| {
+        let apply = NormalFormRelationApplyAtom {
+            name: atom.name,
+            args,
+            validity: atom.validity,
+            span: atom.span,
+        };
+        if is_negated {
+            NormalFormAtom::NegatedRelation(apply)
+        } else {
+            NormalFormAtom::Relation(apply)
+        }
+    })
 }
 
 /// Binding-safety well-ordering: positive applications bind, then pending
