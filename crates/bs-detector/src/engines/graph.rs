@@ -42,23 +42,48 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
             rel: &'a str,
             types: &'a mut BTreeMap<String, TypeFacts>,
         }
+        fn record_derives(
+            v: &mut V<'_>,
+            ident: &syn::Ident,
+            attrs: &[syn::Attribute],
+        ) {
+            let bad: Vec<String> = derive_names(attrs)
+                .into_iter()
+                .filter(|d| d == "Deserialize" || d == "Default" || d == "From")
+                .collect();
+            let rel = v.rel.to_string();
+            v.types
+                .entry(ident.to_string())
+                .or_insert(TypeFacts {
+                    file: rel,
+                    line: span_line(&ident.span()),
+                    fallible_ctor: false,
+                    bad_derives: vec![],
+                })
+                .bad_derives
+                .extend(bad);
+        }
+        // A fallible admission door is ANY constructor-shaped name that can
+        // refuse — not just `new`: parse/decode/from_*/admit/build/of_*
+        // returning Result/Option all claim "this type is proven at entry".
+        fn is_admission_name(name: &str) -> bool {
+            name == "new"
+                || name.starts_with("try_")
+                || name.starts_with("parse")
+                || name.starts_with("decode")
+                || name.starts_with("from_")
+                || name.starts_with("of_")
+                || name.starts_with("admit")
+                || name.starts_with("build")
+        }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
             fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-                let bad: Vec<String> = derive_names(&node.attrs)
-                    .into_iter()
-                    .filter(|d| d == "Deserialize" || d == "Default" || d == "From")
-                    .collect();
-                self.types
-                    .entry(node.ident.to_string())
-                    .or_insert(TypeFacts {
-                        file: self.rel.to_string(),
-                        line: span_line(&node.ident.span()),
-                        fallible_ctor: false,
-                        bad_derives: vec![],
-                    })
-                    .bad_derives
-                    .extend(bad);
+                record_derives(self, &node.ident, &node.attrs);
                 visit::visit_item_struct(self, node);
+            }
+            fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
+                record_derives(self, &node.ident, &node.attrs);
+                visit::visit_item_enum(self, node);
             }
             fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
                 if let syn::Type::Path(tp) = &*node.self_ty {
@@ -67,9 +92,9 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
                         for item in &node.items {
                             if let syn::ImplItem::Fn(m) = item {
                                 let name = m.sig.ident.to_string();
-                                let is_ctor = name == "new" || name.starts_with("try_new");
                                 let ret = m.sig.output.to_token_stream().to_string();
-                                if is_ctor && (ret.contains("Result <") || ret.contains("Option <"))
+                                if is_admission_name(&name)
+                                    && (ret.contains("Result <") || ret.contains("Option <"))
                                 {
                                     self.types
                                         .entry(ty.clone())
@@ -299,11 +324,31 @@ fn fnv(words: &[String]) -> u64 {
 // ---------------------------------------------------------------------------
 
 pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit> {
+    // Parsed, never line-scanned: a declaration reformatted onto one line
+    // or into an inline table is the same declaration.
+    let parsed: toml::Value = match toml::from_str(registry_text) {
+        Ok(v) => v,
+        Err(e) => {
+            return vec![Hit {
+                file: "crates/xtask/agreements.toml".to_string(),
+                line: 0,
+                construct: format!("unparseable-registry: {e}"),
+            }];
+        }
+    };
     let mut declared: Vec<(String, usize)> = vec![];
-    for (idx, line) in registry_text.lines().enumerate() {
-        if let Some(rest) = line.trim_start().strip_prefix("test_fn") {
-            if let Some(name) = rest.split('"').nth(1) {
-                declared.push((name.to_string(), idx + 1));
+    if let Some(entries) = parsed.get("agreement").and_then(|v| v.as_array()) {
+        for entry in entries {
+            if let Some(name) = entry.get("test_fn").and_then(|v| v.as_str()) {
+                // Line 0 is the explicit "declared but not textually
+                // locatable" convention (same as meta's file-level hits) —
+                // a name split across lines still counts, never invents a
+                // position.
+                let line = match registry_text.lines().position(|l| l.contains(name)) {
+                    Some(idx) => idx + 1,
+                    None => 0,
+                };
+                declared.push((name.to_string(), line));
             }
         }
     }

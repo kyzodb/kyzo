@@ -283,27 +283,6 @@ fn allow_attrs(file: &SourceFile, needles: &[&str], construct: &str) -> Vec<Hit>
     hits
 }
 
-/// True when an `INVARIANT(` proof comment sits within `window` lines above
-/// `line` (1-indexed) — the named-invariant protocol for arithmetic that
-/// must wrap by published contract.
-fn has_invariant_comment_above(file: &SourceFile, line: usize, window: usize) -> bool {
-    let lines: Vec<&str> = file.text.lines().collect();
-    // INVARIANT(LineWindow): line indices floor at the top of the file;
-    // saturation IS the window's published clipping contract.
-    let end = line.saturating_sub(1);
-    let start = end.saturating_sub(window);
-    lines[start..end]
-        .iter()
-        .any(|l| l.contains("INVARIANT(") || l.contains("SAFETY("))
-}
-
-/// The 1-indexed source line's text, if the file has that many lines.
-fn line_text(file: &SourceFile, line: usize) -> Option<&str> {
-    // INVARIANT(LineWindow): 1-indexed site line to 0-indexed lookup floors
-    // at the top of the file; saturation is the published clipping contract.
-    file.text.lines().nth(line.saturating_sub(1))
-}
-
 // ---------------------------------------------------------------------------
 // matchers
 // ---------------------------------------------------------------------------
@@ -337,11 +316,33 @@ fn m_todo_bang(f: &SourceFile) -> Vec<Hit> {
     macro_calls(f, &["todo", "unimplemented"], "todo_bang")
 }
 fn m_debug_assert(f: &SourceFile) -> Vec<Hit> {
-    macro_calls(
+    let mut hits = macro_calls(
         f,
         &["debug_assert", "debug_assert_eq", "debug_assert_ne"],
         "debug_assert",
-    )
+    );
+    // #[cfg(debug_assertions)] is the same law compiled out of release.
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            if node.path().is_ident("cfg")
+                && node.to_token_stream().to_string().contains("debug_assertions")
+            {
+                push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), "debug_assert");
+            }
+            visit::visit_attribute(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    hits.append(&mut v.hits);
+    hits
 }
 
 /// `let _ = fallible(...)` — discarding a value that had something to say.
@@ -352,7 +353,14 @@ fn m_let_underscore(f: &SourceFile) -> Vec<Hit> {
     }
     impl<'ast, 'a> Visit<'ast> for V<'a> {
         fn visit_local(&mut self, node: &'ast syn::Local) {
-            if matches!(node.pat, syn::Pat::Wild(_)) && node.init.is_some() {
+            let discards = match &node.pat {
+                syn::Pat::Wild(_) => true,
+                // `let _guard = …` discards by convention — an RAII hold
+                // that is real swears a waiver saying what it holds.
+                syn::Pat::Ident(pi) => pi.ident.to_string().starts_with('_'),
+                _ => false,
+            };
+            if discards && node.init.is_some() {
                 push(&mut self.hits, self.rel, span_line(&node.let_token.span), "let_underscore");
             }
             visit::visit_local(self, node);
@@ -375,8 +383,18 @@ fn m_ok_drop(f: &SourceFile) -> Vec<Hit> {
     impl<'ast, 'a> Visit<'ast> for V<'a> {
         fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
             if let syn::Stmt::Expr(syn::Expr::MethodCall(mc), Some(_)) = node {
-                if mc.method == "ok" && mc.args.is_empty() {
+                if (mc.method == "ok" || mc.method == "err") && mc.args.is_empty() {
                     push(&mut self.hits, self.rel, span_line(&mc.method.span()), "ok_drop");
+                }
+            }
+            if let syn::Stmt::Expr(syn::Expr::Call(c), Some(_)) = node {
+                let is_drop = c
+                    .func
+                    .to_token_stream()
+                    .to_string()
+                    .ends_with("drop");
+                if is_drop && c.args.len() == 1 {
+                    push(&mut self.hits, self.rel, span_line(&c.paren_token.span.open()), "ok_drop");
                 }
             }
             visit::visit_stmt(self, node);
@@ -394,24 +412,15 @@ fn m_ok_drop(f: &SourceFile) -> Vec<Hit> {
 /// a repr(u8) enum's `self as u8` are detected too; the two lawful ones
 /// carry sworn waivers, which is the point: visible, not structural.)
 fn m_as_cast(f: &SourceFile) -> Vec<Hit> {
+    // Every `as` cast, no numeric shortlist: `type W = u8; x as W` dodges
+    // any list of names. Lossless and pointer-shaped casts buy waivers.
     struct V<'a> {
         rel: &'a str,
         hits: Vec<Hit>,
     }
-    const NUMERIC: &[&str] = &[
-        "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
-        "f32", "f64",
-    ];
     impl<'ast, 'a> Visit<'ast> for V<'a> {
         fn visit_expr_cast(&mut self, node: &'ast syn::ExprCast) {
-            if let syn::Type::Path(tp) = &*node.ty {
-                if let Some(seg) = tp.path.segments.last() {
-                    let t = seg.ident.to_string();
-                    if NUMERIC.contains(&t.as_str()) {
-                        push(&mut self.hits, self.rel, span_line(&seg.ident.span()), "as_cast");
-                    }
-                }
-            }
+            push(&mut self.hits, self.rel, span_line(&node.as_token.span), "as_cast");
             visit::visit_expr_cast(self, node);
         }
     }
@@ -423,9 +432,10 @@ fn m_as_cast(f: &SourceFile) -> Vec<Hit> {
     v.hits
 }
 
-/// wrapping_*/saturating_*/overflowing_*/unchecked_* arithmetic without a
-/// named INVARIANT proof comment adjacent — silent overflow or an unproven
-/// contract.
+/// wrapping_*/saturating_*/overflowing_*/unchecked_* arithmetic — every
+/// site, unconditionally. A comment is not a confession: a site whose wrap
+/// IS the published contract swears a [[waiver]] the operator can audit,
+/// never a magic string the author grants themself.
 fn m_unchecked_arith(f: &SourceFile) -> Vec<Hit> {
     const OPS: &[&str] = &[
         "wrapping_add",
@@ -445,9 +455,6 @@ fn m_unchecked_arith(f: &SourceFile) -> Vec<Hit> {
         "unchecked_mul",
     ];
     method_calls(f, OPS, "unchecked_arith")
-        .into_iter()
-        .filter(|h| !has_invariant_comment_above(f, h.line, 3))
-        .collect()
 }
 
 /// `with_capacity`/`reserve` whose argument carries its own `.min(...)`
@@ -588,17 +595,12 @@ fn m_default_impl(f: &SourceFile) -> Vec<Hit> {
 fn m_construction_door(f: &SourceFile) -> Vec<Hit> {
     fn door_site(sig: &syn::Signature) -> Option<usize> {
         let name = sig.ident.to_string();
-        if name == "from_raw" || name.ends_with("_unchecked") {
+        // Every raw-door name, unconditionally — a Result-returning
+        // from_bytes that never actually refuses would dodge any
+        // "fallible = validated" carve; a genuinely validating door swears
+        // one waiver naming its proof.
+        if name == "from_raw" || name.ends_with("_unchecked") || name == "from_bytes" {
             return Some(span_line(&sig.ident.span()));
-        }
-        // BANNED #7's named example: `from_bytes` without validation. The
-        // mechanical reading of "unvalidated" is INFALLIBLE — a from_bytes
-        // that cannot refuse admits anything.
-        if name == "from_bytes" {
-            let ret = sig.output.to_token_stream().to_string();
-            if !ret.contains("Result") && !ret.contains("Option") {
-                return Some(span_line(&sig.ident.span()));
-            }
         }
         None
     }
@@ -646,26 +648,106 @@ fn sig_sites(
 /// A test that can pass without asserting: `Err(_) => return` inside test
 /// scope, `#[should_panic]`, `#[ignore]`.
 fn m_test_err_early_return(f: &SourceFile) -> Vec<Hit> {
+    fn block_is_bare_return_or_empty(b: &syn::Block) -> bool {
+        match b.stmts.as_slice() {
+            [] => true,
+            [syn::Stmt::Expr(syn::Expr::Return(r), _)] => r.expr.is_none(),
+            _ => false,
+        }
+    }
     fn pick(node: &syn::Arm) -> Option<(usize, &'static str)> {
         if !node.pat.to_token_stream().to_string().starts_with("Err") {
             return None;
         }
-        if let syn::Expr::Return(r) = &*node.body {
-            if r.expr.is_none() {
-                return Some((span_line(&r.return_token.span), "test_err_early_return"));
+        let line = span_line(&node.fat_arrow_token.spans[0]);
+        match &*node.body {
+            syn::Expr::Return(r) if r.expr.is_none() => {
+                Some((line, "test_err_early_return"))
             }
+            // `Err(_) => {}` — the error evaporates and the test proceeds
+            // as if proof happened.
+            syn::Expr::Block(b) if b.block.stmts.is_empty() => {
+                Some((line, "test_err_early_return"))
+            }
+            _ => None,
         }
-        None
     }
-    arm_sites(f, pick)
+    let mut hits = arm_sites(f, pick);
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        // `if x.is_err() { return; }` — same evaporation, if-shaped.
+        fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+            let cond = node.cond.to_token_stream().to_string();
+            if cond.contains(". is_err ()") && block_is_bare_return_or_empty(&node.then_branch) {
+                push(&mut self.hits, self.rel, span_line(&node.if_token.span), "test_err_early_return");
+            }
+            visit::visit_expr_if(self, node);
+        }
+        // `let Ok(x) = r else { return };` — refusal diverted to a shrug.
+        fn visit_local(&mut self, node: &'ast syn::Local) {
+            if node.pat.to_token_stream().to_string().starts_with("Ok") {
+                if let Some(init) = &node.init {
+                    if let Some((_, diverge)) = &init.diverge {
+                        if let syn::Expr::Block(b) = &**diverge {
+                            if block_is_bare_return_or_empty(&b.block) {
+                                push(&mut self.hits, self.rel, span_line(&node.let_token.span), "test_err_early_return");
+                            }
+                        }
+                    }
+                }
+            }
+            visit::visit_local(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    hits.append(&mut v.hits);
+    hits
 }
 
 fn m_ignore_test(f: &SourceFile) -> Vec<Hit> {
-    line_starts_scan(f, "#[ignore", None, "ignore_test")
+    attr_sites(f, "ignore", "ignore_test")
 }
 
 fn m_should_panic(f: &SourceFile) -> Vec<Hit> {
-    line_starts_scan(f, "#[should_panic", None, "should_panic")
+    attr_sites(f, "should_panic", "should_panic")
+}
+
+/// AST attribute scan: a bare `#[name]`/`#[name = …]` or a
+/// `#[cfg_attr(…, name…)]` smuggle both count — placement and line
+/// formatting cannot hide an attribute from a parsed walk.
+fn attr_sites(f: &SourceFile, name: &str, construct: &str) -> Vec<Hit> {
+    struct V<'a> {
+        name: &'a str,
+        construct: &'a str,
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            let direct = node.path().is_ident(self.name);
+            let smuggled = node.path().is_ident("cfg_attr")
+                && node.to_token_stream().to_string().contains(self.name);
+            if direct || smuggled {
+                push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), self.construct);
+            }
+            visit::visit_attribute(self, node);
+        }
+    }
+    let mut v = V {
+        name,
+        construct,
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
 }
 
 /// The one attribute-line scanner: a line whose trimmed text starts with
@@ -709,6 +791,30 @@ fn m_err_costume(f: &SourceFile) -> Vec<Hit> {
         if t == "& []" || t == "&[]" {
             return Some("empty_slice_costume");
         }
+        // Any bare literal is a costume: the error became a number, a
+        // string, a bool — a value the caller cannot tell from truth.
+        if matches!(body, syn::Expr::Lit(_)) {
+            return Some("err_to_literal_costume");
+        }
+        if let syn::Expr::Unary(u) = body {
+            if matches!(&*u.expr, syn::Expr::Lit(_)) {
+                return Some("err_to_literal_costume");
+            }
+        }
+        // A bare no-arg constructor is a costume: Vec::new(), String::new(),
+        // Default::default(), T::empty() — a fabricated blank.
+        if let syn::Expr::Call(c) = body {
+            if c.args.is_empty() {
+                return Some("err_to_constructor_costume");
+            }
+        }
+        if t == "vec ! []" || t.starts_with("Default :: default") {
+            return Some("err_to_constructor_costume");
+        }
+        // Silent control flow: the error becomes a skipped iteration.
+        if matches!(body, syn::Expr::Continue(_)) {
+            return Some("err_flow_swallow");
+        }
         None
     }
     fn pick(node: &syn::Arm) -> Option<(usize, &'static str)> {
@@ -723,29 +829,18 @@ fn m_err_costume(f: &SourceFile) -> Vec<Hit> {
     arm_sites(f, pick)
 }
 
+/// Every `exit`/`abort` path ident. Wide on purpose: an imported
+/// `use std::process::exit; exit(1)` carries no `process::` on its line —
+/// a state machine's own `exit` verb buys its life with a sworn waiver.
 fn m_process_exit(f: &SourceFile) -> Vec<Hit> {
     path_idents(f, &["exit", "abort"], "process_exit")
-        .into_iter()
-        .filter(|h| {
-            // Only std::process::exit / std::process::abort — a bare
-            // `exit`/`abort` ident elsewhere (e.g. a state machine's own
-            // verb) is not this shape.
-            line_text(f, h.line)
-                .is_some_and(|l| l.contains("process::exit") || l.contains("process::abort"))
-        })
-        .collect()
 }
 
-/// Sleep-based synchronization (BANNED #18): `thread::sleep` standing in
-/// for a real happens-before.
+/// Sleep-based synchronization (BANNED #18): every `sleep` path ident.
+/// Wide on purpose: `use std::thread::sleep; sleep(d)` carries no
+/// `thread::` on its line. A lawful sleep swears a waiver.
 fn m_sleep_sync(f: &SourceFile) -> Vec<Hit> {
     path_idents(f, &["sleep"], "sleep_sync")
-        .into_iter()
-        .filter(|h| {
-            line_text(f, h.line)
-                .is_some_and(|l| l.contains("thread::sleep") || l.contains("thread :: sleep"))
-        })
-        .collect()
 }
 
 /// `#[serde(default)]` / `#[serde(skip)]` (BANNED #25): a wire format
@@ -761,7 +856,11 @@ fn m_serde_default_skip(f: &SourceFile) -> Vec<Hit> {
         fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
             if node.path().is_ident("serde") {
                 let args = node.to_token_stream().to_string();
-                if args.contains("default") || args.contains("skip") {
+                if args.contains("default")
+                    || args.contains("skip")
+                    || args.contains("other")
+                    || args.contains("untagged")
+                {
                     push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), "serde_default_skip");
                 }
             }
@@ -780,7 +879,22 @@ fn m_serde_default_skip(f: &SourceFile) -> Vec<Hit> {
 fn m_nondeterminism(f: &SourceFile) -> Vec<Hit> {
     path_idents(
         f,
-        &["Instant", "SystemTime", "thread_rng", "OsRng", "getrandom"],
+        &[
+            "Instant",
+            "SystemTime",
+            "UNIX_EPOCH",
+            "thread_rng",
+            "OsRng",
+            "getrandom",
+            "random",
+            "from_entropy",
+            "fastrand",
+            "Utc",
+            "Local",
+            "RandomState",
+            "DefaultHasher",
+            "env",
+        ],
         "nondeterminism",
     )
 }
@@ -800,46 +914,20 @@ fn m_peer_dial(f: &SourceFile) -> Vec<Hit> {
 /// exemption is a newtype's OWN wrap door: `admit`, `as_bytes`,
 /// `as_bytes_mut`, `from_*`, `of_*`.
 fn m_naked_array_sig(f: &SourceFile) -> Vec<Hit> {
-    fn sig_is_naked(sig: &syn::Signature) -> bool {
+    // Every fn signature trafficking a naked [u8; 32/12/64], no name
+    // exemptions: a newtype's genuine wrap door is one sworn waiver, not a
+    // prefix anybody can borrow.
+    fn naked_site(sig: &syn::Signature) -> Option<usize> {
         let text = sig.to_token_stream().to_string();
-        text.contains("[u8 ; 32]") || text.contains("[u8 ; 12]") || text.contains("[u8 ; 64]")
-    }
-    fn is_wrap_door(name: &str) -> bool {
-        name == "admit"
-            || name == "as_bytes"
-            || name == "as_bytes_mut"
-            || name.starts_with("from_")
-            || name.starts_with("of_")
-    }
-    struct V<'a> {
-        rel: &'a str,
-        hits: Vec<Hit>,
-    }
-    impl<'ast, 'a> Visit<'ast> for V<'a> {
-        // The wrap-door exemption is for a newtype's OWN doors — methods in
-        // an impl block. It never applies to free fns: a free
-        // `fn from_bytes(k: [u8; 32])` is not anyone's door, it's a naked
-        // crypto seam wearing a door's name.
-        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-            let name = node.sig.ident.to_string();
-            if !is_wrap_door(&name) && sig_is_naked(&node.sig) {
-                push(&mut self.hits, self.rel, span_line(&node.sig.ident.span()), "naked_array_sig");
-            }
-            visit::visit_impl_item_fn(self, node);
+        let naked = text.contains("[u8 ; 32]")
+            || text.contains("[u8 ; 12]")
+            || text.contains("[u8 ; 64]");
+        if naked {
+            return Some(span_line(&sig.ident.span()));
         }
-        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-            if sig_is_naked(&node.sig) {
-                push(&mut self.hits, self.rel, span_line(&node.sig.ident.span()), "naked_array_sig");
-            }
-            visit::visit_item_fn(self, node);
-        }
+        None
     }
-    let mut v = V {
-        rel: &f.rel_path,
-        hits: vec![],
-    };
-    v.visit_file(&f.ast);
-    v.hits
+    sig_sites(f, naked_site, "naked_array_sig")
 }
 
 /// `unsafe` blocks/fns/impls/traits anywhere (the four crate roots without
@@ -866,6 +954,18 @@ fn m_unsafe_token(f: &SourceFile) -> Vec<Hit> {
                 push(&mut self.hits, self.rel, span_line(&u.span), "unsafe_token");
             }
             visit::visit_item_impl(self, node);
+        }
+        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+            if let Some(u) = &node.sig.unsafety {
+                push(&mut self.hits, self.rel, span_line(&u.span), "unsafe_token");
+            }
+            visit::visit_impl_item_fn(self, node);
+        }
+        fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+            if let Some(u) = &node.unsafety {
+                push(&mut self.hits, self.rel, span_line(&u.span), "unsafe_token");
+            }
+            visit::visit_item_trait(self, node);
         }
     }
     let mut v = V {
@@ -1003,9 +1103,6 @@ fn m_condemned_boundary(f: &SourceFile) -> Vec<Hit> {
 /// identity digests are real and confess individually — no ratchet, no
 /// baseline).
 fn m_hand_layout(f: &SourceFile) -> Vec<Hit> {
-    if f.rel_path == "crates/kyzo-core/src/store/transcript.rs" {
-        return vec![];
-    }
     struct V<'a> {
         rel: &'a str,
         hits: Vec<Hit>,
@@ -1037,13 +1134,11 @@ fn m_hand_layout(f: &SourceFile) -> Vec<Hit> {
 /// Poisoned-lock silent continue (BANNED #13): `.into_inner()` on a
 /// PoisonError — recovering the guard and carrying on.
 fn m_poison_continue(f: &SourceFile) -> Vec<Hit> {
+    // Every `.into_inner()`, unconditionally. The poisoned-lock recovery
+    // this bans does not announce itself in the variable name; the many
+    // lawful into_inner calls (BufWriter, Cell, io wrappers…) swear
+    // site-bound waivers instead of hiding behind a rename.
     method_calls(f, &["into_inner"], "poison_continue")
-        .into_iter()
-        .filter(|h| {
-            line_text(f, h.line)
-                .is_some_and(|l| l.contains("poison") || l.contains("unwrap_or_else"))
-        })
-        .collect()
 }
 
 /// The registry. checks.toml refers to these by name; the meta engine
@@ -1148,14 +1243,18 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_arith_honors_the_invariant_protocol() {
+    fn unchecked_arith_accepts_no_comment_as_confession() {
         let naked = run("unchecked_arith", "fn f(a: u64, b: u64) -> u64 { a.wrapping_mul(b) }");
-        assert_eq!(naked.len(), 1, "no proof comment = violation");
-        let proven = run(
+        assert_eq!(naked.len(), 1, "every site is a violation");
+        let commented = run(
             "unchecked_arith",
             "fn f(a: u64, b: u64) -> u64 {\n    // INVARIANT(SeedMix): wrap is the published mix contract.\n    a.wrapping_mul(b)\n}",
         );
-        assert!(proven.is_empty(), "an adjacent INVARIANT proof stands");
+        assert_eq!(
+            commented.len(),
+            1,
+            "a comment is not a confession — only a sworn waiver stands"
+        );
     }
 
     #[test]
@@ -1221,11 +1320,15 @@ mod tests {
     }
 
     #[test]
-    fn naked_array_sig_exempts_only_the_wrap_doors() {
+    fn naked_array_sig_has_no_name_exemptions() {
         assert_eq!(
             run("naked_array_sig", "fn seal_key(k: [u8; 32]) {}").len(),
             1
         );
-        assert!(run("naked_array_sig", "struct D([u8; 32]); impl D { fn from_derived(b: [u8; 32]) -> D { D(b) } fn as_bytes(&self) -> &[u8; 32] { &self.0 } }").is_empty());
+        assert_eq!(
+            run("naked_array_sig", "struct D([u8; 32]); impl D { fn from_derived(b: [u8; 32]) -> D { D(b) } fn as_bytes(&self) -> &[u8; 32] { &self.0 } }").len(),
+            2,
+            "the type's own doors are naked too — real wrap doors swear waivers"
+        );
     }
 }

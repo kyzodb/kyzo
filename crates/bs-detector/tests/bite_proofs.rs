@@ -145,8 +145,8 @@ fn bite_unchecked_arith() {
             "unchecked_arith",
             "fn f(a: u64, b: u64) -> u64 {\n    // INVARIANT(SeedMix): wrap is the published mix contract.\n    a.wrapping_mul(b)\n}"
         ),
-        Some(0),
-        "an adjacent named INVARIANT proof stands"
+        Some(1),
+        "a comment is not a confession — only a sworn waiver stands"
     );
 }
 
@@ -214,27 +214,28 @@ fn bite_default_impl() {
 fn bite_construction_door() {
     assert_eq!(detonates("construction_door", "fn from_raw(x: u8) -> u8 { x }"), Some(1));
     assert_eq!(detonates("construction_door", "struct S(u8);\nimpl S { fn new_unchecked(x: u8) -> S { S(x) } }"), Some(1));
-    // BANNED #7's named example: infallible from_bytes admits anything.
+    // BANNED #7's named example — and no fallibility carve: a Result door
+    // that never refuses would dodge it, so EVERY from_bytes counts and a
+    // genuinely validating one swears a waiver.
     assert_eq!(
         detonates("construction_door", "struct K([u8; 4]);\nimpl K { fn from_bytes(b: [u8; 4]) -> K { K(b) } }"),
         Some(1)
     );
-    // A from_bytes that can refuse is a validated admission door, not this shape.
     assert_eq!(
         detonates("construction_door", "struct K(u8);\nimpl K { fn from_bytes(b: &[u8]) -> Option<K> { b.first().map(|x| K(*x)) } }"),
-        Some(0)
+        Some(1)
     );
 }
 
 #[test]
 fn bite_naked_array_sig() {
     assert_eq!(detonates("naked_array_sig", "fn seal_key(k: [u8; 32]) -> [u8; 32] { k }"), Some(1));
-    // The wrap-door exemption is impl-scoped ONLY: a free fn named like a
-    // door is still a naked seam.
+    // No name exemptions anywhere — impl doors included; the real wrap
+    // doors buy their lives one sworn waiver each.
     assert_eq!(detonates("naked_array_sig", "fn from_bytes(k: [u8; 32]) -> [u8; 32] { k }"), Some(1));
     assert_eq!(
         detonates("naked_array_sig", "struct D([u8; 32]);\nimpl D { fn from_derived(b: [u8; 32]) -> D { D(b) } }"),
-        Some(0)
+        Some(1)
     );
 }
 
@@ -441,8 +442,8 @@ fn bite_hand_layout() {
         None => panic!("matcher registered and fixture parses"),
     };
     assert_eq!(hits.len(), 1);
-    // The one canonical constructor is exempt BY NAME — its sites are the
-    // authority this law protects.
+    // No file is exempt — the canonical constructor's own sites confess in
+    // waivers.toml like everyone else's.
     let m = match shape::matcher_by_name("hand_layout") {
         Some(m) => m,
         None => panic!("registered"),
@@ -451,5 +452,65 @@ fn bite_hand_layout() {
         Some(f) => f,
         None => panic!("fixture parses"),
     };
-    assert!(shape::run_matcher(m, &f).is_empty());
+    assert_eq!(shape::run_matcher(m, &f).len(), 1);
+}
+
+
+// --- widened edges: the noise-avoidance carves are gone and stay gone ---------------------------
+
+#[test]
+fn bite_widened_swallow_edges() {
+    // imported exit — no `process::` on the line.
+    assert_eq!(detonates("process_exit", "use std::process::exit;\nfn f() { exit(1); }"), Some(1));
+    // imported sleep — no `thread::` on the line.
+    assert_eq!(detonates("sleep_sync", "use std::thread::sleep;\nfn f(d: std::time::Duration) { sleep(d); }"), Some(1));
+    // into_inner with no "poison" anywhere in sight.
+    assert_eq!(detonates("poison_continue", "fn f(g: std::sync::PoisonError<i32>) -> i32 { let recovered = g; recovered.into_inner() }"), Some(1));
+    // `let _guard = …` discards by convention.
+    assert_eq!(detonates("let_underscore", "fn g() -> u8 { 1 }\nfn f() { let _leftover = g(); }"), Some(1));
+    // `.err();` and `drop(...)` statements are the same shut-up as `.ok();`.
+    assert_eq!(detonates("ok_drop", "fn f(x: Result<u8, u8>) { x.err(); }"), Some(1));
+    assert_eq!(detonates("ok_drop", "fn f(x: Result<u8, u8>) { drop(x); }"), Some(1));
+}
+
+#[test]
+fn bite_widened_costumes() {
+    assert_eq!(detonates("err_costume", "fn f(r: Result<u8, u8>) -> bool { match r { Ok(_) => true, Err(_) => false } }"), Some(1));
+    assert_eq!(detonates("err_costume", "fn f(r: Result<String, u8>) -> String { match r { Ok(v) => v, Err(_) => String::new() } }"), Some(1));
+    assert_eq!(detonates("err_costume", "fn f(r: Result<i64, u8>) -> i64 { match r { Ok(v) => v, Err(_) => -1 } }"), Some(1));
+    assert_eq!(detonates("err_costume", "fn f(rs: Vec<Result<u8, u8>>) -> u8 { let mut s = 0; for r in rs { match r { Ok(v) => s += v, Err(_) => continue, } } s }"), Some(1));
+}
+
+#[test]
+fn bite_widened_test_soft_greens() {
+    assert_eq!(
+        detonates("test_err_early_return", "fn t(r: Result<u8, u8>) { match r { Ok(v) => { assert!(v > 0); } Err(_) => {} } }"),
+        Some(1),
+        "Err(_) => {{}} evaporates the error"
+    );
+    assert_eq!(
+        detonates("test_err_early_return", "fn t(r: Result<u8, u8>) { if r.is_err() { return; } assert!(true); }"),
+        Some(1)
+    );
+    assert_eq!(
+        detonates("test_err_early_return", "fn t(r: Result<u8, u8>) { let Ok(v) = r else { return }; assert!(v > 0); }"),
+        Some(1)
+    );
+}
+
+#[test]
+fn bite_widened_lists() {
+    // type alias dodges any numeric shortlist — every cast counts now.
+    assert_eq!(detonates("as_cast", "type W = u8;\nfn f(x: u64) -> W { x as W }"), Some(1));
+    // rand::random and std::env are nondeterminism.
+    assert_eq!(detonates("nondeterminism", "fn f() -> u64 { rand::random() }"), Some(1));
+    assert_eq!(detonates("nondeterminism", "fn f() -> Option<String> { std::env::var(\"HOME\").ok() }"), Some(1));
+    // serde(other)/(untagged) swallow variants.
+    assert_eq!(detonates("serde_default_skip", "enum E { A, #[serde(other)] Unknown }"), Some(1));
+    // cfg(debug_assertions) is debug_assert in a costume.
+    assert_eq!(detonates("debug_assert", "#[cfg(debug_assertions)]\nfn check() {}"), Some(1));
+    // cfg_attr-smuggled ignore counts.
+    assert_eq!(detonates("ignore_test", "#[cfg_attr(miri, ignore)]\nfn t() {}"), Some(1));
+    // unsafe fn inside an impl was invisible; it is not.
+    assert_eq!(detonates("unsafe_token", "struct S;\nimpl S { unsafe fn f(&self) {} }"), Some(1));
 }

@@ -63,11 +63,16 @@ pub fn stale_waivers(waivers: &WaiverFile, raw_hits: &[(String, Vec<Hit>)]) -> V
     stale
 }
 
-/// Every crate root under `crates/` must forbid unsafe at the root.
+/// Every compilation root under `crates/` must forbid unsafe at the root:
+/// lib/main roots, every extra binary root under src/bin/, and build
+/// scripts — each is its own crate root where the forbid must live.
 pub fn forbid_roots(b: &Boundary) -> Vec<Hit> {
     let mut hits = vec![];
     for f in &b.files {
-        let is_root = f.rel_path.ends_with("/src/lib.rs") || f.rel_path.ends_with("/src/main.rs");
+        let is_root = f.rel_path.ends_with("/src/lib.rs")
+            || f.rel_path.ends_with("/src/main.rs")
+            || f.rel_path.contains("/src/bin/")
+            || f.rel_path.ends_with("/build.rs");
         if is_root && !f.text.contains("#![forbid(unsafe_code)]") {
             hits.push(Hit {
                 file: f.rel_path.clone(),
