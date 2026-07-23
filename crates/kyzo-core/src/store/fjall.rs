@@ -525,15 +525,19 @@ impl FjallStorage {
         // One guard around mint AND persist: inserts land in mint order,
         // so the newest persisted watermark is always the largest minted
         // stamp (see `watermark_lock`).
-        let _guard = self
-            .watermark_lock
-            .lock()
-            .map_err(|_| miette!("watermark lock poisoned"))?;
-        let now = crate::session::current_validity()?.raw();
-        let stamp = self.clock.stamp(now)?;
-        self.meta
-            .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.raw().to_be_bytes())
-            .map_err(FjallRefuse::PersistWatermark)?;
+        let stamp = {
+            let watermark_guard = self
+                .watermark_lock
+                .lock()
+                .map_err(|_| miette!("watermark lock poisoned"))?;
+            let now = crate::session::current_validity()?.raw();
+            let stamp = self.clock.stamp(now)?;
+            self.meta
+                .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.raw().to_be_bytes())
+                .map_err(FjallRefuse::PersistWatermark)?;
+            (stamp, watermark_guard)
+        }
+        .0;
         Ok(stamp)
     }
 }
@@ -551,16 +555,20 @@ impl Storage for FjallStorage {
     }
 
     fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
-        let _guard = self
-            .watermark_lock
-            .lock()
-            .map_err(|_| miette!("watermark lock poisoned"))?;
-        self.clock.raise_floor(floor.raw());
-        // Persist the CLOCK's floor, not the argument: raise_floor is a
-        // max, so a stale (lower) argument must not regress the disk.
-        self.meta
-            .insert(SYSTEM_CLOCK_WATERMARK_KEY, self.clock.floor().to_be_bytes())
-            .map_err(FjallRefuse::PersistWatermark)?;
+        let () = {
+            let watermark_guard = self
+                .watermark_lock
+                .lock()
+                .map_err(|_| miette!("watermark lock poisoned"))?;
+            self.clock.raise_floor(floor.raw());
+            // Persist the CLOCK's floor, not the argument: raise_floor is a
+            // max, so a stale (lower) argument must not regress the disk.
+            self.meta
+                .insert(SYSTEM_CLOCK_WATERMARK_KEY, self.clock.floor().to_be_bytes())
+                .map_err(FjallRefuse::PersistWatermark)?;
+            ((), watermark_guard)
+        }
+        .0;
         Ok(())
     }
 
@@ -1414,7 +1422,7 @@ mod tests {
         let dir = tempfile::tempdir().into_diagnostic()?;
         {
             let db = new_fjall_storage(dir.path())?;
-            drop(db);
+            assert!(db.read_tx().is_ok(), "fresh store must accept a read_tx");
         }
 
         // Adversary: rewrite the meta stamp to an older-but-parseable version.
@@ -1457,7 +1465,10 @@ mod tests {
                 ..StorageOptions::empty()
             },
         )?;
-        drop(db);
+        assert!(
+            db.read_tx().is_ok(),
+            "floor journaling size must open a readable store"
+        );
 
         Ok(())
     }

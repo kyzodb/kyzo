@@ -829,10 +829,12 @@ impl RelationHandle {
             RelationGeneration::witness(0),
         ))?;
         let (record, _cert) = admit(seats.store_id(), &live)?;
-        let _permit = record.durable_write_permit();
+        let permit = record.durable_write_permit();
         let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
         let val = self.encode_bitemporal_val_for_store(row, polarity, span)?;
-        tx.put(&key, &val)
+        tx.put(&key, &val)?;
+        drop(permit);
+        Ok(())
     }
 
     #[cfg(any(test, feature = "bench-internals"))]

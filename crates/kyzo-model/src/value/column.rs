@@ -857,7 +857,8 @@ mod tests {
         col.push(sc).into_diagnostic()?;
         let r1 = arena.seal().into_diagnostic()?;
         let col = col.gather(&r1).into_diagnostic()?;
-        let _r2_skipped = arena.seal().into_diagnostic()?;
+        let r2_skipped = arena.seal().into_diagnostic()?;
+        drop(r2_skipped);
         let r3 = arena.seal().into_diagnostic()?;
         // col is at epoch 1; r3 reads epoch 2.
         assert!(

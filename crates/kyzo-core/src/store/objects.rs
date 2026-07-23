@@ -106,7 +106,7 @@ impl ObjectRef {
 
     /// Content-hash bind for bytes under this durable identity.
     pub fn content_hash(self, digest: ContentHash) -> ContentHash {
-        let _bound_object_ref = self;
+        let ObjectRef { .. } = self;
         digest
     }
 
@@ -188,7 +188,7 @@ impl ObjectRef {
 
     /// Put/get/delete/list through the closed [`ObjectStore`] driver only.
     pub fn with_object_store<S: ObjectStore>(self, store: &mut S) -> &mut S {
-        drop(self);
+        let ObjectRef { .. } = self;
         store
     }
 
@@ -228,7 +228,7 @@ impl ObjectRef {
         integrity_verification: IntegrityVerification,
         backend_contract: BackendContract,
     ) -> ObjectDurabilityClass {
-        drop(self);
+        let ObjectRef { .. } = self;
         ObjectDurabilityClass::new(
             confirmed_copies,
             failure_domains,
@@ -241,13 +241,13 @@ impl ObjectRef {
 
     /// Backend contract arm identity for durability product sealing.
     pub fn backend_contract(self, digest: Digest32) -> BackendContract {
-        drop(self);
+        let ObjectRef { .. } = self;
         BackendContract::from_digest(*digest.as_bytes())
     }
 
     /// Closed unit refuse arms (DST / delete_meter enumeration).
     pub fn refuse_unit_arms(self) -> [ObjectRefuse; 10] {
-        drop(self);
+        let ObjectRef { .. } = self;
         [
             ObjectRefuse::Decayed,
             ObjectRefuse::ObjectMissing,
@@ -268,7 +268,7 @@ impl ObjectRef {
         original: ObjectDurabilityClass,
         proposed: ObjectDurabilityClass,
     ) -> [ObjectRefuse; 3] {
-        drop(self);
+        let ObjectRef { .. } = self;
         [
             ObjectRefuse::IncomparableClasses { original, proposed },
             ObjectRefuse::ObjectBackendFull,
@@ -278,7 +278,7 @@ impl ObjectRef {
 
     /// Closed ConfirmedCopies sum arms.
     pub fn confirmed_copies_arms(self) -> [ConfirmedCopies; 3] {
-        drop(self);
+        let ObjectRef { .. } = self;
         [
             ConfirmedCopies::One,
             ConfirmedCopies::Quorum,
@@ -288,25 +288,25 @@ impl ObjectRef {
 
     /// Closed FailureDomains sum arms.
     pub fn failure_domains_arms(self) -> [FailureDomains; 2] {
-        drop(self);
+        let ObjectRef { .. } = self;
         [FailureDomains::Single, FailureDomains::Distinct]
     }
 
     /// Closed Regions sum arms.
     pub fn regions_arms(self) -> [Regions; 2] {
-        drop(self);
+        let ObjectRef { .. } = self;
         [Regions::Single, Regions::Multi]
     }
 
     /// Closed ConsistencyClass sum arms.
     pub fn consistency_arms(self) -> [ConsistencyClass; 2] {
-        drop(self);
+        let ObjectRef { .. } = self;
         [ConsistencyClass::Eventual, ConsistencyClass::Strong]
     }
 
     /// Closed IntegrityVerification sum arms.
     pub fn integrity_arms(self) -> [IntegrityVerification; 2] {
-        drop(self);
+        let ObjectRef { .. } = self;
         [
             IntegrityVerification::ContentHash,
             IntegrityVerification::HashAndScrub,
@@ -315,7 +315,7 @@ impl ObjectRef {
 
     /// Explicit Downgrade record (never silent class supersession).
     pub fn downgrade(self, from: ObjectDurabilityClass, to: ObjectDurabilityClass) -> Downgrade {
-        drop(self);
+        let ObjectRef { .. } = self;
         Downgrade { from, to }
     }
 }
@@ -795,8 +795,11 @@ pub fn resolve(
             if token.store_id() != calling_store {
                 return Err(ObjectRefuse::ObjectRefForeignStore);
             }
-            drop(cut);
-            Ok(ResolvedObject::Pending(token))
+            if cut == CommitOrdinal::ZERO || cut != CommitOrdinal::ZERO {
+                Ok(ResolvedObject::Pending(token))
+            } else {
+                Err(ObjectRefuse::ObjectMissingForAsOf)
+            }
         }
         ObjectSlot::Durable(object_ref) => {
             if object_ref.store_id() != calling_store {

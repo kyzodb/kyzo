@@ -179,7 +179,7 @@ impl<const M: usize> HyperLogLog<M> {
     /// An empty sketch — the identity element of [`Self::merge`].
     pub(crate) fn new() -> Self {
         // Force the precision law to evaluate at monomorphization.
-        drop(Self::PRECISION);
+        const { Self::PRECISION };
         Self {
             registers: HllRegisters::zeros(),
         }
@@ -205,8 +205,8 @@ impl<const M: usize> HyperLogLog<M> {
         let remaining = (h << p) | (1u64 << (p - 1));
         // `u64::leading_zeros` is 0..=64; +1 is 1..=65 and fits `u8`.
         let lz = remaining.leading_zeros();
-        // INVARIANT(HllRank): sentinel-bounded lz+1 always fits u8; sat never fires.
-        let rank = lz.to_le_bytes()[0].saturating_add(1);
+        // Sentinel-bounded lz+1 always fits u8 — LE low-byte door, no sat/wrap.
+        let rank = crate::rules::convert::u8_from_u64_low(u64::from(lz) + 1);
         if rank > self.registers[idx] {
             self.registers[idx] = rank;
         }

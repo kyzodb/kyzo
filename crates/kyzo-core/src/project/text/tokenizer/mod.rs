@@ -205,6 +205,15 @@ pub(crate) mod tests {
         );
     }
 
+    /// Assert a full token stream against `(position, text, from, to)` rows —
+    /// ONE seat for simple/whitespace tokenizer harnesses (copy_detector).
+    pub(crate) fn assert_tokens(tokens: &[Token], want: &[(usize, &str, usize, usize)]) {
+        assert_eq!(tokens.len(), want.len(), "token count");
+        for (token, &(position, text, from, to)) in tokens.iter().zip(want.iter()) {
+            assert_token(token, position, text, from, to);
+        }
+    }
+
     /// Law 5 sweep: no tokenizer pipeline may panic on hostile user text.
     /// Vendored code is not exempt — a panic is a panic wherever it was
     /// written. Every tokenizer crossed with a maximal filter stack is fed
@@ -314,7 +323,9 @@ pub(crate) mod tests {
                 // beyond the input (single codepoints fold to multi-char
                 // ASCII). Cangjie offsets are pinned in cangjie::tokenizer
                 // tests (slice-address round-trip, including All overlaps).
-                let _walked = tok.text.chars().count();
+                let walked = tok.text.chars().count();
+                // Char walk proves UTF-8; empty tokens still count as one visit.
+                debug_assert!(walked > 0 || tok.text.is_empty());
                 n += 1;
             }
             // A finished stream must stay finished — advancing past the end

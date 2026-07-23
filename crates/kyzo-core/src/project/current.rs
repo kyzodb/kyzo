@@ -443,7 +443,8 @@ mod tests {
             let Ok(guard) = engine.segments.lock() else {
                 panic!("lock already poisoned before deliberate poison setup");
             };
-            let _hold = guard;
+            let hold = guard;
+            core::hint::black_box(&hold);
             panic!("deliberate poison");
         }));
         assert!(

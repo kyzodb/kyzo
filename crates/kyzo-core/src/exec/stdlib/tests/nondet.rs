@@ -49,7 +49,8 @@ fn test_now() -> Result<()> {
     let now = op_now(&[])?;
     assert!(matches!(now, DataValue::Num(_)));
     let s = op_format_timestamp(&[now])?;
-    let _dt = op_parse_timestamp(&[s])?;
+    let dt = op_parse_timestamp(&[s])?;
+    assert!(matches!(dt, DataValue::Validity(_) | DataValue::Num(_)));
     Ok(())
 }
 

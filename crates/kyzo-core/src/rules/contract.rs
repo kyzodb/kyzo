@@ -1669,14 +1669,17 @@ pub(crate) mod tests_support {
 
     /// Path graph v0—v{n-1} edge inputs — ONE seat for cancel-pin harnesses.
     pub(crate) fn path_edge_inputs(n: u32) -> Vec<TestInput> {
-        let edges: Vec<Tuple> = (0..n.saturating_sub(1))
-            .map(|i| {
-                Tuple::from_vec(vec![
-                    DataValue::from(format!("v{i}").as_str()),
-                    DataValue::from(format!("v{}", i + 1).as_str()),
-                ])
-            })
-            .collect();
+        let edges: Vec<Tuple> = match n.checked_sub(1) {
+            Some(last) => (0..last)
+                .map(|i| {
+                    Tuple::from_vec(vec![
+                        DataValue::from(format!("v{i}").as_str()),
+                        DataValue::from(format!("v{}", i + 1).as_str()),
+                    ])
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         vec![TestInput::new(vec!["fr", "to"], edges)]
     }
 

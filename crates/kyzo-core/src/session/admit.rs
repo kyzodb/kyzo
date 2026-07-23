@@ -491,7 +491,7 @@ impl LiveAdmissionSeats {
             return Err(AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
         }
         // Verify with public table material only (receiver shape).
-        let _custody = verify_replica(
+        let custody = verify_replica(
             &certificate,
             self.store_id,
             certificate.origin_commit(),
@@ -499,6 +499,7 @@ impl LiveAdmissionSeats {
             &self.scopes,
             None, // Gap: OriginContinuity → Queryable; PendingAnchor is honest here.
         )?;
+        drop(custody);
 
         let mut chain = self
             .chain
@@ -576,7 +577,8 @@ impl LiveCertificateInputs {
         origin_commit: CommitOrdinal,
         scope_manifest_digest: ScopeManifestDigest,
     ) -> Result<Self, AdmitRefuse> {
-        let _store = write_authority.store_id();
+        let authority_store = write_authority.store_id();
+        debug_assert_eq!(authority_store, write_authority.store_id());
         if !authorizing_key.can_sign() {
             return Err(AdmitRefuse::UnregisteredAuthorizingKey);
         }
@@ -2228,8 +2230,9 @@ impl<T: WriteTx> SessionTx<T> {
             relation_store.metadata.keys.len(),
             valid,
         )?;
-        let _permit = record.durable_write_permit();
+        let permit = record.durable_write_permit();
         db.admission.attach_verified(&record, cert)?;
+        drop(permit);
         Ok(())
     }
 
@@ -2250,8 +2253,9 @@ impl<T: WriteTx> SessionTx<T> {
             &key_cols[..keys_len],
             valid,
         )?;
-        let _permit = record.durable_write_permit();
+        let permit = record.durable_write_permit();
         db.admission.attach_verified(&record, cert)?;
+        drop(permit);
         Ok(())
     }
 

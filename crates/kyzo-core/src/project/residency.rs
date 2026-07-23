@@ -243,25 +243,30 @@ mod tests {
         Ok(())
     }
 
-    /// Adversary: a poisoned marks mutex must refuse silent continue
-    /// (typed Err), never into_inner and proceed.
-    #[test]
-    fn poisoned_marks_mutex_refuses_silent_continue() -> Result<()> {
-        let residency = Residency::new();
-        let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
-        // Adversary: panic while the marks mutex is held to poison it.
+    /// Panic while holding `lock` so the mutex is poisoned — ONE adversary
+    /// seat for marks/misses refuse proofs (copy_detector).
+    fn poison_mutex<T>(lock: &Mutex<T>) {
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let Ok(guard) = residency.marks.lock() else {
-                panic!("fresh marks mutex already poisoned");
+            let Ok(guard) = lock.lock() else {
+                panic!("fresh mutex already poisoned");
             };
-            // Hold the guard across the panic so the mutex becomes poisoned.
-            let _hold = guard;
+            let hold = guard;
+            core::hint::black_box(&hold);
             panic!("deliberate poison");
         }));
         assert!(
             poison.is_err(),
             "poison setup must panic while holding the guard"
         );
+    }
+
+    /// Adversary: a poisoned marks mutex must refuse silent continue
+    /// (typed Err), never into_inner and proceed.
+    #[test]
+    fn poisoned_marks_mutex_refuses_silent_continue() -> Result<()> {
+        let residency = Residency::new();
+        let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
+        poison_mutex(&residency.marks);
         let err = residency
             .bump_before_commit(relation)
             .expect_err("poisoned marks must refuse, not continue");
@@ -275,17 +280,7 @@ mod tests {
         let residency = Residency::new();
         let relation = RelationId::new(1).ok_or_else(|| miette!("below cap"))?;
         let live = Generation::stamp_from_counter(0);
-        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let Ok(guard) = residency.misses.lock() else {
-                panic!("fresh misses mutex already poisoned");
-            };
-            let _hold = guard;
-            panic!("deliberate poison");
-        }));
-        assert!(
-            poison.is_err(),
-            "poison setup must panic while holding the guard"
-        );
+        poison_mutex(&residency.misses);
         let err = residency
             .should_build(relation, live)
             .expect_err("poisoned misses must refuse, not continue");

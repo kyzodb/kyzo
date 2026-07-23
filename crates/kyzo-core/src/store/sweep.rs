@@ -58,7 +58,7 @@ use super::merkle::{
     ChainLinkKind, ChainedStateRoot, DurableCommitCut, MerkleChainRefuse, RootChain, StateRoot,
 };
 use super::open::StoreId;
-use super::tx::{CommitFailure, WriteTx};
+use super::tx::{Aborted, CommitFailure, WriteTx};
 use super::wal::{
     GENESIS_PREDECESSOR, WalHash, WalPayload, WalRecord, WalRefuse, WalReplayState, WalSegment,
 };
@@ -730,7 +730,7 @@ impl SweepDoor {
                 snapshot_fork: SnapshotFork::Yes,
             }
             | StableCommitCap::PlatformTransactionProof { .. } => {
-                drop(tx.abort());
+                let Aborted = tx.abort();
                 Err(SweepSealFailure::Sweep(
                     SweepRefuse::NativeFsyncAckArmRequired,
                 ))
@@ -753,25 +753,25 @@ impl SweepDoor {
         // Crash-restored digest map (bodies without preimage).
         if let Some(prior) = self.wal_restored_digests.get(key.as_bytes()) {
             if *prior != request_digest {
-                drop(tx.abort());
+                let Aborted = tx.abort();
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
             }
-            drop(tx.abort());
+            let Aborted = tx.abort();
             return Ok(());
         }
         // Live / preimage-restored IdempotencyMemo.
         match self.idempotency.consult(&key, request_digest) {
             Err(StoreRefuse::OperationKeyReuse) => {
-                drop(tx.abort());
+                let Aborted = tx.abort();
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
             }
             Err(_) => {
-                drop(tx.abort());
+                let Aborted = tx.abort();
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
             }
             Ok(Some(entry)) => {
                 if matches!(entry.outcome(), OperationOutcome::Committed { .. }) {
-                    drop(tx.abort());
+                    let Aborted = tx.abort();
                     return Ok(());
                 }
             }
@@ -787,7 +787,7 @@ impl SweepDoor {
             self.idempotency.lookup(&key),
             OperationOutcome::Committed { .. }
         ) {
-            drop(tx.abort());
+            let Aborted = tx.abort();
             return Ok(());
         }
 
@@ -798,7 +798,8 @@ impl SweepDoor {
             h.update(request_digest.as_bytes());
             StateRoot::from_digest(h.finalize().into())
         };
-        let _committed = self.seal_durable(intent, tx, content_root, current)?;
+        let committed = self.seal_durable(intent, tx, content_root, current)?;
+        let Committed { .. } = committed;
         Ok(())
     }
 
@@ -1860,7 +1861,8 @@ mod composition_tests {
             let Ok(guard) = handle.inner.lock() else {
                 panic!("fresh live-sweep mutex already poisoned");
             };
-            let _hold = guard;
+            let hold = guard;
+            core::hint::black_box(&hold);
             panic!("deliberate poison");
         }));
         assert!(

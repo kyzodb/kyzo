@@ -343,11 +343,16 @@ mod tests {
 
         let generation = stamp(1);
 
-        let _hnsw = ProjectionBuilder::new(Hnsw).seal(generation);
-        let _fts = ProjectionBuilder::new(Fts).seal(generation);
-        let _lsh = ProjectionBuilder::new(Lsh).seal(generation);
-        let _sparse = ProjectionBuilder::new(Sparse).seal(generation);
-        let _spatial = ProjectionBuilder::new(Spatial).seal(generation);
+        let hnsw = ProjectionBuilder::new(Hnsw).seal(generation);
+        let fts = ProjectionBuilder::new(Fts).seal(generation);
+        let lsh = ProjectionBuilder::new(Lsh).seal(generation);
+        let sparse = ProjectionBuilder::new(Sparse).seal(generation);
+        let spatial = ProjectionBuilder::new(Spatial).seal(generation);
+        assert!(stamp(1).classify(hnsw).is_ok());
+        assert!(stamp(1).classify(fts).is_ok());
+        assert!(stamp(1).classify(lsh).is_ok());
+        assert!(stamp(1).classify(sparse).is_ok());
+        assert!(stamp(1).classify(spatial).is_ok());
 
         let sealed = ProjectionBuilder::new(Hnsw).seal(stamp(2));
         assert!(stamp(2).classify(sealed).is_ok());

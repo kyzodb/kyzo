@@ -2472,7 +2472,8 @@ mod tests {
     fn snapshot_refuses_wrong_epoch_stamp() -> Result<()> {
         let mut arena = Arena::new();
         let sc = must_intern(&mut arena, b"x")?;
-        let _remap = arena.seal().into_diagnostic()?;
+        let remap = arena.seal().into_diagnostic()?;
+        drop(remap);
         let snap = arena.snapshot();
         assert!(
             matches!(snap.resolve(sc), Err(Denial::EpochMismatch { .. })),

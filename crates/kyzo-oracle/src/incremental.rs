@@ -564,7 +564,10 @@ pub fn incremental_eval(
     for rel in order {
         let old_rows = match old_total.get(&rel) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let absent_relation = BTreeSet::new();
+                absent_relation
+            }
         };
         let (delta, new_rows) = if edb.contains(&rel) {
             let filtered: BTreeSet<SignedFact> = edb_patch
@@ -704,11 +707,17 @@ mod tests {
         for rel in all_rels {
             let o = match old.get(&rel) {
                 Some(rows) => rows.clone(),
-                None => BTreeSet::new(),
+                None => {
+                    let absent_old = BTreeSet::new();
+                    absent_old
+                }
             };
             let n = match new.get(&rel) {
                 Some(rows) => rows.clone(),
-                None => BTreeSet::new(),
+                None => {
+                    let absent_new = BTreeSet::new();
+                    absent_new
+                }
             };
             let mut want = BTreeSet::new();
             for t in o.difference(&n) {
@@ -719,7 +728,10 @@ mod tests {
             }
             let g = match got.get(&rel) {
                 Some(delta) => delta.clone(),
-                None => BTreeSet::new(),
+                None => {
+                    let absent_delta = BTreeSet::new();
+                    absent_delta
+                }
             };
             assert_eq!(g, want, "{label}: mismatch on {rel}");
         }

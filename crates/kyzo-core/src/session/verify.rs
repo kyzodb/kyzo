@@ -536,8 +536,8 @@ mod tests {
         chain.append(link)?;
 
         // A forged digest in scope — verify never takes it as input.
-        let _forged_caller_root = StateRoot::from_digest([0xDE; 32]);
-        assert_ne!(_forged_caller_root, as_of_root(&chain, cut)?);
+        let forged_caller_root = StateRoot::from_digest([0xDE; 32]);
+        assert_ne!(forged_caller_root, as_of_root(&chain, cut)?);
 
         match verify(&tx, &chain, cut, merkle_budget()?).map_err(|e| miette!("verify runs: {e}"))? {
             RootVerifyOutcome::Intact { root } => {

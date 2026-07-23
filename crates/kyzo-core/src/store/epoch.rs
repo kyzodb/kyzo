@@ -87,7 +87,11 @@ impl CryptoDomain {
     /// `fence_epoch.store_id()`. A disagreeing witness cannot construct a
     /// foreign-domain pair (Unconstructible) — never a panic costume.
     pub fn new(store_id: StoreId, fence_epoch: FenceEpoch) -> Self {
-        let _witness = store_id;
+        debug_assert_eq!(
+            store_id,
+            fence_epoch.store_id(),
+            "call-site store witness must match sealed fence epoch store"
+        );
         Self {
             store_id: fence_epoch.store_id(),
             fence_epoch,

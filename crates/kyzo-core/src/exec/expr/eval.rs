@@ -626,7 +626,7 @@ mod tests {
                 // A residue ≥6 is outside the generator contract — emit a
                 // leaf Const the differential can still judge. Never `_ =>`.
                 modulus_overflow @ 6..=u64::MAX => {
-                    let _named_overflow = modulus_overflow;
+                    debug_assert!(modulus_overflow >= 6);
                     Expr::Const {
                         val: DataValue::Null,
                         span: kyzo_model::SourceSpan::empty(),

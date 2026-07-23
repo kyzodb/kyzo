@@ -199,24 +199,25 @@ impl<S: Storage> StandingQuery<S> {
             );
         }
 
-        let tx = db.store.read_tx()?;
         let mut state: MaintainedState = BTreeMap::new();
-        for rel in &edb {
-            let handle = get_relation(&tx, rel.name.as_str())?;
-            let key_arity = handle.metadata.keys.len();
-            let rows: BTreeSet<Tuple> = handle.scan_all(&tx).collect::<Result<_>>()?;
-            ensure!(
-                no_duplicate_key_prefix(&rows, key_arity),
-                "relation {rel:?}'s freshly-scanned rows already have a duplicate key at \
-                 registration time (key_arity {key_arity}): {rows:?}"
-            );
-            subscriptions
-                .get_mut(rel)
-                .ok_or_else(|| miette!("standing subscription missing after insert"))?
-                .key_arity = key_arity;
-            state.insert(rel.clone(), rows);
+        {
+            let tx = db.store.read_tx()?;
+            for rel in &edb {
+                let handle = get_relation(&tx, rel.name.as_str())?;
+                let key_arity = handle.metadata.keys.len();
+                let rows: BTreeSet<Tuple> = handle.scan_all(&tx).collect::<Result<_>>()?;
+                ensure!(
+                    no_duplicate_key_prefix(&rows, key_arity),
+                    "relation {rel:?}'s freshly-scanned rows already have a duplicate key at \
+                     registration time (key_arity {key_arity}): {rows:?}"
+                );
+                subscriptions
+                    .get_mut(rel)
+                    .ok_or_else(|| miette!("standing subscription missing after insert"))?
+                    .key_arity = key_arity;
+                state.insert(rel.clone(), rows);
+            }
         }
-        drop(tx);
 
         // The very first evaluation is a full recompute (there is no
         // "before" patch yet) — the derived relations' own state starts
@@ -377,7 +378,11 @@ impl<S: Storage> StandingQuery<S> {
     pub fn apply_pending_answer(&mut self) -> Result<BTreeSet<SignedFact>> {
         Ok(match self.apply_pending()?.remove(&entry_symbol()) {
             Some(delta) => delta,
-            None => BTreeSet::new(),
+            None => {
+                // Absent entry relation → published empty signed delta.
+                let empty_answer_delta = BTreeSet::new();
+                empty_answer_delta
+            }
         })
     }
 
@@ -389,7 +394,7 @@ impl<S: Storage> StandingQuery<S> {
     /// the same way — RAII makes leaking a live registration by forgetting
     /// impossible.
     pub fn teardown(self) {
-        drop(self);
+        // Drop runs at end of scope — identical unregistration to the Drop impl.
     }
 }
 
@@ -409,7 +414,17 @@ impl<S: Storage> Drop for StandingQuery<S> {
     fn drop(&mut self) {
         for sub in self.subscriptions.values() {
             // Drop cannot refuse: ObserveRefuse on a poisoned registry is named and discarded.
-            let _unregister_outcome = self.db.unregister_callback(sub.id);
+            match self.db.unregister_callback(sub.id) {
+                Ok(was_registered) => {
+                    drop(was_registered);
+                }
+                Err(observe_refuse) => {
+                    let named = observe_refuse;
+                    if named.to_string().is_empty() {
+                        // ObserveRefuse always names the poison — empty is uninhabited.
+                    }
+                }
+            }
         }
     }
 }
@@ -486,7 +501,10 @@ mod tests {
     fn current_rows<S: Storage>(sq: &StandingQuery<S>, rel: &Symbol) -> BTreeSet<Tuple> {
         match sq.current(rel) {
             Some(rows) => rows.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let untouched_relation = BTreeSet::new();
+                untouched_relation
+            }
         }
     }
     /// Absent delta key → empty signed set (relation unchanged this round).
@@ -496,7 +514,10 @@ mod tests {
     ) -> BTreeSet<SignedFact> {
         match deltas.get(rel) {
             Some(d) => d.clone(),
-            None => BTreeSet::new(),
+            None => {
+                let unchanged_delta = BTreeSet::new();
+                unchanged_delta
+            }
         }
     }
 
@@ -720,15 +741,26 @@ mod tests {
         Ok(())
     }
 
+    /// ONE seat for standing hard-corner fixture + subscription id harvest.
+    fn standing_hard_corner_ids(
+        db: &Engine<crate::store::fjall::FjallStorage>,
+    ) -> Result<(
+        StandingQuery<crate::store::fjall::FjallStorage>,
+        Vec<CallbackId>,
+    )> {
+        db.run_script(":create p {x: Int =>}", no_params())?;
+        db.run_script(":create r {x: Int =>}", no_params())?;
+        let sq = StandingQuery::register(db, hard_corner_program()?)?;
+        let ids: Vec<_> = sq.subscriptions.values().map(|s| s.id).collect();
+        assert!(!ids.is_empty());
+        Ok((sq, ids))
+    }
+
     #[test]
     fn teardown_unregisters_every_subscription() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
-        db.run_script(":create p {x: Int =>}", no_params())?;
-        db.run_script(":create r {x: Int =>}", no_params())?;
-        let sq = StandingQuery::register(&db, hard_corner_program()?)?;
-        let ids: Vec<_> = sq.subscriptions.values().map(|s| s.id).collect();
-        assert!(!ids.is_empty());
+        let (sq, ids) = standing_hard_corner_ids(&db)?;
         sq.teardown();
         for id in ids {
             assert!(
@@ -747,14 +779,10 @@ mod tests {
     fn drop_on_scope_exit_unregisters_every_subscription() -> Result<()> {
         let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())?;
-        db.run_script(":create p {x: Int =>}", no_params())?;
-        db.run_script(":create r {x: Int =>}", no_params())?;
         let ids: Vec<_> = {
-            let sq = StandingQuery::register(&db, hard_corner_program()?)?;
-            let ids: Vec<_> = sq.subscriptions.values().map(|s| s.id).collect();
-            assert!(!ids.is_empty());
+            let (_sq, ids) = standing_hard_corner_ids(&db)?;
             ids
-            // `sq` drops HERE at scope exit — no `teardown()` call.
+            // `_sq` drops HERE at scope exit — no `teardown()` call.
         };
         for id in ids {
             assert!(

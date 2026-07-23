@@ -1567,7 +1567,8 @@ pub fn validate_crossing_before_lower(
     )?;
 
     // 2) Kind — closed wire set (construction already typed; belt for raw tags).
-    let _kind = CrossingKind::from_wire(envelope.kind().as_wire())?;
+    let kind = CrossingKind::from_wire(envelope.kind().as_wire())?;
+    debug_assert_eq!(kind, envelope.kind());
 
     // 3) Schema version ↔ certificate protocol_version.
     if envelope.schema_version() != certificate.protocol_version() {
@@ -1815,7 +1816,7 @@ pub fn anchor_pending(
     local_commit: CommitOrdinal,
     continuity: OriginContinuity,
 ) -> Result<ReplicaCustody, ReplicaRefuse> {
-    let _continuity = continuity;
+    let OriginContinuity { .. } = continuity;
     match pending {
         ReplicaCustody::PendingAnchor { key, .. } => Ok(ReplicaCustody::Queryable {
             key,

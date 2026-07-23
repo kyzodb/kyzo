@@ -1726,8 +1726,6 @@ fn entry_point(
     idx: &RelationHandle,
 ) -> Result<Option<(i64, VectorId)>> {
     #[cfg(test)]
-    let _t0 = std::time::Instant::now();
-    #[cfg(test)]
     probe::ENTRY_POINT_CALLS.with(|c| c.set(c.get() + 1));
     let first = crate::project::contract::index_rows(
         &idx.name,
@@ -1771,8 +1769,6 @@ fn neighbours(
     layer: i64,
     include_ignored: bool,
 ) -> Result<Vec<(VectorId, f64)>> {
-    #[cfg(test)]
-    let _t0 = std::time::Instant::now();
     #[cfg(test)]
     probe::NEIGHBOURS_CALLS.with(|c| c.set(c.get() + 1));
     let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);

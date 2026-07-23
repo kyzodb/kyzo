@@ -534,7 +534,10 @@ fn load_catalog_handles(
         let (k, v) = pair?;
         let tup = match decode_tuple_from_key(&k, 16) {
             Ok(t) => t,
-            Err(_) => continue,
+            Err(decode_refuse) => {
+                drop(decode_refuse);
+                continue;
+            }
         };
         if let Some(DataValue::Str(_)) = tup.first() {
             let h = RelationHandle::decode(&v).map_err(|e| miette::miette!("{e}"))?;
@@ -586,11 +589,17 @@ fn rederive_temporal(
         let (k, v) = pair?;
         let polarity = match claim_polarity_of_value(&v) {
             Ok(p) => p,
-            Err(_) => continue,
+            Err(polarity_refuse) => {
+                drop(polarity_refuse);
+                continue;
+            }
         };
         let tuple = match decode_tuple_from_key(&k, keys_len + 2) {
             Ok(t) => t,
-            Err(_) => continue,
+            Err(decode_refuse) => {
+                drop(decode_refuse);
+                continue;
+            }
         };
         let cols = tuple.as_slice();
         if cols.len() < keys_len + 1 {
@@ -613,12 +622,18 @@ fn rederive_temporal(
         let (k, v) = pair?;
         let polarity = match claim_polarity_of_value(&v) {
             Ok(p) => p,
-            Err(_) => continue,
+            Err(polarity_refuse) => {
+                drop(polarity_refuse);
+                continue;
+            }
         };
         let idx_keys = idx.metadata.keys.len();
         let tuple = match decode_tuple_from_key(&k, idx_keys + 2) {
             Ok(t) => t,
-            Err(_) => continue,
+            Err(decode_refuse) => {
+                drop(decode_refuse);
+                continue;
+            }
         };
         let cols = tuple.as_slice();
         if cols.len() < idx_keys {
