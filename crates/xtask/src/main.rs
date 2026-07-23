@@ -16,6 +16,8 @@
 //! Story #81's resonance gate (five deterministic ontology checks) is the
 //! `resonance` verb; it joins `gate`'s sequence on day one.
 
+#![forbid(unsafe_code)]
+
 mod allowlist;
 mod cargo_meta;
 mod checks;

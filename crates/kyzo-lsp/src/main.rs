@@ -44,6 +44,8 @@
 //! was deleted; definition jumps must wait on a real parse-surface door that
 //! can answer mid-edit documents, not a local mini-lexer.
 
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
 

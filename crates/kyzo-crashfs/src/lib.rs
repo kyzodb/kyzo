@@ -69,6 +69,8 @@
 //!    `fjall`'s own recovery code. A large clean run is a reportable
 //!    result on its own, not a reason to inflate seeds looking for a hit.
 
+#![forbid(unsafe_code)]
+
 pub mod fault;
 pub mod harness;
 pub mod passthrough;
