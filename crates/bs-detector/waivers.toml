@@ -43,7 +43,7 @@ why_not_sabotage = "KEEP: crash_consistency_process_abort child deliberately abo
 [[waiver]]
 check = "ignore_test"
 file = "crates/kyzo-trials/src/gauntlet.rs"
-line = 1448
+line = 1462
 construct = "ignore_test"
 why_not_sabotage = "KEEP: disclosed open seat `demand-rewriter-generative-gap`. Cap1's RuleBody seam is post-stratification and cannot exercise magic-set demand rewriting; the ignored test names the missing public door (`stratified_magic_compile` / Engine generative magic-vs-bypass) and fails loud if un-ignored before that door exists. Not a soft-green skip \u2014 the reason string is the standing obligation."
 
