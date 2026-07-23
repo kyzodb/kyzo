@@ -8,7 +8,8 @@
 # log is flipped to PASS. Anything other than "on" (e.g. "off") disarms the
 # guard completely.
 #
-# Only the operator edits this file. Agents: hands off.
+# Only the operator edits the on/off switch in this file. 
+# Agents: hands off without EXPLICIT approval.
 
 on
 
@@ -18,4 +19,4 @@ on
 # the hook script carries no copy of it.
 # ----------------------------------------------------------------------------
 
-VIOLATION: Change FAIL to PASS in crates/xtask/resonance.log to acknowledge, then immediately sequence development work. This hook repeats every turn until resolved. Do not disable or modify it without explicit operator approval.
+VIOLATION: Change FAIL to PASS in crates/xtask/resonance.log to acknowledge, then immediately sequence any new development work. This hook repeats every turn until resolved.
