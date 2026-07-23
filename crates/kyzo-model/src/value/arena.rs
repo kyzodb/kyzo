@@ -118,15 +118,55 @@ const CHUNK_SIZE: usize = 64 * 1024;
 /// Read access to payload bytes, implemented by the live [`Heap`] and by a
 /// snapshot's frozen chunk set. `tie_payload` is the counted
 /// comparison-tie path.
+///
+/// Unknown-chunk / past-visible-chunk spans refuse with
+/// [`Denial::VisibilityOverflow`] — never empty-slice success, never panic.
 trait Store {
-    fn payload(&self, span: Span) -> &[u8];
+    fn payload(&self, span: Span) -> Result<&[u8], Denial>;
     fn deref_counter(&self) -> &AtomicU64;
 
     #[inline]
-    fn tie_payload(&self, span: Span) -> &[u8] {
+    fn tie_payload(&self, span: Span) -> Result<&[u8], Denial> {
         self.deref_counter().fetch_add(1, AtomicOrd::Relaxed);
         self.payload(span)
     }
+}
+
+/// Fallible binary search: `Ok(Ok(i))` found, `Ok(Err(i))` insertion point,
+/// `Err(e)` when the comparator refuses.
+fn binary_search_by_result<T, E, F>(slice: &[T], mut cmp: F) -> Result<Result<usize, usize>, E>
+where
+    F: FnMut(&T) -> Result<Ordering, E>,
+{
+    let mut left = 0usize;
+    let mut right = slice.len();
+    while left < right {
+        let mid = left + (right - left) / 2;
+        match cmp(&slice[mid])? {
+            Ordering::Less => left = mid + 1,
+            Ordering::Greater => right = mid,
+            Ordering::Equal => return Ok(Ok(mid)),
+        }
+    }
+    Ok(Err(left))
+}
+
+/// Fallible `partition_point`: first index where `pred` is false.
+fn partition_point_result<T, E, F>(slice: &[T], mut pred: F) -> Result<usize, E>
+where
+    F: FnMut(&T) -> Result<bool, E>,
+{
+    let mut left = 0usize;
+    let mut right = slice.len();
+    while left < right {
+        let mid = left + (right - left) / 2;
+        if pred(&slice[mid])? {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    Ok(left)
 }
 
 /// Append-only payload storage as immutable chunks. Frozen chunks are
@@ -244,8 +284,8 @@ impl Heap {
         ChunkId::from_usize(self.frozen.len()).ok_or(Denial::ExtentOverflow)
     }
 
-    pub fn get(&self, span: Span) -> &[u8] {
-        self.payload(span)
+    pub fn get(&self, span: Span) -> Result<&[u8], Denial> {
+        Store::payload(self, span)
     }
 
     /// Total payload fetches forced by comparison ties so far.
@@ -255,25 +295,27 @@ impl Heap {
 }
 
 impl Store for Heap {
-    fn payload(&self, span: Span) -> &[u8] {
+    fn payload(&self, span: Span) -> Result<&[u8], Denial> {
         // A zero-length span owns no bytes and may address a chunk that
         // was never materialized (empty values append nothing).
         if span.len == ByteLen::ZERO {
-            return &[];
+            return Ok(&[]);
         }
         let off = span.off.as_usize();
         let end = span.end_off();
         let c = span.chunk.as_usize();
+        // Live chunk id is always `frozen.len()`; addressable set size is
+        // that plus one. Past that is not empty-slice success.
+        let visible = self.frozen.len() + 1;
         if c < self.frozen.len() {
-            &self.frozen[c][off..end]
+            Ok(&self.frozen[c][off..end])
         } else if c == self.frozen.len() {
-            &self.live[off..end]
+            Ok(&self.live[off..end])
         } else {
-            // Span names a chunk that never existed — fail closed, never
-            // empty-slice success that invents "no payload".
-            Option::<&[u8]>::None.expect(
-                "INVARIANT(heap_span): non-zero span names an unknown chunk",
-            )
+            Err(Denial::VisibilityOverflow {
+                required: c + 1,
+                visible,
+            })
         }
     }
 
@@ -284,21 +326,29 @@ impl Store for Heap {
 
 /// A snapshot's view of the heap: the frozen chunks as of the snapshot.
 /// Spans minted after the snapshot address chunks beyond this set and
-/// panic rather than aliasing.
+/// refuse rather than aliasing.
 struct FrozenStore {
     chunks: Vec<Arc<[u8]>>,
     compare_derefs: Arc<AtomicU64>,
 }
 
 impl Store for FrozenStore {
-    fn payload(&self, span: Span) -> &[u8] {
+    fn payload(&self, span: Span) -> Result<&[u8], Denial> {
         // Zero-length spans own no bytes (see `Heap::payload`).
         if span.len == ByteLen::ZERO {
-            return &[];
+            return Ok(&[]);
+        }
+        let c = span.chunk.as_usize();
+        let visible = self.chunks.len();
+        if c >= visible {
+            return Err(Denial::VisibilityOverflow {
+                required: c + 1,
+                visible,
+            });
         }
         let off = span.off.as_usize();
         let end = span.end_off();
-        &self.chunks[span.chunk.as_usize()][off..end]
+        Ok(&self.chunks[c][off..end])
     }
 
     fn deref_counter(&self) -> &AtomicU64 {
@@ -316,36 +366,41 @@ struct Entry {
 }
 
 impl Entry {
-    fn new(span: Span, heap: &Heap) -> Entry {
-        Entry {
-            prefix: prefix4(heap.get(span)),
+    fn new(span: Span, heap: &Heap) -> Result<Entry, Denial> {
+        Ok(Entry {
+            prefix: prefix4(heap.get(span)?),
             span,
-        }
+        })
     }
 
     /// Prefix-first compare against a needle; payload deref only on tie.
     #[inline]
-    fn cmp_needle<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Ordering {
+    fn cmp_needle<S: Store>(
+        &self,
+        np: [u8; 4],
+        needle: &[u8],
+        store: &S,
+    ) -> Result<Ordering, Denial> {
         match cmp_prefixed(self.prefix, self.span.len.raw(), np, u32::try_from(needle.len()).expect("INVARIANT(needle_len_fits_u32): slice len fits u32")) {
-            PrefixCmp::Decided(o) => o,
-            PrefixCmp::NeedPayload => store.tie_payload(self.span).cmp(needle),
+            PrefixCmp::Decided(o) => Ok(o),
+            PrefixCmp::NeedPayload => Ok(store.tie_payload(self.span)?.cmp(needle)),
         }
     }
 
     /// Prefix-first compare against another entry; payload derefs only on
     /// tie.
     #[inline]
-    fn cmp_entry<S: Store>(&self, other: &Entry, store: &S) -> Ordering {
+    fn cmp_entry<S: Store>(&self, other: &Entry, store: &S) -> Result<Ordering, Denial> {
         match cmp_prefixed(
             self.prefix,
             self.span.len.raw(),
             other.prefix,
             other.span.len.raw(),
         ) {
-            PrefixCmp::Decided(o) => o,
-            PrefixCmp::NeedPayload => store
-                .tie_payload(self.span)
-                .cmp(store.tie_payload(other.span)),
+            PrefixCmp::Decided(o) => Ok(o),
+            PrefixCmp::NeedPayload => Ok(store
+                .tie_payload(self.span)?
+                .cmp(store.tie_payload(other.span)?)),
         }
     }
 }
@@ -370,11 +425,10 @@ impl Run {
     /// uniqueness before this door. Refuses [`Denial::BookkeepingBroken`]
     /// when that law is violated — never a release-elided assert.
     fn from_sorted(entries: Vec<Entry>, heap: &Heap) -> Result<Run, Denial> {
-        if !entries
-            .windows(2)
-            .all(|w| w[0].cmp_entry(&w[1], heap) == Ordering::Less)
-        {
-            return Err(Denial::BookkeepingBroken);
+        for w in entries.windows(2) {
+            if w[0].cmp_entry(&w[1], heap)? != Ordering::Less {
+                return Err(Denial::BookkeepingBroken);
+            }
         }
         match heap {
             value => core::mem::drop(value),
@@ -396,7 +450,7 @@ impl Run {
         let mut merged = Vec::with_capacity(a.entries.len() + b.entries.len());
         let (mut i, mut j) = (0, 0);
         while i < a.entries.len() && j < b.entries.len() {
-            match a.entries[i].cmp_entry(&b.entries[j], heap) {
+            match a.entries[i].cmp_entry(&b.entries[j], heap)? {
                 Ordering::Less => {
                     merged.push(a.entries[i]);
                     i += 1;
@@ -421,12 +475,17 @@ impl Run {
         self.entries.len()
     }
 
-    /// Rank of `needle` within this run: `Ok(rank)` if present, `Err(rank
-    /// it would take)` if absent. Binary search's precondition is the
-    /// type's postcondition.
-    fn search<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Result<usize, usize> {
-        self.entries
-            .binary_search_by(|e| e.cmp_needle(np, needle, store))
+    /// Rank of `needle` within this run: `Ok(Ok(rank))` if present,
+    /// `Ok(Err(rank it would take))` if absent, `Err(Denial)` when a
+    /// payload fetch refuses. Binary search's precondition is the type's
+    /// postcondition.
+    fn search<S: Store>(
+        &self,
+        np: [u8; 4],
+        needle: &[u8],
+        store: &S,
+    ) -> Result<Result<usize, usize>, Denial> {
+        binary_search_by_result(&self.entries, |e| e.cmp_needle(np, needle, store))
     }
 }
 
@@ -772,9 +831,16 @@ impl Delta {
         self.arrivals.len()
     }
 
-    fn search<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Result<usize, usize> {
-        self.sorted
-            .binary_search_by(|&i| self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))].cmp_needle(np, needle, store))
+    fn search<S: Store>(
+        &self,
+        np: [u8; 4],
+        needle: &[u8],
+        store: &S,
+    ) -> Result<Result<usize, usize>, Denial> {
+        binary_search_by_result(&self.sorted, |&i| {
+            self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))]
+                .cmp_needle(np, needle, store)
+        })
     }
 
     fn entry_by_rank(&self, rank: usize) -> Entry {
@@ -925,7 +991,7 @@ impl<'a, S: Store> View<'a, S> {
     }
 
     fn resolve(&self, c: usize) -> Result<&'a [u8], Denial> {
-        Ok(self.store.payload(self.entry_of(c)?.span))
+        self.store.payload(self.entry_of(c)?.span)
     }
 
     /// Semantic comparison of two live codes: rank order is byte order
@@ -951,7 +1017,7 @@ impl<'a, S: Store> View<'a, S> {
         }
         let ea = self.entry_of(ca)?;
         let eb = self.entry_of(cb)?;
-        Ok(ea.cmp_entry(&eb, self.store))
+        ea.cmp_entry(&eb, self.store)
     }
 
     /// Global ordered rank of `value` across sealed and delta together:
@@ -966,7 +1032,7 @@ impl<'a, S: Store> View<'a, S> {
         let mut rank = 0usize;
         let mut found = false;
         for run in self.runs {
-            match run.search(np, value, self.store) {
+            match run.search(np, value, self.store)? {
                 Ok(pos) => {
                     rank += pos;
                     found = true;
@@ -974,10 +1040,10 @@ impl<'a, S: Store> View<'a, S> {
                 Err(pos) => rank += pos,
             }
         }
-        match self
-            .sorted
-            .binary_search_by(|&i| self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))].cmp_needle(np, value, self.store))
-        {
+        match binary_search_by_result(self.sorted, |&i| {
+            self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))]
+                .cmp_needle(np, value, self.store)
+        })? {
             Ok(pos) => {
                 rank += pos;
                 found = true;
@@ -996,7 +1062,7 @@ impl<'a, S: Store> View<'a, S> {
                 visible,
             });
         }
-        Ok(self.store.payload(self.select_global(k)?.span))
+        self.store.payload(self.select_global(k)?.span)
     }
 
     /// Select the sealed value of rank `k` across the disjoint runs: in
@@ -1007,7 +1073,7 @@ impl<'a, S: Store> View<'a, S> {
     /// `k` despite the caller having proven `k` in sealed range.
     fn select_sealed(&self, k: usize) -> Result<Entry, Denial> {
         for (r, run) in self.runs.iter().enumerate() {
-            if let Some(e) = self.select_in(run, r, k, false) {
+            if let Some(e) = self.select_in(run, r, k, false)? {
                 return Ok(e);
             }
         }
@@ -1021,7 +1087,7 @@ impl<'a, S: Store> View<'a, S> {
     /// visible range.
     fn select_global(&self, k: usize) -> Result<Entry, Denial> {
         for (r, run) in self.runs.iter().enumerate() {
-            if let Some(e) = self.select_in(run, r, k, true) {
+            if let Some(e) = self.select_in(run, r, k, true)? {
                 return Ok(e);
             }
         }
@@ -1032,7 +1098,7 @@ impl<'a, S: Store> View<'a, S> {
         while lo < hi {
             let mid = (lo + hi) / 2;
             let e = self.entry_by_delta_rank(mid);
-            let g = self.global_rank_of_delta_entry(e, mid);
+            let g = self.global_rank_of_delta_entry(e, mid)?;
             match g.cmp(&k) {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
@@ -1048,7 +1114,13 @@ impl<'a, S: Store> View<'a, S> {
 
     /// Binary search run `r` for an index whose global rank equals `k`.
     /// `with_delta` includes the delta in the rank sum.
-    fn select_in(&self, run: &Run, r: usize, k: usize, with_delta: bool) -> Option<Entry> {
+    fn select_in(
+        &self,
+        run: &Run,
+        r: usize,
+        k: usize,
+        with_delta: bool,
+    ) -> Result<Option<Entry>, Denial> {
         let (mut lo, mut hi) = (0usize, run.len());
         while lo < hi {
             let mid = (lo + hi) / 2;
@@ -1056,41 +1128,45 @@ impl<'a, S: Store> View<'a, S> {
             let mut g = mid;
             for (i, other) in self.runs.iter().enumerate() {
                 if i != r {
-                    g += self.lower_bound_in(other, e);
+                    g += self.lower_bound_in(other, e)?;
                 }
             }
             if with_delta {
-                g += self.lower_bound_delta(e);
+                g += self.lower_bound_delta(e)?;
             }
             match g.cmp(&k) {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
-                Ordering::Equal => return Some(e),
+                Ordering::Equal => return Ok(Some(e)),
             }
         }
-        None
+        Ok(None)
     }
 
     /// Global rank of a delta entry at sorted position `pos`: `pos` plus
     /// lower bounds across every run.
-    fn global_rank_of_delta_entry(&self, e: Entry, delta_pos: usize) -> usize {
+    fn global_rank_of_delta_entry(&self, e: Entry, delta_pos: usize) -> Result<usize, Denial> {
         let mut g = delta_pos;
         for run in self.runs {
-            g += self.lower_bound_in(run, e);
+            g += self.lower_bound_in(run, e)?;
         }
-        g
+        Ok(g)
     }
 
     /// Number of entries in `run` strictly less than `e`.
-    fn lower_bound_in(&self, run: &Run, e: Entry) -> usize {
-        run.entries
-            .partition_point(|x| x.cmp_entry(&e, self.store) == Ordering::Less)
+    fn lower_bound_in(&self, run: &Run, e: Entry) -> Result<usize, Denial> {
+        partition_point_result(&run.entries, |x| {
+            Ok(x.cmp_entry(&e, self.store)? == Ordering::Less)
+        })
     }
 
     /// Number of delta entries strictly less than `e`.
-    fn lower_bound_delta(&self, e: Entry) -> usize {
-        self.sorted.partition_point(|&i| {
-            self.arrivals[(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))].cmp_entry(&e, self.store) == Ordering::Less
+    fn lower_bound_delta(&self, e: Entry) -> Result<usize, Denial> {
+        partition_point_result(self.sorted, |&i| {
+            Ok(self.arrivals
+                [(usize::try_from(i).expect("INVARIANT(u32_fits_usize): u32 fits usize"))]
+                .cmp_entry(&e, self.store)?
+                == Ordering::Less)
         })
     }
 }
@@ -1670,7 +1746,7 @@ impl Arena {
         let mut rank = 0usize;
         let mut found = false;
         for run in &self.runs {
-            match run.search(np, value, &self.heap) {
+            match run.search(np, value, &self.heap)? {
                 Ok(pos) => {
                     rank += pos;
                     found = true;
@@ -1681,14 +1757,14 @@ impl Arena {
         let code = if found {
             Code(u32::try_from(rank).map_err(|_| Denial::ExtentOverflow)?)
         } else {
-            match self.delta.search(np, value, &self.heap) {
+            match self.delta.search(np, value, &self.heap)? {
                 Ok(pos) => {
                     let arrival = self.delta.sorted[pos];
                     Code(u32::try_from(self.sealed_len + usize::try_from(arrival).expect("INVARIANT(u32_fits_usize): u32 fits usize")).map_err(|_| Denial::ExtentOverflow)?)
                 }
                 Err(pos) => {
                     let span = self.heap.push(value)?;
-                    let entry = Entry::new(span, &self.heap);
+                    let entry = Entry::new(span, &self.heap)?;
                     let arrival = u32::try_from(self.delta.arrivals.len()).map_err(|_| Denial::ExtentOverflow)?;
                     self.delta.arrivals.push(entry);
                     self.delta.sorted.insert(pos, arrival);
@@ -1729,11 +1805,11 @@ impl Arena {
         let mut tail = vec![0u32; delta_n];
         for j in 0..delta_n {
             let entry = self.delta.entry_by_rank(j);
-            let bytes = self.heap.get(entry.span);
+            let bytes = self.heap.get(entry.span)?;
             let np = entry.prefix;
             let mut sealed_rank = 0usize;
             for run in &self.runs {
-                match run.search(np, bytes, &self.heap) {
+                match run.search(np, bytes, &self.heap)? {
                     // Delta values are disjoint from sealed by
                     // intern-time dedup; an exact hit is corrupt bookkeeping.
                     Ok(_) => return Err(Denial::BookkeepingBroken),
@@ -1803,8 +1879,8 @@ mod tests {
 
     use super::*;
 
-    /// Adversary: a forged non-zero span naming an unknown chunk must fail
-    /// closed (panic/expect) — never return empty-slice success.
+    /// Adversary: a forged non-zero span naming an unknown chunk must
+    /// refuse with [`Denial::VisibilityOverflow`] — never empty-slice success.
     #[test]
     fn unknown_chunk_non_zero_span_fails_closed_not_empty() {
         let heap = Heap::new();
@@ -1813,11 +1889,14 @@ mod tests {
             ByteOff::ZERO,
             ByteLen::from_usize(1).expect("len 1 fits"),
         );
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| heap.get(bad)));
-        assert!(
-            result.is_err(),
-            "unknown chunk must fail closed, not return empty success"
-        );
+        match heap.get(bad) {
+            Err(Denial::VisibilityOverflow {
+                required: 1000,
+                visible: 1,
+            }) => {}
+            Ok(bytes) => panic!("unknown chunk must not succeed (len={})", bytes.len()),
+            Err(other) => panic!("expected VisibilityOverflow, got {other:?}"),
+        }
     }
 
     /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.

@@ -346,6 +346,24 @@ pub enum LiveInsert {
     },
 }
 
+/// Supported targets: pointer width ≤ 64, so `usize` → `u64` is total.
+const _: () = assert!(
+    std::mem::size_of::<usize>() <= std::mem::size_of::<u64>(),
+    "fence_pressure requires usize to fit in u64"
+);
+
+/// Lossless `usize` → `u64` via little-endian `From<u8>` assemble.
+///
+/// Same door shape as the fixed-rule zone's width widens (`rules/convert`):
+/// no `as` cast (trips `as_cast`), no `TryFrom::expect` on a total widen.
+#[inline]
+fn u64_from_usize(n: usize) -> u64 {
+    let src = n.to_le_bytes();
+    let mut buf = [0u8; 8];
+    buf[..src.len()].copy_from_slice(&src);
+    u64::from_le_bytes(buf)
+}
+
 /// Session-memory live footprint table — no durable lock organ.
 #[derive(Debug)]
 pub struct LiveFootprintTable {
@@ -395,13 +413,15 @@ impl LiveFootprintTable {
 
     /// Count of live Fenced footprints (fence-pressure operator feed).
     pub fn fence_pressure(&self) -> u64 {
-        u64::try_from(
+        // Cardinality is a `usize`; the operator feed is `u64`. On every
+        // supported target `usize` widens into `u64` losslessly (see
+        // [`u64_from_usize`]); no `TryFrom::expect`, no `as` cast.
+        u64_from_usize(
             self.live
                 .values()
                 .filter(|s| matches!(s, AskShape::Fenced(_)))
                 .count(),
         )
-        .expect("INVARIANT(fence_pressure_fits_u64): live fenced count fits u64")
     }
 
     /// Whether any current-epoch Fenced footprint is live (blocks ordinary advance).
