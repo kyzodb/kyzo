@@ -96,6 +96,7 @@ mod auth;
 mod bulk;
 mod console;
 mod feeds;
+mod payload_wire;
 mod query;
 mod rules;
 

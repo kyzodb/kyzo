@@ -1044,11 +1044,8 @@ fn spatial_knn_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::catalog::KeyspaceKind;
-    use crate::session::catalog::create_relation;
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
-    use kyzo_model::program::InputRelationHandle;
     use miette::{IntoDiagnostic, Result, miette};
 
     // -- deterministic PRNG: splitmix64_step is the sole mix authority -----
@@ -1083,10 +1080,6 @@ mod tests {
         }
     }
 
-    fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHandle {
-        InputRelationHandle::from_metadata(name, metadata)
-    }
-
     /// Base relation `places { id => lat, lon }`.
     fn base_meta() -> StoredRelationMetadata {
         StoredRelationMetadata {
@@ -1111,20 +1104,13 @@ mod tests {
         points: Vec<(i64, f64, f64)>,
     }
 
-    fn setup(db: &impl Storage, points: &[(i64, f64, f64)]) -> Result<Fixture> {
-        let meta = base_meta();
-        let manifest = manifest();
-        let mut tx = db.write_tx()?;
-        let base = create_relation(
-            &mut tx,
-            input_handle("places", meta.clone()),
-            KeyspaceKind::Facts,
-        )?;
-        let idx = create_relation(
-            &mut tx,
-            input_handle("places:geo", spatial_index_metadata(&meta)),
-            KeyspaceKind::AlgorithmState,
-        )?;
+    fn seed_spatial_points<T: crate::store::WriteTx>(
+        tx: &mut T,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        manifest: &SpatialIndexManifest,
+        points: &[(i64, f64, f64)],
+    ) -> Result<()> {
         for (id, lat, lon) in points {
             let row = vec![
                 DataValue::from(*id),
@@ -1132,14 +1118,28 @@ mod tests {
                 DataValue::from(*lon),
             ];
             base.put_fact(
-                &mut tx,
+                tx,
                 &row,
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
-            spatial_put(&mut tx, &row, &manifest, &base, &idx)?;
+            spatial_put(tx, &row, manifest, base, idx)?;
         }
-        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok(())
+    }
+
+    fn setup(db: &impl Storage, points: &[(i64, f64, f64)]) -> Result<Fixture> {
+        let meta = base_meta();
+        let manifest = manifest();
+        let idx_meta = spatial_index_metadata(&meta);
+        let (base, idx) = crate::project::index_fixture::seed_base_and_index(
+            db,
+            "places",
+            "places:geo",
+            meta,
+            idx_meta,
+            |tx, base, idx| seed_spatial_points(tx, base, idx, &manifest, points),
+        )?;
         Ok(Fixture {
             base,
             idx,

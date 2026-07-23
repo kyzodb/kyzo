@@ -160,42 +160,12 @@ pub struct InputRelationHandle {
     pub span: SourceSpan,
 }
 
-impl Serialize for InputRelationHandle {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(serde_derive::Serialize)]
-        struct Wire<'a> {
-            name: &'a Symbol,
-            metadata: &'a StoredRelationMetadata,
-            key_bindings: &'a [Symbol],
-            dep_bindings: &'a [Symbol],
-        }
-        Wire {
-            name: &self.name,
-            metadata: &self.metadata,
-            key_bindings: &self.key_bindings,
-            dep_bindings: &self.dep_bindings,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for InputRelationHandle {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(serde_derive::Deserialize)]
-        struct Wire {
-            name: Symbol,
-            metadata: StoredRelationMetadata,
-            key_bindings: Vec<Symbol>,
-            dep_bindings: Vec<Symbol>,
-        }
-        let w = Wire::deserialize(deserializer)?;
-        Ok(Self {
-            name: w.name,
-            metadata: w.metadata,
-            key_bindings: w.key_bindings,
-            dep_bindings: w.dep_bindings,
-            span: SourceSpan::empty(),
-        })
+crate::program::wire::wire_omit_span! {
+    InputRelationHandle {
+        name: Symbol,
+        metadata: StoredRelationMetadata,
+        key_bindings: Vec<Symbol>,
+        dep_bindings: Vec<Symbol>,
     }
 }
 

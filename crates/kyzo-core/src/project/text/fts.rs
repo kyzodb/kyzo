@@ -829,32 +829,40 @@ mod tests {
         extractor: Expr,
     }
 
-    fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Result<Fixture> {
-        let meta = base_meta();
-        let analyzer = analyzer()?;
-        let extractor = extractor();
-        let mut tx = db.write_tx()?;
-        let base = create_relation(
-            &mut tx,
-            input_handle("docs", meta.clone()),
-            KeyspaceKind::Facts,
-        )?;
-        let idx = create_relation(
-            &mut tx,
-            input_handle("docs:fts", fts_index_metadata(&meta)),
-            KeyspaceKind::AlgorithmState,
-        )?;
+    fn seed_fts_rows<T: crate::store::WriteTx>(
+        tx: &mut T,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        extractor: &Expr,
+        analyzer: &TextAnalyzer,
+        rows: &[(i64, &str)],
+    ) -> Result<()> {
         for (k, text) in rows {
             let row = vec![DataValue::from(*k), DataValue::from(*text)];
             base.put_fact(
-                &mut tx,
+                tx,
                 &row,
                 kyzo_model::value::ValidityTs::of_micros(0),
                 SourceSpan(0, 0),
             )?;
-            fts_put(&mut tx, &row, &extractor, &analyzer, &base, &idx)?;
+            fts_put(tx, &row, extractor, analyzer, base, idx)?;
         }
-        tx.commit().map_err(|e| miette!("{e}"))?;
+        Ok(())
+    }
+
+    fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Result<Fixture> {
+        let meta = base_meta();
+        let analyzer = analyzer()?;
+        let extractor = extractor();
+        let idx_meta = fts_index_metadata(&meta);
+        let (base, idx) = crate::project::index_fixture::seed_base_and_index(
+            db,
+            "docs",
+            "docs:fts",
+            meta,
+            idx_meta,
+            |tx, base, idx| seed_fts_rows(tx, base, idx, &extractor, &analyzer, rows),
+        )?;
         Ok(Fixture {
             base,
             idx,

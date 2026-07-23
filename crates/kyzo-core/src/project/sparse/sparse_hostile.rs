@@ -19,69 +19,25 @@ use std::collections::BTreeMap;
 
 use crate::project::contract::search_rows;
 use crate::project::sparse::index::{
-    Sparse, SparseSearchParams, sparse_index_metadata, sparse_put, sparse_total_docs,
+    Sparse, SparseDoc, SparseSearchParams, setup_sparse_docs, sparse_total_docs,
 };
-use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
+use crate::session::catalog::RelationHandle;
 use crate::store::fjall::new_fjall_storage;
-use crate::store::{Storage, WriteTx};
+use crate::store::Storage;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::InputRelationHandle;
 use kyzo_model::program::expr::Expr;
-use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
 use miette::{IntoDiagnostic, Result, miette};
-use smartstring::SmartString;
-
-fn col(name: &str, coltype: ColType) -> ColumnDef {
-    ColumnDef {
-        name: SmartString::from(name),
-        typing: NullableColType::required(coltype),
-        default_gen: None,
-    }
-}
-
-fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHandle {
-    InputRelationHandle::from_metadata(name, metadata)
-}
-
-fn base_meta() -> StoredRelationMetadata {
-    StoredRelationMetadata {
-        keys: vec![col("k", ColType::Int)],
-        non_keys: vec![col("tag", ColType::String)],
-    }
-}
 
 struct Fixture {
     base: RelationHandle,
     idx: RelationHandle,
 }
 
-type Doc<'a> = (i64, &'a str, &'a [(u32, f32)]);
+type Doc<'a> = SparseDoc<'a>;
 
 fn setup(db: &impl Storage, docs: &[Doc]) -> Result<Fixture> {
-    let meta = base_meta();
-    let mut tx = db.write_tx()?;
-    let base = create_relation(
-        &mut tx,
-        input_handle("docs", meta.clone()),
-        KeyspaceKind::Facts,
-    )?;
-    let idx = create_relation(
-        &mut tx,
-        input_handle("docs:sparse", sparse_index_metadata(&meta)),
-        KeyspaceKind::AlgorithmState,
-    )?;
-    for (k, tag, vector) in docs {
-        let row = vec![DataValue::from(*k), DataValue::from(*tag)];
-        base.put_fact(
-            &mut tx,
-            &row,
-            kyzo_model::value::ValidityTs::of_micros(0),
-            SourceSpan(0, 0),
-        )?;
-        sparse_put(&mut tx, &row, vector, &base, &idx)?;
-    }
-    tx.commit().map_err(|e| miette!("{e}"))?;
+    let (base, idx) = setup_sparse_docs(db, docs)?;
     Ok(Fixture { base, idx })
 }
 

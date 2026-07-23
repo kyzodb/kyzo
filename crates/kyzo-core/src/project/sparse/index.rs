@@ -563,6 +563,51 @@ fn sparse_search_body(
     Ok(ret)
 }
 
+/// Test/hostile shared fixture: base key + tag + sparse vector.
+#[cfg(test)]
+pub(super) type SparseDoc<'a> = (i64, &'a str, &'a [(u32, f32)]);
+
+/// ONE sparse index fixture door (tests + hostile). Scaffold is
+/// [`crate::project::index_fixture::seed_base_and_index`].
+#[cfg(test)]
+pub(super) fn setup_sparse_docs(
+    db: &impl crate::store::Storage,
+    docs: &[SparseDoc<'_>],
+) -> Result<(RelationHandle, RelationHandle)> {
+    fn col(name: &str, coltype: ColType) -> ColumnDef {
+        ColumnDef {
+            name: SmartString::from(name),
+            typing: NullableColType::required(coltype),
+            default_gen: None,
+        }
+    }
+    let meta = StoredRelationMetadata {
+        keys: vec![col("k", ColType::Int)],
+        non_keys: vec![col("tag", ColType::String)],
+    };
+    let idx_meta = sparse_index_metadata(&meta);
+    crate::project::index_fixture::seed_base_and_index(
+        db,
+        "docs",
+        "docs:sparse",
+        meta,
+        idx_meta,
+        |tx, base, idx| {
+            for (k, tag, vector) in docs {
+                let row = vec![DataValue::from(*k), DataValue::from(*tag)];
+                base.put_fact(
+                    tx,
+                    &row,
+                    kyzo_model::value::ValidityTs::of_micros(0),
+                    SourceSpan(0, 0),
+                )?;
+                sparse_put(tx, &row, vector, base, idx)?;
+            }
+            Ok(())
+        },
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Tests: the engine's executable law.
 // ---------------------------------------------------------------------------
@@ -612,32 +657,10 @@ mod tests {
     }
 
     /// A document: base key, a tag payload, and its sparse vector.
-    type Doc<'a> = (i64, &'a str, &'a [(u32, f32)]);
+    type Doc<'a> = super::SparseDoc<'a>;
 
     fn setup(db: &impl Storage, docs: &[Doc]) -> Result<Fixture> {
-        let meta = base_meta();
-        let mut tx = db.write_tx()?;
-        let base = create_relation(
-            &mut tx,
-            input_handle("docs", meta.clone()),
-            KeyspaceKind::Facts,
-        )?;
-        let idx = create_relation(
-            &mut tx,
-            input_handle("docs:sparse", sparse_index_metadata(&meta)),
-            KeyspaceKind::AlgorithmState,
-        )?;
-        for (k, tag, vector) in docs {
-            let row = vec![DataValue::from(*k), DataValue::from(*tag)];
-            base.put_fact(
-                &mut tx,
-                &row,
-                kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
-            )?;
-            sparse_put(&mut tx, &row, vector, &base, &idx)?;
-        }
-        tx.commit().map_err(|e| miette!("{e}"))?;
+        let (base, idx) = super::setup_sparse_docs(db, docs)?;
         Ok(Fixture { base, idx })
     }
 

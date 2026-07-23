@@ -16,6 +16,7 @@ pub mod query;
 pub mod rule;
 pub mod span;
 pub mod symbol;
+pub(crate) mod wire;
 
 pub use aggregate::{AggrKind, AggrRefuse, Aggregation, parse_aggr};
 pub use expr::{BindingPos, Decision, Expr, LazyOp};

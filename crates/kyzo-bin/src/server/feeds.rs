@@ -125,7 +125,7 @@ pub(super) struct StandingQueryParams {
 impl<'de> serde::Deserialize<'de> for StandingQueryParams {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use std::fmt;
-        use serde::de::{self, MapAccess, Visitor};
+        use serde::de::{MapAccess, Visitor};
 
         struct V;
         impl<'de> Visitor<'de> for V {
@@ -135,21 +135,12 @@ impl<'de> serde::Deserialize<'de> for StandingQueryParams {
             }
             fn visit_map<A: MapAccess<'de>>(
                 self,
-                mut map: A,
+                map: A,
             ) -> Result<StandingQueryParams, A::Error> {
-                let mut query = None;
-                let mut params = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "query" => query = Some(map.next_value()?),
-                        "params" => params = Some(map.next_value()?),
-                        _unknown_field => {
-                            let _skipped: de::IgnoredAny = map.next_value()?;
-                        }
-                    }
-                }
+                let (query, params) =
+                    super::payload_wire::take_required_string_and_params(map, "query")?;
                 Ok(StandingQueryParams {
-                    query: query.ok_or_else(|| de::Error::missing_field("query"))?,
+                    query,
                     // Absent params is the published empty string — parse_params
                     // treats "" as no JSON object.
                     params: match params {

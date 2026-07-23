@@ -18,6 +18,9 @@ pub(crate) mod residency;
 pub(crate) mod retrieval;
 
 #[cfg(test)]
+pub(crate) mod index_fixture;
+
+#[cfg(test)]
 pub(crate) mod gazetteer;
 
 pub(crate) mod text;

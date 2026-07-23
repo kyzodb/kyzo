@@ -17,7 +17,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use serde::Deserialize;
-use serde::de::{self, MapAccess, Visitor};
+use serde::de::{MapAccess, Visitor};
 use serde_json::Value as JsonValue;
 use tokio::task::spawn_blocking;
 
@@ -38,20 +38,11 @@ impl<'de> Deserialize<'de> for QueryPayload {
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("QueryPayload object with script and optional params")
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<QueryPayload, A::Error> {
-                let mut script = None;
-                let mut params = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "script" => script = Some(map.next_value()?),
-                        "params" => params = Some(map.next_value()?),
-                        _unknown_field => {
-                            let _skipped: de::IgnoredAny = map.next_value()?;
-                        }
-                    }
-                }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<QueryPayload, A::Error> {
+                let (script, params) =
+                    super::payload_wire::take_required_string_and_params(map, "script")?;
                 Ok(QueryPayload {
-                    script: script.ok_or_else(|| de::Error::missing_field("script"))?,
+                    script,
                     // Absent params is the published wire null — not a fabricated object.
                     params: match params {
                         Some(p) => p,
