@@ -72,6 +72,15 @@ pub fn env_report() -> Result<(), ProcessFailure> {
 }
 
 /// `cargo check --workspace --all-targets`.
+/// The bs-detector conduct gate: one door, zero baseline. The binary
+/// itself writes crates/xtask/resonance.log and bs-counts.txt; a red exit
+/// here is the verdict.
+pub fn bs_detector() -> Result<(), ProcessFailure> {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--release", "-p", "bs-detector", "--", "--root", "."]);
+    run_step("bs-detector", cmd)
+}
+
 pub fn check() -> Result<(), ProcessFailure> {
     let mut cmd = Command::new("cargo");
     cmd.args(["check", "--workspace", "--all-targets"]);

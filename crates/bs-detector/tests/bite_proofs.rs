@@ -380,3 +380,59 @@ fn the_real_registry_loads_and_binds_to_this_file() {
     };
     assert!(reg.checks.len() >= 43, "every engine's checks are registered");
 }
+
+// --- ported ratchets: the old xtask checks' historical bugs still bite ---------------------------
+
+#[test]
+fn bite_assert_bang() {
+    // The RelationId shape: stored bytes bound-checked by assert on a
+    // production decode path.
+    assert_eq!(detonates("assert_bang", "fn decode(b: &[u8]) -> u64 { assert!(b.len() >= 8); 0 }"), Some(1));
+    assert_eq!(detonates("assert_bang", "#[test]\nfn t() { assert_eq!(1, 1); }"), Some(0));
+}
+
+#[test]
+fn bite_condemned_boundary() {
+    assert_eq!(
+        detonates("condemned_boundary", "struct T { put_triggers: Vec<String> }"),
+        Some(1),
+        "raw-source trigger field"
+    );
+    assert_eq!(
+        detonates(
+            "condemned_boundary",
+            "fn f(filter: u8, extractor: u8) -> String { format!(\"if({filter}, {extractor})\") }"
+        ),
+        Some(1),
+        "Display splice"
+    );
+    assert_eq!(
+        detonates(
+            "condemned_boundary",
+            "struct S { extractor: String }\nfn f(e: u8) -> S { S { extractor: e.to_string() } }"
+        ),
+        Some(1),
+        "to_string capture"
+    );
+}
+
+#[test]
+fn bite_hand_layout() {
+    let src = "struct H; impl H { fn update(&mut self, _b: &[u8]) {} }\nfn seal(h: &mut H) { h.update(b\"kyzo:checkpoint:v1\"); }";
+    let hits = match shape_hits("hand_layout", src) {
+        Some(h) => h,
+        None => panic!("matcher registered and fixture parses"),
+    };
+    assert_eq!(hits.len(), 1);
+    // The one canonical constructor is exempt BY NAME — its sites are the
+    // authority this law protects.
+    let m = match shape::matcher_by_name("hand_layout") {
+        Some(m) => m,
+        None => panic!("registered"),
+    };
+    let f = match parsed("crates/kyzo-core/src/store/transcript.rs", src) {
+        Some(f) => f,
+        None => panic!("fixture parses"),
+    };
+    assert!(shape::run_matcher(m, &f).is_empty());
+}

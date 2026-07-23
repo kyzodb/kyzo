@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-# xtask (story #81, the resonance gate) and kyzo-arrow-interop (story #77's
+# xtask (the gate program), bs-detector (the conduct gate), and kyzo-arrow-interop (story #77's
 # Arrow cross-check, see its own Cargo.toml) are dev tooling only: neither is
 # part of the shipped engine tree. `cargo xtask pure-rust` gates only the
 # kyzo/kyzo-bin dependency trees (`cargo tree -p kyzo|kyzo-bin`), so xtask's

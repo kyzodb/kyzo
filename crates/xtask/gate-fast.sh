@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# gate-fast.sh — one-shot combined resonance + fast lib-test run.
+# gate-fast.sh — one-shot combined bs-detector + fast lib-test run.
 #
 # Mirrors resonance-watch.sh's lock/log convention but covers the heavier
-# cycle that was being run by hand (isolated container, resonance check,
-# then `cargo test -p kyzo --lib`) — the exact thing that was showing up as
-# raw build/test output dumped straight into a foreground chat session.
-# Always invoke this backgrounded (`just gate` does this); never run it
-# synchronously in a terminal someone is watching.
+# cycle (isolated container, conduct gate, then the workspace lib tests).
+# Always invoke this backgrounded; never run it synchronously in a terminal
+# someone is watching.
 #
-# Writes crates/xtask/resonance.log with the header resonance-stop-guard.sh
-# already parses:
+# The bs-detector binary writes crates/xtask/resonance.log and
+# bs-counts.txt itself; this script then overlays the combined GATE verdict
+# the stop hook parses:
 #   line 1: "GATE: PASS"  or  "GATE: FAIL fast-tests"  or  "GATE: FAIL <checks>"
 #   line 2: "commit <sha>"
 #   body:   the failing step's own output (only when red).
@@ -29,21 +28,21 @@ commit="$(cd "$REPO" && git rev-parse HEAD)"
 short="$(cd "$REPO" && git rev-parse --short HEAD)"
 tmp="$LOG.tmp"
 
-printf 'GATE: FAIL running %s\nisolated snapshot + resonance + fast-tests in flight\n' \
+printf 'GATE: FAIL running %s\nisolated snapshot + bs-detector + fast-tests in flight\n' \
   "$commit" > "$tmp"
 mv -f "$tmp" "$LOG"
 
-resonance_out="$(cd "$REPO" && docker compose run --rm \
+detector_out="$(cd "$REPO" && docker compose run --rm \
   --name "ci-snapshot-kyzo-dev-run-$short" kyzo-dev \
-  cargo run -p xtask --quiet -- resonance 2>&1)"
-resonance_rc=$?
+  cargo run --release --quiet -p bs-detector -- --root . 2>&1)"
+detector_rc=$?
 
-if [ "$resonance_rc" -ne 0 ]; then
-  checks="$(printf '%s\n' "$resonance_out" \
-    | sed -n 's/^FAIL: resonance gate found violations in: //p' | tail -1)"
+if [ "$detector_rc" -ne 0 ]; then
+  checks="$(printf '%s\n' "$detector_out" \
+    | sed -n 's/^RESONANCE: FAIL //p' | tail -1)"
   {
-    printf 'GATE: FAIL %s\ncommit %s\n' "${checks:-unknown}" "$commit"
-    printf '%s\n' "$resonance_out"
+    printf 'GATE: FAIL %s\ncommit %s\n' "${checks:-bs-detector}" "$commit"
+    printf '%s\n' "$detector_out" | grep -v '^ Container '
   } > "$tmp"
   mv -f "$tmp" "$LOG"
   exit 0

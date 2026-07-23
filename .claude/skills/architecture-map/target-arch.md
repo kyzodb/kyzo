@@ -335,7 +335,7 @@ Format: `path` — description
 `crates/xtask/src/gate.rs` — orchestrates the full cargo xtask gate (merge witness, not Plan DoD)
 `crates/xtask/src/main.rs` — xtask binary entry: dispatches gate verbs
 `crates/xtask/src/proc.rs` — spawns and collects subprocesses for gate commands
-`crates/xtask/src/resonance.rs` — resonance runner that keeps mechanical checks in agreement
+`crates/bs-detector/` — the conduct gate (checks.toml registry, sworn waivers, bite-proof-bound engines) that keeps mechanical checks in agreement
 `crates/xtask/src/synutil.rs` — syn-based AST helpers for source gates
 `crates/xtask/src/verbs.rs` — named xtask verbs the operator/CI invoke
 `fuzz/fuzz_targets/compare_prefixed_slice.rs` — fuzzes prefixed-slice compare under the one law

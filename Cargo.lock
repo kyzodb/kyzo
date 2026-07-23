@@ -4944,14 +4944,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "proc-macro2",
- "quote",
  "regex",
  "serde",
  "serde_json",
- "syn",
  "tempfile",
- "toml 0.8.23",
  "walkdir",
 ]
 

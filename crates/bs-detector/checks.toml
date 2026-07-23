@@ -363,3 +363,27 @@ engine = "meta"
 policy = "sworn-waiver"
 law = "a crate root without #![forbid(unsafe_code)] leaves the whole crate's proof open"
 bite_proof = "bite_forbid_roots"
+
+[[check]]
+name = "assert_bang"
+engine = "shape"
+matcher = "assert_bang"
+policy = "sworn-waiver"
+law = "assert! on a caller-reachable path is a panic in an invariant costume — hostile bytes must be refused typed, never asserted"
+bite_proof = "bite_assert_bang"
+
+[[check]]
+name = "condemned_boundary"
+engine = "shape"
+matcher = "condemned_boundary"
+policy = "hard-ban"
+law = "story #299's condemned shapes returning: raw-source trigger fields, Display-spliced or to_string-captured extractors"
+bite_proof = "bite_condemned_boundary"
+
+[[check]]
+name = "hand_layout"
+engine = "shape"
+matcher = "hand_layout"
+policy = "sworn-waiver"
+law = "a byte-literal domain tag fed to a hasher outside the one transcript constructor — a second sealed-artifact serializer until sworn otherwise"
+bite_proof = "bite_hand_layout"

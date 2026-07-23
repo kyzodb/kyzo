@@ -5,17 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Story #322: the gate program — one door, entered through the container, that every caller (developer, agent, hook, CI) runs to get a verdict. Story #81's resonance gate (machine-checked ontology invariants over crates/kyzo-core/kyzo-bin) is one verb of it. Never shipped: this crate is dev tooling, not part of the engine tree (the pure-rust verb only walks the kyzo/kyzo-bin dependency trees, so xtask's own dependencies — syn, quote, proc-macro2, clap, regex, serde_json, tempfile — never touch the purity gate)."
+description = "Story #322: the gate program — one door, entered through the container, that every caller (developer, agent, hook, CI) runs to get a verdict. Conduct policing lives in the bs-detector crate (its own verb runs it); xtask keeps the build/test/supply-chain verbs. Never shipped: dev tooling only."
 
 [dependencies]
-syn = { version = "2", features = ["full", "visit", "extra-traits"] }
-# span-locations: `Span::start()` gives real file line numbers when run as a
-# plain binary (this crate, never a proc-macro) — every check reports
-# `file:line` off it.
-proc-macro2 = { version = "1", features = ["span-locations"] }
-quote = "1"
 walkdir = "2"
-toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 # The authority-graph verb's committed artifacts (story #322: ported from
 # scripts/authority-graph.py) and its allowlist/baseline inputs.

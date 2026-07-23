@@ -8,10 +8,10 @@
  */
 
 //! The `gate` verb: the one-command seal. Runs env-report, check, fmt,
-//! clippy, unsafe, pure-rust, test, and test-release-checked,
-//! plus the resonance suite, in that dependency order — cheapest/most-arguable
-//! checks first, the full test suite last — stopping at the first failure
-//! (story #322's Engineering Choice, task 1).
+//! clippy, unsafe, pure-rust, build-script-sandbox, the bs-detector
+//! conduct gate, test, and test-release-checked, in that dependency order —
+//! cheapest/most-arguable checks first, the full test suite last — stopping
+//! at the first failure (story #322's Engineering Choice, task 1).
 
 use std::fmt;
 
@@ -19,7 +19,6 @@ use crate::checks::build_script_sandbox::BuildScriptSandboxError;
 use crate::checks::pure_rust::PureRustError;
 use crate::checks::unsafe_check::UnsafeCheckError;
 use crate::proc::ProcessFailure;
-use crate::resonance::{self, ResonanceError};
 use crate::verbs;
 
 /// Every way `gate` can refuse, one variant per step it runs — a closed sum
@@ -35,7 +34,7 @@ pub enum GateError {
     Unsafe(UnsafeCheckError),
     PureRust(PureRustError),
     BuildScriptSandbox(BuildScriptSandboxError),
-    Resonance(ResonanceError),
+    BsDetector(ProcessFailure),
     Test(ProcessFailure),
     TestReleaseChecked(ProcessFailure),
 }
@@ -52,7 +51,7 @@ impl fmt::Display for GateError {
             GateError::BuildScriptSandbox(e) => {
                 write!(f, "build-script-sandbox step failed: {e}")
             }
-            GateError::Resonance(e) => write!(f, "resonance step failed: {e}"),
+            GateError::BsDetector(e) => write!(f, "bs-detector step failed: {e}"),
             GateError::Test(e) => write!(f, "test step failed: {e}"),
             GateError::TestReleaseChecked(e) => {
                 write!(f, "test-release-checked step failed: {e}")
@@ -71,7 +70,7 @@ pub fn run() -> Result<(), GateError> {
     verbs::unsafe_check().map_err(GateError::Unsafe)?;
     verbs::pure_rust().map_err(GateError::PureRust)?;
     verbs::build_script_sandbox().map_err(GateError::BuildScriptSandbox)?;
-    resonance::run(None, false).map_err(GateError::Resonance)?;
+    verbs::bs_detector().map_err(GateError::BsDetector)?;
     verbs::test().map_err(GateError::Test)?;
     verbs::test_release_checked().map_err(GateError::TestReleaseChecked)?;
 

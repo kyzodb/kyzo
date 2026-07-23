@@ -13,27 +13,23 @@
 //! xtask <verb>`). There is no other door: no justfile, no scripts run
 //! directly, no floating toolchain. `cargo xtask gate` is the seal.
 //!
-//! Story #81's resonance gate (five deterministic ontology checks) is the
-//! `resonance` verb; it joins `gate`'s sequence on day one.
+//! Conduct policing (the old `resonance` verb) moved wholesale to the
+//! bs-detector crate: `cargo run --release -p bs-detector -- --root .` is
+//! that door now, with checks.toml/waivers.toml as its law and ledger.
 
 #![forbid(unsafe_code)]
 
-mod allowlist;
 mod cargo_meta;
 mod checks;
 mod fsutil;
 mod gate;
 mod proc;
-mod resonance;
-mod synutil;
 mod verbs;
 
 use std::fmt;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-
-use resonance::ResonanceCheck;
 
 /// The one closed sum of every verb's own closed refusal type. `main`'s
 /// dispatch match arm is the only place a per-verb error is converted into
@@ -46,7 +42,6 @@ enum XtaskError {
     Process(proc::ProcessFailure),
     Bench(verbs::BenchRefuse),
     Dataset(verbs::DatasetRefuse),
-    Resonance(resonance::ResonanceError),
     UnsafeCheck(checks::unsafe_check::UnsafeCheckError),
     PureRust(checks::pure_rust::PureRustError),
     BuildScriptSandbox(checks::build_script_sandbox::BuildScriptSandboxError),
@@ -60,7 +55,6 @@ impl fmt::Display for XtaskError {
             XtaskError::Process(e) => write!(f, "{e}"),
             XtaskError::Bench(e) => write!(f, "{e}"),
             XtaskError::Dataset(e) => write!(f, "{e}"),
-            XtaskError::Resonance(e) => write!(f, "{e}"),
             XtaskError::UnsafeCheck(e) => write!(f, "{e}"),
             XtaskError::PureRust(e) => write!(f, "{e}"),
             XtaskError::BuildScriptSandbox(e) => write!(f, "{e}"),
@@ -98,19 +92,6 @@ enum Verb {
     /// Every build-script target, net-isolated and snapshot-diffed for
     /// writes outside its own OUT_DIR.
     BuildScriptSandbox,
-    /// The resonance-gate registry of seat-tagged ontology checks
-    /// (docs/resonance-gate.md).
-    Resonance {
-        /// Run a single named check instead of the whole registry.
-        #[arg(long, value_enum)]
-        only: Option<ResonanceCheck>,
-        /// Restore per-check headers and PASS chatter (default is quiet).
-        #[arg(long)]
-        verbose: bool,
-        /// Print the seat-coverage table (check -> enforced seats) and exit.
-        #[arg(long)]
-        coverage: bool,
-    },
     /// The full first-party test suite.
     Test,
     /// The whole test suite under the `release-checked` profile (overflow-checks live).
@@ -168,18 +149,6 @@ fn main() -> ExitCode {
         Verb::PureRust => verbs::pure_rust().map_err(XtaskError::PureRust),
         Verb::BuildScriptSandbox => {
             verbs::build_script_sandbox().map_err(XtaskError::BuildScriptSandbox)
-        }
-        Verb::Resonance {
-            only,
-            verbose,
-            coverage,
-        } => {
-            if coverage {
-                resonance::coverage();
-                Ok(())
-            } else {
-                resonance::run(only, verbose).map_err(XtaskError::Resonance)
-            }
         }
         Verb::Test => verbs::test().map_err(XtaskError::Process),
         Verb::TestReleaseChecked => verbs::test_release_checked().map_err(XtaskError::Process),

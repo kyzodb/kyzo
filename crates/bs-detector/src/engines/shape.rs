@@ -817,6 +817,164 @@ fn m_unsafe_token(f: &SourceFile) -> Vec<Hit> {
     v.hits
 }
 
+/// `assert!`/`assert_eq!`/`assert_ne!` on a caller-reachable path — a
+/// panic wearing an invariant costume (the historical RelationId decode
+/// bug: hostile stored bytes bound-checked by an assert, panicking the
+/// process instead of refusing typed). In `#[test]` scope asserts ARE the
+/// mechanism; in production they are panics.
+fn m_assert_bang(f: &SourceFile) -> Vec<Hit> {
+    macro_calls(f, &["assert", "assert_eq", "assert_ne"], "assert_bang")
+}
+
+/// Story #299's condemned boundary shapes may never return: triggers
+/// stored as raw source-string collections, and extractor expressions
+/// captured as Display text / textually spliced back together.
+fn m_condemned_boundary(f: &SourceFile) -> Vec<Hit> {
+    const TRIGGER_FIELDS: &[&str] = &["put_triggers", "rm_triggers", "replace_triggers"];
+    const EXTRACTOR_NAMES: &[&str] = &["extractor", "extract_filter"];
+    fn is_string_collection(ty: &syn::Type) -> bool {
+        let syn::Type::Path(tp) = ty else {
+            return false;
+        };
+        let Some(seg) = tp.path.segments.last() else {
+            return false;
+        };
+        if seg.ident != "Vec" {
+            return false;
+        }
+        let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+            return false;
+        };
+        args.args.iter().any(|arg| {
+            let syn::GenericArgument::Type(syn::Type::Path(inner)) = arg else {
+                return false;
+            };
+            inner
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "String" || s.ident == "SmartString")
+        })
+    }
+    fn is_to_string_call(expr: &syn::Expr) -> bool {
+        matches!(expr, syn::Expr::MethodCall(m) if m.method == "to_string")
+    }
+    fn format_is_if_splice(mac: &syn::ExprMacro) -> bool {
+        let Ok(args) = mac.mac.parse_body_with(
+            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+        ) else {
+            return false;
+        };
+        let Some(syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(lit),
+            ..
+        })) = args.first()
+        else {
+            return false;
+        };
+        let value = lit.value();
+        value.contains("if(") && value.matches('{').count() >= 2
+    }
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_field(&mut self, node: &'ast syn::Field) {
+            if let Some(ident) = &node.ident {
+                let name = ident.to_string();
+                if TRIGGER_FIELDS.contains(&name.as_str()) && is_string_collection(&node.ty) {
+                    push(&mut self.hits, self.rel, span_line(&ident.span()), "stored_source_trigger_field");
+                }
+            }
+            visit::visit_field(self, node);
+        }
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Macro(mac) = node {
+                let is_format = mac
+                    .mac
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|seg| seg.ident == "format");
+                if is_format && format_is_if_splice(mac) {
+                    if let Some(seg) = mac.mac.path.segments.last() {
+                        push(&mut self.hits, self.rel, span_line(&seg.ident.span()), "extractor_display_splice");
+                    }
+                }
+            }
+            if let syn::Expr::Assign(a) = node {
+                if let syn::Expr::Path(pth) = a.left.as_ref() {
+                    if let Some(seg) = pth.path.segments.last() {
+                        if EXTRACTOR_NAMES.contains(&seg.ident.to_string().as_str())
+                            && is_to_string_call(&a.right)
+                        {
+                            push(&mut self.hits, self.rel, span_line(&seg.ident.span()), "extractor_to_string_capture");
+                        }
+                    }
+                }
+            }
+            if let syn::Expr::Struct(st) = node {
+                for field in &st.fields {
+                    if let syn::Member::Named(ident) = &field.member {
+                        if EXTRACTOR_NAMES.contains(&ident.to_string().as_str())
+                            && is_to_string_call(&field.expr)
+                        {
+                            push(&mut self.hits, self.rel, span_line(&ident.span()), "extractor_to_string_capture");
+                        }
+                    }
+                }
+            }
+            visit::visit_expr(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
+}
+
+/// Seat 59: a `hasher.update(b"...")` byte-literal domain tag is the
+/// opening move of a hand-rolled sealed-artifact layout. There is ONE
+/// canonical constructor — `kyzo-core/src/store/transcript.rs` — and its
+/// own sites ARE the authority, exempt structurally by name; every other
+/// site is a second serializer until sworn otherwise (KDFs and internal
+/// identity digests are real and confess individually — no ratchet, no
+/// baseline).
+fn m_hand_layout(f: &SourceFile) -> Vec<Hit> {
+    if f.rel_path == "crates/kyzo-core/src/store/transcript.rs" {
+        return vec![];
+    }
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+            let is_byte_tag = node.method == "update"
+                && matches!(
+                    node.args.first(),
+                    Some(syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::ByteStr(_),
+                        ..
+                    }))
+                );
+            if is_byte_tag {
+                push(&mut self.hits, self.rel, span_line(&node.method.span()), "hand_layout");
+            }
+            visit::visit_expr_method_call(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
+}
+
 /// Poisoned-lock silent continue (BANNED #13): `.into_inner()` on a
 /// PoisonError — recovering the guard and carrying on.
 fn m_poison_continue(f: &SourceFile) -> Vec<Hit> {
@@ -870,6 +1028,9 @@ pub const MATCHERS: &[Matcher] = &[
     Matcher { name: "peer_dial", class: ScanClass::ProductionOnly, run: m_peer_dial },
     Matcher { name: "naked_array_sig", class: ScanClass::ProductionOnly, run: m_naked_array_sig },
     Matcher { name: "unsafe_token", class: ScanClass::Everything, run: m_unsafe_token },
+    Matcher { name: "assert_bang", class: ScanClass::ProductionOnly, run: m_assert_bang },
+    Matcher { name: "condemned_boundary", class: ScanClass::ProductionOnly, run: m_condemned_boundary },
+    Matcher { name: "hand_layout", class: ScanClass::ProductionOnly, run: m_hand_layout },
 ];
 
 #[cfg(test)]
