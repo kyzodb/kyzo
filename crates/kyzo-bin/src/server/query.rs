@@ -44,7 +44,10 @@ impl<'de> Deserialize<'de> for QueryPayload {
                 Ok(QueryPayload {
                     script,
                     // Absent params is the published wire null — convert door, not Err/None costume.
-                    params: params.unwrap_or(JsonValue::Null),
+                    params: match params {
+                        Some(p) => p,
+                        None => JsonValue::Null,
+                    },
                 })
             }
         }
